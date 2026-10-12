@@ -212,7 +212,11 @@ binary needs the matching release.
   inside the same git repository): see
   [which directories see a registration](#mcp-registration).
 - No second agent-director directory, and no link where the move needs a copy.
-- For a store kept outside the directory (`[store] db_path`): a copy of
+  Do not run `make-template` with `--store-path`, or the Go client's
+  `MakeTemplate`, before the install: see
+  [`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict).
+- For a store kept outside the directory (`[store] db_path`), including one
+  whose `db_path` reaches it through a link inside the directory: a copy of
   `state.db`, `state.db-wal` and `state.db-shm` made first. The upgrade
   migrates that store in place.
 
@@ -222,12 +226,11 @@ binary needs the matching release.
   `~/.config/agent-director`, with each file's mode, and checks every copy. The
   store is copied with SQLite's backup. A `[store] db_path` or `[log]
   error_log_path` value that names a place inside the old directory is rewritten
-  to the same place in the new one. A relative value that points outside the
-  old directory, including one that leaves it through a link inside it, is
-  rewritten to the absolute path it reaches. An absolute or `~/` value that is
-  inside the old directory as written but reaches outside through a link inside
-  it is refused before anything changes: set it to the absolute path the
-  message shows (see [`ErrMoveConflict`](operator-actions.md#installsh-refuses-with-errmoveconflict)).
+  to the same place in the new one. A value that is inside the old directory as
+  written but reaches outside it through a link inside the old directory is
+  rewritten to the absolute path it reaches today, whether it is relative,
+  absolute or `~/`. A relative value that points outside the old directory is
+  rewritten to the absolute path it reaches too.
 - Renames the old directory to `~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>`:
   the original, untouched, old binaries included. Delete it once the upgrade is
   confirmed; `uninstall.sh --purge` removes it too.

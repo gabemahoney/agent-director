@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J31, and G8 for the binary's ErrOldLayout). Each test
+# (advice inventory J1-J31, J26 retired, and G8 for the binary's ErrOldLayout). Each test
 # triggers one install.sh refusal, checks the advice text word for word, does
 # exactly what the text says (re-runs the same command, runs the advised
 # command, puts the missing tool on PATH) and checks the promised outcome.
@@ -15,7 +15,7 @@
 # can reach the real ~/.config/agent-director.
 #
 # ADVICE_FOLLOW_ONLY=<extended regex> runs only the tests whose names match. The
-# move tests (J23-J26, G8) build the previous release's binary from its git tag
+# move tests (J23-J25, G8) build the previous release's binary from its git tag
 # (v0.11.1) when they need it, and skip with the reason in a checkout without it.
 #
 # Advice that does not work as written is a known-broken test: it is skipped
@@ -2414,10 +2414,15 @@ EOF
 # ---- J17: exit 5's cause line (b.cfq) ----------------------------------------------
 
 # j17_remedy <err_name>: what a caller of install.sh does after an exit 5 whose
-# cause line names <err_name>, from the name alone, as SKILL.md's "Exit 5's
-# cause line" and --help map it: rerun, fix-config, fix-template (--help: "fix
+# cause line names <err_name>, from the name alone, as SKILL.md's "Exit 5's cause
+# line" table (and --help) maps it: rerun, fix-config, fix-template (--help: "fix
 # the template the message names, then re-run"), newer-binary, stop for a human,
-# or, for any other name, rerun-once (stop if the re-run fails with that name).
+# apply-message (ErrMoveConflict: the message names the cause and its remedy;
+# apply it, rename never delete, then re-run), stop-agents (ErrAgentsLive: stop
+# whatever runs against the old directory, then re-run), fix-cause (ErrMoveFailed:
+# fix the cause the message names, then re-run), or, for any other name,
+# rerun-once (stop if the re-run fails with that name). test_J17 reads the names
+# from SKILL.md's table and fails on one that falls to rerun-once here.
 j17_remedy() {
     case "$1" in
         ErrVersionUnreadable) echo rerun ;;
@@ -2425,8 +2430,23 @@ j17_remedy() {
         ErrTemplateMalformed) echo fix-template ;;
         ErrSchemaMismatch) echo newer-binary ;;
         ErrSchemaVerifyFailed) echo stop ;;
+        ErrMoveConflict) echo apply-message ;;
+        ErrAgentsLive) echo stop-agents ;;
+        ErrMoveFailed) echo fix-cause ;;
         *) echo rerun-once ;;
     esac
+}
+
+# j17_table_names: the err_name of every row of SKILL.md's "Exit 5's cause line"
+# table (the row "any other name" has none), one per line.
+j17_table_names() {
+    local line in=0 name
+    while IFS= read -r line; do
+        if [[ "$line" == "### Exit 5's cause line" ]]; then in=1; continue; fi
+        [[ "$in" -eq 1 ]] || continue
+        [[ "$line" != "#"* ]] || break
+        if [[ "$line" =~ ^\|\ \`(Err[A-Za-z]+)\` ]]; then name="${BASH_REMATCH[1]}"; echo "$name"; fi
+    done <"$REPO_ROOT/skills/install-agent-director/SKILL.md"
 }
 
 # The setups for test_J17's cases: each leaves an exit 5 of J7ARGV in J7H.
@@ -2465,6 +2485,56 @@ j17_fake() {
     run "$J7H" "${J7ARGV[@]}"
 }
 
+# The move setups reuse the J23-J25 ones (old_home, MOVE_ARGV; defined below,
+# before any test runs): each leaves an exit 5 of MOVE_ARGV in J7H.
+# j17_both_dirs: the old directory and a new one both exist (J23's both-present).
+j17_both_dirs() {
+    J7H="$(new_home)" J7ARGV=("${MOVE_ARGV[@]}")
+    old_home "$J7H"
+    mkdir -p "$J7H/.config/agent-director/templates" || return 1
+    printf '# the new config\n' >"$J7H/.config/agent-director/config.toml"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_both_dirs_template: the same, the new directory holding only a template
+# (what the table says make-template made; the CLI's make-template is refused
+# with ErrOldLayout on an old-only host, so the file is written directly, as
+# J23's templ case does); J17_COPY is the template to copy back after the move.
+j17_both_dirs_template() {
+    J7H="$(new_home)" J7ARGV=("${MOVE_ARGV[@]}") J17_COPY=mine.toml
+    old_home "$J7H"
+    mkdir -p "$J7H/.config/agent-director/templates" || return 1
+    printf '# made by make-template\n' >"$J7H/.config/agent-director/templates/mine.toml"
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_agents_live: a process running the old binary (a copy of sleep as the old
+# directory's bin/agent-director, J24's); J17_PID is its pid.
+j17_agents_live() {
+    local phys i
+    J7H="$(new_home)" J7ARGV=("${MOVE_ARGV[@]}")
+    old_home "$J7H"
+    cp "$(type -P sleep)" "$J7H/.agent-director/bin/agent-director" || return 1
+    phys="$(cd -P "$J7H/.agent-director" && pwd -P)/bin/agent-director"
+    "$J7H/.agent-director/bin/agent-director" 600 &
+    J17_PID=$!
+    for i in $(seq 100); do
+        [[ "$(readlink "/proc/$J17_PID/exe")" == "$phys" ]] && break
+        sleep 0.05
+    done
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_fifo: a fifo in the old directory (J25's), which the move cannot copy.
+j17_fifo() {
+    J7H="$(new_home)" J7ARGV=("${MOVE_ARGV[@]}")
+    old_home "$J7H"
+    mkfifo "$J7H/.agent-director/odd.fifo" || return 1
+    run "$J7H" "${J7ARGV[@]}"
+}
+# j17_reap: stop the process j17_agents_live started, if it still runs.
+j17_reap() {
+    [[ -z "$J17_PID" ]] || { kill "$J17_PID" 2>/dev/null; wait "$J17_PID" 2>/dev/null; }
+    J17_PID=""
+}
+
 # J17: "Every exit 5 ends with one line on stderr, its last, naming the cause:
 # `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it"
 # (install.sh --help). Per case <setup>|<headline>|<Name>|<config fix>: the
@@ -2474,7 +2544,11 @@ j17_fake() {
 # fix-config applies the sed <config fix> to config.toml and re-runs (fix-template
 # applies the same sed to the template the headline names: ErrTemplateMalformed,
 # --help's "fix the template the message names, then re-run"),
-# newer-binary installs BIN_NEWER; each then installs. rerun-once runs J7ARGV
+# newer-binary installs BIN_NEWER; the move names (the table's rows): apply-message
+# runs the commands the message advises under the marker <config fix> gives, as
+# written (both directories, the new one holding only a template: it is set aside, then the template copied back),
+# stop-agents stops the process the message lists, fix-cause removes the fifo
+# the message names; each then installs, the move done. rerun-once runs J7ARGV
 # again, which, the cause unchanged, fails with the same name: then, as for
 # stop, it is a human's turn. The FAKE_AD cases: no store after an open that
 # succeeded, and a failed open whose stderr (relayed below <headline>, every
@@ -2482,15 +2556,16 @@ j17_fake() {
 # no Err... name (one holding a cause line, which must stay inside the
 # envelope), or one with an err_name install.sh's own remedies do not name.
 test_J17_ExitFiveCauseLineDecidesRemedy() {
-    local setup headline name fix cause remedy want_bin want_v relayed J17_RELAY
-    local -a words argv0=("${J7ARGV[@]}")
+    local setup headline name fix cause remedy want_bin want_v relayed fifo tname J17_RELAY J17_PID="" J17_COPY="" aside
+    local -a words seen=() argv0=("${J7ARGV[@]}")
     local -a J7ARGV # j17_fake sets its own
     run "$(new_home)" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
     [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name. ErrTemplateMalformed is agent-director'"'"'s own catalogued name (errnames.Catalog); fix the template the message names, then re-run.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
-        J7ARGV=("${argv0[@]}") J17_RELAY=""
+        j17_reap
+        J7ARGV=("${argv0[@]}") J17_RELAY="" J17_COPY="" aside=""
         read -r -a words <<<"$setup"
         "${words[@]}" || { bad "$setup: setup failed"; continue; }
         headline="${headline//@J7H@/$J7H}"
@@ -2503,6 +2578,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
         fi
         cause="$(tail -n 1 "$ERR")"
         remedy="$(j17_remedy "${cause#install.sh: err_name=}")"
+        seen+=("$name")
         want_bin="$BIN" want_v="$SCHEMA"
         case "$remedy" in
             rerun) run "$J7H" "${J7ARGV[@]}" ;;
@@ -2517,6 +2593,26 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
             newer-binary)
                 want_bin="$BIN_NEWER" want_v=$((SCHEMA + 1))
                 run "$J7H" bash "$LOOSE" --binary "$BIN_NEWER" --admin-binary "$ADMIN" --no-hooks --no-symlink ;;
+            apply-message)
+                # The message names the cause and its remedy: its commands, as written, under the marker in <config fix> (a
+                # rename, never a delete), then the re-run.
+                [[ -z "$J17_COPY" ]] || aside="$(aside_of "$fix")"
+                follow_cmds "$J7H" "$fix" || continue
+                run "$J7H" "${J7ARGV[@]}" ;;
+            stop-agents)
+                # Stop what runs against the old directory (here the one process the message lists), then re-run.
+                [[ -n "$J17_PID" ]] || { bad "$setup: no process to stop"; continue; }
+                [[ "$(flat "$ERR")" == *"Processes running the old binary (pid, executable): $J17_PID "* ]] \
+                    || bad "$setup: the message does not list pid $J17_PID: $(flat "$ERR")"
+                j17_reap
+                run "$J7H" "${J7ARGV[@]}" ;;
+            fix-cause)
+                # The cause the message names, a fifo to remove or move out of the old directory, then the re-run.
+                fifo="$(sed -n "s|^install\.sh: moving .* failed: cannot copy \(.*\): it is not a regular file.*|\1|p" "$ERR")"
+                [[ -n "$fifo" ]] || { bad "$setup: the message names no cause to fix: $(flat "$ERR")"; continue; }
+                run_advised "$J7H" "$ROOT" "rm -- $(printf '%q' "$fifo")"
+                expect_rc 0 "$setup: remove $fifo" || continue
+                run "$J7H" "${J7ARGV[@]}" ;;
             rerun-once)
                 expect_advice "re-running this install will retry it."
                 run "$J7H" "${J7ARGV[@]}"
@@ -2527,6 +2623,10 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
         expect_rc 0 "$setup: $remedy after \"$cause\"" || continue
         expect_installed "$J7H" "$want_bin" "$ADMIN"
         [[ "$(db_version "$J7H")" == "$want_v" ]] || bad "$setup: store at v$(db_version "$J7H") after $remedy; want v$want_v"
+        if [[ "$remedy" == apply-message && -n "$J17_COPY" ]]; then # "copy any template wanted from it into the moved directory"
+            cp "$aside/templates/$J17_COPY" "$J7H/.config/agent-director/templates/" || bad "$setup: copy $J17_COPY from $aside"
+            [[ -f "$J7H/.config/agent-director/templates/$J17_COPY" ]] || bad "$setup: $J17_COPY is not in the moved directory"
+        fi
     done 3<<'EOF'
 j17_lock|install.sh: reading state.db's schema version FAILED|ErrVersionUnreadable|
 j17_config_refused|install.sh: agent-director refused its config file (ErrConfigMalformed)|ErrConfigMalformed|/^expire_retention_days = /d
@@ -2537,7 +2637,18 @@ j17_fake ok|install.sh: state.db was not created by the store open|ErrSchemaVeri
 j17_fake panic|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
 j17_fake odd-name|install.sh: store open (agent-director list) failed after install|ErrStoreOpen|
 j17_fake other-name|install.sh: store open (agent-director list) failed after install|ErrSchemaMigrationRequired|
+j17_both_dirs|install.sh: both @J7H@/.agent-director and @J7H@/.config/agent-director exist; refusing to install.|ErrMoveConflict|If the old directory holds the install in use, set the new one aside; the re-run moves the old directory in:
+j17_both_dirs_template|install.sh: both @J7H@/.agent-director and @J7H@/.config/agent-director exist; refusing to install.|ErrMoveConflict|If the old directory holds the install in use, set the new one aside; the re-run moves the old directory in:
+j17_agents_live|install.sh: AD's old directory is in use; refusing to upgrade while an agent or agent-director process runs.|ErrAgentsLive|
+j17_fifo|install.sh: moving @J7H@/.agent-director to @J7H@/.config/agent-director failed: cannot copy @J7H@/.agent-director/odd.fifo: it is not a regular file, a directory or a link (a fifo, a socket or a device, say). Remove it or move it out of @J7H@/.agent-director, then re-run|ErrMoveFailed|
 EOF
+    j17_reap
+    # SKILL.md's table: every name has a j17_remedy case and a row above.
+    while IFS= read -r tname; do
+        [[ "$(j17_remedy "$tname")" != rerun-once ]] || bad "SKILL.md's exit-5 table has $tname, which j17_remedy has no case for"
+        [[ " ${seen[*]} " == *" $tname "* ]] || bad "SKILL.md's exit-5 table has $tname, which no J17 row triggers"
+    done < <(j17_table_names)
+    [[ "$(j17_table_names | wc -l)" -ge 8 ]] || bad "read only $(j17_table_names | wc -l) names from SKILL.md's exit-5 table"
 }
 
 # ---- J18: settings.json of another shape, hooks on (b.cfq, b.dzu) ------------------
@@ -2881,7 +2992,7 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
     done
 }
 
-# ---- J23-J26, G8: the move of ~/.agent-director (SR-11.7) --------------------------
+# ---- J23-J25, G8: the move of ~/.agent-director (SR-11.7) --------------------------
 
 # The old layout's binary and store are the previous release's, built from its
 # git tag the first time a test needs them (not at start-up: most tests never
@@ -3384,55 +3495,9 @@ test_J25_MoveFailedFixCauseAndRerun() {
     done
 }
 
-# ---- J26: a path key that leaves the old directory through a link inside it --
-
-# J26: "<key> <value> reaches outside <old> through a link inside it; refusing
-# to install. ... Set the key to the absolute physical path it reaches, in
-# <config>, then re-run: <key> = "<physical path>"": an absolute or ~/ path key
-# that is inside the old directory by its text and outside it through a link
-# inside (the move renames the old directory away, so the value as written would
-# name nothing). The advised line is put in config.toml as written; the re-run
-# moves, the key stays as advised (it names a place outside), and the installed
-# binary opens the store, or writes the error log, at that physical place.
-test_J26_PathKeyThroughInnerLinkSetPhysicalPathAndRerun() {
-    local h o n what table key value phys marker line
-    old_release_or_skip || return
-    for what in store tilde-store log; do
-        h="$(new_home)" o="$h/.agent-director" n="$h/.config/agent-director"
-        old_home "$h" store
-        mkdir -p "$h/elsewhere" || { bad "$what: mkdir elsewhere"; continue; }
-        case "$what" in
-            store)       table=store key=db_path         value="$o/out/s.db" phys="$h/elsewhere/s.db" ;;
-            tilde-store) table=store key=db_path         value="~/.agent-director/out/s.db" phys="$h/elsewhere/s.db" ;;
-            log)         table=log   key=error_log_path  value="$o/out/e.log" phys="$h/elsewhere/e.log" ;;
-        esac
-        if [[ "$table" == store ]]; then
-            mv "$o/state.db" "$phys" || { bad "$what: move the store out"; continue; }
-        else
-            printf 'an old error\n' >"$phys" || { bad "$what: write the log"; continue; }
-        fi
-        ln -s "$h/elsewhere" "$o/out" || { bad "$what: make the link"; continue; }
-        printf '[%s]\n%s = "%s"\n' "$table" "$key" "$value" >"$o/config.toml"
-        marker="Set the key to the absolute physical path it reaches, in $o/config.toml, then re-run:"
-        move_refused "$h" "[$table] $key $value reaches outside $o through a link inside it; refusing to install." \
-            "$marker $key = \"$phys\"" "so it reaches $phys today." || continue
-        line="$(line_after "$marker")"
-        [[ "$line" == "$key = \"$phys\"" ]] || { bad "$what: the advised line is \"$line\"; want $key = \"$phys\""; continue; }
-        # Set the key as advised: the line replaces the key's line in its table.
-        printf '[%s]\n%s\n' "$table" "$line" >"$o/config.toml" || { bad "$what: write the advised line"; continue; }
-        run "$h" "${MOVE_ARGV[@]}"
-        if [[ "$table" == store ]]; then
-            moved "$h" "$what" "$phys" || continue
-            [[ ! -e "$n/state.db" ]] || bad "$what: the new directory holds a default state.db: the store did not stay at $phys"
-            run "$h" "$n/bin/agent-director" list
-            expect_rc 0 "$what: list opens the store at $phys" || continue
-        else
-            moved "$h" "$what" || continue
-            [[ "$(cat "$phys")" == "an old error" ]] || bad "$what: the error log $phys changed: $(cat "$phys")"
-        fi
-        grep -qxF "$key = \"$phys\"" "$n/config.toml" || bad "$what: the moved config.toml does not hold the advised line: $(cat "$n/config.toml")"
-    done
-}
+# J26 is retired (not reused): install.sh no longer refuses an absolute or ~/ path
+# key that reaches outside the old directory through a link inside it, so it gives
+# no advice to follow; the move rewrites the key (TestMovePathKeyOutwardRewritten).
 
 # ---- J27: neither Claude Code nor Codex found (SR-11.1) -----------------------------
 

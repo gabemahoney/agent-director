@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.agent-director/ with the binary and the off-PATH operator tool agent-director-admin, migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), and injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact). Needs Claude Code or Codex on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
 ---
 
 ## First-time install on a brand-new machine
@@ -30,6 +30,54 @@ them silently. Walk the operator through each choice with
 `AskUserQuestion`, echo the resolved flag set back for confirmation,
 then execute. Keep it tight — four questions, then a confirm.
 
+### Before the questions: which agents, and an old-layout install
+
+Two checks come first. Neither is a question, but each changes what
+you ask and what you tell the operator.
+
+**Which agents are on the machine.** agent-director launches Claude Code
+and Codex agents, and `install.sh` needs at least one of them. Each
+counts as present when its launch path names an existing executable
+file (`[launch] claude_path` or `codex_path` in `config.toml`, both
+optional) or its program (`claude`, `codex`) is on PATH. Check with
+`command -v claude` and `command -v codex`, and read the `[launch]`
+table if the operator has one. With neither present `install.sh` stops
+(exit 2) naming both and how to install either: stop and tell the
+operator to install one first. If the operator uses npm's Codex
+launcher, tell them to set `codex_path` to the native Codex program (a
+file `install.sh` can see as executable), as `docs/install.md`
+describes. Then:
+
+- **Claude Code present:** ask every question below.
+- **Claude Code absent (only Codex):** do not ask question 3 (the MCP
+  server is Claude Code's), and in question 4 say the
+  `~/.claude/settings.json` hooks do not apply; the install skips the
+  `settings.json` step and `--register-mcp` and says so. The
+  `inject_help_hook` setting in `config.toml` is still merged unless
+  `--no-hooks`.
+- `install.sh` runs nothing in Codex, registers nothing with Codex and
+  writes nothing in any Codex folder, and never writes a `[launch]` key.
+
+**Whether this is an upgrade from the old layout.** An earlier release
+kept its files in a directory this release no longer uses, and the
+install moves it, once. Look for it with the check in "Upgrading an
+install from the old directory" below. When it finds one, do that
+section's "before you run" steps with the operator before the first
+question. In short, tell the operator to:
+
+- stop everything that starts agents, then every agent, every
+  `agent-director serve` and every caller (a Claude Code session's own
+  agent-director MCP server is a live `serve`: end that session too);
+  the install refuses (`ErrAgentsLive`) while any of them runs;
+- run the install from a shell agent-director did not start (not one
+  inside an agent's session), from the directory the original install
+  ran in (or one inside the same git repository), so it finds a
+  `local` MCP registration made there;
+- copy a store kept outside agent-director's directory (`[store]
+  db_path`, including one whose `db_path` reaches it through a link
+  inside the directory) first: the upgrade migrates it in place, and
+  the way back needs the copy.
+
 ### How to phrase each question
 
 **Assume the operator has never seen this project before.** Don't lead
@@ -55,10 +103,10 @@ who already knows what the script does. Rewrite it.
 Every install writes two binaries from the same build, because both
 open the same store:
 
-- `agent-director`, at `~/.agent-director/bin/agent-director` (and,
+- `agent-director`, at `~/.config/agent-director/bin/agent-director` (and,
   optionally, on PATH through a symlink; question 2);
 - the operator tool `agent-director-admin`, at
-  `~/.agent-director/admin/agent-director-admin` (directory mode 0700,
+  `~/.config/agent-director/admin/agent-director-admin` (directory mode 0700,
   binary 0755). It is **never** put on PATH and never symlinked, under
   any option. It is for a human's repair actions only; its help opens
   with the rule that nobody runs it without a human's explicit approval
@@ -86,10 +134,11 @@ current exec is unaffected by the swap.
 
 The previous binaries are *not* retained by default. Pass `--keep-prior`
 on upgrade to have install.sh snapshot both existing binaries before
-either new one is staged, to `~/.agent-director/bin/agent-director.prior` and
-`~/.agent-director/admin/agent-director-admin.prior`. That gives you a
+either new one is staged, to `~/.config/agent-director/bin/agent-director.prior` and
+`~/.config/agent-director/admin/agent-director-admin.prior`. That gives you a
 one-step rollback of the matching pair (`mv .prior canonical` for
-each). A re-install of the same pair (agent-director already
+each), for an upgrade that does not move the directory. A re-install of
+the same pair (agent-director already
 byte-identical to the one being installed, and agent-director-admin
 byte-identical too or not installed) is not snapshotted, so re-running
 the same install (for example after an exit 5) keeps the `.prior`
@@ -98,10 +147,16 @@ say `not snapshotted`. Any other install snapshots both, even when
 only one of them changed. On an upgrade from a release before 0.11.0
 there is no agent-director-admin to snapshot: install.sh removes any
 stale admin `.prior`, prints an `admin prior: none` line, and rolling
-back means removing `~/.agent-director/admin/agent-director-admin`.
+back means removing `~/.config/agent-director/admin/agent-director-admin`.
+The upgrade that moves the old directory makes no snapshot at all, with
+or without `--keep-prior`: the new `bin/` and `admin/` hold no earlier
+binary, so `.prior` is not a way back across the move (the way back is
+"Going back to the previous release" below).
 Without `--keep-prior`, re-install the previous tag via
 `install.sh --from-release v<old>` (this install.sh refuses a tag before
-0.11.0, which has no agent-director-admin).
+0.11.0, which has no agent-director-admin). A release from before the
+move is installed only with its own install.sh fetched from its tag:
+this install.sh refuses its binaries with exit 3.
 
 ### The four questions
 
@@ -110,9 +165,9 @@ Without `--keep-prior`, re-install the previous tag via
    - *What this is:* agent-director is a Go binary that comes with a
      second one from the same build, the operator tool
      `agent-director-admin`. The install script copies
-     `agent-director` into `~/.agent-director/bin/` (and onto your
+     `agent-director` into `~/.config/agent-director/bin/` (and onto your
      PATH) and `agent-director-admin` into
-     `~/.agent-director/admin/`, never on PATH. We need to know where to
+     `~/.config/agent-director/admin/`, never on PATH. We need to know where to
      copy both *from*; they must come from the same build.
    - *Four options:*
      - **(a) Download a pre-built release from GitHub** *(recommended
@@ -143,7 +198,7 @@ Without `--keep-prior`, re-install the previous tag via
        re-inject the hooks or register MCP, say). No binary flag: run
        from the installed skill, outside any checkout, install.sh pairs
        the `agent-director` on PATH with the installed
-       `~/.agent-director/admin/agent-director-admin`. For the full
+       `~/.config/agent-director/admin/agent-director-admin`. For the full
        lookup order, see "Where install.sh looks for each binary" in
        step 6 of "What this skill does".
      - **(d) Build from source now, then install.** Run `make build` in
@@ -176,7 +231,7 @@ Without `--keep-prior`, re-install the previous tag via
        to use a possibly-stale `./bin/agent-director`.
      - **Not in a checked-out tree** (install.sh was curled to a tmp
        path, or invoked from an arbitrary directory), `agent-director`
-       on PATH, `~/.agent-director/admin/agent-director-admin` present,
+       on PATH, `~/.config/agent-director/admin/agent-director-admin` present,
        and the operator wants to re-inject the hooks or register MCP →
        propose **(c)** *use what is on PATH* (no binary flag).
      - **Not in a checked-out tree** otherwise, or the operator wants
@@ -211,14 +266,17 @@ Without `--keep-prior`, re-install the previous tag via
 2. **Should the binary go on `PATH` via a symlink? (`--symlink-dir <dir>` or `--no-symlink`)**
 
    - *What this is:* the binary lives at
-     `~/.agent-director/bin/agent-director`. For you to type
+     `~/.config/agent-director/bin/agent-director`. For you to type
      `agent-director` from any shell, that directory needs to be on
      `PATH`, **or** we need to drop a symlink somewhere that already
      is. A symlink is a file that points at another file — running it
      runs the target. This question is about `agent-director` only:
      `agent-director-admin` never gets a symlink and is never put on
-     PATH, whatever you pick; don't add `~/.agent-director/admin/` to
-     PATH either.
+     PATH, whatever you pick; don't add `~/.config/agent-director/admin/` to
+     PATH either. On an upgrade from the old layout, a link the install
+     manages is re-pointed to the new binary, and every other link or
+     `$PATH` entry that leads into the old `bin` directory is printed
+     with its fix.
    - *Options:*
      - **(a) Drop a symlink in `~/.local/bin`** *(recommended if it
        exists and is on PATH)*. This is the standard place for
@@ -227,7 +285,7 @@ Without `--keep-prior`, re-install the previous tag via
        `~/bin`, `/usr/local/bin`). Pass the directory.
      - **(c) Skip the symlink entirely (`--no-symlink`)**. You invoke
        agent-director via the full path
-       `~/.agent-director/bin/agent-director`, or add that bin/
+       `~/.config/agent-director/bin/agent-director`, or add that bin/
        directory to `PATH` yourself.
    - *Default:* (a) if `~/.local/bin` exists and is already on
      `PATH`. Otherwise ask explicitly — don't silently fall back to
@@ -237,6 +295,8 @@ Without `--keep-prior`, re-install the previous tag via
      `install.sh --symlink-dir <dir>`.
 
 3. **Register the MCP server with Claude Code? (`--register-mcp`)**
+   *(Claude Code only: skip this question when Claude Code is not
+   installed. Codex gets no registration from the install.)*
 
    - *What this is:* MCP (Model Context Protocol) is how Claude Code
      learns about external tool servers and exposes their operations
@@ -252,8 +312,16 @@ Without `--keep-prior`, re-install the previous tag via
    - *Options:*
      - **(a) Register now (`--register-mcp`).** The script runs
        `claude mcp add agent-director -- <path> serve --stdio`
-       (the `--` is required). If a registration for this install's
-       binary is already there it says so and adds nothing. If the
+       (the `--` is required), through the one Claude Code program
+       every Claude Code command in the install uses: `[launch]
+       claude_path` in `config.toml` when it names an executable file,
+       else `claude` from PATH. If a registration for this install's
+       binary is already there it says so and adds nothing. On an
+       upgrade from the old layout, a registration the install finds
+       (it runs `claude mcp get agent-director` from the directory it
+       runs in) that names the old directory's binary is removed and
+       added again for the new binary, in the same scope; without
+       `--register-mcp` the install prints the commands instead. If the
        add fails (for example, the name is already registered for
        another command, which Claude Code refuses), every other
        install step is still done and install.sh exits 6, showing the
@@ -271,11 +339,16 @@ Without `--keep-prior`, re-install the previous tag via
      orchestrator setups, but off-by-default keeps the tool list
      lean for operators who don't need it. Easy to flip on later.
    - *Reversibility:* fully reversible. To add it later:
-     `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
+     `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`.
      To remove: `claude mcp remove agent-director -s <scope>` or
      `uninstall.sh --mcp-also`.
 
 4. **Inject persistent help hooks into `~/.claude/settings.json`? (`--no-hooks`)**
+   *(`--no-hooks` skips both the help hooks in `settings.json` and the
+   `inject_help_hook = true` merge into `config.toml`. Without Claude
+   Code on the machine the `settings.json` hooks do not apply; the
+   install skips them with a message, and only the `config.toml`
+   setting is still merged unless `--no-hooks`.)*
 
    - *What this is:* agent-director ships a `help` verb that prints
      its entire manifest (every verb, every error code) as JSON. The
@@ -297,21 +370,31 @@ Without `--keep-prior`, re-install the previous tag via
        those events are preserved, and re-running the install is
        idempotent (duplicate entries are detected and skipped). The
        install also snapshots `~/.claude/settings.json` to a
-       timestamped `.bak` first.
+       timestamped `.bak` first. On an upgrade from the old layout it
+       also removes the entries whose hook names the old directory's
+       binary, which that upgrade replaced, before it adds the new ones.
      - **(b) Skip the hook injection (`--no-hooks`)**. Pick this if
        you want to manage how Claudes learn about agent-director
        yourself (e.g. via per-project CLAUDE.md, hand-paste, or some
        other mechanism). With this flag, settings.json is left
-       byte-identical to its pre-install state — no edit, no .bak.
+       byte-identical to its pre-install state — no edit, no .bak. On
+       an upgrade from the old layout, the entries that still name the
+       old directory's binary are printed with the fix and left in
+       place: they point at a binary that is kept only until the
+       operator deletes the old directory. `--no-hooks` does not skip
+       the migration of `config.toml` and the templates to the agent
+       names (see "What this skill does"); that runs on an upgrade
+       either way.
    - *Default:* (a) — inject. This is the single biggest reason
      install.sh exists over a bare binary copy. Defaulting to skip
      would make the install almost useless for the orchestrator use
      case.
    - *Reversibility:* fully reversible. `uninstall.sh` removes the
-     two entries (preserving any other user hooks at those events),
-     and the pre-edit `.bak` snapshot is retained for manual
-     rollback. Re-injecting later is a re-run of `install.sh`
-     without `--no-hooks`.
+     two entries (preserving any other user hooks at those events;
+     the entries of an install from before the move too), and the
+     pre-edit `.bak` snapshot is retained for manual rollback.
+     Re-injecting later is a re-run of `install.sh` without
+     `--no-hooks`.
 
 5. **Confirm and execute**
    - Display the assembled `bash install.sh <resolved flags>` command
@@ -319,27 +402,45 @@ Without `--keep-prior`, re-install the previous tag via
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
-   - If this is an upgrade and the operator wants a single-step
-     rollback path, add `--keep-prior` (it snapshots both binaries, so
-     the rollback restores a matching pair). Otherwise leave it off;
-     a re-install with `--from-release v<old>` is the fallback.
+   - If this is an upgrade within the new layout and the operator
+     wants a single-step rollback path, add `--keep-prior` (it
+     snapshots both binaries, so the rollback restores a matching
+     pair). Otherwise leave it off; a re-install with
+     `--from-release v<old>` is the fallback, for a release of this
+     layout or later.
+   - On the upgrade that moves the old directory, `--keep-prior`
+     makes no snapshot, so do not offer it as the rollback: the way
+     back is "Going back to the previous release" below, which sets
+     the new directory aside and puts the kept old directory back,
+     and the fallback `--from-release v<old>` does not work across
+     the move (this install.sh refuses a release from before it).
+     Tell the operator before the run that the way back loses
+     everything written since the upgrade.
    - After the run, tell the operator where `agent-director-admin` was
      installed (install.sh's `admin   :` line, just before
      `install.sh: done`) and that it is not on PATH. Do not run it.
+     After a move, also tell them the kept directory's name (the
+     `kept    :` line) and to delete it once the upgrade is confirmed.
    - If install.sh exits non-zero, see "When install.sh fails" below.
      On exit 5, act on its last stderr line,
      `install.sh: err_name=<Name>`, never on the text above it.
 
 Do NOT skip this dialog because flags "look obvious from context".
 The operator may want a non-default path, MCP off, or a `--keep-prior`
-rollback snapshot. Inferring intent is the failure mode this section
-exists to prevent.
+rollback snapshot (an upgrade within the new layout only). Inferring
+intent is the failure mode this section exists to prevent.
 
 ## What this skill does
 
 This skill runs `install.sh` from the same directory. The script:
 
-1. **Pre-flights.** First, while parsing flags, it refuses (exit `2`)
+1. **Pre-flights.** First of all, before it reads or writes anything,
+   it refuses (exit `2`) a `HOME` that is unset, empty or not an
+   absolute path (`install.sh: HOME is unset, empty or not an absolute
+   path`): every path the install uses is built from `HOME`, and an
+   empty one would put the install root at `/.config/agent-director`.
+   Run it with `HOME` set to the user's home directory. `uninstall.sh`
+   refuses the same way. Next, while parsing flags, it refuses (exit `2`)
    an unknown flag; `--from-release` with `--binary` or
    `--admin-binary`; `--sha256` or `--admin-sha256` without
    `--from-release` ("only applies with --from-release") or not 64
@@ -358,8 +459,10 @@ This skill runs `install.sh` from the same directory. The script:
       `Darwin/x86_64`, etc.) is hard-refused with a message naming
       the supported set and referencing Idea Bee `b.fg3` for
       cross-platform expansion status.
-   3. **Required tools on PATH.** `claude`, `tmux`, `jq`, `file`,
-      and `sqlite3` must all resolve via `command -v`. The `file(1)`
+   3. **Required tools on PATH.** `tmux`, `jq`, `file`,
+      and `sqlite3` must all resolve via `command -v`. (Claude Code and
+      Codex are not on this list: at least one of them must be present,
+      checked with item 4 below.) The `file(1)`
       tool is mandatory because step 7 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
       install via `apt install file` / `brew install file-formula`
@@ -368,16 +471,24 @@ This skill runs `install.sh` from the same directory. The script:
       ACTUAL `user_version` through the WAL with
       `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <db> "PRAGMA user_version;"`,
       both to decide whether a migration sentinel is needed and to
-      verify the post-open version. Raw header bytes are subtly wrong
+      verify the post-open version. (The one read made before anything
+      is installed, the gate of the config and template migration
+      below, takes the version from the database file's header when
+      that is safe to read and touches nothing, and falls back to the
+      same command with `-readonly`, so that a refusal leaves the
+      store as it found it.) Raw header bytes are subtly wrong
       for a WAL-mode DB, `-init /dev/null` keeps your `~/.sqliterc` from
       changing the output, and `<busy_timeout_ms>` is the `[store]
-      busy_timeout_ms` that step 4 reads. Install `sqlite3` via
+      busy_timeout_ms` that item 4 reads. Install `sqlite3` via
       `apt install sqlite3` / `brew install sqlite` /
       `dnf install sqlite`. `curl` is also required when
       `--from-release` is supplied.
-   4. **Store database (`[store] db_path` and `busy_timeout_ms`)** —
-      reads `[store] db_path` from `~/.agent-director/config.toml` to
-      find the database agent-director opens, the one the
+   4. **Store database (`[store] db_path` and `busy_timeout_ms`), the
+      launch paths, and the agents** —
+      reads `[store] db_path` from AD's `config.toml`
+      (`~/.config/agent-director/config.toml`; while the move of the old
+      directory is due, the old directory's copy, which is the one to
+      fix) to find the database agent-director opens, the one the
       schema-migration flow (below) reads, authorizes and verifies. When
       `db_path` moves the store, the `pre-flight OK` block gains a line
       `store   : <path> ([store] db_path in <config>)`; with the default
@@ -385,7 +496,28 @@ This skill runs `install.sh` from the same directory. The script:
       script cannot read stops the install here (exit `5`,
       `ErrConfigMalformed`), before anything is installed or changed.
       See "Which database install.sh checks" below for the accepted form
-      and the refusal. It then reads `[store] busy_timeout_ms`, how long
+      and the refusal. In the same read it takes `[launch] claude_path`
+      and `codex_path`, each optional, each an absolute path or one
+      starting with `~/`; a `[launch]` line it cannot read stops the
+      install here too (exit `5`, `ErrConfigMalformed`; see "A refused
+      config file" below). It then looks for the two agents: each is
+      present when its launch path names an existing executable file or
+      its program is on PATH, and the `pre-flight OK` block prints a
+      `claude  :` and a `codex   :` line for them. The `claude  :` line
+      gives the `--version` line and the program's path
+      (`(program: <path>)`). The `codex   :` line gives the program's
+      path and says the version was not checked: Codex is never run,
+      because its `--version` writes files in the Codex folder. An agent
+      that is not found prints `not installed (<reason>)`, the reason
+      being that its program is not on PATH and its `[launch]` path is
+      not set, or that the `[launch]` path names no executable file. A
+      `[launch]` path that names no executable file while the program is
+      on PATH prints a line saying so, then the line for the program
+      found on PATH.
+      With neither present the install stops (exit `2`) naming both and
+      how to install either, after every other pre-flight check below,
+      so a config file refused for its form (exit `5`) is reported first.
+      It then reads `[store] busy_timeout_ms`, how long
       agent-director waits for a locked store, so that its own reads of
       that database wait as long. A `busy_timeout_ms` line the script
       cannot read stops the install here too (exit `5`,
@@ -399,7 +531,8 @@ This skill runs `install.sh` from the same directory. The script:
       `~/.claude/settings.json` or `config.toml` that step 6's merges
       cannot write through stops the install here, before anything is
       installed or changed: `settings.json` with exit `4`, `config.toml`
-      with exit `5` (`ErrConfigMalformed`); see step 6 below.
+      with exit `5` (`ErrConfigMalformed`); see step 6 below. With Claude
+      Code absent, `settings.json` is not read, checked or written.
    5. **`--from-release` resolution** (if applicable) — downloads
       both matching assets for `$(uname -s)`/`$(uname -m)` from GitHub
       Releases (`agent-director-<os>-<arch>` and
@@ -427,7 +560,7 @@ This skill runs `install.sh` from the same directory. The script:
         `--binary` or found in the checkout: "install.sh: no
         agent-director-admin source binary found.", `Tried:` the
         checkout's `bin/agent-director-admin` and
-        `~/.agent-director/admin/agent-director-admin`, and "Pass
+        `~/.config/agent-director/admin/agent-director-admin`, and "Pass
         --admin-binary <path> to override."
       - neither found: one combined refusal, "install.sh: no source
         binaries found: ...", that names all four places it looked and
@@ -444,7 +577,7 @@ This skill runs `install.sh` from the same directory. The script:
       | Binary | 1st | 2nd | 3rd |
       |---|---|---|---|
       | `agent-director` | `--binary <path>` | `bin/agent-director` of the checkout the script sits in | `command -v agent-director` |
-      | `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout | the installed `~/.agent-director/admin/agent-director-admin` |
+      | `agent-director-admin` | `--admin-binary <path>` | `bin/agent-director-admin` of that checkout | the installed `~/.config/agent-director/admin/agent-director-admin` |
 
       `agent-director-admin` is never looked up on PATH, where it is
       never installed. So a re-run of the installed skill, outside any
@@ -501,12 +634,105 @@ This skill runs `install.sh` from the same directory. The script:
       Makefile; otherwise it names no tree, only the placeholder
       `<path-to-agent-director-checkout>`. Both binaries open the same
       store, so they must come from one build.
+   10. **Directory capability check (SR-11.7)** — each binary's `version`
+      result must report `config_dir` `~/.config/agent-director`, the
+      directory this release keeps AD's files in. A binary whose
+      `version` lacks it, or names another directory, is from an earlier
+      release and is refused with exit 3 ("a binary to install is from
+      an earlier release"), naming both binaries and their `config_dir`.
+      The check runs `version`, which opens no store. The fix is to
+      install this release's binaries (`make build` in a checkout, or
+      `--from-release`); an earlier release is installed only with its
+      own `install.sh`, fetched from its tag.
 
-2. **Creates `~/.agent-director/`** (mode 0700) if missing, plus
-   `~/.agent-director/bin/` for the binary and
-   `~/.agent-director/admin/` (mode 0700) for the operator tool.
+   **Also in pre-flight: the directory layout, the migration's checks and
+   the live-agent check.** Among the reads of item 4, in this order, and
+   all before anything is installed or changed:
 
-3. **Copies the binary** to `~/.agent-director/bin/agent-director`
+   - *The layout.* The old directory is present when anything is at
+     that path (a dangling link included), except a link that points to
+     `~/.config/agent-director`, which counts as no old directory. The
+     move is due when the old directory is present and the new one is
+     absent, or holds the marker `.move-incomplete` that a failed move
+     left. While the move is due the reads above and below resolve in
+     the old directory. A layout the install will not move stops it
+     (exit `5`, `ErrMoveConflict`): the message names the one cause and
+     its remedy; see the exit 5 table and "Upgrading an install from the
+     old directory" below.
+   - *The agent-rename gate.* The migration of `config.toml` and the
+     templates (see step 5, "Before the six steps") is due only when a
+     store exists at the path pre-flight resolved and its
+     `user_version` is below the version of the rename's store hop (9).
+     A store whose version cannot be read stops the install here (exit
+     `5`, `ErrVersionUnreadable`), with nothing changed; while the move is
+     due that read is left to the live-agent check below, which reads the
+     same store first.
+   - *The migration's checks.* When the migration is due, `config.toml`
+     and every template are checked (with or without `--no-hooks`); a
+     file it refuses stops the install (exit `5`, `ErrConfigMalformed`
+     for `config.toml`, `ErrTemplateMalformed` for a template), and so
+     does one it will change that is a symlink it cannot write through.
+     See "A refused config file" below.
+   - *The live-agent check.* While the move is due, a row in a live
+     state in the old store, a process running the old binary, or live
+     rows that cannot be read stop the install (exit `5`,
+     `ErrAgentsLive`). It also finds the links and `$PATH` entries that
+     lead into the old `bin` directory, for the move's report.
+
+2. **Moves the old directory when one is due, then creates
+   `~/.config/agent-director/`** (mode 0700) if missing, plus
+   `~/.config/agent-director/bin/` for the binary and
+   `~/.config/agent-director/admin/` (mode 0700) for the operator tool.
+   Only an upgrade from a release that kept its files in the old
+   directory has a move; every other install goes straight to the
+   directory. When it is due, this happens after every pre-flight check,
+   both binary sources and all the checks on them (item 10 included),
+   and before the binary swap, the config and template migration and the
+   store steps:
+   - The two binary sources are copied to temp files outside both
+     directories (a source may sit in the old one, where `command -v
+     agent-director` can lead), and the copies are installed. The
+     live-agent check runs again. `move    : <old> -> <new>` is printed.
+   - Everything in the old directory except `bin/`, `admin/` and the
+     store is copied into the new one, each file written with the
+     original's mode and checked byte for byte. A store inside the old
+     directory is copied with SQLite's backup, from the original opened
+     read-only; the copy must report the same `user_version` and
+     schema hash. A fifo, a socket or a device fails the move, named.
+     A marker file `.move-incomplete` sits in the new directory until
+     the rename.
+   - In the new `config.toml`, a `[store] db_path` or `[log]
+     error_log_path` that names a place inside the old directory is
+     rewritten to the same place in the new one. A value that is inside
+     the old directory as written but reaches outside it through a link
+     inside it is rewritten to the absolute path it reaches today,
+     whether it was relative, absolute or `~/`; a relative value that
+     points outside is rewritten absolute. No line reports a rewritten
+     key: only the `move    :`, `moved   :` and `kept    :` lines are
+     printed. A store that is itself a link is refused, not moved
+     (`ErrMoveConflict`).
+   - The old directory is renamed to
+     `~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>` (the original,
+     old binaries included), the marker is removed, and
+     `moved   :` and `kept    :` lines are printed. The kept
+     directory is for the operator to delete once the upgrade is
+     confirmed; nothing in it is touched.
+   - A failure before the rename, an interrupt included, removes the
+     partial new directory and ends the install with exit 5
+     (`ErrMoveFailed`); the old directory is untouched. A signal that
+     arrives after the rename removes nothing, says the move
+     finished and also ends with exit 5; the re-run continues from the
+     new directory with no move due.
+   - `--keep-prior` makes no snapshot on this install, and a `prior   :`
+     line says so.
+   - After the move, the lines of `config.toml` and the templates
+     that still name the old directory (a `[launch]` value, an
+     `extra_env` value, `cwd`) are printed as `references:` with their
+     fix, left as written (after the migration below, so their line
+     numbers are those of the files as the install leaves them).
+   - The remaining steps work in the new directory.
+
+3. **Copies the binary** to `~/.config/agent-director/bin/agent-director`
    (mode 0755). The source is determined by:
    - `--from-release [tag]` if supplied — the script downloads the
      asset for this host's OS/arch from GitHub Releases (resolving
@@ -521,7 +747,7 @@ This skill runs `install.sh` from the same directory. The script:
    expected hashes before install.
 
    It then copies `agent-director-admin` to
-   `~/.agent-director/admin/agent-director-admin` (mode 0755) the same
+   `~/.config/agent-director/admin/agent-director-admin` (mode 0755) the same
    way, from the source step 6 of the pre-flights settled. It is never
    put on PATH.
 
@@ -555,9 +781,54 @@ This skill runs `install.sh` from the same directory. The script:
    is the legitimate authorizer. See the **"Schema migration: the
    six-step sentinel flow"** section below for the full detail.
    `state.db` here is the database agent-director opens:
-   `~/.agent-director/state.db`, or wherever `[store] db_path` puts it
-   (step 4 of the pre-flights); the install's messages call it
+   `~/.config/agent-director/state.db`, or wherever `[store] db_path` puts it
+   (item 4 of the pre-flights); the install's messages call it
    `state.db` for the default store and name it by its path otherwise.
+
+   **Before the six steps: the migration of `config.toml` and the
+   templates to the agent names (SR-11.2).** This release renames the
+   `[defaults]` key for the question tool in `config.toml`, renames the
+   arguments key of a template, and gives each template an agent. The
+   migration is due only on an install that crosses the rename: a store
+   exists at the path pre-flight resolved and its `user_version` is below
+   the version of the rename's store hop (9). With no store, or a store
+   at or above that version, neither file kind is read or changed, so a
+   template made after the upgrade survives every later install byte
+   for byte. It runs with or without `--no-hooks`. Pre-flight has
+   already checked every file (see "Also in pre-flight" above), and the
+   apply runs here: after the move and the binary swap, and before step
+   2's read and every other step that opens the store. For each file the
+   migration changes (`config.toml` in AD's directory, each
+   `templates/*.toml`):
+   - the old key name is renamed in place, and a template with no
+     `agent` gets the line `agent = "claude"` before its first table
+     header (or at the end of the file when it has none); only the lines
+     before a template's first table header are read;
+   - the file is first copied beside itself, with its mode, as
+     `<file>.pre-agent-rename.<YYYYmmdd-HHMMSS>`, and then replaced
+     whole, keeping its mode; a symlink is written through and kept;
+   - `  migrate : <file> migrated for the agent rename (copy: <backup>)`
+     is printed, or `  migrate : config.toml and the templates need no
+     agent-rename change` when none changed. A file that needs no change
+     gets no write and no copy, so a re-run changes nothing already
+     migrated.
+
+   A write that fails (a full disk, a permission changed since
+   pre-flight, a failed copy) stops the install with **exit 1** and no
+   `err_name` line. It happens after the new binaries are installed and
+   before the store is opened: the file is as it was, every copy the
+   install made is kept, and when the install moved the directory first
+   the message also prints the `references:` lines a re-run would not.
+   The message gives two ways on: fix the cause (free space, restore
+   the permission, fix the link) and run this release's install.sh
+   again from a shell agent-director did not start (it completes the
+   migration, changes nothing already migrated, then migrates the
+   store), or take the way back ("Going back to the previous release"
+   below). A file the migration refuses at this point although
+   pre-flight accepted it (it changed in between) stops the install
+   with **exit 5** and the same two ways on, named
+   `ErrConfigMalformed` or `ErrTemplateMalformed` as in pre-flight.
+
    In brief, in order:
 
    1. **Install the new binary** — already done by step 3/the atomic
@@ -565,8 +836,8 @@ This skill runs `install.sh` from the same directory. The script:
    2. **Read the DB's ACTUAL `user_version`** via
       `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
       (through the WAL, waiting up to `[store] busy_timeout_ms` for a
-      lock, ignoring `~/.sqliterc` — never assume the version, and never
-      read raw header bytes). No `state.db` on disk (fresh install) →
+      lock, ignoring `~/.sqliterc` — never assume the version, and this
+      read never uses raw header bytes). No `state.db` on disk (fresh install) →
       nothing to authorize; step 4 fresh-creates it. A `state.db` that
       exists but whose version cannot be read, or reads as anything but
       a whole number (0 or more), stops the install here (**exit 5**): no
@@ -574,7 +845,7 @@ This skill runs `install.sh` from the same directory. The script:
       unreadable schema version" below.
    3. **Write the authorization sentinel** — a file
       `migrate-authorized` beside state.db
-      (`~/.agent-director/migrate-authorized` for the default store)
+      (`~/.config/agent-director/migrate-authorized` for the default store)
       containing `{"from": <actual>, "to": <target>}`, where
       `<target>` is the schema version this binary requires. **Skipped
       when `from == target`** (the DB is already current), on a
@@ -652,6 +923,11 @@ This skill runs `install.sh` from the same directory. The script:
    fresh session. Mirrors how `bees sting` keeps its skill list
    alive across compacts.
 
+   On an upgrade that moved the old directory, this step also removes
+   the help-hook entries that name the old directory's binary, so the
+   file ends with the new entries only. With `--no-hooks` the file is
+   left as it is, and the install prints the old entries and the fix.
+
    The merge is additive: existing user hooks are preserved. Re-running
    the install is idempotent — duplicate entries are detected and
    skipped. An entry counts as already there only where Claude Code
@@ -709,7 +985,7 @@ This skill runs `install.sh` from the same directory. The script:
    with the same flags.
 
    The same step sets `inject_help_hook = true` in the `[defaults]`
-   table of `~/.agent-director/config.toml`, so every Spawn also gets
+   table of `~/.config/agent-director/config.toml`, so every Spawn also gets
    the help hook whatever its `CLAUDE_CONFIG_DIR`. An existing
    `inject_help_hook` line there is rewritten, a missing one is added
    to the table, and a `[defaults]` header holding the key is added at
@@ -740,7 +1016,7 @@ This skill runs `install.sh` from the same directory. The script:
    is installed or changed (b.whe):
 
        install.sh: cannot merge inject_help_hook = true into config.toml's [defaults] table; refusing to install.
-         config  : /home/<you>/.agent-director/config.toml
+         config  : /home/<you>/.config/agent-director/config.toml
          line 1  : defaults = { relay_mode = "off" }
          This sets defaults as a key (an inline table, say) rather than under a
          [defaults] header. With hooks on, install.sh sets inject_help_hook = true
@@ -786,7 +1062,7 @@ This skill runs `install.sh` from the same directory. The script:
          merges add where the files come from (your dotfiles or home-manager
          configuration, say): in settings.json, a SessionStart hook and a
          SessionEnd hook with matcher "compact", each a command hook running
-         "/home/<you>/.agent-director/bin/agent-director help"; in config.toml,
+         "/home/<you>/.config/agent-director/bin/agent-director help"; in config.toml,
          inject_help_hook = true under [defaults].
          Nothing was installed or changed. Re-run this install after the change.
 
@@ -799,8 +1075,8 @@ This skill runs `install.sh` from the same directory. The script:
      event's list (beside any entries already there):
 
          {"hooks": {
-           "SessionStart": [{"hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}],
-           "SessionEnd": [{"matcher": "compact", "hooks": [{"type": "command", "command": "/home/<you>/.agent-director/bin/agent-director help"}]}]
+           "SessionStart": [{"hooks": [{"type": "command", "command": "/home/<you>/.config/agent-director/bin/agent-director help"}]}],
+           "SessionEnd": [{"matcher": "compact", "hooks": [{"type": "command", "command": "/home/<you>/.config/agent-director/bin/agent-director help"}]}]
          }}
 
      In `config.toml`, set `inject_help_hook = true` under `[defaults]`.
@@ -816,9 +1092,15 @@ This skill runs `install.sh` from the same directory. The script:
    summary reports `hooks   : skipped (--no-hooks)`.
 
 7. **Optional MCP registration.** With `--register-mcp`, runs
-   `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
-   Skipped by default — operators who don't want the MCP server
-   never see it advertised inside Claude. A registration already
+   `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`
+   (through the Claude Code program the install found, `[launch]
+   claude_path` or `claude`; with Claude Code absent the step is skipped
+   with a line saying so). Skipped by default — operators who don't want the MCP server
+   never see it advertised inside Claude. On an upgrade that moved the
+   old directory, a registration that names the old binary is re-pointed
+   at the new one when `--register-mcp` is passed (the registration is
+   removed and added again in its scope); without it, the install
+   prints the commands that do it. A registration already
    there for this binary (`serve --stdio`) is left alone ("already
    registered"). A failed `mcp add` (or the `mcp remove` before a
    re-add) is reported with the command run, its exit status and its
@@ -829,17 +1111,20 @@ This skill runs `install.sh` from the same directory. The script:
    symlink at `<dir>/agent-director` pointing at the canonical
    binary. Default: `~/.local/bin` if it exists and is on PATH;
    otherwise no symlink (the operator can invoke the full path or
-   add `~/.agent-director/bin` to PATH manually). `agent-director-admin`
-   never gets a symlink, under any option.
+   add `~/.config/agent-director/bin` to PATH manually). `agent-director-admin`
+   never gets a symlink, under any option. On an upgrade that moved the
+   old directory, the link the install manages is re-pointed to the new
+   binary, and every other link and `$PATH` entry that leads into the old
+   `bin` directory is printed with its fix.
 
 9. **Prints the operator tool's path** once, at the end
-   (`admin   : ~/.agent-director/admin/agent-director-admin (operator
+   (`admin   : ~/.config/agent-director/admin/agent-director-admin (operator
    tool, not on PATH; ...)`), for the human.
 
 **Your umask (b.7j2).** install.sh runs `umask u=rwx` before anything
 else, so your umask never takes away the owner's own permission bits
 on what the install creates. That covers files the install's own
-`agent-director` runs create in `~/.agent-director/`, since they
+`agent-director` runs create in `~/.config/agent-director/`, since they
 inherit the umask. The group and other bits stay as your umask sets
 them, so an ordinary umask (022, 077, 027, 002) is unchanged. The
 modes above are set with explicit `chmod`s and do not depend on the
@@ -851,21 +1136,27 @@ umask.
   via `--settings` at spawn time and are NOT persistent in the
   user's `settings.json`.
 - It does NOT touch existing user hooks in any event.
-- It does NOT install `claude` or `tmux` themselves. Those are
-  pre-flight requirements.
+- It does NOT install Claude Code, Codex or `tmux` themselves. At
+  least one of the two agents, and `tmux`, are pre-flight requirements.
+- It does NOT run Codex, register anything with Codex or write in any
+  Codex folder, and never writes a `[launch]` key.
+- It does NOT delete the old directory the move keeps
+  (`~/.agent-director.pre-move-*`): that is for the operator to delete
+  once the upgrade is confirmed.
 
 ## When install.sh fails
 
-install.sh exits 0 on success. Its own failures exit 2 to 6:
+install.sh exits 0 on success. Its own failures exit 1 to 6:
 
 | Exit | Cause |
 |---|---|
-| 2 | Pre-flight: a bad flag or flag pair, whitespace in `$HOME`, an unsupported OS/CPU, a missing tool, or a binary built for another architecture. |
-| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, or two version stamps that differ or carry no commit. |
-| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). |
-| 5 | The config file, or the store open and schema migration. The cause line below names which. |
-| 6 | The MCP registration failed (`--register-mcp`): `claude mcp add`, or the `claude mcp remove` before the re-add, exited non-zero. Every other step is done and kept (binaries, store, hooks, links). stderr shows the command run, its exit status, its stderr and the command to run by hand; the last line says the registration failed. There is no `err_name` line. Fix what the stderr names and run the command by hand; if the name is registered for another command and that registration should go, `claude mcp remove agent-director -s <scope>` first. Do not re-run the install for this. |
-| any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
+| 1 | The agent-rename migration could not write a file (a full disk, a permission changed since pre-flight, a failed copy), after the new binaries were installed and before the store was opened; see "Before the six steps" in step 5 of "What this skill does". The message starts `the agent-rename migration could not write <file>; stopping before the store is opened`, its `file` and `error` lines name the file and the cause, and there is no `err_name` line. The file is as it was, every copy the install made is kept, and the store is not opened. Fix the cause the `error` line names, then run this release's install.sh again with the same flags, from a shell agent-director did not start: it completes the migration, changes nothing already migrated, then migrates the store. Or take the way back ("Going back to the previous release" below, with the operator's go-ahead). A step that exits 1 for another reason is the last row of this table. |
+| 2 | Pre-flight: `HOME` unset, empty or not an absolute path (checked first, before anything is read or written: run it with `HOME` set to the user's home directory); a bad flag or flag pair; whitespace in the install path; an unsupported OS/CPU; a missing tool (`tmux`, `jq`, `file`, `sqlite3`); a binary built for another architecture; or neither Claude Code nor Codex found (the message names both, their `[launch]` keys and how to install either; install one, or set its `[launch]` path, then re-run). `uninstall.sh` exits 2 for an unset, empty or relative `HOME` too. |
+| 3 | The binaries: one not found or not executable, a `--from-release` that found no release or could not download one, a hash mismatch, a release before 0.11.0, a local binary not built from `HEAD`, two version stamps that differ or carry no commit, or a binary whose `version` result lacks `config_dir` `~/.config/agent-director` or names another directory (a binary from an earlier release: install this release's binaries; an earlier release is installed with its own install.sh, fetched from its tag). |
+| 4 | The `~/.claude/settings.json` hook merge (step 6 of "What this skill does"): the file is not valid JSON, holds more than one JSON document, or is valid JSON of another shape. Or, with hooks on and Claude Code present, a symlinked `settings.json` the merge cannot write through (refused in pre-flight, before anything was installed or changed; see step 6). With Claude Code absent `settings.json` is not touched or checked. |
+| 5 | The config file or a template, the move of the old directory, or the store open and schema migration. The cause line below names which. |
+| 6 | The MCP registration failed (`--register-mcp`): `claude mcp add`, or the `claude mcp remove` before the re-add of a registration that names the old directory's binary, exited non-zero. Every other step is done and kept (binaries, store, hooks, links). stderr shows the command run, its exit status, its stderr and the command to run by hand; the last line says the registration failed. There is no `err_name` line. Fix what the stderr names and run the command by hand; if the name is registered for another command and that registration should go, `claude mcp remove agent-director -s <scope>` first. Do not re-run the install for this. |
+| any other non-zero | A command install.sh does not check failed (for example `mkdir` could not create `~/.config/agent-director`), and the script stopped there with that command's status, usually 1. The command's own error is on stderr above. |
 
 Each message on stderr says what went wrong and what to do; show it to
 the operator. When this skill ran the install, re-run it only on the
@@ -885,16 +1176,30 @@ no other exit status has a cause line.
 
 | `<Name>` | Cause | Remedy |
 |---|---|---|
-| `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
-| `ErrConfigMalformed` | `~/.agent-director/config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path` and `[store] busy_timeout_ms`, or, with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); or by agent-director at step 3's probe or step 4's store open. | Fix what the message names in config.toml (or its symlink), then re-run the install with the same flags; a symlink also has a `--no-hooks` way out. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 6 of "What this skill does", and "A refused config file". |
-| `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, or a symlinked template the migration cannot write through; all before anything was installed or changed), or by agent-director when it loads a template. | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
+| `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
+| `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
+| `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
 | `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
+| `ErrMoveConflict` | Pre-flight, before anything was installed or changed: AD's old and new directories cannot be moved as they are. The first line names the one cause: the new directory is a dangling link or not a directory; the old directory is a dangling link; both directories exist (the message gives each one's store time); the old directory is a link or not a directory, or its `config.toml`, `templates`, one template or its store is a link while the move is due; a `[store] db_path` or `[log] error_log_path` whose place cannot be resolved against the old directory; or a store that is itself a link. On a host that has only the old directory, the Go client's `MakeTemplate` and the CLI's `make-template` run with `--store-path` create `~/.config/agent-director/templates/` themselves, so running either before the install makes both directories exist (the CLI's `make-template` without `--store-path` refuses with `ErrOldLayout` and creates nothing). | Change nothing else: the message names the cause and its remedy (docs/operator-actions.md, "`install.sh` refuses with `ErrMoveConflict`"). Apply that remedy, then re-run with the same flags. Where both directories exist, ask the operator which one holds the install in use before setting the other aside by renaming it (never delete either); a new directory holding only `templates` that `make-template` made is the one to set aside, then copy any template wanted from it into the moved directory's `templates`. |
+| `ErrAgentsLive` | Pre-flight (and again at the move's first step), before anything was installed or changed, while the move is due: a row in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`) in the old store, a process running the old binary (a Claude Code session's own `agent-director serve --stdio` counts), live rows that could not be read (the store stayed busy past its timeout, or is unreadable), or a process check that did not run (no `/proc`, no usable `ps` or `lsof`: check by hand). | Stop whatever starts agents, then every agent, every `serve` and every caller (ask the operator; do not end agents yourself), run `find-missing` with the old binary's path the message prints for a row whose agent is already gone, and re-run from a shell agent-director did not start. A re-run reads the rows again. See "Upgrading an install from the old directory" and "`install.sh` refuses with `ErrAgentsLive`" in docs/operator-actions.md. |
+| `ErrMoveFailed` | The move failed before its rename (a full disk is the usual cause; a fifo, socket or device in the old directory; a temp directory inside either AD directory), or the install was interrupted before the rename. The partial new directory was removed and the old directory is untouched. A signal after the rename also exits here, saying the move finished: the old directory is then the kept `~/.agent-director.pre-move-*`, and the new directory holds the complete copy. | Fix the cause the message names (free space on the disk that holds `~/` and on the one that holds the temp directory, move a fifo or socket out of the old directory, set `TMPDIR` outside both AD directories), then re-run with the same flags. A leftover `.move-incomplete` is handled by the re-run. After the move had finished, the re-run just continues from the new directory. See "`install.sh` stops with `ErrMoveFailed`" in docs/operator-actions.md. |
 | any other name | Step 4's store open failed with that agent-director `err_name` (`ErrSchemaMigrationRequired`, say). It is `ErrStoreOpen` when the open's output held no error envelope, or an envelope whose `err_name` is not a plain `Err…` name. | The message advises a re-run: a migration this install authorized was not consumed, and a re-run retries it. If the re-run fails with the same name, it needs a human: show the operator the error above the cause line. |
 
-`ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
-names: no agent-director verb returns them. Whatever the name, do NOT
-delete state.db.
+Remedy classes: re-run as is (`ErrVersionUnreadable`; `ErrMoveFailed`
+once its cause is fixed; `ErrAgentsLive` once the agents are stopped);
+fix the file or directory the message names, then re-run
+(`ErrConfigMalformed`, `ErrTemplateMalformed`, `ErrMoveConflict`);
+install a newer agent-director (`ErrSchemaMismatch`); stop for a human
+(`ErrSchemaVerifyFailed`, a repeated unknown name).
+
+`ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
+`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own names: no
+agent-director verb returns them. `ErrConfigMalformed` and
+`ErrTemplateMalformed` are agent-director's own catalogued names, which
+install.sh also gives for its pre-flight and migration checks of the
+two file kinds. Whatever the name, do NOT delete state.db, and never
+delete the old directory or its kept copy to get past a refusal.
 
 ## Uninstall
 
@@ -911,11 +1216,25 @@ at stake if you pick wrong — and here especially, **what is
 irreversible**. Uninstall deletes things; the operator needs to know
 which deletes are recoverable from the filesystem and which are not.
 
+Which directory it works on: `~/.config/agent-director`. When only the
+old directory is present (an install never moved to the new one, because
+it was never upgraded), it works on that directory instead, the same
+way, and every path below is then that directory's. A link at the old
+path that points to `~/.config/agent-director` is no old directory.
+Tell the operator which one it will work on (`ls -ld ~/.config/agent-director`
+and the old directory), and about every other directory an upgrade or a
+way back left, which the script names: the kept
+`~/.agent-director.pre-move-*`, `~/.config/agent-director.after-upgrade-*`,
+`~/.agent-director.recreated-*`, an old directory present beside the new
+one, and any `*.aside-*` directory.
+
 What the script removes *unconditionally* (the operator does not need
 to opt into these): the two help-hooks injected into
-`~/.claude/settings.json`, the binary under
-`~/.agent-director/bin/`, the operator tool
-`~/.agent-director/admin/agent-director-admin` with its `admin/`
+`~/.claude/settings.json` (the entries an install from before the move
+wrote too, whose hook names the old directory's binary), the binary
+under `~/.config/agent-director/bin/` (the old directory's `bin/` on an
+old-only host), the operator tool
+`~/.config/agent-director/admin/agent-director-admin` with its `admin/`
 directory, and the PATH symlink if one exists. State
 the baseline up front so the questions are only about the
 destructive *additions*.
@@ -923,11 +1242,19 @@ destructive *additions*.
 1. **Also delete `state.db` and templates? (`--purge`)**
 
    - *What this is:* by default uninstall removes the binary and
-     hooks but leaves `~/.agent-director/` itself in place — so
+     hooks but leaves `~/.config/agent-director/` itself in place — so
      `state.db` (the SQLite database with every Spawn's id,
      transcript pointer, and history) and any templates you've
      created with `make-template` survive. `--purge` adds
-     `rm -rf ~/.agent-director/` on top.
+     `rm -rf ~/.config/agent-director/` on top, and removes every other
+     directory an upgrade or a way back left: each
+     `~/.agent-director.pre-move-*` (the old directory the upgrade
+     kept), `~/.config/agent-director.after-upgrade-*`,
+     `~/.agent-director.recreated-*`, an old directory present beside
+     the new one, and a link at the old path that points to the new
+     directory (removed as a link, never what it points to). A
+     directory named `*.aside-*` is always left and named: an operator
+     set it aside and it may hold data.
    - *Options:*
      - **(a) Keep state (default).** Re-installing later picks up
        your existing Spawn history and templates.
@@ -942,14 +1269,21 @@ destructive *additions*.
      `~/.claude/projects/` and survive — but their mapping to
      instance ids is in `state.db`, so a purge means you'd
      have to grep transcripts by hand to find a specific session.
+     Purging the kept old directory also removes the only way back to
+     the previous release ("Going back to the previous release" below
+     needs it): say so when one is present.
      `uninstall.sh` does not read `[store] db_path`: a store that
-     `db_path` puts outside `~/.agent-director/` survives `--purge`,
+     `db_path` puts outside `~/.config/agent-director/` survives `--purge`,
      and the operator deletes it by hand if they want it gone.
+     Without `--purge`, the script names each kept directory, with the
+     advice to delete it once the upgrade is confirmed.
 
 2. **Skip the script's `[y/N]` safety prompt? (`--force`)** *(only ask if (b) above was chosen)*
 
    - *What this is:* with `--purge`, `uninstall.sh` prints
-     `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]`
+     `uninstall.sh: --purge will rm -rf ~/.config/agent-director[, and
+     also remove these other AD directories ...: <path> (<what it is>),
+     ...] — proceed? [y/N]` (it names each directory it will remove)
      before it removes or changes anything, and reads the reply from
      its stdin. `--force` suppresses that prompt. Your tool call gives
      the script no stdin, so the prompt gets no reply: the script then
@@ -993,6 +1327,15 @@ destructive *additions*.
      if there's no registration (the script says it found none and
      goes on; that is not a failure), but defaulting it on would
      imply the operator registered MCP — which they may not have.
+   - *Which program:* the Claude Code program install.sh runs:
+     `[launch] claude_path` in the `config.toml` of the directory the
+     script works on, when it names an executable file, else `claude`
+     from PATH. A `[launch]` line it cannot read, or a `claude_path`
+     that names no executable file, gets a note and the step uses
+     `claude` from PATH; it never stops or fails the script. With no
+     program at all the step is skipped with a line saying so
+     (agent-director was not deregistered from Claude Code) and the exit
+     status is unchanged.
    - *Where it looks:* the command runs from the directory
      uninstall.sh runs in. A `local` registration made inside a git
      repository is found from any directory of that repository; made
@@ -1007,7 +1350,7 @@ destructive *additions*.
      `claude mcp remove agent-director -s <scope>` once per scope.
    - *Reversibility:* completely reversible. Re-register at any
      time with
-     `claude mcp add agent-director -- ~/.agent-director/bin/agent-director serve --stdio`.
+     `claude mcp add agent-director -- ~/.config/agent-director/bin/agent-director serve --stdio`.
 
 4. **Confirm and execute**
    - Display the assembled `bash uninstall.sh <resolved flags>`.
@@ -1045,7 +1388,9 @@ destructive *additions*.
 
   An entry is agent-director's only when it is an object whose `hooks`
   is a list holding a hook whose `command` starts with
-  `~/.agent-director/bin/agent-director` (the path spelled out). Any
+  `~/.config/agent-director/bin/agent-director` (the path spelled out)
+  or with the old directory's `bin/agent-director` (the help hooks an
+  install before the move wrote). Any
   other value in the `SessionStart` and `SessionEnd` lists (a string,
   a number, an entry whose `hooks` is an object or whose `command` is
   not a string, say) is kept as it is, while agent-director's entries
@@ -1074,7 +1419,8 @@ destructive *additions*.
   the file comes from (your dotfiles or home-manager configuration):
   - `settings.json`: each `SessionStart` and `SessionEnd` entry holding
     a hook whose command starts with
-    `~/.agent-director/bin/agent-director` (the path spelled out);
+    `~/.config/agent-director/bin/agent-director` or the old directory's
+    `bin/agent-director` (the paths spelled out);
   - `config.toml`: `inject_help_hook` from `[defaults]`, and the
     `[defaults]` header too when only blank lines and comments are left
     under it.
@@ -1088,17 +1434,29 @@ destructive *additions*.
   `uninstall.sh: left <path> alone: it holds no agent-director hook entries, and its symlink cannot be written through`.
   Such a `config.toml` without `inject_help_hook` needs no edit and is
   not checked.
-- Removes the binary at `~/.agent-director/bin/agent-director` and
-  the `.prior` snapshot if one is present.
-- Removes `~/.agent-director/admin/agent-director-admin`, its `.prior`
-  snapshot if one is present, and the `~/.agent-director/admin/`
-  directory (left in place, with a note, if it holds other files).
+- Removes the binary at `~/.config/agent-director/bin/agent-director`
+  and the `.prior` snapshot if one is present (the same files in the old
+  directory on an old-only host).
+- Removes `~/.config/agent-director/admin/agent-director-admin`, its
+  `.prior` snapshot if one is present, and the
+  `~/.config/agent-director/admin/` directory (left in place, with a
+  note, if it holds other files).
 - Unlinks the PATH symlink if one was created.
-- With `--purge`: also removes `~/.agent-director/` entirely
-  (including state.db + templates). A store `[store] db_path` puts
-  outside `~/.agent-director/` is not removed. Unless `--force` is
-  supplied, it first prints
-  `--purge will rm -rf ~/.agent-director/ — proceed? [y/N]` and reads
+- Without `--purge`, names and leaves every other AD directory it
+  finds (`uninstall.sh: kept <dir> (<what it is>); delete it once the
+  upgrade is confirmed, or run --purge`): the kept `.pre-move-*`, the
+  `after-upgrade-*` and `recreated-*` directories, and an old directory
+  present beside the new one. Every `*.aside-*` directory is left, under
+  `--purge` too, and named (`uninstall.sh: left <dir> (set aside to
+  settle a conflict ...)`); tell the operator to delete it themselves
+  once sure it holds nothing they need.
+- With `--purge`: also removes `~/.config/agent-director/` entirely
+  (including state.db + templates) and every other AD directory listed
+  under question 1 (`uninstall.sh: purged <dir> (<what it is>)` for each;
+  a link is removed as a link). A store `[store] db_path` puts
+  outside `~/.config/agent-director/` is not removed. Unless `--force` is
+  supplied, it first prints the prompt of question 2, which names each
+  directory, and reads
   one reply line from stdin, before anything is removed or changed
   (but after the `settings.json` symlink check above). Then:
   - `y`, `Y`, `yes` or `YES` (or `--force`): the purge runs. A
@@ -1124,6 +1482,10 @@ destructive *additions*.
   any other failure is reported, the later steps still run, and the
   script exits 6 at the end (also after `--purge aborted`, which
   otherwise exits 0).
+- Removes nothing Codex-related: the install added nothing in any
+  Codex folder. A Codex MCP or help entry an operator added by hand
+  stays, and removing it is the operator's to do by hand. This skill
+  gives no removal steps for it.
 
 ## Schema migration: the six-step sentinel flow
 
@@ -1145,7 +1507,7 @@ administrator action, so the install writes the sentinel for you.
 ### The sentinel
 
 - **Path:** always a *sibling of state.db*, the database
-  agent-director opens: `~/.agent-director/migrate-authorized` for the
+  agent-director opens: `~/.config/agent-director/migrate-authorized` for the
   default store, or `migrate-authorized` in the directory of the file
   `[store] db_path` names (see "Which database install.sh checks"
   below), so the install authorizes the right DB.
@@ -1163,17 +1525,17 @@ administrator action, so the install writes the sentinel for you.
 ### Which database install.sh checks
 
 install.sh reads, authorizes and verifies the database agent-director
-itself opens. That is `~/.agent-director/state.db` unless `[store]
-db_path` in `~/.agent-director/config.toml` moves it. install.sh reads
+itself opens. That is `~/.config/agent-director/state.db` unless `[store]
+db_path` in `~/.config/agent-director/config.toml` moves it. install.sh reads
 `db_path` itself, in pre-flight, and resolves it as agent-director
 does:
 
 | `db_path` | Store database |
 |---|---|
-| unset, or `""` | `~/.agent-director/state.db` |
+| unset, or `""` | `~/.config/agent-director/state.db` |
 | `"~/x"` | `x` under `$HOME` |
 | `"/abs/x"` | `/abs/x`, as written |
-| anything else (`"x"`, `"./x"`, `"../x"`, `"~"`, `"~user/x"`) | relative to `~/.agent-director/` |
+| anything else (`"x"`, `"./x"`, `"../x"`, `"~"`, `"~user/x"`) | relative to `~/.config/agent-director/` |
 
 `$VAR` is not expanded: `"$HOME/x"` is a relative path. Step 2 below
 reads that database's `user_version`, step 3 writes the sentinel beside
@@ -1183,14 +1545,24 @@ block names it:
     install.sh: pre-flight OK
       claude  : ...
       tmux    : ...
-      store   : /home/<you>/custom/state.db ([store] db_path in /home/<you>/.agent-director/config.toml)
+      store   : /home/<you>/custom/state.db ([store] db_path in /home/<you>/.config/agent-director/config.toml)
 
 and later messages name it by that path where they would say
 `state.db`. With the default store there is no `store` line and the
-output is unchanged. A `~/.agent-director/state.db` left behind after
+output is unchanged. A `~/.config/agent-director/state.db` left behind after
 `db_path` moved the store is neither read nor changed. No
 agent-director command prints the store path; the `store` line is where
 the install shows it.
+
+While the move of the old directory is due, pre-flight reads the old
+directory's `config.toml` and the store in the old directory, and
+resolves a relative `db_path` against the old directory; the message
+that names the file names that copy. After the move, the same value
+resolves in `~/.config/agent-director/`: the move rewrites a value that
+names a place inside the old directory to the same place in the new one,
+and a value that reaches outside it to the absolute path it reaches; see
+step 2 of "What this skill does". A store kept outside the directory is
+neither copied nor moved.
 
 **The form install.sh reads.** The reader is narrow and fails closed.
 It accepts only blank lines, `#` comment lines, `[name]` table headers
@@ -1220,7 +1592,7 @@ character (a tab, say) or a `?`, a UTF-16 byte-order mark, or a
 the line (none for a file it cannot read) and what to change:
 
     install.sh: cannot tell which store database agent-director opens; refusing to install.
-      config  : /home/<you>/.agent-director/config.toml
+      config  : /home/<you>/.config/agent-director/config.toml
       line 1  : store.db_path = "~/custom/state.db"
       This sets a store key as a dotted key (store.db_path = ..., say)
       rather than under a [store] header. Move this line, without the
@@ -1251,11 +1623,38 @@ before any header (`defaults = { ... }`); with hooks on, the check that
 follows it refuses that line in pre-flight (exit 5); see step 6 of "What
 this skill does" above.
 
+**The `[launch]` table.** install.sh also reads `[launch] claude_path` and
+`codex_path` in pre-flight, from the same file, to choose the Claude Code
+program it runs and to see which agents are installed (it never runs
+Codex). It reads the same narrow form: a value is a one-line `"..."`
+holding no backslash, or a `'...'`, and an optional `#` comment, and is an
+absolute path or starts with `~/`; an empty `""` counts as unset. Anything
+else stops the install with **exit 5** (`ErrConfigMalformed`) before
+anything is installed or changed, with the headline `install.sh: cannot
+tell which programs agent-director launches (the [launch] table); refusing
+to install.` and the same `config  :`, `line N  :` and change lines as
+above. install.sh never writes a `[launch]` key.
+
+**The migration's refusals.** Two more refusals come from the migration
+of `config.toml` and the templates to the agent names (step 5, "Before the
+six steps"), in pre-flight, with the same "nothing was installed or
+changed" ending: `ErrConfigMalformed` for a `config.toml` that sets the
+question-tool key more than once under `[defaults]`, sets `defaults` as a
+key on a line that names the key's old name, or cannot be read; and
+`ErrTemplateMalformed` for a template with a line before its first table
+header that the migration cannot read, with the old name of the arguments
+key set twice or together with `agent_args`, or that cannot be read. Both
+also refuse a file the migration cannot write through (a symlink it cannot
+follow), and the apply, which runs after the binaries are installed,
+refuses a file that changed since pre-flight. Fix the file the message
+names; see "`install.sh` refuses config.toml or a template" in
+docs/operator-actions.md.
+
 ### How long install.sh waits for a locked state.db
 
 agent-director waits up to `[store] busy_timeout_ms` for a store database
 another process holds locked, then fails the call. install.sh reads that
-key itself, in pre-flight, from the same `~/.agent-director/config.toml`,
+key itself, in pre-flight, from the same `~/.config/agent-director/config.toml`,
 right after `db_path`. Each sqlite3 read of state.db's `user_version`
 (`.timeout <busy_timeout_ms>`) waits up to that long for a lock, and the
 `sqlite3` check commands the install prints carry the same value.
@@ -1283,7 +1682,7 @@ regardless of letter case), or a second `busy_timeout_ms`. The report
 names the file, the line and what to change:
 
     install.sh: cannot tell how long agent-director waits for a locked store database; refusing to install.
-      config  : /home/<you>/.agent-director/config.toml
+      config  : /home/<you>/.config/agent-director/config.toml
       line 2  : BUSY_TIMEOUT_MS = 30000
       agent-director reads this key as busy_timeout_ms: its TOML decoder
       matches names regardless of letter case. Write it as busy_timeout_ms.
@@ -1299,8 +1698,11 @@ Make the change it names, then re-run the install with the same flags.
 `state.db` below is the database the section above names.
 
 1. **Install the new binaries** (atomic `mv` into
-   `~/.agent-director/bin/`, and `agent-director-admin` into
-   `~/.agent-director/admin/`).
+   `~/.config/agent-director/bin/`, and `agent-director-admin` into
+   `~/.config/agent-director/admin/`). On the upgrade that moves the old
+   directory, the move runs first (step 2 of "What this skill does"), and
+   the migration of `config.toml` and the templates runs after this step
+   and before step 2 below.
 2. **Read the ACTUAL `user_version`** via
    `sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" <state.db> "PRAGMA user_version;"`
    (through the WAL, waiting up to `[store] busy_timeout_ms` for a
@@ -1441,7 +1843,7 @@ full disk), mktemp's own error comes first, then the install exits 5
 with:
 
     install.sh: writing the migration sentinel FAILED
-      sentinel: /home/<you>/.agent-director/migrate-authorized
+      sentinel: /home/<you>/.config/agent-director/migrate-authorized
       mktemp could not create a temp file beside it (its error is above), so
       no migration was authorized: state.db is still at v<N>.
       The new agent-director does not open it until it is at v<T>.
@@ -1479,7 +1881,7 @@ or the read is wrong. Do NOT delete state.db.
    your store's path and its `[store] busy_timeout_ms`; for the default
    store it is:
 
-       sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "PRAGMA user_version;"
+       sqlite3 -batch -init /dev/null -cmd ".timeout <busy_timeout_ms>" ~/.config/agent-director/state.db "PRAGMA user_version;"
 
 2. Re-run the install with the same flags. It reads the version again:
    below `v<T>` it brings state.db to `v<T>` again, above `v<T>` it
@@ -1495,12 +1897,12 @@ When step 4's store open (`agent-director list`) succeeds but step 5
 finds no file at state.db's path, the install exits 5 with:
 
     install.sh: state.db was not created by the store open
-      state.db: /home/<you>/.agent-director/state.db
-      config  : /home/<you>/.agent-director/config.toml
+      state.db: /home/<you>/.config/agent-director/state.db
+      config  : /home/<you>/.config/agent-director/config.toml
       The store open (agent-director list) succeeded, yet there is no store
       at the state.db path above, where install.sh expected it. agent-director
       opens its store at [store] db_path in the config file above
-      (~/.agent-director/state.db when unset), and install.sh read that file
+      (~/.config/agent-director/state.db when unset), and install.sh read that file
       before the open. So either db_path changed since and agent-director
       opened a store somewhere else, or something removed or moved the store
       after the open.
@@ -1516,7 +1918,7 @@ finds no file at state.db's path, the install exits 5 with:
 With `[store] db_path` set, the headline and the `state.db:` line name
 that store's path (see "Which database install.sh checks" above).
 agent-director takes its store's path only from `[store] db_path` in
-`~/.agent-director/config.toml`: no `AGENT_DIRECTOR_*` environment
+`~/.config/agent-director/config.toml`: no `AGENT_DIRECTOR_*` environment
 variable moves it, and install.sh passes it no store-path flag. install.sh
 read `db_path` in pre-flight, so a missing store means one of: `db_path`
 changed after pre-flight, something removed or moved the store after the
@@ -1546,7 +1948,7 @@ merged and MCP was not registered.
 
 ### A refused config file
 
-agent-director loads `~/.agent-director/config.toml` before it opens
+agent-director loads `~/.config/agent-director/config.toml` before it opens
 state.db, so a config it refuses (`ErrConfigMalformed`: for example a
 refused `[tmux]` timing, `[defaults] expire_retention_days` or `[store]
 busy_timeout_ms` value, a TOML syntax error in a value, such as
@@ -1559,10 +1961,12 @@ step 3's probe when state.db exists, step 4's open on a fresh install.
 `[header]` say, stops the install earlier, in pre-flight; see "Which
 database install.sh checks" above. So does a `busy_timeout_ms` line its
 own reader cannot read; see "How long install.sh waits for a locked
-state.db" above.) It reports:
+state.db" above. So do a `[launch]` line its own reader cannot read and
+the migration's refusals, which name the old directory's copy while the move
+is due; see "Which database install.sh checks" above.) It reports:
 
     install.sh: agent-director refused its config file (ErrConfigMalformed)
-      config  : /home/<you>/.agent-director/config.toml
+      config  : /home/<you>/.config/agent-director/config.toml
       {"err_name":"ErrConfigMalformed","err_description":"config <path>: refused [defaults] values: ..."}
       Fix what the error above names in the config file, then re-run this
       install.
@@ -1594,18 +1998,25 @@ state.db is refused with `ErrSchemaMigrationRequired`.
 ## Upgrade rollback
 
 If you used `install.sh --keep-prior` on the previous install, the
-previous binaries are at `~/.agent-director/bin/agent-director.prior`
-and `~/.agent-director/admin/agent-director-admin.prior`. To roll back
+previous binaries are at `~/.config/agent-director/bin/agent-director.prior`
+and `~/.config/agent-director/admin/agent-director-admin.prior`. To roll back
 the *binaries*, roll back both, so the pair still matches:
 
-    mv ~/.agent-director/bin/agent-director.prior \
-       ~/.agent-director/bin/agent-director
-    mv ~/.agent-director/admin/agent-director-admin.prior \
-       ~/.agent-director/admin/agent-director-admin
+    mv ~/.config/agent-director/bin/agent-director.prior \
+       ~/.config/agent-director/bin/agent-director
+    mv ~/.config/agent-director/admin/agent-director-admin.prior \
+       ~/.config/agent-director/admin/agent-director-admin
+
+This is a way back only for an upgrade that did not move the old
+directory. The upgrade that moves it makes no `.prior` file, with or
+without `--keep-prior` (the new `bin/` and `admin/` hold no earlier
+binary, and install.sh says so on its `prior   :` line), and the
+previous release cannot read the migrated store, so a binary swap does
+not work there: take "Going back to the previous release" below.
 
 If the previous install was a release before 0.11.0, there is no
 `agent-director-admin.prior` (install.sh said `admin prior: none`):
-roll back by removing `~/.agent-director/admin/agent-director-admin`.
+roll back by removing `~/.config/agent-director/admin/agent-director-admin`.
 
 Re-running the same install (for example after an exit 5) does not
 snapshot again, because the installed pair is already the one being
@@ -1619,7 +2030,10 @@ from a release before 0.11.0, the `admin prior: none` line still ends
 
 If you didn't pass `--keep-prior`, re-install the previous version via
 `install.sh --from-release v<old-tag>` (0.11.0 or later: this install.sh
-refuses an older tag, which has no agent-director-admin).
+refuses an older tag, which has no agent-director-admin). A release from
+before the move of the old directory is installed only with its own
+install.sh, fetched from its tag: this install.sh refuses its binaries
+(exit 3).
 
 Note a caveat that did not exist before schema migrations: once an
 upgrade has migrated state.db forward (newer `user_version`), rolling
@@ -1643,7 +2057,7 @@ which.
 user_version=N, want M" with N greater than M). Migrations only run
 forward, and the install will not downgrade a DB.
 
-1. Inspect: `sqlite3 -cmd ".timeout <busy_timeout_ms>" ~/.agent-director/state.db "PRAGMA user_version"`
+1. Inspect: `sqlite3 -cmd ".timeout <busy_timeout_ms>" ~/.config/agent-director/state.db "PRAGMA user_version"`
    (with `[store] db_path` set, use the path install.sh's `store` line
    shows; for `<busy_timeout_ms>`, use your `[store] busy_timeout_ms`,
    or the default if unset, as "How long install.sh waits for a locked
@@ -1664,3 +2078,115 @@ migrates that copy. Writes made since the install are lost.
 
 The JSONL transcripts under `~/.claude/projects/` persist
 independently of state.db in every case.
+
+## Upgrading an install from the old directory
+
+An earlier release kept its files in `~/.agent-director`. This release keeps
+them in `~/.config/agent-director`, and `install.sh` moves the old directory,
+once, on the first upgrade. Check for it before the first question:
+
+```sh
+ls -ld ~/.agent-director ~/.config/agent-director
+```
+
+The old directory is present when anything is at that path (a dangling link
+included), except a link that points to `~/.config/agent-director`. The move is
+due when the old directory is present and the new one is absent, or holds the
+marker `.move-incomplete` that a failed move left. When both directories exist
+without that marker, the install refuses (`ErrMoveConflict`): ask the operator
+which one holds the install in use, and set the other aside by renaming it,
+never by deleting it.
+
+Before you run, with the operator (ask; do not end agents yourself):
+
+1. Stop whatever starts agents (a scheduler, a loop, a caller), then every
+   agent, every `agent-director serve` and every caller. A Claude Code
+   session's own `agent-director serve --stdio` is one: end that session too.
+   The install refuses (`ErrAgentsLive`) while any of them runs.
+2. Run the install from a shell agent-director did not start (not one inside
+   an agent's session), from the directory the original install ran in, or
+   one inside the same git repository, so it finds a `local` MCP registration
+   made there.
+3. Copy a store kept outside agent-director's directory (`[store] db_path`,
+   including one whose `db_path` reaches it through a link inside the
+   directory) first: the upgrade migrates it in place, and the way back needs
+   the copy.
+4. Tell the operator that the way back loses everything written since the
+   upgrade, and that `--keep-prior` is no way back across the move.
+
+What the move leaves: the old directory, renamed
+`~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>` and kept (the `kept    :`
+line names it), and the new directory holding a verified copy of everything
+but `bin/`, `admin/` and the store, which is copied with SQLite's backup and
+checked. Delete the kept directory once the upgrade is confirmed.
+`uninstall.sh --purge` removes it.
+
+## Going back to the previous release
+
+Use this when the upgrade to this release must be undone. Whatever was written
+since the upgrade is lost: the previous release reads the directory as it was
+before the upgrade. The previous release's schema cannot read this release's
+store, so there is no other way back; a binary swap or a downgrade of the store
+does not work.
+
+1. Stop whatever starts agents, then every agent, every `serve` and every
+   caller.
+2. Set the new directory aside:
+
+   ```sh
+   mv -- ~/.config/agent-director ~/.config/agent-director.after-upgrade-$(date +%Y%m%d-%H%M%S)
+   ```
+
+3. If `~/.agent-director` exists again (something recreated it since the
+   upgrade), set it aside too. Then rename the newest kept directory back. It
+   holds the store, `config.toml` and templates as they were before the upgrade.
+
+   ```sh
+   mv -- ~/.agent-director ~/.agent-director.recreated-$(date +%Y%m%d-%H%M%S)
+   ls -d ~/.agent-director.pre-move-*
+   mv -- ~/.agent-director.pre-move-<newest> ~/.agent-director
+   ```
+
+   Run the first command only when the old path exists. The newest name is the
+   one with the latest timestamp.
+4. A store kept outside AD's directory (`[store] db_path`) was migrated in
+   place by the upgrade. Put back the copy made before the upgrade: `state.db`
+   with its `-wal` and `-shm`, deleting a `-wal` or `-shm` the copy lacks. Skip
+   this when the store was inside the directory.
+5. In `~/.claude/settings.json`, remove only the entries that hold a hook
+   command starting with `~/.config/agent-director/bin/agent-director` (written
+   out with your home directory). Leave every other entry. Check the result is
+   valid JSON.
+6. From the directory the upgrade ran in (for a `local` registration made
+   inside a git repository, any directory of that repository), remove AD's MCP
+   registration, if there is one, in the scope `claude mcp get agent-director`
+   shows. A name registered in several scopes needs this once per scope:
+
+   ```sh
+   claude mcp get agent-director
+   claude mcp remove agent-director -s <scope>
+   ```
+
+7. From the same directory, install the previous release with that release's
+   own `install.sh`, fetched from its tag, with the flags the original install
+   used (`--register-mcp`, `--no-hooks`, `--symlink-dir` and the rest). It puts
+   back its help hooks. Its `--register-mcp` registers nothing with the current
+   Claude Code (it prints `registration failed (continuing anyway)`), so when
+   step 6 showed a registration, add it back by hand, in the scope step 6
+   showed (`local`, `user` or `project`), with the old path:
+
+   ```sh
+   claude mcp add agent-director -s <scope> -- ~/.agent-director/bin/agent-director serve --stdio
+   claude mcp get agent-director
+   ```
+
+   This release's `install.sh` cannot install the previous release: it refuses
+   an earlier release's binaries.
+8. Change back by hand what was changed by hand to the new path after the
+   upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
+   folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
+   registration made by hand.
+9. Start the caller's previous version.
+
+Delete the `after-upgrade` and `recreated` directories once the previous
+release is confirmed working; `uninstall.sh --purge` removes them.

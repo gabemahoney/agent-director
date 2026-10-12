@@ -143,7 +143,12 @@
 #      which the config.toml merge cannot extend, or (hooks on) a
 #      symlinked config.toml install.sh cannot resolve or write through,
 #      as for settings.json under exit 4 (all refused in pre-flight,
-#      before anything on disk changes). state.db here is
+#      before anything on disk changes). A config.toml or template that
+#      changes after pre-flight and that the migration then refuses is
+#      refused by the migration step instead, after the binaries are
+#      installed and before the store is opened: it prints the refusal, the
+#      move's references (when a move ran) and exit 1's two ways on, then ends
+#      with exit 5 and ErrConfigMalformed or ErrTemplateMalformed. state.db here is
 #      the store database agent-director opens: ~/.config/agent-director/state.db,
 #      or wherever [store] db_path in ~/.config/agent-director/config.toml puts it.
 #      Every exit 5 ends with one line on stderr, its last, naming the
@@ -216,7 +221,9 @@
 # that fails stops the install with exit 1, the file as it was, every copy
 # kept: fix the cause and run this release's install.sh again (it completes
 # the migration, and changes nothing already migrated), or take the way back
-# (docs/operator-actions.md). With no store, or a store at or above that
+# (docs/operator-actions.md). A file that changed since pre-flight and that the
+# migration then refuses stops the install the same way, with exit 5 and
+# ErrConfigMalformed or ErrTemplateMalformed. With no store, or a store at or above that
 # version, no file is read or changed. An unreadable store version stops the
 # install in pre-flight (exit 5, ErrVersionUnreadable). It runs with or
 # without --no-hooks.
@@ -1924,77 +1931,6 @@ ad_key_unresolvable() {
         "  mkdir -p -- $(printf '%q' "$(dirname "$2")")"
 }
 
-# ad_raw_path_value <config> <table> <key> — print the value of <key> under
-# [<table>] in <config> as written, without its quotes (nothing when the file
-# or the key is missing, or the value is not a one-line "..." or '...' string).
-# Call it only after ad_store_db_path accepted <config>: that reader has
-# refused every other form, so a bare name = value line is all there is.
-ad_raw_path_value() {
-    local cfg="$1" want_table="$2" want_key="$3" line n=0 table="" rest val=""
-    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
-    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
-    local re_dq='^"([^"]*)"'
-    local re_sq="^'([^']*)'"
-    if [[ ! -f "$cfg" ]]; then
-        return 0
-    fi
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        n=$((n + 1))
-        if [[ "$n" -eq 1 ]]; then
-            line="${line#$'\xef\xbb\xbf'}"
-        fi
-        line="${line%$'\r'}"
-        if [[ "$line" =~ $re_header ]]; then
-            table="${BASH_REMATCH[1]}"
-        elif [[ "$table" == "$want_table" && "$line" =~ $re_keyval && "${BASH_REMATCH[1]}" == "$want_key" ]]; then
-            rest="${BASH_REMATCH[2]}"
-            if [[ "$rest" =~ $re_dq ]]; then
-                val="${BASH_REMATCH[1]}"
-            elif [[ "$rest" =~ $re_sq ]]; then
-                val="${BASH_REMATCH[1]}"
-            fi
-        fi
-    done <"$cfg"
-    printf '%s' "$val"
-}
-
-# ad_move_refuse_outward_path <table> <key> <resolved path> — the one place
-# that decides what the move does with a path key written as an absolute or
-# `~/` path that is inside the old directory by its text but reaches outside
-# it through a link inside it (class warn, see ad_key_class). SR-11.7 says
-# such a key stays as written, but the move renames the old directory away,
-# so the path as written would name nothing afterwards and the store open
-# would recreate an empty directory there. Pending the User's decision
-# (rewrite or refuse), the move REFUSES it here, in pre-flight: ErrMoveConflict
-# (exit 5), nothing changed, the cause naming the key, its value and the
-# physical place it reaches, the remedy being to set the key to that absolute
-# physical path.
-# TO SWITCH TO A REWRITE: delete the two calls of this function in the
-# pre-flight below. ad_move_key_newvalue's warn case already writes every
-# form of such a key as its absolute physical path ($KEY_PHYS), as it does
-# for a relative value today. Nothing else changes.
-ad_move_refuse_outward_path() {
-    local table="$1" key="$2" resolved="$3" raw label
-    label="[${table}] ${key}"
-    raw="$(ad_raw_path_value "$PREFLIGHT_CONFIG" "$table" "$key")"
-    case "$raw" in
-        "~/"*|/*) ;;
-        *) return 0 ;;
-    esac
-    resolved="$(ad_clean_path "$resolved")"
-    if ! ad_key_class "$resolved"; then
-        ad_key_unresolvable "$label" "$resolved"
-    fi
-    if [[ "$KEY_CLASS" != warn ]]; then
-        return 0
-    fi
-    ad_move_conflict "$label $raw reaches outside $OLD_INSTALL_ROOT through a link inside it; refusing to install." \
-        "$label = $raw is inside $OLD_INSTALL_ROOT as written, but a link inside it leads out, so it reaches $KEY_PHYS today." \
-        "The move renames $OLD_INSTALL_ROOT away, so the path as written would no longer reach $KEY_PHYS, and agent-director would create an empty one there." \
-        "Set the key to the absolute physical path it reaches, in ${PREFLIGHT_CONFIG}, then re-run:" \
-        "  ${key} = \"${KEY_PHYS}\""
-}
-
 # The store's place and the error log's place, while the move is due.
 STORE_PHYS=""
 STORE_CLASS=""
@@ -2039,10 +1975,6 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
         ad_move_conflict "the store $state_db is a link; refusing to install." \
             "The move copies the store inside AD's old directory with SQLite's backup and will not follow a link to it." \
             "$(ad_link_copy_lines "$state_db")"
-    fi
-    ad_move_refuse_outward_path store db_path "$state_db"
-    if [[ -n "$old_error_log" ]]; then
-        ad_move_refuse_outward_path log error_log_path "$old_error_log"
     fi
 else
     if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" launch)"; then
@@ -3988,12 +3920,11 @@ ad_move_key_newvalue() {
             ;;
         warn)
             # Inside by its text, outside by its physical place (SR-11.7 places
-            # a key by its physical place): a relative value would resolve
-            # against the new directory, where a copied relative link points one
-            # level deeper, so it is written as the absolute physical path it
-            # reaches today. An absolute or ~/ value never gets here while
-            # pre-flight refuses it (ad_move_refuse_outward_path, which says
-            # how to switch that to this rewrite).
+            # a key by its physical place). The move renames the old directory
+            # away, so the value as written would name nothing afterwards (a
+            # relative one would resolve against the new directory, where a
+            # copied relative link points one level deeper). Every form is
+            # written as the absolute physical path it reaches today.
             REWRITE_NEWVAL="$KEY_PHYS"
             ;;
         out)

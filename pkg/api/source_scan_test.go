@@ -79,10 +79,15 @@ func repoTree(t testing.TB, dir string) []scanSource {
 // and gives its reason; at most one of heading, block and ident narrows it.
 type scanException struct {
 	file    string // repo-relative path, or a built text's name; alone it exempts the whole file
-	heading string // a Markdown heading title in file: its section, up to the next heading of its level or higher
+	heading string // a Markdown heading title in file: its section, up to the next heading of its level or higher (any level with anyLevel)
 	block   string // text in the line that opens a declaration in file: that line to its closing line
 	ident   string // a Go name in file: "Name", "Type.Field", "Type.Method" or "Func.param"
 	reason  string // why the name may stay there (the SR that allows it)
+
+	// anyLevel ends a heading exception's section at the next heading of any
+	// level, so a sub-heading ends it (alone, it runs to the next heading of its
+	// own level or higher, so a sub-section stays inside it).
+	anyLevel bool
 }
 
 // scanRules are a scan's exceptions. An exception whose target does not exist
@@ -126,7 +131,7 @@ func (r *scanRules) skipLines(t testing.TB, src scanSource) map[int]bool {
 			}
 			end := len(lines)
 			for _, h := range doc.headings {
-				if h.line > hs[0].line && h.level <= hs[0].level {
+				if h.line > hs[0].line && (e.anyLevel || h.level <= hs[0].level) {
 					end = h.line
 					break
 				}

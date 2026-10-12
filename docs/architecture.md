@@ -7534,7 +7534,10 @@ store.
   is a link, or a path key cannot be placed. The last two need the keys the
   reader has read, so they come after it. A new directory that holds only what
   `make-template` (`api.MakeTemplate`) created beside a real old install is the
-  both-present case.
+  both-present case. `MakeTemplate`, and the CLI's `make-template --store-path`
+  with it, creates `~/.config/agent-director/templates/` on a host that has
+  only the old directory, so running it before the install is a way to get
+  both directories, and the next install refuses.
 - `ErrAgentsLive`: the old store holds a row in a live state (`pending`,
   `waiting`, `working`, `check_permission`, `ask_user`; read with
   `sqlite3 -readonly`, waiting the busy timeout, a failed read being a
@@ -7582,20 +7585,15 @@ inside stays as written; an absolute or `~/` value inside is rewritten to the
 same place under the new directory in its own form, its quoting and comment
 kept, or to the new place's absolute path when it reaches the old directory
 only through a link; a value outside stays as written, except a relative one,
-which becomes the absolute path it resolves to. A `warn` value is placed by
-its physical place: a relative one is written as the absolute physical path it
-reaches today (left relative, it would resolve against the new directory,
-where a copied relative link points one level deeper), so the key still names
-the same place after the rename. An absolute or `~/` `warn` value would be left as written by SR-11.7,
-but the rename would leave that path naming nothing, so pre-flight refuses it
-as `ErrMoveConflict` (exit 5, nothing changed), naming the key, the value and
-the absolute physical path it reaches; the remedy is to set the key to that
-path and re-run. This is an interim choice pending a decision between
-refusing and rewriting; it lives in one function,
-`ad_move_refuse_outward_path`, called for the store and the error log, and
-dropping its two calls switches to the rewrite, which
-`ad_move_key_newvalue`'s `warn` case already does for every form. Only the new
-copy is rewritten, before the rename. A store that is a link to anywhere (class
+which becomes the absolute path it resolves to. A `warn` value, of any form,
+is placed by its physical place: it is written as the absolute physical path
+it reaches today, so the key still names the same place after the rename (a
+value left as written would name nothing once the old directory is renamed
+away, and a relative one would resolve against the new directory, where a
+copied relative link points one level deeper). This is `ad_move_key_newvalue`'s
+`warn` case; no line reports a rewritten key, and the `move`, `moved` and
+`kept` summary lines are all the move prints about them. Only the new copy is
+rewritten, before the rename. A store that is a link to anywhere (class
 `in`, `link` or `warn`) is `ErrMoveConflict`. A `[launch]` value, an `extra_env`
 value or a template's `cwd` that names the old directory is printed with its
 fix and left as written (`ad_move_print_references`).
@@ -14460,6 +14458,8 @@ than `go test ./...`.
 - Copies all of `test/driver/` to `/opt/driver/`: the driver, its prompt,
   `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
   the Docker hook pattern's stand-ins).
+- Bakes the previous release under `/opt/previous-release` (see
+  [The baked previous release](#the-baked-previous-release)).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
 - Sets `AGENT_DIRECTOR_TEST_HARNESS=1` (an image `ENV`), the marker that
   this is the Docker test harness container. `db-reset.sh` refuses to run
@@ -14576,6 +14576,77 @@ are plain-English bodies. The driver reads `t1.*.md` and `t2.*.md` files
 directly. Each t2 body has a fenced ```bash``` block executed by
 `DRIVER_MODE=shell`; the same prose is the spec the `DRIVER_MODE=claude`
 path hands to the driver-Claude.
+
+### The baked previous release
+
+`test/Dockerfile` fetches the previous release at image build and keeps it,
+whole, under `/opt/previous-release` (not on PATH, so no case meets it by
+accident): `install.sh` from the release's tag, and the `agent-director` and
+`agent-director-admin` assets for the image's architecture, with `TAG` naming
+the tag (`PREV_RELEASE_TAG`, `v0.11.1`). Each of the three files is checked
+against its sha256 pin in the same `RUN`, so a stale pin fails the build:
+`PREV_INSTALL_SH_SHA256` for the script, and `PREV_SHA256_AMD64` /
+`PREV_SHA256_ARM64` and `PREV_ADMIN_SHA256_AMD64` / `PREV_ADMIN_SHA256_ARM64`
+for the two assets. The files are fetched from the network at build time and
+are the release's own, so a case runs that release exactly as an operator on
+it would.
+
+**Bump rule** (a comment in the Dockerfile beside the Go, Bun and Claude Code
+pins, with the steps for finding each hash): the previous release is the last
+one that keeps its files in the old directory, and the upgrade and way-back
+cases model that layout. Do not bump `PREV_RELEASE_TAG` unless the new
+previous release still uses the old layout; a bump moves all five pins
+together.
+
+### Old-layout install from a case: `old-layout.sh` and `tree-snapshot.sh` (reusable driver helpers)
+
+`test/driver/old-layout.sh` (installed at `/opt/driver/old-layout.sh`) builds
+an install of the previous release in the old layout, for the cases that
+upgrade from it or go back to it. `old-layout.sh <abs-home> [--store-outside
+<abs-dir>]` runs the baked release's own `install.sh` in `<abs-home>` (hooks
+on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
+`HOME=<abs-home>` and that directory as the working directory. When that
+release's own registration registers nothing (current Claude Code refuses its
+form of the `claude mcp add` call), the helper registers the MCP server by
+hand, from the same directory and in the same scope, with the `--` form. It
+then adds, with that release's own verbs, one `ended` row, two templates (one
+with the old arguments key, one whose tables hold quoted keys) and the old
+question-tool key under `[defaults]`. With `--store-outside` the store lives
+in the given directory, named by `[store] db_path`. It prints `key=value`
+lines on stdout (`home`, `dir`, `bin`, `admin`, `db`, `instance_id`, `link`,
+`mcp`, `templates`; `mcp` is `install`, `helper` or `none`), and sends the
+install's own output to stderr. A case redirects stdout to a file, not a
+command substitution, as the helper starts a tmux server.
+
+`test/driver/tree-snapshot.sh` (at `/opt/driver/tree-snapshot.sh`) prints one
+line per entry of a directory tree, sorted by path: path, kind, mode, and the
+sha256 of a file's bytes or a link's target. `tree-snapshot.sh <dir> [--skip
+<rel>]...` leaves out each `--skip` path and what is under it. It never lists
+`state.db` or `state.db-shm`, and lists `state.db-wal` only when it holds
+bytes: reading a store, even read-only, creates or changes them.
+
+**Must use:** a Docker case that needs an old-layout install builds it with
+`old-layout.sh`, and one that compares two trees uses `tree-snapshot.sh`;
+never a second builder of the old directory or a second tree lister. Rules for
+the upgrade and way-back cases (`epic-12-install`):
+
+- Compare a store by `PRAGMA user_version`, its tables and indexes
+  (`pragma_table_info`, `pragma_index_info`) and row dumps, all through
+  [`sql.sh`](#store-access-from-a-case-sqlsh-reusable-driver-helper). Never by
+  `.sha3sum --schema`: it hashes rows, `store_id` is random, and a migrated
+  store's `CREATE` text differs from a fresh one's. The previous release's
+  expected `user_version` and structure come from a store that release made,
+  not from a constant.
+- Claude Code writes `~/.claude/telemetry/` on every run: leave it out of any
+  `~/.claude` comparison. Every install's hooks merge writes
+  `config.toml.bak.<ts>` and `settings.json.bak.<ts>`: expect them.
+- The way-back case reads the steps from `/work/source` at run time and
+  compares the way-back text of `docs/operator-actions.md` and of the install
+  skill's `SKILL.md` with its own copy, word for word, so a change to a step
+  in either file turns it red.
+- The driver keeps only about 330 characters of a case's output head and 600 of
+  its `xtrace` tail in `details`, so a case that checks several things collects
+  its failures and repeats them, trimmed, in its last line.
 
 ### Store access from a case: `sql.sh` (reusable driver helper)
 
@@ -17364,8 +17435,10 @@ A text hit is an exact name, with no letter, digit or underscore beside it.
 
 - `TestOldNamesAbsentFromTextSurfaces` scans `api.Help()`, `adminapi.Verbs`,
   `pkg/api/manifest/surface.json`, `README.md`, `pkg/api/README.md`,
-  `pkg/ts-bun-client/README.md`, every `docs/*.md` except the `*-guide.md`
-  files, and every file under `pkg/ts-bun-client/src`.
+  `pkg/ts-bun-client/README.md`, the install skill's `SKILL.md` (every line,
+  with no exception: an old key name is never spelled there), every `docs/*.md`
+  except the `*-guide.md` files, and every file under
+  `pkg/ts-bun-client/src`.
 - `TestOldNamesAbsentFromGoSurface` walks the exported identifiers, struct
   fields, json and toml tags, and the parameter names of exported functions and
   methods in `pkg/api` and its subpackages, `internal/adminapi`'s exported
@@ -19534,9 +19607,10 @@ the section) of each hit.
 
 **What is scanned.** Non-test Go files, the TS client's sources
 (`pkg/ts-bun-client/src/`), shell scripts outside any `test` directory, the
-`Makefile`, `README.md`, `docs/*.md` (not the `docs/*-guide.md` guides) and the
-two package READMEs. `CLAUDE.md`, the guides, `.claude/` and `tickets/` are not
-scanned. The walker and the exception mechanism are in `source_scan_test.go`.
+`Makefile`, `README.md`, `docs/*.md` (not the `docs/*-guide.md` guides), the
+two package READMEs and the install skill's `skills/install-agent-director/SKILL.md`,
+every line of it, frontmatter and fenced code included. `CLAUDE.md`, the
+guides, `.claude/` and `tickets/` are not scanned. The walker and the exception mechanism are in `source_scan_test.go`.
 
 **What matches.** The name as a whole path element, in any quoting: no name
 character (letter, digit, `_`, `-`) or dot before it, and after it no name
@@ -19552,12 +19626,18 @@ scripts; and six sections of the user docs, [Upgrade](install.md#upgrade) in
 `docs/install.md` and, in `docs/operator-actions.md`, "A verb refuses with
 `ErrOldLayout`", "`install.sh` refuses with `ErrMoveConflict`",
 "`install.sh` refuses with `ErrAgentsLive`", "`install.sh` stops with
-`ErrMoveFailed`" and "Going back to the previous release". A section runs from its heading to
-the next heading of any level, so it holds no sub-heading and no code-block
-line led by `#`. An exception whose file is not scanned is stale
-and fails (`requireAllHit`); an exception named by a heading that its file
-does not have is dropped, which is how a section is added to the list before
-its doc exists. **Must use:** a new place that has to name the old directory
+`ErrMoveFailed`" and "Going back to the previous release"; and two sections
+of `SKILL.md`, "Upgrading an install from the old directory" and "Going back to
+the previous release". A user-doc section runs from its heading to the next
+heading of its level or higher. A `SKILL.md` section sets the exception's
+`anyLevel` flag (in `source_scan_test.go`), so it runs to the next heading of
+any level: it holds no sub-heading and no code-block line led by `#`. An exception whose file is not scanned is stale
+and fails (`requireAllHit`); a user-doc exception named by a heading that its
+file does not have is dropped, which is how a section is added to the list
+before its doc exists, but a missing `SKILL.md` heading fails, as the skill
+always has both. The installed skill has no repo docs, so its way-back
+section restates `docs/operator-actions.md`'s word for word (links reduced to
+their text). **Must use:** a new place that has to name the old directory
 is added to `oldPathRules` with its reason, never allowed by loosening the
 matcher. A user doc that needs to point at the old directory links to one of
 the exempt sections instead of naming it.

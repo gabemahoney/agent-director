@@ -72,8 +72,9 @@ func builtText(t *testing.T, name string, v any) scanSource {
 }
 
 // TestOldNamesAbsentFromTextSurfaces: help, the admin verb list, the manifest,
-// the user docs and package READMEs, and the TypeScript client's sources name
-// no old name outside the exceptions.
+// the user docs and package READMEs, the install skill's SKILL.md (every line,
+// no exception) and the TypeScript client's sources name no old name outside
+// the exceptions.
 func TestOldNamesAbsentFromTextSurfaces(t *testing.T) {
 	t.Parallel()
 	help, err := api.Help()
@@ -82,7 +83,8 @@ func TestOldNamesAbsentFromTextSurfaces(t *testing.T) {
 	}
 	srcs := []scanSource{builtText(t, "api.Help()", help), builtText(t, "adminapi.Verbs", adminapi.Verbs),
 		repoFile(t, "pkg/api/manifest/surface.json"), repoFile(t, "README.md"),
-		repoFile(t, "pkg/api/README.md"), repoFile(t, "pkg/ts-bun-client/README.md")}
+		repoFile(t, "pkg/api/README.md"), repoFile(t, "pkg/ts-bun-client/README.md"),
+		repoFile(t, installSkillMD)}
 	srcs = append(srcs, repoGlob(t, "docs/*.md", func(rel string) bool { return !strings.HasSuffix(rel, "-guide.md") })...)
 	srcs = append(srcs, repoTree(t, "pkg/ts-bun-client/src")...)
 	rules := oldNameTextRules()
@@ -117,4 +119,26 @@ func TestOldNamesAbsentFromGoSurface(t *testing.T) {
 		}
 	}
 	rules.requireAllHit(t)
+}
+
+// TestOldNamesMatcher: an old name matches as an exact name; Claude Code's own
+// names and longer names that contain one (claude_path, ClaudePath,
+// claude_args_extra) do not.
+func TestOldNamesMatcher(t *testing.T) {
+	t.Parallel()
+	for line, want := range map[string]int{
+		"claude_args = []":                   1,
+		"--claude-args":                      1,
+		"`claude_session_id`":                1,
+		"disable_askuserquestion":            1,
+		"[launch] claude_path = \"/x\"":      0,
+		"ClaudePath":                         0,
+		"CLAUDE_CONFIG_DIR and .claude.json": 0,
+		"claude_args_extra":                  0,
+		"my_claude_args":                     0,
+	} {
+		if got := len(oldNamesIn(line)); got != want {
+			t.Errorf("oldNamesIn(%q) = %d hits; want %d", line, got, want)
+		}
+	}
 }

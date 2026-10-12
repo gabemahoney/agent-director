@@ -472,14 +472,15 @@ func TestMovePathKeyUnresolvableLog(t *testing.T) {
 	}})
 }
 
-// TestMovePathKeyOutwardRefused: an absolute or ~/ path key that is inside the
+// TestMovePathKeyOutwardRewritten: an absolute or ~/ path key that is inside the
 // old directory by its text but reaches outside it through a link inside it
-// cannot be left as written (the rename would leave it naming nothing), so
-// pre-flight refuses it with ErrMoveConflict, names the key, its value as
-// written and the physical place it reaches, and gives the key's remedy; nothing
-// is changed (runMoveRefusals compares the tree).
-func TestMovePathKeyOutwardRefused(t *testing.T) {
-	const cite = "operator-actions.md, \"`install.sh` refuses with `ErrMoveConflict`\""
+// (SR-11.7's `warn` class) is rewritten by the move to the absolute physical
+// path it reaches today, not refused: the install succeeds, the new config.toml
+// differs from the old only in that key's value (the key's own line, its quotes
+// kept), the store or log at the physical place is still the one used, and
+// nothing is made at the old path's text.
+func TestMovePathKeyOutwardRewritten(t *testing.T) {
+	const logText = "an old error\n"
 	// outward builds an old install whose [store] db_path / [log] error_log_path
 	// is value (read by the config), with the link .agent-director/out leading to target.
 	outward := func(table, value, target string) func(t *testing.T, h *moveHome) {
@@ -494,49 +495,89 @@ func TestMovePathKeyOutwardRefused(t *testing.T) {
 			}
 			opts = append(opts, withMoveConfig(func(*moveHome) string { return cfg }))
 			h.BuildOld(opts...)
-			h.Write(filepath.Join(h.Home, "elsewhere", "e.log"), "an old error\n", 0o640)
+			h.Write(filepath.Join(h.Home, "elsewhere", "e.log"), logText, 0o640)
 			h.Link(h.expand(target), filepath.Join(h.Old, "out"))
 		}
 	}
-	refused := func(key, value, remedy string) moveWant {
-		table := "store"
-		if key == "error_log_path" {
-			table = "log"
-		}
-		return moveWant{Code: 5, Err: "ErrMoveConflict", Stderr: []string{
-			"install.sh: [" + table + "] " + key + " " + value + " reaches outside {HOME}/.agent-director through a link inside it; refusing to install.",
-			"  " + key + ` = "` + remedy + `"`,
-			"Nothing was installed or changed. Re-run this install after the change.",
-			cite,
-		}, NoStdout: []string{"move    :"}}
+	rows := []struct {
+		name, table, value, target, phys string
+	}{
+		{"absolute-db-path-through-an-inner-link", "store", "{HOME}/.agent-director/out/x", "{HOME}/elsewhere", "{HOME}/elsewhere/x"},
+		{"tilde-db-path-through-an-inner-link", "store", "~/.agent-director/out/x", "{HOME}/elsewhere", "{HOME}/elsewhere/x"},
+		{"absolute-db-path-through-a-link-with-a-relative-target", "store", "{HOME}/.agent-director/out/x", "../elsewhere", "{HOME}/elsewhere/x"},
+		{"absolute-error-log-through-an-inner-link", "log", "{HOME}/.agent-director/out/e.log", "{HOME}/elsewhere", "{HOME}/elsewhere/e.log"},
+		{"tilde-error-log-through-an-inner-link", "log", "~/.agent-director/out/e.log", "{HOME}/elsewhere", "{HOME}/elsewhere/e.log"},
 	}
-	runMoveRefusals(t, []moveRefusal{
-		{
-			name:  "absolute-db-path-through-an-inner-link",
-			setup: outward("store", "{HOME}/.agent-director/out/x", "{HOME}/elsewhere"),
-			want:  refused("db_path", "{HOME}/.agent-director/out/x", "{HOME}/elsewhere/x"),
-		},
-		{
-			name:  "tilde-db-path-through-an-inner-link",
-			setup: outward("store", "~/.agent-director/out/x", "{HOME}/elsewhere"),
-			want:  refused("db_path", "~/.agent-director/out/x", "{HOME}/elsewhere/x"),
-		},
-		{
-			name:  "absolute-db-path-through-a-link-with-a-relative-target",
-			setup: outward("store", "{HOME}/.agent-director/out/x", "../elsewhere"),
-			want:  refused("db_path", "{HOME}/.agent-director/out/x", "{HOME}/elsewhere/x"),
-		},
-		{
-			name:  "absolute-error-log-through-an-inner-link",
-			setup: outward("log", "{HOME}/.agent-director/out/e.log", "{HOME}/elsewhere"),
-			want:  refused("error_log_path", "{HOME}/.agent-director/out/e.log", "{HOME}/elsewhere/e.log"),
-		},
-		{
-			name:  "tilde-error-log-through-an-inner-link",
-			setup: outward("log", "~/.agent-director/out/e.log", "{HOME}/elsewhere"),
-			want:  refused("error_log_path", "~/.agent-director/out/e.log", "{HOME}/elsewhere/e.log"),
-		},
-	})
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			h := newMoveHome(t)
+			outward(row.table, row.value, row.target)(t, h)
+			oldCfg, err := os.ReadFile(filepath.Join(h.Old, "config.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			phys := h.expand(row.phys)
+			// Only the key's value changes: its quotes and every other byte stay.
+			wantCfg := strings.Replace(string(oldCfg), `"`+h.expand(row.value)+`"`, `"`+phys+`"`, 1)
+			if wantCfg == string(oldCfg) {
+				t.Fatalf("the old config.toml does not hold %q:\n%s", row.value, oldCfg)
+			}
+			before := h.Snapshot()
+			res := moveMustInstall(t, h)
+
+			got, err := os.ReadFile(filepath.Join(h.New, "config.toml"))
+			if err != nil || string(got) != wantCfg {
+				t.Errorf("new config.toml = %q, %v\nwant %q", got, err, wantCfg)
+			}
+			for _, s := range []string{"warning:", "reaches outside", "refusing"} {
+				if strings.Contains(res.Stdout+res.Stderr, s) {
+					t.Errorf("the install says %q:\nstdout:\n%s\nstderr:\n%s", s, res.Stdout, res.Stderr)
+				}
+			}
+
+			// The file at the physical place is the one in use, and nothing else
+			// in its directory changed (the store itself is migrated in place).
+			after := h.Snapshot()
+			elsewhere := func(tr moveTree) moveTree {
+				return moveWithout(moveUnder(tr, "elsewhere"), "x", "x-wal", "x-shm")
+			}
+			if d := moveDiff(elsewhere(before), elsewhere(after)); d != "" {
+				t.Errorf("{HOME}/elsewhere changed:\n%s", d)
+			}
+			if row.table == "store" {
+				if _, err := os.Stat(phys); err != nil {
+					t.Errorf("the store is not at %s: %v", phys, err)
+				}
+				if _, err := os.Lstat(filepath.Join(h.New, "state.db")); err == nil {
+					t.Errorf("the new directory holds a default state.db: the installed binary opened another store")
+				}
+				moveListHas(t, h, "ended-1", "ended-3")
+			} else {
+				if b, err := os.ReadFile(phys); err != nil || string(b) != logText {
+					t.Errorf("the error log %s = %q, %v; want its old text", phys, b, err)
+				}
+				moveListHas(t, h, "ended-1", "ended-3")
+			}
+
+			// Nothing was made at the old path's text: the old directory is gone
+			// (kept under its .pre-move name, as it was), and the new directory
+			// holds no store or log of its own beside the key's.
+			if _, err := os.Lstat(h.Old); err == nil {
+				t.Errorf("%s still exists", h.Old)
+			}
+			if d := moveDiff(moveUnder(before, moveOldRel), moveUnder(after, moveKeptDir(t, h))); d != "" {
+				t.Errorf("the kept directory is not the original:\n%s", d)
+			}
+			for _, name := range []string{"x", "e.log"} {
+				if _, err := os.Lstat(filepath.Join(h.New, name)); err == nil {
+					t.Errorf("the new directory holds its own %s", name)
+				}
+			}
+			if _, err := os.Lstat(filepath.Join(h.Home, ".config", "elsewhere")); err == nil {
+				t.Errorf("~/.config/elsewhere was made")
+			}
+		})
+	}
 }
 
 func TestMoveOtherReferencesPrinted(t *testing.T) {

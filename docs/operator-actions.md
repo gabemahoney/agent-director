@@ -347,6 +347,12 @@ Find the cause by its first line, then apply its remedy.
     client's `MakeTemplate`) created, such as a `templates` directory, next to
     a real old install is the first case: rename the new directory. Afterwards
     copy any template you want from it into the moved directory's `templates`.
+    This is a way to end up with both directories: on a host that has only the
+    old directory, the Go client's `MakeTemplate` and the CLI's `make-template`
+    run with `--store-path` create `~/.config/agent-director/templates/`
+    themselves, so running either before the install makes the next install
+    refuse. The CLI's `make-template` without `--store-path` creates nothing
+    there: it returns `ErrOldLayout`.
 
   ```sh
   mv -- ~/.config/agent-director ~/.config/agent-director.aside-$(date +%Y%m%d-%H%M%S)
@@ -367,17 +373,6 @@ Find the cause by its first line, then apply its remedy.
   in `config.toml` names a place whose directory is missing or cannot be read,
   so `install.sh` cannot tell whether it is inside the old directory. Create
   that directory, or correct the value, and re-run.
-- **A path key reaches outside the old directory through a link inside it.**
-  `[store] db_path` or `[log] error_log_path` is written as an absolute or `~/`
-  path that is inside the old directory as written, but a link inside the old
-  directory leads out, so the key reaches a place elsewhere today. The move
-  renames the old directory away, so the path as written would name nothing
-  afterwards and agent-director would create an empty one there. The message
-  names the key, its value and the absolute path it reaches. Check with
-  `readlink -f` on the value (`~` expanded). Fix: set the key in `config.toml`
-  to that absolute path, the one the message shows, and re-run. A relative
-  value that leaves the old directory this way is not refused: the move
-  rewrites it to the absolute path.
 
 ## `install.sh` refuses with `ErrAgentsLive`
 
@@ -602,9 +597,18 @@ does not work.
 7. From the same directory, install the previous release with that release's
    own `install.sh`, fetched from its tag, with the flags the original install
    used (`--register-mcp`, `--no-hooks`, `--symlink-dir` and the rest). It puts
-   back its help hooks and, with `--register-mcp`, the registration with the old
-   path. This release's `install.sh` cannot install it: it refuses an earlier
-   release's binaries.
+   back its help hooks. Its `--register-mcp` registers nothing with the current
+   Claude Code (it prints `registration failed (continuing anyway)`), so when
+   step 6 showed a registration, add it back by hand, in the scope step 6
+   showed (`local`, `user` or `project`), with the old path:
+
+   ```sh
+   claude mcp add agent-director -s <scope> -- ~/.agent-director/bin/agent-director serve --stdio
+   claude mcp get agent-director
+   ```
+
+   This release's `install.sh` cannot install the previous release: it refuses
+   an earlier release's binaries.
 8. Change back by hand what was changed by hand to the new path after the
    upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
    folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP

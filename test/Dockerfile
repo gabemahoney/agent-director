@@ -29,6 +29,33 @@ ARG GO_SHA256_ARM64=5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef45058
 # Pinned for reproducibility; bump requires re-running ts-bun-lib testplan.
 ARG BUN_VERSION=1.3.13
 
+# The previous release, baked in whole under /opt/previous-release for the
+# epic-12-install cases that upgrade from, and go back to, the old layout
+# (the directory ~/.agent-director, before AD moved to ~/.config/agent-director;
+# b.ssz). It holds the release's own install.sh, fetched from its tag, and
+# both release assets for the image's architecture, the file names the
+# release skill publishes (agent-director-linux-<arch>,
+# agent-director-admin-linux-<arch>). None of it is on PATH, so no other
+# slug sees it. test/driver/old-layout.sh is the one helper that uses it.
+#
+# Bump policy for PREV_RELEASE_TAG and the five sha256 pins below: v0.11.1 is
+# the last release that keeps its files in ~/.agent-director, and the cases
+# model that layout, so do not bump the tag unless the new previous release
+# still does. To change it:
+#   1. Set PREV_RELEASE_TAG.
+#   2. PREV_INSTALL_SH_SHA256: `git show <tag>:skills/install-agent-director/install.sh | sha256sum`.
+#   3. The per-arch asset pins: `gh release view <tag> --repo gabemahoney/agent-director
+#      --json assets -q '.assets[]|[.name,.digest]|@tsv'` (the digest is the sha256).
+#   4. Rebuild the image; the in-container sha256sum checks fail loudly on a
+#      stale pin. Then re-run epic-12-install: the old-layout helper's
+#      assumptions (verbs, flags, files) come from this release.
+ARG PREV_RELEASE_TAG=v0.11.1
+ARG PREV_INSTALL_SH_SHA256=c9fd83e3660c9b3cb0f4fd92c841d7cc227bd8ec008f667a338c6619f539b873
+ARG PREV_SHA256_AMD64=5a39cbaf3be9ef11e616032a21b291ecc0a41b1e83891f23e8be09c5df458a20
+ARG PREV_SHA256_ARM64=e8280209940ef26f348ce7befeca84314c602119ec5510c87850753b2117fdba
+ARG PREV_ADMIN_SHA256_AMD64=b315a7657338f9fe89ede1a6fee6dff832e4d8351f46a6af9814596138ec829c
+ARG PREV_ADMIN_SHA256_ARM64=100155f1006f5f4b03e6b59844c831f94fa0fe384b461152543095c9d4a8d369
+
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
@@ -75,6 +102,28 @@ RUN apt-get update \
  && rm /tmp/go.tgz \
  && ln -s /usr/local/go/bin/go /usr/local/bin/go \
  && useradd --create-home --shell /bin/bash --uid 1000 tester
+
+# The previous release (see PREV_RELEASE_TAG above): its install.sh and both
+# assets, each checked against its pin before it is kept. Its own files, so a
+# case runs the release exactly as an operator on it would.
+RUN arch=$(dpkg --print-architecture) \
+ && case "$arch" in \
+        amd64) prev_sha="${PREV_SHA256_AMD64}"; prev_admin_sha="${PREV_ADMIN_SHA256_AMD64}" ;; \
+        arm64) prev_sha="${PREV_SHA256_ARM64}"; prev_admin_sha="${PREV_ADMIN_SHA256_ARM64}" ;; \
+        *) echo "ERROR: no pinned PREV_SHA256 for arch=$arch" >&2; exit 1 ;; \
+    esac \
+ && base="https://github.com/gabemahoney/agent-director/releases/download/${PREV_RELEASE_TAG}" \
+ && mkdir -p /opt/previous-release \
+ && curl -fsSL -o /opt/previous-release/install.sh \
+        "https://raw.githubusercontent.com/gabemahoney/agent-director/${PREV_RELEASE_TAG}/skills/install-agent-director/install.sh" \
+ && echo "${PREV_INSTALL_SH_SHA256}  /opt/previous-release/install.sh" | sha256sum -c - \
+ && curl -fsSL -o /opt/previous-release/agent-director "${base}/agent-director-linux-${arch}" \
+ && echo "${prev_sha}  /opt/previous-release/agent-director" | sha256sum -c - \
+ && curl -fsSL -o /opt/previous-release/agent-director-admin "${base}/agent-director-admin-linux-${arch}" \
+ && echo "${prev_admin_sha}  /opt/previous-release/agent-director-admin" | sha256sum -c - \
+ && printf '%s\n' "${PREV_RELEASE_TAG}" > /opt/previous-release/TAG \
+ && chmod 0755 /opt/previous-release /opt/previous-release/install.sh /opt/previous-release/agent-director /opt/previous-release/agent-director-admin \
+ && chmod 0644 /opt/previous-release/TAG
 
 # Pre-built binary + driver assets are produced by the host Makefile.
 COPY bin/agent-director /usr/local/bin/agent-director
