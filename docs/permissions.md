@@ -1140,8 +1140,8 @@ processes, never Claude Code's screen. These cases are not covered:
   subagent's or an in-process teammate's) is proven gone only by its
   tool's `PostToolUse` or by the spawn's end: the main agent's `Stop` and
   idle-prompt Notification do not cover it, since a background subagent
-  can outlive the main turn, and agent-director does not register the
-  subagent's own stop hook. A deny runs no tool, so after a denied
+  can outlive the main turn, and the subagent's own stop hook
+  (`SubagentStop`) proves no request gone. A deny runs no tool, so after a denied
   subagent request a plain `send-keys` without a pane hash, and `pause`,
   are held until the spawn's agent ends; only a person or an LLM who
   looked, sending with the pane's hash, gets keys through. A subagent's

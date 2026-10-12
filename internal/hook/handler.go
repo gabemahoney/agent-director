@@ -223,6 +223,18 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // tool ran, so its dialog was answered allow), with the same gate, before its
 // ordinary write.
 //
+// Subagent capture (b.xjn; subagent.go): SubagentStart and SubagentStop are one
+// store transaction instead of the ordinary write, the soft refresh and the
+// entry writes together (applySubagentLifecycle), with HandleConfig.Start as
+// the receipt time; without an agent_id they are the soft refresh alone, and
+// ad.hook.fired's upsert_outcome is the transaction's. A PreToolUse,
+// PostToolUse or PostToolUseFailure whose tool_name is Agent, and a main-agent
+// Stop, run the entry transaction after their ordinary write, and only when it
+// applied (runSubagentAfterWrite); a Stop first reads whether a claimable launch
+// is old enough to close. A failure of that transaction logs one line (instance
+// id and event name) and leaves upsert_outcome the row write's. No payload
+// string is logged and nothing is written to stdout.
+//
 // State-tracking is fail-open per SRD §3.2: any internal failure logs
 // and returns nil. The relay flow is fail-closed per SRD §6.4 and b.146
 // rule 3: a failure before its request is recorded (its first write
@@ -409,11 +421,25 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			closeToolRan(st, hc, instanceID, gate, res.ToolUseID, logger)
 		}
 		var upsertOutcome store.UpsertOutcome
-		upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
+		wrote := false
+		if isSubagentLifecycle(res) {
+			// b.xjn: SubagentStart and SubagentStop are one transaction, the
+			// soft refresh and the entry writes, with the receipt time.
+			upsertOutcome, applied, wrote, err = applySubagentLifecycle(st, instanceID, gate, res, raw, start.UnixMilli(), transcriptPath, jsonlPresent)
+		}
+		if !wrote && err == nil {
+			upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
+		}
 		fields["upsert_outcome"] = string(upsertOutcome)
 		if err != nil {
 			failClosed(fmt.Sprintf("apply transition (instance=%s, event=%s): %v", instanceID, res.EventName, err))
 			return nil
+		}
+		if applied.Applied && !isSubagentLifecycle(res) {
+			// b.xjn: the Agent tool's launch hooks and a main-agent Stop follow
+			// their applied row write with the entry transaction. A held
+			// working transition counts as applied.
+			runSubagentAfterWrite(st, instanceID, gate, res, raw, start, logger)
 		}
 	}
 

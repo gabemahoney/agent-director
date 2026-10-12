@@ -41,6 +41,9 @@ type gateEvent struct {
 }
 
 // gateEvents is every ordinary event the settings register, and an unknown one.
+// SubagentStart and SubagentStop are not here: this table asserts a recorded
+// session id, which a subagent's hooks never record (SR-3.2); they are in
+// hook_subagent_records_test.go.
 var gateEvents = []gateEvent{
 	{name: "UserPromptSubmit", fixture: "user-prompt-submit.json", event: "UserPromptSubmit", state: store.StateWorking},
 	{name: "PreToolUse/Bash", fixture: "pre-tool-use-bash.json", event: "PreToolUse", state: store.StateWorking},

@@ -15,7 +15,7 @@ import (
 // hookEventName is the event-key string used in Claude Code's settings.
 // Listed in stable order so the synthesized JSON is reproducible (Go's
 // json.Marshal sorts keys alphabetically anyway; the slice exists so
-// tests can iterate the canonical 9 events without hardcoding the list).
+// tests can iterate the canonical eleven events without hardcoding the list).
 type hookEventName string
 
 const (
@@ -28,19 +28,23 @@ const (
 	hookNotification       hookEventName = "Notification"
 	hookSessionEnd         hookEventName = "SessionEnd"
 	hookPermissionRequest  hookEventName = "PermissionRequest"
+	hookSubagentStart      hookEventName = "SubagentStart"
+	hookSubagentStop       hookEventName = "SubagentStop"
 )
 
-// hookEvents enumerates the 9 events agent-director registers on every
+// hookEvents enumerates the eleven events agent-director registers on every
 // Spawn (SRD §6.1). Two of them (PreToolUse, PermissionRequest) carry a
 // `"matcher": "*"` field; the matcherFields set names those.
 // PostToolUseFailure (b.146 rule 13) is Claude Code's PostToolUse for a tool
 // that ran and failed: with PostToolUse it carries the tool_use_id that
 // closes a fallen-back permission request whose tool ran, and it moves the
-// row as PostToolUse does.
+// row as PostToolUse does. SubagentStart and SubagentStop (the last two) are
+// Claude Code's subagent lifecycle events; the hook records each subagent of the
+// row's agent from them.
 var hookEvents = []hookEventName{
 	hookSessionStart, hookUserPromptSubmit, hookPreToolUse,
 	hookPostToolUse, hookPostToolUseFailure, hookStop, hookNotification,
-	hookSessionEnd, hookPermissionRequest,
+	hookSessionEnd, hookPermissionRequest, hookSubagentStart, hookSubagentStop,
 }
 
 var matcherFields = map[hookEventName]bool{
@@ -123,7 +127,7 @@ const sessionStartHookTimeoutSeconds = 600
 // Claude Code honours (b.8q2). The SessionStart agent-director
 // hook entry carries sessionStartHookTimeoutSeconds (600), which does not
 // move with the relay settings: it keeps Claude Code's kill boundary above
-// the internal/hook SessionStart wait cap (SR-22.9). The other six events
+// the internal/hook SessionStart wait cap (SR-22.9). The other eight events
 // and the inject_help_hook SessionStart entry carry no timeout.
 //
 // `<bin>` is the absolute path to the currently-running agent-director

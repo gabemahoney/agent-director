@@ -1,0 +1,288 @@
+package hook
+
+import (
+	"encoding/json"
+	"log"
+	"time"
+
+	"github.com/gabemahoney/agent-director/internal/store"
+)
+
+// Subagent capture (b.xjn): the Claude Code half of the SRD's "Agent scope".
+// This file reads the payload fields only this feature reads and maps Claude
+// Code's SubagentStart, SubagentStop and Agent tool hooks onto the store's
+// agent-neutral events. The store applies them under the hook gate; nothing here
+// writes a row itself.
+
+// The subagent hook events and the tool whose hooks carry a launch.
+const (
+	EventNameSubagentStart = "SubagentStart"
+	EventNameSubagentStop  = "SubagentStop"
+	EventNamePreToolUse    = "PreToolUse"
+	// ToolAgent is the tool_name of a subagent launch, matched exactly (Claude
+	// Code 2.1.280 names the tool Agent).
+	ToolAgent = "Agent"
+)
+
+// Launch-result statuses of tool_response.status.
+const (
+	launchStatusAsync     = "async_launched"
+	launchStatusCompleted = "completed"
+)
+
+// subagentStore optional extensions of HookStore. *store.Store satisfies them; a
+// test double that does not gets today's write.
+
+// subagentLifecycleWriter is the combined gated row write and entry
+// transaction of SubagentStart and SubagentStop (store ApplySubagentLifecycle).
+type subagentLifecycleWriter interface {
+	ApplySubagentLifecycle(instanceID string, gate store.HookGate, ev store.SubagentLifecycleEvent, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
+}
+
+// subagentAfterWriter is the entry and claimable-launch transaction that follows
+// a hook's own applied row write (store ApplySubagentAfterWrite).
+type subagentAfterWriter interface {
+	ApplySubagentAfterWrite(instanceID string, gate store.HookGate, w store.SubagentAfterWrite) error
+}
+
+// subagentTurnEndReader is the plain read behind a main-agent Stop's skip
+// decision (store SubagentTurnEndHasWork).
+type subagentTurnEndReader interface {
+	SubagentTurnEndHasWork(instanceID string, receivedMs int64) (bool, error)
+}
+
+// subagentFields are the payload fields only the subagent feature reads. A field
+// is supplied when it is present, not null, of the type it is read as and, for a
+// string, not empty; one that is not is the zero value, and reading never fails
+// (SR-5.1). tool_input and tool_response count only when they are objects. The
+// value of tool_input.name, the content fields, an error, counters, outputFile,
+// tool_response.agent_id and session_crons are never read.
+type subagentFields struct {
+	// SessionID is session_id (SubagentStart, PostToolUse(Agent)).
+	SessionID string
+	// AgentType is agent_type (SubagentStart).
+	AgentType string
+	// StopHookActive is stop_hook_active (SubagentStop).
+	StopHookActive bool
+	// InputType is tool_input.subagent_type.
+	InputType string
+	// InputDescription is tool_input.description.
+	InputDescription string
+	// InputNamed reports whether tool_input.name is supplied; its value is never
+	// kept.
+	InputNamed bool
+	// ResponseAgentID is tool_response.agentId.
+	ResponseAgentID string
+	// ResponseStatus is tool_response.status.
+	ResponseStatus string
+	// ResponseModel is tool_response.resolvedModel.
+	ResponseModel string
+	// ResponseAgentType is tool_response.agentType, read from a completed result
+	// only.
+	ResponseAgentType string
+}
+
+// readSubagentFields reads the fields of subagentFields from raw. A payload that
+// is not a JSON object, or a field of the wrong type, reads as not supplied.
+func readSubagentFields(raw json.RawMessage) subagentFields {
+	var f subagentFields
+	top := rawObject(raw)
+	f.SessionID = rawString(top["session_id"])
+	f.AgentType = rawString(top["agent_type"])
+	f.StopHookActive = rawBool(top["stop_hook_active"])
+	if in := rawObject(top["tool_input"]); in != nil {
+		f.InputType = rawString(in["subagent_type"])
+		f.InputDescription = rawString(in["description"])
+		f.InputNamed = rawString(in["name"]) != ""
+	}
+	if resp := rawObject(top["tool_response"]); resp != nil {
+		f.ResponseAgentID = rawString(resp["agentId"])
+		f.ResponseStatus = rawString(resp["status"])
+		f.ResponseModel = rawString(resp["resolvedModel"])
+		if f.ResponseStatus == launchStatusCompleted {
+			f.ResponseAgentType = rawString(resp["agentType"])
+		}
+	}
+	return f
+}
+
+// rawObject decodes raw as a JSON object, or returns nil when it is not one.
+// Values stay raw so a wrongly typed one never fails the decode.
+func rawObject(raw json.RawMessage) map[string]json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// rawString decodes raw as a non-empty JSON string; anything else is "".
+func rawString(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return ""
+	}
+	return s
+}
+
+// rawBool decodes raw as a JSON boolean; anything else is false.
+func rawBool(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var b bool
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return false
+	}
+	return b
+}
+
+// isSubagentLifecycle reports whether res is a SubagentStart or SubagentStop.
+func isSubagentLifecycle(res ClassifyResult) bool {
+	return res.EventName == EventNameSubagentStart || res.EventName == EventNameSubagentStop
+}
+
+// applySubagentLifecycle is the gated write of a SubagentStart or SubagentStop
+// (ApplySubagentLifecycle), with the hook's receipt time. Without an agent_id it
+// is the same soft refresh with no entry writes. A start without a type never
+// claims; a stop carries stop_hook_active. ok is false when st has no such
+// method, and the caller makes the ordinary write.
+func applySubagentLifecycle(st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, raw json.RawMessage, receivedMs int64, jsonlPath string, jsonlPresent bool) (outcome store.UpsertOutcome, applied store.HookApplied, ok bool, err error) {
+	w, has := st.(subagentLifecycleWriter)
+	if !has {
+		return "", store.HookApplied{}, false, nil
+	}
+	ev := store.SubagentLifecycleEvent{ReceivedMs: receivedMs}
+	if res.AgentID != "" {
+		f := readSubagentFields(raw)
+		ev.SubagentID = res.AgentID
+		if res.EventName == EventNameSubagentStart {
+			ev.Kind = store.SubagentLifecycleStart
+			ev.SessionID = f.SessionID
+			ev.Type = f.AgentType
+		} else {
+			ev.Kind = store.SubagentLifecycleStop
+			ev.SupersedesBlockedStop = f.StopHookActive
+		}
+	}
+	outcome, applied, err = w.ApplySubagentLifecycle(instanceID, gate, ev, res.EventName, jsonlPath, jsonlPresent)
+	return outcome, applied, true, err
+}
+
+// isAgentToolHook reports whether res is a PreToolUse, PostToolUse or
+// PostToolUseFailure of the Agent tool.
+func isAgentToolHook(res ClassifyResult) bool {
+	if res.ToolName != ToolAgent {
+		return false
+	}
+	switch res.EventName {
+	case EventNamePreToolUse, EventNamePostToolUse, EventNamePostToolUseFailure:
+		return true
+	}
+	return false
+}
+
+// isMainAgentStop reports whether res is a Stop with no agent_id.
+func isMainAgentStop(res ClassifyResult) bool {
+	return res.EventName == EventNameStop && res.AgentID == ""
+}
+
+// subagentAfterWrite builds the entry transaction that follows a hook's applied
+// row write: the Agent tool's launch request, launch result or launch failure,
+// or a main-agent Stop's turn end. ok is false when the hook has none (any other
+// event, a non-Agent tool, a Stop with an agent_id, a request that opens no
+// claimable launch, or a result that carries nothing to apply).
+func subagentAfterWrite(res ClassifyResult, raw json.RawMessage, receivedMs int64) (w store.SubagentAfterWrite, ok bool) {
+	switch {
+	case isMainAgentStop(res):
+		return store.SubagentAfterWrite{TurnEnd: &store.SubagentTurnEnd{ReceivedMs: receivedMs}}, true
+	case !isAgentToolHook(res):
+		return store.SubagentAfterWrite{}, false
+	}
+	f := readSubagentFields(raw)
+	switch res.EventName {
+	case EventNamePreToolUse:
+		if res.ToolUseID == "" || f.InputType == "" || f.InputNamed {
+			return store.SubagentAfterWrite{}, false
+		}
+		return store.SubagentAfterWrite{LaunchRequest: &store.SubagentLaunchRequest{
+			ToolUseID: res.ToolUseID, Type: f.InputType, ReceivedMs: receivedMs,
+		}}, true
+	case EventNamePostToolUseFailure:
+		if res.ToolUseID == "" {
+			return store.SubagentAfterWrite{}, false
+		}
+		return store.SubagentAfterWrite{LaunchFailure: &store.SubagentLaunchFailure{ToolUseID: res.ToolUseID}}, true
+	}
+	// PostToolUse: the launch result. With no tool_use_id and no agentId (a
+	// teammate's) there is nothing to close or record.
+	if res.ToolUseID == "" && f.ResponseAgentID == "" {
+		return store.SubagentAfterWrite{}, false
+	}
+	typ := f.InputType
+	if typ == "" {
+		typ = f.ResponseAgentType
+	}
+	outcome := store.SubagentLaunchOther
+	switch f.ResponseStatus {
+	case launchStatusAsync:
+		outcome = store.SubagentLaunchBackgroundStarted
+	case launchStatusCompleted:
+		outcome = store.SubagentLaunchForegroundFinished
+	}
+	return store.SubagentAfterWrite{LaunchDetails: &store.SubagentLaunchDetails{
+		ToolUseID:   res.ToolUseID,
+		SubagentID:  f.ResponseAgentID,
+		LauncherID:  res.AgentID,
+		SessionID:   f.SessionID,
+		Type:        typ,
+		Description: f.InputDescription,
+		Model:       f.ResponseModel,
+		Outcome:     outcome,
+		ReceivedMs:  receivedMs,
+	}}, true
+}
+
+// runSubagentAfterWrite is Handle's entry transaction after an applied row write
+// (SR-3.3): the Agent tool's launch request, launch result or launch failure,
+// and a main-agent Stop's turn end, the latter only when the skip read finds a
+// claimable launch to close (SR-12.2). It is fail-open: a store without the
+// methods does nothing, and a failure logs one line carrying the instance id and
+// event name and changes nothing else, so the hook's upsert_outcome stays the
+// row write's. It adds no sleep, poll or timeout.
+func runSubagentAfterWrite(st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, raw json.RawMessage, start time.Time, logger *log.Logger) {
+	aw, ok := st.(subagentAfterWriter)
+	if !ok {
+		return
+	}
+	receivedMs := start.UnixMilli()
+	w, ok := subagentAfterWrite(res, raw, receivedMs)
+	if !ok {
+		return
+	}
+	if w.TurnEnd != nil {
+		if r, has := st.(subagentTurnEndReader); has {
+			work, err := r.SubagentTurnEndHasWork(instanceID, receivedMs)
+			if err != nil {
+				logf(logger, "hook: subagent turn-end read (instance=%s, event=%s): %v", instanceID, res.EventName, err)
+				return
+			}
+			if !work {
+				return
+			}
+		}
+	}
+	if err := aw.ApplySubagentAfterWrite(instanceID, gate, w); err != nil {
+		logf(logger, "hook: subagent entry transaction (instance=%s, event=%s): %v", instanceID, res.EventName, err)
+	}
+}
+
+var _ subagentLifecycleWriter = (*store.Store)(nil)
+var _ subagentAfterWriter = (*store.Store)(nil)
+var _ subagentTurnEndReader = (*store.Store)(nil)

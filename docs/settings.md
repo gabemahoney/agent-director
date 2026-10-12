@@ -19,11 +19,11 @@ byte-for-byte regardless of which shell the operator has configured.
 
 The synthesized payload contains:
 
-- **`hooks`** — nine state-tracking entries (`SessionStart`,
+- **`hooks`** — eleven state-tracking entries (`SessionStart`,
   `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`,
-  `Stop`, `Notification`, `SessionEnd`, `PermissionRequest`), each pointing at
-  the running `agent-director` binary's absolute path. See `hooks.md`
-  for the per-event mapping.
+  `Stop`, `Notification`, `SessionEnd`, `PermissionRequest`, `SubagentStart`,
+  `SubagentStop`), each pointing at the running `agent-director` binary's
+  absolute path. See `hooks.md` for the per-event mapping.
 - **`permissions`** (optional) — `allow` / `deny` / `ask` arrays
   populated from the spawn's `allow` / `deny` / `ask` params
   (`--allow` / `--deny` / `--ask` on the CLI) plus the

@@ -1,16 +1,17 @@
 # Hooks
 
 How agent-director's per-Spawn state-tracking hooks coexist with the
-operator's own Claude Code hooks. Each Spawn gets nine hook entries
+operator's own Claude Code hooks. Each Spawn gets eleven hook entries
 synthesized into its `--settings`; they fire on every Claude lifecycle
 event and write the row update that powers `status` / `get` / `list`,
 but only for the row's own agent (see "Only the row's own agent moves
-the row" below).
+the row" below). Some of them also write the agent's subagent records
+(see "What the hooks write for subagent records" below).
 
 For Claude Code's own hooks reference, see:
 <https://docs.claude.com/en/docs/claude-code/hooks>.
 
-## The nine state-tracking hooks
+## The eleven state-tracking hooks
 
 agent-director registers one entry per event listed below. Each entry
 is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
@@ -55,16 +56,18 @@ null.
 | --- | --- | --- |
 | `SessionStart` | — | `waiting` (also writes `session_id`) |
 | `UserPromptSubmit` | — | `working` |
-| `PreToolUse` | `*` (all tools) | `working` |
+| `PreToolUse` | `*` (all tools) | `working`; for the `Agent` tool it also writes subagent data, the state result unchanged (see "What the hooks write for subagent records" below) |
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
-| `PostToolUse` | — | `working`; with `relay_mode=on`, it first proves the permission requests carrying the same `tool_use_id` gone (see "Hooks that prove a request's dialog gone" below), then closes a fallen-back one (see "A request whose tool ran" below) |
-| `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed |
-| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone |
+| `PostToolUse` | — | `working`; with `relay_mode=on`, it first proves the permission requests carrying the same `tool_use_id` gone (see "Hooks that prove a request's dialog gone" below), then closes a fallen-back one (see "A request whose tool ran" below); for the `Agent` tool it also writes subagent data, the state result unchanged |
+| `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed; for the `Agent` tool it also writes subagent data, the state result unchanged |
+| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone; a main-agent `Stop` also writes subagent data, the state result unchanged |
 | `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (see "A relay row left in `check_permission`" below); any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it started gone, as `Stop` does |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
+| `SubagentStart` | — | soft refresh: bumps `last_seen_at`, state unchanged, `idle_since` and the settle clock untouched. With `agent_id` it records no session id, and writes the subagent's entry in the same write |
+| `SubagentStop` | — | as `SubagentStart` |
 
 Unknown event names are treated as soft refreshes — the row's
 `last_seen_at` updates and an info-level log line records the unknown
@@ -120,7 +123,7 @@ Claude Code sends a `Notification` with `notification_type`
 
 Every applied write of this Notification, the soft refresh included, sets
 the row's `idle_since` to the current time, and the agent's next applied
-hook clears it. `find-missing` reads it when it repairs a relay row left in
+hook clears it (a `SubagentStart` or `SubagentStop` leaves it). `find-missing` reads it when it repairs a relay row left in
 `check_permission`: `waiting` when it is set, `working` when it is not (see
 "PermissionRequest relay path" below).
 
@@ -340,11 +343,16 @@ carries it and is the agent itself.
   process. The one exception is an idle-prompt `Notification` with
   `agent_id`: it is a soft refresh and never returns the row to
   `waiting` (see "The idle-prompt Notification").
+- **SubagentStart and SubagentStop with `agent_id`:** these are not
+  ignored: only SessionStart and SessionEnd are. Each is a soft refresh
+  of the row that also writes the subagent's entry (see "What the hooks
+  write for subagent records" below).
 - **Permission requests with `agent_id`:** a subagent's `PostToolUse`
   proves its request gone by `tool_use_id` like the agent's own, but no
   `Stop` or idle-prompt Notification does: a background subagent can
-  outlive the main agent's turn, and agent-director registers no hook for
-  a subagent's own stop (see "Hooks that prove a request's dialog gone").
+  outlive the main agent's turn. `SubagentStop` is registered, but no
+  subagent event proves a permission request gone (see "Hooks that prove a
+  request's dialog gone").
 
 ### The `ad.hook.ignored` reasons
 
@@ -366,6 +374,115 @@ Consequences: a nested agent's or a teammate pane's work is not
 reflected in the row, and an `ended` row stays `ended` against every
 other process's hooks.
 
+## What the hooks write for subagent records
+
+agent-director keeps one entry for each subagent of the row's agent. An
+entry becomes a record once an Agent call or a launch result confirms
+it; an entry that nothing confirms is an observation, and is not a
+record. An open Agent call is a note that the agent called its `Agent`
+tool and no subagent has yet been matched to the call. An entry belongs
+to one launch of the row: a `resume` or a `reuse` starts a new one.
+
+Only the row's own agent's hooks write entries and open Agent calls. Each
+write carries the same gate as every hook (see "Only the row's own agent
+moves the row"), so a hook from any other process writes none, and so
+does a hook for a row that is `ended` or `missing`. Entries are written
+only for a launch whose `--settings` register `SubagentStart` and
+`SubagentStop`; whether a launch is such a one, as a consumer sees it
+(`tracked`), is in [usage.md](usage.md). Every time written is the moment
+the hook started.
+
+- **`SubagentStart`**, with `agent_id` (without one it is the soft refresh
+  alone). It writes in the same write as its soft refresh: both land or
+  neither does.
+  - A start for an id with no entry creates one, `running`, that records
+    the payload's session id and, from `agent_type`, its type.
+  - A start that creates the entry and supplies a type is matched to the
+    oldest open Agent call of that type in the row's current launch: the
+    call is closed and the entry is confirmed. The match only confirms. It
+    copies nothing from the call, and each start matches at most one call.
+  - A start without a type is never matched, so its entry is an
+    observation.
+  - A start for an id that already has an entry never matches a call.
+  - A start for an id that has an entry moves it into the current launch,
+    sets its type when it has none or got it from a lower source (a type
+    from a start outranks one from a launch result), and, when the entry
+    was `stopped` or `lost`, runs it again. A running entry stays running.
+- **`SubagentStop`**, with `agent_id`. It writes in the same write as its
+  soft refresh, and without an `agent_id` it is the soft refresh alone. It
+  never creates an entry, and it changes only an entry of the current launch. A `running` or `lost` entry becomes `stopped`
+  and takes the stop's time as `stopped_at`. A stop for an entry already
+  stopped keeps `stopped_at`, unless the stop carries `stop_hook_active`
+  true (the real stop after another stop hook blocked the first one) or the
+  earlier time came from a launch result; the new stop's time replaces
+  it. What a consumer sees of a record that reads stopped while another
+  stop hook blocks the real stop is in [usage.md](usage.md).
+- **The launch request**, a `PreToolUse` for the `Agent` tool. It opens an
+  open Agent call holding the `tool_use_id`, the type from
+  `tool_input.subagent_type` and the time. It opens none when the call has
+  no `tool_use_id`, names no type or carries a `tool_input.name` (a
+  teammate launch), and it changes nothing when that `tool_use_id` is
+  already open, or already belongs to an entry of the current launch.
+- **The launch result**, a `PostToolUse` for the `Agent` tool.
+  - It closes the open Agent call with its `tool_use_id`, whatever else
+    it does. A result that carries neither a `tool_use_id` nor an
+    `agentId` writes nothing.
+  - With `tool_response.agentId` it also confirms and updates that
+    subagent's entry, moving it into the current launch. It fills what the
+    entry does not yet have: the description (`tool_input.description`),
+    the model (`tool_response.resolvedModel`), the parent (the subagent
+    that made the call, from the payload's `agent_id`, otherwise the agent
+    itself), the `tool_use_id` and the run mode. The type is
+    `tool_input.subagent_type`, or, when the call named none, the
+    `agentType` of a `completed` result. A type from a start outranks it.
+  - `tool_response.status` `async_launched` counts as a start: it creates a
+    `running` entry for an id with none, with run mode `background`.
+    `completed` counts as a stop: it creates a `stopped` entry with run mode
+    `foreground`, or stops a `running` or `lost` one, with the result's
+    time as `stopped_at`. Any other status creates no entry and changes no
+    state, though it still fills fields of an entry that exists.
+- **`PostToolUseFailure`** for the `Agent` tool closes the open Agent call
+  with its `tool_use_id` and writes nothing else.
+- **A main-agent `Stop`** (no `agent_id`) closes the open Agent calls of
+  the current launch opened more than 2 s before the `Stop`. Calls of an
+  earlier launch stay. A `Stop` carrying `agent_id` writes nothing of
+  this kind. The hook first reads, without taking the store's write lock,
+  whether any call is old enough, and writes nothing when none is.
+
+The Agent-tool hooks and the main-agent `Stop` write their subagent data
+after their own row write, in a transaction of its own, and only when the
+row write applied (a move to `working` held by a permission request
+counts as applied). It writes no trail record, and the hook's
+`ad.hook.fired` `upsert_outcome` stays the row write's. A `PostToolUse` or
+`PostToolUseFailure` makes it after the relay proofs and the close of a
+fallen-back request, and after the ordinary write. `SubagentStart` and
+`SubagentStop` write the row and the entry in one transaction, so their
+`upsert_outcome` covers both.
+
+Internal agents (Claude Code's own, for one) produce no record, and
+teammates produce none except by one residual. A teammate's launch
+request names it and so opens no Agent call, and its result names no
+subagent, so it confirms nothing. An internal agent's `SubagentStop`
+finds no entry. A start that either one fires can leave an
+observation, which stays one. The residual: a teammate whose type equals
+that of a running launch's open Agent call can claim that call with the
+start that creates its entry, and then shows as one record. The residuals
+a consumer meets are in [usage.md](usage.md).
+
+Nothing of a subagent's content is read or stored: not the prompt, the
+messages, the result text, an error, usage counters, an output file or
+the listed background tasks. The only text kept from a launch is the
+description the call gave, the type, the model and ids. Nothing of it
+reaches the log or the trail.
+
+Limits:
+
+- Only the hooks above end an entry. A subagent whose stop signals never
+  reached agent-director (a foreground one is still stopped by its completed
+  launch result), a row that ends or goes missing, and a `resume` or `reuse`
+  that starts a new launch all leave their `running` entries running.
+- A launch whose hooks were all missed has no entry.
+
 ## Fail-open invariant
 
 State-tracking hooks **must never block Claude Code**. The `hook` verb
@@ -374,7 +491,10 @@ it does not apply:
 
 - Missing `AGENT_DIRECTOR_INSTANCE_ID` env → exit 0, log entry.
 - Malformed JSON payload → exit 0, log entry.
-- Payload over 1 MiB → exit 0, log entry.
+- Payload over 1 MiB → exit 0, log entry. The payload is dropped whole:
+  nothing is written, subagent entries included. When both stop signals of
+  a subagent exceed 1 MiB, its record is left `running`; see
+  [usage.md](usage.md).
 - Config malformed → exit 0, log entry.
 - Store open failure → exit 0, log entry.
 - No usable `HOME` (unset or empty) → exit 0, log entry (normally on
@@ -406,6 +526,21 @@ it does not apply:
   stderr, no store opened, one `ad.hook.ignored` record with reason
   `no_exec_form`.
 - Hook for an id with no row → exit 0, nothing written.
+- `SubagentStart` or `SubagentStop`, or a subagent write after another
+  hook's row write, that fails → exit 0 with one log entry. The entry
+  names the instance id and the event and carries no payload text. A
+  `SubagentStart` or `SubagentStop` whose transaction rolled back writes
+  nothing, the row refresh included, and its `ad.hook.fired` record has
+  `upsert_outcome` `error`; the entry's next event writes it again. A
+  failed subagent write after another hook's row write leaves that row
+  write and its `upsert_outcome` as they were.
+
+The subagent hooks add nothing to stdout, whatever they write: no context,
+no decision, and a `SubagentStop` never blocks a stop. Each of their store
+transactions waits at most `[store] busy_timeout_ms` for the write lock, so
+a hook that makes two (an Agent-tool hook or a main-agent `Stop`: its row
+write, then the subagent write) can wait that long twice. They add no sleep
+or poll.
 
 All log entries land in `~/.config/agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`), or on stderr when that
@@ -828,8 +963,9 @@ row's requests not yet proven, as `proven_gone_at` (the hook's clock) and
 `turn_end` means the turn of the agent that asked ended after the request
 was written; the main agent's `Stop` and idle-prompt Notification prove it
 for a request with no `agent_id`. No other hook proves anything: not `PreToolUse`, not another
-Notification, not a `Stop` or idle prompt carrying `agent_id`, and not a
-`PostToolUse` with another `tool_use_id` or none.
+Notification, not a `Stop` or idle prompt carrying `agent_id`, not a
+`SubagentStart` or `SubagentStop`, and not a `PostToolUse` with another
+`tool_use_id` or none.
 
 - **Written before.** A `Stop` or idle prompt covers only a request whose
   `created_at` is before the second the hook process started, so one

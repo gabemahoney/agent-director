@@ -68,13 +68,14 @@ const (
 // subagent_launches (SR-10.3). One constant bounds both tables.
 const SubagentCap = 300
 
-// evictSubagentEntrySQL is evictSubagentEntryAtCap's one statement: when the
-// row holds SubagentCap entries or more, it deletes exactly one, chosen by
-// rank, then oldest activity_at, then lowest created_seq (SR-10.3): rank 0 is a
-// closed observation (not running, not confirmed), rank 1 a closed record (not
-// running, confirmed) and rank 2 a running entry, taken only when nothing
-// closed remains. Below the cap the count condition fails and nothing is
-// deleted. Placeholders: the id, the id, the cap.
+// evictSubagentEntrySQL is the entry eviction's one statement, without a gate:
+// when the row holds SubagentCap entries or more, it deletes exactly one,
+// chosen by rank, then oldest activity_at, then lowest created_seq (SR-10.3):
+// rank 0 is a closed observation (not running, not confirmed), rank 1 a closed
+// record (not running, confirmed) and rank 2 a running entry, taken only when
+// nothing closed remains. Below the cap the count condition fails and nothing
+// is deleted. Placeholders: the id, the id, the cap. A hook's eviction appends
+// the fragment subagentGateExists returns (evictSubagentEntryGated).
 const evictSubagentEntrySQL = `DELETE FROM subagents
   WHERE created_seq = (
         SELECT created_seq FROM subagents
@@ -95,14 +96,31 @@ const evictSubagentEntrySQL = `DELETE FROM subagents
 // Below the cap it deletes nothing and reports false. It is one statement on q,
 // the caller's open transaction or connection, so it commits or rolls back with
 // the caller's write; the caller inserts its entry after it.
+//
+// This form carries no hook gate. It is for a caller that is not a hook event
+// and for the cap's own tests; a hook's eviction is evictSubagentEntryGated,
+// which every entry write of a hook uses (SR-3.1).
 func evictSubagentEntryAtCap(q querier, instanceID string) (bool, error) {
 	return execEvict(q, "evict subagent entry", evictSubagentEntrySQL, instanceID, instanceID, SubagentCap)
 }
 
-// evictSubagentLaunchSQL is evictSubagentLaunchAtCap's one statement: when the
-// row holds SubagentCap claimable launches or more, it deletes the one with the
-// oldest opened_at, ties to the lowest created_seq (SR-10.3). Placeholders: the
-// id, the id, the cap.
+// evictSubagentEntryGated is evictSubagentEntryAtCap for a hook event (SR-3.1):
+// the same statement with the hook gate and the four row conditions in its own
+// WHERE (the fragment subagentGateExists returns), so it deletes nothing for a foreign parent, a
+// pane-less, ended, missing or untracked row, or a row with no launch_token.
+// The caller's gated insert follows it in the same transaction and rolls the
+// whole transaction back when it inserts nothing, so an eviction never stands
+// without its insert.
+func evictSubagentEntryGated(q querier, instanceID string, gate HookGate) (bool, error) {
+	frag, gateArgs := subagentGateExists(instanceID, gate, "")
+	args := append([]any{instanceID, instanceID, SubagentCap}, gateArgs...)
+	return execEvict(q, "evict subagent entry", evictSubagentEntrySQL+` AND `+frag, args...)
+}
+
+// evictSubagentLaunchSQL is the claimable-launch eviction's one statement,
+// without a gate: when the row holds SubagentCap claimable launches or more, it
+// deletes the one with the oldest opened_at, ties to the lowest created_seq
+// (SR-10.3). Placeholders: the id, the id, the cap.
 const evictSubagentLaunchSQL = `DELETE FROM subagent_launches
   WHERE created_seq = (
         SELECT created_seq FROM subagent_launches
@@ -115,9 +133,53 @@ const evictSubagentLaunchSQL = `DELETE FROM subagent_launches
 // instanceID: when the row holds SubagentCap of them it deletes the one with
 // the oldest opened_at, ties to the lowest created_seq (SR-10.3), and reports
 // true; below the cap it deletes nothing and reports false. One statement on
-// q, the caller's open transaction or connection, as evictSubagentEntryAtCap.
+// q, the caller's open transaction or connection, as evictSubagentEntryAtCap,
+// and ungated as it is; a hook's eviction is evictSubagentLaunchGated.
 func evictSubagentLaunchAtCap(q querier, instanceID string) (bool, error) {
 	return execEvict(q, "evict subagent launch", evictSubagentLaunchSQL, instanceID, instanceID, SubagentCap)
+}
+
+// evictSubagentLaunchGated is evictSubagentLaunchAtCap for a hook event
+// (SR-3.1), gated as evictSubagentEntryGated is.
+func evictSubagentLaunchGated(q querier, instanceID string, gate HookGate) (bool, error) {
+	frag, gateArgs := subagentGateExists(instanceID, gate, "")
+	args := append([]any{instanceID, instanceID, SubagentCap}, gateArgs...)
+	return execEvict(q, "evict subagent launch", evictSubagentLaunchSQL+` AND `+frag, args...)
+}
+
+// subagentRowLiveSQL is the three row conditions of SR-3.1 that need no
+// argument, on the spawns row aliased sp: the row is live (neither ended nor
+// missing, SR-3.4), its current launch is tracked (SR-9), and its launch_token
+// is not null.
+const subagentRowLiveSQL = `sp.state NOT IN ('` + StateEnded + `', '` + StateMissing + `')
+        AND sp.subagent_tracking = 1 AND sp.launch_token IS NOT NULL`
+
+// subagentGateExists returns the EXISTS fragment every statement that creates,
+// changes or deletes an entry or a claimable launch for a hook event carries in
+// its own WHERE (SR-3.1), with its arguments: the spawns row of instanceID,
+// aliased sp, passes the hook gate (hookGateSQL) and the row conditions
+// (subagentRowLiveSQL). A non-empty belongsTo names a table of the outer
+// statement whose launch_token column must equal the row's current
+// launch_token, read in the same statement, so the statement acts only on what
+// belongs to the current launch. Nothing is checked before the statement: the
+// row's state, pane and launch_token are decided in it.
+func subagentGateExists(instanceID string, gate HookGate, belongsTo string) (string, []any) {
+	frag := `EXISTS (SELECT 1 FROM spawns sp WHERE ` + subagentRowGateSQL
+	if belongsTo != "" {
+		frag += ` AND sp.launch_token = ` + belongsTo + `.launch_token`
+	}
+	frag += `)`
+	return frag, subagentRowGateArgs(instanceID, gate)
+}
+
+// subagentRowGateSQL is subagentGateExists's condition on the spawns row aliased
+// sp, without the EXISTS around it, for a statement that selects from spawns
+// (an insert-select). Placeholders: the id, then hookGateArgs.
+const subagentRowGateSQL = `sp.instance_id = ? AND ` + subagentRowLiveSQL + ` AND ` + hookGateSQL
+
+// subagentRowGateArgs returns the arguments of subagentRowGateSQL.
+func subagentRowGateArgs(instanceID string, gate HookGate) []any {
+	return append([]any{instanceID}, hookGateArgs(gate)...)
 }
 
 // execEvict runs one eviction statement on q and reports whether it deleted a

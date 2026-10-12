@@ -102,8 +102,8 @@ func acDoc19Items() []acDocItem {
 				{name: "Back", lead: "**Back**", steps: []stepSpec{
 					{"stop the set and every serve", []string{quoted(stoppingItemTitle), "stop every agent of the set and every `serve`"}, nil},
 					{"restore the store or downgrade, then the previous binary", []string{"Put back the pre-upgrade copy of `state.db`",
-						"`-wal`", "`-shm`", "(migration-guide.md#v6--v5-reverses-migratev5tov6)",
-						"(migration-guide.md#v5--v4-reverses-migratev4tov5)", "Install the previous binary",
+						"`-wal`", "`-shm`", "the migrated store is v9", "(migration-guide.md#emergency-downgrade-recipe)",
+						"Install", "the previous binary",
 						"start the caller's old version"}, nil},
 				}},
 			},

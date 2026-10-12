@@ -42,6 +42,10 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "SessionEnd matcher logout", raw: `{"hook_event_name":"SessionEnd","matcher":"logout"}`, wantState: store.StateEnded},
 		{name: "SessionEnd endReason logout", raw: `{"hook_event_name":"SessionEnd","endReason":"logout"}`, wantState: store.StateEnded},
 		{name: "SessionEnd matcher compact", raw: `{"hook_event_name":"SessionEnd","matcher":"compact"}`, wantSoft: true},
+		{name: "SubagentStart", raw: `{"hook_event_name":"SubagentStart"}`, wantSoft: true},
+		{name: "SubagentStart with agent_id", raw: `{"hook_event_name":"SubagentStart","agent_id":"a1","agent_type":"general-purpose"}`, wantSoft: true},
+		{name: "SubagentStop", raw: `{"hook_event_name":"SubagentStop"}`, wantSoft: true},
+		{name: "SubagentStop with agent_id", raw: `{"hook_event_name":"SubagentStop","agent_id":"a1","stop_hook_active":false}`, wantSoft: true},
 		{name: "unknown event", raw: `{"hook_event_name":"BrandNewEvent"}`, wantSoft: true, wantUnknown: true},
 		{name: "empty payload", raw: ``, wantSoft: true},
 	}
@@ -135,6 +139,34 @@ func TestClassifyEventAgentID(t *testing.T) {
 				t.Errorf("result = %+v; want %+v", res, want)
 			}
 		})
+	}
+}
+
+// TestClassifyEventSubagentStartStop (SR-2.2, SR-13.1): SubagentStart and
+// SubagentStop, with and without agent_id, are known events that carry the
+// agent_id verbatim, and are none of a subagent SessionStart/SessionEnd (so
+// never ignored as subagent_event), the main agent's end of turn or a tool that
+// ran.
+func TestClassifyEventSubagentStartStop(t *testing.T) {
+	for _, event := range []string{"SubagentStart", "SubagentStop"} {
+		for _, agentID := range []string{"a1", ""} {
+			name := event + "/agent_id=" + agentID
+			t.Run(name, func(t *testing.T) {
+				p := map[string]any{"hook_event_name": event, "tool_use_id": "toolu_01", "agent_id": agentID}
+				res := classifyMap(t, p)
+				if res.EventName != event || res.UnknownEvent || !res.SoftRefresh || res.NewState != "" {
+					t.Errorf("EventName/UnknownEvent/SoftRefresh/NewState = %q/%v/%v/%q; want %q/false/true/empty",
+						res.EventName, res.UnknownEvent, res.SoftRefresh, res.NewState, event)
+				}
+				if res.AgentID != agentID {
+					t.Errorf("AgentID = %q; want %q", res.AgentID, agentID)
+				}
+				if res.SubagentLifecycle() || res.TurnEnded() || res.ToolRan() || res.WaitingIfWorking {
+					t.Errorf("SubagentLifecycle/TurnEnded/ToolRan/WaitingIfWorking = %v/%v/%v/%v; want all false",
+						res.SubagentLifecycle(), res.TurnEnded(), res.ToolRan(), res.WaitingIfWorking)
+				}
+			})
+		}
 	}
 }
 

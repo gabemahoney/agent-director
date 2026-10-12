@@ -1,0 +1,22 @@
+{
+  "session_id": "9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "agent_id": "a3f9c2e81b7d4056",
+  "agent_type": "general-purpose",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/agent/.claude/projects/-work-demo/9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40/subagents/agent-a3f9c2e81b7d4056.jsonl",
+  "background_tasks": [
+    {
+      "id": "a3f9c2e81b7d4056",
+      "type": "subagent",
+      "status": "running",
+      "description": "Claude Code label for the task",
+      "agent_type": "general-purpose"
+    }
+  ],
+  "session_crons": []
+}

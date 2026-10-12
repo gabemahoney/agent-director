@@ -198,6 +198,83 @@ func TestHookCLIUsesConfiguredBusyTimeout(t *testing.T) {
 	}
 }
 
+// TestHookCLISubagentBusyStore (b.xjn; SR-15.1, SR-18): a SubagentStart and a
+// SubagentStop, whose soft refresh and entry write are one transaction, give up
+// at once when the store is locked past a 1 ms busy timeout, fail-open (exit 0,
+// nothing on stdout or stderr, the row and its entries untouched, a locked-store
+// line in errors.log), and wait for the release and apply with 60000 ms.
+func TestHookCLISubagentBusyStore(t *testing.T) {
+	const subagent = "a3f9c2e81b7d4056" // the id both fixtures carry
+	for _, ev := range []struct {
+		name, fixture string
+		seedEntry     bool
+		want          func(rows apitest.SubagentRows) bool // the applied result
+	}{
+		{"SubagentStart", "subagent-start.json", false, func(r apitest.SubagentRows) bool {
+			return len(r.Entries) == 1 && r.Entries[0].State == store.SubagentStateRunning
+		}},
+		{"SubagentStop", "subagent-stop.json", true, func(r apitest.SubagentRows) bool {
+			return len(r.Entries) == 1 && r.Entries[0].State == store.SubagentStateStopped
+		}},
+	} {
+		for _, tc := range []struct {
+			name    string
+			ms      int
+			hold    time.Duration // the lock's release, unless the hook returns first
+			applied bool
+		}{
+			{"1 ms gives up", 1, 5 * time.Second, false},
+			{"60000 ms waits for the release", 60000, 300 * time.Millisecond, true},
+		} {
+			t.Run(ev.name+" "+tc.name, func(t *testing.T) {
+				home := t.TempDir()
+				const id = "id-xjn-busy"
+				if _, err := apitest.SeedSpawn(stateDB(home), id, store.StateWorking, "/tmp", "off", "", true,
+					withTestProcessPane(t)); err != nil {
+					t.Fatalf("SeedSpawn: %v", err)
+				}
+				if ev.seedEntry {
+					if err := apitest.SeedSubagent(stateDB(home), id, subagent); err != nil {
+						t.Fatalf("SeedSubagent: %v", err)
+					}
+				}
+				cfg := fmt.Sprintf("[store]\nbusy_timeout_ms = %d\n", tc.ms)
+				if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatalf("write config: %v", err)
+				}
+				payload, err := os.ReadFile(filepath.Join("..", "..", "internal", "hook", "testdata", "hook-payloads", ev.fixture))
+				if err != nil {
+					t.Fatalf("read fixture: %v", err)
+				}
+				rowBefore := rowColumns(t, home, id)
+
+				release := apitest.HoldWriteLock(t, stateDB(home), tc.hold)
+				stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id}, string(payload))
+				release()
+
+				if code != 0 || stdout != "" || stderr != "" {
+					t.Fatalf("hook exit = %d, stdout = %q, stderr = %q; want 0 and both empty", code, stdout, stderr)
+				}
+				rows, err := apitest.ReadSubagentRows(stateDB(home), id)
+				if err != nil {
+					t.Fatalf("ReadSubagentRows: %v", err)
+				}
+				if got := ev.want(rows); got != tc.applied {
+					t.Errorf("entries after the hook = %+v; applied = %v, want %v", rows.Entries, got, tc.applied)
+				}
+				if rowAfter := rowColumns(t, home, id); (rowAfter.RowVersion != rowBefore.RowVersion) != tc.applied {
+					t.Errorf("row_version %v -> %v; want it moved exactly when the hook applied (%v)",
+						rowBefore.RowVersion, rowAfter.RowVersion, tc.applied)
+				}
+				log, _ := os.ReadFile(filepath.Join(directorDir(home), "errors.log"))
+				if locked := strings.Contains(string(log), "database is locked"); locked == tc.applied {
+					t.Errorf("errors.log = %q; want a locked-store line exactly when the write gave up", log)
+				}
+			})
+		}
+	}
+}
+
 // TestHookCLIFailOpen: with no AGENT_DIRECTOR_INSTANCE_ID the hook exits 0
 // with no stdout and still writes its ad.hook.fired line (instance id null);
 // with the trail unwritable (an empty 0400 ad-trail.jsonl) it still exits 0

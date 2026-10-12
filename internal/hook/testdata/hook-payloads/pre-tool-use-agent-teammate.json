@@ -1,0 +1,15 @@
+{
+  "session_id": "9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Spawn teammate helper",
+    "subagent_type": "general-purpose",
+    "name": "helper"
+  },
+  "tool_use_id": "toolu_01TeamSpawnGhi789Uvw"
+}

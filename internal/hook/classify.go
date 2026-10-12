@@ -270,6 +270,11 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		res.WaitingIfWorking = p.NotificationType == NotificationTypeIdlePrompt && p.AgentID == ""
 	case "PermissionRequest":
 		res.NewState = store.StateCheckPermission
+	case EventNameSubagentStart, EventNameSubagentStop:
+		// b.xjn: a subagent's start or stop keeps the row's state and bumps
+		// last_seen_at, as a soft refresh does. It is a known event (no
+		// unknown-event log line); Handle routes it to the subagent write.
+		res.SoftRefresh = true
 	case "SessionEnd":
 		// b.pmn: soft-refresh by default. Only mark `ended` on known-
 		// terminal causes. Empty/unknown causes (which Claude Code emits

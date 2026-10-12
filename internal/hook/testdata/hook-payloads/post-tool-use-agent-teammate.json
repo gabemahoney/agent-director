@@ -1,0 +1,31 @@
+{
+  "session_id": "9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40",
+  "transcript_path": "/home/agent/.claude/projects/-work-demo/9b2e4c71-3f58-4d0a-8e6b-1a7c5d9f2e40.jsonl",
+  "cwd": "/work/demo",
+  "prompt_id": "550e8400-e29b-41d4-a716-446655440000",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Spawn teammate helper",
+    "subagent_type": "general-purpose",
+    "name": "helper"
+  },
+  "tool_response": {
+    "status": "teammate_spawned",
+    "teammate_id": "helper@session-4f7a1c9e",
+    "agent_id": "helper@session-4f7a1c9e",
+    "agent_type": "general-purpose",
+    "model": "fixture-model-v1",
+    "name": "helper",
+    "color": "blue",
+    "tmux_session_name": "in-process",
+    "tmux_window_name": "in-process",
+    "tmux_pane_id": "in-process",
+    "team_name": "session-4f7a1c9e",
+    "is_splitpane": false,
+    "plan_mode_required": false
+  },
+  "tool_use_id": "toolu_01TeamSpawnGhi789Uvw",
+  "duration_ms": 6
+}
