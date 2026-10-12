@@ -25,7 +25,8 @@
 // fast-forward-main-worktree regression, this test extracts the exact
 // "Create install root + bin dir" block from the live install.sh and sources it
 // into a tiny bash harness, with DEFAULT_INSTALL_ROOT / DEFAULT_BIN_DIR derived
-// from an overridden HOME exactly as install.sh derives them (install.sh:55-56).
+// from an overridden HOME exactly as install.sh derives them (its readonly DEFAULT_INSTALL_ROOT and
+// DEFAULT_BIN_DIR).
 //
 // FALSIFIABILITY / GENUINE SETGID PARENT
 // ======================================
@@ -152,7 +153,7 @@ func TestInstallRootClearsInheritedSetgid(t *testing.T) {
 	home := makeSetgidHome(t)
 
 	// Reproduce install.sh's own derivation of the install paths from HOME
-	// (install.sh:55-56), then run the extracted production block verbatim.
+	// (its readonly DEFAULT_INSTALL_ROOT and DEFAULT_BIN_DIR), then run the extracted production block verbatim.
 	harness := "set -euo pipefail\n" +
 		`DEFAULT_INSTALL_ROOT="${HOME}/.config/agent-director"` + "\n" +
 		`DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"` + "\n" +

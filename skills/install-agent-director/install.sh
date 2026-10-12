@@ -62,7 +62,9 @@
 #                        Default: ~/.local/bin if on PATH; otherwise
 #                        no symlink.
 #   --no-symlink         Suppress symlink creation regardless of dir.
-#   --register-mcp       Run `claude mcp add` for the stdio server.
+#   --register-mcp       Run `claude mcp add` for the stdio server. Also
+#                        re-points a registration that names the old
+#                        directory's binary (see "The move" below).
 #   --no-hooks           Skip the ~/.claude/settings.json hook
 #                        injection step entirely. settings.json is
 #                        left byte-identical (no .bak backup, no
@@ -83,7 +85,11 @@
 #                        the one being installed, and
 #                        agent-director-admin either byte-identical too
 #                        or not installed) is not snapshotted, so the
-#                        .prior files from the earlier run are kept.
+#                        .prior files from the earlier run are kept. On an
+#                        install that moves AD's directory (see "The
+#                        move" below) nothing is snapshotted: the new bin
+#                        and admin directories hold no earlier binary, and
+#                        the install says so.
 #
 # Exit codes:
 #   0  success
@@ -92,7 +98,11 @@
 #   3  binary source not found / not executable (including a
 #      --from-release release before 0.11.0, which has no
 #      agent-director-admin binary), or the two binaries' version
-#      stamps differ or carry no commit stamp
+#      stamps differ or carry no commit stamp, or a binary's `version`
+#      output lacks config_dir or names a directory other than
+#      ~/.config/agent-director (a binary from an earlier release: install
+#      that release with its own install.sh, fetched from its tag; this
+#      install reads no store for the check)
 #   4  hook merge failure (~/.claude/settings.json malformed, or holding
 #      more than one JSON document; an empty one is merged as {}), or
 #      (hooks on) a symlinked settings.json install.sh cannot resolve or
@@ -119,8 +129,43 @@
 #      cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the
 #      text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed
 #      (fix config.toml, then re-run), ErrSchemaMismatch (install a newer
-#      agent-director), ErrSchemaVerifyFailed (needs a human), or, when the
-#      store open fails another way, agent-director's own err_name.
+#      agent-director), ErrSchemaVerifyFailed (needs a human),
+#      ErrMoveConflict (the directory layout cannot be moved as it is: the
+#      message names the one cause and its remedy; change nothing else,
+#      apply the remedy, re-run), ErrAgentsLive (an agent or an
+#      agent-director process runs against the old ~/.agent-director, or
+#      its live rows could not be read: stop whatever starts agents, then
+#      every agent, every serve and every caller, and re-run; a re-run
+#      reads the rows again), ErrMoveFailed (moving ~/.agent-director to
+#      ~/.config/agent-director failed before the rename, a full disk
+#      being the usual cause: the partial new directory was removed and
+#      the old directory is untouched; fix the cause and re-run), or, when
+#      the store open fails another way, agent-director's own err_name.
+#      ErrMoveConflict, ErrAgentsLive and ErrMoveFailed come from the
+#      move of AD's directory (SR-11.7), which this release makes once on
+#      an upgrade from a release that kept its files in ~/.agent-director,
+#      before any binary is replaced; ErrMoveConflict and ErrAgentsLive are
+#      raised in pre-flight, changing nothing. They are install.sh's own
+#      names, as ErrVersionUnreadable is, not agent-director's.
+#
+# The move (SR-11.7). An earlier release kept AD's files in
+# ~/.agent-director; this one keeps them in ~/.config/agent-director. When
+# ~/.agent-director is present and ~/.config/agent-director is absent (or
+# holds the marker .move-incomplete a failed move left), this install moves
+# the directory first: it refuses while an agent or an agent-director
+# process runs (exit 5, ErrAgentsLive) or on a layout it cannot move safely
+# (exit 5, ErrMoveConflict), copies everything but bin/ and admin/ into the
+# new directory (the store with SQLite's backup, every copy checked, the
+# path keys in config.toml rewritten) and renames the old directory to
+# ~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>, to delete once the upgrade is
+# confirmed. A failure before the rename removes the partial copy and ends
+# the install with exit 5 (ErrMoveFailed), the old directory untouched. The
+# install also re-points the PATH link it manages, removes help hooks in
+# settings.json that name the old directory's binary (with --no-hooks it
+# prints them), prints the other links and $PATH entries into the old bin
+# directory with their fix, and checks Claude Code's registration of AD's MCP
+# server (`claude mcp get agent-director`, from the directory the install
+# runs in). Run the upgrade from a shell AD did not start.
 #
 # Idempotent: re-running it after a clean install, with the same
 # binaries (a no-flag re-run outside a checkout picks the
@@ -163,6 +208,12 @@ readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
 readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
 readonly DEFAULT_ADMIN_PATH="${DEFAULT_ADMIN_DIR}/agent-director-admin"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
+# The directory an earlier release kept its files in (SR-11.7). Only the move
+# and the messages around it name it.
+readonly OLD_INSTALL_ROOT="${HOME}/.agent-director"
+readonly OLD_BIN_DIR="${OLD_INSTALL_ROOT}/bin"
+# The marker the move writes into the new directory first and removes last.
+readonly MOVE_MARKER="${DEFAULT_INSTALL_ROOT}/.move-incomplete"
 
 BINARY_SRC=""
 ADMIN_SRC=""
@@ -235,7 +286,7 @@ if [[ -n "$SHA256_EXPECTED" && "$FROM_RELEASE" -eq 0 ]]; then
     echo "install.sh: --sha256 only applies with --from-release" >&2
     exit 2
 fi
-if [[ -n "$SHA256_EXPECTED" && ! "$SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
+if [[ -n "$SHA256_EXPECTED" && ! "$SHA256_EXPECTED" =~ ^[0-9a-f]{40,}$ ]]; then
     echo "install.sh: --sha256 must be 64 lowercase hex characters" >&2
     exit 2
 fi
@@ -247,7 +298,7 @@ if [[ -n "$ADMIN_SHA256_EXPECTED" && "$FROM_RELEASE" -eq 0 ]]; then
     echo "install.sh: --admin-sha256 only applies with --from-release" >&2
     exit 2
 fi
-if [[ -n "$ADMIN_SHA256_EXPECTED" && ! "$ADMIN_SHA256_EXPECTED" =~ ^[0-9a-f]{64}$ ]]; then
+if [[ -n "$ADMIN_SHA256_EXPECTED" && ! "$ADMIN_SHA256_EXPECTED" =~ ^[0-9a-f]{40,}$ ]]; then
     echo "install.sh: --admin-sha256 must be 64 lowercase hex characters" >&2
     exit 2
 fi
@@ -284,8 +335,19 @@ fi
 #   any other name        step 4's open failed with that agent-director
 #                         err_name (ErrStoreOpen when its stderr held no
 #                         error envelope).
-# ErrVersionUnreadable and ErrSchemaVerifyFailed are install.sh's own
-# names, not agent-director error names.
+#   ErrMoveConflict       AD's old and new directories cannot be moved as
+#                         they are (both present, a link where the move
+#                         copies, a path key it cannot place, ...): the
+#                         message names the cause and the remedy.
+#   ErrAgentsLive         the old store holds a live row, a process runs
+#                         the old binary, or the rows could not be read:
+#                         stop them, then re-run.
+#   ErrMoveFailed         the move failed before its rename: the partial
+#                         new directory was removed, the old one is
+#                         untouched; fix the cause (a full disk), re-run.
+# ErrVersionUnreadable, ErrSchemaVerifyFailed, ErrMoveConflict,
+# ErrAgentsLive and ErrMoveFailed are install.sh's own names, not
+# agent-director error names.
 # --------------------------------------------------------------------
 
 # ad_exit_5 <err_name> — print exit 5's cause line naming <err_name> on
@@ -293,6 +355,22 @@ fi
 ad_exit_5() {
     echo "install.sh: err_name=$1" >&2
     exit 5
+}
+
+# ad_exit_cleanup — the install's EXIT cleanup: remove every temp file this
+# install made and has not moved into place (the staged binary copies, the
+# --from-release downloads, the binary and admin temp copies, and a migration
+# sentinel's temp file that step 3 never moved into place). Every EXIT trap
+# of this script runs it, the move's too (ad_move_on_exit), so the move's
+# traps chain onto it rather than replace it.
+ad_exit_cleanup() {
+    local f
+    for f in "${TMP:-}" "${ADMIN_TMP:-}" "${tmp_bin:-}" "${tmp_admin:-}" \
+        "${tmp_sentinel:-}" "${stage_bin:-}" "${stage_admin:-}"; do
+        if [[ -n "$f" ]]; then
+            rm -f "$f"
+        fi
+    done
 }
 
 # --------------------------------------------------------------------
@@ -352,6 +430,13 @@ for tool in "${required_tools[@]}"; do
     fi
 done
 
+# The one Claude Code program (SR-11.1): every Claude Code command this
+# script runs (the summary's version line, `mcp get`, `mcp add` and `mcp
+# remove`) goes through "$CLAUDE_PROG", so a later change of which program
+# that is (the pre-flight reader's [launch] claude_path, when it names an
+# existing executable file) is one assignment here and nothing below it.
+CLAUDE_PROG=claude
+
 # --------------------------------------------------------------------
 # Store database: [store] db_path (b.2io)
 #
@@ -397,11 +482,18 @@ done
 #
 # The value resolves exactly as Go resolves it (internal/config
 # resolvePathField, pkg/api resolveStorePath): empty or unset gives
-# ~/.config/agent-director/state.db, a leading ~/ is joined onto $HOME, an
+# state.db in the base directory, a leading ~/ is joined onto $HOME, an
 # absolute path is used unchanged, and anything else (~, ~user/x, ./x,
-# ../x) is joined onto ~/.config/agent-director. Every join is cleaned as Go's
-# filepath.Join cleans it (ad_clean_path); an absolute path is not.
+# ../x) is joined onto the base directory. The caller names the base
+# directory: the directory the config file is read in, which is where Go
+# joins relative paths once the file is in place. Every join is cleaned as
+# Go's filepath.Join cleans it (ad_clean_path); an absolute path is not.
 # $VAR stays literal.
+#
+# When asked, the reader also reads [log] error_log_path the same way, in
+# the same line form and with the same refusals, except that a '?' is
+# accepted there (it is no SQLite path); an unset or empty value gives no
+# path.
 #
 # The block between the >>> and <<< marker lines is self-contained (bash
 # 3.2 or later, builtins only), so a test can extract it with sed and
@@ -469,11 +561,15 @@ ad_toml_name() {
 # ad_db_path_refuse <config> <line number> <line> <reason>... — report a
 # config file the reader cannot read, with the offending line (none when
 # <line number> is 0) and <reason>s saying what to change, then exit 1.
-# Called only inside ad_store_db_path's subshell.
+# Called only inside ad_store_db_path's subshell, which sets want_log.
 ad_db_path_refuse() {
     local config="$1" n="$2" line="$3" reason
     shift 3
-    echo "install.sh: cannot tell which store database agent-director opens; refusing to install." >&2
+    if [[ "${want_log:-0}" -eq 1 ]]; then
+        echo "install.sh: cannot tell which store database or error log agent-director opens; refusing to install." >&2
+    else
+        echo "install.sh: cannot tell which store database agent-director opens; refusing to install." >&2
+    fi
     echo "  config  : $config" >&2
     if [[ "$n" -gt 0 ]]; then
         printf '  line %s  : %s\n' "$n" "$line" >&2
@@ -482,27 +578,49 @@ ad_db_path_refuse() {
         echo "  $reason" >&2
     done
     if [[ "$n" -gt 0 ]]; then
-        echo "  install.sh reads [store] db_path itself, to check, migrate and verify" >&2
-        echo "  the database agent-director opens, and reads only this form of the" >&2
-        echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
-        echo "  a name being letters, digits, _ and -, with db_path under [store] set" >&2
-        echo "  to a one-line \"...\" holding no backslash, or '...', and an optional" >&2
-        echo "  # comment after it." >&2
+        if [[ "${want_log:-0}" -eq 1 ]]; then
+            echo "  install.sh reads [store] db_path and [log] error_log_path itself, to" >&2
+            echo "  check, migrate and verify the database agent-director opens and to move" >&2
+            echo "  the paths with it, and reads only this form of the" >&2
+            echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
+            echo "  a name being letters, digits, _ and -, with db_path under [store] and" >&2
+            echo "  error_log_path under [log] set to a one-line \"...\" holding no" >&2
+            echo "  backslash, or '...', and an optional # comment after it." >&2
+        else
+            echo "  install.sh reads [store] db_path itself, to check, migrate and verify" >&2
+            echo "  the database agent-director opens, and reads only this form of the" >&2
+            echo "  file: blank lines, # comments, [name] headers and name = value lines," >&2
+            echo "  a name being letters, digits, _ and -, with db_path under [store] set" >&2
+            echo "  to a one-line \"...\" holding no backslash, or '...', and an optional" >&2
+            echo "  # comment after it." >&2
+        fi
     fi
     echo "  Nothing was installed or changed. Re-run this install after the change." >&2
     exit 1
 }
 
-# ad_store_db_path <config> <home> — print the store database agent-director
-# opens for config file <config> and home directory <home> (non-empty),
-# resolved as above; a missing <config> gives the default. On a file the
-# reader cannot read, print why on stderr and return 1, printing nothing on
-# stdout. The body is a subshell under the C locale, so the matching is
-# bytewise whatever the caller's locale.
+# ad_store_db_path <config> <home> <base> [log] — print the store database
+# agent-director opens for config file <config>, home directory <home>
+# (non-empty) and base directory <base> (the directory the config file's
+# relative paths are joined onto; the caller says which directory that is,
+# so the same reader serves a config file before and after it moves),
+# resolved as above; a missing <config> gives the default. With a fourth
+# argument "log" it also reads [log] error_log_path and prints it, resolved
+# the same way, as a second line: empty when the file does not set it or sets
+# it empty (there is then nothing to move or check). A '?' is refused in
+# db_path only. On a file the reader cannot read, print why on stderr and
+# return 1, printing nothing on stdout. The body is a subshell under the C
+# locale, so the matching is bytewise whatever the caller's locale.
 ad_store_db_path() (
     LC_ALL=C
-    local config="$1" home="$2" n=0 line table="" seen_store=0 have_value=0
-    local value="" key rest resolved name
+    local config="$1" home="$2" base="$3" want_log=0 n=0 line table=""
+    local seen_store=0 seen_log=0 have_value=0 have_log_value=0
+    local value="" log_value="" key rest resolved name t k which parsed seen
+    local -a tables=(store)
+    if [[ "${4:-}" == log ]]; then
+        want_log=1
+        tables=(store log)
+    fi
     local re_skip='^[[:blank:]]*(#.*)?$'
     local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
     local re_bracket='^[[:blank:]]*\['
@@ -513,7 +631,9 @@ ad_store_db_path() (
     local re_basic='^[[:blank:]]*"([^"]*)"[[:blank:]]*(#.*)?$'
     local re_literal="^[[:blank:]]*'([^']*)'[[:blank:]]*(#.*)?\$"
     local re_store='^[Ss][Tt][Oo][Rr][Ee]$'
+    local re_log='^[Ll][Oo][Gg]$'
     local re_db_path='^[Dd][Bb]_[Pp][Aa][Tt][Hh]$'
+    local re_elp='^[Ee][Rr][Rr][Oo][Rr]_[Ll][Oo][Gg]_[Pp][Aa][Tt][Hh]$'
     local re_cntrl='[[:cntrl:]]'
     # Only to word a refusal: the line forms the reader refuses, as TOML
     # writes them. A key or table-name part is a bare name, a "..." holding no
@@ -538,15 +658,39 @@ ad_store_db_path() (
         "Add no header in this line's place: the lines below it, up to the next"
         "header, would fall under that header too."
     )
-    # The advice for a store key before any header (store = { ... }), bare or
+
+    # is_table <name> <table>: is <name> the table's name in some letter
+    # case; key_of <table>: the key the reader reads under it.
+    is_table() {
+        case "$2" in
+            store) [[ "$1" =~ $re_store ]] ;;
+            log) [[ "$1" =~ $re_log ]] ;;
+        esac
+    }
+    is_key() {
+        case "$2" in
+            store) [[ "$1" =~ $re_db_path ]] ;;
+            log) [[ "$1" =~ $re_elp ]] ;;
+        esac
+    }
+    key_of() {
+        case "$1" in
+            store) k=db_path ;;
+            log) k=error_log_path ;;
+        esac
+    }
+    # The advice for a table key before any header (store = { ... }), bare or
     # quoted.
-    local -a refuse_top_store=(
-        "This sets store as a key (an inline table, say) rather than under a"
-        "[store] header. Remove this line. If it sets db_path, set db_path under"
-        "the file's [store] header instead, adding that header at the end of the"
-        "file if the file has none."
-        "${not_here[@]}"
-    )
+    refuse_top() {
+        local -a reasons=(
+            "This sets $1 as a key (an inline table, say) rather than under a"
+            "[$1] header. Remove this line. If it sets $k, set $k under"
+            "the file's [$1] header instead, adding that header at the end of the"
+            "file if the file has none."
+            "${not_here[@]}"
+        )
+        ad_db_path_refuse "$config" "$n" "$line" "${reasons[@]}"
+    }
 
     if [[ -e "$config" ]]; then
         if [[ ! -f "$config" || ! -r "$config" ]]; then
@@ -580,20 +724,24 @@ ad_store_db_path() (
             fi
             if [[ "$line" =~ $re_header ]]; then
                 table="${BASH_REMATCH[1]}"
-                if [[ "$table" =~ $re_store ]]; then
-                    if [[ "$table" != store ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "agent-director reads this header as [store]: its TOML decoder matches" \
-                            "names regardless of letter case. Write it as [store]."
+                for t in "${tables[@]}"; do
+                    if is_table "$table" "$t"; then
+                        if [[ "$table" != "$t" ]]; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this header as [$t]: its TOML decoder matches" \
+                                "names regardless of letter case. Write it as [$t]."
+                        fi
+                        seen=$seen_store
+                        if [[ "$t" == log ]]; then seen=$seen_log; fi
+                        if [[ "$seen" -eq 1 ]]; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "This is a second [$t] header, and agent-director refuses a table" \
+                                "defined twice. Move the lines under it, up to the next header, to" \
+                                "under the first [$t] header, then remove this header."
+                        fi
+                        if [[ "$t" == log ]]; then seen_log=1; else seen_store=1; fi
                     fi
-                    if [[ "$seen_store" -eq 1 ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "This is a second [store] header, and agent-director refuses a table" \
-                            "defined twice. Move the lines under it, up to the next header, to" \
-                            "under the first [store] header, then remove this header."
-                    fi
-                    seen_store=1
-                fi
+                done
                 continue
             fi
             # A refused header is never to be removed alone: the lines under it
@@ -601,11 +749,15 @@ ad_store_db_path() (
             if [[ "$line" =~ $re_bracket ]]; then
                 if [[ "$line" =~ $re_aot ]]; then
                     name="$(ad_toml_name "${BASH_REMATCH[1]}")"
-                    if [[ "$line" =~ $re_aot_one && "$name" =~ $re_store ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "This makes store an array of tables ([[name]]), and agent-director" \
-                            "reads [store] only as one table, so it refuses the file. Write it" \
-                            "as [store]."
+                    if [[ "$line" =~ $re_aot_one ]]; then
+                        for t in "${tables[@]}"; do
+                            if is_table "$name" "$t"; then
+                                ad_db_path_refuse "$config" "$n" "$line" \
+                                    "This makes $t an array of tables ([[name]]), and agent-director" \
+                                    "reads [$t] only as one table, so it refuses the file. Write it" \
+                                    "as [$t]."
+                            fi
+                        done
                     fi
                     ad_db_path_refuse "$config" "$n" "$line" \
                         "This is an array of tables ([[name]]), which agent-director does not" \
@@ -614,12 +766,14 @@ ad_store_db_path() (
                 fi
                 if [[ "$line" =~ $re_header_one ]]; then
                     name="$(ad_toml_name "${BASH_REMATCH[1]}")"
-                    if [[ "$name" =~ $re_store ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "agent-director reads this header as [store]: a quoted name is the" \
-                            "same as the bare one, and its TOML decoder matches names regardless" \
-                            "of letter case. Write it as [store]."
-                    fi
+                    for t in "${tables[@]}"; do
+                        if is_table "$name" "$t"; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this header as [$t]: a quoted name is the" \
+                                "same as the bare one, and its TOML decoder matches names regardless" \
+                                "of letter case. Write it as [$t]."
+                        fi
+                    done
                     if [[ "$name" =~ $re_bare ]]; then
                         ad_db_path_refuse "$config" "$n" "$line" \
                             "A quoted table name is the same as the bare one. Write it as" \
@@ -646,15 +800,18 @@ ad_store_db_path() (
             if [[ ! "$line" =~ $re_keyval ]]; then
                 if [[ "$line" =~ $re_key_one ]]; then
                     name="$(ad_toml_name "${BASH_REMATCH[1]}")"
-                    if [[ -z "$table" && "$name" =~ $re_store ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" "${refuse_top_store[@]}"
-                    fi
-                    if [[ "$table" == store && "$name" =~ $re_db_path ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "agent-director reads this key as db_path: a quoted key is the same" \
-                            "as the bare one, and its TOML decoder matches names regardless of" \
-                            "letter case. Write it as db_path."
-                    fi
+                    for t in "${tables[@]}"; do
+                        key_of "$t"
+                        if [[ -z "$table" ]] && is_table "$name" "$t"; then
+                            refuse_top "$t"
+                        fi
+                        if [[ "$table" == "$t" ]] && is_key "$name" "$t"; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "agent-director reads this key as $k: a quoted key is the same" \
+                                "as the bare one, and its TOML decoder matches names regardless of" \
+                                "letter case. Write it as $k."
+                        fi
+                    done
                     if [[ "$name" =~ $re_bare ]]; then
                         ad_db_path_refuse "$config" "$n" "$line" \
                             "A quoted key is the same as the bare one. Write it as $name, without" \
@@ -668,14 +825,17 @@ ad_store_db_path() (
                 # dotted key sets a key in a table within that table.
                 if [[ -z "$table" && "$line" =~ $re_key_two ]]; then
                     name="$(ad_toml_name "${BASH_REMATCH[1]}")"
-                    if [[ "$name" =~ $re_store ]]; then
-                        ad_db_path_refuse "$config" "$n" "$line" \
-                            "This sets a store key as a dotted key (store.db_path = ..., say)" \
-                            "rather than under a [store] header. Move this line, without the" \
-                            "store. prefix, to under the file's [store] header, adding that header" \
-                            "at the end of the file if the file has none." \
-                            "${not_here[@]}"
-                    fi
+                    for t in "${tables[@]}"; do
+                        key_of "$t"
+                        if is_table "$name" "$t"; then
+                            ad_db_path_refuse "$config" "$n" "$line" \
+                                "This sets a $t key as a dotted key ($t.$k = ..., say)" \
+                                "rather than under a [$t] header. Move this line, without the" \
+                                "$t. prefix, to under the file's [$t] header, adding that header" \
+                                "at the end of the file if the file has none." \
+                                "${not_here[@]}"
+                        fi
+                    done
                     if [[ "$name" =~ $re_bare ]]; then
                         ad_db_path_refuse "$config" "$n" "$line" \
                             "Before any header, a dotted key a.b = value sets b under [a]. Move this" \
@@ -702,68 +862,534 @@ ad_store_db_path() (
             fi
             key="${BASH_REMATCH[1]}"
             rest="${BASH_REMATCH[2]}"
-            if [[ -z "$table" && "$key" =~ $re_store ]]; then
-                ad_db_path_refuse "$config" "$n" "$line" "${refuse_top_store[@]}"
+            for t in "${tables[@]}"; do
+                key_of "$t"
+                if [[ -z "$table" ]] && is_table "$key" "$t"; then
+                    refuse_top "$t"
+                fi
+            done
+            which=""
+            if [[ "$table" == store ]] && is_key "$key" store; then
+                which=store
+            elif [[ "$want_log" -eq 1 && "$table" == log ]] && is_key "$key" log; then
+                which=log
             fi
-            if [[ "$table" != store || ! "$key" =~ $re_db_path ]]; then
+            if [[ -z "$which" ]]; then
                 continue
             fi
-            if [[ "$key" != db_path ]]; then
+            key_of "$which"
+            if [[ "$key" != "$k" ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
-                    "agent-director reads this key as db_path: its TOML decoder matches" \
-                    "names regardless of letter case. Write it as db_path."
+                    "agent-director reads this key as $k: its TOML decoder matches" \
+                    "names regardless of letter case. Write it as $k."
             fi
-            if [[ "$have_value" -eq 1 ]]; then
+            if [[ "$which" == log ]]; then
+                if [[ "$have_log_value" -eq 1 ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "This sets $k a second time. Keep one."
+                fi
+            elif [[ "$have_value" -eq 1 ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
-                    "This sets db_path a second time. Keep one."
+                    "This sets $k a second time. Keep one."
             fi
             if [[ "$rest" =~ $re_escape ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
-                    "db_path's \"...\" value holds a backslash, which starts an escape." \
+                    "$k's \"...\" value holds a backslash, which starts an escape." \
                     "Write the path without escapes; in single quotes ('...') a backslash" \
                     "or a double quote is literal."
             elif [[ "$rest" =~ $re_basic || "$rest" =~ $re_literal ]]; then
-                value="${BASH_REMATCH[1]}"
+                parsed="${BASH_REMATCH[1]}"
             else
                 ad_db_path_refuse "$config" "$n" "$line" \
-                    "db_path's value is not a one-line \"...\" or '...' string, optionally" \
+                    "$k's value is not a one-line \"...\" or '...' string, optionally" \
                     "followed by a # comment. Write it in that form."
             fi
-            if [[ "$value" =~ $re_cntrl ]]; then
-                ad_db_path_refuse "$config" "$n" "$line" \
-                    "db_path's value holds a control character, such as a tab. install.sh" \
-                    "cannot install with one in the store path, so remove it. agent-director" \
-                    "then opens the path without it, not any store it already keeps at this" \
-                    "one."
+            if [[ "$parsed" =~ $re_cntrl ]]; then
+                if [[ "$which" == log ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the path, so remove it. agent-director" \
+                        "then uses the path without it, not the file it already keeps at" \
+                        "this one."
+                else
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "$k's value holds a control character, such as a tab. install.sh" \
+                        "cannot install with one in the store path, so remove it. agent-director" \
+                        "then opens the path without it, not any store it already keeps at this" \
+                        "one."
+                fi
             fi
-            if [[ "$value" == *\?* ]]; then
-                ad_db_path_refuse "$config" "$n" "$line" \
-                    "db_path's value holds a '?'. agent-director's store open reads" \
-                    "everything from the first '?' on as SQLite options, so it would not" \
-                    "open this path. Use a path without '?'."
+            if [[ "$which" == store ]]; then
+                if [[ "$parsed" == *\?* ]]; then
+                    ad_db_path_refuse "$config" "$n" "$line" \
+                        "db_path's value holds a '?'. agent-director's store open reads" \
+                        "everything from the first '?' on as SQLite options, so it would not" \
+                        "open this path. Use a path without '?'."
+                fi
+                value="$parsed"
+                have_value=1
+            else
+                log_value="$parsed"
+                have_log_value=1
             fi
-            have_value=1
         done <"$config"
     fi
 
     case "$value" in
-        "")    resolved="$(ad_clean_path "${home}/.config/agent-director/state.db")" ;;
+        "")    resolved="$(ad_clean_path "${base}/state.db")" ;;
         "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
         /*)    resolved="$value" ;;
-        *)     resolved="$(ad_clean_path "${home}/.config/agent-director/${value}")" ;;
+        *)     resolved="$(ad_clean_path "${base}/${value}")" ;;
     esac
     printf '%s\n' "$resolved"
+    if [[ "$want_log" -eq 1 ]]; then
+        case "$log_value" in
+            "")    resolved="" ;;
+            "~/"*) resolved="$(ad_clean_path "${home}/${log_value:2}")" ;;
+            /*)    resolved="$log_value" ;;
+            *)     resolved="$(ad_clean_path "${base}/${log_value}")" ;;
+        esac
+        printf '%s\n' "$resolved"
+    fi
 )
 
 # <<< ad_store_db_path (b.2io) <<<
 
-if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME")"; then
+# --------------------------------------------------------------------
+# AD's directory moves to ~/.config/agent-director (SR-11.7, b.nx4)
+#
+# An earlier release kept its files in ~/.agent-director. This release keeps
+# them in ~/.config/agent-director, and this installer moves the old
+# directory there, once, in the install's middle (below, after both binary
+# sources are found and checked): the old directory is copied, checked and
+# renamed to ~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>, kept for the
+# operator to delete once the upgrade is confirmed.
+#
+# This section decides, before every other pre-flight reader, which layout
+# is there, and stops with exit 5 (ErrMoveConflict) on a layout it will not
+# move, changing nothing:
+#   - ~/.agent-director is "present" when anything is at that name (a
+#     dangling link included), except a compatibility link: a link whose raw
+#     target, read against $HOME when relative and cleaned, is
+#     ~/.config/agent-director. That counts as no old directory.
+#   - ~/.config/agent-director that is a link to a directory counts as that
+#     directory.
+#   - The move is due when the old directory is present and the new one is
+#     absent or holds the marker .move-incomplete (a move that did not
+#     finish). While it is due the pre-flight reads resolve in the old
+#     directory (PREFLIGHT_ROOT), as SR-11.2's gate does; otherwise in the
+#     new one.
+# The two causes that need the config keys are checked after the reader has
+# read them (below).
+# --------------------------------------------------------------------
+
+# ad_resolve_link <file> — print the path <file> resolves to through its
+# chain of symlinks, or <file> itself when it is not a link (b.nw5). Each
+# relative link target is read against its own link's directory. A loop
+# over readlink, as readlink -f is missing from older macOS. A dangling
+# link gives the missing path it names. More than 40 links (a loop) fails,
+# as the kernel does.
+ad_resolve_link() {
+    local path="$1" link hops=0
+    while [[ -L "$path" ]]; do
+        if (( ++hops > 40 )); then
+            echo "install.sh: $1: too many levels of symbolic links" >&2
+            return 1
+        fi
+        link=$(readlink "$path") || return 1
+        case "$link" in
+            /*) path="$link" ;;
+            *) path="$(dirname "$path")/$link" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# ad_mode_of <file> — print <file>'s permission bits in octal. stat -L
+# reads the mode of the file a symlinked <file> points at, not the link's
+# own 777; -c is GNU stat, -f BSD stat.
+ad_mode_of() {
+    stat -L -c '%a' "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
+}
+
+OLD_ROOT_CLEAN="$(ad_clean_path "$OLD_INSTALL_ROOT")"
+NEW_ROOT_CLEAN="$(ad_clean_path "$DEFAULT_INSTALL_ROOT")"
+HOME_CLEAN="$(ad_clean_path "$HOME")"
+
+# ad_ts — the timestamp the installer puts in the names it makes.
+ad_ts() {
+    date +%Y%m%d-%H%M%S
+}
+
+# ad_mtime_text <path> — print <path>'s last change as YYYY-mm-dd HH:MM:SS
+# (GNU or BSD stat and date), or nothing when it cannot be read.
+ad_mtime_text() {
+    local e
+    e="$(stat -L -c '%Y' "$1" 2>/dev/null || stat -L -f '%m' "$1" 2>/dev/null)" || return 0
+    if [[ ! "$e" =~ ^[0-9]+$ ]]; then
+        return 0
+    fi
+    date -d "@${e}" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+        || date -r "$e" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+        || true
+}
+
+# ad_store_changed <dir> — print when the default store in <dir> (state.db,
+# or its -wal, whichever changed last) last changed, or "no store".
+ad_store_changed() {
+    local best="" f t
+    for f in "$1/state.db" "$1/state.db-wal"; do
+        if [[ -f "$f" ]]; then
+            t="$(ad_mtime_text "$f")"
+            if [[ "$t" > "$best" ]]; then
+                best="$t"
+            fi
+        fi
+    done
+    printf '%s' "${best:-no store}"
+}
+
+# ad_move_conflict <headline> <line>... — report one ErrMoveConflict cause
+# on stderr (the headline, each line indented under it, a line saying
+# nothing was changed and where the remedy is documented) and exit 5 with
+# its err_name. A line may hold several lines. Nothing was changed.
+ad_move_conflict() {
+    local head="$1" l
+    shift
+    echo "install.sh: ${head}" >&2
+    for l in "$@"; do
+        printf '%s\n' "$l" | sed 's/^/  /' >&2
+    done
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    echo "  (operator-actions.md, \"\`install.sh\` refuses with \`ErrMoveConflict\`\")" >&2
+    ad_exit_5 ErrMoveConflict
+}
+
+# ad_is_compat_link <path> — true when <path> is a link whose raw target,
+# read against $HOME when relative and cleaned, is AD's new directory (the
+# compatibility link of SR-11.7, whether or not the target exists).
+# Keep in step with uninstall.sh, which inlines this test and the OLD_PRESENT
+# rule below ("Which AD directory this run works on"): change both together.
+ad_is_compat_link() {
+    local t
+    if [[ ! -L "$1" ]]; then
+        return 1
+    fi
+    t="$(readlink "$1")" || return 1
+    case "$t" in
+        /*) ;;
+        *) t="${HOME}/${t}" ;;
+    esac
+    [[ "$(ad_clean_path "$t")" == "$NEW_ROOT_CLEAN" ]]
+}
+
+# ad_link_copy_lines <link> — print the remedy for a link the move will not
+# follow: replace it with a copy of its target (a dangling link, with
+# nothing to copy, is removed), commands with %q-quoted paths.
+ad_link_copy_lines() {
+    local link="$1" target
+    if target="$(ad_resolve_link "$link" 2>/dev/null)" && [[ -e "$target" ]]; then
+        echo "Replace the link with a copy of what it points at, re-run, and make the link again in the new directory afterwards if you want it:"
+        if [[ -d "$target" ]]; then
+            printf '  cp -R -- %q %q\n' "$target" "${link}.copy"
+            printf '  rm -- %q\n' "$link"
+            printf '  mv -- %q %q\n' "${link}.copy" "$link"
+        else
+            printf '  cp -- %q %q\n' "$target" "${link}.copy"
+            printf '  mv -f -- %q %q\n' "${link}.copy" "$link"
+        fi
+    else
+        echo "It is a dangling link (it points at nothing). Remove it, re-run, and make the link again in the new directory afterwards if you want it:"
+        printf '  rm -- %q\n' "$link"
+    fi
+}
+
+# ad_phys_place <path> — print <path>'s physical place: its directory
+# resolved with links followed (cd -P, pwd -P) joined with its last element;
+# a <path> that is itself a link is followed first. Fails when a link loops
+# or the directory is missing or unreadable.
+ad_phys_place() {
+    local p="$1" d b
+    if [[ -L "$p" ]]; then
+        p="$(ad_resolve_link "$p" 2>/dev/null)" || return 1
+    fi
+    d="$(dirname "$p")"
+    b="$(basename "$p")"
+    d="$(cd -P -- "$d" 2>/dev/null && pwd -P)" || return 1
+    if [[ "$d" == / ]]; then
+        printf '/%s\n' "$b"
+    else
+        printf '%s/%s\n' "$d" "$b"
+    fi
+}
+
+# Keep in step with uninstall.sh, which inlines this rule and
+# ad_is_compat_link ("Which AD directory this run works on").
+OLD_PRESENT=0
+if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]] && ! ad_is_compat_link "$OLD_INSTALL_ROOT"; then
+    OLD_PRESENT=1
+fi
+
+# A new path that is a dangling link or not a directory: on every install.
+if [[ ( -e "$DEFAULT_INSTALL_ROOT" || -L "$DEFAULT_INSTALL_ROOT" ) && ! -d "$DEFAULT_INSTALL_ROOT" ]]; then
+    if [[ -L "$DEFAULT_INSTALL_ROOT" && ! -e "$DEFAULT_INSTALL_ROOT" ]]; then
+        ad_move_conflict "$DEFAULT_INSTALL_ROOT is a dangling link; refusing to install." \
+            "It points at $(readlink "$DEFAULT_INSTALL_ROOT"), which does not exist." \
+            "Remove it, or fix it so it names a directory, then re-run:" \
+            "  rm -- $(printf '%q' "$DEFAULT_INSTALL_ROOT")"
+    fi
+    ad_move_conflict "$DEFAULT_INSTALL_ROOT is not a directory; refusing to install." \
+        "AD keeps its files in a directory there (or a link to one)." \
+        "Rename it aside, or fix it so it is a directory, then re-run:" \
+        "  mv -- $(printf '%q' "$DEFAULT_INSTALL_ROOT") $(printf '%q' "${DEFAULT_INSTALL_ROOT}.aside-$(ad_ts)")"
+fi
+
+# An old path that is a dangling link other than a compatibility link: on
+# every install.
+if [[ "$OLD_PRESENT" -eq 1 && -L "$OLD_INSTALL_ROOT" && ! -e "$OLD_INSTALL_ROOT" ]]; then
+    ad_move_conflict "$OLD_INSTALL_ROOT is a dangling link; refusing to install." \
+        "It points at $(readlink "$OLD_INSTALL_ROOT"), which does not exist, and is not the compatibility link to $NEW_ROOT_CLEAN." \
+        "Remove it, then re-run:" \
+        "  rm -- $(printf '%q' "$OLD_INSTALL_ROOT")"
+fi
+
+# A marker, left by a move that did not finish, decides what the re-run does
+# (SR-11.7 "A failed move"): when the kept directory it names exists the
+# move finished and only the marker's removal did not, so the marker goes
+# (a present old directory is then the both-present conflict below);
+# otherwise, with an old directory present, the new one is a partial copy,
+# deleted by the move, which is due again; otherwise the marker goes and the
+# install goes on.
+MOVE_PARTIAL=0
+if [[ -f "$MOVE_MARKER" || -L "$MOVE_MARKER" ]]; then
+    marker_kept=""
+    IFS= read -r marker_kept <"$MOVE_MARKER" || true
+    if [[ -n "$marker_kept" && ( -e "$marker_kept" || -L "$marker_kept" ) ]]; then
+        rm -f "$MOVE_MARKER"
+    elif [[ "$OLD_PRESENT" -eq 1 ]]; then
+        MOVE_PARTIAL=1
+    else
+        rm -f "$MOVE_MARKER"
+    fi
+fi
+
+# Both directories present, and the new one holds no marker.
+if [[ "$OLD_PRESENT" -eq 1 && -d "$DEFAULT_INSTALL_ROOT" && "$MOVE_PARTIAL" -eq 0 ]]; then
+    aside_ts="$(ad_ts)"
+    ad_move_conflict "both $OLD_INSTALL_ROOT and $DEFAULT_INSTALL_ROOT exist; refusing to install." \
+        "old: $OLD_INSTALL_ROOT (store last changed: $(ad_store_changed "$OLD_INSTALL_ROOT"))" \
+        "new: $DEFAULT_INSTALL_ROOT (store last changed: $(ad_store_changed "$DEFAULT_INSTALL_ROOT"))" \
+        "This release moves the old directory into the new place, so only one of them may be there. Set one aside, then re-run." \
+        "If the old directory holds the install in use, set the new one aside; the re-run moves the old directory in:" \
+        "  mv -- $(printf '%q' "$DEFAULT_INSTALL_ROOT") $(printf '%q' "${DEFAULT_INSTALL_ROOT}.aside-${aside_ts}")" \
+        "Otherwise (the new one holds the install in use), set the old one aside:" \
+        "  mv -- $(printf '%q' "$OLD_INSTALL_ROOT") $(printf '%q' "${OLD_INSTALL_ROOT}.aside-${aside_ts}")" \
+        "A new directory holding only what make-template created (a templates directory, say) next to a real old install is the first case: set it aside, and copy any template you want from it into the moved directory afterwards."
+fi
+
+MOVE_DUE=0
+if [[ "$OLD_PRESENT" -eq 1 ]] && { [[ ! -e "$DEFAULT_INSTALL_ROOT" && ! -L "$DEFAULT_INSTALL_ROOT" ]] || [[ "$MOVE_PARTIAL" -eq 1 ]]; }; then
+    MOVE_DUE=1
+fi
+
+# While the move is due: the old directory must be a real directory with no
+# link at the places the move copies by content.
+OLD_PHYS=""
+if [[ "$MOVE_DUE" -eq 1 ]]; then
+    if [[ -L "$OLD_INSTALL_ROOT" && -d "$OLD_INSTALL_ROOT" ]]; then
+        ad_move_conflict "$OLD_INSTALL_ROOT is a link; refusing to install." \
+            "The move copies AD's old directory and will not follow a link to it." \
+            "$(ad_link_copy_lines "$OLD_INSTALL_ROOT")"
+    fi
+    if [[ ! -d "$OLD_INSTALL_ROOT" ]]; then
+        ad_move_conflict "$OLD_INSTALL_ROOT is not a directory; refusing to install." \
+            "AD's old directory must be a directory for the move to copy it." \
+            "Rename it aside and re-run; this install then makes a fresh install in $NEW_ROOT_CLEAN, and nothing of the old one is moved:" \
+            "  mv -- $(printf '%q' "$OLD_INSTALL_ROOT") $(printf '%q' "${OLD_INSTALL_ROOT}.aside-$(ad_ts)")"
+    fi
+    for old_entry in "${OLD_INSTALL_ROOT}/config.toml" "${OLD_INSTALL_ROOT}/templates"; do
+        if [[ -L "$old_entry" ]]; then
+            ad_move_conflict "$old_entry is a link; refusing to install." \
+                "The move copies AD's old directory and will not follow a link inside it." \
+                "$(ad_link_copy_lines "$old_entry")"
+        fi
+    done
+    for old_entry in "${OLD_INSTALL_ROOT}/templates"/*; do
+        if [[ -L "$old_entry" ]]; then
+            ad_move_conflict "template $old_entry is a link; refusing to install." \
+                "The move copies AD's old directory and will not follow a link inside it." \
+                "$(ad_link_copy_lines "$old_entry")"
+        fi
+    done
+    OLD_PHYS="$(cd -P -- "$OLD_INSTALL_ROOT" 2>/dev/null && pwd -P)" || OLD_PHYS="$OLD_ROOT_CLEAN"
+    PREFLIGHT_ROOT="$OLD_INSTALL_ROOT"
+else
+    PREFLIGHT_ROOT="$DEFAULT_INSTALL_ROOT"
+fi
+PREFLIGHT_CONFIG="${PREFLIGHT_ROOT}/config.toml"
+
+# ad_key_class <resolved path> — place a config path key's resolved path
+# (what ad_store_db_path printed) against the old directory, as SR-11.7's
+# "Path keys" does. Sets KEY_PHYS, the physical place of the path (links
+# resolved, ad_phys_place), and KEY_CLASS:
+#   in    lexically inside the old directory and physically inside it
+#   link  lexically outside, physically inside: it reaches the old
+#         directory only through a link
+#   warn  lexically inside, physically outside: an inner link leads out
+#   out   outside both ways
+# Fails (KEY_CLASS empty) when the place cannot be resolved: its directory
+# is missing or unreadable. Needs OLD_PHYS, so only while the move is due.
+KEY_PHYS=""
+KEY_CLASS=""
+ad_key_class() {
+    local p="$1" lex_in=0 phys_in=0
+    KEY_PHYS=""
+    KEY_CLASS=""
+    KEY_PHYS="$(ad_phys_place "$p")" || return 1
+    if [[ "$p" == "$OLD_ROOT_CLEAN"/* ]]; then
+        lex_in=1
+    fi
+    if [[ "$KEY_PHYS" == "$OLD_PHYS"/* ]]; then
+        phys_in=1
+    fi
+    if [[ "$lex_in" -eq 1 && "$phys_in" -eq 1 ]]; then
+        KEY_CLASS=in
+    elif [[ "$lex_in" -eq 0 && "$phys_in" -eq 1 ]]; then
+        KEY_CLASS=link
+    elif [[ "$lex_in" -eq 1 ]]; then
+        KEY_CLASS=warn
+    else
+        KEY_CLASS=out
+    fi
+}
+
+# ad_key_unresolvable <key> <path> — report a path key whose place
+# ad_key_class could not resolve (ErrMoveConflict) and exit 5.
+ad_key_unresolvable() {
+    ad_move_conflict "cannot place $1 $2 against the old directory; refusing to install." \
+        "Its directory, $(dirname "$2"), is missing or cannot be read, so install.sh cannot tell whether the path is inside $OLD_INSTALL_ROOT, which the move needs to know." \
+        "Create the directory, or correct the value in ${PREFLIGHT_CONFIG}, then re-run:" \
+        "  mkdir -p -- $(printf '%q' "$(dirname "$2")")"
+}
+
+# ad_raw_path_value <config> <table> <key> — print the value of <key> under
+# [<table>] in <config> as written, without its quotes (nothing when the file
+# or the key is missing, or the value is not a one-line "..." or '...' string).
+# Call it only after ad_store_db_path accepted <config>: that reader has
+# refused every other form, so a bare name = value line is all there is.
+ad_raw_path_value() {
+    local cfg="$1" want_table="$2" want_key="$3" line n=0 table="" rest val=""
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_keyval='^[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*=[[:blank:]]*(.*)$'
+    local re_dq='^"([^"]*)"'
+    local re_sq="^'([^']*)'"
+    if [[ ! -f "$cfg" ]]; then
+        return 0
+    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        if [[ "$n" -eq 1 ]]; then
+            line="${line#$'\xef\xbb\xbf'}"
+        fi
+        line="${line%$'\r'}"
+        if [[ "$line" =~ $re_header ]]; then
+            table="${BASH_REMATCH[1]}"
+        elif [[ "$table" == "$want_table" && "$line" =~ $re_keyval && "${BASH_REMATCH[1]}" == "$want_key" ]]; then
+            rest="${BASH_REMATCH[2]}"
+            if [[ "$rest" =~ $re_dq ]]; then
+                val="${BASH_REMATCH[1]}"
+            elif [[ "$rest" =~ $re_sq ]]; then
+                val="${BASH_REMATCH[1]}"
+            fi
+        fi
+    done <"$cfg"
+    printf '%s' "$val"
+}
+
+# ad_move_refuse_outward_path <table> <key> <resolved path> — the one place
+# that decides what the move does with a path key written as an absolute or
+# `~/` path that is inside the old directory by its text but reaches outside
+# it through a link inside it (class warn, see ad_key_class). SR-11.7 says
+# such a key stays as written, but the move renames the old directory away,
+# so the path as written would name nothing afterwards and the store open
+# would recreate an empty directory there. Pending the User's decision
+# (rewrite or refuse), the move REFUSES it here, in pre-flight: ErrMoveConflict
+# (exit 5), nothing changed, the cause naming the key, its value and the
+# physical place it reaches, the remedy being to set the key to that absolute
+# physical path.
+# TO SWITCH TO A REWRITE: delete the two calls of this function in the
+# pre-flight below. ad_move_key_newvalue's warn case already writes every
+# form of such a key as its absolute physical path ($KEY_PHYS), as it does
+# for a relative value today. Nothing else changes.
+ad_move_refuse_outward_path() {
+    local table="$1" key="$2" resolved="$3" raw label
+    label="[${table}] ${key}"
+    raw="$(ad_raw_path_value "$PREFLIGHT_CONFIG" "$table" "$key")"
+    case "$raw" in
+        "~/"*|/*) ;;
+        *) return 0 ;;
+    esac
+    resolved="$(ad_clean_path "$resolved")"
+    if ! ad_key_class "$resolved"; then
+        ad_key_unresolvable "$label" "$resolved"
+    fi
+    if [[ "$KEY_CLASS" != warn ]]; then
+        return 0
+    fi
+    ad_move_conflict "$label $raw reaches outside $OLD_INSTALL_ROOT through a link inside it; refusing to install." \
+        "$label = $raw is inside $OLD_INSTALL_ROOT as written, but a link inside it leads out, so it reaches $KEY_PHYS today." \
+        "The move renames $OLD_INSTALL_ROOT away, so the path as written would no longer reach $KEY_PHYS, and agent-director would create an empty one there." \
+        "Set the key to the absolute physical path it reaches, in ${PREFLIGHT_CONFIG}, then re-run:" \
+        "  ${key} = \"${KEY_PHYS}\""
+}
+
+# The store's place and the error log's place, while the move is due.
+STORE_PHYS=""
+STORE_CLASS=""
+LOG_PHYS=""
+LOG_CLASS=""
+old_error_log=""
+if [[ "$MOVE_DUE" -eq 1 ]]; then
+    # While the move is due the reader also reads [log] error_log_path.
+    if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" log)"; then
+        ad_exit_5 ErrConfigMalformed
+    fi
+    state_db="${reader_out%%$'\n'*}"
+    case "$reader_out" in
+        *$'\n'*) old_error_log="${reader_out#*$'\n'}" ;;
+        *) old_error_log="" ;;
+    esac
+    # The two ErrMoveConflict causes that need the keys: a path key whose
+    # place cannot be resolved, and a store inside the old directory that is
+    # a link ("inside" judged by the store's path before links resolve).
+    if ! ad_key_class "$state_db"; then
+        ad_key_unresolvable "[store] db_path" "$state_db"
+    fi
+    STORE_PHYS="$KEY_PHYS"
+    STORE_CLASS="$KEY_CLASS"
+    if [[ -n "$old_error_log" ]]; then
+        if ! ad_key_class "$old_error_log"; then
+            ad_key_unresolvable "[log] error_log_path" "$old_error_log"
+        fi
+        LOG_PHYS="$KEY_PHYS"
+        LOG_CLASS="$KEY_CLASS"
+    fi
+    if [[ ( "$STORE_CLASS" == in || "$STORE_CLASS" == link || "$STORE_CLASS" == warn ) && -L "$state_db" ]]; then
+        ad_move_conflict "the store $state_db is a link; refusing to install." \
+            "The move copies the store inside AD's old directory with SQLite's backup and will not follow a link to it." \
+            "$(ad_link_copy_lines "$state_db")"
+    fi
+    ad_move_refuse_outward_path store db_path "$state_db"
+    if [[ -n "$old_error_log" ]]; then
+        ad_move_refuse_outward_path log error_log_path "$old_error_log"
+    fi
+elif ! state_db="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT")"; then
     ad_exit_5 ErrConfigMalformed
 fi
 # Messages name the store "state.db" when it is the default one, as
 # before, and by its path when [store] db_path moves it.
 state_db_name="state.db"
-if [[ "$state_db" != "$(ad_clean_path "${HOME}/.config/agent-director/state.db")" ]]; then
+if [[ "$state_db" != "$(ad_clean_path "${PREFLIGHT_ROOT}/state.db")" ]]; then
     state_db_name="$state_db"
 fi
 
@@ -897,7 +1523,7 @@ ad_store_busy_timeout_ms() (
 
 # <<< ad_store_busy_timeout_ms (b.c7f) <<<
 
-if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "${DEFAULT_INSTALL_ROOT}/config.toml")"; then
+if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "$PREFLIGHT_CONFIG")"; then
     ad_exit_5 ErrConfigMalformed
 fi
 
@@ -968,7 +1594,7 @@ ad_config_merge_check() (
     done <"$config"
 )
 
-if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_config_merge_check "$PREFLIGHT_CONFIG"; then
     ad_exit_5 ErrConfigMalformed
 fi
 
@@ -992,27 +1618,8 @@ fi
 # neither is checked. uninstall.sh runs the same check before its edits.
 # --------------------------------------------------------------------
 
-# ad_resolve_link <file> — print the path <file> resolves to through its
-# chain of symlinks, or <file> itself when it is not a link (b.nw5). Each
-# relative link target is read against its own link's directory. A loop
-# over readlink, as readlink -f is missing from older macOS. A dangling
-# link gives the missing path it names. More than 40 links (a loop) fails,
-# as the kernel does.
-ad_resolve_link() {
-    local path="$1" link hops=0
-    while [[ -L "$path" ]]; do
-        if (( ++hops > 40 )); then
-            echo "install.sh: $1: too many levels of symbolic links" >&2
-            return 1
-        fi
-        link=$(readlink "$path") || return 1
-        case "$link" in
-            /*) path="$link" ;;
-            *) path="$(dirname "$path")/$link" ;;
-        esac
-    done
-    printf '%s\n' "$path"
-}
+# (ad_resolve_link is defined above, in the section on AD's directory move,
+# which needs it first.)
 
 # ad_link_write_check <file> — return 0 when <file> is not a symlink, or
 # is one ad_replace_keeping_mode can write through: its links end, and
@@ -1069,16 +1676,285 @@ if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH"; th
     ad_link_refuse "$DEFAULT_SETTINGS_PATH"
     exit 4
 fi
-if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "${DEFAULT_INSTALL_ROOT}/config.toml"; then
-    ad_link_refuse "${DEFAULT_INSTALL_ROOT}/config.toml"
+if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
+    ad_link_refuse "$PREFLIGHT_CONFIG"
     ad_exit_5 ErrConfigMalformed
 fi
 
+# --------------------------------------------------------------------
+# Links and PATH entries into the old bin directory; nothing running
+# (SR-11.7)
+#
+# With the move due, pre-flight finds what points into the old bin
+# directory: the links at ~/.local/bin, at --symlink-dir and where `command
+# -v agent-director` leads, and the $PATH entries naming that directory
+# (OLD_BIN_LINKS, OLD_BIN_PATH_ENTRIES). The installer re-points the link it
+# manages after the move and prints the rest with their fix; the macOS
+# process check below names those links too.
+#
+# It then stops (exit 5, ErrAgentsLive), changing nothing, while the old
+# store holds a row in a live state (pending, waiting, working,
+# check_permission, ask_user) or a process runs the old bin/agent-director.
+# The rows are read with sqlite3 -readonly, waiting the store's busy timeout;
+# a read that fails stops the install the same way, saying so. A process
+# counts on Linux when its /proc/<pid>/exe, any " (deleted)" suffix dropped,
+# is the old binary's resolved path; on macOS when its executable path
+# (ps -axo pid=,comm=, or lsof's txt entry) is the old binary or a link into
+# the old bin directory found here. Where neither way is available the
+# installer says the process check did not run. The same check runs again as
+# the move's first step.
+#
+# Test-only switch INSTALL_SH_TEST_PROC_CHECK (not in --help): "macos" runs
+# the ps/lsof branch on any host (so a test puts stand-ins for ps and lsof on
+# PATH), "none" runs neither branch.
+# --------------------------------------------------------------------
+
+OLD_BIN_LINKS=()
+OLD_BIN_PATH_ENTRIES=()
+
+# ad_in_old_bin <path> — true when <path> lies inside the old bin directory,
+# lexically or by its physical place.
+ad_in_old_bin() {
+    local c ph
+    c="$(ad_clean_path "$1")"
+    if [[ "$c" == "${OLD_ROOT_CLEAN}/bin" || "$c" == "${OLD_ROOT_CLEAN}/bin"/* ]]; then
+        return 0
+    fi
+    if ph="$(ad_phys_place "$1" 2>/dev/null)" \
+        && [[ "$ph" == "${OLD_PHYS}/bin" || "$ph" == "${OLD_PHYS}/bin"/* ]]; then
+        return 0
+    fi
+    return 1
+}
+
+# ad_discover_old_bin_refs — fill OLD_BIN_LINKS and OLD_BIN_PATH_ENTRIES.
+ad_discover_old_bin_refs() {
+    local cands c t e seen
+    local -a parts
+    OLD_BIN_LINKS=()
+    OLD_BIN_PATH_ENTRIES=()
+    cands=("${HOME}/.local/bin/agent-director")
+    if [[ -n "$SYMLINK_DIR" ]]; then
+        cands+=("${SYMLINK_DIR}/agent-director")
+    fi
+    t="$(command -v agent-director 2>/dev/null || true)"
+    if [[ "$t" == /* ]]; then
+        cands+=("$t")
+    fi
+    for c in "${cands[@]}"; do
+        if [[ ! -L "$c" ]]; then
+            continue
+        fi
+        t="$(ad_resolve_link "$c" 2>/dev/null)" || continue
+        if ! ad_in_old_bin "$t"; then
+            continue
+        fi
+        seen=0
+        for e in ${OLD_BIN_LINKS[@]+"${OLD_BIN_LINKS[@]}"}; do
+            if [[ "$e" == "$c" ]]; then seen=1; fi
+        done
+        if [[ "$seen" -eq 0 ]]; then
+            OLD_BIN_LINKS+=("$c")
+        fi
+    done
+    IFS=: read -r -a parts <<<"$PATH"
+    for e in ${parts[@]+"${parts[@]}"}; do
+        if [[ -z "$e" || "$e" != /* ]]; then
+            continue
+        fi
+        if ad_in_old_bin "$e" && [[ "$(ad_clean_path "$e")" == "${OLD_ROOT_CLEAN}/bin" || "$(ad_phys_place "$e" 2>/dev/null)" == "${OLD_PHYS}/bin" ]]; then
+            OLD_BIN_PATH_ENTRIES+=("$e")
+        fi
+    done
+    return 0
+}
+
+# ad_old_binary_names — print each name the old binary's own process can
+# show on Linux: its place under the old directory's physical path, and
+# where its links lead.
+ad_old_binary_names() {
+    local b="${OLD_PHYS}/bin/agent-director" t r
+    printf '%s\n' "$b"
+    if t="$(ad_resolve_link "$b" 2>/dev/null)" && r="$(ad_phys_place "$t" 2>/dev/null)"; then
+        printf '%s\n' "$r"
+    fi
+}
+
+# ad_scan_old_processes — fill LIVE_PROCS with "<pid> <path>" for each
+# process running the old binary. Return 0 when a process check ran, 1 when
+# none could (no /proc and no usable ps or lsof).
+LIVE_PROCS=()
+ad_scan_old_processes() {
+    local mode="${INSTALL_SH_TEST_PROC_CHECK:-}" n d pid exe line comm ps_out lsof_out
+    local -a names
+    LIVE_PROCS=()
+    names=()
+    while IFS= read -r n; do
+        names+=("$n")
+    done < <(ad_old_binary_names)
+    if [[ "$mode" == none ]]; then
+        return 1
+    fi
+    if [[ "$mode" != macos && -d /proc/self ]]; then
+        for d in /proc/[0-9]*; do
+            pid="${d#/proc/}"
+            exe="$(readlink "$d/exe" 2>/dev/null)" || continue
+            exe="${exe% (deleted)}"
+            for n in "${names[@]}"; do
+                if [[ "$exe" == "$n" ]]; then
+                    LIVE_PROCS+=("$pid $exe")
+                    break
+                fi
+            done
+        done
+        return 0
+    fi
+    # macOS: the old binary, or a link into the old bin directory that the
+    # discovery above found, named as the process's executable path.
+    for n in ${OLD_BIN_LINKS[@]+"${OLD_BIN_LINKS[@]}"}; do
+        names+=("$n")
+    done
+    names+=("${OLD_BIN_DIR}/agent-director")
+    if command -v ps >/dev/null 2>&1 && ps_out="$(ps -axo pid=,comm= 2>/dev/null)"; then
+        while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            pid="${line%%[[:space:]]*}"
+            comm="${line#"$pid"}"
+            comm="${comm#"${comm%%[![:space:]]*}"}"
+            if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+                continue
+            fi
+            for n in "${names[@]}"; do
+                if [[ "$comm" == "$n" ]]; then
+                    LIVE_PROCS+=("$pid $comm")
+                    break
+                fi
+            done
+        done <<<"$ps_out"
+        return 0
+    fi
+    if command -v lsof >/dev/null 2>&1 && lsof_out="$(lsof -d txt -Fpn 2>/dev/null)"; then
+        pid=""
+        while IFS= read -r line; do
+            case "$line" in
+                p*) pid="${line#p}" ;;
+                n*)
+                    comm="${line#n}"
+                    for n in "${names[@]}"; do
+                        if [[ "$comm" == "$n" && "$pid" =~ ^[0-9]+$ ]]; then
+                            LIVE_PROCS+=("$pid $comm")
+                            break
+                        fi
+                    done
+                    ;;
+            esac
+        done <<<"$lsof_out"
+        return 0
+    fi
+    return 1
+}
+
+# ad_read_live_rows <db> — fill LIVE_ROWS with one "<state> <id>" line per
+# row of <db>'s spawns table in a live state, and return 0; return 1 with
+# the reason in LIVE_ROWS_ERR when the rows could not be read (busy past the
+# store's busy timeout, or unreadable). No store file, or no spawns table,
+# holds no rows. The id column is instance_id (the current schema) or
+# claude_instance_id (the previous release's), found first.
+LIVE_ROWS=""
+LIVE_ROWS_ERR=""
+ad_read_live_rows() {
+    local db="$1" cols idcol rc=0
+    LIVE_ROWS=""
+    LIVE_ROWS_ERR=""
+    if [[ ! -f "$db" ]]; then
+        return 0
+    fi
+    cols="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$db" "SELECT name FROM pragma_table_info('spawns');" 2>&1)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        LIVE_ROWS_ERR="$cols"
+        return 1
+    fi
+    if [[ -z "$cols" ]]; then
+        return 0
+    fi
+    case $'\n'"$cols"$'\n' in
+        *$'\ninstance_id\n'*) idcol=instance_id ;;
+        *$'\nclaude_instance_id\n'*) idcol=claude_instance_id ;;
+        *) idcol=rowid ;;
+    esac
+    LIVE_ROWS="$(sqlite3 -readonly -batch -init /dev/null -separator ' ' -cmd ".timeout ${store_busy_timeout_ms}" "$db" "SELECT state, ${idcol} FROM spawns WHERE state IN ('pending','waiting','working','check_permission','ask_user') ORDER BY ${idcol};" 2>&1)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        LIVE_ROWS_ERR="$LIVE_ROWS"
+        LIVE_ROWS=""
+        return 1
+    fi
+    return 0
+}
+
+# ad_agents_live_check — exit 5 (ErrAgentsLive) when the old store holds a
+# live row or a process runs the old binary, or when the rows could not be
+# read; say so on stdout, once, when the process check could not run (it runs
+# again as the move's first step). Nothing is changed. Run in pre-flight and
+# again as the move's first step.
+PROC_CHECK_NOTED=0
+ad_agents_live_check() {
+    local rows_failed=0 proc_ran=0 found=0 l
+    if ! ad_read_live_rows "$state_db"; then
+        rows_failed=1
+    fi
+    if ad_scan_old_processes; then
+        proc_ran=1
+    fi
+    if [[ "$rows_failed" -eq 0 && -z "$LIVE_ROWS" && "${#LIVE_PROCS[@]}" -eq 0 ]]; then
+        if [[ "$proc_ran" -eq 0 && "$PROC_CHECK_NOTED" -eq 0 ]]; then
+            PROC_CHECK_NOTED=1
+            echo "  process check: did not run (this host has no /proc and no usable ps or lsof), so no agent-director process was looked for"
+        fi
+        return 0
+    fi
+    echo "install.sh: AD's old directory is in use; refusing to upgrade while an agent or agent-director process runs." >&2
+    echo "  old binary: ${OLD_BIN_DIR}/agent-director" >&2
+    echo "  old store : $state_db" >&2
+    if [[ "$rows_failed" -eq 1 ]]; then
+        echo "  The live rows could not be read (the store was busy past its busy timeout of ${store_busy_timeout_ms} ms, or is unreadable), so the install cannot tell whether an agent runs. A re-run reads them again. sqlite3 said:" >&2
+        printf '%s\n' "$LIVE_ROWS_ERR" | sed 's/^/    /' >&2
+    fi
+    if [[ -n "$LIVE_ROWS" ]]; then
+        echo "  Rows in a live state (state, instance id):" >&2
+        printf '%s\n' "$LIVE_ROWS" | sed 's/^/    /' >&2
+        found=1
+    fi
+    if [[ "${#LIVE_PROCS[@]}" -gt 0 ]]; then
+        echo "  Processes running the old binary (pid, executable):" >&2
+        for l in "${LIVE_PROCS[@]}"; do
+            echo "    $l" >&2
+        done
+        echo "  A Claude Code session's own MCP server (agent-director serve --stdio) is one such process: it runs the old binary until that session ends." >&2
+        found=1
+    fi
+    if [[ "$proc_ran" -eq 0 ]]; then
+        echo "  The process check did not run (this host has no /proc and no usable ps or lsof)." >&2
+    fi
+    if [[ "$found" -eq 1 ]]; then
+        echo "  Stop whatever starts agents (a scheduler, a loop, a caller), then every agent, every serve and every caller, and re-run this install from a shell AD did not start." >&2
+        echo "  A row whose agent is already gone is cleared by the old binary's find-missing, which a still-running agent never matches:" >&2
+        printf '    %q find-missing\n' "${OLD_BIN_DIR}/agent-director" >&2
+    fi
+    echo "  Nothing was installed or changed. Re-run this install after the change." >&2
+    echo "  (operator-actions.md, \"\`install.sh\` refuses with \`ErrAgentsLive\`\")" >&2
+    ad_exit_5 ErrAgentsLive
+}
+
+if [[ "$MOVE_DUE" -eq 1 ]]; then
+    ad_discover_old_bin_refs
+    ad_agents_live_check
+fi
+
 echo "install.sh: pre-flight OK"
-echo "  claude  : $(claude --version 2>/dev/null || echo '<unknown>')"
+echo "  claude  : $("$CLAUDE_PROG" --version 2>/dev/null || echo '<unknown>')"
 echo "  tmux    : $(tmux -V 2>/dev/null || echo '<unknown>')"
 if [[ "$state_db_name" != state.db ]]; then
-    echo "  store   : $state_db ([store] db_path in ${DEFAULT_INSTALL_ROOT}/config.toml)"
+    echo "  store   : $state_db ([store] db_path in ${PREFLIGHT_CONFIG})"
 fi
 
 # --------------------------------------------------------------------
@@ -1191,7 +2067,7 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
     # Defer-cleanup the tempfiles on any exit path. The install steps
     # later in the script copy their contents into place, so the
     # tempfiles being cleaned up at script exit is fine.
-    trap 'rm -f "$tmp_bin" "$tmp_admin"' EXIT
+    trap ad_exit_cleanup EXIT
 
     # ----------------------------------------------------------------
     # CDN-propagation retry (b.kym).
@@ -1255,7 +2131,8 @@ if [[ "$FROM_RELEASE" -eq 1 ]]; then
         echo "" >&2
         echo "  Releases before 0.11.0 ship no agent-director-admin binary, so" >&2
         echo "  re-running this command will never find one. Instead:" >&2
-        echo "    - install release 0.11.0 or later: bash $0 --from-release <tag of v0.11.0 or later>" >&2
+        echo "    - install this release or later: bash $0 --from-release <tag of this release or later>" >&2
+        echo "    - or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one" >&2
         exit 3
     }
 
@@ -1634,6 +2511,609 @@ fi
 echo "  version-check: agent-director-admin stamp matches ($main_stamp)"
 
 # --------------------------------------------------------------------
+# Capability check (SR-11.7)
+#
+# Both binaries' `version` results carry config_dir, the directory each
+# keeps AD's files in: ~/.config/agent-director. A binary whose version
+# output lacks it, or names another directory, is from an earlier release,
+# which keeps its files in a directory this install does not manage, so it
+# is refused (exit 3). The check reads no store: it runs `version`, which is
+# handle-free, on each binary.
+# --------------------------------------------------------------------
+
+# ad_config_dir_of <binary> — print the config_dir its `version` result
+# holds, or nothing when there is none.
+ad_config_dir_of() {
+    "$1" version 2>/dev/null \
+        | jq -er 'select((.config_dir | type) == "string") | .config_dir' 2>/dev/null \
+        || true
+}
+
+main_config_dir="$(ad_config_dir_of "$BINARY_SRC")"
+admin_config_dir="$(ad_config_dir_of "$ADMIN_SRC")"
+if [[ "$main_config_dir" != "~/.config/agent-director" || "$admin_config_dir" != "~/.config/agent-director" ]]; then
+    echo "install.sh: a binary to install is from an earlier release (its version output lacks config_dir ~/.config/agent-director); refusing to install." >&2
+    echo "  agent-director      : $BINARY_SRC (config_dir: ${main_config_dir:-<none>})" >&2
+    echo "  agent-director-admin: $ADMIN_SRC (config_dir: ${admin_config_dir:-<none>})" >&2
+    echo "" >&2
+    echo "  This release keeps AD's files in ~/.config/agent-director, and both of its" >&2
+    echo "  binaries report that directory as config_dir in their version result." >&2
+    echo "  A binary that does not is from an earlier release, which an earlier" >&2
+    echo "  release's own install.sh installs: fetch that release's install.sh from its" >&2
+    echo "  tag and run it, rather than this one. To install this release instead:" >&2
+    echo "    - build both binaries from it: $build_advice" >&2
+    echo "    - or download release:        rerun with --from-release (omit --binary and --admin-binary)" >&2
+    exit 3
+fi
+
+# --------------------------------------------------------------------
+# The move of AD's directory (SR-11.7)
+#
+# With the move due, and every pre-flight check, both binary sources and the
+# checks on them behind us, this copies ~/.agent-director into
+# ~/.config/agent-director and renames the old directory to
+# ~/.agent-director.pre-move-<YYYYmmdd-HHMMSS> (or a free variant of that
+# name), before the binary swap, SR-11.2's migration and the store steps:
+#
+#   0. Both binary sources are copied to temp files outside both
+#      directories (a source may live inside the old one, where `command -v
+#      agent-director` can lead), and the copies are used from here on. The
+#      EXIT cleanup removes them.
+#   1. The live-row and process checks run again (ErrAgentsLive, nothing
+#      changed).
+#   2. A stale partial new directory (one holding .move-incomplete) is
+#      deleted; ~/.config is created (mode 0700) if missing, then the new
+#      directory.
+#   3. The marker .move-incomplete is written into the new directory.
+#   4. The old directory's contents are copied, except bin/, admin/ and a
+#      store inside it: each file and directory written owner-only (umask
+#      077) and then given the original's mode (never cp -p or cp -a), with
+#      commands that run on GNU and BSD systems, a link copied as the same
+#      link. Anything that is not a file, directory or link (a fifo, a
+#      socket, a device) fails the move, named.
+#   5. The store inside the old directory is copied with SQLite's backup,
+#      from the original opened with sqlite3 -readonly, its -wal and -shm
+#      never copied as files; the copy must have the same user_version and
+#      .sha3sum --schema.
+#   6. Every other copied file is checked byte for byte.
+#   7. The path keys in the new config.toml are rewritten (SR-11.7 "Path
+#      keys"); only the new copy is changed.
+#   8. The kept directory's name is written into the marker.
+#   9. The old directory is renamed to that name.
+#  10. The marker is removed.
+# The move makes no backup of its own: the kept directory holds the
+# original.
+#
+# A failure before the rename, an interrupt included, removes the partial new
+# directory (marker included; a linked new directory has its contents
+# cleared) and, with rmdir only, a ~/.config the move created; it ends the
+# install with exit 5 (ErrMoveFailed), the old directory untouched. The
+# move's EXIT, INT, TERM and HUP traps chain onto the install's existing
+# EXIT trap. After the rename nothing is removed: a signal that arrives after
+# mv completed but before the traps are put back finds the rename done (the
+# old path gone, the kept directory there), removes nothing, says the move
+# finished, and ends the install with exit 5; the re-run continues from the
+# new directory.
+# --------------------------------------------------------------------
+
+MOVED=0
+MOVED_KEPT=""
+MOVE_ACTIVE=0
+MOVE_CREATED_BASE=0
+MOVE_NEW_IS_LINK=0
+MOVE_CAUSE=""
+MOVE_PREV_EXIT=""
+MOVE_NOTES=""
+MOVE_KEPT_NAME=""
+STORE_SRC_PHYS=""
+stage_bin=""
+stage_admin=""
+
+# ad_move_rename_done — true when the rename (step 9) has happened: the move
+# has chosen the kept directory's name, the old path is gone and the kept
+# directory exists (the name was free when chosen, so only the move's mv made
+# it). A signal can arrive after mv completes and before the traps are put
+# back, and nothing may be removed after the rename, so the failure path asks
+# this state, not a flag set after mv.
+ad_move_rename_done() {
+    [[ -n "$MOVE_KEPT_NAME" && ! -e "$OLD_INSTALL_ROOT" && ! -L "$OLD_INSTALL_ROOT" ]] \
+        && [[ -e "$MOVE_KEPT_NAME" || -L "$MOVE_KEPT_NAME" ]]
+}
+
+# ad_move_cleanup — remove what the move made, when it is still active:
+# the partial new directory (a linked one has its contents cleared) and,
+# with rmdir only, a ~/.config the move created. Safe to run twice. Removes
+# nothing once the rename is done.
+ad_move_cleanup() {
+    local was_active="$MOVE_ACTIVE"
+    MOVE_ACTIVE=0
+    if [[ "$was_active" -ne 1 ]]; then
+        return 0
+    fi
+    if ad_move_rename_done; then
+        return 0
+    fi
+    if [[ "$MOVE_NEW_IS_LINK" -eq 1 ]]; then
+        find "${DEFAULT_INSTALL_ROOT}/" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null || true
+    else
+        rm -rf -- "$DEFAULT_INSTALL_ROOT" 2>/dev/null || true
+    fi
+    if [[ "$MOVE_CREATED_BASE" -eq 1 ]]; then
+        rmdir -- "$(dirname "$DEFAULT_INSTALL_ROOT")" 2>/dev/null || true
+    fi
+}
+
+# ad_move_fail <cause> — end the install for a failure before the rename:
+# clean up, say why, exit 5 (ErrMoveFailed). When the rename has already
+# happened (a signal arrived after mv completed), nothing is removed and the
+# message says so.
+ad_move_fail() {
+    local was_active="$MOVE_ACTIVE" renamed=0
+    trap - INT TERM HUP
+    if ad_move_rename_done; then
+        renamed=1
+    fi
+    ad_move_cleanup
+    if [[ "$renamed" -eq 1 ]]; then
+        MOVE_ACTIVE=0
+        echo "install.sh: the install was stopped after the move had renamed $OLD_INSTALL_ROOT: $1" >&2
+        echo "  The move itself finished: $OLD_INSTALL_ROOT is now $MOVE_KEPT_NAME, and $DEFAULT_INSTALL_ROOT holds the complete copy. Nothing was removed." >&2
+        echo "  Re-run this install: it continues from $DEFAULT_INSTALL_ROOT, and no move is due. $MOVE_KEPT_NAME keeps the old directory as it was." >&2
+        echo "  (operator-actions.md, \"\`install.sh\` stops with \`ErrMoveFailed\`\")" >&2
+        ad_exit_5 ErrMoveFailed
+    fi
+    echo "install.sh: moving $OLD_INSTALL_ROOT to $DEFAULT_INSTALL_ROOT failed: $1" >&2
+    if [[ "$was_active" -eq 1 ]]; then
+        echo "  The partial $DEFAULT_INSTALL_ROOT was removed (and so was ~/.config, when the move had created it); $OLD_INSTALL_ROOT was not changed." >&2
+    else
+        echo "  Nothing was changed: $OLD_INSTALL_ROOT is as it was." >&2
+    fi
+    echo "  A full disk is the usual cause: free some space (or fix the cause above), then re-run this install." >&2
+    echo "  (operator-actions.md, \"\`install.sh\` stops with \`ErrMoveFailed\`\")" >&2
+    ad_exit_5 ErrMoveFailed
+}
+
+# ad_move_on_exit — the move's EXIT trap: clean up a move that is still
+# active (the safety net for a stop nothing reported), then run the EXIT
+# trap the install had before.
+ad_move_on_exit() {
+    ad_move_cleanup
+    if [[ -n "$MOVE_PREV_EXIT" ]]; then
+        eval "$MOVE_PREV_EXIT"
+    fi
+}
+
+# ad_move_on_signal <name> — the move's INT, TERM and HUP trap.
+ad_move_on_signal() {
+    ad_move_fail "the install was interrupted (SIG$1)"
+}
+
+# ad_move_arm_traps — chain the move's traps onto the install's EXIT trap.
+ad_move_arm_traps() {
+    eval "set -- $(trap -p EXIT)"
+    MOVE_PREV_EXIT="${3:-}"
+    trap ad_move_on_exit EXIT
+    trap 'ad_move_on_signal INT' INT
+    trap 'ad_move_on_signal TERM' TERM
+    trap 'ad_move_on_signal HUP' HUP
+}
+
+# ad_move_disarm_traps — after the rename, put the install's EXIT trap back
+# and drop the signal traps.
+ad_move_disarm_traps() {
+    MOVE_ACTIVE=0
+    trap - INT TERM HUP
+    if [[ -n "$MOVE_PREV_EXIT" ]]; then
+        trap "$MOVE_PREV_EXIT" EXIT
+    else
+        trap - EXIT
+    fi
+}
+
+# ad_stage_binary <source> <var name> — copy <source> to a temp file outside
+# both directories and name it in <var name> (so the EXIT cleanup removes
+# it). Sets MOVE_CAUSE and fails when it cannot.
+ad_stage_binary() {
+    local t
+    t="$(mktemp -t agent-director.stage.XXXXXX)" || {
+        MOVE_CAUSE="cannot make a temp file to hold a copy of $1"
+        return 1
+    }
+    printf -v "$2" '%s' "$t"
+    case "$t" in
+        "$OLD_ROOT_CLEAN"/*|"$NEW_ROOT_CLEAN"/*)
+            MOVE_CAUSE="the temp directory ($t) is inside AD's directories; set TMPDIR to a directory outside them"
+            return 1
+            ;;
+    esac
+    if ! cp -- "$1" "$t" || ! chmod 0755 "$t" || ! cmp -s "$1" "$t"; then
+        MOVE_CAUSE="cannot copy $1 to the temp file $t"
+        return 1
+    fi
+}
+
+# ad_move_walk <copy|verify> <src dir> <dst dir> <depth> — copy, or check
+# byte for byte, the entries of <src dir> (a real directory) in <dst dir>,
+# except, at depth 0, bin and admin, and the store inside the old directory
+# (STORE_SRC_PHYS) with its -wal and -shm. Sets MOVE_CAUSE and fails on the
+# first entry it cannot copy or that differs.
+ad_move_walk() {
+    local mode="$1" src="$2" dst="$3" depth="$4" e name d t
+    if [[ ! -r "$src" || ! -x "$src" ]]; then
+        MOVE_CAUSE="cannot read the directory $src"
+        return 1
+    fi
+    while IFS= read -r -d '' e; do
+        name="${e##*/}"
+        d="${dst}/${name}"
+        if [[ "$depth" -eq 0 && ( "$name" == bin || "$name" == admin ) ]]; then
+            continue
+        fi
+        if [[ -n "$STORE_SRC_PHYS" && ( "$e" == "$STORE_SRC_PHYS" || "$e" == "${STORE_SRC_PHYS}-wal" || "$e" == "${STORE_SRC_PHYS}-shm" ) ]]; then
+            continue
+        fi
+        if [[ -L "$e" ]]; then
+            t="$(readlink "$e")" || {
+                MOVE_CAUSE="cannot read the link $e"
+                return 1
+            }
+            if [[ "$mode" == copy ]]; then
+                ln -s -- "$t" "$d" || {
+                    MOVE_CAUSE="cannot copy the link $e to $d"
+                    return 1
+                }
+            elif [[ ! -L "$d" || "$(readlink "$d")" != "$t" ]]; then
+                MOVE_CAUSE="the copy $d of the link $e is not the same link"
+                return 1
+            fi
+        elif [[ -d "$e" ]]; then
+            if [[ "$mode" == copy ]]; then
+                (umask 077; mkdir -- "$d") || {
+                    MOVE_CAUSE="cannot make the directory $d"
+                    return 1
+                }
+            elif [[ ! -d "$d" || -L "$d" ]]; then
+                MOVE_CAUSE="the copy $d of the directory $e is missing"
+                return 1
+            fi
+            ad_move_walk "$mode" "$e" "$d" $((depth + 1)) || return 1
+            if [[ "$mode" == copy ]]; then
+                chmod "$(ad_mode_of "$e")" "$d" || {
+                    MOVE_CAUSE="cannot set the mode of the directory $d"
+                    return 1
+                }
+            fi
+        elif [[ -f "$e" ]]; then
+            if [[ "$mode" == copy ]]; then
+                (umask 077; cp -- "$e" "$d") || {
+                    MOVE_CAUSE="cannot copy $e to $d"
+                    return 1
+                }
+                chmod "$(ad_mode_of "$e")" "$d" || {
+                    MOVE_CAUSE="cannot set the mode of $d"
+                    return 1
+                }
+            elif ! cmp -s "$e" "$d"; then
+                MOVE_CAUSE="the copy $d of $e differs from it"
+                return 1
+            fi
+        else
+            MOVE_CAUSE="cannot copy $e: it is not a regular file, a directory or a link (a fifo, a socket or a device, say). Remove it or move it out of $OLD_INSTALL_ROOT, then re-run"
+            return 1
+        fi
+    done < <(find "$src" -mindepth 1 -maxdepth 1 -print0)
+}
+
+# ad_move_backup_store <source> <destination> — copy the store with SQLite's
+# backup, from <source> opened read-only, to <destination> (through a temp
+# name beside the new directory's top, then a rename), give the copy the
+# original's mode, and check that it has the same user_version and
+# .sha3sum --schema. Sets MOVE_CAUSE and fails when it cannot.
+ad_move_backup_store() {
+    local src="$1" dst="$2" tmp="${DEFAULT_INSTALL_ROOT}/.state-backup.$$" out v_src v_dst h_src h_dst
+    if [[ "$tmp" == *[\"\\]* ]]; then
+        MOVE_CAUSE="the path $tmp holds a quote or a backslash, which SQLite's backup command cannot take"
+        return 1
+    fi
+    rm -f -- "$tmp"
+    out="$(umask 077; sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$src" ".backup \"${tmp}\"" 2>&1)" || {
+        MOVE_CAUSE="SQLite's backup of the store $src failed: $out"
+        return 1
+    }
+    mkdir -p -- "$(dirname "$dst")" || {
+        MOVE_CAUSE="cannot make the directory for the store's copy $dst"
+        return 1
+    }
+    mv -f -- "$tmp" "$dst" || {
+        MOVE_CAUSE="cannot move the store's copy to $dst"
+        return 1
+    }
+    chmod "$(ad_mode_of "$src")" "$dst" || {
+        MOVE_CAUSE="cannot set the mode of the store's copy $dst"
+        return 1
+    }
+    v_src="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$src" "PRAGMA user_version;" 2>&1)" || true
+    v_dst="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" "PRAGMA user_version;" 2>&1)" || true
+    if [[ ! "$v_src" =~ ^[0-9]+$ || "$v_src" != "$v_dst" ]]; then
+        MOVE_CAUSE="the copy $dst of the store has user_version '${v_dst}', the original's is '${v_src}'"
+        return 1
+    fi
+    h_src="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$src" ".sha3sum --schema" 2>&1)" || true
+    h_dst="$(sqlite3 -readonly -batch -init /dev/null -cmd ".timeout ${store_busy_timeout_ms}" "$dst" ".sha3sum --schema" 2>&1)" || true
+    if [[ ! "$h_src" =~ ^[0-9a-f]{40,}$ || "$h_src" != "$h_dst" ]]; then
+        MOVE_CAUSE="the schema of the copy $dst of the store could not be shown to match the original's (.sha3sum --schema gave '${h_dst}' for the copy and '${h_src}' for the original)"
+        return 1
+    fi
+}
+
+# ad_move_quote <value> <quote char> — print <value> as a TOML string,
+# keeping <quote char> (" or ') when the value allows it and the other when
+# it does not. Fails when neither quoting can hold the value.
+ad_move_quote() {
+    if [[ "$2" == '"' && "$1" != *[\"\\]* ]]; then
+        printf '"%s"' "$1"
+    elif [[ "$1" != *"'"* ]]; then
+        printf "'%s'" "$1"
+    elif [[ "$1" != *[\"\\]* ]]; then
+        printf '"%s"' "$1"
+    else
+        return 1
+    fi
+}
+
+# ad_move_key_newvalue <key label> <value as written> — decide the new value
+# of a path key from the old directory's point of view (SR-11.7 "Path
+# keys"). Sets REWRITE_NEWVAL (empty: leave the line as written) and may add
+# a note to MOVE_NOTES. Sets MOVE_CAUSE and fails when the place cannot be
+# resolved.
+REWRITE_NEWVAL=""
+ad_move_key_newvalue() {
+    local label="$1" v="$2" form="rel" resolved
+    REWRITE_NEWVAL=""
+    case "$v" in
+        "~/"*) form=tilde; resolved="${HOME}/${v:2}" ;;
+        /*) form=abs; resolved="$v" ;;
+        *) resolved="${OLD_INSTALL_ROOT}/${v}" ;;
+    esac
+    resolved="$(ad_clean_path "$resolved")"
+    if ! ad_key_class "$resolved"; then
+        MOVE_CAUSE="cannot place $label $v against the old directory (its directory is missing or unreadable)"
+        return 1
+    fi
+    case "$KEY_CLASS" in
+        in)
+            case "$form" in
+                abs) REWRITE_NEWVAL="${NEW_ROOT_CLEAN}/${resolved#"$OLD_ROOT_CLEAN"/}" ;;
+                tilde) REWRITE_NEWVAL="~/${NEW_ROOT_CLEAN#"$HOME_CLEAN"/}/${resolved#"$OLD_ROOT_CLEAN"/}" ;;
+            esac
+            ;;
+        link)
+            REWRITE_NEWVAL="${NEW_ROOT_CLEAN}/${KEY_PHYS#"$OLD_PHYS"/}"
+            ;;
+        warn)
+            # Inside by its text, outside by its physical place (SR-11.7 places
+            # a key by its physical place): a relative value would resolve
+            # against the new directory, where a copied relative link points one
+            # level deeper, so it is written as the absolute physical path it
+            # reaches today. An absolute or ~/ value never gets here while
+            # pre-flight refuses it (ad_move_refuse_outward_path, which says
+            # how to switch that to this rewrite).
+            REWRITE_NEWVAL="$KEY_PHYS"
+            ;;
+        out)
+            if [[ "$form" == rel ]]; then
+                REWRITE_NEWVAL="$KEY_PHYS"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# ad_move_rewrite_config <config> — rewrite [store] db_path and [log]
+# error_log_path in the new <config> per SR-11.7 "Path keys", changing no
+# other byte (a byte-order mark, CRLF line ends and a missing final newline
+# are kept; a value's quoting and trailing comment are kept, switching quote
+# only when the new value needs it). Written through a temp file with cat,
+# so the file keeps its mode. Sets MOVE_CAUSE and fails when it cannot.
+ad_move_rewrite_config() {
+    local cfg="$1" tmp="${DEFAULT_INSTALL_ROOT}/.config.toml.rewrite" line n=0 table="" cr bom noeol changed=0
+    local indent key eq rest q v tail newq
+    local re_header='^[[:blank:]]*\[[[:blank:]]*([A-Za-z0-9_-]+)[[:blank:]]*\][[:blank:]]*(#.*)?$'
+    local re_keyval='^([[:blank:]]*)(db_path|error_log_path)([[:blank:]]*=[[:blank:]]*)(.*)$'
+    local re_dq='^"([^"]*)"(.*)$'
+    local re_sq="^'([^']*)'(.*)\$"
+    if [[ ! -f "$cfg" ]]; then
+        return 0
+    fi
+    {
+        while :; do
+            noeol=0
+            if ! IFS= read -r line; then
+                if [[ -z "$line" ]]; then
+                    break
+                fi
+                noeol=1
+            fi
+            n=$((n + 1))
+            bom=""
+            if [[ "$n" -eq 1 && "$line" == $'\xef\xbb\xbf'* ]]; then
+                bom=$'\xef\xbb\xbf'
+                line="${line#"$bom"}"
+            fi
+            cr=""
+            if [[ "$line" == *$'\r' ]]; then
+                cr=$'\r'
+                line="${line%$'\r'}"
+            fi
+            if [[ "$line" =~ $re_header ]]; then
+                table="${BASH_REMATCH[1]}"
+            elif [[ ( "$table" == store || "$table" == log ) && "$line" =~ $re_keyval ]]; then
+                indent="${BASH_REMATCH[1]}"
+                key="${BASH_REMATCH[2]}"
+                eq="${BASH_REMATCH[3]}"
+                rest="${BASH_REMATCH[4]}"
+                if { [[ "$table" == store && "$key" == db_path ]] || [[ "$table" == log && "$key" == error_log_path ]]; }; then
+                    q=""
+                    if [[ "$rest" =~ $re_dq ]]; then
+                        q='"'
+                    elif [[ "$rest" =~ $re_sq ]]; then
+                        q="'"
+                    fi
+                    if [[ -n "$q" ]]; then
+                        v="${BASH_REMATCH[1]}"
+                        tail="${BASH_REMATCH[2]}"
+                        if [[ -n "$v" ]]; then
+                            ad_move_key_newvalue "[${table}] ${key}" "$v" || return 1
+                            if [[ -n "$REWRITE_NEWVAL" ]]; then
+                                newq="$(ad_move_quote "$REWRITE_NEWVAL" "$q")" || {
+                                    MOVE_CAUSE="the new value $REWRITE_NEWVAL of [${table}] ${key} holds both a single and a double quote (or a backslash with a single quote), which no TOML string can write here"
+                                    return 1
+                                }
+                                line="${indent}${key}${eq}${newq}${tail}"
+                                changed=1
+                            fi
+                        fi
+                    fi
+                fi
+            fi
+            printf '%s%s%s' "$bom" "$line" "$cr"
+            if [[ "$noeol" -eq 0 ]]; then
+                printf '\n'
+            fi
+        done <"$cfg"
+    } >"$tmp" || {
+        rm -f -- "$tmp"
+        if [[ -z "$MOVE_CAUSE" ]]; then
+            MOVE_CAUSE="cannot rewrite the path keys in $cfg"
+        fi
+        return 1
+    }
+    if [[ "$changed" -eq 1 ]]; then
+        cat "$tmp" >"$cfg" || {
+            MOVE_CAUSE="cannot write the rewritten $cfg"
+            return 1
+        }
+    fi
+    rm -f -- "$tmp"
+    return 0
+}
+
+# ad_move_print_references <kept dir> — print every other reference into the
+# old directory the installer finds in the new config.toml (a [launch]
+# value) or a template (an extra_env value, cwd), each with its fix, left as
+# written.
+ad_move_print_references() {
+    local hits
+    hits="$( { grep -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/config.toml" 2>/dev/null | sed "s|^|${DEFAULT_INSTALL_ROOT}/config.toml:|"; grep -r -n -F -I -e "$OLD_INSTALL_ROOT" -e '~/.agent-director' -e '$HOME/.agent-director' -e '${HOME}/.agent-director' "${DEFAULT_INSTALL_ROOT}/templates" 2>/dev/null; } || true)"
+    if [[ -n "$hits" ]]; then
+        echo "  references: these lines still name the old directory. They were left as written; change each to the same place under $NEW_ROOT_CLEAN (or remove it) by hand, since the old directory is kept only until you delete it ($1):"
+        printf '%s\n' "$hits" | sed 's/^/    /'
+    fi
+}
+
+# Step 0: stage both binary sources outside both directories.
+if [[ "$MOVE_DUE" -eq 1 ]]; then
+    trap ad_exit_cleanup EXIT
+    ad_stage_binary "$BINARY_SRC" stage_bin || ad_move_fail "$MOVE_CAUSE"
+    ad_stage_binary "$ADMIN_SRC" stage_admin || ad_move_fail "$MOVE_CAUSE"
+    BINARY_SRC="$stage_bin"
+    ADMIN_SRC="$stage_admin"
+
+    echo "  move    : $OLD_INSTALL_ROOT -> $DEFAULT_INSTALL_ROOT"
+    ad_move_arm_traps
+
+    # Step 1: nothing running, again.
+    ad_agents_live_check
+
+    # Step 2: the stale partial new directory goes; ~/.config and the new
+    # directory are made.
+    if [[ -L "$DEFAULT_INSTALL_ROOT" ]]; then
+        MOVE_NEW_IS_LINK=1
+    fi
+    if [[ "$MOVE_PARTIAL" -eq 1 ]]; then
+        MOVE_ACTIVE=1
+        ad_move_cleanup
+        MOVE_ACTIVE=1
+    fi
+    config_base="$(dirname "$DEFAULT_INSTALL_ROOT")"
+    if [[ ! -d "$config_base" ]]; then
+        MOVE_ACTIVE=1
+        MOVE_CREATED_BASE=1
+        mkdir -- "$config_base" || ad_move_fail "cannot make $config_base"
+        chmod 00700 "$config_base" || ad_move_fail "cannot set the mode of $config_base"
+    fi
+    MOVE_ACTIVE=1
+    if [[ ! -d "$DEFAULT_INSTALL_ROOT" ]]; then
+        mkdir -- "$DEFAULT_INSTALL_ROOT" || ad_move_fail "cannot make $DEFAULT_INSTALL_ROOT"
+    fi
+    chmod 00700 "$DEFAULT_INSTALL_ROOT" || ad_move_fail "cannot set the mode of $DEFAULT_INSTALL_ROOT"
+
+    # Step 3: the marker.
+    (umask 077; : >"$MOVE_MARKER") || ad_move_fail "cannot write the marker $MOVE_MARKER"
+
+    # Step 4: copy everything but bin/, admin/ and the store inside.
+    if [[ "$STORE_CLASS" == in || "$STORE_CLASS" == link ]]; then
+        STORE_SRC_PHYS="$STORE_PHYS"
+    fi
+    ad_move_walk copy "$OLD_PHYS" "$DEFAULT_INSTALL_ROOT" 0 || ad_move_fail "$MOVE_CAUSE"
+
+    # Step 5: the store, with SQLite's backup.
+    if [[ -n "$STORE_SRC_PHYS" && -f "$STORE_SRC_PHYS" ]]; then
+        ad_move_backup_store "$STORE_SRC_PHYS" "${DEFAULT_INSTALL_ROOT}${STORE_SRC_PHYS#"$OLD_PHYS"}" || ad_move_fail "$MOVE_CAUSE"
+    fi
+
+    # Step 6: every other copied file, byte for byte.
+    ad_move_walk verify "$OLD_PHYS" "$DEFAULT_INSTALL_ROOT" 0 || ad_move_fail "$MOVE_CAUSE"
+
+    # Step 7: the path keys in the new config.toml.
+    ad_move_rewrite_config "${DEFAULT_INSTALL_ROOT}/config.toml" || ad_move_fail "$MOVE_CAUSE"
+
+    # Step 8: the kept directory's name, into the marker.
+    kept="${OLD_INSTALL_ROOT}.pre-move-$(ad_ts)"
+    kept_base="$kept"
+    kept_n=1
+    while [[ -e "$kept" || -L "$kept" ]]; do
+        kept_n=$((kept_n + 1))
+        kept="${kept_base}-${kept_n}"
+    done
+    MOVE_KEPT_NAME="$kept"
+    printf '%s\n' "$kept" >"$MOVE_MARKER" || ad_move_fail "cannot write the kept directory's name into $MOVE_MARKER"
+
+    # Step 9: the rename. After it nothing is removed.
+    mv -- "$OLD_INSTALL_ROOT" "$kept" || ad_move_fail "cannot rename $OLD_INSTALL_ROOT to $kept"
+    MOVED=1
+    MOVED_KEPT="$kept"
+    ad_move_disarm_traps
+
+    # Step 10: the marker.
+    if ! rm -f -- "$MOVE_MARKER"; then
+        echo "  warning: could not remove the marker $MOVE_MARKER; the next install removes it" >&2
+    fi
+
+    echo "  moved   : $OLD_INSTALL_ROOT -> $DEFAULT_INSTALL_ROOT (store, config.toml, templates and the rest, checked)"
+    echo "  kept    : $MOVED_KEPT (the old directory as it was before the move, old binaries included; delete it once the upgrade is confirmed)"
+    if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+        echo "  prior   : --keep-prior made no snapshot on this install: the new bin and admin directories hold no earlier binary. The way back is operator-actions.md, \"Going back to the previous release\""
+    fi
+    if [[ -n "$MOVE_NOTES" ]]; then
+        printf '%s' "$MOVE_NOTES"
+    fi
+    ad_move_print_references "$MOVED_KEPT"
+
+    # Every step from here works in the new directory (SR-11.7).
+    if ! state_db="$(ad_store_db_path "${DEFAULT_INSTALL_ROOT}/config.toml" "$HOME" "$DEFAULT_INSTALL_ROOT")"; then
+        ad_exit_5 ErrConfigMalformed
+    fi
+    state_db_name="state.db"
+    if [[ "$state_db" != "$(ad_clean_path "${DEFAULT_INSTALL_ROOT}/state.db")" ]]; then
+        state_db_name="$state_db"
+    fi
+    if ! store_busy_timeout_ms="$(ad_store_busy_timeout_ms "${DEFAULT_INSTALL_ROOT}/config.toml")"; then
+        ad_exit_5 ErrConfigMalformed
+    fi
+fi
+
+# --------------------------------------------------------------------
 # Create install root + bin dir
 # --------------------------------------------------------------------
 
@@ -1671,6 +3151,7 @@ chmod 00755 "$DEFAULT_BIN_DIR"
 # --------------------------------------------------------------------
 
 CANONICAL="${DEFAULT_BIN_DIR}/agent-director"
+MANAGED_LINK=""
 PRIOR="${CANONICAL}.prior"
 TMP="${CANONICAL}.tmp.$$"
 ADMIN_CANONICAL="$DEFAULT_ADMIN_PATH"
@@ -1695,7 +3176,7 @@ ADMIN_TMP="${ADMIN_CANONICAL}.tmp.$$"
 # (A0,M0), (A1,M1) and (A2,M1) would leave A1 beside M0. A cmp that
 # cannot compare (missing, or a file it cannot read) counts as
 # different, so both are snapshotted.
-if [[ "$KEEP_PRIOR" -eq 1 ]]; then
+if [[ "$KEEP_PRIOR" -eq 1 && "$MOVED" -eq 0 ]]; then
     if [[ -f "$CANONICAL" ]] && cmp -s "$CANONICAL" "$BINARY_SRC" \
         && { [[ ! -f "$ADMIN_CANONICAL" ]] || cmp -s "$ADMIN_CANONICAL" "$ADMIN_SRC"; }; then
         if [[ -f "$ADMIN_CANONICAL" ]]; then
@@ -1753,7 +3234,7 @@ fi
 # symlink for it. Its path is printed once, at the end.
 # --------------------------------------------------------------------
 
-trap 'rm -f "$TMP" "$ADMIN_TMP" ${tmp_bin:+"$tmp_bin"} ${tmp_admin:+"$tmp_admin"} ${tmp_sentinel:+"$tmp_sentinel"}' EXIT
+trap ad_exit_cleanup EXIT
 
 mkdir -p "$DEFAULT_ADMIN_DIR"
 chmod 00700 "$DEFAULT_ADMIN_DIR"
@@ -1780,8 +3261,27 @@ if [[ "$NO_SYMLINK" -eq 0 && -n "$SYMLINK_DIR" ]]; then
         target="${SYMLINK_DIR}/agent-director"
         ln -sfn "$CANONICAL" "${target}.new"
         mv -f "${target}.new" "$target"
+        MANAGED_LINK="$target"
         echo "  symlink : $target → $CANONICAL"
     fi
+fi
+
+# After a move, every other link into the old bin directory that pre-flight
+# found (OLD_BIN_LINKS; the one this install manages was re-pointed above),
+# and each $PATH entry naming that directory, is printed with its fix. The
+# installer changes neither: a link elsewhere, and a shell startup file, are
+# the operator's (SR-11.7).
+if [[ "$MOVED" -eq 1 ]]; then
+    for old_link in ${OLD_BIN_LINKS[@]+"${OLD_BIN_LINKS[@]}"}; do
+        if [[ "$old_link" == "$MANAGED_LINK" ]]; then
+            continue
+        fi
+        echo "  old link: $old_link still leads into the old directory's bin, which is kept only until you delete it. Re-point it:"
+        printf '    ln -sfn %q %q\n' "$CANONICAL" "$old_link"
+    done
+    for old_entry in ${OLD_BIN_PATH_ENTRIES[@]+"${OLD_BIN_PATH_ENTRIES[@]}"}; do
+        echo "  old PATH: \$PATH names $old_entry, the old directory's bin, which is kept only until you delete it. In your shell startup file (~/.bashrc, ~/.zshrc, ...), replace it with ${DEFAULT_BIN_DIR}, then open a new shell."
+    done
 fi
 
 # --------------------------------------------------------------------
@@ -2262,12 +3762,8 @@ fi
 # up — leaving settings.json byte-identical to its pre-install state.
 # --------------------------------------------------------------------
 
-# ad_mode_of <file> — print <file>'s permission bits in octal. stat -L
-# reads the mode of the file a symlinked <file> points at, not the link's
-# own 777; -c is GNU stat, -f BSD stat.
-ad_mode_of() {
-    stat -L -c '%a' "$1" 2>/dev/null || stat -L -f '%Lp' "$1"
-}
+# (ad_mode_of is defined above, in the section on AD's directory move, which
+# copies modes too.)
 
 # ad_replace_keeping_mode <file> <text> — replace <file> with <text> and a
 # newline: write <file>.new beside it, then mv it over <file>. A symlinked
@@ -2311,8 +3807,38 @@ ad_backup_keeping_mode() {
     chmod "$(ad_mode_of "$1")" "$2"
 }
 
+# The help hooks an earlier release's install.sh wrote name the old
+# directory's binary (SR-11.7). An entry is "ours" the way uninstall.sh tests
+# it: an object whose hooks list holds an object whose command is a string
+# starting with the old directory's bin/agent-director path. Other shapes are
+# never indexed, so they pass through untouched.
+OLD_HOOK_PREFIX="${OLD_BIN_DIR}/agent-director"
+OLD_HOOK_OURS_JQ='
+    def ours:
+      type == "object"
+      and (.hooks | type) == "array"
+      and any(.hooks[]; type == "object"
+        and (.command | type) == "string"
+        and (.command | startswith($oldprefix)));
+'
+
 if [[ "$NO_HOOKS" -eq 1 ]]; then
     echo "  hooks   : skipped (--no-hooks)"
+    # settings.json stays byte-identical; entries naming the old directory's
+    # binary are printed with their fix.
+    if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
+        old_hook_lines=$(jq -r --arg oldprefix "$OLD_HOOK_PREFIX" "$OLD_HOOK_OURS_JQ"'
+            (.hooks | objects) as $h
+            | ("SessionStart", "SessionEnd") as $e
+            | ($h[$e] | arrays | .[] | select(ours) | .hooks[] | objects | .command | strings | select(startswith($oldprefix)))
+            | "\($e): \(.)"
+        ' "$DEFAULT_SETTINGS_PATH" 2>/dev/null || true)
+        if [[ -n "$old_hook_lines" ]]; then
+            echo "  hooks   : $DEFAULT_SETTINGS_PATH holds hook entries that name the old directory's binary (${OLD_HOOK_PREFIX}), which this upgrade replaced; they were left as they are:"
+            sed 's/^/    /' <<<"$old_hook_lines"
+            echo "    Fix: re-run this install without --no-hooks (it removes them and adds the new ones), or edit each command to start with ${CANONICAL} (or delete the entry)."
+        fi
+    fi
 else
     mkdir -p "$(dirname "$DEFAULT_SETTINGS_PATH")"
 
@@ -2367,10 +3893,12 @@ else
     # neither an object nor null (a string, say) fails the merge too. A
     # null one indexes to null and passes.
     if ! new_settings=$(printf '%s' "$existing" | jq \
-        --arg cmd "$help_cmd" '
+        --arg cmd "$help_cmd" --arg oldprefix "$OLD_HOOK_PREFIX" "$OLD_HOOK_OURS_JQ"'
             .hooks //= {}
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
+            | .hooks.SessionStart |= (if type == "array" then [.[] | select(ours | not)] else . end)
+            | .hooks.SessionEnd |= (if type == "array" then [.[] | select(ours | not)] else . end)
             | (
                 if any(.hooks.SessionStart | arrays | .[]; .hooks | arrays | any(.[]; .command == $cmd))
                   then .
@@ -2420,6 +3948,11 @@ else
         exit 4
     fi
 
+    # How many entries the merge removed as naming the old directory's binary.
+    old_hook_count=$(printf '%s' "$existing" | jq -r --arg oldprefix "$OLD_HOOK_PREFIX" "$OLD_HOOK_OURS_JQ"'
+        [(.hooks | objects) as $h | ("SessionStart", "SessionEnd") as $e | $h[$e] | arrays | .[] | select(ours)] | length
+    ' 2>/dev/null || echo 0)
+
     # Backup-before-edit: snapshot the prior settings.json (if any) into a
     # timestamped .bak alongside the original so a regressed jq filter is
     # recoverable. Only the *prior* contents are backed up; in-place
@@ -2435,6 +3968,9 @@ else
     ad_replace_keeping_mode "$DEFAULT_SETTINGS_PATH" "$new_settings"
 
     echo "  hooks   : injected into $DEFAULT_SETTINGS_PATH"
+    if [[ "$old_hook_count" =~ ^[0-9]+$ && "$old_hook_count" -gt 0 ]]; then
+        echo "  hooks   : removed $old_hook_count hook entries that named the old directory's binary (${OLD_HOOK_PREFIX})"
+    fi
 fi
 
 # --------------------------------------------------------------------
@@ -2529,16 +4065,154 @@ if [[ "$NO_HOOKS" -eq 0 ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Optional MCP registration
+# MCP registration: the optional `mcp add` (--register-mcp) and the check of
+# an earlier registration
+#
+# AD's MCP registration (SR-11.7). On every install, at this step (after the
+# store steps, never in pre-flight), Claude Code's `mcp get agent-director`
+# runs through "$CLAUDE_PROG" in the directory the install runs in (a `local`
+# registration belongs to that directory only). Its outcomes are told apart by
+# markers, never by the whole text: the exit status, a `Command:` line, an
+# `Args:` line, an `Environment:` block (an `Environment:` line with at least one
+# indented KEY=value line under it; counted only for the re-add) and the
+# `-s <scope>` in the line that says how to remove the server. `Status:`,
+# `Issue:` and `Timeout:` lines are ignored. The marker shapes below are
+# derived from SR-11.7's description of the output; SR-16.1 checks them on
+# real Claude Code.
+#
+#   non-zero exit                     none found: nothing changes; one line
+#                                     says so; --register-mcp adds as before
+#   exit 0, Command: the old binary,  with --register-mcp: remove and add
+#     Args: exactly `serve --stdio`,    again in that scope, then no plain
+#     no Environment: block             add; without it: both commands
+#                                       printed
+#   exit 0, Command: in the old       "another form": nothing changes; the
+#     directory with other Args or      installer says it could not read the
+#     an Environment: block, or no            registration, and prints the commands
+#     Command: line, or no scope        that re-point one; --register-mcp
+#                                       adds as before
+#   exit 0, any other Command:        nothing changes, nothing printed;
+#                                     --register-mcp adds as before
 # --------------------------------------------------------------------
 
-if [[ "$REGISTER_MCP" -eq 1 ]]; then
-    if claude mcp add agent-director "$CANONICAL" serve --stdio 2>/dev/null; then
-        echo "  mcp     : registered with claude mcp"
-    else
-        echo "  mcp     : registration failed (continuing anyway)" >&2
+MCP_KIND=""
+MCP_SCOPE=""
+
+# ad_mcp_classify — run `mcp get agent-director` and set MCP_KIND (none,
+# old_plain, old_other, other, unreadable) and MCP_SCOPE.
+#
+# The Environment block counts only when at least one indented KEY=value line
+# follows the `Environment:` line (have_env). Checked against these capture
+# shapes of `claude mcp get` (Claude Code 2.1.280):
+#   - a registration added with no -e: prints an `  Environment:` line with
+#     nothing under it (the stored env is `{}`); NOT an environment block
+#   - a registration added with -e KEY=value: `  Environment:` followed by
+#     one indented `    KEY=value` line per variable; an environment block
+#   - no `Environment:` line at all (older output): not an environment block
+# The block ends at the first line that is not an indented KEY=value (a blank
+# line, `To remove this server, run: ...`).
+ad_mcp_classify() {
+    local out rc=0 line raw cmd="" args="" have_cmd=0 have_env=0 in_env=0
+    MCP_KIND=none
+    MCP_SCOPE=""
+    out="$("$CLAUDE_PROG" mcp get agent-director 2>&1 </dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        return 0
     fi
-fi
+    while IFS= read -r raw; do
+        raw="${raw%$'\r'}"
+        line="${raw#"${raw%%[![:space:]]*}"}"
+        if [[ "$in_env" -eq 1 ]]; then
+            if [[ "$raw" =~ ^[[:space:]]+[A-Za-z_][A-Za-z0-9_]*= ]]; then
+                have_env=1
+                continue
+            fi
+            in_env=0
+        fi
+        case "$line" in
+            Command:*)
+                have_cmd=1
+                cmd="${line#Command:}"
+                cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+                cmd="${cmd%"${cmd##*[![:space:]]}"}"
+                ;;
+            Args:*)
+                args="${line#Args:}"
+                args="${args#"${args%%[![:space:]]*}"}"
+                args="${args%"${args##*[![:space:]]}"}"
+                ;;
+            Environment:*)
+                in_env=1
+                ;;
+            *"mcp remove"*)
+                if [[ "$line" =~ [[:space:]]-s[[:space:]]+([A-Za-z]+) ]]; then
+                    MCP_SCOPE="${BASH_REMATCH[1]}"
+                fi
+                ;;
+        esac
+    done <<<"$out"
+    if [[ "$have_cmd" -eq 0 ]]; then
+        MCP_KIND=unreadable
+    elif [[ "$cmd" == "${OLD_BIN_DIR}/agent-director" && "$args" == "serve --stdio" && "$have_env" -eq 0 && -n "$MCP_SCOPE" ]]; then
+        MCP_KIND=old_plain
+    elif [[ "$cmd" == "${OLD_INSTALL_ROOT}/"* ]]; then
+        MCP_KIND=old_other
+    else
+        MCP_KIND=other
+    fi
+}
+
+# ad_mcp_print_repoint <scope> — the two commands that re-point a
+# registration in <scope>.
+ad_mcp_print_repoint() {
+    printf '    %q mcp remove agent-director -s %s\n' "$CLAUDE_PROG" "$1"
+    printf '    %q mcp add -s %s agent-director %q serve --stdio\n' "$CLAUDE_PROG" "$1" "$CANONICAL"
+}
+
+ad_mcp_step() {
+    local plain_add="$REGISTER_MCP" scope
+    if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
+        ad_mcp_classify
+        scope="${MCP_SCOPE:-<scope>}"
+        case "$MCP_KIND" in
+            none)
+                echo "  mcp     : no agent-director registration found from this directory"
+                ;;
+            old_plain)
+                if [[ "$REGISTER_MCP" -eq 1 ]]; then
+                    plain_add=0
+                    if ! "$CLAUDE_PROG" mcp remove agent-director -s "$MCP_SCOPE" >/dev/null 2>&1; then
+                        echo "  mcp     : the registration names the old directory's binary, and removing it failed (continuing anyway); re-point it:" >&2
+                        ad_mcp_print_repoint "$MCP_SCOPE" >&2
+                    elif "$CLAUDE_PROG" mcp add -s "$MCP_SCOPE" agent-director "$CANONICAL" serve --stdio >/dev/null 2>&1; then
+                        echo "  mcp     : re-registered with claude mcp (scope $MCP_SCOPE): it named the old directory's binary"
+                    else
+                        echo "  mcp     : the old registration (scope $MCP_SCOPE) was removed, but adding it again failed (continuing anyway); add it with:" >&2
+                        printf '    %q mcp add -s %s agent-director %q serve --stdio\n' "$CLAUDE_PROG" "$MCP_SCOPE" "$CANONICAL" >&2
+                    fi
+                else
+                    echo "  mcp     : the registration from this directory (scope $MCP_SCOPE) names the old directory's binary, which is kept only until you delete it. Re-point it:"
+                    ad_mcp_print_repoint "$MCP_SCOPE"
+                fi
+                ;;
+            old_other|unreadable)
+                echo "  mcp     : could not read the registration from this directory as one this installer can re-point (it names the old directory's binary with other arguments or an environment, or its text was not as expected); it was left as it is. To re-point one that names the old directory (use the scope that 'mcp get agent-director' shows, and keep any arguments or environment you set):"
+                ad_mcp_print_repoint "$scope"
+                ;;
+            *)
+                ;;
+        esac
+    fi
+    if [[ "$plain_add" -eq 1 ]]; then
+        if "$CLAUDE_PROG" mcp add agent-director "$CANONICAL" serve --stdio 2>/dev/null; then
+            echo "  mcp     : registered with claude mcp"
+        else
+            echo "  mcp     : registration failed (continuing anyway)" >&2
+        fi
+    fi
+}
+
+ad_mcp_step
 
 echo "  admin   : $ADMIN_CANONICAL (operator tool, not on PATH; run it only with a human's explicit approval for that run)"
 echo "install.sh: done. Try: $CANONICAL help"

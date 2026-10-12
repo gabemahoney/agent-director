@@ -178,6 +178,13 @@ mkdir -p "$FAKES" "$ROOT/tmp"
 fake() { cat >"$FAKES/$1"; chmod 0755 "$FAKES/$1"; }
 fake claude <<'EOF'
 #!/bin/bash
+# `mcp get` finds no registration (non-zero), as Claude Code does for a server
+# it does not know; install.sh reads any other answer as a registration in
+# another form. Every other call answers as before: its version line, exit 0.
+if [[ "${1:-}" == mcp && "${2:-}" == get ]]; then
+    echo "No MCP server found with name: ${3:-}" >&2
+    exit 1
+fi
 echo "0.0.0 (fake claude, b.kym install-sh retry)"
 EOF
 fake sleep <<'EOF'

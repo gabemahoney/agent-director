@@ -155,6 +155,11 @@ func oldPathRules(t testing.TB, srcs []scanSource) *scanRules {
 		{file: "skills/install-agent-director/uninstall.sh", reason: "SR-11.7: the uninstaller's presence check"},
 		{file: "docs/install.md", heading: "Upgrade", reason: "SR-11.7: the upgrade moves the old directory"},
 		{file: "docs/operator-actions.md", heading: "A verb refuses with `ErrOldLayout`", reason: "SR-11.7: the refusal names the old directory"},
+		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrMoveConflict`", reason: "SR-11.7: the refusal names the old directory"},
+		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrAgentsLive`", reason: "SR-11.7: the refusal names the old directory"},
+		{file: "docs/operator-actions.md", heading: "`install.sh` stops with `ErrMoveFailed`", reason: "SR-11.7: the stop names the old directory"},
+		{file: "docs/operator-actions.md", heading: "Going back to the previous release", reason: "SR-11.7: going back names the old directory"},
+		{file: "docs/architecture.md", heading: "Moving agent-director's directory", reason: "SR-11.7: the move's design names the old directory"},
 	}
 	for _, src := range srcs {
 		if strings.HasPrefix(src.name, "tools/measure-exit/") {

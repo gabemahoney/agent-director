@@ -1,5 +1,5 @@
 // Package installsh_test runs install.sh's b.fji literal-follow tests
-// (advice_follow.sh, advice inventory J1-J22) under go test, so make
+// (advice_follow.sh, advice inventory J1-J26 and G8) under go test, so make
 // test-sandbox runs them and a change to install.sh's advice turns it red.
 package installsh_test
 
@@ -18,7 +18,9 @@ import (
 
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
-	os.Exit(m.Run())
+	code := m.Run()
+	moveFixtureShutdown() // os.Exit skips deferred calls; the fixture's shared build dir goes here
+	os.Exit(code)
 }
 
 // cli2Inputs are what advice_follow.sh runs or builds from, relative to the
@@ -36,18 +38,25 @@ const cli2SkipRC = 77
 // cli2SkipLine matches that line; the group is the reason.
 var cli2SkipLine = regexp.MustCompile(`(?m)^advice_follow\.sh: SKIP: (.+)$`)
 
-// cli2TrackInputs walks cli2Inputs. go test caches a pass keyed only on the
-// files the test process reads, so this makes a change to any of them rerun it.
+// cli2TrackInputs walks cli2Inputs and stats every file in them. go test
+// caches a pass keyed only on the files the test process opens or stats (a
+// directory walk lists names only), so this makes a change to any of them,
+// install.sh and uninstall.sh included, rerun it.
 func cli2TrackInputs(t *testing.T) {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	skip := filepath.Join(root, "pkg", "ts-bun-client")
 	for _, in := range cli2Inputs {
 		err := filepath.WalkDir(filepath.Join(root, in), func(path string, d fs.DirEntry, err error) error {
-			if err == nil && d.IsDir() && path == skip {
+			switch {
+			case err != nil:
+				return nil // an entry that vanishes mid-walk only changes what is tracked
+			case d.IsDir() && path == skip:
 				return fs.SkipDir
+			case !d.IsDir():
+				_, _ = os.Lstat(path)
 			}
-			return nil // an entry that vanishes mid-walk only changes what is tracked
+			return nil
 		})
 		if err != nil {
 			t.Fatalf("walk %s: %v", in, err)
@@ -55,9 +64,9 @@ func cli2TrackInputs(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_J_InstallShScript: J1-J22, each test_* in advice_follow.sh a
-// subtest with its own result; known-broken ones skip unless the gate is set.
-// On a host install.sh refuses, the whole test skips with the script's reason.
+// TestAdviceFollow_J_InstallShScript: J1-J26 and G8, each test_* in
+// advice_follow.sh a subtest with its own result; known-broken ones skip unless
+// the gate is set. On a host install.sh refuses, the whole test skips with the script's reason.
 func TestAdviceFollow_J_InstallShScript(t *testing.T) {
 	if os.Getenv(sandboxguard.EnvVar) != "1" {
 		t.Skipf("advice_follow.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
@@ -66,7 +75,9 @@ func TestAdviceFollow_J_InstallShScript(t *testing.T) {
 	t.Logf("AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=%q", os.Getenv("AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE"))
 	cli2TrackInputs(t)
 
-	out, err := exec.Command("bash", "advice_follow.sh").CombinedOutput()
+	cmd := exec.Command("bash", "advice_follow.sh")
+	cmd.Env = append(os.Environ(), "ADVICE_FOLLOW_ONLY=") // the script's test filter is for a developer's own runs
+	out, err := cmd.CombinedOutput()
 
 	var exitErr *exec.ExitError
 	skipRC := errors.As(err, &exitErr) && exitErr.ExitCode() == cli2SkipRC

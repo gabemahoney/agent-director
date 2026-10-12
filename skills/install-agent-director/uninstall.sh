@@ -3,7 +3,10 @@
 #
 # Per SRD §16.2. By default:
 #   - Remove the two help hook entries from ~/.claude/settings.json
-#     (preserving any other user hooks).
+#     (preserving any other user hooks), and any entry whose hook
+#     command starts with the old directory's bin/agent-director path
+#     (~/.agent-director/bin/agent-director: the help hooks an install
+#     before the move to ~/.config/agent-director wrote).
 #   - Remove the canonical binary and any `.prior` rollback snapshot
 #     under ~/.config/agent-director/bin/.
 #   - Remove the operator tool ~/.config/agent-director/admin/agent-director-admin,
@@ -14,11 +17,35 @@
 #   - Leave ~/.config/agent-director/ intact (the operator may want to
 #     keep their templates / state.db history).
 #
+# It works on ~/.config/agent-director. When only ~/.agent-director is
+# present (an install never moved to the new directory), it works on
+# that directory instead, the same way. A ~/.agent-director that is a
+# link to ~/.config/agent-director (a compatibility link) is no old
+# directory.
+#
+# Without --purge it names, and leaves, every other AD directory it
+# finds: each ~/.agent-director.pre-move-* (the old directory the move
+# kept), each ~/.config/agent-director.after-upgrade-* and
+# ~/.agent-director.recreated-* (left by the way back in
+# operator-actions.md), a ~/.agent-director present beside the new
+# directory, and each *.aside-* directory (set aside to settle a
+# conflict). Delete the kept, after-upgrade and recreated ones once the
+# upgrade is confirmed.
+#
 # Flags:
 #   --purge              Also rm -rf ~/.config/agent-director (templates +
-#                        state.db). Requires --force or an interactive
-#                        confirmation, asked before anything is removed
-#                        or changed.
+#                        state.db) and every other AD directory it finds:
+#                        each ~/.agent-director.pre-move-*, each
+#                        ~/.config/agent-director.after-upgrade-* and
+#                        ~/.agent-director.recreated-*, a ~/.agent-director
+#                        beside the new directory, and a compatibility link
+#                        ~/.agent-director. A link is removed as a link,
+#                        never what it points to. Every *.aside-*
+#                        directory is left (it may hold data an operator
+#                        did not choose), and named. Requires --force or
+#                        an interactive confirmation, which names each
+#                        directory, asked before anything is removed or
+#                        changed.
 #   --force              Skip the --purge confirmation prompt.
 #   --mcp-also           Also run `claude mcp remove agent-director`.
 #   --symlink-dir <dir>  Look for the PATH symlink at <dir>; default
@@ -26,10 +53,14 @@
 
 set -euo pipefail
 
-readonly DEFAULT_INSTALL_ROOT="${HOME}/.config/agent-director"
-readonly DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
-readonly DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
+# AD's directory, and the one an earlier release kept its files in (SR-11.7).
+# DEFAULT_INSTALL_ROOT, below the helper functions, is the one this run works
+# on: the new directory, or the old one when only that is present.
+readonly NEW_INSTALL_ROOT="${HOME}/.config/agent-director"
+readonly OLD_INSTALL_ROOT="${HOME}/.agent-director"
 readonly DEFAULT_SETTINGS_PATH="${HOME}/.claude/settings.json"
+# The program every Claude Code command here runs.
+CLAUDE_PROG=claude
 
 PURGE=0
 FORCE=0
@@ -138,12 +169,121 @@ ad_backup_keeping_mode() {
     chmod "$(ad_mode_of "$1")" "$2"
 }
 
+# ad_clean_path <path> — print <path> cleaned as install.sh's ad_clean_path
+# does (Go's filepath.Clean on Unix).
+ad_clean_path() {
+    local rest="$1" out="" seg root=""
+    if [[ "$rest" == /* ]]; then
+        root=/
+    fi
+    while [[ -n "$rest" ]]; do
+        seg="${rest%%/*}"
+        if [[ "$seg" == "$rest" ]]; then rest=""; else rest="${rest#*/}"; fi
+        case "$seg" in
+            ""|.) ;;
+            ..)
+                if [[ -n "$out" && "$out" != .. && "$out" != */.. ]]; then
+                    if [[ "$out" == */* ]]; then out="${out%/*}"; else out=""; fi
+                elif [[ -z "$root" ]]; then
+                    out="${out:+$out/}.."
+                fi
+                ;;
+            *) out="${out:+$out/}$seg" ;;
+        esac
+    done
+    out="${root}${out}"
+    printf '%s\n' "${out:-.}"
+}
+
+# --------------------------------------------------------------------
+# Which AD directory this run works on (SR-11.4, SR-11.7).
+#
+# ~/.agent-director is present when anything is at that name (a dangling link
+# included), except a compatibility link: a link whose raw target, read
+# against $HOME when relative and cleaned, is ~/.config/agent-director,
+# whether or not that target exists. That link counts as no old directory.
+# A run works on ~/.config/agent-director; when only ~/.agent-director is
+# present (never moved) it works on that directory instead.
+#
+# The presence rule and the compatibility-link test below are inlined copies
+# of install.sh's (OLD_PRESENT, ad_is_compat_link): keep in step with
+# install.sh's OLD_PRESENT test and ad_is_compat_link, and change both
+# together.
+# --------------------------------------------------------------------
+
+old_present=0
+compat_link=0
+if [[ -e "$OLD_INSTALL_ROOT" || -L "$OLD_INSTALL_ROOT" ]]; then
+    old_present=1
+    if [[ -L "$OLD_INSTALL_ROOT" ]]; then
+        compat_target=$(readlink "$OLD_INSTALL_ROOT" 2>/dev/null || true)
+        case "$compat_target" in
+            /*) ;;
+            *) compat_target="${HOME}/${compat_target}" ;;
+        esac
+        if [[ "$(ad_clean_path "$compat_target")" == "$(ad_clean_path "$NEW_INSTALL_ROOT")" ]]; then
+            old_present=0
+            compat_link=1
+        fi
+    fi
+fi
+new_present=0
+if [[ -e "$NEW_INSTALL_ROOT" || -L "$NEW_INSTALL_ROOT" ]]; then
+    new_present=1
+fi
+if [[ "$old_present" -eq 1 && "$new_present" -eq 0 ]]; then
+    DEFAULT_INSTALL_ROOT="$OLD_INSTALL_ROOT"
+else
+    DEFAULT_INSTALL_ROOT="$NEW_INSTALL_ROOT"
+fi
+DEFAULT_BIN_DIR="${DEFAULT_INSTALL_ROOT}/bin"
+DEFAULT_ADMIN_DIR="${DEFAULT_INSTALL_ROOT}/admin"
+
+# The other AD directories this run names, and removes under --purge. A
+# kept, after-upgrade or recreated directory, a ~/.agent-director beside the
+# new directory, and a compatibility link are purge_extras (removed by
+# --purge; a link as a link); every *.aside-* directory is an aside (named,
+# never removed). purge_extra_kinds holds one line of text per purge_extras
+# entry, saying what it is.
+purge_extras=()
+purge_extra_kinds=()
+asides=()
+for f in "${HOME}"/.agent-director.pre-move-*; do
+    [[ -e "$f" || -L "$f" ]] || continue
+    purge_extras+=("$f")
+    purge_extra_kinds+=("the old directory an upgrade kept")
+done
+for f in "${HOME}"/.config/agent-director.after-upgrade-*; do
+    [[ -e "$f" || -L "$f" ]] || continue
+    purge_extras+=("$f")
+    purge_extra_kinds+=("the directory the way back set aside")
+done
+for f in "${HOME}"/.agent-director.recreated-*; do
+    [[ -e "$f" || -L "$f" ]] || continue
+    purge_extras+=("$f")
+    purge_extra_kinds+=("a recreated old directory the way back set aside")
+done
+if [[ "$DEFAULT_INSTALL_ROOT" == "$NEW_INSTALL_ROOT" && "$old_present" -eq 1 ]]; then
+    purge_extras+=("$OLD_INSTALL_ROOT")
+    purge_extra_kinds+=("an old directory recreated beside the new one")
+fi
+if [[ "$compat_link" -eq 1 ]]; then
+    purge_extras+=("$OLD_INSTALL_ROOT")
+    purge_extra_kinds+=("a compatibility link to the new directory")
+fi
+for f in "${HOME}"/.agent-director.aside-* "${HOME}"/.config/agent-director.aside-*; do
+    [[ -e "$f" || -L "$f" ]] || continue
+    asides+=("$f")
+done
+
 # --------------------------------------------------------------------
 # Remove hook entries from ~/.claude/settings.json.
 # Match by a command starting with the install root's binary path
-# (hook_prefix), so the script only removes ITS entries — other user
-# hooks survive verbatim. The new contents are worked out here and written
-# after the symlink check below (b.nw5), as config.toml's are.
+# (hook_prefix) or the old directory's (old_hook_prefix: the help hooks an
+# install before the move to ~/.config/agent-director wrote, SR-11.4), so
+# the script only removes ITS entries — other user hooks survive verbatim.
+# The new contents are worked out here and written after the symlink check
+# below (b.nw5), as config.toml's are.
 #
 # The filter writes one result per JSON document it reads, so the file's
 # documents are counted first (b.zbg), as install.sh counts them. A file
@@ -182,15 +322,17 @@ ad_backup_keeping_mode() {
 # on.
 # --------------------------------------------------------------------
 
-hook_prefix="${DEFAULT_BIN_DIR}/agent-director"
-# ours, for the filter and the symlink branch's count below.
+hook_prefix="${NEW_INSTALL_ROOT}/bin/agent-director"
+old_hook_prefix="${OLD_INSTALL_ROOT}/bin/agent-director"
+# ours, for the filter and the symlink branch's count below: a command
+# starting with either directory's bin/agent-director path.
 hook_ours_jq='
     def ours:
       type == "object"
       and (.hooks | type) == "array"
       and any(.hooks[]; type == "object"
         and (.command | type) == "string"
-        and (.command | startswith($prefix)));
+        and ((.command | startswith($prefix)) or (.command | startswith($oldprefix))));
 '
 settings_edit=0
 if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
@@ -213,7 +355,7 @@ if [[ -f "$DEFAULT_SETTINGS_PATH" ]]; then
         echo "uninstall.sh: ~/.claude/settings.json is valid JSON, but not an object whose hooks hold event lists; leaving it alone" >&2
     elif [[ "$settings_docs" -eq 1 ]]; then
         if new=$(printf '%s' "$existing" | jq \
-            --arg prefix "$hook_prefix" "$hook_ours_jq"'
+            --arg prefix "$hook_prefix" --arg oldprefix "$old_hook_prefix" "$hook_ours_jq"'
             .hooks //= {}
             | .hooks.SessionStart //= []
             | .hooks.SessionEnd //= []
@@ -355,7 +497,7 @@ if [[ "$settings_edit" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH
     # either; should jq fail anyway, the file is left alone with the
     # filter's note and the uninstall goes on (b.ak5).
     if ! removed=$(printf '%s' "$existing" | jq \
-        --arg prefix "$hook_prefix" "$hook_ours_jq"'
+        --arg prefix "$hook_prefix" --arg oldprefix "$old_hook_prefix" "$hook_ours_jq"'
         .hooks //= {}
         | [(.hooks.SessionStart // []), (.hooks.SessionEnd // []) | .[] | select(ours)]
         | length
@@ -368,7 +510,7 @@ if [[ "$settings_edit" -eq 1 ]] && ! ad_link_write_check "$DEFAULT_SETTINGS_PATH
     else
         ad_link_refuse "$DEFAULT_SETTINGS_PATH" "remove agent-director's hook entries from" \
             "each SessionStart and SessionEnd entry holding a hook whose command starts" \
-            "with $hook_prefix."
+            "with $hook_prefix or $old_hook_prefix."
     fi
 fi
 
@@ -384,7 +526,17 @@ fi
 
 purge_aborted=0
 if [[ "$PURGE" -eq 1 && "$FORCE" -eq 0 ]]; then
-    printf "uninstall.sh: --purge will rm -rf %s — proceed? [y/N] " "$DEFAULT_INSTALL_ROOT"
+    purge_prompt="uninstall.sh: --purge will rm -rf ${DEFAULT_INSTALL_ROOT}"
+    if [[ "${#purge_extras[@]}" -gt 0 ]]; then
+        purge_prompt="${purge_prompt}, and also remove these other AD directories (a link is removed as a link, never what it points to):"
+        for ((i = 0; i < ${#purge_extras[@]}; i++)); do
+            purge_prompt="${purge_prompt} ${purge_extras[$i]} (${purge_extra_kinds[$i]})"
+            if [[ "$i" -lt $((${#purge_extras[@]} - 1)) ]]; then
+                purge_prompt="${purge_prompt},"
+            fi
+        done
+    fi
+    printf "%s — proceed? [y/N] " "$purge_prompt"
     read -r answer
     case "$answer" in
         y|Y|yes|YES) ;;
@@ -473,8 +625,8 @@ fi
 # --------------------------------------------------------------------
 
 if [[ "$MCP_ALSO" -eq 1 ]]; then
-    if command -v claude >/dev/null 2>&1; then
-        claude mcp remove agent-director 2>/dev/null || true
+    if command -v "$CLAUDE_PROG" >/dev/null 2>&1; then
+        "$CLAUDE_PROG" mcp remove agent-director 2>/dev/null || true
         echo "uninstall.sh: deregistered agent-director from MCP"
     fi
 fi
@@ -484,6 +636,24 @@ fi
 # symlink under ~/.config/agent-director, not the file it points to.
 # --------------------------------------------------------------------
 
+# Without a confirmed --purge, every other AD directory found is kept and
+# named, with the advice to delete it once the upgrade is confirmed.
+if [[ "$PURGE" -eq 0 ]]; then
+    for ((i = 0; i < ${#purge_extras[@]}; i++)); do
+        # A compatibility link is no directory to delete once the upgrade is
+        # confirmed; only --purge removes it, so it is not named here.
+        if [[ "${purge_extra_kinds[$i]}" == "a compatibility link"* ]]; then
+            continue
+        fi
+        echo "uninstall.sh: kept ${purge_extras[$i]} (${purge_extra_kinds[$i]}); delete it once the upgrade is confirmed, or run --purge"
+    done
+fi
+# Every aside is left, under --purge too: an operator set it aside to settle
+# a conflict, and it may hold the data not chosen.
+for f in ${asides[@]+"${asides[@]}"}; do
+    echo "uninstall.sh: left $f (set aside to settle a conflict; it may hold data you did not choose, so --purge leaves it); delete it yourself once you are sure it is not needed"
+done
+
 if [[ "$purge_aborted" -eq 1 ]]; then
     echo "uninstall.sh: --purge aborted"
     exit 0
@@ -491,6 +661,10 @@ fi
 if [[ "$PURGE" -eq 1 ]]; then
     rm -rf "$DEFAULT_INSTALL_ROOT"
     echo "uninstall.sh: purged $DEFAULT_INSTALL_ROOT"
+    for ((i = 0; i < ${#purge_extras[@]}; i++)); do
+        rm -rf "${purge_extras[$i]}"
+        echo "uninstall.sh: purged ${purge_extras[$i]} (${purge_extra_kinds[$i]})"
+    done
 fi
 
 echo "uninstall.sh: done"

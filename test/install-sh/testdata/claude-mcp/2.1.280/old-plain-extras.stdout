@@ -1,0 +1,11 @@
+agent-director:
+  Scope: Local config (private to you in this project)
+  Status: ✓ Connected
+  Type: stdio
+  Command: @HOME@/.agent-director/bin/agent-director
+  Args: serve --stdio
+  Issue: Command not found: the file does not exist
+  Timeout: 30000ms
+  Environment:
+
+To remove this server, run: claude mcp remove "agent-director" -s local

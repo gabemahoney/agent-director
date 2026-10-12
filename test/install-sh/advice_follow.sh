@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # advice_follow.sh — b.fji literal-follow tests for install.sh's own advice
-# (advice inventory J1-J22). Each test triggers one install.sh refusal, checks
-# the advice text word for word, does exactly what the text says (re-runs the
-# same command, runs the advised command, puts the missing tool on PATH) and
-# checks the promised outcome.
+# (advice inventory J1-J26, and G8 for the binary's ErrOldLayout). Each test
+# triggers one install.sh refusal, checks the advice text word for word, does
+# exactly what the text says (re-runs the same command, runs the advised
+# command, puts the missing tool on PATH) and checks the promised outcome.
 #
 # Sandbox only: it builds and runs agent-director binaries. make test-sandbox
 # runs it through advice_follow_test.go; alone, run
@@ -13,6 +13,10 @@
 # a toolbox of links and fakes (fake claude, file when the image lacks it, curl
 # that never touches the network, an instant sleep) and `env -i`, so nothing
 # can reach the real ~/.config/agent-director.
+#
+# ADVICE_FOLLOW_ONLY=<extended regex> runs only the tests whose names match. The
+# move tests (J23-J26, G8) build the previous release's binary from its git tag
+# (v0.11.1) when they need it, and skip with the reason in a checkout without it.
 #
 # Advice that does not work as written is a known-broken test: it is skipped
 # unless AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1, which runs it and shows it
@@ -168,7 +172,7 @@ var version, commit, around string
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
-		fmt.Printf("{\"version\":%q,\"commit\":%q}\n", version, commit)
+		fmt.Printf("{\"version\":%q,\"commit\":%q,\"config_dir\":\"~/.config/agent-director\"}\n", version, commit)
 		return
 	}
 	mode, _ := os.ReadFile(filepath.Join(os.Getenv("HOME"), "fake-list"))
@@ -366,7 +370,9 @@ mktemp_fails "$SENTINEL_MKTEMP_FAILS" '*/migrate-authorized.tmp.*' "Permission d
 
 # ---- harness ---------------------------------------------------------------
 
-pass=0 fail=0 skip=0
+pass=0 fail=0 skip=0 skip_broken=0 skip_tag=0
+# T_SKIPPED: 0 ran, 1 skipped as known-broken advice, 2 skipped for a git tag
+# the checkout lacks.
 T_FAILED=0 T_SKIPPED=0 RUN_N=0 RC=0 OUT="" ERR=""
 FAKE_CURL_STATUS=200 FAKE_CURL_ADMIN_STATUS="" FAKE_CURL_API_TAG="" FAKE_SQLITE3_FAIL_CALL=0 FAKE_SQLITE3_ANSWER=""
 FAKE_SQLITE3_ERR="" FAKE_SQLITE3_RC=0 PATH_EXTRA=""
@@ -516,6 +522,11 @@ run_test() {
         fail=$((fail + 1)); echo "--- FAIL: $1"
     elif [[ "$T_SKIPPED" -ne 0 ]]; then
         skip=$((skip + 1)); echo "--- SKIP: $1"
+        if [[ "$T_SKIPPED" -eq 2 ]]; then
+            skip_tag=$((skip_tag + 1))
+        else
+            skip_broken=$((skip_broken + 1))
+        fi
     else
         pass=$((pass + 1)); echo "--- PASS: $1"
     fi
@@ -1657,10 +1668,13 @@ test_J9_NoCommitStampMakeBuild() {
 
 # ---- J10: --from-release of a release before 0.11.0 (b.vqr) ------------------
 
-# J10: "install release 0.11.0 or later: bash $0 --from-release <tag of v0.11.0
-# or later>": the missing agent-director-admin asset of a release before 0.11.0
-# is refused at once, with no retry and no gh fallback (gh on PATH) and nothing
-# installed; the advised release installs both.
+# J10: "install this release or later: bash $0 --from-release <tag of this
+# release or later>" and "or install an earlier release with that release's own
+# install.sh, fetched from its tag, rather than this one": the missing
+# agent-director-admin asset of a release before 0.11.0 is refused at once, with
+# no retry and no gh fallback (gh on PATH) and nothing installed; the advised
+# release installs both. (The advice names no 0.11.x tag: every 0.11.x is
+# refused, as it has no config_dir.)
 test_J10_PreAdminReleaseInstallNewer() {
     local h cmd tag=v0.10.0
     h="$(new_home)"
@@ -1672,11 +1686,12 @@ test_J10_PreAdminReleaseInstallNewer() {
     [[ "$(head -n 1 "$ERR")" == "$want" ]] || bad "first stderr line \"$(head -n 1 "$ERR")\"; want \"$want\""
     grep -qF "asset not yet available" "$ERR" && bad "the agent-director-admin asset was retried"
     grep -qF "gh release download" "$ERR" && bad "the gh fallback was tried"
-    expect_advice "install release 0.11.0 or later: bash $LOOSE --from-release <tag of v0.11.0 or later>"
+    expect_advice "- install this release or later: bash $LOOSE --from-release <tag of this release or later>"
+    expect_advice "- or install an earlier release with that release's own install.sh, fetched from its tag, rather than this one"
     expect_nothing_installed "$h"
-    cmd="$(advice_after "install release 0.11.0 or later: ")" || { bad "no advised command"; return; }
-    FAKE_CURL_ADMIN_STATUS="" # a release from 0.11.0 on ships agent-director-admin
-    run_advised "$h" "$ROOT" "${cmd/<tag of v0.11.0 or later>/$REL_TAG}"
+    cmd="$(advice_after "install this release or later: ")" || { bad "no advised command"; return; }
+    FAKE_CURL_ADMIN_STATUS="" # the release this install.sh belongs to ships agent-director-admin
+    run_advised "$h" "$ROOT" "${cmd/<tag of this release or later>/$REL_TAG}"
     expect_rc 0 "advised: $cmd" && expect_installed "$h" "$BIN" "$ADMIN"
 }
 
@@ -2368,7 +2383,7 @@ test_J17_ExitFiveCauseLineDecidesRemedy() {
     local -a J7ARGV # j17_fake sets its own
     run "$(new_home)" bash "$LOOSE" --help
     expect_rc 0 "install.sh --help" || return
-    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), or, when the store open fails another way, agent-director'"'"'s own err_name.'* ]] \
+    [[ "$(flat "$OUT")" == *'Every exit 5 ends with one line on stderr, its last, naming the cause: `install.sh: err_name=<Name>`. Branch on <Name>, never on the text above it: ErrVersionUnreadable (re-run), ErrConfigMalformed (fix config.toml, then re-run), ErrSchemaMismatch (install a newer agent-director), ErrSchemaVerifyFailed (needs a human), ErrMoveConflict (the directory layout cannot be moved as it is: the message names the one cause and its remedy; change nothing else, apply the remedy, re-run), ErrAgentsLive (an agent or an agent-director process runs against the old ~/.agent-director, or its live rows could not be read: stop whatever starts agents, then every agent, every serve and every caller, and re-run; a re-run reads the rows again), ErrMoveFailed (moving ~/.agent-director to ~/.config/agent-director failed before the rename, a full disk being the usual cause: the partial new directory was removed and the old directory is untouched; fix the cause and re-run), or, when the store open fails another way, agent-director'"'"'s own err_name.'* ]] \
         || bad "--help lacks the cause-line contract: $(flat "$OUT")"
     while IFS='|' read -r setup headline name fix <&3; do
         J7ARGV=("${argv0[@]}") J17_RELAY=""
@@ -2755,9 +2770,590 @@ test_J22_NoStoreAfterOpenCheckAndRerun() {
     done
 }
 
+# ---- J23-J26, G8: the move of ~/.agent-director (SR-11.7) --------------------------
+
+# The old layout's binary and store are the previous release's, built from its
+# git tag the first time a test needs them (not at start-up: most tests never
+# do): a current binary refuses an old-layout home (ErrOldLayout), so only the
+# old one can run the `find-missing` ErrAgentsLive advises, and only it makes a
+# store in the shape the move carries over. A checkout without the tag skips
+# the tests that need it, with the reason.
+OLD_REL_TAG=v0.11.1
+OLD_REL_BIN="$ROOT/bin/agent-director-$OLD_REL_TAG"
+OLD_REL_STORE="$ROOT/old-release-store.db"
+OLD_REL_STATE=""
+
+# need_old_release: build $OLD_REL_BIN and make $OLD_REL_STORE (a store of that
+# release with no rows); fail when this checkout has no $OLD_REL_TAG.
+need_old_release() {
+    local src="$ROOT/old-release-src" h="$ROOT/old-release-home"
+    case "$OLD_REL_STATE" in ok) return 0 ;; no) return 1 ;; esac
+    if ! git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$OLD_REL_TAG^{commit}" >/dev/null 2>&1; then
+        OLD_REL_STATE=no
+        return 1
+    fi
+    mkdir -p "$src" "$h" || die "mkdir for $OLD_REL_TAG"
+    git -C "$REPO_ROOT" archive "$OLD_REL_TAG" | tar -x -C "$src" || die "extract $OLD_REL_TAG"
+    (cd "$src" && CGO_ENABLED=0 go build -o "$OLD_REL_BIN" ./cmd/agent-director) || die "go build $OLD_REL_TAG"
+    mkdir -p "$h/.agent-director" || die "mkdir $h/.agent-director"
+    HOME="$h" "$OLD_REL_BIN" list >/dev/null || die "$OLD_REL_TAG list"
+    "$SQLITE" "$h/.agent-director/state.db" ".backup \"$OLD_REL_STORE\"" || die "copy the $OLD_REL_TAG store"
+    OLD_REL_STATE=ok
+}
+
+# old_release_or_skip: need_old_release, or skip the rest of this test.
+old_release_or_skip() {
+    need_old_release && return 0
+    echo "    SKIP: git tag $OLD_REL_TAG is not in this checkout: the old layout's binary and store are built from it"
+    T_SKIPPED=2
+    return 1
+}
+
+# old_home<home> [store]: <home>/.agent-director as an install of the previous
+# release left it: bin/agent-director, a config.toml and a template. With
+# `store` the binary is that release's own and state.db its (empty) store;
+# without, the binary is only a file and there is no store, so the install
+# makes a new one.
+old_home() {
+    local o="$1/.agent-director"
+    mkdir -p "$o/bin" "$o/templates" || die "mkdir $o"
+    chmod 00700 "$o"
+    if [[ "${2:-}" == store ]]; then
+        cp "$OLD_REL_BIN" "$o/bin/agent-director" && cp "$OLD_REL_STORE" "$o/state.db" && chmod 0600 "$o/state.db" \
+            || die "old_home $1: store"
+    else
+        cp "$BIN_OLD" "$o/bin/agent-director" || die "old_home $1: binary"
+    fi
+    printf '# the old config\n' >"$o/config.toml"
+    printf '# the old template\n' >"$o/templates/t1.toml"
+}
+
+# old_row <home> <id> <state>: a row in <home>'s old store. A live state's
+# agent is gone (its pid is none), as after a crash.
+old_row() {
+    "$SQLITE" "$1/.agent-director/state.db" "INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, pid, proc_starttime)
+        VALUES ('$2', '$3', '/tmp', 's-$2', 'off', 4194000, '1');" || die "old_row $2"
+}
+
+# MOVE_ARGV: the install the move tests run, as often as they re-run it.
+MOVE_ARGV=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-hooks --no-symlink)
+
+# cmds_after <marker>: the commands the last run's stderr advises under its
+# first line holding marker: the lines after it indented four spaces (the
+# message indents two, the command two more), each trimmed.
+cmds_after() {
+    awk -v m="$1" 'f { if ($0 ~ /^    [^ ]/) { sub(/^ +/, ""); print; next } exit } index($0, m) { f = 1 }' "$ERR"
+}
+
+# aside_of <marker>: the last word of the first command under marker, the name
+# a `mv` advised there sets a directory aside to.
+aside_of() {
+    local c
+    local -a w
+    c="$(cmds_after "$1" | head -n 1)"
+    eval "w=($c)"
+    printf '%s' "${w[${#w[@]} - 1]}"
+}
+
+# follow_cmds <home> <marker>: run, as written and in order, every command
+# advised under marker; each must succeed. Fails (the test is told) with none.
+follow_cmds() {
+    local cmd n=0
+    while IFS= read -r cmd; do
+        n=$((n + 1))
+        run_advised "$1" "$ROOT" "$cmd"
+        expect_rc 0 "advised: $cmd" || return 1
+    done < <(cmds_after "$2")
+    [[ "$n" -gt 0 ]] || { bad "no command advised under \"$2\": $(flat "$ERR")"; return 1; }
+}
+
+# move_refused <home> <headline> [<phrase>...]: MOVE_ARGV in <home> exits 5,
+# ErrMoveConflict, with the headline on a line of its own and each phrase in
+# the message (spaces squeezed, lines joined), and changes nothing: the home is
+# as it was.
+move_refused() {
+    local h="$1" headline="$2" before p
+    shift 2
+    before="$(j14_snap "$h")"
+    run "$h" "${MOVE_ARGV[@]}"
+    expect_exit5 ErrMoveConflict "$headline" || return 1
+    grep -qxF "install.sh: $headline" "$ERR" || { bad "no \"install.sh: $headline\" line: $(flat "$ERR")"; return 1; }
+    expect_advice "Nothing was installed or changed. Re-run this install after the change."
+    for p in "$@"; do expect_advice "$p"; done
+    [[ "$(j14_snap "$h")" == "$before" ]] || bad "$headline: the refusal changed the home: $(diff <(printf '%s\n' "$before") <(j14_snap "$h") | head -n 6)"
+}
+
+# moved <home> <what> [<db>]: the last run (the re-run) exited 0 having moved
+# the old directory: both binaries installed in the new one, which holds the old
+# config.toml and template and a store at the current schema (<db>, default
+# state.db), the old directory kept under its .pre-move name and the marker gone.
+# Sets KEPT to the kept directory; call it directly, never in a subshell, which
+# would lose its failures.
+KEPT=""
+moved() {
+    local h="$1" n="$h/.config/agent-director" db="${3:-$h/.config/agent-director/state.db}"
+    local -a kepts
+    KEPT=""
+    expect_rc 0 "$2: re-run" || return 1
+    if [[ -z "${3:-}" ]]; then
+        expect_installed "$h" "$BIN" "$ADMIN"
+    else # [store] db_path puts the store elsewhere: the binaries only
+        cmp -s "$n/bin/agent-director" "$BIN" && cmp -s "$n/admin/agent-director-admin" "$ADMIN" || bad "$2: the binaries are not installed in $n"
+    fi
+    kepts=("$h"/.agent-director.pre-move-*)
+    if [[ ${#kepts[@]} -ne 1 || ! -d "${kepts[0]}" ]]; then
+        bad "$2: the kept directories are ${kepts[*]}; want one $h/.agent-director.pre-move-<time>"
+        return 1
+    fi
+    KEPT="${kepts[0]}"
+    [[ ! -e "$h/.agent-director" ]] || bad "$2: $h/.agent-director is still there"
+    [[ ! -e "$n/.move-incomplete" ]] || bad "$2: the marker is still in $n"
+    [[ "$("$SQLITE" "$db" 'PRAGMA user_version;')" == "$SCHEMA" ]] || bad "$2: the store $db is not at v$SCHEMA"
+    grep -qF "kept    : $KEPT" "$OUT" || bad "$2: the run does not say it kept $KEPT: $(flat "$OUT")"
+}
+
+# ---- J23: ErrMoveConflict ---------------------------------------------------
+
+# J23: "<headline>; refusing to install." with the cause and its remedy:
+# "Remove it, or fix it so it names a directory, then re-run: rm -- <new>",
+# "Rename it aside, or fix it so it is a directory, then re-run: mv -- <new>
+# <new>.aside-<time>", "Remove it, then re-run: rm -- <old>". Each is run as
+# written, in the install's env; the re-run makes a fresh install (nothing to move).
+test_J23_NewDirDanglingOrNotADirectory() {
+    local h new cause cmd
+    for cause in dangling file; do
+        h="$(new_home)" new="$h/.config/agent-director"
+        mkdir -p "$h/.config"
+        if [[ "$cause" == dangling ]]; then
+            ln -s "$h/nowhere" "$new"
+            move_refused "$h" "$new is a dangling link; refusing to install." \
+                "It points at $h/nowhere, which does not exist. Remove it, or fix it so it names a directory, then re-run:" || continue
+            follow_cmds "$h" "Remove it, or fix it so it names a directory, then re-run:" || continue
+            [[ ! -L "$new" ]] || bad "$cause: the link is still there"
+        else
+            printf 'not a directory\n' >"$new"
+            move_refused "$h" "$new is not a directory; refusing to install." \
+                "AD keeps its files in a directory there (or a link to one). Rename it aside, or fix it so it is a directory, then re-run:" || continue
+            cmd="$(aside_of "Rename it aside, or fix it so it is a directory, then re-run:")"
+            follow_cmds "$h" "Rename it aside, or fix it so it is a directory, then re-run:" || continue
+            [[ "$(cat "$cmd")" == "not a directory" ]] || bad "$cause: the aside $cmd does not hold the file"
+        fi
+        run "$h" "${MOVE_ARGV[@]}"
+        expect_rc 0 "$cause: re-run" || continue
+        expect_installed "$h" "$BIN" "$ADMIN"
+        [[ -d "$new" && ! -L "$new" ]] || bad "$cause: $new is not a directory after the re-run"
+        [[ "$(db_version "$h")" == "$SCHEMA" ]] || bad "$cause: the new store is not at v$SCHEMA"
+    done
+}
+
+# J23: "<old> is a dangling link; refusing to install." ... "Remove it, then
+# re-run: rm -- <old>": a link that is not the compatibility link; the re-run is
+# a fresh install.
+test_J23_OldDirDanglingLink() {
+    local h="$(new_home)" old
+    old="$h/.agent-director"
+    ln -s "$h/nowhere" "$old"
+    move_refused "$h" "$old is a dangling link; refusing to install." \
+        "It points at $h/nowhere, which does not exist, and is not the compatibility link to $h/.config/agent-director. Remove it, then re-run:" || return
+    follow_cmds "$h" "Remove it, then re-run:" || return
+    [[ ! -L "$old" ]] || bad "the link is still there"
+    run "$h" "${MOVE_ARGV[@]}"
+    expect_rc 0 "re-run" || return
+    expect_installed "$h" "$BIN" "$ADMIN"
+    [[ "$(db_version "$h")" == "$SCHEMA" ]] || bad "the new store is not at v$SCHEMA"
+    [[ -z "$(find "$h" -maxdepth 1 -name '.agent-director*')" ]] || bad "a fresh install left: $(find "$h" -maxdepth 1 -name '.agent-director*')"
+}
+
+# J23: both directories present: "Set one aside, then re-run. If the old
+# directory holds the install in use, set the new one aside; the re-run moves
+# the old directory in: mv -- <new> <new>.aside-<time>" / "Otherwise (the new one
+# holds the install in use), set the old one aside: mv -- <old>
+# <old>.aside-<time>". Per case <which branch>, followed as written, then the
+# re-run:
+#   new    the first branch: the old directory is moved in, the new one is the
+#          aside, still as it was;
+#   old    the second: the install goes into the new directory, which the re-run
+#          leaves as it was, and the old one is the aside, as it was;
+#   templ  the first, for a new directory holding only a template make-template
+#          made: after it, "copy any template you want from it into the moved
+#          directory" (cp from the aside) puts the template in the moved one.
+test_J23_BothPresentSetOneAside() {
+    local h old new branch aside before_old before_new first second note
+    first="If the old directory holds the install in use, set the new one aside; the re-run moves the old directory in:"
+    second="Otherwise (the new one holds the install in use), set the old one aside:"
+    note="A new directory holding only what make-template created (a templates directory, say) next to a real old install is the first case: set it aside, and copy any template you want from it into the moved directory afterwards."
+    for branch in new old templ; do
+        h="$(new_home)" old="$h/.agent-director" new="$h/.config/agent-director"
+        old_home "$h"
+        mkdir -p "$new/templates"
+        if [[ "$branch" == templ ]]; then
+            printf '# made by make-template\n' >"$new/templates/mine.toml"
+        else
+            printf '# the new config\n' >"$new/config.toml"
+        fi
+        before_old="$(j14_snap "$old")" before_new="$(j14_snap "$new")"
+        move_refused "$h" "both $old and $new exist; refusing to install." \
+            "This release moves the old directory into the new place, so only one of them may be there. Set one aside, then re-run. $first" \
+            "$second" "$note" || continue
+        if [[ "$branch" == old ]]; then
+            aside="$(aside_of "$second")"
+            follow_cmds "$h" "$second" || continue
+        else
+            aside="$(aside_of "$first")"
+            follow_cmds "$h" "$first" || continue
+        fi
+        [[ -d "$aside" ]] || { bad "$branch: the aside $aside is not there"; continue; }
+        run "$h" "${MOVE_ARGV[@]}"
+        if [[ "$branch" == old ]]; then
+            expect_rc 0 "$branch: re-run" || continue
+            expect_installed "$h" "$BIN" "$ADMIN"
+            [[ "$(j14_snap "$aside")" == "$before_old" ]] || bad "$branch: the old directory, set aside, changed"
+            [[ "$(cat "$new/config.toml")" == "# the new config" ]] || bad "$branch: the new directory's config.toml changed"
+            [[ ! -e "$h/.agent-director" ]] || bad "$branch: $h/.agent-director is back"
+            [[ -z "$(find "$h" -maxdepth 1 -name '.agent-director.pre-move-*')" ]] || bad "$branch: a move ran"
+            [[ "$(db_version "$h")" == "$SCHEMA" ]] || bad "$branch: the new store is not at v$SCHEMA"
+            continue
+        fi
+        moved "$h" "$branch" || continue
+        [[ "$(j14_snap "$aside")" == "$before_new" ]] || bad "$branch: the new directory, set aside, changed"
+        [[ "$(cat "$new/config.toml")" == "# the old config" ]] || bad "$branch: the moved config.toml is not the old one"
+        [[ "$(cat "$new/templates/t1.toml")" == "# the old template" ]] || bad "$branch: the old template did not move"
+        if [[ "$branch" == templ ]]; then
+            [[ ! -e "$new/templates/mine.toml" ]] || bad "$branch: the set-aside template is in the moved directory already"
+            cp "$aside/templates/mine.toml" "$new/templates/" || bad "$branch: copy the template from $aside"
+            [[ "$(cat "$new/templates/mine.toml")" == "# made by make-template" ]] || bad "$branch: the copied template differs"
+        fi
+    done
+}
+
+# J23: a link the move will not follow: "<path> is a link; refusing to install.
+# ... Replace the link with a copy of what it points at, re-run, and make the
+# link again in the new directory afterwards if you want it:" then the cp, rm
+# (a directory) or mv, as written. Per case <what is the link>: the old directory
+# itself, its config.toml, its templates directory, an entry of that, or the
+# store (a link to a file inside the old directory). Each re-run moves the copy
+# the commands made into the new directory, as a file or directory, no link,
+# with what the link led to, and leaves the target where it was.
+test_J23_LinkInOldDirCopyAndRerun() {
+    local h o n what link target before_target want_head marker
+    marker="Replace the link with a copy of what it points at, re-run, and make the link again in the new directory afterwards if you want it:"
+    old_release_or_skip || return
+    for what in dir config templates template store; do
+        h="$(new_home)" o="$h/.agent-director" n="$h/.config/agent-director"
+        old_home "$h" store
+        want_head=""
+        case "$what" in
+            dir)
+                link="$o" target="$h/elsewhere" want_head="$o is a link; refusing to install."
+                mv "$o" "$target" && ln -s "$target" "$link" ;;
+            config)
+                link="$o/config.toml" target="$h/cfg-target.toml" want_head="$o/config.toml is a link; refusing to install."
+                mv "$link" "$target" && ln -s "$target" "$link" ;;
+            templates)
+                link="$o/templates" target="$h/tpl-target" want_head="$o/templates is a link; refusing to install."
+                mv "$link" "$target" && ln -s "$target" "$link" ;;
+            template)
+                link="$o/templates/t2.toml" target="$h/t2-target.toml" want_head="template $o/templates/t2.toml is a link; refusing to install."
+                printf '# a linked template\n' >"$target" && ln -s "$target" "$link" ;;
+            store)
+                link="$o/state.db" target="$o/store-real.db" want_head="the store $o/state.db is a link; refusing to install."
+                mv "$link" "$target" && ln -s "$target" "$link" ;;
+        esac || { bad "$what: set up the link"; continue; }
+        before_target="$(link_target_sum "$target")"
+        move_refused "$h" "$want_head" "$marker" || continue
+        follow_cmds "$h" "$marker" || continue
+        [[ ! -L "$link" ]] || { bad "$what: $link is still a link after the advised commands"; continue; }
+        run "$h" "${MOVE_ARGV[@]}"
+        moved "$h" "$what" || continue
+        [[ ! -L "$n" && ! -L "$n/config.toml" && ! -L "$n/templates" && ! -L "$n/templates/t1.toml" && ! -L "$n/state.db" ]] \
+            || bad "$what: the new directory holds a link: $(find "$n" -type l)"
+        [[ "$(cat "$n/config.toml")" == "# the old config" ]] || bad "$what: the moved config.toml is not the old one"
+        [[ "$(cat "$n/templates/t1.toml")" == "# the old template" ]] || bad "$what: the old template did not move"
+        [[ "$what" != template ]] || [[ "$(cat "$n/templates/t2.toml")" == "# a linked template" ]] || bad "$what: the linked template is not copied as a file"
+        # What a link led to is where it was (the store's target moves with the old directory).
+        [[ "$what" == store ]] || [[ "$(link_target_sum "$target")" == "$before_target" ]] || bad "$what: the link's target $target changed"
+    done
+}
+
+# link_target_sum <path>: the checksum of a file, or of every file under a directory.
+link_target_sum() {
+    if [[ -d "$1" ]]; then (cd "$1" && find . -type f -exec sha256sum {} + | sort); else sha256sum "$1"; fi
+}
+
+# J23: "cannot place [store] db_path <path> against the old directory; refusing
+# to install. ... Create the directory, or correct the value in <config>, then
+# re-run: mkdir -p -- <dir>": a db_path whose directory (inside the old
+# directory) is missing. The re-run moves, with the key rewritten to the new
+# directory, where the store is made.
+test_J23_PathKeyUnresolvableMakeDirAndRerun() {
+    local h o n key marker
+    h="$(new_home)" o="$h/.agent-director" n="$h/.config/agent-director"
+    old_home "$h"
+    key="$o/data/s.db"
+    printf '[store]\ndb_path = "%s"\n' "$key" >"$o/config.toml"
+    marker="Create the directory, or correct the value in $o/config.toml, then re-run:"
+    move_refused "$h" "cannot place [store] db_path $key against the old directory; refusing to install." \
+        "Its directory, $o/data, is missing or cannot be read, so install.sh cannot tell whether the path is inside $o, which the move needs to know. $marker" || return
+    follow_cmds "$h" "$marker" || return
+    [[ -d "$o/data" ]] || bad "$o/data was not made"
+    run "$h" "${MOVE_ARGV[@]}"
+    moved "$h" "key" "$n/data/s.db" || return
+    grep -qxF "db_path = \"$n/data/s.db\"" "$n/config.toml" || bad "the moved config.toml does not name the new store: $(cat "$n/config.toml")"
+}
+
+# ---- J24: ErrAgentsLive -----------------------------------------------------
+
+# agents_live_refused <home> <headline>: MOVE_ARGV exits 5, ErrAgentsLive, the
+# headline first and the old binary and store named, changing nothing.
+agents_live_refused() {
+    local h="$1" before after
+    # The read-only open of the old store (SQLite, WAL mode) leaves its state.db-shm
+    # and an empty state.db-wal beside it, and so changes the old directory's
+    # mtime: neither is a change to what the install would move.
+    before="$(j14_snap "$h" | grep -v -E '^\./\.agent-director d |state\.db-(shm|wal)')"
+    run "$h" "${MOVE_ARGV[@]}"
+    expect_exit5 ErrAgentsLive "$2" || return 1
+    [[ "$(head -n 1 "$ERR")" == "install.sh: AD's old directory is in use; refusing to upgrade while an agent or agent-director process runs." ]] \
+        || bad "$2: first stderr line \"$(head -n 1 "$ERR")\""
+    expect_advice "old binary: $h/.agent-director/bin/agent-director old store : $h/.agent-director/state.db"
+    expect_advice "Nothing was installed or changed. Re-run this install after the change."
+    after="$(j14_snap "$h" | grep -v -E '^\./\.agent-director d |state\.db-(shm|wal)')"
+    [[ "$after" == "$before" ]] || bad "$2: the refusal changed the home: $(diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | head -n 6)"
+}
+
+# J24: a row in a live state whose agent is gone. "Stop whatever starts agents (a
+# scheduler, a loop, a caller), then every agent, every serve and every caller,
+# and re-run this install from a shell AD did not start. A row whose agent is
+# already gone is cleared by the old binary's find-missing, which a
+# still-running agent never matches: <old bin> find-missing". Nothing runs
+# here to stop; find-missing is run as written (the old release's own), then
+# the re-run moves, and the row is in the new store as missing, the rows of
+# other states as they were.
+test_J24_LiveRowFindMissingThenRerun() {
+    local h o rows marker
+    old_release_or_skip || return
+    h="$(new_home)" o="$h/.agent-director"
+    old_home "$h" store
+    old_row "$h" id-gone working
+    old_row "$h" id-ended ended
+    marker="A row whose agent is already gone is cleared by the old binary's find-missing, which a still-running agent never matches:"
+    agents_live_refused "$h" "a live row" || return
+    expect_advice "Rows in a live state (state, instance id): working id-gone Stop whatever starts agents (a scheduler, a loop, a caller), then every agent, every serve and every caller, and re-run this install from a shell AD did not start. $marker"
+    [[ "$(flat "$ERR")" != *"id-ended"* ]] || bad "the row that ended is listed as live"
+    [[ "$(flat "$ERR")" != *"Processes running the old binary"* ]] || bad "a process is listed: $(flat "$ERR")"
+    [[ "$(line_after "$marker")" == "$o/bin/agent-director find-missing" ]] || bad "the find-missing line is \"$(line_after "$marker")\"; want \"$o/bin/agent-director find-missing\""
+    follow_cmds "$h" "$marker" || return
+    [[ "$(jq -c '.ids' "$OUT")" == '["id-gone"]' ]] || bad "find-missing cleared $(cat "$OUT"); want id-gone"
+    run "$h" "${MOVE_ARGV[@]}"
+    moved "$h" "re-run" || return
+    run "$h" "$BIN" list
+    expect_rc 0 "list after the move" || return
+    rows="$(jq -r '.spawns[] | "\(.instance_id) \(.state)"' "$OUT" | sort | paste -sd'|')"
+    [[ "$rows" == "id-ended ended|id-gone missing" ]] || bad "rows after the move: \"$rows\"; want id-ended ended|id-gone missing"
+}
+
+# J24: a process running the old binary (a serve, say; here a copy of sleep as
+# the old directory's bin/agent-director). "Stop ... every serve ... and
+# re-run this install": the process the refusal lists is stopped (its pid read
+# from the message), then the re-run moves.
+test_J24_RunningOldBinaryStopItThenRerun() {
+    local h o pid listed phys i
+    h="$(new_home)" o="$h/.agent-director"
+    old_home "$h"
+    cp "$(type -P sleep)" "$o/bin/agent-director" || { bad "copy sleep"; return; }
+    phys="$(cd -P "$o" && pwd -P)/bin/agent-director"
+    "$o/bin/agent-director" 600 &
+    pid=$!
+    for i in $(seq 100); do
+        [[ "$(readlink "/proc/$pid/exe")" == "$phys" ]] && break
+        sleep 0.05
+    done
+    agents_live_refused "$h" "a process"
+    expect_advice "Processes running the old binary (pid, executable): $pid $phys A Claude Code session's own MCP server (agent-director serve --stdio) is one such process: it runs the old binary until that session ends. Stop whatever starts agents"
+    listed="$(grep -A1 -F "  Processes running the old binary (pid, executable):" "$ERR" | tail -n 1 | awk '{print $1}')"
+    [[ "$listed" == "$pid" ]] || bad "the process listed is \"$listed\"; want $pid"
+    [[ "$(flat "$ERR")" != *"Rows in a live state"* ]] || bad "a row is listed as live: $(flat "$ERR")"
+    kill "$listed" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    ! kill -0 "$pid" 2>/dev/null || bad "pid $pid still runs after it was stopped"
+    run "$h" "${MOVE_ARGV[@]}"
+    moved "$h" "re-run"
+}
+
+# J24: rows that could not be read (the store busy past its busy timeout): "The
+# live rows could not be read (...), so the install cannot tell whether an agent
+# runs. A re-run reads them again. sqlite3 said:" with sqlite3's own error
+# below, and no advice to stop anything. The advised plain re-run reads them,
+# finds none and moves.
+test_J24_UnreadableRowsPlainRerun() {
+    local h
+    old_release_or_skip || return
+    h="$(new_home)"
+    old_home "$h" store
+    J7H="$h" J7ARGV=("${MOVE_ARGV[@]}")
+    j7_run 1
+    expect_exit5 ErrAgentsLive "unreadable rows" || return
+    expect_advice "The live rows could not be read (the store was busy past its busy timeout of 10000 ms, or is unreadable), so the install cannot tell whether an agent runs. A re-run reads them again. sqlite3 said: $SHIM_LOCK_ERR Nothing was installed or changed. Re-run this install after the change."
+    [[ "$(flat "$ERR")" != *"Stop whatever starts agents"* ]] || bad "a read that failed advises stopping agents: $(flat "$ERR")"
+    [[ ! -e "$h/.config" ]] || bad "the refusal made $h/.config"
+    run "$h" "${MOVE_ARGV[@]}"
+    moved "$h" "re-run"
+}
+
+# ---- J25: ErrMoveFailed -----------------------------------------------------
+
+# cp_fails <dir> <glob>: a cp stand-in in <dir> (a test puts <dir> on PATH_EXTRA)
+# that, for a destination matching <glob>, fails as cp does on a full disk; every
+# other call runs the real one.
+cp_fails() {
+    mkdir -p "$1" || die "mkdir $1"
+    cat >"$1/cp" <<EOF
+#!/bin/bash
+if [[ "\${!#}" == $2 ]]; then
+    echo "cp: error writing '\${!#}': No space left on device" >&2
+    exit 1
+fi
+exec "$(type -P cp)" "\$@"
+EOF
+    chmod 0755 "$1/cp" || die "chmod $1/cp"
+}
+CP_FAILS="$ROOT/cp-fails"
+cp_fails "$CP_FAILS" '*/.config/agent-director/*'
+
+# J25: "moving <old> to <new> failed: <cause>", "The partial <new> was removed
+# (and so was ~/.config, when the move had created it); <old> was not changed."
+# and "A full disk is the usual cause: free some space (or fix the cause above),
+# then re-run this install." The cause is fixed as it says, then the re-run
+# moves. Per case <cause>:
+#   fifo  a fifo in the old directory ("Remove it or move it out of <old>, then
+#         re-run"): it is removed, and the kept directory has no fifo;
+#   disk  a copy into the new directory fails with "No space left on device":
+#         the space is freed (the failing cp is gone).
+test_J25_MoveFailedFixCauseAndRerun() {
+    local h o n cause before fifo head
+    for cause in fifo disk; do
+        h="$(new_home)" o="$h/.agent-director" n="$h/.config/agent-director"
+        old_home "$h"
+        if [[ "$cause" == fifo ]]; then
+            mkfifo "$o/odd.fifo" || { bad "mkfifo"; continue; }
+        else
+            PATH_EXTRA="$CP_FAILS"
+        fi
+        before="$(j14_snap "$o")"
+        run "$h" "${MOVE_ARGV[@]}"
+        expect_exit5 ErrMoveFailed "$cause" || continue
+        head="$(head -n 1 "$ERR")"
+        if [[ "$cause" == fifo ]]; then
+            [[ "$head" == "install.sh: moving $o to $n failed: cannot copy $o/odd.fifo: it is not a regular file, a directory or a link (a fifo, a socket or a device, say). Remove it or move it out of $o, then re-run" ]] \
+                || bad "$cause: first stderr line \"$head\""
+        else
+            [[ "$head" == "cp: error writing '$n/"* ]] || bad "$cause: first stderr line \"$head\"; want cp's own error"
+            grep -q "^install\.sh: moving $o to $n failed: cannot copy $o/.* to $n/" "$ERR" || bad "$cause: no \"moving ... failed: cannot copy\" line: $(flat "$ERR")"
+        fi
+        expect_advice "The partial $n was removed (and so was ~/.config, when the move had created it); $o was not changed. A full disk is the usual cause: free some space (or fix the cause above), then re-run this install."
+        [[ ! -e "$h/.config" ]] || bad "$cause: $h/.config is left"
+        [[ "$(j14_snap "$o")" == "$before" ]] || bad "$cause: the old directory changed: $(diff <(printf '%s\n' "$before") <(j14_snap "$o") | head -n 6)"
+        [[ -z "$(find "$h" -maxdepth 1 -name '.agent-director.pre-move-*')" ]] || bad "$cause: a kept directory was made"
+        if [[ "$cause" == fifo ]]; then
+            fifo="$(sed -n "s|^install\.sh: moving .* failed: cannot copy \(.*\): it is not a regular file.*|\1|p" "$ERR")"
+            run_advised "$h" "$ROOT" "rm -- $(printf '%q' "$fifo")"
+            expect_rc 0 "$cause: remove the fifo" || continue
+        else
+            PATH_EXTRA=""
+        fi
+        run "$h" "${MOVE_ARGV[@]}"
+        moved "$h" "$cause" || continue
+        [[ ! -e "$KEPT/odd.fifo" && ! -e "$n/odd.fifo" ]] || bad "$cause: the fifo is still there"
+        [[ "$(cat "$n/config.toml")" == "# the old config" ]] || bad "$cause: the moved config.toml is not the old one"
+    done
+}
+
+# ---- J26: a path key that leaves the old directory through a link inside it --
+
+# J26: "<key> <value> reaches outside <old> through a link inside it; refusing
+# to install. ... Set the key to the absolute physical path it reaches, in
+# <config>, then re-run: <key> = "<physical path>"": an absolute or ~/ path key
+# that is inside the old directory by its text and outside it through a link
+# inside (the move renames the old directory away, so the value as written would
+# name nothing). The advised line is put in config.toml as written; the re-run
+# moves, the key stays as advised (it names a place outside), and the installed
+# binary opens the store, or writes the error log, at that physical place.
+test_J26_PathKeyThroughInnerLinkSetPhysicalPathAndRerun() {
+    local h o n what table key value phys marker line
+    old_release_or_skip || return
+    for what in store tilde-store log; do
+        h="$(new_home)" o="$h/.agent-director" n="$h/.config/agent-director"
+        old_home "$h" store
+        mkdir -p "$h/elsewhere" || { bad "$what: mkdir elsewhere"; continue; }
+        case "$what" in
+            store)       table=store key=db_path         value="$o/out/s.db" phys="$h/elsewhere/s.db" ;;
+            tilde-store) table=store key=db_path         value="~/.agent-director/out/s.db" phys="$h/elsewhere/s.db" ;;
+            log)         table=log   key=error_log_path  value="$o/out/e.log" phys="$h/elsewhere/e.log" ;;
+        esac
+        if [[ "$table" == store ]]; then
+            mv "$o/state.db" "$phys" || { bad "$what: move the store out"; continue; }
+        else
+            printf 'an old error\n' >"$phys" || { bad "$what: write the log"; continue; }
+        fi
+        ln -s "$h/elsewhere" "$o/out" || { bad "$what: make the link"; continue; }
+        printf '[%s]\n%s = "%s"\n' "$table" "$key" "$value" >"$o/config.toml"
+        marker="Set the key to the absolute physical path it reaches, in $o/config.toml, then re-run:"
+        move_refused "$h" "[$table] $key $value reaches outside $o through a link inside it; refusing to install." \
+            "$marker $key = \"$phys\"" "so it reaches $phys today." || continue
+        line="$(line_after "$marker")"
+        [[ "$line" == "$key = \"$phys\"" ]] || { bad "$what: the advised line is \"$line\"; want $key = \"$phys\""; continue; }
+        # Set the key as advised: the line replaces the key's line in its table.
+        printf '[%s]\n%s\n' "$table" "$line" >"$o/config.toml" || { bad "$what: write the advised line"; continue; }
+        run "$h" "${MOVE_ARGV[@]}"
+        if [[ "$table" == store ]]; then
+            moved "$h" "$what" "$phys" || continue
+            [[ ! -e "$n/state.db" ]] || bad "$what: the new directory holds a default state.db: the store did not stay at $phys"
+            run "$h" "$n/bin/agent-director" list
+            expect_rc 0 "$what: list opens the store at $phys" || continue
+        else
+            moved "$h" "$what" || continue
+            [[ "$(cat "$phys")" == "an old error" ]] || bad "$what: the error log $phys changed: $(cat "$phys")"
+        fi
+        grep -qxF "$key = \"$phys\"" "$n/config.toml" || bad "$what: the moved config.toml does not hold the advised line: $(cat "$n/config.toml")"
+    done
+}
+
+# ---- G8: ErrOldLayout -------------------------------------------------------
+
+# G8: store: "this host still has the old agent-director directory and no store
+# in ~/.config/agent-director; run this release's install.sh to move it". A
+# built binary's verb (list) under a home with only the old directory exits 1
+# with that envelope and makes nothing; install.sh is run as advised (this
+# release's, with its binaries), and the same verb then succeeds and lists the
+# old store's rows.
+test_G8_OldLayoutRunInstallShThenVerbSucceeds() {
+    local h before rows
+    old_release_or_skip || return
+    h="$(new_home)"
+    old_home "$h" store
+    old_row "$h" id-ended ended
+    old_row "$h" id-gone missing
+    before="$(j14_snap "$h")"
+    run "$h" "$BIN" list
+    expect_rc 1 "list under the old layout" || return
+    [[ -z "$(cat "$OUT")" ]] || bad "stdout is not empty: $(cat "$OUT")"
+    [[ "$(jq -r .err_name "$ERR")" == ErrOldLayout ]] || bad "err_name is \"$(jq -r .err_name "$ERR")\"; want ErrOldLayout: $(cat "$ERR")"
+    [[ "$(jq -r .err_description "$ERR")" == "store: this host still has the old agent-director directory and no store in ~/.config/agent-director; run this release's install.sh to move it" ]] \
+        || bad "err_description is \"$(jq -r .err_description "$ERR")\""
+    [[ "$(j14_snap "$h")" == "$before" ]] || bad "the refusal changed the home: $(diff <(printf '%s\n' "$before") <(j14_snap "$h") | head -n 6)"
+    run "$h" "${MOVE_ARGV[@]}"
+    moved "$h" "install.sh as advised" || return
+    run "$h" "$BIN" list
+    expect_rc 0 "list after install.sh" || return
+    rows="$(jq -r '.spawns[] | "\(.instance_id) \(.state)"' "$OUT" | sort | paste -sd'|')"
+    [[ "$rows" == "id-ended ended|id-gone missing" ]] || bad "rows after the move: \"$rows\"; want id-ended ended|id-gone missing"
+}
+
 echo "[b.fji install-sh advice-follow] start (schema v$SCHEMA)"
 for t in $(declare -F | awk '{print $3}' | grep '^test_'); do
+    # ADVICE_FOLLOW_ONLY=<extended regex> runs only the tests whose names match.
+    if [[ -n "${ADVICE_FOLLOW_ONLY:-}" ]] && ! [[ "$t" =~ $ADVICE_FOLLOW_ONLY ]]; then continue; fi
     run_test "$t"
 done
-echo "[b.fji install-sh advice-follow] summary: $pass passed, $fail failed, $skip skipped (known-broken)"
+echo "[b.fji install-sh advice-follow] summary: $pass passed, $fail failed, $skip skipped ($skip_broken known-broken, $skip_tag for a missing git tag)"
 [[ "$fail" -eq 0 ]]

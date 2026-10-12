@@ -519,7 +519,7 @@ func treeSnap(t *testing.T, root string) map[string]string {
 	return snap
 }
 
-// TestUninstallRefusesUnwritableLink (b.nw5): a settings.json holding its hooks,
+// TestUninstallRefusesUnwritableLink (b.nw5, b.ssz): a settings.json holding its hooks,
 // or a config.toml holding inject_help_hook, linked into a directory it cannot
 // write in, makes uninstall.sh refuse (exit 2) and change nothing. Each way out
 // the refusal gives, followed, lets the re-run finish: fixing the link, or
@@ -544,7 +544,7 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 			`{"theme":"dark","hooks":{"SessionStart":[]}}` + "\n",
 			"{bin} help", "dark",
 			"remove agent-director's hook entries from",
-			"each SessionStart and SessionEnd entry holding a hook whose command starts with {bin}."},
+			"each SessionStart and SessionEnd entry holding a hook whose command starts with {bin} or {oldbin}."},
 		{"config.toml", ".config/agent-director",
 			"[defaults]\nrelay_mode = \"off\"\ninject_help_hook = true\n",
 			"[defaults]\nrelay_mode = \"off\"\n",
@@ -557,7 +557,7 @@ func TestUninstallRefusesUnwritableLink(t *testing.T) {
 			t.Run(f.base+", "+follow, func(t *testing.T) {
 				home := t.TempDir()
 				bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
-				fill := strings.NewReplacer("{bin}", bin).Replace
+				fill := strings.NewReplacer("{bin}", bin, "{oldbin}", filepath.Join(home, ".agent-director", "bin", "agent-director")).Replace
 				link := filepath.Join(home, f.dir, f.base)
 				writeMode(t, bin, "binary", 0o755)
 				// Both files hold uninstall.sh's entry: f's linked into store/, the other plain.
@@ -727,5 +727,424 @@ func TestUninstallPurge(t *testing.T) {
 				t.Errorf("%s after uninstall.sh = %q, %v; want the hook gone and the theme kept", settings, got, err)
 			}
 		})
+	}
+}
+
+// uninstallSeedCodex seeds HOME/.codex and returns a check that it is unchanged.
+func uninstallSeedCodex(t *testing.T, home string) func() {
+	t.Helper()
+	dir := filepath.Join(home, ".codex")
+	writeMode(t, filepath.Join(dir, "config.toml"), "model = \"x\"\n", 0o600)
+	writeMode(t, filepath.Join(dir, "sessions", "a.jsonl"), "{}\n", 0o600)
+	before := treeSnap(t, dir)
+	return func() {
+		t.Helper()
+		if after := treeSnap(t, dir); !maps.Equal(after, before) {
+			t.Errorf("uninstall.sh changed %s:\nbefore %v\nafter  %v", dir, before, after)
+		}
+	}
+}
+
+// uninstallLinesWith returns the lines of out that start with any of prefixes.
+func uninstallLinesWith(out []byte, prefixes ...string) []string {
+	var got []string
+	for _, line := range strings.Split(string(out), "\n") {
+		for _, p := range prefixes {
+			if strings.HasPrefix(line, p) {
+				got = append(got, line)
+				break
+			}
+		}
+	}
+	return got
+}
+
+// TestUninstallNeverMovedLayout (SR-11.4, b.ssz): with only ~/.agent-director
+// present, uninstall.sh works on it as on the new directory: it removes the
+// binaries, the admin tool, the PATH link, its old-path help hooks and
+// inject_help_hook, keeps the directory without --purge, and makes no new one.
+func TestUninstallNeverMovedLayout(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	modes := []struct {
+		name   string
+		args   []string
+		input  string
+		purged bool
+	}{
+		{"no --purge", nil, "", false},
+		{"--purge --force", []string{"--purge", "--force"}, "", true},
+		{"--purge answered y", []string{"--purge"}, "y\n", true},
+	}
+	for _, m := range modes {
+		t.Run(m.name, func(t *testing.T) {
+			home := t.TempDir()
+			root := filepath.Join(home, ".agent-director")
+			bin := filepath.Join(root, "bin", "agent-director")
+			cfg := filepath.Join(root, "config.toml")
+			settings := filepath.Join(home, ".claude", "settings.json")
+			link := filepath.Join(home, ".local", "bin", "agent-director")
+			const user = `{"hooks":[{"type":"command","command":"/usr/bin/true"}]}`
+			ours := `{"hooks":[{"type":"command","command":"` + bin + ` help"}]}`
+			for _, f := range []string{"bin/agent-director", "bin/agent-director.prior", "bin/agent-director.20250101",
+				"admin/agent-director-admin", "admin/agent-director-admin.prior", "state.db", "templates/t.toml"} {
+				writeMode(t, filepath.Join(root, f), f, 0o755)
+			}
+			writeMode(t, cfg, "[defaults]\nrelay_mode = \"off\"\ninject_help_hook = true\n", 0o600)
+			writeMode(t, settings, `{"theme":"dark","hooks":{"SessionStart":[`+ours+`,`+user+`],"SessionEnd":[`+ours+`]}}`+"\n", 0o600)
+			symlink(t, bin, link)
+			codexUnchanged := uninstallSeedCodex(t, home)
+
+			out, code := uninstallExit(t, home, "", m.input, m.args)
+
+			if code != 0 {
+				t.Fatalf("uninstall.sh: exit %d\n%s", code, out)
+			}
+			lines := strings.Split(string(out), "\n")
+			wantLines := []string{
+				"uninstall.sh: removed binaries under " + filepath.Join(root, "bin"),
+				"uninstall.sh: removed " + filepath.Join(root, "admin"),
+				"uninstall.sh: removed symlink " + link,
+				"uninstall.sh: removed help hook entries from " + settings,
+			}
+			if m.purged {
+				wantLines = append(wantLines, "uninstall.sh: purged "+root)
+			}
+			for _, want := range wantLines {
+				if !slices.Contains(lines, want) {
+					t.Errorf("output lacks the line %q:\n%s", want, out)
+				}
+			}
+			if len(uninstallLinesWith(out, "uninstall.sh: cleared inject_help_hook from "+cfg+" (backup ")) != 1 {
+				t.Errorf("output lacks the line clearing inject_help_hook from %s:\n%s", cfg, out)
+			}
+			if got := uninstallLinesWith(out, "uninstall.sh: kept "); len(got) != 0 {
+				t.Errorf("output names directories it kept, with no other AD directory present: %q", got)
+			}
+			if _, err := os.Lstat(link); !os.IsNotExist(err) {
+				t.Errorf("%s after uninstall.sh: %v; want it removed", link, err)
+			}
+			if _, err := os.Lstat(filepath.Join(home, ".config")); !os.IsNotExist(err) {
+				t.Errorf("%s after uninstall.sh: %v; want none made", filepath.Join(home, ".config"), err)
+			}
+			raw, err := os.ReadFile(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("settings.json after uninstall.sh: %v\n%s", err, raw)
+			}
+			if err := json.Unmarshal([]byte(`{"theme":"dark","hooks":{"SessionStart":[`+user+`],"SessionEnd":[]}}`), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("settings.json after uninstall.sh = %s; want only the user's hook left", raw)
+			}
+			if m.purged {
+				if _, err := os.Lstat(root); !os.IsNotExist(err) {
+					t.Errorf("%s after a confirmed --purge: %v; want it removed", root, err)
+				}
+				if !strings.Contains(string(out), "uninstall.sh: --purge will rm -rf "+root+" — proceed? [y/N] ") != (m.input == "") {
+					t.Errorf("--purge prompt wrong for input %q:\n%s", m.input, out)
+				}
+			} else {
+				for f, text := range map[string]string{"state.db": "state.db", "templates/t.toml": "templates/t.toml",
+					"config.toml": "[defaults]\nrelay_mode = \"off\"\n"} {
+					if got, err := os.ReadFile(filepath.Join(root, f)); err != nil || strings.TrimSuffix(string(got), "\n") != strings.TrimSuffix(text, "\n") {
+						t.Errorf("%s after uninstall.sh = %q, %v; want %q", f, got, err, text)
+					}
+				}
+				var left []string
+				for _, sub := range []string{"bin", "admin"} {
+					_ = filepath.WalkDir(filepath.Join(root, sub), func(p string, d os.DirEntry, err error) error {
+						if err == nil && !d.IsDir() {
+							left = append(left, p)
+						}
+						return nil
+					})
+				}
+				if len(left) != 0 {
+					t.Errorf("files left under bin and admin: %q; want none", left)
+				}
+			}
+			codexUnchanged()
+		})
+	}
+}
+
+// TestUninstallRemovesOldDirectoryHookEntries (SR-11.4, b.ssz): uninstall.sh
+// removes the help hooks whose command starts with the old directory's
+// bin/agent-director beside the new ones, keeping every other hook, with the
+// .bak copy and the symlink rules as for the new ones: an old-path entry alone
+// counts, so a link it cannot write through is refused, not left alone.
+func TestUninstallRemovesOldDirectoryHookEntries(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const (
+		oldHelp   = `{"hooks":[{"type":"command","command":"{oldbin} help"}]}`
+		newHelp   = `{"hooks":[{"type":"command","command":"{bin} help"}]}`
+		user      = `{"hooks":[{"type":"command","command":"/usr/bin/true"}]}`
+		lookalike = `{"hooks":[{"type":"command","command":"{home}/.agent-director-other/bin/agent-director help"}]}`
+	)
+	cases := []struct {
+		name, settings, want string
+		link                 string // "" a plain file, or "writable" or "unwritable": a link to a file in a directory uninstall.sh can or cannot write in
+	}{
+		{name: "new and old entries beside others",
+			settings: `{"theme":"dark","hooks":{"SessionStart":[` + oldHelp + `,` + newHelp + `,` + user + `,` + lookalike + `],` +
+				`"SessionEnd":[{"matcher":"x","hooks":[{"type":"command","command":"{oldbin} help"}]},` + newHelp + `]}}`,
+			want: `{"theme":"dark","hooks":{"SessionStart":[` + user + `,` + lookalike + `],"SessionEnd":[]}}`},
+		{name: "old entries only",
+			settings: `{"hooks":{"SessionStart":[` + oldHelp + `],"SessionEnd":[` + oldHelp + `]}}`,
+			want:     `{"hooks":{"SessionStart":[],"SessionEnd":[]}}`},
+		{name: "old entry only, writable link", link: "writable",
+			settings: `{"hooks":{"SessionStart":[` + oldHelp + `,` + user + `],"SessionEnd":[]}}`,
+			want:     `{"hooks":{"SessionStart":[` + user + `],"SessionEnd":[]}}`},
+		{name: "old entry only, unwritable link", link: "unwritable",
+			settings: `{"hooks":{"SessionStart":[` + oldHelp + `],"SessionEnd":[]}}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.link == "unwritable" && os.Geteuid() == 0 {
+				t.Skip("root can write in the 0555 directory that stands in for a read-only one")
+			}
+			home := t.TempDir()
+			bin := filepath.Join(home, ".config", "agent-director", "bin", "agent-director")
+			oldBin := filepath.Join(home, ".agent-director", "bin", "agent-director")
+			settings := filepath.Join(home, ".claude", "settings.json")
+			fill := strings.NewReplacer("{bin}", bin, "{oldbin}", oldBin, "{home}", home).Replace
+			writeMode(t, bin, "binary", 0o755)
+			target := settings
+			switch tc.link {
+			case "":
+				writeMode(t, settings, fill(tc.settings), 0o600)
+			case "writable":
+				target = filepath.Join(home, "dotfiles", "settings.json")
+				writeMode(t, target, fill(tc.settings), 0o600)
+				symlink(t, target, settings)
+			case "unwritable":
+				target = linkIntoReadOnlyDir(t, home, settings, fill(tc.settings))
+			}
+			if tc.link == "unwritable" {
+				before := treeSnap(t, home)
+
+				out, code := uninstallExit(t, home, "", "", nil)
+
+				want := "uninstall.sh: cannot remove agent-director's hook entries from " + settings + " through its symlink; refusing to uninstall."
+				if got := strings.Join(strings.Fields(string(out)), " "); code != 2 || !strings.HasPrefix(got, want) ||
+					!strings.Contains(got, "starts with "+bin+" or "+oldBin+".") {
+					t.Errorf("uninstall.sh exit %d, output:\n%s\nwant exit 2, starting %q and naming both prefixes", code, out, want)
+				}
+				if after := treeSnap(t, home); !maps.Equal(after, before) {
+					t.Errorf("the refusal changed %s:\nbefore %v\nafter  %v", home, before, after)
+				}
+				return
+			}
+
+			runUninstall(t, home, "")
+
+			raw, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want any
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatalf("settings.json after uninstall.sh: %v\n%s", err, raw)
+			}
+			if err := json.Unmarshal([]byte(fill(tc.want)), &want); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("settings.json after uninstall.sh = %s; want %s", raw, fill(tc.want))
+			}
+			baks, err := filepath.Glob(settings + ".bak.*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(baks) != 1 {
+				t.Fatalf("settings.json backups = %q; want one", baks)
+			}
+			if bak, err := os.ReadFile(baks[0]); err != nil || string(bak) != fill(tc.settings) {
+				t.Errorf("%s = %q, %v; want the original, %q", baks[0], bak, err, fill(tc.settings))
+			}
+			if tc.link != "" {
+				if got, err := os.Readlink(settings); err != nil || got != target {
+					t.Errorf("%s link = %q, %v; want kept, naming %q", settings, got, err, target)
+				}
+			}
+		})
+	}
+}
+
+// uninstallOther is an AD directory beside the one uninstall.sh works on.
+type uninstallOther struct {
+	rel    string // under HOME
+	kind   string // the text a purge names it with in parentheses; "" for an aside
+	linkTo string // "" a directory holding state.db, else the link's target ({new} is the new directory)
+}
+
+// TestUninstallOtherADirectories (SR-11.4, b.ssz): without a confirmed --purge
+// uninstall.sh keeps every other AD directory (each pre-move-*, after-upgrade-*
+// and recreated-* one, an old directory beside the new one, a compatibility link)
+// and names each but the link, with the delete-once-confirmed advice; a confirmed
+// --purge, its prompt naming each, removes them (a link as a link, its target
+// untouched) but leaves each *.aside-* directory, and names it either way. A
+// seeded ~/.codex is never touched.
+func TestUninstallOtherADirectories(t *testing.T) {
+	if os.Getenv(sandboxguard.EnvVar) != "1" {
+		t.Skipf("uninstall.sh runs only in the sandbox (%s=1)", sandboxguard.EnvVar)
+	}
+	cli2TrackInputs(t)
+	const (
+		preMove    = "the old directory an upgrade kept"
+		afterUp    = "the directory the way back set aside"
+		recreated  = "a recreated old directory the way back set aside"
+		beside     = "an old directory recreated beside the new one"
+		compat     = "a compatibility link to the new directory"
+		stamp      = "20260101-000000"
+		asideStamp = "20260104-000000"
+	)
+	worlds := []struct {
+		name   string
+		others []uninstallOther // in the order uninstall.sh names them: pre-move, after-upgrade, recreated, beside, compat, then asides
+	}{
+		{"every kind of directory and both asides", []uninstallOther{
+			{".agent-director.pre-move-" + stamp, preMove, ""},
+			{".agent-director.pre-move-" + stamp + "-2", preMove, ""},
+			{".config/agent-director.after-upgrade-" + stamp, afterUp, ""},
+			{".agent-director.recreated-" + stamp, recreated, ""},
+			{".agent-director", beside, ""},
+			{".agent-director.aside-" + asideStamp, "", ""},
+			{".config/agent-director.aside-" + asideStamp, "", ""}}},
+		{"a kept directory that is a link elsewhere", []uninstallOther{
+			{".agent-director.pre-move-" + stamp, preMove, "elsewhere"}}},
+		{"a relative compatibility link", []uninstallOther{{".agent-director", compat, ".config/agent-director"}}},
+		{"an absolute compatibility link", []uninstallOther{{".agent-director", compat, "{new}"}}},
+		{"no other directory", nil},
+	}
+	modes := []struct {
+		name     string
+		args     []string
+		input    string
+		purged   bool
+		prompted bool
+	}{
+		{"no --purge", nil, "", false, false},
+		{"--purge answered n", []string{"--purge"}, "n\n", false, true},
+		{"--purge answered y", []string{"--purge"}, "y\n", true, true},
+		{"--purge --force", []string{"--purge", "--force"}, "", true, false},
+	}
+	for _, w := range worlds {
+		for _, m := range modes {
+			t.Run(w.name+", "+m.name, func(t *testing.T) {
+				home := t.TempDir()
+				root := filepath.Join(home, ".config", "agent-director")
+				writeMode(t, filepath.Join(root, "bin", "agent-director"), "binary", 0o755)
+				writeMode(t, filepath.Join(root, "state.db"), "db", 0o600)
+				writeMode(t, filepath.Join(home, "elsewhere", "state.db"), "elsewhere", 0o600)
+				var extras, asides []uninstallOther
+				for _, o := range w.others {
+					p := filepath.Join(home, o.rel)
+					if o.linkTo == "" {
+						writeMode(t, filepath.Join(p, "state.db"), o.rel, 0o600)
+					} else {
+						symlink(t, strings.ReplaceAll(o.linkTo, "{new}", root), p)
+					}
+					if o.kind == "" {
+						asides = append(asides, o)
+					} else {
+						extras = append(extras, o)
+					}
+				}
+				codexUnchanged := uninstallSeedCodex(t, home)
+				// What must stay as it is: each aside and the link's target always, each kept directory too unless purged.
+				stays := []string{filepath.Join(home, "elsewhere")}
+				for _, o := range asides {
+					stays = append(stays, filepath.Join(home, o.rel))
+				}
+				if !m.purged {
+					for _, o := range extras {
+						stays = append(stays, filepath.Join(home, o.rel))
+					}
+				}
+				snap := func() map[string]string {
+					all := map[string]string{}
+					for _, p := range stays {
+						maps.Copy(all, treeSnap(t, p))
+					}
+					return all
+				}
+				before := snap()
+
+				out, code := uninstallExit(t, home, "", m.input, m.args)
+
+				if code != 0 {
+					t.Fatalf("uninstall.sh: exit %d\n%s", code, out)
+				}
+				// uninstall.sh names the kept directories, then the asides, then what it purged.
+				var wantNamed, wantPurged []string
+				for _, o := range extras {
+					p := filepath.Join(home, o.rel)
+					switch {
+					case m.purged:
+						wantPurged = append(wantPurged, "uninstall.sh: purged "+p+" ("+o.kind+")")
+					case o.kind != compat:
+						wantNamed = append(wantNamed, "uninstall.sh: kept "+p+" ("+o.kind+"); delete it once the upgrade is confirmed, or run --purge")
+					}
+				}
+				for _, o := range asides {
+					wantNamed = append(wantNamed, "uninstall.sh: left "+filepath.Join(home, o.rel)+
+						" (set aside to settle a conflict; it may hold data you did not choose, so --purge leaves it); delete it yourself once you are sure it is not needed")
+				}
+				if m.purged {
+					wantNamed = append(wantNamed, "uninstall.sh: purged "+root)
+					wantNamed = append(wantNamed, wantPurged...)
+				}
+				named := uninstallLinesWith(out, "uninstall.sh: kept ", "uninstall.sh: purged ", "uninstall.sh: left ")
+				if !slices.Equal(named, wantNamed) {
+					t.Errorf("lines naming directories:\n%s\nwant:\n%s\nfull output:\n%s", strings.Join(named, "\n"), strings.Join(wantNamed, "\n"), out)
+				}
+
+				prompt := "uninstall.sh: --purge will rm -rf " + root
+				if len(extras) > 0 {
+					prompt += ", and also remove these other AD directories (a link is removed as a link, never what it points to):"
+					for i, o := range extras {
+						prompt += " " + filepath.Join(home, o.rel) + " (" + o.kind + ")"
+						if i < len(extras)-1 {
+							prompt += ","
+						}
+					}
+				}
+				prompt += " — proceed? [y/N] "
+				if got := strings.Contains(string(out), prompt); got != m.prompted {
+					t.Errorf("output has the prompt %q = %v; want %v:\n%s", prompt, got, m.prompted, out)
+				}
+				if got := strings.Contains(string(out), "proceed? [y/N]"); got != m.prompted {
+					t.Errorf("output has a --purge prompt = %v; want %v:\n%s", got, m.prompted, out)
+				}
+				if last := strings.Split(strings.TrimRight(string(out), "\n"), "\n"); m.input == "n\n" != (last[len(last)-1] == "uninstall.sh: --purge aborted") {
+					t.Errorf("last output line = %q for input %q", last[len(last)-1], m.input)
+				}
+
+				if after := snap(); !maps.Equal(after, before) {
+					t.Errorf("uninstall.sh changed what it keeps:\nbefore %v\nafter  %v", before, after)
+				}
+				for _, o := range extras {
+					p := filepath.Join(home, o.rel)
+					if _, err := os.Lstat(p); os.IsNotExist(err) != m.purged {
+						t.Errorf("%s removed = %v; want %v (%v)", p, os.IsNotExist(err), m.purged, err)
+					}
+				}
+				if _, err := os.Lstat(filepath.Join(root, "state.db")); os.IsNotExist(err) != m.purged {
+					t.Errorf("%s removed = %v; want %v (%v)", root, os.IsNotExist(err), m.purged, err)
+				}
+				codexUnchanged()
+			})
+		}
 	}
 }

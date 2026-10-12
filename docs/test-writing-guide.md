@@ -364,6 +364,22 @@ run outside the sandbox). To run the `known_broken` tests and see them fail:
 make sandbox CMD="env AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1 bash test/install-sh/advice_follow.sh"
 ```
 
+To run only some of the cases, set `ADVICE_FOLLOW_ONLY` to an extended regular
+expression on the case names (`make sandbox CMD="env ADVICE_FOLLOW_ONLY=J23 bash
+test/install-sh/advice_follow.sh"`); the Go test that runs the script clears it.
+J23's link case, both J24 live-row cases and G8 build the previous release's
+binary and store from the `v0.11.1` git tag and skip when the checkout lacks
+that tag; `git fetch --tags` brings it in. No workflow runs `test/install-sh`,
+so a checkout without the tag only skips those cases.
+
+The tests of the install's move of AD's directory (`test/install-sh/move_*_test.go`)
+build each case's old-layout install with the fixture in
+`test/install-sh/move_fixture_test.go`, not by hand, and put stand-ins for
+`cp`, `sqlite3`, `ps`, `lsof` and `claude` first on `PATH` instead of editing
+`install.sh`. The stand-in `claude` replays the captures in
+`test/install-sh/testdata/claude-mcp/`; `INDEX.tsv` marks each `synthetic` or
+`captured`, and a real capture replaces a synthetic one with no test change.
+
 ## Synthetic-regression test convention
 
 Synthetic-regression tests re-anchor known failure-classes so they can
