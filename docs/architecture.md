@@ -25,7 +25,7 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
 ## Data
 
-- SQLite at `~/.config/agent-director/state.db` for spawn state, parent/child links, permission requests, and labels.
+- SQLite at `~/.config/agent-director/state.db` for spawn state, parent/child links, permission requests, subagent records, and labels.
 - TOML config at `~/.config/agent-director/config.toml`.
 - Templates as plain files in `~/.config/agent-director/templates/`.
 
@@ -879,7 +879,7 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v9** lives in `internal/store/schema.go`. Four tables, none with a
+**Schema v9** lives in `internal/store/schema.go`. Six tables, none with a
 column whose name starts with `claude_` (the v9 hop renamed those; see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
 
@@ -888,7 +888,8 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   lifecycle (`state`, the raw state, `started_at`, `last_seen_at`,
   `ended_at`), the settle columns `settled_state` and `state_changed_ms`
   (see "v8 columns" below), the agent columns `agent` and
-  `end_reported_at` (see "v9 columns" below), the agent's arguments
+  `end_reported_at` and the subagent tracking flag `subagent_tracking`
+  (see "v9 columns" below), the agent's arguments
   (`agent_args`) and session id (`session_id`), tmux + relay metadata, and a
   JSON-encoded `labels` blob. Indexed on `state`, `last_seen_at`, and
   `parent_id`.
@@ -960,6 +961,82 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     `connQuerier` (fail-closed: a history error rolls the whole change
     back and returns an error holding `ErrReuseArchive`). Every new code
     path that archives a session must call it too, never a second upsert.
+- `subagents` (v9, b.xjn) — one row per subagent entry of a spawn row: a
+  record (`confirmed` 1) or an observation (`confirmed` 0). Only
+  `internal/store` reads or writes it, and no verb shows it yet. The
+  columns, with their exact text in `schemaDDL` for a fresh store and in
+  `v9SubagentTablesSQL`, the v8 → v9 hop's own copy
+  (`internal/store/schema.go`):
+  - `created_seq INTEGER PRIMARY KEY AUTOINCREMENT` grows with each insert and
+    is never reused, so it orders creation and breaks every tie.
+  - `instance_id TEXT NOT NULL REFERENCES spawns(instance_id) ON DELETE
+    CASCADE`, with `UNIQUE(instance_id, subagent_id)`: one entry per row and
+    subagent id. That constraint's implicit index serves the per-row read, the
+    per-launch transitions and the cap, which all lead with `instance_id`;
+    the table has no explicit index.
+  - `launch_token TEXT NOT NULL`, the launch the entry belongs to;
+    `confirmed INTEGER NOT NULL`; `state TEXT NOT NULL` (the values
+    `store.SubagentStateRunning`, `SubagentStateStopped` and
+    `SubagentStateLost`); `close_reason TEXT`, NULL while running (the values
+    `SubagentCloseStopEvent`, `SubagentCloseAbsentFromSnapshot` and
+    `SubagentCloseAgentGone`).
+  - Nullable fields: `session_id`, `subagent_type`, `description`, `model`,
+    `parent_type` (`SubagentParentAgent` or `SubagentParentSubagent`),
+    `parent_id`, `tool_use_id`, `run_mode` (`SubagentRunModeBackground` or
+    `SubagentRunModeForeground`), all TEXT, and the INTEGER times
+    `first_started_at`, `started_at`, `stopped_at` and `lost_at`, in
+    milliseconds since the epoch. NULL means the value is unknown.
+  - `opened_at INTEGER NOT NULL`: the latest time the entry became running,
+    or its creation time. `activity_at INTEGER NOT NULL`: the instant of the
+    latest write that changed the entry. Both are what the cap's eviction
+    order reads.
+  - `subagent_type_source`, `run_mode_source` and `stopped_at_source`, all
+    nullable TEXT: which source set a value that has more than one
+    (`SubagentSourceStart`, `SubagentSourceDetails`, `SubagentSourceSnapshot`,
+    `SubagentSourceStop`; NULL while the value is unknown).
+- `subagent_launches` (v9, b.xjn) — one row per open claimable launch: an
+  internal note that an agent's Agent tool call has not yet been matched to a
+  subagent. Internal to `internal/store`, and never shown by any verb.
+  `created_seq INTEGER PRIMARY KEY AUTOINCREMENT`, `instance_id TEXT NOT NULL
+  REFERENCES spawns(instance_id) ON DELETE CASCADE`, `launch_token`,
+  `tool_use_id` and `subagent_type` (all TEXT NOT NULL), `opened_at INTEGER
+  NOT NULL`, with `UNIQUE(instance_id, tool_use_id)` (one note per row and
+  tool call, and the index later closes use) and one explicit index,
+  `idx_subagent_launches_claim` on `(instance_id, launch_token,
+  subagent_type, opened_at)`, which serves the claim of the oldest note of the
+  current launch and type.
+  - **Lifetime.** Both tables belong to the row, not to a launch: nothing in
+    a reuse's reset or a resume's move deletes an entry or a note, so they
+    survive a reuse (an entry's `launch_token` says which launch it belongs
+    to). They go with the row through the foreign key's cascade: `expire`'s
+    `DeleteFinishedIfSameLife` and the admin `delete` (`DeleteSpawn`) remove a
+    row's entries and notes with the row (see [`expire`](#expire) and [`delete`](#delete)). Nothing closes an
+    entry on `ended`, `missing`, resume or reuse yet.
+  - **Retention: two caps of 300.** One row holds at most
+    `store.SubagentCap` (300) entries (records and observations of every launch
+    together) and at most 300 claimable launches. At the cap, one more insert
+    evicts exactly one row first. Entries: the closed observation (`confirmed`
+    0, `state` not `running`) with the oldest `activity_at`; when no
+    observation is closed, the closed record with the oldest `activity_at`;
+    when nothing closed remains, the running entry with the oldest
+    `activity_at`; ties go to the lowest `created_seq`. Claimable launches: the
+    note with the oldest `opened_at`, ties to the lowest `created_seq`. Below
+    the cap nothing is evicted.
+  - **Must use:** every insert of an entry or a claimable launch calls the
+    cap step first, `evictSubagentEntryAtCap(q, instanceID)` or
+    `evictSubagentLaunchAtCap(q, instanceID)` (`internal/store/subagents.go`),
+    never its own count or delete. Each is one `DELETE` on the caller's
+    transaction, connection or pool (the `querier`), so it commits or rolls
+    back with the caller's write; it never begins or ends a transaction, and
+    returns whether it evicted a row. A writer holds the write lock first
+    (`BEGIN IMMEDIATE`, see "the write lock before the read" under "Versioned
+    writes"), so the count and the insert see one state. The value sets
+    above are `store.Subagent*` constants; compare against them, never
+    against literals. No product write inserts an entry or a note yet; the
+    helpers are tested through the export shim
+    `internal/store/subagents_export_test.go`
+    (`store.EvictSubagentEntryAtCapForTest` and
+    `store.EvictSubagentLaunchAtCapForTest`, each one committed transaction).
 - `store_meta` (v5, b.fmk; SR-5.1) — `key TEXT PRIMARY KEY, value TEXT NOT
   NULL`, with one row in Phase 1: `store_id`, the store's identity. Every
   `@ad_owner` label carries it as its last field (see `internal/tmux` in the
@@ -1235,18 +1312,21 @@ guard reads. The writes and the derivation live in
   `SpawnState`, `ReadForReuse` or a raw `state` WHERE), never
   `ReportedState`.
 
-**v9 columns: the row's agent and its end report (b.ssz; one migration).**
-Schema v9 adds two `spawns` columns after `state_changed_ms`, in this order.
+**v9 columns: the row's agent, its end report and its subagent tracking (b.ssz,
+b.xjn; one migration).**
+Schema v9 adds three `spawns` columns after `state_changed_ms`, in this order.
 They are listed once, with their exact DDL text, in `v9Columns`
 (`internal/store/schema.go`), which `migrateV8toV9` walks and `schemaDDL`
-repeats. Neither has a CHECK constraint or an index. The same hop renames
-six Claude-named columns (see [Store upgrade to agent-generic
+repeats. None has a CHECK constraint or an index. The same hop renames
+six Claude-named columns and creates the `subagents` and `subagent_launches`
+tables (see [Store upgrade to agent-generic
 names](#store-upgrade-to-agent-generic-names)).
 
 | Column | Type | Written by | Meaning |
 | --- | --- | --- | --- |
 | `agent` | TEXT NOT NULL DEFAULT `''` | `InsertPending` and `ResetForReuse`, from `Spawn.Agent`; the hop's backfill | Which agent the row runs: exactly `claude` or `codex` (`store.AgentClaude`, `store.AgentCodex`). The empty default is only what SQLite needs to add a not-null column; it is no agent, and no write relies on it: the hop sets every existing row to `claude`, and the two writes that begin a row name the agent. Until a later Task adds the agent input, spawn and reuse write `claude` through `ComposeLaunch` (`internal/spawn/compose.go`). |
 | `end_reported_at` | INTEGER (epoch ms), nullable | nothing yet | When a Codex row's verified agent process reported its session's end. NULL on every row, and always on a Claude row. Nothing writes it yet; the code only keeps it through the life rules below. |
+| `subagent_tracking` | INTEGER NOT NULL DEFAULT 0 | `InsertPending`, `MoveToPending` and `ResetForReuse`, each the literal 1 in its existing statement, with no new parameter; `RestoreAfterFailedResume` and `RestoreAfterFailedReuse`, the earlier value | Whether the settings the row's current launch was given register the agent's subagent start and stop events: 1 yes, 0 no. Every launch write on this build stores 1, so a row launched, resumed or reused by this build reads 1. A row from before the v9 migration reads 0 (untracked) until its next launch write, because the hop does no backfill. Nothing else writes it. `get`, `list` and `status` do not show it. |
 
 - **Agent write refusal.** `InsertPending` and `ResetForReuse` refuse a
   `Spawn` whose `Agent` is anything but exactly `claude` or `codex` (the empty
@@ -1264,6 +1344,21 @@ names](#store-upgrade-to-agent-generic-names)).
   `end_reported_at` to NULL, and `RestoreAfterFailedResume` writes the prior
   value back (`ResumePrior.EndReportedAtMillis`). Resume keeps `agent`: it
   neither writes nor restores it.
+- **The tracking flag's rules.** `Spawn.SubagentTracking` (bool, `spawnColumns`,
+  last) comes back on every read that returns a `Spawn`: true only for the
+  stored integer 1, false for 0 and any other stored value, so no stored value
+  fails a read (`decodeSubagentTracking` in `internal/store/rowsnapshot.go`). It
+  is on no `SpawnRow` or `ListRow`. The three launch writes write the literal
+  `subagentTrackedSQL` (`1`, `internal/store/spawns.go`), taking nothing from a
+  `Spawn`, including over a row that held 0. Both restores write the earlier
+  launch's flag back, since that launch becomes current again: reuse saves it
+  in `RawLife` (`ReadForReuse`) and `RestoreAfterFailedReuse` writes it back
+  verbatim through `rawLifeColumns`; resume's caller sets
+  `ResumePrior.SubagentTracking` from the `Spawn` it read (`resumePriorOf`,
+  `pkg/api/resume.go`) and `RestoreAfterFailedResume` writes 1 or 0. **Must
+  use:** every new write that begins a launch of a row writes
+  `subagent_tracking` through `subagentTrackedSQL`, and every new restore of a
+  failed launch writes the saved flag back.
 - **Reads decode it without failing.** A stored `end_reported_at` that is not
   a positive integer reads as absent (0), as `decodeEndReportedAt` in
   `internal/store/rowsnapshot.go` decides.
@@ -1275,12 +1370,13 @@ scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
 for NULL), `Snapshot` and `Identity`, the v6 `LaunchOwner` and the v7
-`IdleSince` (`""` for NULL), and the v9 `Agent` and `EndReportedAtMillis` (0
-for NULL; see "v9 columns" above). (It also carries `ReportedState`, b.3ie,
+`IdleSince` (`""` for NULL), and the v9 `Agent`, `EndReportedAtMillis` (0
+for NULL) and `SubagentTracking` (see "v9 columns" above). (It also carries `ReportedState`, b.3ie,
 which is no column: see "v8 columns" above.) Two writes
 take a `Spawn`: `InsertPending` and `ResetForReuse` (its `fresh` row), each
 taking `LaunchStartedAtMillis`, `NoPreTrust`, `Identity.Token`,
-`Identity.Socket`, `LaunchOwner` and `Agent` from it; no write takes the other
+`Identity.Socket`, `LaunchOwner` and `Agent` from it (both also write the
+tracking flag 1, taking nothing from the `Spawn`); no write takes the other
 v5 fields from one.
 Reuse reads a finished row through its own narrow read, `ReadForReuse`
 (`store.ReuseRow`, with the raw `store.RawLife`; see "Versioned writes"). A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
@@ -1417,6 +1513,9 @@ still the one it read, so it knows the row has not changed since. As built:
   three that set a launch start:
   `InsertPending` (plain spawn), `ResetForReuse` (reuse's reset) and
   `MoveToPending` (resume's move).
+- Those same three writes are the ones that write `subagent_tracking` (the
+  literal 1, no parameter), and the two restores of a failed launch write it
+  back (see "v9 columns"). No other write touches it.
 - `InsertPending` writes `launch_started_at`, `launch_token`,
   `tmux_socket` and the three launch-owner columns in the INSERT (zero
   values as NULL) and never the six identity columns. The same INSERT
@@ -1469,7 +1568,7 @@ still the one it read, so it knows the row has not changed since. As built:
 - Resume's writes (SR-8.3, SR-8.5; `internal/store/resume_writes.go`;
   called only by `resume`, see [Resume](#resume)). `MoveToPending` moves
   an `ended` or `missing` row whose `RowSnapshot` still equals the
-  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id` and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
+  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id`, `subagent_tracking` (1) and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
   `proc_starttime`, `ended_at`, the liveness columns, `end_reported_at` and the
   six identity columns. In the same `BEGIN IMMEDIATE` transaction (`inImmediateTx`),
   when the move applied, it closes every request of the row that still
@@ -1480,7 +1579,8 @@ still the one it read, so it knows the row has not changed since. As built:
   plain `send-keys` in the new one: both or neither. It returns the
   version it produced. `RestoreAfterFailedResume`, guarded on `pending` at that
   version, writes a `ResumePrior` back (state, cleared columns, `end_reported_at`
-  as `ResumePrior.EndReportedAtMillis`, token,
+  as `ResumePrior.EndReportedAtMillis`, `subagent_tracking` as
+  `ResumePrior.SubagentTracking`, token,
   socket, identity; `parent_id` keeps the move's value) and clears the
   launch start; it does not reopen a request the move closed. The move
   emits one `ad.row_mutation.committed` (writer `resume`, `decision_reason`
@@ -1498,7 +1598,8 @@ still the one it read, so it knows the row has not changed since. As built:
     to `GetSpawn`'s), and `Life`, a `RawLife`: every column the restore
     writes back, each selected as `typeof(col), +col` so the stored value
     and storage class come back unparsed (NULL distinct from empty, a
-    zero-length blob kept a blob; `agent` and `end_reported_at` included). It
+    zero-length blob kept a blob; `agent`, `end_reported_at` and
+    `subagent_tracking` included). It
     never decodes `labels`, `agent_args` or `extra_env`, and no stored timestamp, token or
     pre-trust value fails it, so a hand-edited malformed row can be reused
     and restored byte for byte. No row: `found` false, no error.
@@ -1526,7 +1627,7 @@ still the one it read, so it knows the row has not changed since. As built:
     launch-owner columns from `fresh.LaunchOwner` (the reusing process);
     `agent` from `fresh.Agent`, refused before anything is written, with an
     error holding `ErrRowAgentInvalid`, when it is not exactly `claude` or
-    `codex`; `life_number` + 1; `row_version` + 1; then the deletion of every
+    `codex`; `subagent_tracking` 1; `life_number` + 1; `row_version` + 1; then the deletion of every
     permission request of the id, decided or not; then COMMIT. Applied, it
     returns the archived session id (`""` when none) and `resetVersion`,
     the examined version + 1. Any failure rolls everything back and
@@ -1539,7 +1640,7 @@ still the one it read, so it knows the row has not changed since. As built:
     stored (state, `life_number`, `no_pre_trust`, the session id and path,
     pid and start time, `started_at`, `last_seen_at`, the liveness
     columns, the request fields, token, socket, the six identity
-    columns, the three launch-owner columns, `agent` and `end_reported_at`); `ended_at` as stored, or
+    columns, the three launch-owner columns, `agent`, `end_reported_at` and `subagent_tracking`); `ended_at` as stored, or
     `failedAt` when it was NULL;
     `parent_id` only while that row still exists (else NULL, decided in
     the same statement, so the foreign key never fails it); clears
@@ -1813,7 +1914,9 @@ still the one it read, so it knows the row has not changed since. As built:
   finished row the caller passes a far-future cutoff).
   `DeleteFinishedIfSameLife(instanceID, examined)` is one `DELETE` guarded
   on `finishedStateGuardSQL` and `snapshotMatchSQL`: `CondApplied` when it
-  deleted the row; `CondChanged` (live or `pending` now, or its snapshot
+  deleted the row (its permission requests, session history, subagent
+  entries and claimable launches go with it through the foreign keys'
+  `ON DELETE CASCADE`); `CondChanged` (live or `pending` now, or its snapshot
   differs) or `CondAbsent` through `condNotApplied`, having deleted
   nothing; a store failure as a wrapped error with a zero `CondResult`.
   Neither emits a trail event or makes a tmux call. **Must use:** a delete
@@ -1867,8 +1970,9 @@ source of truth for which schema this binary expects. On `Open`:
   `permission_requests` and `spawns`, the relay's delivery facts, then the
   proof of finished rows' requests), `{from: 7, apply: migrateV7toV8}`
   (two ADD COLUMN on `spawns`, the settle columns, then their backfill) and
-  `{from: 8, apply: migrateV8toV9}` (six column renames, two ADD COLUMN on
-  `spawns`, then the `agent` backfill) —
+  `{from: 8, apply: migrateV8toV9}` (six column renames, three ADD COLUMN on
+  `spawns`, CREATE `subagents` and `subagent_launches`, then the `agent`
+  backfill) —
   see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", "Schema v3 →
   v4 Migration", "Schema v4 → v5 Migration", "Schema v5 → v6 Migration",
   "Schema v6 → v7 Migration", "Schema v7 → v8 Migration" and [Store upgrade
@@ -2227,8 +2331,10 @@ Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 
 The current migration (`migrateV8toV9`, b.ssz; the one `migrationSteps`
 entry `{from: 8, apply: migrateV8toV9}`) takes the store from schema v8 to
-v9. It drops the Claude names from the store's columns and gives every row a
-record of its agent. A fresh store is created at v9 by `schemaDDL`, with the
+v9. It drops the Claude names from the store's columns, gives every row a
+record of its agent and of whether its launch registers the subagent events,
+and adds the tables that hold a row's subagent records (these are folded into
+this hop: there is no later schema version for them). A fresh store is created at v9 by `schemaDDL`, with the
 same column text as the hop, so a fresh and a migrated store have the same
 shape (names, positions, index columns and foreign keys).
 
@@ -2250,15 +2356,23 @@ shape (names, positions, index columns and foreign keys).
    clauses of the other tables, which is why `spawns` is renamed first. The
    values are not touched. This section is the only place in this document
    where the old names may stay as names of store columns.
-2. **Two new `spawns` columns**, appended after `state_changed_ms` in
+2. **Three new `spawns` columns**, appended after `state_changed_ms` in
    `v9Columns`' order, each with the text `schemaDDL` uses (see "v9 columns"
-   above): `agent TEXT NOT NULL DEFAULT ''` and `end_reported_at INTEGER`
-   (nullable). The empty default of `agent` is only what SQLite needs to add
-   a not-null column; it is no agent, and nothing relies on it (see
-   "Agent write refusal" under "v9 columns").
+   above): `agent TEXT NOT NULL DEFAULT ''`, `end_reported_at INTEGER`
+   (nullable) and `subagent_tracking INTEGER NOT NULL DEFAULT 0`. The empty
+   default of `agent` is only what SQLite needs to add a not-null column; it
+   is no agent, and nothing relies on it (see "Agent write refusal" under
+   "v9 columns"). Then **two new tables**: the hop runs `v9SubagentTablesSQL`,
+   its own fixed copy of the text `schemaDDL` holds for a fresh store, which has `CREATE TABLE IF NOT EXISTS
+   subagents`, `CREATE TABLE IF NOT EXISTS subagent_launches` and `CREATE
+   INDEX IF NOT EXISTS idx_subagent_launches_claim` (see
+   [`internal/store`](#internalstore)). It runs after the renames, so the
+   tables' foreign keys to `spawns(instance_id)` name the renamed column.
+   Both tables start empty and every existing row keeps `subagent_tracking`
+   0: there is no backfill for them.
 3. **One backfill**: phase 3, `v9BackfillSQL` (`UPDATE spawns SET agent =
-   'claude' WHERE agent = ''`), after the renames and both columns and before
-   the stamp, makes every row that existed at the migration a Claude row.
+   'claude' WHERE agent = ''`), after the renames, the three columns and the
+   subagent tables and before the stamp, makes every row that existed at the migration a Claude row.
    `end_reported_at` stays NULL. It writes only rows with no agent (a re-run
    rewrites nothing, and a row that already holds one keeps it). No other
    existing value is rewritten (`row_version` included); `store_meta` and its
@@ -2273,11 +2387,12 @@ shape (names, positions, index columns and foreign keys).
    naming the table and both columns (`refusing to rename`, `holds neither`),
    before anything is changed. Any later failure (a rename, an `ADD COLUMN`,
    the backfill, the stamp or the commit) rolls the whole hop back: the store
-   stays at v8 with every column under its old name, no new column and the
-   sentinel kept, so the next authorized open retries. Re-entering the hop is
+   stays at v8 with every column under its old name, no new column or table
+   and the sentinel kept, so the next authorized open retries. Re-entering the hop is
    safe: a rename whose new name is present and old name absent is skipped
-   (an earlier run did it), and an `ADD COLUMN` whose column is present is
-   skipped.
+   (an earlier run did it), an `ADD COLUMN` whose column is present is
+   skipped (a `pragma_table_info` probe), and a subagent table or index that
+   exists is left as it is (`IF NOT EXISTS`).
 6. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it, `{"from": 8,
    "to": 9}` for a v8 store (the sentinel's `to` is this binary's
@@ -2285,7 +2400,8 @@ shape (names, positions, index columns and foreign keys).
    `ErrSchemaMigrationRequired`, and `user_version > 9` surfaces
    `ErrSchemaMismatch`.
 7. **No reverse recipe.** docs/migration-guide.md §5 has no v9 → v8 recipe,
-   and none is to be written: the downgrade recipes cover v8 and older only.
+   and none is to be written (the hop renames columns and adds a column and
+   two tables): the downgrade recipes cover v8 and older only.
    The way back from a v9 store is to restore the copy of `state.db` (with its
    `-wal` and `-shm` files) taken before the install, then run the
    previous release's install; every write made since the install is lost.
@@ -7177,7 +7293,7 @@ surfaces `ErrSchemaMismatch`. Roll back only before letting the new
 binary migrate the DB. After it has migrated, first return the store to
 the older version with the emergency downgrade recipes in
 docs/migration-guide.md §5, newest first. A store at v9 has no recipe: the
-v8 → v9 hop renamed columns and no recipe reverses it, so the only way back
+v8 → v9 hop renamed columns and added a column and two tables, and no recipe reverses it, so the only way back
 from v9 is a copy of `state.db` taken before the install (see [Store upgrade
 to agent-generic names](#store-upgrade-to-agent-generic-names)). For a store
 at v8 or older the recipes are (for v8 → v7: drop the two
@@ -7313,9 +7429,9 @@ three `spawns` ADD COLUMN, the launch owner, preserving every row and the
 store id; v6→v7, nineteen `permission_requests` and one `spawns` ADD COLUMN,
 the relay's delivery facts, preserving every row and the store id; v7→v8,
 two `spawns` ADD COLUMN, the settle columns, with every row backfilled as
-settled, preserving every row and the store id; v8→v9, six column renames and
-two `spawns` ADD COLUMN, with every row backfilled as a Claude row, preserving
-every row and the store id).
+settled, preserving every row and the store id; v8→v9, six column renames,
+three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
+every row backfilled as a Claude row, preserving every row and the store id).
 Rolling the binary back after such a migration to v9 needs the copy of
 `state.db` taken before the install: no downgrade recipe reaches a v9 store.
 Rolling it back over a migration that ended at v8 or older can also use the
@@ -11620,7 +11736,10 @@ read makes it apply nothing. Applied puts the row in `ids`;
 `CondChanged` keeps it `changed_since_examined`; `CondAbsent` (another
 caller removed it first) puts it in neither list; a store error is logged
 with the instance id, keeps the row `store_error`, and the run goes on and
-succeeds. Dependent rows go by the schema's foreign-key actions.
+succeeds. Dependent rows go by the schema's foreign-key actions: the row's
+permission requests, session history, subagent entries and claimable
+launches are deleted with it (`ON DELETE CASCADE`), so an expired row leaves
+none of them behind.
 
 **The result (SR-12.4).** `count` / `ids` are the rows deleted; `kept` /
 `kept_ids` are the selected rows kept. Both lists are sorted and never null
@@ -11710,8 +11829,9 @@ so only a Go caller sees that result.
 `delete` bypasses every state-precondition guard. A live-state row
 is removed by id exactly the same way a terminal row is. The verb
 does NOT touch tmux or JSONL transcripts; the
-`permission_requests` row(s) FK-referencing the spawn are removed
-by the schema's `ON DELETE CASCADE`.
+`permission_requests`, `session_history`, `subagents` and
+`subagent_launches` rows FK-referencing the spawn are removed by the
+schema's `ON DELETE CASCADE`.
 
 It is a human's repair tool for a row nothing else removes (a row whose
 recorded tmux session name cannot be used, which `resume` and reuse
@@ -13825,8 +13945,8 @@ launch owner, no backfill), the v6→v7 hop (twenty ADD COLUMN across
 `permission_requests` and `spawns`, the relay's delivery facts, then the
 proof of finished rows' requests), the v7→v8 hop (two `spawns` ADD
 COLUMN, the settle columns, then every row backfilled as settled) and/or the
-v8→v9 hop (six column renames, two `spawns` ADD COLUMN, then every row
-backfilled as a Claude row; see [Store upgrade to agent-generic
+v8→v9 hop (six column renames, three `spawns` ADD COLUMN, CREATE `subagents`
+and `subagent_launches`, then every row backfilled as a Claude row; see [Store upgrade to agent-generic
 names](#store-upgrade-to-agent-generic-names)), walking
 from the DB's `user_version` up to `schemaVersion` in one pass.
 `ErrSchemaMismatch` fires when `user_version > 9` — meaning the store was
@@ -15197,7 +15317,7 @@ are in `internal/hook/hook_parent_fakes_test.go`). Inside
 
 **`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
 write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
-six kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
+seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
 
 - `WriteFailReuseArchive`: an insert or update of the id's
   `session_history` entry (`ResetForReuse`'s archive, whose failure holds
@@ -15235,6 +15355,17 @@ six kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
   test that the mark and the close are both or neither installs this kind.
   The CLI and MCP tests of a pane answer whose `sent` write fails after its
   key (the `ErrInternal` with `PaneKeySentDetails`) install it too.
+- `WriteFailSubagentRecord` (`writefailfix.SubagentRecord`, kind 7, named
+  "subagent record", b.xjn): every insert, update and delete of the id's rows
+  in `subagents` and in `subagent_launches` (six triggers, one per operation
+  and table, keyed on the id through the bookkeeping table). It also matches
+  the cap evictions, a delete of the id's `spawns` row while it still has
+  entries or claimable launches (through the foreign keys' cascade: `delete`'s
+  and `expire`'s), and `apitest.SeedSubagent` and `apitest.SeedSubagentLaunch`,
+  so install it after seeding. It never matches a write to the id's `spawns`
+  row itself or to another id's subagent rows. **Must use:** a test that a
+  write of a subagent record fails, or that a delete of a row fails when its
+  subagent records cannot be removed, installs this kind.
 
 How it works:
 
@@ -16354,6 +16485,28 @@ unchanged. When two options set the same column, the later one wins.
   **Must use** them to seed the two columns; never write them with raw SQL.
   Every seeded row is a Claude row with no end report unless they say
   otherwise.
+- Subagent tracking and records (schema v9, b.xjn). A seeded row is tracked
+  (`subagent_tracking` 1), as the store's launch writes leave it;
+  `WithNoSubagentTracking()` stores 0 instead, a row from before the upgrade.
+  `SeedSubagent(dbPath, instanceID, subagentID string, opts
+  ...SubagentOption) error` inserts one `subagents` row and
+  `SeedSubagentLaunch(dbPath, instanceID, toolUseID string, opts
+  ...SubagentLaunchOption) error` one `subagent_launches` row. Both go through
+  a raw connection, enforce no invariant of the entries (an option can make a
+  row that breaks one), and return an error wrapping `store.ErrSpawnNotFound`
+  for a missing row. By default an entry is confirmed, `running` and of the
+  row's current launch token (read at seed time), with `opened_at` and
+  `activity_at` at `apitest.SeededSubagentMs` and every other field NULL; a
+  launch note takes the current launch token, type `general-purpose` and
+  `opened_at` `SeededSubagentMs`. `SubagentOption` has one `WithSubagent*`
+  option per column (`WithSubagentState`, `WithSubagentCloseReason`,
+  `WithSubagentLaunchToken`, `WithSubagentConfirmed`, `WithSubagentOpenedAt`,
+  `WithSubagentActivityAt`, and so on; a later option for the same column
+  wins); `SubagentLaunchOption` has `WithClaimableLaunchToken`,
+  `WithClaimableType` and `WithClaimableOpenedAt`. **Must use** them to seed
+  the two tables, never raw SQL: a test that seeds to the cap sets
+  `activity_at` or `opened_at` explicitly so the eviction order is the one
+  under test.
 - Raw JSON columns: `WithRawLabels(text)`, `WithRawAgentArgs(text)` (the
   `agent_args` column) and
   `WithRawExtraEnv(text)`, each stored byte for byte. `WithRawExtraEnv` and
@@ -16452,9 +16605,10 @@ values, except for a row the test inserted itself.
     their v9 names), the
     three v6 launch-owner columns (`LaunchOwnerPID`,
     `LaunchOwnerStarttime`, `LaunchOwnerPIDNS`), v7's `idle_since`
-    (`SpawnColumns.IdleSince`, as stored text) and v9's `agent` and
-    `end_reported_at` (`SpawnColumns.Agent`, `SpawnColumns.EndReportedAt`)
-    included; v8's settle
+    (`SpawnColumns.IdleSince`, as stored text) and v9's `agent`,
+    `end_reported_at` and `subagent_tracking` (`SpawnColumns.Agent`,
+    `SpawnColumns.EndReportedAt`, `SpawnColumns.SubagentTracking`; 1 on a
+    default seed) included; v8's settle
     columns are read with `ReadSettle` (below). Each comes
     back as `any`: nil for NULL,
     otherwise the stored storage class (`int64`, `float64`, `string` or
@@ -16462,6 +16616,14 @@ values, except for a row the test inserted itself.
   - Decodes nothing, so it works on rows `GetSpawn` cannot decode.
   - A missing row returns an error wrapping `store.ErrSpawnNotFound`. It
     never creates a store file.
+- `ReadSubagentRows(dbPath, instanceID) (SubagentRows, error)`
+  - Returns the id's `subagents` entries and `subagent_launches` notes raw, in
+    `created_seq` order: `SubagentRows{Entries []SubagentEntryColumns,
+    Launches []SubagentLaunchColumns}`, both slices non-nil. Each column comes
+    back as `any` (nil for NULL, `int64` for an integer), `CreatedSeq` as
+    `int64`. It reads the tables directly, never through the store, so it
+    works on rows no store method decodes. An id with no rows (or no row of
+    `spawns`) gives empty slices and no error; it never creates a store file.
 - `ReadSessionHistoryAllLives(dbPath, instanceID) ([]HistoryEntry, error)`
   - Returns the id's `session_history` entries from every life:
     `SessionID`, `JSONLPath` (`sql.NullString`), `LifeNumber` and

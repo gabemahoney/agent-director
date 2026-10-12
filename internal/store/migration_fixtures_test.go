@@ -1192,12 +1192,15 @@ func v9Rows(rows []map[string]string) []map[string]string {
 	return out
 }
 
-// v9ColumnSpecs are the two spawns columns the v8→v9 step adds (SR-3.1), in
-// schema order, after state_changed_ms. agent's default is no agent: the hop
-// backfills claude (assertV9Defaults).
+// v9ColumnSpecs are the three spawns columns the v8→v9 step adds (SR-3.1; b.xjn
+// SR-9 folded subagent_tracking into the same unreleased hop), in schema order,
+// after state_changed_ms. agent's default is no agent: the hop backfills claude
+// (assertV9Defaults). subagent_tracking is last: 0 is untracked, and no backfill
+// sets 1.
 var v9ColumnSpecs = []columnSpec{
 	{"spawns", "agent", "TEXT", true, "''"},
 	{"spawns", "end_reported_at", "INTEGER", false, ""},
+	{"spawns", "subagent_tracking", "INTEGER", true, "0"},
 }
 
 // v9ColumnNames are v9ColumnSpecs' column names, in order.
@@ -1209,14 +1212,181 @@ func v9ColumnNames() []string {
 	return names
 }
 
+// col is one expected PRAGMA table_info row (no default; pk 0 or the position
+// in the primary key).
+func col(name, typ string, notNull bool, pk int) tableColumn {
+	c := tableColumn{name: name, typ: typ, pk: pk}
+	if notNull {
+		c.notNull = 1
+	}
+	return c
+}
+
+// v9SubagentTable is one table of the subagent storage the v8→v9 hop creates
+// (b.xjn SR-10.1, SR-10.5), written out here and not read from the hop: its
+// columns in order, the foreign key and unique pair, and the CREATE text a
+// part-migrated store is given (preAddV9SubagentObjects).
+type v9SubagentTable struct {
+	name    string
+	columns []tableColumn
+	fk      string   // the table's one foreign key, as schemaShape reports it
+	unique  []string // the columns of the table's one UNIQUE constraint
+	ddl     string
+}
+
+var v9SubagentTables = []v9SubagentTable{
+	{
+		name: "subagents",
+		columns: []tableColumn{
+			col("created_seq", "INTEGER", false, 1), col("instance_id", "TEXT", true, 0),
+			col("subagent_id", "TEXT", true, 0), col("launch_token", "TEXT", true, 0), col("confirmed", "INTEGER", true, 0),
+			col("session_id", "TEXT", false, 0), col("subagent_type", "TEXT", false, 0), col("description", "TEXT", false, 0),
+			col("model", "TEXT", false, 0), col("parent_type", "TEXT", false, 0), col("parent_id", "TEXT", false, 0),
+			col("tool_use_id", "TEXT", false, 0), col("run_mode", "TEXT", false, 0),
+			col("first_started_at", "INTEGER", false, 0), col("started_at", "INTEGER", false, 0),
+			col("stopped_at", "INTEGER", false, 0), col("lost_at", "INTEGER", false, 0),
+			col("state", "TEXT", true, 0), col("close_reason", "TEXT", false, 0),
+			col("opened_at", "INTEGER", true, 0), col("activity_at", "INTEGER", true, 0),
+			col("subagent_type_source", "TEXT", false, 0), col("run_mode_source", "TEXT", false, 0),
+			col("stopped_at_source", "TEXT", false, 0),
+		},
+		fk:     "instance_id -> spawns(instance_id) on delete CASCADE",
+		unique: []string{"instance_id", "subagent_id"},
+		ddl: `CREATE TABLE subagents (
+			created_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_id TEXT NOT NULL REFERENCES spawns(instance_id) ON DELETE CASCADE,
+			subagent_id TEXT NOT NULL, launch_token TEXT NOT NULL, confirmed INTEGER NOT NULL,
+			session_id TEXT, subagent_type TEXT, description TEXT, model TEXT,
+			parent_type TEXT, parent_id TEXT, tool_use_id TEXT, run_mode TEXT,
+			first_started_at INTEGER, started_at INTEGER, stopped_at INTEGER, lost_at INTEGER,
+			state TEXT NOT NULL, close_reason TEXT,
+			opened_at INTEGER NOT NULL, activity_at INTEGER NOT NULL,
+			subagent_type_source TEXT, run_mode_source TEXT, stopped_at_source TEXT,
+			UNIQUE(instance_id, subagent_id))`,
+	},
+	{
+		name: "subagent_launches",
+		columns: []tableColumn{
+			col("created_seq", "INTEGER", false, 1), col("instance_id", "TEXT", true, 0),
+			col("launch_token", "TEXT", true, 0), col("tool_use_id", "TEXT", true, 0),
+			col("subagent_type", "TEXT", true, 0), col("opened_at", "INTEGER", true, 0),
+		},
+		fk:     "instance_id -> spawns(instance_id) on delete CASCADE",
+		unique: []string{"instance_id", "tool_use_id"},
+		ddl: `CREATE TABLE subagent_launches (
+			created_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+			instance_id TEXT NOT NULL REFERENCES spawns(instance_id) ON DELETE CASCADE,
+			launch_token TEXT NOT NULL, tool_use_id TEXT NOT NULL, subagent_type TEXT NOT NULL,
+			opened_at INTEGER NOT NULL,
+			UNIQUE(instance_id, tool_use_id))`,
+	},
+}
+
+// The one explicit index of the subagent tables: the claim's (a launch's open
+// notes by launch, type and age), with its CREATE text and columns.
+const (
+	v9ClaimIndexName = "idx_subagent_launches_claim"
+	v9ClaimIndexDDL  = `CREATE INDEX idx_subagent_launches_claim
+		ON subagent_launches(instance_id, launch_token, subagent_type, opened_at)`
+)
+
+var v9ClaimIndexColumns = []string{"instance_id", "launch_token", "subagent_type", "opened_at"}
+
+// assertV9SubagentSchema checks db's two subagent tables: each one's columns in
+// order with type, NOT NULL and primary key; its foreign key to
+// spawns(instance_id) ON DELETE CASCADE; its one unique pair (the implicit
+// index sqlite_autoindex_<table>_1, unique); and that the claim index is the
+// only explicit index on them.
+func assertV9SubagentSchema(t *testing.T, db *sql.DB) {
+	t.Helper()
+	shape := schemaShape(t, db)
+	for _, tbl := range v9SubagentTables {
+		if got := shape["table "+tbl.name]; !reflect.DeepEqual(got, tbl.columns) {
+			t.Errorf("columns of %s = %+v; want %+v", tbl.name, got, tbl.columns)
+		}
+		if got, want := shape["fk "+tbl.name], []string{tbl.fk}; !reflect.DeepEqual(got, want) {
+			t.Errorf("foreign keys of %s = %v; want %v", tbl.name, got, want)
+		}
+		auto := "sqlite_autoindex_" + tbl.name + "_1"
+		if got := shape["index "+auto]; !reflect.DeepEqual(got, tbl.unique) {
+			t.Errorf("index %s = %v; want the unique pair %v", auto, got, tbl.unique)
+		}
+		var unique int
+		if err := db.QueryRow(`SELECT "unique" FROM pragma_index_list(?) WHERE name = ?`, tbl.name, auto).Scan(&unique); err != nil || unique != 1 {
+			t.Errorf("%s unique = %d, %v; want 1", auto, unique, err)
+		}
+		var indexes []string
+		for _, name := range queryStrings(t, db, `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ?`, tbl.name) {
+			if !strings.HasPrefix(name, "sqlite_autoindex_") {
+				indexes = append(indexes, name)
+			}
+		}
+		var wantIndexes []string
+		if tbl.name == "subagent_launches" {
+			wantIndexes = []string{v9ClaimIndexName}
+		}
+		if !slices.Equal(indexes, wantIndexes) {
+			t.Errorf("explicit indexes on %s = %v; want %v", tbl.name, indexes, wantIndexes)
+		}
+	}
+	if got := shape["index "+v9ClaimIndexName]; !reflect.DeepEqual(got, v9ClaimIndexColumns) {
+		t.Errorf("index %s = %v; want %v", v9ClaimIndexName, got, v9ClaimIndexColumns)
+	}
+}
+
+// subagentRowCounts is the number of entries and claimable launches in the
+// subagent tables of the store at path, over all rows of spawns.
+func subagentRowCounts(t *testing.T, path string) (entries, launches int) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for table, dst := range map[string]*int{"subagents": &entries, "subagent_launches": &launches} {
+			if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(dst); err != nil {
+				t.Fatalf("count %s: %v", table, err)
+			}
+		}
+	})
+	return entries, launches
+}
+
 // assertV9Defaults checks id's v9 columns hold what the hop gives an existing
-// row: agent claude and no end report (NULL).
+// row: agent claude, no end report (NULL) and subagent_tracking 0; and that
+// the store holds no subagent entry and no claimable launch (the tables the hop
+// creates start empty).
 func assertV9Defaults(t *testing.T, path, id string) {
 	t.Helper()
 	got := readRawSpawn(t, path, id, v9ColumnNames())
-	if got["agent"] != "'claude'" || got["end_reported_at"] != "NULL" {
-		t.Errorf("%s: agent %s, end_reported_at %s; want 'claude' and NULL", id, got["agent"], got["end_reported_at"])
+	if got["agent"] != "'claude'" || got["end_reported_at"] != "NULL" || got["subagent_tracking"] != "0" {
+		t.Errorf("%s: agent %s, end_reported_at %s, subagent_tracking %s; want 'claude', NULL and 0",
+			id, got["agent"], got["end_reported_at"], got["subagent_tracking"])
 	}
+	if entries, launches := subagentRowCounts(t, path); entries != 0 || launches != 0 {
+		t.Errorf("%d subagent entries and %d claimable launches; want none", entries, launches)
+	}
+}
+
+// preAddV9SubagentObjects creates the named subagent objects ("subagents",
+// "subagent_launches", v9ClaimIndexName) from their own text: a v8→v9 hop that
+// stopped part-way through its CREATEs. They follow the renames and column adds
+// in the hop, so the store must already hold those.
+func preAddV9SubagentObjects(t *testing.T, path string, names ...string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, n := range names {
+			found := n == v9ClaimIndexName
+			if found {
+				mustExec(t, db, v9ClaimIndexDDL)
+			}
+			for _, tbl := range v9SubagentTables {
+				if tbl.name == n {
+					mustExec(t, db, tbl.ddl)
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("unknown v9 subagent object %q", n)
+			}
+		}
+	})
 }
 
 // preRenameV9 renames the named columns ("table.oldname") to their v9 names: a
@@ -1313,6 +1483,22 @@ func breakV9Backfill(t *testing.T, path string) {
 		mustExec(t, db, `CREATE TRIGGER ad_test_fail_agent_backfill BEFORE UPDATE ON spawns
 			BEGIN SELECT RAISE(ABORT, 'test: the agent backfill fails'); END`)
 	})
+}
+
+// breakV9FirstSubagentTable adds an index named subagents on spawns: the hop
+// renames, adds every column, then fails creating the first subagent table (a
+// table cannot take an existing index's name, IF NOT EXISTS or not).
+func breakV9FirstSubagentTable(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "CREATE INDEX subagents ON spawns(state)") })
+}
+
+// breakV9SecondSubagentTable adds an index named subagent_launches on spawns:
+// the hop renames, adds every column and creates subagents, then fails creating
+// subagent_launches.
+func breakV9SecondSubagentTable(t *testing.T, path string) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "CREATE INDEX subagent_launches ON spawns(state)") })
 }
 
 // seedPreMigrationRow inserts the row 'pre' (working, relay on, settled when
@@ -1479,7 +1665,7 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 // assertV8ValuesKept fails unless every value makeV8Fixture seeded in the
 // store at path (migrated through the v8→v9 hop) reads back under its v9 name:
 // every spawns row, request and history entry, each row's agent claude (or
-// held's) and no end report.
+// held's), no end report and subagent_tracking 0.
 func assertV8ValuesKept(t *testing.T, path string, f v8Fixture, held map[string]string) {
 	t.Helper()
 	for _, id := range f.ids {
@@ -1496,8 +1682,9 @@ func assertV8ValuesKept(t *testing.T, path string, f v8Fixture, held map[string]
 		if a, ok := held[id]; ok {
 			wantAgent = "'" + a + "'"
 		}
-		if got := readRawSpawn(t, path, id, v9ColumnNames()); got["agent"] != wantAgent || got["end_reported_at"] != "NULL" {
-			t.Errorf("%s: agent %s, end_reported_at %s; want %s and NULL", id, got["agent"], got["end_reported_at"], wantAgent)
+		if got := readRawSpawn(t, path, id, v9ColumnNames()); got["agent"] != wantAgent || got["end_reported_at"] != "NULL" || got["subagent_tracking"] != "0" {
+			t.Errorf("%s: agent %s, end_reported_at %s, subagent_tracking %s; want %s, NULL and 0",
+				id, got["agent"], got["end_reported_at"], got["subagent_tracking"], wantAgent)
 		}
 	}
 }

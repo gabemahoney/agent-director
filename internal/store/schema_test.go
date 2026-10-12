@@ -55,8 +55,12 @@ func columnsByName(shape map[string]any) map[string]any {
 // TestFreshStoreSchema checks a new store and a reopen of it: user_version at
 // schemaVersion, every table, index and foreign key, the v9 renames at their
 // old positions, the v3, v5, v6, v7, v8 and v9 columns (in order, last on their
-// tables), store_meta, WAL and foreign keys on, no sentinel, and a 0700 parent
-// and 0600 file that a second open does not widen.
+// tables; v9's end with subagent_tracking), the subagents and subagent_launches
+// tables (b.xjn: columns in order with types and NOT NULL, each foreign key to
+// spawns(instance_id) ON DELETE CASCADE, the unique pairs (instance_id,
+// subagent_id) and (instance_id, tool_use_id) and the claim index), store_meta,
+// WAL and foreign keys on, no sentinel, and a 0700 parent and 0600 file that a
+// second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent-director") // OpenOrInit creates the parent
 	path := filepath.Join(dir, "state.db")
@@ -92,6 +96,7 @@ func TestFreshStoreSchema(t *testing.T) {
 	}
 	shape := schemaShape(t, db)
 	for _, name := range []string{"table spawns", "table permission_requests", "table session_history",
+		"table subagents", "table subagent_launches", "index " + v9ClaimIndexName,
 		"index idx_spawns_state", "index idx_spawns_last_seen", "index idx_spawns_parent",
 		"index idx_permission_requests_instance_decision", "index idx_permission_requests_decision_decided_at",
 		"index idx_session_history_instance"} {
@@ -115,6 +120,8 @@ func TestFreshStoreSchema(t *testing.T) {
 		"spawns":              {"parent_id -> spawns(instance_id) on delete SET NULL"},
 		"permission_requests": {"instance_id -> spawns(instance_id) on delete CASCADE"},
 		"session_history":     {"instance_id -> spawns(instance_id) on delete CASCADE"},
+		"subagents":           {"instance_id -> spawns(instance_id) on delete CASCADE"},
+		"subagent_launches":   {"instance_id -> spawns(instance_id) on delete CASCADE"},
 	} {
 		if got := shape["fk "+table]; !reflect.DeepEqual(got, want) {
 			t.Errorf("foreign keys of %s = %v; want %v", table, got, want)
@@ -136,9 +143,10 @@ func TestFreshStoreSchema(t *testing.T) {
 	if got, want := tableColumnNames(t, db, "permission_requests")[:2], []string{"request_id", "instance_id"}; !slices.Equal(got, want) {
 		t.Errorf("permission_requests' first columns = %v; want %v", got, want)
 	}
+	assertV9SubagentSchema(t, db)
 	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs, v9ColumnSpecs))
 	// spawns ends with the v6 columns, v7's idle_since, the v8 columns, then
-	// agent and end_reported_at; permission_requests with the v7 columns after
+	// agent, end_reported_at and subagent_tracking; permission_requests with the v7 columns after
 	// created_at (the two-places rule's order).
 	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames())
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
@@ -152,17 +160,20 @@ func TestFreshStoreSchema(t *testing.T) {
 	assertSentinel(t, dir, false)
 }
 
-// TestNoAgentSuppliedIdentifierIsAKey: the hook input's tool_use_id and
-// agent_id are recorded on a request (b.146 rule 2) but never identify one
-// (b.c26): no index, UNIQUE or primary key covers either; a request stays
-// keyed by its row id and (instance_id, request_token), the token the
-// relay hook mints.
+// TestNoAgentSuppliedIdentifierIsAKey: on permission_requests, the hook
+// input's tool_use_id and agent_id are recorded on a request (b.146 rule 2) but
+// never identify one (b.c26): no index, UNIQUE or primary key of that table
+// covers either; a request stays keyed by its row id and (instance_id,
+// request_token), the token the relay hook mints. The rule is about permission
+// requests only: the subagent tables are keyed by the subagent id and the
+// tool-use id on purpose (SR-4.1, SR-10.5), for there the agent-supplied id is
+// the identity being recorded (TestFreshStoreSchema holds those keys).
 func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 	s, _ := openTempStore(t)
-	for _, idx := range queryStrings(t, s.db, `SELECT name FROM sqlite_master WHERE type = 'index'`) {
+	for _, idx := range queryStrings(t, s.db, `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'permission_requests'`) {
 		for _, col := range queryStrings(t, s.db, `SELECT name FROM pragma_index_info(?)`, idx) {
 			if col == "tool_use_id" || col == "agent_id" {
-				t.Errorf("index %s covers %s; want no agent-supplied id in any key", idx, col)
+				t.Errorf("index %s covers %s; want no agent-supplied id in any key of permission_requests", idx, col)
 			}
 		}
 	}
@@ -177,7 +188,8 @@ func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 // exact-match sentinel climbs the real chain in one open to the fresh store's
 // schema (the two-places rule, foreign keys included), consumes the sentinel
 // with one ad.schema.migrated line, keeps a pre-existing row with the new
-// columns' defaults (agent claude, no end report) and one store id, and does
+// columns' defaults (agent claude, no end report, subagent_tracking 0, no
+// subagent entry or claimable launch) and one store id, and does
 // not backfill v1's permission rows. A reopen is a clean no-op, and a stale
 // sentinel beside the current store is left alone (SR-1, SR-2, SR-5.4).
 func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
@@ -208,8 +220,8 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
-				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 {
-				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude and no end report", sp, err)
+				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking {
+				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report and untracked", sp, err)
 			}
 			id := s.StoreID()
 			if err := s.Close(); err != nil {
@@ -352,7 +364,10 @@ func TestNewerThanBinaryIsSchemaMismatch(t *testing.T) {
 // TestMigrationStepReentry: a step re-run over a DB it migrated wholly or in
 // part succeeds and gives the schema one run gives (b.93m); v4→v5 and every
 // later hop never add a second store id or replace one (SR-5.4). The v8→v9 rows
-// run over a v8 fixture and also keep every value, a row's held agent included.
+// run over a v8 fixture and also keep every value, a row's held agent included,
+// and cover each state the folded subagent objects can be left in: one table
+// made, both, and the tables and every column made before the backfill and
+// stamp.
 func TestMigrationStepReentry(t *testing.T) {
 	const preID = "0123456789abcdef"
 	var allV5 []string
@@ -387,6 +402,15 @@ func TestMigrationStepReentry(t *testing.T) {
 		preAddV9Columns(t, path, v9ColumnNames()...)
 		setRowAgent(t, path, v8LiveID, AgentCodex)
 	}
+	// every rename and column done, then the named subagent objects
+	preV9Subagent := func(names ...string) func(*testing.T, string) {
+		return func(t *testing.T, path string) {
+			preRenameV9(t, path, allV9RenameKeys()...)
+			preAddV9Columns(t, path, v9ColumnNames()...)
+			preAddV9SubagentObjects(t, path, names...)
+		}
+	}
+	allSubagent := []string{"subagents", "subagent_launches", v9ClaimIndexName}
 	cases := []struct {
 		name   string
 		from   int
@@ -427,12 +451,29 @@ func TestMigrationStepReentry(t *testing.T) {
 			preRenameV9(t, path, allV9RenameKeys()...)
 			preAddV9Columns(t, path, "agent")
 		}, 1, ""},
-		{"v8→v9 after the renames and both columns, before the backfill", 8, func(t *testing.T, path string) {
+		{"v8→v9 after the renames and the first two columns, before subagent_tracking", 8, func(t *testing.T, path string) {
+			preRenameV9(t, path, allV9RenameKeys()...)
+			preAddV9Columns(t, path, "agent", "end_reported_at")
+		}, 1, ""},
+		{"v8→v9 after the renames and all three columns, before the subagent tables", 8, func(t *testing.T, path string) {
 			preRenameV9(t, path, allV9RenameKeys()...)
 			preAddV9Columns(t, path, v9ColumnNames()...)
 		}, 1, ""},
+		{"v8→v9 after subagents alone", 8, preV9Subagent("subagents"), 1, ""},
+		{"v8→v9 after subagent_launches alone", 8, preV9Subagent("subagent_launches"), 1, ""},
+		{"v8→v9 after both tables, before the claim index", 8, preV9Subagent("subagents", "subagent_launches"), 1, ""},
+		{"v8→v9 after both tables and the claim index, before the backfill and stamp", 8, preV9Subagent(allSubagent...), 1, ""},
+		{"v8→v9 after both tables, with subagent_tracking only", 8, func(t *testing.T, path string) {
+			preRenameV9(t, path, allV9RenameKeys()...)
+			preAddV9Columns(t, path, "subagent_tracking")
+			preAddV9SubagentObjects(t, path, allSubagent...)
+		}, 1, ""},
 		{"v8→v9 after the backfill, a row holding codex kept", 8, preV9Held, 1, ""},
 		{"v8→v9 run twice after a row holds codex", 8, preV9Held, 2, ""},
+		{"v8→v9 run twice after the subagent tables and a held agent", 8, func(t *testing.T, path string) {
+			preV9Subagent(allSubagent...)(t, path)
+			setRowAgent(t, path, v8LiveID, AgentCodex)
+		}, 2, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -471,6 +512,10 @@ func TestMigrationStepReentry(t *testing.T) {
 			}
 			if tc.from == 8 {
 				assertV8ValuesKept(t, path, v8, held)
+				assertV9SubagentSchema(t, db)
+				if entries, launches := subagentRowCounts(t, path); entries != 0 || launches != 0 {
+					t.Errorf("%d subagent entries and %d claimable launches after re-entry; want none", entries, launches)
+				}
 			}
 		})
 	}
@@ -481,7 +526,10 @@ func TestMigrationStepReentry(t *testing.T) {
 // version, schema, rows and sentinel (SR-2.4, SR-5.4, SR-20.6); a v6→v7 hop
 // failing at its backfill leaves no column added and no request proven; a
 // v8→v9 hop failing in its validation leaves every column under its old name,
-// and failing at its agent backfill leaves no rename and no column.
+// failing at its agent backfill leaves no rename and no column, and failing
+// part-way through the folded subagent tables (after the renames and columns, at
+// the first table or at the second) leaves no rename, no column and no subagent
+// table.
 func TestMigrationRollback(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -504,6 +552,8 @@ func TestMigrationRollback(t *testing.T) {
 		{"v8→v9 at a table holding both names", 8, breakV9BothNames, "holds both claude_session_id and session_id"},
 		{"v8→v9 at a table holding neither name", 8, breakV9NeitherName, "holds neither claude_args nor agent_args"},
 		{"v8→v9 at the agent backfill, after every rename and column", 8, breakV9Backfill, "backfill agent"},
+		{"v8→v9 at subagents, after every rename and column", 8, breakV9FirstSubagentTable, "create subagent tables"},
+		{"v8→v9 at subagent_launches, after subagents was created", 8, breakV9SecondSubagentTable, "create subagent tables"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

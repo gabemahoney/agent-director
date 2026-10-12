@@ -49,8 +49,9 @@ type moveRow struct {
 }
 
 // seedMoveRow seeds a codex row with a value in every column the move clears
-// or keeps (non-default layouts, raw text, an end report), a parent and a
-// history entry.
+// or keeps (non-default layouts, raw text, an end report), untracked
+// (subagent_tracking 0, which the move sets), two subagent entries and a
+// claimable launch, a parent and a history entry.
 func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 	t.Helper()
 	state := spec.state
@@ -65,7 +66,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithTmuxSessionName("move-ts"), apitest.WithRawLabels(`{"team":  "a", "b":"2"}`),
 		apitest.WithRawAgentArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
-		apitest.WithAgent(moveAgent), apitest.WithEndReportedAt(moveEndReported),
+		apitest.WithAgent(moveAgent), apitest.WithEndReportedAt(moveEndReported), apitest.WithNoSubagentTracking(),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
 			Life: 2, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
@@ -73,6 +74,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 	if err := apitest.SeedParentChild(f.path, f.seed(store.StateWaiting, ""), id); err != nil {
 		t.Fatalf("SeedParentChild: %v", err)
 	}
+	f.seedSubagentsOf(id)
 	return moveRow{id: id, examined: rvExamine(t, f, id), before: f.rawColumns(id), history: f.historyAllLives(id)}
 }
 
@@ -103,7 +105,8 @@ func requireSet(t *testing.T, cols map[string]any) {
 
 // TestMoveToPendingApplied checks the applied move on an ended and a missing
 // row: the returned version is stored; pid, process start, ended_at, the end
-// report, liveness and the server and pane identity are NULL; the launch start, token, socket
+// report, liveness and the server and pane identity are NULL; subagent_tracking
+// is 1 over the seeded 0; the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
 // kept column (the agent included) and the history are byte for byte unchanged.
 func TestMoveToPendingApplied(t *testing.T) {
@@ -123,6 +126,9 @@ func TestMoveToPendingApplied(t *testing.T) {
 			r := seedMoveRow(t, f, tc.spec)
 			requireSet(t, moveKept(r.before))
 			requireSet(t, map[string]any{"end_reported_at": r.before.EndReportedAt})
+			if r.before.SubagentTracking != int64(0) {
+				t.Fatalf("seeded subagent_tracking = %v; want 0, or the move's write is vacuous", r.before.SubagentTracking)
+			}
 			var parent any
 			parentID := ""
 			if tc.parent {
@@ -137,7 +143,7 @@ func TestMoveToPendingApplied(t *testing.T) {
 			want := map[string]any{"state": store.StatePending, "row_version": r.examined.Snapshot.RowVersion + 1,
 				"launch_started_at": moveLaunchMillis, "launch_token": moveToken, "tmux_socket": moveSocket, "parent_id": parent,
 				"pid": nil, "proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
-				"end_reported_at": nil}
+				"end_reported_at": nil, "subagent_tracking": int64(1)}
 			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 				want[col] = w
 			}
@@ -145,7 +151,7 @@ func TestMoveToPendingApplied(t *testing.T) {
 			for col, g := range map[string]any{"state": after.State, "row_version": after.RowVersion, "launch_started_at": after.LaunchStartedAt,
 				"launch_token": after.LaunchToken, "tmux_socket": after.TmuxSocket, "parent_id": after.ParentID, "pid": after.PID,
 				"proc_starttime": after.ProcStarttime, "ended_at": after.EndedAt, "liveness_unverified_since": after.LivenessUnverifiedSince,
-				"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt} {
+				"liveness_note": after.LivenessNote, "end_reported_at": after.EndReportedAt, "subagent_tracking": after.SubagentTracking} {
 				got[col] = g
 			}
 			if !reflect.DeepEqual(got, want) || v != r.examined.Snapshot.RowVersion+1 {

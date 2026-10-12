@@ -129,7 +129,10 @@ func emitOrphanCloseoutTick(instanceID, requestToken string) {
 // id matches no row. Per SRD §12 the `delete` verb (admin path)
 // composes this primitive per id. Does NOT touch tmux sessions or
 // JSONL transcripts; the caller is expected to have already torn
-// those down or accept the orphan.
+// those down or accept the orphan. The row's permission requests, session
+// history, subagent entries and claimable launches go with it through the
+// schema's ON DELETE CASCADE foreign keys (foreign_keys=1), with no delete
+// statement of their own.
 func (s *Store) DeleteSpawn(instanceID string) error {
 	const q = `DELETE FROM spawns WHERE instance_id = ?`
 	res, err := s.db.Exec(q, instanceID)

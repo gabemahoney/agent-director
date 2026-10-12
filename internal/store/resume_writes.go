@@ -21,6 +21,12 @@ type ResumePrior struct {
 	// epoch; 0 = NULL (no end report). The move clears it and a failed
 	// resume's restore writes it back.
 	EndReportedAtMillis int64
+	// SubagentTracking is subagent_tracking as the Spawn read it (SR-9): the
+	// move sets the flag to 1 for the launch it begins, and a failed resume's
+	// restore writes this pre-move value back (1, or 0 for a row from before
+	// the v9 migration), since the earlier launch becomes current again. A
+	// stored value other than 1 was read as false and is written back as 0.
+	SubagentTracking bool
 	// Identity is the pre-move launch_token, tmux_socket and server and pane
 	// identity, as stored, so the restore writes the previous token back and
 	// the label of the row's earlier launch stays current (amendment 1; LFR H3).
@@ -45,6 +51,7 @@ const moveToPendingSQL = `UPDATE spawns
         pane_pid                  = NULL,
         pane_starttime            = NULL,
         end_reported_at           = NULL,
+        subagent_tracking         = ` + subagentTrackedSQL + `,
         launch_started_at         = ?,
         launch_token              = ?,
         tmux_socket               = ?,
@@ -75,7 +82,11 @@ const moveToPendingSQL = `UPDATE spawns
 // written as NULL; and advances row_version by one. Every other column
 // (session_id, jsonl_path, life_number, no_pre_trust, started_at,
 // last_seen_at, agent and the request fields) is unchanged, and session_history
-// is not touched.
+// is not touched. It also sets subagent_tracking to 1, the flag of the launch
+// it begins (subagentTrackedSQL, SR-9; no parameter: every launch on this build
+// registers the subagent events), including over a row that held 0. It closes
+// no subagent entry here: the entries are the closes' (SR-8.1), not this
+// statement's.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request
 // of the row that still awaits an answer gets closed_at, an undecided one
@@ -168,6 +179,7 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
         pane_pid                  = ?,
         pane_starttime            = ?,
         end_reported_at           = ?,
+        subagent_tracking         = ?,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND state = ? AND row_version = ?`
@@ -178,7 +190,9 @@ const restoreAfterFailedResumeSQL = `UPDATE spawns
 // movedVersion, the version MoveToPending produced. In that statement it sets
 // state to prior.State as an immediate write (settled_state prior.State,
 // state_changed_ms the statement's clock; b.3ie); writes ended_at, pid, proc_starttime,
-// liveness_unverified_since, liveness_note and end_reported_at from prior, and
+// liveness_unverified_since, liveness_note, end_reported_at and
+// subagent_tracking (1 for prior.SubagentTracking true, else 0; the earlier
+// launch's flag, SR-9) from prior, and
 // launch_token, tmux_socket and the six server and pane identity columns from
 // prior.Identity, each zero value as NULL; sets launch_started_at to NULL; and
 // advances row_version by one. The texts are bound as the stored text they
@@ -217,6 +231,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		nullableStringArg(id.ServerStarttime), nullableStringArg(id.PaneID),
 		positiveIntArg(id.PanePID), nullableStringArg(id.PaneStarttime),
 		positiveInt64Arg(prior.EndReportedAtMillis),
+		boolInt(prior.SubagentTracking),
 		instanceID, StatePending, movedVersion,
 	)
 	r, err := s.db.Exec(restoreAfterFailedResumeSQL, args...)

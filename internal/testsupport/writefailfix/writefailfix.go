@@ -73,6 +73,18 @@ const (
 	// a pane answer's intent or its release. A delete of a request (the spawn
 	// delete cascade, the cap eviction) is not matched.
 	PermissionDecision Kind = 6
+	// SubagentRecord fails every insert, update and delete of the id's rows in
+	// subagents and in subagent_launches (b.xjn): the writes that create,
+	// change or remove a subagent entry or a claimable launch. Also matched:
+	// the SR-8.1 closes (a close of the id's running entries is an update, and
+	// a reuse's delete of its claimable launches a delete, so resume's move,
+	// reuse's reset and the ended write that carry one fail with it), the caps'
+	// evictions, a delete of the id's spawns row (delete, expire) while it
+	// still has entries or claimable launches, through the cascade, and
+	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install after
+	// seeding. Writes to the id's spawns row itself, and every write to another
+	// id's subagent rows, are not matched.
+	SubagentRecord Kind = 7
 )
 
 // String names the kind, for test failure messages.
@@ -90,6 +102,8 @@ func (k Kind) String() string {
 		return "launch identity write"
 	case PermissionDecision:
 		return "permission decision"
+	case SubagentRecord:
+		return "subagent record"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -97,7 +111,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -211,6 +225,70 @@ END`,
                   WHERE kind = 6 AND instance_id = OLD.instance_id)
 BEGIN
     SELECT RAISE(ABORT, 'injected write failure: permission decision');
+END`,
+		},
+	},
+	// Every insert, update and delete of the id's rows in either subagent
+	// table, a cascaded delete included.
+	SubagentRecord: {
+		{
+			name: "ad_test_fail_subagent_entry_insert",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_entry_insert
+    BEFORE INSERT ON subagents
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = NEW.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
+END`,
+		},
+		{
+			name: "ad_test_fail_subagent_entry_update",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_entry_update
+    BEFORE UPDATE ON subagents
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = OLD.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
+END`,
+		},
+		{
+			name: "ad_test_fail_subagent_entry_delete",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_entry_delete
+    BEFORE DELETE ON subagents
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = OLD.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
+END`,
+		},
+		{
+			name: "ad_test_fail_subagent_launch_insert",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_launch_insert
+    BEFORE INSERT ON subagent_launches
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = NEW.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
+END`,
+		},
+		{
+			name: "ad_test_fail_subagent_launch_update",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_launch_update
+    BEFORE UPDATE ON subagent_launches
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = OLD.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
+END`,
+		},
+		{
+			name: "ad_test_fail_subagent_launch_delete",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_subagent_launch_delete
+    BEFORE DELETE ON subagent_launches
+    WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 7 AND instance_id = OLD.instance_id)
+BEGIN
+    SELECT RAISE(ABORT, 'injected write failure: subagent record');
 END`,
 		},
 	},

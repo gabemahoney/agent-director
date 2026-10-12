@@ -50,8 +50,10 @@ type reuseRow struct {
 }
 
 // seedReuseRow seeds a finished codex row with a non-default value in every
-// column the reset clears, sets or keeps (an end report included), an older
-// history entry, a parent, a child and two permission requests (one decided),
+// column the reset clears, sets or keeps (an end report included), untracked
+// (subagent_tracking 0, which the reset sets), two subagent entries and a
+// claimable launch, an older history entry, a parent, a child and two
+// permission requests (one decided),
 // read as reuse would.
 func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 	t.Helper()
@@ -69,7 +71,7 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 		apitest.WithLaunchStartedAt(1767225600999), apitest.WithLifeNumber(reuseLife), apitest.WithTmuxSessionName("reuse-ts"),
 		apitest.WithRawLabels(`{"team":  "a", "b":"2"}`), apitest.WithRawAgentArgs(`["--model",   "opus"]`),
 		apitest.WithRawExtraEnv(`{"K":  "v"}`), apitest.WithEndedAt("2026-09-29T01:02:03.5Z"), apitest.WithJsonlPath(reuseJsonl),
-		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported),
+		apitest.WithAgent(store.AgentCodex), apitest.WithEndReportedAt(reuseEndReported), apitest.WithNoSubagentTracking(),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-reuse-old", JSONLPath: "/tmp/ad-reuse-test/old.jsonl",
 			Life: 1, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
@@ -83,6 +85,7 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 			t.Fatalf("SeedParentChild(%s, %s): %v", pc[0], pc[1], err)
 		}
 	}
+	f.seedSubagentsOf(id)
 	decided := seedRequest(t, f, id)
 	seedRequest(t, f, id)
 	ok, err := f.s.DecidePermissionRequest(id, decided, "allow", "", "reuse_test")
@@ -181,7 +184,8 @@ func TestReuseReadForReuse(t *testing.T) {
 
 // TestReuseResetApplied checks the applied reset on ended and missing rows:
 // the archived session, cleared and fresh columns (the agent the fresh spawn
-// names, either way between claude and codex, and no end report), life and
+// names, either way between claude and codex, no end report, and
+// subagent_tracking 1 over the seeded 0), life and
 // version each +1, the pre-trust choice either way, an empty parent stored NULL; every request
 // of the id deleted (another id's kept), the child and older history kept; a
 // row with no session archives nothing.
@@ -224,8 +228,9 @@ func TestReuseResetApplied(t *testing.T) {
 			if tc.freshAgent != "" {
 				fresh.Agent, wantAgent = tc.freshAgent, tc.freshAgent
 			}
-			if r.before.EndReportedAt != reuseEndReported {
-				t.Fatalf("seeded end_reported_at = %v; want %d, or the cleared check is vacuous", r.before.EndReportedAt, reuseEndReported)
+			if r.before.EndReportedAt != reuseEndReported || r.before.SubagentTracking != int64(0) {
+				t.Fatalf("seeded end_reported_at = %v, subagent_tracking = %v; want %d and 0, or the checks are vacuous",
+					r.before.EndReportedAt, r.before.SubagentTracking, reuseEndReported)
 			}
 
 			res, archived, v, err := f.reuseReset(r, fresh)
@@ -240,7 +245,7 @@ func TestReuseResetApplied(t *testing.T) {
 				"parent_id": a.ParentID, "launch_token": a.LaunchToken, "tmux_socket": a.TmuxSocket,
 				"session_id": a.SessionID, "jsonl_path": a.JSONLPath, "pid": a.PID, "proc_starttime": a.ProcStarttime,
 				"ended_at": a.EndedAt, "liveness_unverified_since": a.LivenessUnverifiedSince, "liveness_note": a.LivenessNote,
-				"agent": a.Agent, "end_reported_at": a.EndReportedAt}
+				"agent": a.Agent, "end_reported_at": a.EndReportedAt, "subagent_tracking": a.SubagentTracking}
 			for col, g := range identityColumns(a) {
 				got[col] = g
 			}
@@ -251,7 +256,7 @@ func TestReuseResetApplied(t *testing.T) {
 				"labels": `{"team":"z"}`, "extra_env": `{"NEW":"1"}`, "parent_id": parent, "launch_token": "a1b2c3d4e5f60718",
 				"tmux_socket": "/tmp/ad-reuse-test/new-sock", "session_id": nil, "jsonl_path": nil, "pid": nil,
 				"proc_starttime": nil, "ended_at": nil, "liveness_unverified_since": nil, "liveness_note": nil,
-				"agent": wantAgent, "end_reported_at": nil}
+				"agent": wantAgent, "end_reported_at": nil, "subagent_tracking": int64(1)}
 			for col, w := range wantIdentityColumns(store.LaunchIdentity{}) {
 				want[col] = w
 			}

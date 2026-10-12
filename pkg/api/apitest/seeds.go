@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -404,4 +405,110 @@ func InitStore(dbPath string) (string, error) {
 		return "", fmt.Errorf("InitStore: close: %w", err)
 	}
 	return dbPath, nil
+}
+
+// currentLaunchToken reads instanceID's current launch_token on raw, the launch
+// a seeded subagent entry or claimable launch belongs to by default. A missing
+// row, or one with no launch token, is an error.
+func currentLaunchToken(raw *sql.DB, who, instanceID string) (string, error) {
+	var token sql.NullString
+	err := raw.QueryRow(`SELECT launch_token FROM spawns WHERE instance_id = ?`, instanceID).Scan(&token)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("%s: %w: %s", who, store.ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: read launch token: %w", who, err)
+	}
+	if !token.Valid || token.String == "" {
+		return "", fmt.Errorf("%s: instance %s has no launch token", who, instanceID)
+	}
+	return token.String, nil
+}
+
+// SeedSubagent inserts one subagents row for the seeded spawn instanceID,
+// through a raw connection: it bypasses the hook gate, the entry cap and every
+// transition rule, so a test can seed any entry, running, stopped or lost,
+// record or observation, of the current or an earlier launch, with any field
+// null or set. Defaults for a column no option names: subagent_id as given, the
+// row's current launch token, confirmed 1, state running, opened_at and
+// activity_at SeededSubagentMs, every other column NULL (see SubagentOption).
+// The row must exist. Install writefailfix's subagent kind
+// (storefix.WriteFailSubagentRecord) after seeding: it fails this insert too.
+func SeedSubagent(dbPath, instanceID, subagentID string, opts ...SubagentOption) error {
+	o := &subagentOpts{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("SeedSubagent: %w", err)
+	}
+	defer raw.Close() //nolint:errcheck
+
+	launch := o.launch
+	if launch == "" {
+		if launch, err = currentLaunchToken(raw, "SeedSubagent", instanceID); err != nil {
+			return err
+		}
+	}
+	defaults := map[string]any{
+		"confirmed":   int64(1),
+		"state":       store.SubagentStateRunning,
+		"opened_at":   SeededSubagentMs,
+		"activity_at": SeededSubagentMs,
+	}
+	for col, v := range defaults {
+		if _, ok := o.cols[col]; !ok {
+			o.set(col, v)
+		}
+	}
+	o.set("instance_id", instanceID)
+	o.set("subagent_id", subagentID)
+	o.set("launch_token", launch)
+
+	cols := make([]string, 0, len(o.cols))
+	for col := range o.cols {
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	args := make([]any, len(cols))
+	for i, col := range cols {
+		args[i] = o.cols[col]
+	}
+	q := "INSERT INTO subagents (" + strings.Join(cols, ", ") + ") VALUES (?" + strings.Repeat(", ?", len(cols)-1) + ")"
+	if _, err := raw.Exec(q, args...); err != nil {
+		return fmt.Errorf("SeedSubagent: insert %q for %s: %w", subagentID, instanceID, err)
+	}
+	return nil
+}
+
+// SeedSubagentLaunch inserts one subagent_launches row (a claimable launch)
+// for the seeded spawn instanceID and the Agent tool call toolUseID, through a
+// raw connection that bypasses the gate and the claimable-launch cap.
+// Defaults: the row's current launch token, the type "general-purpose",
+// opened_at SeededSubagentMs (see SubagentLaunchOption). The row must exist.
+// Install writefailfix's subagent kind after seeding: it fails this insert too.
+func SeedSubagentLaunch(dbPath, instanceID, toolUseID string, opts ...SubagentLaunchOption) error {
+	o := &subagentLaunchOpts{typ: "general-purpose", openedAt: SeededSubagentMs}
+	for _, opt := range opts {
+		opt(o)
+	}
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("SeedSubagentLaunch: %w", err)
+	}
+	defer raw.Close() //nolint:errcheck
+
+	launch := o.launch
+	if launch == "" {
+		if launch, err = currentLaunchToken(raw, "SeedSubagentLaunch", instanceID); err != nil {
+			return err
+		}
+	}
+	if _, err := raw.Exec(`INSERT INTO subagent_launches
+	    (instance_id, launch_token, tool_use_id, subagent_type, opened_at)
+	  VALUES (?, ?, ?, ?, ?)`, instanceID, launch, toolUseID, o.typ, o.openedAt); err != nil {
+		return fmt.Errorf("SeedSubagentLaunch: insert %q for %s: %w", toolUseID, instanceID, err)
+	}
+	return nil
 }

@@ -33,7 +33,7 @@ End a finished row's (ended or missing) own old session, after a human has looke
 
 `agent-director-admin delete --instance-id <id> [--instance-id <id>...]`
 
-Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. It also removes each row's permission requests and session history and clears it as the parent of any other row. It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. Never remove a row after a kill that did not succeed. Each id is processed on its own; a failure on one never aborts the batch. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+Remove rows by id, bypassing every guard: the human's repair tool for a row nothing else removes, such as a row whose recorded tmux session name cannot be used, which resume and reuse refuse and expire keeps. It also removes each row's permission requests, session history and subagent records and clears it as the parent of any other row. It touches no tmux session and no transcript: on a live row the agent keeps running, untracked. Never remove a row after a kill that did not succeed. Each id is processed on its own; a failure on one never aborts the batch. Run it as the agents' user and in their tmux environment. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
 
 ### Flags
 

@@ -119,7 +119,8 @@ A human removes the row, in order:
    `AGENT_DIRECTOR_INSTANCE_ID=<this row's id>`. Another id is another row's
    agent: never end it.
 4. End this row's session by its session id (steps 4 and 5).
-5. Remove the row, its permission requests and its session history:
+5. Remove the row, its permission requests, its session history and its
+   subagent records:
 
    ```sh
    ~/.config/agent-director/admin/agent-director-admin delete --instance-id <id>
@@ -251,12 +252,12 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 1. With the new binary, stop every agent of the set and every `serve`, as in
    "Stopping a set of agents before a binary change".
 2. Put back the pre-upgrade copy of `state.db` (with `-wal` and `-shm`; delete
-   any `-wal` or `-shm` the copy lacks; this loses every write since), or run
-   the downgrade recipes down to the previous binary's schema, newest first:
-   [v6 → v5](migration-guide.md#v6--v5-reverses-migratev5tov6) for 0.11.x, then
-   [v5 → v4](migration-guide.md#v5--v4-reverses-migratev4tov5) only for an older
-   release. They keep the rows but lose the values of columns the migrations
-   added. Install the previous binary and start the caller's old version.
+   any `-wal` or `-shm` the copy lacks; this loses every write since). It is
+   the only way back: the migrated store is v9, and there is no v9 → v8
+   downgrade recipe (see
+   [Emergency downgrade recipe](migration-guide.md#emergency-downgrade-recipe)
+   in the migration guide), so the older recipes (v6 → v5 and below) cannot reach it. Install
+   the previous binary and start the caller's old version.
 
 ## A row stays `pending` and the trail shows `no_exec_form`
 

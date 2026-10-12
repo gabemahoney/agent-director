@@ -68,7 +68,8 @@ func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
 // back byte for byte, malformed values and their storage class included, with
 // no launch start, the reset version + 1, the failure time for a NULL ended_at
 // and a NULL parent once the pre-reuse parent is deleted, the agent and end
-// report included; the reset's archive and request deletion stay.
+// report and subagent_tracking (the reset set 1) included; the reset's archive
+// and request deletion stay and no subagent entry or claimable launch changes.
 func TestReuseRestoreApplied(t *testing.T) {
 	badToken := reuseIdentity()
 	badToken.Token = "NOT-a-token!"
@@ -103,7 +104,11 @@ func TestReuseRestoreApplied(t *testing.T) {
 				t.Fatalf("seeded typeof(no_pre_trust) = %q; want %q", seededClass, tc.seedClass)
 			}
 			r := rrDoReset(t, f, id, reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust))
-			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt"} {
+			reset := f.subagentRowsOf(id)
+			if len(reset.Entries) != 2 || len(reset.Launches) != 1 {
+				t.Fatalf("seedReuseRow left %d entries and %d claimable launches; want 2 and 1", len(reset.Entries), len(reset.Launches))
+			}
+			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt", "SubagentTracking"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
 				if reflect.DeepEqual(a, b) {
 					t.Fatalf("the reset left %s = %s; the restore check would be vacuous", col, rsShow(b))
@@ -130,6 +135,9 @@ func TestReuseRestoreApplied(t *testing.T) {
 			}
 			if got := f.historyAllLives(id); !reflect.DeepEqual(got, r.history) {
 				t.Errorf("history %+v -> %+v; want the reset's, archive included", r.history, got)
+			}
+			if got := f.subagentRowsOf(id); !reflect.DeepEqual(got, reset) {
+				t.Errorf("subagent rows %+v -> %+v; want unchanged by the restore", reset, got)
 			}
 			if reqs := f.reuseRequests(t, id); len(seeded.requests) == 0 || len(reqs) != 0 {
 				t.Errorf("requests %d -> %d after the restore; want the reset's deletion kept", len(seeded.requests), len(reqs))

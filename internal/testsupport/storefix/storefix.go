@@ -288,6 +288,12 @@ const (
 	WriteFailReuseRestore          = writefailfix.ReuseRestore
 	WriteFailLaunchIdentity        = writefailfix.LaunchIdentityWrite
 	WriteFailPermissionDecision    = writefailfix.PermissionDecision
+	// WriteFailSubagentRecord (b.xjn) fails every insert, update and delete of
+	// the id's subagent entries and claimable launches, the closes, the caps'
+	// evictions and a cascaded delete from the spawns row included, and
+	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install it after
+	// seeding. Used only through InjectWriteFailure.
+	WriteFailSubagentRecord = writefailfix.SubagentRecord
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

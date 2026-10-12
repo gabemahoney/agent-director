@@ -81,6 +81,35 @@ import (
 // INTEGER, milliseconds since the epoch), appended in that order after
 // state_changed_ms. The column text matches v9Columns exactly (the two-places
 // rule).
+//
+// v9 also carries, folded into the same unreleased hop (b.xjn, SR-9, SR-10.1,
+// SR-10.5; there is no separate v10): spawns.subagent_tracking (INTEGER NOT
+// NULL DEFAULT 0), appended after end_reported_at, and two tables at the end
+// of this text, subagents (one row per subagent entry) and subagent_launches
+// (one row per claimable launch), both with a foreign key to spawns(instance_id)
+// ON DELETE CASCADE. The same CREATE text, column for column, is v9SubagentTablesSQL,
+// migrateV8toV9's own fixed copy (the two-places rule), so a fresh store and a
+// migrated store have the same objects. Only internal/store reads or writes
+// them.
+//
+// subagents holds one row per entry, a record (confirmed) or an observation
+// (unconfirmed): created_seq grows with each insert and is never reused, so it
+// orders creation; launch_token is the launch the entry belongs to; times are
+// integer milliseconds since the epoch; opened_at is the latest time the entry
+// became running (or its creation time) and activity_at the instant of the
+// latest write that changed it; the three *_source columns say which source set
+// a value that has more than one, NULL while the value is unknown. The
+// UNIQUE(instance_id, subagent_id) constraint's implicit index serves the
+// per-row read, the per-launch transitions and the cap, which all lead with
+// instance_id.
+//
+// subagent_launches holds one row per open claimable launch: an internal note
+// of an Agent tool call not yet matched to a subagent. UNIQUE(instance_id,
+// tool_use_id) serves the closes; idx_subagent_launches_claim serves the claim
+// (the current launch and type, oldest first).
+//
+// Both cascade from spawns, so expire's guarded delete and the admin delete
+// remove a row's entries and claimable launches with the row.
 const schemaDDL = `
 CREATE TABLE IF NOT EXISTS spawns (
     instance_id                TEXT PRIMARY KEY,
@@ -120,7 +149,8 @@ CREATE TABLE IF NOT EXISTS spawns (
     settled_state              TEXT NOT NULL DEFAULT '',
     state_changed_ms           INTEGER NOT NULL DEFAULT 0,
     agent                      TEXT NOT NULL DEFAULT '',
-    end_reported_at            INTEGER
+    end_reported_at            INTEGER,
+    subagent_tracking          INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -174,6 +204,47 @@ CREATE TABLE IF NOT EXISTS session_history (
 CREATE INDEX IF NOT EXISTS idx_session_history_instance ON session_history(instance_id);
 
 CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS subagents (
+    created_seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id          TEXT NOT NULL
+                         REFERENCES spawns(instance_id) ON DELETE CASCADE,
+    subagent_id          TEXT NOT NULL,
+    launch_token         TEXT NOT NULL,
+    confirmed            INTEGER NOT NULL,
+    session_id           TEXT,
+    subagent_type        TEXT,
+    description          TEXT,
+    model                TEXT,
+    parent_type          TEXT,
+    parent_id            TEXT,
+    tool_use_id          TEXT,
+    run_mode             TEXT,
+    first_started_at     INTEGER,
+    started_at           INTEGER,
+    stopped_at           INTEGER,
+    lost_at              INTEGER,
+    state                TEXT NOT NULL,
+    close_reason         TEXT,
+    opened_at            INTEGER NOT NULL,
+    activity_at          INTEGER NOT NULL,
+    subagent_type_source TEXT,
+    run_mode_source      TEXT,
+    stopped_at_source    TEXT,
+    UNIQUE(instance_id, subagent_id)
+);
+
+CREATE TABLE IF NOT EXISTS subagent_launches (
+    created_seq   INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id   TEXT NOT NULL
+                  REFERENCES spawns(instance_id) ON DELETE CASCADE,
+    launch_token  TEXT NOT NULL,
+    tool_use_id   TEXT NOT NULL,
+    subagent_type TEXT NOT NULL,
+    opened_at     INTEGER NOT NULL,
+    UNIQUE(instance_id, tool_use_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_launches_claim ON subagent_launches(instance_id, launch_token, subagent_type, opened_at);
 `
 
 // migrationStep upgrades a database from `from` to `from+1` inside a single
@@ -869,10 +940,16 @@ var v9Renames = []struct{ table, oldName, newName string }{
 //   - end_reported_at: when a Codex row's verified agent process sent a
 //     SessionEnd, in milliseconds since the epoch (NULL on every row until a
 //     the Codex end report sets it; nothing writes it yet. Always NULL on a
-//     Claude row).
+//     Claude row);
+//   - subagent_tracking (b.xjn, SR-9): 1 when the settings the row's current
+//     launch was given register the agent's subagent start and stop events.
+//     NOT NULL DEFAULT 0 and no backfill: a row from before the hop reads 0
+//     (untracked) until its next launch write sets 1; only InsertPending,
+//     MoveToPending and ResetForReuse write it.
 var v9Columns = []struct{ table, name, ddl string }{
 	{"spawns", "agent", "ALTER TABLE spawns ADD COLUMN agent TEXT NOT NULL DEFAULT ''"},
 	{"spawns", "end_reported_at", "ALTER TABLE spawns ADD COLUMN end_reported_at INTEGER"},
+	{"spawns", "subagent_tracking", "ALTER TABLE spawns ADD COLUMN subagent_tracking INTEGER NOT NULL DEFAULT 0"},
 }
 
 // v9BackfillSQL is migrateV8toV9's one backfill (phase 3): every row that
@@ -880,6 +957,57 @@ var v9Columns = []struct{ table, name, ddl string }{
 // the empty string, so a second run rewrites nothing and a row that already
 // holds an agent keeps it.
 const v9BackfillSQL = `UPDATE spawns SET agent = 'claude' WHERE agent = ''`
+
+// v9SubagentTablesSQL is migrateV8toV9's own, fixed copy of the CREATE text of
+// the two subagent tables and the claim index (b.xjn, SR-10.1, SR-10.5), run in
+// phase 2 after the renames. Like v9Columns it carries the exact column text
+// schemaDDL uses (the two-places rule) and, as a shipped hop's text, never
+// changes once released: a later change to either table is a later hop's, not
+// an edit here. IF NOT EXISTS keeps a second run a no-op. Both tables cascade
+// from spawns(instance_id). schemaDDL's own copy documents what each table and
+// column holds.
+const v9SubagentTablesSQL = `
+CREATE TABLE IF NOT EXISTS subagents (
+    created_seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id          TEXT NOT NULL
+                         REFERENCES spawns(instance_id) ON DELETE CASCADE,
+    subagent_id          TEXT NOT NULL,
+    launch_token         TEXT NOT NULL,
+    confirmed            INTEGER NOT NULL,
+    session_id           TEXT,
+    subagent_type        TEXT,
+    description          TEXT,
+    model                TEXT,
+    parent_type          TEXT,
+    parent_id            TEXT,
+    tool_use_id          TEXT,
+    run_mode             TEXT,
+    first_started_at     INTEGER,
+    started_at           INTEGER,
+    stopped_at           INTEGER,
+    lost_at              INTEGER,
+    state                TEXT NOT NULL,
+    close_reason         TEXT,
+    opened_at            INTEGER NOT NULL,
+    activity_at          INTEGER NOT NULL,
+    subagent_type_source TEXT,
+    run_mode_source      TEXT,
+    stopped_at_source    TEXT,
+    UNIQUE(instance_id, subagent_id)
+);
+
+CREATE TABLE IF NOT EXISTS subagent_launches (
+    created_seq   INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id   TEXT NOT NULL
+                  REFERENCES spawns(instance_id) ON DELETE CASCADE,
+    launch_token  TEXT NOT NULL,
+    tool_use_id   TEXT NOT NULL,
+    subagent_type TEXT NOT NULL,
+    opened_at     INTEGER NOT NULL,
+    UNIQUE(instance_id, tool_use_id)
+);
+CREATE INDEX IF NOT EXISTS idx_subagent_launches_claim ON subagent_launches(instance_id, launch_token, subagent_type, opened_at);
+`
 
 // v9HasColumn reports whether table has a column called name, by a
 // pragma_table_info probe inside tx. The table name is bound as an argument and
@@ -909,15 +1037,21 @@ func v9HasColumn(tx *sql.Tx, table, name string) (bool, error) {
 //  2. Rename and add: ALTER TABLE ... RENAME COLUMN for each rename whose old
 //     name is still there (one whose new name is present and old name absent
 //     was done by an earlier run and is skipped), then ADD COLUMN for each of
-//     v9Columns not already there, in order.
+//     v9Columns not already there, in order (the last is subagent_tracking),
+//     then CREATE the subagents and subagent_launches tables and their indexes
+//     (v9SubagentTablesSQL, IF NOT EXISTS, after the renames so their foreign
+//     keys name spawns(instance_id)).
 //  3. Backfill: every row whose agent is still the empty string gets claude
 //     (v9BackfillSQL); a row that already holds an agent is not touched.
 //  4. Stamp user_version = 9, the last statement.
 //
 // No existing value is rewritten but agent, and store_meta and its store id are
-// kept. Every other table, index and constraint keeps its shape. Any probe,
-// rename, ADD COLUMN or backfill failure rolls the whole hop back, leaving
-// user_version=8, every column under its old name and no new column.
+// kept. The subagent tables start empty and every existing row reads
+// subagent_tracking 0: no backfill (b.xjn, SR-10.2 as folded into this hop).
+// Every other table, index and constraint keeps its shape. Any probe, rename,
+// ADD COLUMN, CREATE or backfill failure rolls the whole hop back, leaving
+// user_version=8, every column under its old name, no new column and neither
+// subagent table.
 func migrateV8toV9(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -977,6 +1111,10 @@ func migrateV8toV9(db *sql.DB) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("store: v8→v9 add %s.%s: %w", col.table, col.name, err)
 		}
+	}
+	if _, err := tx.Exec(v9SubagentTablesSQL); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: v8→v9 create subagent tables: %w", err)
 	}
 	// Phase 3: backfill.
 	if _, err := tx.Exec(v9BackfillSQL); err != nil {

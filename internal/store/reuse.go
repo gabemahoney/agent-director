@@ -81,6 +81,7 @@ type RawLife struct {
 	launchOwnerPIDNS        rawValue
 	agent                   rawValue
 	endReportedAt           rawValue
+	subagentTracking        rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -151,6 +152,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"launch_owner_pidns", func(l *RawLife) *rawValue { return &l.launchOwnerPIDNS }},
 	{"agent", func(l *RawLife) *rawValue { return &l.agent }},
 	{"end_reported_at", func(l *RawLife) *rawValue { return &l.endReportedAt }},
+	{"subagent_tracking", func(l *RawLife) *rawValue { return &l.subagentTracking }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -261,6 +263,7 @@ const resetForReuseSQL = `UPDATE spawns
         launch_owner_pidns        = ?,
         agent                     = ?,
         end_reported_at           = NULL,
+        subagent_tracking         = ` + subagentTrackedSQL + `,
         life_number               = life_number + 1,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
@@ -309,7 +312,9 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     fresh.LaunchOwner (zero = NULL; the reuse records itself as the owner
 //     of the launch it begins, b.kdf); agent fresh.Agent, which must be claude
 //     or codex (checked before anything is written: ErrRowAgentInvalid) and
-//     end_reported_at NULL; life_number and row_version each
+//     end_reported_at NULL; subagent_tracking 1, the flag of the launch it
+//     begins (subagentTrackedSQL, SR-9; no parameter), including over a row
+//     that held 0; life_number and row_version each
 //     advanced by one. The store reads no clock: the caller supplies
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
@@ -471,7 +476,8 @@ var restoreAfterFailedReuseSQL = func() string {
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
 // tmux_session_name, agent_args, relay_mode, labels, extra_env,
 // launch_token, tmux_socket, the six server and pane identity columns, the
-// three launch-owner columns, agent and end_reported_at), so the row returns to its pre-reuse life and
+// three launch-owner columns, agent, end_reported_at and subagent_tracking),
+// so the row returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same

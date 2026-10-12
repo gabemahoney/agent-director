@@ -353,3 +353,186 @@ func nullIfZero[T comparable](v T) any {
 	}
 	return v
 }
+
+// WithNoSubagentTracking stores 0 as the row's schema-v9 subagent_tracking: a
+// row from before the upgrade, whose current launch registered no subagent
+// events. Without it a seeded row is tracked (1), as InsertPending stores for
+// every launch.
+func WithNoSubagentTracking() SpawnOption {
+	return func(o *spawnOpts) { o.set("subagent_tracking", int64(0)) }
+}
+
+// SeededSubagentMs is the instant, in Unix milliseconds, SeedSubagent and
+// SeedSubagentLaunch store as opened_at (and SeedSubagent as activity_at) when
+// no option names one, so a default seed is deterministic and ties fall to
+// created_seq.
+const SeededSubagentMs int64 = 1_700_000_000_000
+
+// subagentOpts accumulates what SeedSubagent's SubagentOption arguments
+// request: cols maps a subagents column name to the value stored (nil stores
+// NULL). launch is the launch token the entry belongs to; empty means the
+// row's current launch token, read at seed time.
+type subagentOpts struct {
+	cols   map[string]any
+	launch string
+}
+
+// set records value for column; nil stores NULL.
+func (o *subagentOpts) set(column string, value any) {
+	if o.cols == nil {
+		o.cols = map[string]any{}
+	}
+	o.cols[column] = value
+}
+
+// SubagentOption configures one subagents row seeded by SeedSubagent. A column
+// no option names takes SeedSubagent's default: a confirmed, running entry of
+// the row's current launch, opened_at and activity_at SeededSubagentMs, every
+// other field NULL. Options write raw column values and enforce no SR-6.5
+// invariant, so a test can also seed a row that breaks one; a later option for
+// the same column wins.
+type SubagentOption func(*subagentOpts)
+
+// WithSubagentState stores state (running, stopped or lost, or any text) as the
+// entry's state.
+func WithSubagentState(state string) SubagentOption {
+	return func(o *subagentOpts) { o.set("state", state) }
+}
+
+// WithSubagentCloseReason stores reason (stop_event, absent_from_snapshot or
+// agent_gone, or any text) as the entry's close_reason.
+func WithSubagentCloseReason(reason string) SubagentOption {
+	return func(o *subagentOpts) { o.set("close_reason", reason) }
+}
+
+// WithSubagentLaunchToken makes the entry belong to the launch with this token
+// (an earlier launch of the row, say) instead of the row's current one.
+func WithSubagentLaunchToken(token string) SubagentOption {
+	return func(o *subagentOpts) { o.launch = token }
+}
+
+// WithSubagentConfirmed stores confirmed: true (the default) for a record,
+// false for an observation.
+func WithSubagentConfirmed(confirmed bool) SubagentOption {
+	v := int64(0)
+	if confirmed {
+		v = 1
+	}
+	return func(o *subagentOpts) { o.set("confirmed", v) }
+}
+
+// WithSubagentSessionID stores the entry's session_id.
+func WithSubagentSessionID(id string) SubagentOption {
+	return func(o *subagentOpts) { o.set("session_id", id) }
+}
+
+// WithSubagentType stores the entry's subagent_type.
+func WithSubagentType(t string) SubagentOption {
+	return func(o *subagentOpts) { o.set("subagent_type", t) }
+}
+
+// WithSubagentDescription stores the entry's description.
+func WithSubagentDescription(d string) SubagentOption {
+	return func(o *subagentOpts) { o.set("description", d) }
+}
+
+// WithSubagentModel stores the entry's model.
+func WithSubagentModel(m string) SubagentOption {
+	return func(o *subagentOpts) { o.set("model", m) }
+}
+
+// WithSubagentParent stores the entry's parent_type (agent or subagent) and
+// parent_id.
+func WithSubagentParent(parentType, parentID string) SubagentOption {
+	return func(o *subagentOpts) {
+		o.set("parent_type", parentType)
+		o.set("parent_id", parentID)
+	}
+}
+
+// WithSubagentToolUseID stores the entry's tool_use_id.
+func WithSubagentToolUseID(id string) SubagentOption {
+	return func(o *subagentOpts) { o.set("tool_use_id", id) }
+}
+
+// WithSubagentRunMode stores the entry's run_mode (background or foreground).
+func WithSubagentRunMode(mode string) SubagentOption {
+	return func(o *subagentOpts) { o.set("run_mode", mode) }
+}
+
+// WithSubagentFirstStartedAt stores first_started_at, in Unix milliseconds.
+func WithSubagentFirstStartedAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("first_started_at", ms) }
+}
+
+// WithSubagentStartedAt stores started_at, in Unix milliseconds.
+func WithSubagentStartedAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("started_at", ms) }
+}
+
+// WithSubagentStoppedAt stores stopped_at, in Unix milliseconds.
+func WithSubagentStoppedAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("stopped_at", ms) }
+}
+
+// WithSubagentLostAt stores lost_at, in Unix milliseconds.
+func WithSubagentLostAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("lost_at", ms) }
+}
+
+// WithSubagentOpenedAt stores opened_at, in Unix milliseconds: the latest time
+// the entry became running, or its creation time.
+func WithSubagentOpenedAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("opened_at", ms) }
+}
+
+// WithSubagentActivityAt stores activity_at, in Unix milliseconds: the instant
+// of the latest write that changed the entry, which the entry cap orders by.
+func WithSubagentActivityAt(ms int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("activity_at", ms) }
+}
+
+// WithSubagentTypeSource stores subagent_type_source (start, details or
+// snapshot).
+func WithSubagentTypeSource(source string) SubagentOption {
+	return func(o *subagentOpts) { o.set("subagent_type_source", source) }
+}
+
+// WithSubagentRunModeSource stores run_mode_source (details or snapshot).
+func WithSubagentRunModeSource(source string) SubagentOption {
+	return func(o *subagentOpts) { o.set("run_mode_source", source) }
+}
+
+// WithSubagentStoppedAtSource stores stopped_at_source (stop or details).
+func WithSubagentStoppedAtSource(source string) SubagentOption {
+	return func(o *subagentOpts) { o.set("stopped_at_source", source) }
+}
+
+// subagentLaunchOpts accumulates what SeedSubagentLaunch's options request.
+type subagentLaunchOpts struct {
+	launch   string // "" = the row's current launch token
+	typ      string
+	openedAt int64
+}
+
+// SubagentLaunchOption configures one subagent_launches row seeded by
+// SeedSubagentLaunch. Defaults: the row's current launch, the type
+// "general-purpose", opened_at SeededSubagentMs.
+type SubagentLaunchOption func(*subagentLaunchOpts)
+
+// WithClaimableLaunchToken makes the claimable launch belong to the launch with
+// this token (an earlier launch of the row, say) instead of the current one.
+func WithClaimableLaunchToken(token string) SubagentLaunchOption {
+	return func(o *subagentLaunchOpts) { o.launch = token }
+}
+
+// WithClaimableType stores the claimable launch's subagent_type.
+func WithClaimableType(t string) SubagentLaunchOption {
+	return func(o *subagentLaunchOpts) { o.typ = t }
+}
+
+// WithClaimableOpenedAt stores the claimable launch's opened_at, in Unix
+// milliseconds: what the claimable-launch cap orders by.
+func WithClaimableOpenedAt(ms int64) SubagentLaunchOption {
+	return func(o *subagentLaunchOpts) { o.openedAt = ms }
+}

@@ -3,9 +3,12 @@ package store
 // Schema v9 (b.ssz, the agent-neutral names): the v8 fixture's rows after the
 // hop (every value kept under its new column name, each row's agent claude, no
 // end report), a migrated row's reads and resume writes, and no column left
-// with a claude_ name. The column specs, re-entry and rollback rows are
-// schema_test.go's; the fixture and its checks: migration_fixtures_test.go.
-// There is no v9 → v8 recipe: the downgrade guide stops at v8.
+// with a claude_ name. b.xjn folded its subagent storage into the same hop: the
+// migrated rows read untracked (subagent_tracking 0) beside empty subagent
+// tables whose foreign keys work. The column specs, re-entry and rollback rows
+// are schema_test.go's; the fixture and its checks: migration_fixtures_test.go.
+// There is no v9 → v8 recipe: the downgrade guide stops at v8, and the subagent
+// objects have no recipe of their own (v9 was never released).
 
 import (
 	"database/sql"
@@ -31,8 +34,9 @@ func migrateV8Fixture(t *testing.T) (f v8Fixture, s *Store, storeID string) {
 
 // TestV9MigrationKeepsV8Rows: after the authorised hop every v8 value of every
 // fixture row, request and archived session reads back under its v9 column
-// name, each row's agent is claude with no end report, the sentinel is consumed
-// and the store id is kept.
+// name, each row's agent is claude with no end report, every row reads
+// subagent_tracking 0 (untracked) and no subagent entry or claimable launch
+// exists, the sentinel is consumed and the store id is kept.
 func TestV9MigrationKeepsV8Rows(t *testing.T) {
 	f, s, storeID := migrateV8Fixture(t)
 	if got := s.StoreID(); got != storeID {
@@ -40,8 +44,52 @@ func TestV9MigrationKeepsV8Rows(t *testing.T) {
 	}
 	assertSentinel(t, f.dir, false)
 	assertV8ValuesKept(t, f.path, f, nil)
+	for _, id := range f.ids {
+		assertV9Defaults(t, f.path, id)
+		if sp := mustGetSpawn(t, s, id); sp.SubagentTracking {
+			t.Errorf("%s reads tracked after the hop; want a pre-upgrade row untracked", id)
+		}
+	}
 	if got := assertOneStoreID(t, f.path); got != storeID {
 		t.Errorf("store_id after the hop = %q; want %q", got, storeID)
+	}
+}
+
+// TestV9MigratedStoreEnforcesSubagentForeignKeys: the subagent tables of a
+// migrated store are usable and keep their foreign keys to the renamed
+// spawns(instance_id): an entry and a claimable launch for a row that exists
+// insert, ones for no row are refused, and deleting the row removes its
+// entries and launches while another row's stay. (Written through the store's
+// own connection, which runs with foreign keys on.)
+func TestV9MigratedStoreEnforcesSubagentForeignKeys(t *testing.T) {
+	_, s, _ := migrateV8Fixture(t)
+	const entry = `INSERT INTO subagents (instance_id, subagent_id, launch_token, confirmed, state, opened_at, activity_at)
+		VALUES (?, 'agent-1', 'tok', 1, 'running', 1, 1)`
+	const launch = `INSERT INTO subagent_launches (instance_id, launch_token, tool_use_id, subagent_type, opened_at)
+		VALUES (?, 'tok', 'toolu_1', 'general-purpose', 1)`
+	for _, id := range []string{v8OptedOutID, v8LiveID} {
+		for _, q := range []string{entry, launch} {
+			if _, err := s.db.Exec(q, id); err != nil {
+				t.Fatalf("insert for %s: %v", id, err)
+			}
+		}
+	}
+	for _, q := range []string{entry, launch} {
+		if _, err := s.db.Exec(q, "no-such-row"); err == nil {
+			t.Errorf("insert for a row that does not exist succeeded; want a foreign key refusal:\n%s", q)
+		}
+	}
+	if _, err := s.db.Exec(`DELETE FROM spawns WHERE instance_id = ?`, v8OptedOutID); err != nil {
+		t.Fatalf("delete the row: %v", err)
+	}
+	for table, want := range map[string]int{"subagents": 1, "subagent_launches": 1} {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8OptedOutID).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s rows of the deleted row = %d, %v; want 0 (cascade)", table, n, err)
+		}
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8LiveID).Scan(&n); err != nil || n != want {
+			t.Errorf("%s rows of the kept row = %d, %v; want %d", table, n, err, want)
+		}
 	}
 }
 

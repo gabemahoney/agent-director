@@ -675,6 +675,7 @@ func resumePriorOf(row Spawn) ResumePrior {
 		LivenessUnverifiedSince: row.LivenessUnverifiedSince,
 		LivenessNote:            row.LivenessNote,
 		EndReportedAtMillis:     row.EndReportedAtMillis,
+		SubagentTracking:        row.SubagentTracking,
 		Identity:                row.Identity,
 	}
 }

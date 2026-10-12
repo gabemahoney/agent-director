@@ -160,7 +160,11 @@ never touching `state.db`) — there is no logger plumbed into the store:
   inert per above).
 
 **Adding a step.** To add the next version (v10, generalizing to any vN→vN+1);
-`migrateV8toV9` (b.ssz) is the most recent worked example:
+`migrateV8toV9` (b.ssz) is the most recent worked example (its column list
+`v9Columns` also carries `spawns.subagent_tracking`, and the hop creates the
+`subagents` and `subagent_launches` tables from its own fixed copy of their
+CREATE text, `v9SubagentTablesSQL`, which repeats what `schemaDDL` holds for a
+fresh store):
 
 1. Bump `schemaVersion` to `10` (`store.go`).
 2. Evolve `schemaDDL` so a fresh DB is created directly at v10 (the two-places
@@ -520,8 +524,8 @@ bytes. What they cover, step by step:
   data test. In `TestFreshStoreSchema`, add the specs to its
   `assertColumnSpecs` call (today `v3ColumnSpecs`, `v5ColumnSpecs`,
   `v6ColumnSpecs`, `v7ColumnSpecs`, `v8ColumnSpecs` and `v9ColumnSpecs`), check where the new
-  columns sit in each table (v9's: `agent` and `end_reported_at`, last on
-  `spawns`; v8's: after v7's
+  columns sit in each table (v9's: `agent`, `end_reported_at` and
+  `subagent_tracking`, last on `spawns`; v8's: after v7's
   `idle_since`; v7's: after `created_at` on `permission_requests`), and add
   any new table or index to its list of names. Neither test picks up a new
   version's columns on its own.
@@ -665,7 +669,9 @@ v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
 There is no v9 → v8 recipe. The v8 → v9 hop (`migrateV8toV9`, b.ssz) renames
-six columns, so no recipe reaches a v9 store; the way back is a copy of
+six columns, adds three columns to `spawns` (`agent`, `end_reported_at` and
+`subagent_tracking`), backfills `agent` and creates the `subagents` and
+`subagent_launches` tables, so no recipe reaches a v9 store; the way back is a copy of
 `state.db` (with its `-wal` and `-shm` files) that you took yourself before
 installing. The installer does not make that copy.
 
@@ -1017,8 +1023,11 @@ installing.
   `migrateV4toV5`, `migrateV5toV6`, `migrateV6toV7` with its column list
   `v7Columns` and its phase 3 `v7ProveFinishedSQL`, `migrateV7toV8` with its
   column list `v8Columns` and its phase 3 `v8BackfillSQL`, `migrateV8toV9` with
-  its renames `v9Renames`, its column list `v9Columns` and its backfill
-  `v9BackfillSQL`,
+  its renames `v9Renames`, its column list `v9Columns` (`agent`,
+  `end_reported_at`, `subagent_tracking`), its subagent tables
+  `v9SubagentTablesSQL` (the hop's own copy of the CREATE text for
+  `subagents`, `subagent_launches` and the claim index, which `schemaDDL`
+  repeats for a fresh store) and its backfill `v9BackfillSQL`,
   `buildMigrationRefusal`.
 - `internal/store/migrate_auth.go` — the sentinel gate: `authorizeMigration`,
   `parseAuthorization`, `consumeAuthorization`, `sentinelPath`,

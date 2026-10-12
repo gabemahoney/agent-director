@@ -227,6 +227,45 @@ var proxyWrites = []proxyWrite{
 		},
 		observe: observeOpenRequests,
 	},
+	{
+		// The row holds only an entry: its delete cascades to the entry (no
+		// permission request, so ReusePermissionDelete does not match).
+		name: "spawn delete cascade to a subagent entry",
+		kind: storefix.WriteFailSubagentRecord,
+		seed: func(t *testing.T, _ *store.Store, dbPath, id string) {
+			t.Helper()
+			seedState(store.StateEnded, "")(t, nil, dbPath, id)
+			if err := apitest.SeedSubagent(dbPath, id, "sa-wf"); err != nil {
+				t.Fatalf("SeedSubagent(%q): %v", id, err)
+			}
+		},
+		write:   func(s *store.Store, id string) error { return s.DeleteSpawn(id) },
+		observe: observeSubagentRows,
+	},
+	{
+		// The row holds only a claimable launch.
+		name: "spawn delete cascade to a claimable launch",
+		kind: storefix.WriteFailSubagentRecord,
+		seed: func(t *testing.T, _ *store.Store, dbPath, id string) {
+			t.Helper()
+			seedState(store.StateEnded, "")(t, nil, dbPath, id)
+			if err := apitest.SeedSubagentLaunch(dbPath, id, "toolu-wf"); err != nil {
+				t.Fatalf("SeedSubagentLaunch(%q): %v", id, err)
+			}
+		},
+		write:   func(s *store.Store, id string) error { return s.DeleteSpawn(id) },
+		observe: observeSubagentRows,
+	},
+}
+
+// observeSubagentRows returns the id's subagent entries and claimable launches, raw.
+func observeSubagentRows(t *testing.T, _ *store.Store, dbPath, id string) any {
+	t.Helper()
+	rows, err := apitest.ReadSubagentRows(dbPath, id)
+	if err != nil {
+		t.Fatalf("ReadSubagentRows(%q): %v", id, err)
+	}
+	return rows
 }
 
 // observeOpenRequests returns the id's open permission requests.

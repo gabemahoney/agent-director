@@ -60,6 +60,11 @@ type SpawnColumns struct {
 	// when its agent's SessionEnd was reported (Unix ms; nil = no end report).
 	Agent         any
 	EndReportedAt any
+
+	// The schema-v9 spawns column subagent_tracking (b.xjn): 1 when the row's
+	// current launch registered the agent's subagent events, 0 for a row from
+	// before the upgrade. A default seed reads 1 (int64).
+	SubagentTracking any
 }
 
 // ReadSpawnColumns reads every column of instanceID's spawns row from the
@@ -84,7 +89,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	                  tmux_server_started, tmux_server_starttime, pane_id,
 	                  pane_pid, pane_starttime, launch_owner_pid,
 	                  launch_owner_starttime, launch_owner_pidns, idle_since,
-		                  agent, end_reported_at
+		                  agent, end_reported_at, subagent_tracking
 	             FROM spawns
 	            WHERE instance_id = ?`
 	var c SpawnColumns
@@ -98,7 +103,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		&c.TmuxServerStarted, &c.TmuxServerStarttime, &c.PaneID,
 		&c.PanePID, &c.PaneStarttime, &c.LaunchOwnerPID,
 		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS, &c.IdleSince,
-		&c.Agent, &c.EndReportedAt,
+		&c.Agent, &c.EndReportedAt, &c.SubagentTracking,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w: %s", store.ErrSpawnNotFound, instanceID)
@@ -151,6 +156,125 @@ func ReadSessionHistoryAllLives(dbPath, instanceID string) ([]HistoryEntry, erro
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("ReadSessionHistoryAllLives: iterate: %w", err)
+	}
+	return out, nil
+}
+
+// SubagentEntryColumns is one subagents row as ReadSubagentRows returns it:
+// every column's raw driver value, keeping its storage class (nil for NULL,
+// int64 or string), so NULL is distinct from 0 and "". CreatedSeq is the
+// table's created_seq.
+type SubagentEntryColumns struct {
+	CreatedSeq         int64
+	InstanceID         any
+	SubagentID         any
+	LaunchToken        any
+	Confirmed          any
+	SessionID          any
+	SubagentType       any
+	Description        any
+	Model              any
+	ParentType         any
+	ParentID           any
+	ToolUseID          any
+	RunMode            any
+	FirstStartedAt     any // Unix ms
+	StartedAt          any // Unix ms
+	StoppedAt          any // Unix ms
+	LostAt             any // Unix ms
+	State              any
+	CloseReason        any
+	OpenedAt           any // Unix ms
+	ActivityAt         any // Unix ms
+	SubagentTypeSource any
+	RunModeSource      any
+	StoppedAtSource    any
+}
+
+// SubagentLaunchColumns is one subagent_launches row (a claimable launch) as
+// ReadSubagentRows returns it, each column's raw driver value.
+type SubagentLaunchColumns struct {
+	CreatedSeq   int64
+	InstanceID   any
+	LaunchToken  any
+	ToolUseID    any
+	SubagentType any
+	OpenedAt     any // Unix ms
+}
+
+// SubagentRows is every subagents row (Entries) and every subagent_launches row
+// (Launches) of one instance, each in created_seq order. Both slices are
+// non-nil and empty when the instance has none.
+type SubagentRows struct {
+	Entries  []SubagentEntryColumns
+	Launches []SubagentLaunchColumns
+}
+
+// ReadSubagentRows reads every entry and every claimable launch of instanceID
+// straight from the store file at dbPath through a raw connection, decoding
+// nothing, so a test asserts what was stored with NULL distinct from zero. An
+// id with no spawns row (or none of either kind of row) gives empty slices and
+// no error. It never creates a store file.
+func ReadSubagentRows(dbPath, instanceID string) (SubagentRows, error) {
+	raw, err := openRawStore(dbPath)
+	if err != nil {
+		return SubagentRows{}, fmt.Errorf("ReadSubagentRows: %w", err)
+	}
+	defer raw.Close() //nolint:errcheck
+
+	out := SubagentRows{Entries: []SubagentEntryColumns{}, Launches: []SubagentLaunchColumns{}}
+
+	const entriesQ = `SELECT created_seq, instance_id, subagent_id, launch_token,
+	                         confirmed, session_id, subagent_type, description,
+	                         model, parent_type, parent_id, tool_use_id, run_mode,
+	                         first_started_at, started_at, stopped_at, lost_at,
+	                         state, close_reason, opened_at, activity_at,
+	                         subagent_type_source, run_mode_source,
+	                         stopped_at_source
+	                    FROM subagents
+	                   WHERE instance_id = ?
+	                ORDER BY created_seq`
+	rows, err := raw.Query(entriesQ, instanceID)
+	if err != nil {
+		return SubagentRows{}, fmt.Errorf("ReadSubagentRows: query entries: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck
+	for rows.Next() {
+		var e SubagentEntryColumns
+		if err := rows.Scan(&e.CreatedSeq, &e.InstanceID, &e.SubagentID, &e.LaunchToken,
+			&e.Confirmed, &e.SessionID, &e.SubagentType, &e.Description,
+			&e.Model, &e.ParentType, &e.ParentID, &e.ToolUseID, &e.RunMode,
+			&e.FirstStartedAt, &e.StartedAt, &e.StoppedAt, &e.LostAt,
+			&e.State, &e.CloseReason, &e.OpenedAt, &e.ActivityAt,
+			&e.SubagentTypeSource, &e.RunModeSource, &e.StoppedAtSource); err != nil {
+			return SubagentRows{}, fmt.Errorf("ReadSubagentRows: scan entry: %w", err)
+		}
+		out.Entries = append(out.Entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return SubagentRows{}, fmt.Errorf("ReadSubagentRows: iterate entries: %w", err)
+	}
+
+	const launchesQ = `SELECT created_seq, instance_id, launch_token, tool_use_id,
+	                          subagent_type, opened_at
+	                     FROM subagent_launches
+	                    WHERE instance_id = ?
+	                 ORDER BY created_seq`
+	lrows, err := raw.Query(launchesQ, instanceID)
+	if err != nil {
+		return SubagentRows{}, fmt.Errorf("ReadSubagentRows: query launches: %w", err)
+	}
+	defer lrows.Close() //nolint:errcheck
+	for lrows.Next() {
+		var l SubagentLaunchColumns
+		if err := lrows.Scan(&l.CreatedSeq, &l.InstanceID, &l.LaunchToken, &l.ToolUseID,
+			&l.SubagentType, &l.OpenedAt); err != nil {
+			return SubagentRows{}, fmt.Errorf("ReadSubagentRows: scan launch: %w", err)
+		}
+		out.Launches = append(out.Launches, l)
+	}
+	if err := lrows.Err(); err != nil {
+		return SubagentRows{}, fmt.Errorf("ReadSubagentRows: iterate launches: %w", err)
 	}
 	return out, nil
 }

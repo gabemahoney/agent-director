@@ -129,8 +129,9 @@ func TestExpireCandidatesCarryTheRow(t *testing.T) {
 
 // TestExpireDeleteFinishedIfSameLife checks the delete removes a finished row
 // still holding the examined snapshot, its requests and history with it and
-// its children unlinked, refuses one resume moved on or another caller
-// deleted, and never touches a row sharing its session name.
+// its children unlinked and its subagent entries and claimable launches
+// cascaded away, refuses one resume moved on (keeping them) or another caller
+// deleted, and never touches a row sharing its session name or its entries.
 func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -156,6 +157,14 @@ func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 			id := f.seed(c.state, "sess-exp", append(shared, apitest.WithSessionHistory(apitest.SessionHistorySeed{
 				SessionID: "sess-exp-old", JSONLPath: "/tmp/ad-expire-test/old.jsonl"}))...)
 			seedRequest(t, f, id)
+			for _, owner := range []string{id, bystander} {
+				if err := apitest.SeedSubagent(f.path, owner, "sa-exp"); err != nil {
+					t.Fatalf("SeedSubagent(%s): %v", owner, err)
+				}
+				if err := apitest.SeedSubagentLaunch(f.path, owner, "toolu-exp"); err != nil {
+					t.Fatalf("SeedSubagentLaunch(%s): %v", owner, err)
+				}
+			}
 			child := f.seed(store.StateWaiting, "")
 			if err := apitest.SeedParentChild(f.path, id, child); err != nil {
 				t.Fatalf("SeedParentChild: %v", err)
@@ -164,7 +173,7 @@ func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 			if c.after != nil {
 				c.after(t, f, id)
 			}
-			bystanderBefore := f.rawColumns(bystander)
+			bystanderBefore, bystanderSubagents, idSubagents := f.rawColumns(bystander), f.subagentRowsOf(bystander), f.subagentRowsOf(id)
 			before, readErr := apitest.ReadSpawnColumns(f.path, id)
 			if got, err := f.s.DeleteFinishedIfSameLife(id, examined); err != nil || got != c.want {
 				t.Fatalf("DeleteFinishedIfSameLife = %v, %v; want %v", got, err, c.want)
@@ -180,6 +189,20 @@ func TestExpireDeleteFinishedIfSameLife(t *testing.T) {
 					t.Errorf("after the delete: row %v, requests %d (%v), history %d, child parent %#v; want all gone, parent NULL",
 						afterErr, len(reqs), err, len(f.historyAllLives(id)), f.rawColumns(child).ParentID)
 				}
+			}
+			wantSubagents := apitest.SubagentRows{Entries: []apitest.SubagentEntryColumns{}, Launches: []apitest.SubagentLaunchColumns{}}
+			if c.want == store.CondChanged {
+				wantSubagents = idSubagents
+			}
+			if c.want != store.CondAbsent && (len(idSubagents.Entries) != 1 || len(idSubagents.Launches) != 1) {
+				t.Fatalf("the row held %d entries and %d claimable launches before the delete; want 1 and 1, or the cascade check is vacuous",
+					len(idSubagents.Entries), len(idSubagents.Launches))
+			}
+			if got := f.subagentRowsOf(id); !reflect.DeepEqual(got, wantSubagents) {
+				t.Errorf("the row's entries and claimable launches after the delete = %+v; want %+v", got, wantSubagents)
+			}
+			if got := f.subagentRowsOf(bystander); !reflect.DeepEqual(got, bystanderSubagents) {
+				t.Errorf("bystander's entries and claimable launches %+v -> %+v; want unchanged", bystanderSubagents, got)
 			}
 			if after := f.rawColumns(bystander); !reflect.DeepEqual(after, bystanderBefore) {
 				t.Errorf("bystander with the same session name changed:\nbefore %+v\nafter  %+v", bystanderBefore, after)

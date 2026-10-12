@@ -266,6 +266,16 @@ func decodeLaunchToken(v any) string {
 	return s
 }
 
+// decodeSubagentTracking maps subagent_tracking to the Spawn's flag: only the
+// integer 1, the value the launch writes mean by tracked, is tracked. The integer
+// 0 (the column default, every row from before the v9 migration) and any other
+// stored value, including one only a hand edit can store, read as not tracked,
+// so no stored value fails a read (b.xjn, SR-9).
+func decodeSubagentTracking(v any) bool {
+	n, ok := v.(int64)
+	return ok && n == 1
+}
+
 // decodeNoPreTrust maps no_pre_trust to the recorded opt-out. The integer 0
 // (the column default) means pre-trust allowed; any other stored value,
 // including one only a hand edit can store, means opted out (SR-5.5, SR-22.6).

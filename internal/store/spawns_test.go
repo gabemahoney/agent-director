@@ -16,7 +16,8 @@ import (
 // TestInsertPendingRoundTrip: an inserted row reads back pending with its
 // fields, extra env included, through GetSpawn and ListSpawns alike; a nil
 // extra env is stored '{}' and reads as an empty map; the v3 columns read as
-// stored; a repeated id or a parent naming no row fails the insert; an absent
+// stored; every insert stores subagent_tracking 1 (the column default is 0); a
+// repeated id or a parent naming no row fails the insert; an absent
 // id is ErrSpawnNotFound.
 func TestInsertPendingRoundTrip(t *testing.T) {
 	s, _ := openTempStore(t)
@@ -38,6 +39,9 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 		!reflect.DeepEqual(got.ExtraEnv, full.ExtraEnv) || got.StartedAt.IsZero() || got.EndedAt != nil ||
 		got.PID != 0 || got.ProcStarttime != "" || got.LivenessUnverifiedSince != "" || got.LivenessNote != "" {
 		t.Errorf("GetSpawn = %+v; want the inserted pending row", got)
+	}
+	if !got.SubagentTracking || !mustGetSpawn(t, s, "bare").SubagentTracking {
+		t.Error("an inserted row reads SubagentTracking false; want true (the insert stores 1)")
 	}
 
 	var raw sql.NullString
@@ -77,6 +81,54 @@ func TestInsertPendingRoundTrip(t *testing.T) {
 	}
 	if _, err := s.GetSpawnState("absent"); !errors.Is(err, ErrSpawnNotFound) {
 		t.Errorf("GetSpawnState(absent) err = %v; want ErrSpawnNotFound", err)
+	}
+}
+
+// TestSubagentTrackingReadsNeverFail: a hand-edited subagent_tracking never
+// fails a read (b.xjn, SR-9): through GetSpawn and ListSpawns alike, only the
+// stored integer 1 reads tracked; 0, any other integer and text read untracked.
+// (The column is NOT NULL, so NULL cannot be stored.)
+func TestSubagentTrackingReadsNeverFail(t *testing.T) {
+	cases := []struct {
+		name        string
+		stored      any
+		wantTracked bool
+	}{
+		{"0", int64(0), false},
+		{"1", int64(1), true},
+		{"7", int64(7), false},
+		{"-1", int64(-1), false},
+		{"text", "weird", false},
+	}
+	s, path := openTempStore(t)
+	ids := make([]string, len(cases))
+	for i, tc := range cases {
+		ids[i] = "tracking-" + tc.name
+		if err := s.InsertPending(Spawn{InstanceID: ids[i], Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-" + tc.name, RelayMode: "on"}); err != nil {
+			t.Fatalf("InsertPending(%s): %v", ids[i], err)
+		}
+		withRaw(t, path, func(db *sql.DB) {
+			mustExec(t, db, `UPDATE spawns SET subagent_tracking = ? WHERE instance_id = ?`, tc.stored, ids[i])
+		})
+	}
+	listed, err := s.ListSpawns(ListFilters{})
+	if err != nil || len(listed) != len(cases) {
+		t.Fatalf("ListSpawns = %d rows, %v; want %d and no error", len(listed), err, len(cases))
+	}
+	for i, tc := range cases {
+		got, err := s.GetSpawn(ids[i])
+		if err != nil {
+			t.Errorf("stored %s: GetSpawn: %v; a read must not fail", tc.name, err)
+			continue
+		}
+		if got.SubagentTracking != tc.wantTracked {
+			t.Errorf("stored %s: GetSpawn SubagentTracking = %v; want %v", tc.name, got.SubagentTracking, tc.wantTracked)
+		}
+		for _, l := range listed {
+			if l.InstanceID == ids[i] && l.SubagentTracking != tc.wantTracked {
+				t.Errorf("stored %s: ListSpawns SubagentTracking = %v; want %v", tc.name, l.SubagentTracking, tc.wantTracked)
+			}
+		}
 	}
 }
 

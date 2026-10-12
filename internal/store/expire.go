@@ -118,8 +118,11 @@ const deleteFinishedIfSameLifeSQL = `DELETE FROM spawns
 // reuse's reset and every hook write advance row_version (SR-5.2), so any of
 // them landing after expire read the row makes the delete apply nothing. The
 // row's dependent rows go by the schema's foreign-key actions, as DeleteSpawn
-// relies on; it touches nothing else, emits no trail event, and never touches
-// tmux or transcripts.
+// relies on: the row's permission requests, session history, subagent entries
+// and claimable launches (the subagents and subagent_launches tables, ON DELETE
+// CASCADE) go with it, through the foreign keys alone (foreign_keys=1), with no
+// delete statement of their own and no other row's entries touched. It touches
+// nothing else, emits no trail event, and never touches tmux or transcripts.
 //
 // It returns CondApplied when the row was deleted; CondChanged, having
 // deleted nothing, when the row exists but is live or pending now or its

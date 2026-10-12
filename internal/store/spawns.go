@@ -203,6 +203,18 @@ type Spawn struct {
 	// the row's raw life.
 	EndReportedAtMillis int64
 
+	// SubagentTracking is the schema-v9 subagent_tracking column (b.xjn, SR-9):
+	// true when the settings the row's current launch was given register the
+	// agent's subagent start and stop events. Every read that returns a Spawn
+	// fills it; true only for the integer 1 (1 means tracked), and false for 0
+	// and any other stored value (any other value reads as untracked), so no stored value
+	// fails a read (see decodeSubagentTracking). InsertPending, ResetForReuse
+	// and MoveToPending each write 1 for the launch they begin
+	// (subagentTrackedSQL), taking nothing from a Spawn; a row from before the
+	// v9 migration reads false until its next launch. Never on SpawnRow,
+	// ListRow or any verb output.
+	SubagentTracking bool
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
 	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
@@ -210,6 +222,21 @@ type Spawn struct {
 	// fills it, so it is never "" on a row a read returned. Guards never read
 	// it: they act on State, the raw state.
 	ReportedState string
+}
+
+// subagentTrackedSQL is the SQL literal of the tracking flag every launch write
+// stores (b.xjn, SR-9): on this build every launch is a Claude launch, whose
+// synthesized settings always register SubagentStart and SubagentStop, so
+// InsertPending, MoveToPending and ResetForReuse each write 1 and take no new
+// parameter.
+const subagentTrackedSQL = "1"
+
+// boolInt is a bool as the integer a 0/1 column stores.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // InsertPending writes a new row in `pending` state. Used by spawn.Launch
@@ -244,7 +271,8 @@ type Spawn struct {
 // it begins. The new row starts at row_version 0 (the column default). It is
 // an immediate write (b.3ie): settled_state is pending and state_changed_ms
 // the statement's own clock, so the new row reports pending at once whatever
-// the settle time.
+// the settle time. It also writes subagent_tracking 1 (subagentTrackedSQL, SR-9),
+// the flag of the launch it begins, whatever the caller passes.
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -270,8 +298,8 @@ func (s *Store) InsertPending(sp Spawn) error {
             agent_args, relay_mode, labels, extra_env,
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
-            settled_state, state_changed_ms, agent
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?)
+            settled_state, state_changed_ms, agent, subagent_tracking
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedSQL + `)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -377,7 +405,8 @@ func (s *Store) GetSpawnSettled(instanceID string, r SettleRead) (Spawn, error) 
 // Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
 // zero value; any other stored value scans normally). The v6 launch-owner
 // columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
-// the v7 idle_since, then the v9 agent and end_reported_at, last.
+// the v7 idle_since, then the v9 agent, end_reported_at and subagent_tracking,
+// last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -389,7 +418,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -432,6 +461,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		launchStartedAt any
 		noPreTrust      any
 		endReportedAt   any
+		subagentTrack   any
 		life            lifeScan
 	)
 	dest := append([]any{
@@ -445,7 +475,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack)
 	if reported {
 		dest = append(dest, &sp.ReportedState)
 	}
@@ -472,6 +502,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	sp.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
 	sp.NoPreTrust = decodeNoPreTrust(noPreTrust)
 	sp.EndReportedAtMillis = decodeEndReportedAt(endReportedAt)
+	sp.SubagentTracking = decodeSubagentTracking(subagentTrack)
 	sp.EndedAtText = endedAtText.String
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
