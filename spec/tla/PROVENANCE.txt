@@ -4,12 +4,13 @@ What this is
   Bee b.zuj's TLA+ model of the Phase 1 LABEL design and its on-demand
   model-check suite, vendored so `make tla` can submit it to the job
   scheduler (Epic 22, t1.h98.8p; subtask t3.h98.8p.q1.74). Bee b.zuj owns
-  the model and its results. Two files have since been changed here (see
-  "Changed here" below): Phase4.tla for bees b.66h and b.y88, and one
-  comment in ci/mkci.py for bee b.y88. Nothing else changes b.zuj's specs,
-  cfgs, manifest or expectations. To re-sync, copy the files from b.zuj
-  again, re-apply the b.66h and b.y88 changes (or take b.zuj's adoption of
-  them) and replace the pin lines at the end of this file.
+  the model and its results. Three files have since been changed here (see
+  "Changed here" below): Phase4.tla for bees b.66h and b.y88, one
+  comment in ci/mkci.py for bee b.y88, and Phase5Hook.tla for bee b.xjn.
+  Nothing else changes b.zuj's specs, cfgs, manifest or expectations. To
+  re-sync, copy the files from b.zuj again, re-apply the b.66h, b.y88 and
+  b.xjn changes (or take b.zuj's adoption of them) and replace the pin
+  lines at the end of this file.
 
 Changed here, not from b.zuj (bee b.66h, launch-scoped actions, 2026-10-03)
   Phase4.tla differs from b.zuj CI run 4. Run 4's file had SHA-256
@@ -25,8 +26,8 @@ Changed here, not from b.zuj (bee b.66h, launch-scoped actions, 2026-10-03)
   so for those cfgs only the verdict is comparable. Run 4's verdicts do not
   cover the changed file until a make tla run passes. Details:
   launch/README.md.
-  Every other pinned file, except ci/mkci.py (b.y88 below), is still
-  byte-identical to run 4's.
+  Every other pinned file, except ci/mkci.py (b.y88 below) and
+  Phase5Hook.tla (b.xjn below), is still byte-identical to run 4's.
   New files, written here and not pinned: launch/README.md,
   launch/suite.tsv and launch/cfg/*.cfg (the b.66h runs).
 
@@ -45,11 +46,32 @@ Changed here, not from b.zuj (bee b.y88, operator kill comments, 2026-10-03)
   3f440fbf1599e4fca3beee91270908059046cba746c5ce9ac64896bd580d4b21 (as
   copied from b.zuj); the pin lines below pin the changed files.
 
+Changed here, not from b.zuj (bee b.xjn, subagent records, 2026-10-11)
+  Phase5Hook.tla differs from b.zuj CI run 4. Run 4's file had SHA-256
+  e34dc7153b6c9d7230440f96c2b11a308e55a68608e46de75f37a236ed5f3a2e; the pin
+  line below pins the changed file. The change adds subagent records behind
+  knobs that default off: KnobOn and the knobs Sub, SubNoGate, SubNoClose and
+  SubOnTerminal (zero-arity definitions, all FALSE), the variables subs and
+  subViol (in vars and Init), SubSame in the existing actions, CloseAll and
+  SubClose in the applied SessionEnd (HookEnd), the resume and reuse launch
+  (Launch) and find-missing's mark (FM), the action SubHook in Next, and
+  the properties SubOnlyByAgent, SubNoStaleRunning, RunningRec,
+  SubLostResolves and the probes NotSubRunning, NotSubClosed and
+  NotSubNextLaunch. The module line (line 1) is unchanged; a new comment
+  block above b.zuj's header describes the change. With every knob
+  FALSE (every cfg in ci/cfg/) the model's steps are identical to run 4's,
+  so a cfg without a VIEW reaches run 4's distinct-state count exactly (the
+  knobs-off run sx_eq_Sns reaches ci_H_Sns's 11,387,737). Run 4's verdicts
+  do not cover the changed file until a make tla run passes. Details:
+  subagent/README.md.
+  New files, written here and not pinned: subagent/README.md,
+  subagent/suite.tsv and subagent/cfg/*.cfg (the b.xjn runs).
+
 Source
   Bee b.zuj, directory tickets/Ideas/b.zuj/ of the Apiary ticket tree (outside
   this repo). Copied byte for byte with cp on 2026-10-02. Each file was
   checked equal to its b.zuj source with sha256sum at copy time. The pin list
-  below has those SHA-256s, except for the two files changed since; their
+  below has those SHA-256s, except for the three files changed since; their
   copied SHA-256s are under "Changed here".
 
 Delivering run: b.zuj CI run 4
@@ -95,6 +117,7 @@ Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
                                                 b.zuj's run_ci.sh; written for
                                                 this repo, so not pinned
   launch/                                       the b.66h runs (not pinned)
+  subagent/                                     the b.xjn runs (not pinned)
   PROVENANCE.txt                                this file
 
 Not vendored
@@ -123,8 +146,9 @@ Design values mkci.py sets (only controls turn them off)
 Wording
   The vendored b.zuj files, and verbatim copies of their output lines, keep
   their own wording, which predates the repo's wording rule, apart from what
-  bees b.66h and b.y88 changed in Phase4.tla and ci/mkci.py (see "Changed
-  here"). Everything this Epic writes follows that rule.
+  bees b.66h and b.y88 changed in Phase4.tla and ci/mkci.py and what bee
+  b.xjn changed in Phase5Hook.tla (see "Changed here"). Everything this
+  Epic writes follows that rule.
 
 tla2tools.jar pin (committed, not fetched)
   jar.bytes   4493033
@@ -150,7 +174,7 @@ Pin list
 
 be725a245191c0fcc0d91e17ec51fe89dd0d0f9c06714ffe6b2aede8a49b2445  Phase4.tla
 257a0f1d79c73a0efb4897959c9ca0335e2b705695e7aaae2a48242760a1811e  Phase4Split.tla
-e34dc7153b6c9d7230440f96c2b11a308e55a68608e46de75f37a236ed5f3a2e  Phase5Hook.tla
+7e7d2efb878c2b34b8046a25755477d50580129e6511d8ff89403566116c4987  Phase5Hook.tla
 320d5f022777a8194c194388bc7c39ba54c0570a0a6b40dcffd374e551057067  ci/cfg/ci_C1.cfg
 eccd5071110e7f6d2ca718461e17052a78d6b3cd0135f93b7d16f53c5f139828  ci/cfg/ci_C2.cfg
 37406b2fbbd17d263acb7da30a020585d1bbeae4427a54e88fcbdaecb02e4494  ci/cfg/ci_C3.cfg

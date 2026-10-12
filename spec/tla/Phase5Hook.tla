@@ -1,5 +1,21 @@
 ----------------------------- MODULE Phase5Hook -----------------------------
 (***************************************************************************)
+(* b.xjn: spec/tla/Phase5Hook.tla (dev/v0.12.0, SHA-256 e34dc715...) plus  *)
+(* subagent records. A subagent runs inside its agent's Claude process, so *)
+(* its hooks (SubagentStart, SubagentStop, and the Stop hook's snapshot)   *)
+(* have that process as their parent. A record write is gated (it shares  *)
+(* SubagentStart/Stop's soft-refresh transaction; for PreToolUse,          *)
+(* PostToolUse and Stop it is its own gated transaction beside the row     *)
+(* write) and touches only the row's current launch, never an ended or     *)
+(* missing row. SubHook models the record write as one gated step. Ending  *)
+(* (SessionEnd), find-missing's missing mark and a new launch close every  *)
+(* running record (lost) in their own transaction. One record per launch   *)
+(* stands for all of its subagents. Knobs are zero-arity definitions,      *)
+(* FALSE here, so every Phase5Hook cfg parses unchanged; a cfg turns one   *)
+(* on with `Sub <- KnobOn`. Knobs off, subs = {} and subViol = FALSE, so   *)
+(* the state graph is Phase5Hook's state for state.                        *)
+(***************************************************************************)
+(***************************************************************************)
 (* b.zuj v5 -- the hook-identity design of decision-0929c (SRD rev 17,     *)
 (* SR-22.9, SR-3.6 adoption by @ad_pane, SR-6.1 kill of every pane).       *)
 (* A focused model of the process and pane layer for ONE instance id; the  *)
@@ -39,9 +55,19 @@ CONSTANTS MaxClock, MaxLife, MaxFaults, PidPool,
           HookWait,          \* SessionStart waits (pending, no pane, identity write outstanding, in grace)
           AllowSlowIdentity  \* the grace period may pass before the identity write (residual ii)
 
-VARIABLES row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen
+\* b.xjn knobs (FALSE here; `Name <- KnobOn` in a cfg turns one on)
+KnobOn        == TRUE
+Sub           == FALSE  \* the design: subagent hooks and records
+SubNoGate     == FALSE  \* control: the record write is not gated (any process carrying the id writes)
+SubNoClose    == FALSE  \* control: ended, missing and a new launch close no running record
+SubOnTerminal == FALSE  \* control: a gated subagent hook writes the record of an ended or missing row
 
-vars == <<row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen>>
+VARIABLES row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen,
+          subs,    \* b.xjn: the records, [lau |-> launch, st |-> "running" | "closed"] (stopped and lost are one value here)
+          subViol  \* b.xjn: a record was written by a process other than the current launch's agent
+
+vars == <<row, procs, panes, sess, clock, life, faults, rowViol, killViol, seen, subs, subViol>>
+SubSame == UNCHANGED <<subs, subViol>>
 
 OldTok == 99                                   \* a leftover's label: an earlier life's token
 \* idw: the launch's identity write is outstanding; rp: the create reply it will write
@@ -52,6 +78,7 @@ NoRow  == [st |-> "none", tok |-> 0, pn |-> 0, ppid |-> 0, pst |-> 0, sid |-> 0,
 Init == /\ row = NoRow /\ procs = {} /\ panes = {} /\ sess = {}
         /\ clock = 0 /\ life = 0 /\ faults = 0
         /\ rowViol = FALSE /\ killViol = FALSE /\ seen = {}
+        /\ subs = {} /\ subViol = FALSE
 
 Note(c, t) == seen' = IF Probes /\ c THEN seen \cup {t} ELSE seen
 Can        == clock < MaxClock
@@ -95,7 +122,7 @@ HookFire(p) ==
   /\ p.sid # 0 /\ ~p.started /\ ~p.ended /\ ~p.ssw /\ row.st # "none"
   /\ procs' = (procs \ {p}) \cup {[p EXCEPT !.started = TRUE, !.ssw = TRUE,
                                            !.wt = (row.st = "pending" /\ row.pn = 0 /\ row.idw)]}
-  /\ UNCHANGED <<row, panes, sess, clock, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, panes, sess, clock, life, faults, rowViol, killViol, seen>> /\ SubSame
 \* The wait (decision D): while the row is pending with no pane, its identity write
 \* outstanding and the grace period not yet passed.
 Waits == HookWait /\ row.st = "pending" /\ row.pn = 0 /\ row.idw /\ ~row.late
@@ -112,27 +139,53 @@ HookStartRun(p) ==
           /\ seen' = IF ~Probes THEN seen
                      ELSE seen \cup (IF p.lau = 0 /\ p.pn # 0 /\ p.pn = row.pn THEN {"nested_ignored"} ELSE {})
                                \cup (IF p.wt THEN {"waited_ignored"} ELSE {})
-  /\ UNCHANGED <<panes, sess, clock, life, faults, killViol>>
+  /\ UNCHANGED <<panes, sess, clock, life, faults, killViol>> /\ SubSame
 \* An ordinary hook (a prompt, a tool, Stop): moves the row as today; records the
 \* session id only when the row has none (a lost reply adopted after SessionStart).
 HookAct(p) ==
   /\ p.started /\ ~p.ended /\ ~p.ssw /\ row.st # "none"
   /\ IF GateOK(p) THEN Apply(p, "live", IF row.sid = 0 THEN p.sid ELSE row.sid) /\ UNCHANGED seen
      ELSE Ignored(p)
-  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, killViol>>
+  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, killViol>> /\ SubSame
+\* b.xjn: every running record becomes closed (lost), in the writer's own transaction.
+CloseAll(S) == {IF r.st = "running" THEN [r EXCEPT !.st = "closed"] ELSE r : r \in S}
+SubClose    == /\ subs' = IF Sub /\ ~SubNoClose THEN CloseAll(subs) ELSE subs
+               /\ UNCHANGED subViol
 \* SessionEnd (a real end; the process exits afterwards).
 HookEnd(p) ==
   /\ p.started /\ ~p.ended /\ ~p.ssw /\ row.st # "none"
   /\ procs' = (procs \ {p}) \cup {[p EXCEPT !.ended = TRUE]}
-  /\ IF GateOK(p) THEN Apply(p, "ended", row.sid) /\ UNCHANGED seen ELSE Ignored(p)
+  /\ IF GateOK(p) THEN Apply(p, "ended", row.sid) /\ UNCHANGED seen /\ SubClose
+     ELSE Ignored(p) /\ SubSame
   /\ UNCHANGED <<panes, sess, clock, life, faults, killViol>>
+\* b.xjn: a subagent hook fired by the Claude process p. k = "start" (SubagentStart:
+\* opens or reopens the record), "stop" (SubagentStop, or a Stop snapshot that covers
+\* the record and omits it: closes a running record; no record, no write). It may come
+\* after p's SessionEnd (p still runs until Exit). The gated row write is a soft
+\* refresh (state and session id unchanged; a NULL start time is recorded as any
+\* applied hook records it).
+SubHook(p, k) ==
+  /\ Sub /\ p.started /\ ~p.ssw /\ row.st # "none"
+  /\ LET gate == GateOK(p)
+         w    == (gate \/ SubNoGate) /\ (row.st \notin {"ended", "missing"} \/ SubOnTerminal)
+         old  == {r \in subs : r.lau = row.tok}
+         run  == \E r \in old : r.st = "running"
+     IN /\ IF gate THEN /\ row' = [row EXCEPT !.pst = IF @ = 0 /\ row.pn # 0 THEN p.st ELSE @]
+                        /\ rowViol' = (rowViol \/ ~IsAgent(p))
+                        /\ UNCHANGED seen
+                   ELSE Ignored(p)
+        /\ IF w /\ (k = "start" \/ run)
+           THEN /\ subs' = (subs \ old) \cup {[lau |-> row.tok, st |-> IF k = "start" THEN "running" ELSE "closed"]}
+                /\ subViol' = (subViol \/ ~IsAgent(p))
+           ELSE SubSame
+  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, killViol>>
 \* In-session /clear or /resume: the same process, a new Claude session id; its
 \* SessionStart (source clear/resume) follows as HookFire and HookStartRun.
 Rotate(p) ==
   /\ AllowRotate /\ Can /\ p.started /\ ~p.ended /\ ~p.ssw /\ p.lau # 0
   /\ procs' = (procs \ {p}) \cup {[p EXCEPT !.sid = T, !.started = FALSE]}
   /\ clock' = clock + 1
-  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>> /\ SubSame
 
 -----------------------------------------------------------------------------
 (* Launches, the processes an agent starts, accidents *)
@@ -149,6 +202,7 @@ Launch ==
                   idw |-> TRUE, rp |-> <<T, pid, T>>, late |-> FALSE, lostRep |-> FALSE]
   /\ life' = life + 1 /\ clock' = clock + 1
   /\ UNCHANGED <<faults, rowViol, killViol, seen>>
+  /\ SubClose  \* b.xjn: resume / reuse close any record left running
 \* The identity write (SR-3.6): conditional on the row as the launch left it (still
 \* pending, no pane: an adoption in between wins). The reply may have been lost (a
 \* fault: nothing written), and the start time may be unreadable (NULL).
@@ -161,19 +215,19 @@ RecordIdentity ==
                                   !.pst = IF ns THEN 0 ELSE row.rp[3]]
        /\ faults' = IF lost THEN faults + 1 ELSE faults
        /\ Note(ns /\ ~lost /\ row.pn = 0, "null_start")
-  /\ UNCHANGED <<procs, panes, sess, clock, life, rowViol, killViol>>
+  /\ UNCHANGED <<procs, panes, sess, clock, life, rowViol, killViol>> /\ SubSame
 \* The grace period passes before the identity write (drops the timing assumption).
 IdentityLate ==
   /\ AllowSlowIdentity /\ row.st = "pending" /\ row.idw /\ ~row.late
   /\ row' = [row EXCEPT !.late = TRUE]
-  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<procs, panes, sess, clock, life, faults, rowViol, killViol, seen>> /\ SubSame
 \* a nested `claude` run from an agent's shell: a child in the agent's pane
 Nested ==
   /\ AllowNested /\ Can /\ HasFree
   /\ \E p \in procs : p.lau # 0 /\ p.pn # 0 /\ \E h \in HupChoice :
        procs' = procs \cup {NewProc(FreePid, p.pid, p.pn, 0, h)}
   /\ clock' = clock + 1
-  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>> /\ SubSame
 \* an agent-teams teammate: the main process of a new pane split in the agent's session
 Teammate ==
   /\ AllowTeammate /\ Can /\ HasFree
@@ -181,12 +235,12 @@ Teammate ==
        /\ panes' = panes \cup {[pn |-> T, tid |-> x.tid, main |-> FreePid, mst |-> T, adp |-> 0]}
        /\ procs' = procs \cup {NewProc(FreePid, 0, T, 0, h)}
   /\ clock' = clock + 1
-  /\ UNCHANGED <<row, sess, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, sess, life, faults, rowViol, killViol, seen>> /\ SubSame
 Stray ==
   /\ AllowStray /\ Can /\ HasFree /\ ~\E p \in procs : p.pn = 0 /\ p.par = 0 /\ p.lau = 0
   /\ procs' = procs \cup {NewProc(FreePid, 0, 0, 0, FALSE)}
   /\ clock' = clock + 1
-  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, panes, sess, life, faults, rowViol, killViol, seen>> /\ SubSame
 \* a leftover of an earlier life: its own session and pane, an old label
 Leftover ==
   /\ AllowLeftover /\ Can /\ HasFree /\ ~\E s \in sess : s.tok = OldTok
@@ -194,7 +248,7 @@ Leftover ==
   /\ panes' = panes \cup {[pn |-> T, tid |-> T, main |-> FreePid, mst |-> T, adp |-> OldTok]}
   /\ procs' = procs \cup {NewProc(FreePid, 0, T, 0, FALSE)}
   /\ clock' = clock + 1
-  /\ UNCHANGED <<row, life, faults, rowViol, killViol, seen>>
+  /\ UNCHANGED <<row, life, faults, rowViol, killViol, seen>> /\ SubSame
 \* a process exits: after its SessionEnd, or any time (a crash; non-agents any time).
 \* A pane main's exit closes its pane (remain-on-exit is off).
 Exit ==
@@ -206,7 +260,7 @@ Exit ==
        IN /\ procs' = P2
           /\ panes' = PanesLeft(PNs)
           /\ sess'  = SessLeft(PanesLeft(PNs))
-    /\ UNCHANGED <<row, clock, life, faults, rowViol, killViol, seen>>
+    /\ UNCHANGED <<row, clock, life, faults, rowViol, killViol, seen>> /\ SubSame
 
 -----------------------------------------------------------------------------
 (* agent-director's verbs *)
@@ -222,7 +276,7 @@ Adopt ==
                  /\ row' = [row EXCEPT !.pn = x.pn, !.ppid = x.main, !.pst = x.mst]
                  /\ Note(TRUE, "adopted")
             /\ UNCHANGED faults
-  /\ UNCHANGED <<procs, panes, sess, clock, life, rowViol, killViol>>
+  /\ UNCHANGED <<procs, panes, sess, clock, life, rowViol, killViol>> /\ SubSame
 \* kill of a live row (pending included), lookup Ours, the agent's pane found:
 \* list the session's panes, kill the agent's pane and the session, wait.
 Kill ==
@@ -243,7 +297,7 @@ Kill ==
                         ELSE seen \cup (IF ~ok THEN {"kill_failed"} ELSE {})
                                   \cup (IF ok /\ \E q \in P2 : q.pn = 0 /\ q.hup /\ q.par # 0
                                         THEN {"child_outlives_ok_kill"} ELSE {})
-  /\ UNCHANGED <<row, clock, life, faults, rowViol>>
+  /\ UNCHANGED <<row, clock, life, faults, rowViol>> /\ SubSame
 \* find-missing (the grace period abstracted): the recorded agent process is gone, or
 \* no pane is recorded and the launch's labelled session is gone.
 FM ==
@@ -253,8 +307,10 @@ FM ==
      \/ row.pn = 0 /\ FMNoPaneGone /\ ~\E x \in panes : x.adp = row.tok
   /\ row' = [row EXCEPT !.st = "missing"]
   /\ UNCHANGED <<procs, panes, sess, clock, life, faults, rowViol, killViol, seen>>
+  /\ SubClose  \* b.xjn: in the same transaction as the missing mark
 
 Next == \/ \E p \in procs : HookFire(p) \/ HookStartRun(p) \/ HookAct(p) \/ HookEnd(p) \/ Rotate(p)
+        \/ \E p \in procs, k \in {"start", "stop"} : SubHook(p, k)
         \/ Launch \/ RecordIdentity \/ IdentityLate \/ Nested \/ Teammate \/ Stray \/ Leftover \/ Exit
         \/ Adopt \/ Kill \/ FM
 Spec     == Init /\ [][Next]_vars
@@ -293,4 +349,19 @@ NotTeammateLive    == ~\E p \in procs, x \in panes : p.lau = 0 /\ p.par = 0 /\ x
 NotWaitedApplied   == NotSeen("waited_applied")
 NotWaitedIgnored   == NotSeen("waited_ignored")
 NotPidReused       == ~\E p \in procs : row.ppid = p.pid /\ row.pst # 0 /\ row.pst # p.st
+
+-----------------------------------------------------------------------------
+(* b.xjn properties *)
+\* a subagent record is written only by the row's current agent (its own launch's)
+SubOnlyByAgent    == ~subViol
+\* a running record belongs to the current launch of a row that is not ended or missing
+SubNoStaleRunning == \A r \in subs : r.st = "running" => r.lau = row.tok /\ row.st \notin {"ended", "missing"}
+RunningRec        == \E r \in subs : r.st = "running"
+\* once the agent is gone, no record stays running
+SubLostResolves   == (RunningRec /\ ~AgentAlive) ~> ~RunningRec
+\* probes (each must be violated: the case is reachable)
+NotSubRunning     == ~RunningRec
+NotSubClosed      == ~\E r \in subs : r.st = "closed"
+\* a second launch runs a subagent while the first launch's record is closed
+NotSubNextLaunch  == ~\E r1, r2 \in subs : r1.lau # r2.lau /\ r1.st = "closed" /\ r2.st = "running"
 =============================================================================

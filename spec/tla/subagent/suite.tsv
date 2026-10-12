@@ -1,0 +1,14 @@
+# b.xjn subagent records (spec/tla/subagent/README.md). Columns as ci/suite.tsv (group, spec, cfg,
+# cap_s, expect, tier, what), plus props: for a violation row, the properties whose violation counts
+# as the expected result (comma-separated); "-" for a pass row. Cfgs are in subagent/cfg/.
+sx_S5	Phase5Hook	sx_S5	2600	pass	fast	as sx_S with pid reuse and readable start times (MaxClock 5, PidPool 3)	-
+sx_L	Phase5Hook	sx_L	1800	pass	fast	find-missing fair: PendingResolves, ReportInResolves, SubLostResolves	-
+sx	Phase5Hook	sx_eq_Sns	600	pass	fast	knobs off: b.zuj run 4's ci_H_Sns exactly; the distinct-state count must be 11387737 (compared by hand)	-
+sx	Phase5Hook	sx_S	1200	pass	fast	subagent records: RowOnlyByAgent, KillAllGone, ClockBound, SubOnlyByAgent, SubNoStaleRunning; whole world, unreadable start	-
+sx	Phase5Hook	sx_C_nogate	900	violation	fast	control: the record write is not gated	SubOnlyByAgent
+sx	Phase5Hook	sx_C_noclose	900	violation	fast	control: ended, missing and a new launch close nothing	SubNoStaleRunning
+sx	Phase5Hook	sx_C_noclose_live	900	violation	fast	control: no close; a gone agent's record runs for good	SubLostResolves
+sx	Phase5Hook	sx_C_terminal	900	violation	fast	control: a subagent hook after SessionEnd writes the ended row's record	SubNoStaleRunning
+sx	Phase5Hook	sx_V_running	900	violation	fast	probe: a running record is reachable	NotSubRunning
+sx	Phase5Hook	sx_V_closed	900	violation	fast	probe: a closed record is reachable	NotSubClosed
+sx	Phase5Hook	sx_V_nextlaunch	900	violation	fast	probe: the next launch runs a subagent while the first launch's record is closed	NotSubNextLaunch

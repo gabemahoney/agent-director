@@ -48,80 +48,98 @@ func writeManifest(t *testing.T, dir string, lines ...string) string {
 	return p
 }
 
-// TestRunnerLaunchSuite runs spec/tla/launch/suite.tsv: its props column is
-// accepted, its cfgs come from launch/cfg/ (unpinned) into the job contexts,
-// and every row gets the violation its props name.
+// TestRunnerLaunchSuite runs each unpinned run set's suite.tsv (launch/,
+// subagent/): its props column is accepted, its cfgs come from its cfg/
+// (unpinned) into the job contexts, and every row gets the violation its props name.
 func TestRunnerLaunchSuite(t *testing.T) {
-	r := newRig(t)
-	suite := filepath.Join(r.tree, "launch", "suite.tsv")
-	cfgDir, err := filepath.EvalSymlinks(filepath.Join(r.tree, "launch", "cfg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, props := loadSuite8(t, suite)
-	for i, rw := range rows {
-		res := "PASS"
-		if rw.expect == "violation" {
-			names := strings.Split(props[i], ",")
-			res = "FAIL(Invariant_" + names[len(names)-1] + "_is_violated)"
-		}
-		r.verdict(t, rw.cfg, res)
-	}
-	r.env["TLA_SUITE"] = suite
-	r.env["TLA_TIER"] = "full"
-
-	res := r.run(t)
-
-	want := fmt.Sprintf(`^CI-VERDICT PASS \(%d/%d runs ok, \d+ min, tier full\)$`, len(rows), len(rows))
-	if res.code != 0 || !regexp.MustCompile(want).MatchString(res.last()) {
-		t.Fatalf("want exit 0 and %s\n%s", want, res)
-	}
-	lines := res.lines()
-	for i, rw := range rows {
-		m := runLine.FindStringSubmatch(lines[i])
-		if m == nil || m[1] != "PASS" || m[2] != rw.cfg || m[6] != rw.what {
-			t.Errorf("run line %d = %q, want a PASS line for %s -- %s", i, lines[i], rw.cfg, rw.what)
-		}
-	}
-	groups := groupsOf(rows)
-	if got := r.submits(t); !reflect.DeepEqual(got, append([]string{"parse"}, groups...)) {
-		t.Errorf("submits = %v, want parse then %v", got, groups)
-	}
-	checkJob(t, r, "parse", parseRuns(rows), 600)
-	for _, g := range groups {
-		runs, budget := groupRuns(rows, g)
-		checkJob(t, r, g, runs, budget)
-		for _, line := range runs {
-			c := strings.Fields(line)[1]
-			sum := fmt.Sprintf("%x  ./%s.cfg", sha256.Sum256([]byte(readFile(t, filepath.Join(cfgDir, c+".cfg")))), c)
-			if !strings.Contains(r.seen(t, g, "cfgs"), sum) {
-				t.Errorf("job %s context lacks launch/cfg/%s.cfg as it is on disk:\n%s", g, c, r.seen(t, g, "cfgs"))
+	for _, tc := range []struct {
+		dir      string
+		temporal string         // a property TLC reports as a temporal one, not an invariant
+		budgets  map[string]int // group -> budget the suite's caps must give; nil to skip
+	}{
+		{dir: "launch"},
+		{dir: "subagent", temporal: "SubLostResolves", budgets: map[string]int{"sx_S5": 2740, "sx_L": 1940, "sx": 8400}},
+	} {
+		t.Run(tc.dir, func(t *testing.T) {
+			r := newRig(t)
+			suite := filepath.Join(r.tree, tc.dir, "suite.tsv")
+			cfgDir, err := filepath.EvalSymlinks(filepath.Join(r.tree, tc.dir, "cfg"))
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-	if note := fmt.Sprintf("# %d cfgs from %s (next to TLA_SUITE; not pinned)", len(rows), cfgDir); !strings.Contains(res.stderr, note) {
-		t.Errorf("stderr lacks %q\n%s", note, res)
-	}
-	if exists(filepath.Join(r.fake, "forbidden")) {
-		t.Errorf("the runner started a forbidden tool: %s", readFile(t, filepath.Join(r.fake, "forbidden")))
-	}
+			rows, props := loadSuite8(t, suite)
+			for i, rw := range rows {
+				res := "PASS"
+				if rw.expect == "violation" {
+					names := strings.Split(props[i], ",")
+					last := names[len(names)-1]
+					res = "FAIL(Invariant_" + last + "_is_violated)"
+					if last == tc.temporal {
+						res = "FAIL(Temporal_property_" + last + "_was_violated)"
+					}
+				}
+				r.verdict(t, rw.cfg, res)
+			}
+			r.env["TLA_SUITE"] = suite
+			r.env["TLA_TIER"] = "full"
 
-	t.Run("print", func(t *testing.T) {
-		p := newRig(t)
-		p.env["TLA_SUITE"] = suite
+			res := r.run(t)
 
-		res := p.run(t, "--print")
+			want := fmt.Sprintf(`^CI-VERDICT PASS \(%d/%d runs ok, \d+ min, tier full\)$`, len(rows), len(rows))
+			if res.code != 0 || !regexp.MustCompile(want).MatchString(res.last()) {
+				t.Fatalf("want exit 0 and %s\n%s", want, res)
+			}
+			lines := res.lines()
+			for i, rw := range rows {
+				m := runLine.FindStringSubmatch(lines[i])
+				if m == nil || m[1] != "PASS" || m[2] != rw.cfg || m[6] != rw.what {
+					t.Errorf("run line %d = %q, want a PASS line for %s -- %s", i, lines[i], rw.cfg, rw.what)
+				}
+			}
+			groups := groupsOf(rows)
+			if got := r.submits(t); !reflect.DeepEqual(got, append([]string{"parse"}, groups...)) {
+				t.Errorf("submits = %v, want parse then %v", got, groups)
+			}
+			checkJob(t, r, "parse", parseRuns(rows), 600)
+			for _, g := range groups {
+				runs, budget := groupRuns(rows, g)
+				if want, ok := tc.budgets[g]; tc.budgets != nil && (!ok || budget != want) {
+					t.Errorf("group %s budget = %d, want %d", g, budget, want)
+				}
+				checkJob(t, r, g, runs, budget)
+				for _, line := range runs {
+					c := strings.Fields(line)[1]
+					sum := fmt.Sprintf("%x  ./%s.cfg", sha256.Sum256([]byte(readFile(t, filepath.Join(cfgDir, c+".cfg")))), c)
+					if !strings.Contains(r.seen(t, g, "cfgs"), sum) {
+						t.Errorf("job %s context lacks %s/cfg/%s.cfg as it is on disk:\n%s", g, tc.dir, c, r.seen(t, g, "cfgs"))
+					}
+				}
+			}
+			if note := fmt.Sprintf("# %d cfgs from %s (next to TLA_SUITE; not pinned)", len(rows), cfgDir); !strings.Contains(res.stderr, note) {
+				t.Errorf("stderr lacks %q\n%s", note, res)
+			}
+			if exists(filepath.Join(r.fake, "forbidden")) {
+				t.Errorf("the runner started a forbidden tool: %s", readFile(t, filepath.Join(r.fake, "forbidden")))
+			}
 
-		if res.code != 0 {
-			t.Fatalf("want exit 0\n%s", res)
-		}
-		if line := fmt.Sprintf("  cfgs:       %d from %s (next to TLA_SUITE; not pinned)", len(rows), cfgDir); !strings.Contains(res.stdout, line) {
-			t.Errorf("stdout lacks %q\n%s", line, res)
-		}
-		if p.calls(t) != nil {
-			t.Errorf("--print called the scheduler: %v", p.calls(t))
-		}
-	})
+			t.Run("print", func(t *testing.T) {
+				p := newRig(t)
+				p.env["TLA_SUITE"] = suite
+
+				res := p.run(t, "--print")
+
+				if res.code != 0 {
+					t.Fatalf("want exit 0\n%s", res)
+				}
+				if line := fmt.Sprintf("  cfgs:       %d from %s (next to TLA_SUITE; not pinned)", len(rows), cfgDir); !strings.Contains(res.stdout, line) {
+					t.Errorf("stdout lacks %q\n%s", line, res)
+				}
+				if p.calls(t) != nil {
+					t.Errorf("--print called the scheduler: %v", p.calls(t))
+				}
+			})
+		})
+	}
 }
 
 // TestRunnerPropsRules: with the props column, a violation row is ok only

@@ -14587,22 +14587,36 @@ depends on it.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The
-repo copy is vendored byte for byte under SHA-256 pins, with two exceptions,
-`Phase4.tla` and `ci/mkci.py`. `Phase4.tla` carries bee b.66h's
-launch-scoped-actions change. Its knobs default to off. With them off, the
-model's steps are identical to b.zuj CI run 4, but distinct-state counts
-under `VIEW CIView` can vary between runs. Bee b.y88 then changed only
-comments in both files, which now name `agent-director-admin kill-finished`.
-Neither the model's steps nor `mkci.py`'s output changed.
+repo copy is vendored byte for byte under SHA-256 pins, with three
+exceptions, `Phase4.tla`, `Phase5Hook.tla` and `ci/mkci.py`. `Phase4.tla`
+carries bee b.66h's launch-scoped-actions change. Its knobs default to off.
+With them off, the model's steps are identical to b.zuj CI run 4, but
+distinct-state counts under `VIEW CIView` can vary between runs. Bee b.y88
+then changed only comments in both files, which now name
+`agent-director-admin kill-finished`. Neither the model's steps nor
+`mkci.py`'s output changed. `Phase5Hook.tla` carries bee b.xjn's
+subagent-record change: subagent records behind four knobs (`Sub`,
+`SubNoGate`, `SubNoClose`, `SubOnTerminal`) that default to off. With them
+off, the model's steps are identical to run 4's, and a cfg without a `VIEW`
+reaches run 4's distinct-state count exactly. Run 4's verdicts do not cover
+the changed file until a `make tla` run passes.
 [`spec/tla/PROVENANCE.txt`](../spec/tla/PROVENANCE.txt) records the
-source, the pin list, the delivering run, the b.66h and b.y88 changes, the
-layout and the TLC build: `tla2tools.jar` rev `4260e47`, committed because
-that nightly build has no immutable upstream URL.
+source, the pin list, the delivering run, the b.66h, b.y88 and b.xjn
+changes, the layout and the TLC build: `tla2tools.jar` rev `4260e47`,
+committed because that nightly build has no immutable upstream URL.
 
 [`spec/tla/launch/`](../spec/tla/launch/README.md) holds the b.66h runs. It
 is written here and not pinned. Its runs are not in `ci/suite.tsv`, so a
 plain `make tla` does not run them; `make tla
 TLA_SUITE=spec/tla/launch/suite.tsv` does.
+
+[`spec/tla/subagent/`](../spec/tla/subagent/README.md) holds the b.xjn
+runs: 11 runs of the changed `Phase5Hook.tla` (a knobs-off equivalence run,
+safety runs, controls and probes). Like `launch/`, it is written here and
+not pinned, and its runs are not in `ci/suite.tsv`; `make tla
+TLA_SUITE=spec/tla/subagent/suite.tsv` runs them. They check
+`SubOnlyByAgent`, `SubNoStaleRunning` and `SubLostResolves`, with the README
+holding the verdicts, the job ids and the rerun commands.
 
 [`spec/tla/settle/`](../spec/tla/settle/README.md) holds bee b.3ie's model
 of the settle time (`B3ieSettle.tla`; see
@@ -14675,10 +14689,20 @@ The model has three specs:
     recorded pane process;
   - adoption by `@ad_pane`;
   - `kill` waiting for every pane process of the session;
-  - SessionStart's bounded wait for the launch's identity write (0930b Q1).
+  - SessionStart's bounded wait for the launch's identity write (0930b Q1);
+  - with b.xjn's knobs on, subagent records: one record per launch, written
+    by a subagent hook that any process carrying the id may fire (the
+    agent, a nested `claude`, a teammate, a stray or a leftover). The write
+    is gated by the same parent-process rule and touches only the row's
+    current launch, never an `ended` or `missing` row. The row's
+    SessionEnd, `find-missing`'s `missing` mark and a new launch (resume or
+    reuse) each close every running record as lost.
 
   Its actors include a nested `claude`, teammates, leftovers, strays, a
   `/clear`, a lost reply, processes that survive the hangup, and pid reuse.
+  The 22 runs in `ci/suite.tsv` run it with the b.xjn knobs off. Of the 11
+  runs in `subagent/`, 10 turn them on and `sx_eq_Sns` keeps them off (the
+  knobs-off equivalence run).
 
 `mkci.py` sets the design values. The runs that turn one off are:
 
@@ -14709,7 +14733,14 @@ The properties checked are:
     current launch's agent;
   - `KillAllGone`: `kill` never succeeds while a pane process of the
     session survives;
-  - `PendingResolves` and `ReportInResolves`.
+  - `PendingResolves` and `ReportInResolves`;
+  - with the knobs on (10 of the 11 `subagent/` runs; `sx_eq_Sns` keeps them
+    off): `SubOnlyByAgent`, a subagent
+    record is written only by the row's current agent; `SubNoStaleRunning`,
+    a running record belongs to the current launch of a row that is neither
+    `ended` nor `missing`; `SubLostResolves`, once the agent is gone no
+    record stays running. Its probes `NotSubRunning`, `NotSubClosed` and
+    `NotSubNextLaunch` must be violated, which shows the state is reachable.
 
 The run kinds and their expected results:
 
@@ -14774,9 +14805,11 @@ nothing here changes it).**
    liveness runs assume the wider gate. No run composes the built gate
    with the label lookup.
 2. Not modelled:
-   - subagents and in-process teammates (no `agent_id`, no in-process
-     actors), so neither the `agent_id` guard (`subagent_event`) nor their
-     other events moving the row; the SRD says they need no model;
+   - the `agent_id` guard (`subagent_event`). The model lets any process
+     carrying the id fire a subagent hook, which is the harder case for the
+     gate. The record writes of subagents are modelled (see the
+     `Phase5Hook.tla` bullet above);
+   - in-process teammates' row moves (no in-process actors);
    - `no_exec_form`; the SRD says it needs no model;
    - an unreadable parent start time. The built rule, under which the hook
      never applies, is safety-conservative. For liveness the row stays
@@ -14822,8 +14855,11 @@ The variables:
 - `TLA_GROUPS` lists the groups to run, space-separated, in the order
   given. The default is every manifest group.
 - `TLA_SPEC_DIR` and `TLA_SUITE` point at another copy of the three specs
-  and another manifest. An override is not pinned. The cfgs, the jar and
-  the job image files always come from the pinned tree.
+  and another manifest. An override is not pinned. The jar and the job
+  image files always come from the pinned tree, and so do the cfgs the
+  manifest names from `ci/cfg/`. A manifest may also name cfgs in the `cfg/`
+  directory next to it (`launch/cfg/`, `subagent/cfg/`); those are not
+  pinned.
 
 The host needs `bash`, `sha256sum` and `jq`. The runner reads the
 scheduler's `--json` output with `jq`. The scheduler's dispatcher must
@@ -14909,19 +14945,26 @@ scheduler. The suite's files:
 - **`runner_test.go`** covers the job order and tiers, the ok rules, the
   fail-closed paths and the overrides.
 - **`interrupt_test.go`** covers the interrupt cases above.
-- **`props_test.go`** covers the props column: the shipped launch suite,
-  with its cfgs packed from `launch/cfg/`, the props ok rule, and the
-  preflight refusals for bad props or an ambiguous or missing cfg.
+- **`props_test.go`** covers the props column: the shipped launch and
+  subagent suites (a table, one subtest each, with a `print` subtest that
+  runs `--print`), with their cfgs packed from `launch/cfg/` and
+  `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
+  props ok rule, and the preflight refusals for bad props or an ambiguous or
+  missing cfg.
 - **`provenance_test.go`** has six tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `settle/` and `hold36h/`
-    (each of the last two has its own pin list) are unpinned by
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/` and
+    `hold36h/` (each of the last two has its own pin list) are unpinned by
     `spec/tla/PROVENANCE.txt`;
   - `settle/PROVENANCE.txt` pins every other file under `settle/` with its
     SHA-256, and each of its pins names one of them (`TestSettleProvenance`);
   - `hold36h/PROVENANCE.txt` does the same for `hold36h/`
     (`TestHold36hProvenance`);
-  - `launch/cfg/` holds exactly the cfgs `launch/suite.tsv` names;
+  - for each of `launch/` and `subagent/` (`TestRunSets`), `cfg/` holds
+    exactly the cfgs `suite.tsv` names, each row has eight columns with
+    the props column `-` on exactly the pass rows, every cfg turns the
+    run set's knob on (except the knobs-off `sx_eq_Sns`), and each cfg's
+    comment names the run set's `README.md` and no `tickets/` path;
   - the runner names no checker or container command;
   - `make -n tla` and `make -n tla-print` run only the runner, none of
     `all`, `test` and `test-sandbox` reaches it, and `make tla-print` contacts no scheduler.

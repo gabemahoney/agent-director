@@ -31,8 +31,8 @@ func pinLines(t *testing.T, prov string) map[string]string {
 
 // TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
 // against the file's SHA-256, and that only the repo's own files are unpinned:
-// three named files plus the b.66h runs (launch/). The b.3ie model (settle/)
-// and the b.36h model (hold36h/) each have their own pin list.
+// three named files plus the unpinned run sets (launch/, subagent/). The b.3ie
+// model (settle/) and the b.36h model (hold36h/) each have their own pin list.
 func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
@@ -46,7 +46,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "subagent/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -137,37 +137,62 @@ func checkOwnPins(t *testing.T, dir string) {
 	}
 }
 
-// TestLaunchRuns: launch/cfg holds exactly the cfgs launch/suite.tsv names,
-// and each row has the eight columns ci/run_ci.sh reads.
-func TestLaunchRuns(t *testing.T) {
+// TestRunSets: for each unpinned run set (launch/, subagent/) its cfg/ holds
+// exactly the cfgs suite.tsv names, and each row has the eight columns ci/run_ci.sh reads.
+func TestRunSets(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
-	var named []string
-	for _, line := range strings.Split(readFile(t, filepath.Join(tree, "launch", "suite.tsv")), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Split(line, "\t")
-		if len(f) != 8 || f[1] != "Phase4Split" || (f[4] != "pass" && f[4] != "violation") || (f[4] == "pass") != (f[7] == "-") {
-			t.Errorf("launch/suite.tsv: bad row %q", line)
-			continue
-		}
-		named = append(named, f[2]+".cfg")
-		cfg := readFile(t, filepath.Join(tree, "launch", "cfg", f[2]+".cfg"))
-		if !strings.Contains(cfg, "  LaunchObs <- KnobOn\n") {
-			t.Errorf("launch/cfg/%s.cfg does not turn LaunchObs on", f[2])
-		}
-	}
-	entries, err := os.ReadDir(filepath.Join(tree, "launch", "cfg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var have []string
-	for _, e := range entries {
-		have = append(have, e.Name())
-	}
-	sort.Strings(named)
-	if len(named) == 0 || !reflect.DeepEqual(have, named) {
-		t.Errorf("launch/cfg holds %v; want exactly the launch/suite.tsv names %v", have, named)
+	for _, tc := range []struct {
+		dir, spec, knob string
+		off             map[string]bool // cfgs with the knob off
+	}{
+		{"launch", "Phase4Split", "LaunchObs", nil},
+		{"subagent", "Phase5Hook", "Sub", map[string]bool{"sx_eq_Sns": true}},
+	} {
+		t.Run(tc.dir, func(t *testing.T) {
+			readme := "spec/tla/" + tc.dir + "/README.md"
+			knobOn := regexp.MustCompile(`(?m)^  ` + tc.knob + ` <- KnobOn$`)
+			knobAny := regexp.MustCompile(`(?m)^\s*` + tc.knob + ` <-`)
+			var named []string
+			for _, line := range strings.Split(readFile(t, filepath.Join(tree, tc.dir, "suite.tsv")), "\n") {
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				f := strings.Split(line, "\t")
+				if len(f) != 8 || f[1] != tc.spec || (f[4] != "pass" && f[4] != "violation") || (f[4] == "pass") != (f[7] == "-") {
+					t.Errorf("%s/suite.tsv: bad row %q", tc.dir, line)
+					continue
+				}
+				named = append(named, f[2]+".cfg")
+				cfg := readFile(t, filepath.Join(tree, tc.dir, "cfg", f[2]+".cfg"))
+				if tc.off[f[2]] && knobAny.MatchString(cfg) {
+					t.Errorf("%s/cfg/%s.cfg sets %s; this knobs-off cfg must leave it unset", tc.dir, f[2], tc.knob)
+				}
+				if !tc.off[f[2]] && !knobOn.MatchString(cfg) {
+					t.Errorf("%s/cfg/%s.cfg does not turn %s on", tc.dir, f[2], tc.knob)
+				}
+				var comment []string
+				for _, l := range strings.Split(cfg, "\n") {
+					if strings.HasPrefix(l, `\*`) {
+						comment = append(comment, l)
+					}
+				}
+				if c := strings.Join(comment, "\n"); !strings.Contains(c, readme) || strings.Contains(c, "tickets/") {
+					t.Errorf("%s/cfg/%s.cfg: comment must name %s and no tickets/ path:\n%s", tc.dir, f[2], readme, c)
+				}
+			}
+			entries, err := os.ReadDir(filepath.Join(tree, tc.dir, "cfg"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var have []string
+			for _, e := range entries {
+				have = append(have, e.Name())
+			}
+			sort.Strings(named)
+			if len(named) == 0 || !reflect.DeepEqual(have, named) {
+				t.Errorf("%s/cfg holds %v; want exactly the %s/suite.tsv names %v", tc.dir, have, tc.dir, named)
+			}
+		})
 	}
 }
 
