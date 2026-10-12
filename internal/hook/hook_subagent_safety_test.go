@@ -59,15 +59,45 @@ func TestSubagentCaptureStoresNoContent(t *testing.T) {
 	if len(r.rows().Entries) == 0 {
 		t.Fatal("no entry was written; the scan proves nothing")
 	}
+	assertNoSentinel(t, r, logs.String())
+}
+
+// assertNoSentinel fails when the sentinel is in the row's store file (write-ahead
+// log included), the trail or the hook log text logs.
+func assertNoSentinel(t *testing.T, r *subRow, logs string) {
+	t.Helper()
 	if storeContains(t, r.dbPath, subSentinel) {
 		t.Error("the store file holds the sentinel")
 	}
 	if trailContains(t, readTrailLines(t, trailFile()), subSentinel) {
 		t.Error("the trail holds the sentinel")
 	}
-	if strings.Contains(logs.String(), subSentinel) {
-		t.Errorf("the hook log holds the sentinel: %q", logs.String())
+	if strings.Contains(logs, subSentinel) {
+		t.Errorf("the hook log holds the sentinel: %q", logs)
 	}
+}
+
+// TestSubagentListingStoresNoDescription: a background_tasks whose every
+// description (a subagent's and a teammate's) is the sentinel is applied (the
+// Stop's snapshot made its record, the SubagentStop's listing confirmed and
+// filled its entry), yet the sentinel reaches no table, trail line or log line.
+func TestSubagentListingStoresNoDescription(t *testing.T) {
+	t.Run("a Stop's snapshot", func(t *testing.T) {
+		r := newSubRow(t, subRowID)
+		f := r.fire(sentinelPayload(t, fxMainStop), at(1))
+		assertEntries(t, r, listedRecord(subAgentID, subType, at(1)))
+		assertNoSentinel(t, r, f.Log)
+	})
+
+	t.Run("a SubagentStop's listing", func(t *testing.T) {
+		r := newSubRow(t, subRowID)
+		r.fire(variant(t, fxStart), at(1))
+		f := r.fire(sentinelPayload(t, fxStop), at(2))
+		want := listedRecord(subAgentID, subType, at(1))
+		want.first, want.started = at(1), at(1)
+		assertEntries(t, r, want.stoppedAt(at(2)))
+		assertNoSentinel(t, r, f.Log)
+	})
 }
 
 // failRow is a row with one claimable launch (B9) and one entry (B1's, claimed
@@ -85,7 +115,19 @@ func failRow(t *testing.T) *subRow {
 	return r
 }
 
-// TestSubagentCaptureFailsOpen: when the entry write fails the hook exits 0
+// failSnapshotRow is a row whose Stop snapshot (B8) made a background record,
+// then every write of its subagent rows made to fail.
+func failSnapshotRow(t *testing.T) *subRow {
+	t.Helper()
+	r := newSubRow(t, subRowID)
+	r.fire(variant(t, fxMainStop), at(1))
+	assertEntries(t, r, listedRecord(subAgentID, subType, at(1)))
+	storefix.InjectWriteFailure(t, r.dbPath, storefix.WriteFailSubagentRecord, r.id)
+	return r
+}
+
+// TestSubagentCaptureFailsOpen: when the entry write fails (a Stop's snapshot
+// included, whether it would create or close a record) the hook exits 0
 // with nothing on stdout, writes no entry or launch, and logs one line naming
 // the instance and event without any payload string. A SubagentStart or
 // SubagentStop, whose soft refresh shares the entry's transaction, leaves the
@@ -97,20 +139,31 @@ func TestSubagentCaptureFailsOpen(t *testing.T) {
 		payload     func(*testing.T) []byte
 		lifecycle   bool
 		atMs        int64
+		row         func(*testing.T) *subRow // failRow when nil
 	}{
 		{"launch request", "PreToolUse", func(t *testing.T) []byte {
 			return sentinelPayload(t, fxRequest, setKey("tool_use_id", subSecondToolUseID))
-		}, false, at(10)},
-		{"launch result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxResult) }, false, at(10)},
-		{"nested launch result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxResultNested) }, false, at(10)},
-		{"completed result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxCompleted) }, false, at(10)},
-		{"launch failure", "PostToolUseFailure", func(t *testing.T) []byte { return agentFailure(t, subToolUseID, sentinelEdits()) }, false, at(10)},
-		{"main-agent Stop past the grace", "Stop", func(t *testing.T) []byte { return sentinelPayload(t, fxMainStop, emptyListing()) }, false, at(10)},
-		{"SubagentStart", "SubagentStart", func(t *testing.T) []byte { return sentinelPayload(t, fxStart, setKey("agent_id", subChildID)) }, true, at(10)},
-		{"SubagentStop", "SubagentStop", func(t *testing.T) []byte { return sentinelPayload(t, fxStop) }, true, at(10)},
+		}, false, at(10), nil},
+		{"launch result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxResult) }, false, at(10), nil},
+		{"nested launch result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxResultNested) }, false, at(10), nil},
+		{"completed result", "PostToolUse", func(t *testing.T) []byte { return sentinelPayload(t, fxCompleted) }, false, at(10), nil},
+		{"launch failure", "PostToolUseFailure", func(t *testing.T) []byte { return agentFailure(t, subToolUseID, sentinelEdits()) }, false, at(10), nil},
+		{"main-agent Stop past the grace", "Stop", func(t *testing.T) []byte { return sentinelPayload(t, fxMainStop, emptyListing()) }, false, at(10), nil},
+		{"main-agent Stop whose snapshot would create", "Stop", func(t *testing.T) []byte {
+			return sentinelPayload(t, fxMainStop, tasks(taskEntry(subAgentID, subType, map[string]any{"description": subSentinel}),
+				taskEntry(subChildID, subType, map[string]any{"description": subSentinel})))
+		}, false, at(10), failSnapshotRow},
+		{"main-agent Stop whose snapshot would close", "Stop", func(t *testing.T) []byte { return sentinelPayload(t, fxMainStop, emptyListing()) },
+			false, at(10), failSnapshotRow},
+		{"SubagentStart", "SubagentStart", func(t *testing.T) []byte { return sentinelPayload(t, fxStart, setKey("agent_id", subChildID)) }, true, at(10), nil},
+		{"SubagentStop", "SubagentStop", func(t *testing.T) []byte { return sentinelPayload(t, fxStop) }, true, at(10), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := failRow(t)
+			build := tc.row
+			if build == nil {
+				build = failRow
+			}
+			r := build(t)
 			rowsBefore, spawnBefore := r.rows(), r.spawn()
 			f := r.fire(tc.payload(t), tc.atMs)
 			if f.LogLines != 1 {
@@ -275,5 +328,39 @@ func TestSubagentCaptureStringBound(t *testing.T) {
 		if got := r.rows().Entries[0].SubagentID; got != exact || len(exact) != 1024 {
 			t.Errorf("subagent_id = %v (len %d); want the 1024-byte id unchanged", got, len(exact))
 		}
+	})
+}
+
+// TestSubagentListingStringBound: a listed id and type are cut to the longest
+// whole-UTF-8 prefix within 1024 bytes like every other string of a record
+// (SR-5.3), so a long listed id makes the cut record, matches the cut id of a
+// launch result or a start, and keeps that record from closing.
+func TestSubagentListingStringBound(t *testing.T) {
+	cut := func(s string) string { return wantCut(longOf(s)) }
+	long := func(t *testing.T, fx string) []byte { return longVariant(t, fx, longOf) }
+
+	t.Run("a Stop's snapshot creates the cut record, B5 fills it and a later snapshot keeps it", func(t *testing.T) {
+		r := newSubRow(t, subRowID)
+		created := listedRecord(cut(subAgentID), cut(subType), at(1))
+		created.session = cut(subSessionID)
+		full := filled(r, cut(subAgentID), cut(subType), cut(subLaunchDesc), cut(subModel), cut(subToolUseID), at(2))
+		full.opened, full.session = at(1), cut(subSessionID)
+		r.script(t, []step{
+			{name: "B8 creates one record", payload: long(t, fxMainStop), at: at(1), entries: []wantEntry{created}},
+			{name: "B5 fills that record", payload: long(t, fxResult), at: at(2), entries: []wantEntry{full}},
+			{name: "a later snapshot past the grace lists the long id", payload: long(t, fxMainStop), at: at(3), entries: []wantEntry{full}},
+		})
+	})
+
+	t.Run("a SubagentStop's listing confirms the cut entry", func(t *testing.T) {
+		r := newSubRow(t, subRowID)
+		started := running(cut(subAgentID), cut(subType), false, at(1))
+		started.session = cut(subSessionID)
+		confirmed := started
+		confirmed.confirmed, confirmed.runMode = true, "background"
+		r.script(t, []step{
+			{name: "B1 with a long id", payload: long(t, fxStart), at: at(1), entries: []wantEntry{started}},
+			{name: "B3 whose listing carries it", payload: long(t, fxStop), at: at(2), entries: []wantEntry{confirmed.stoppedAt(at(2))}},
+		})
 	})
 }

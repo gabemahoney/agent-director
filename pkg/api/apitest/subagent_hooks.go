@@ -21,7 +21,8 @@ import (
 // call sequence of each.
 
 // SubagentLifecycleEvent is a SubagentStart or SubagentStop's event
-// (store.SubagentLifecycleEvent); the helper sets its Kind.
+// (store.SubagentLifecycleEvent); the helper sets its Kind. A stop's Listing is
+// its background_tasks.
 type SubagentLifecycleEvent = store.SubagentLifecycleEvent
 
 // SubagentLaunchRequest is an Agent-tool launch request (store.SubagentLaunchRequest).
@@ -33,7 +34,17 @@ type SubagentLaunchDetails = store.SubagentLaunchDetails
 // SubagentLaunchFailure is an Agent-tool launch failure (store.SubagentLaunchFailure).
 type SubagentLaunchFailure = store.SubagentLaunchFailure
 
-// MainAgentStop is a main-agent Stop (storefix.MainAgentStop).
+// SubagentListed is a subagent a snapshot or listing names: its id and optional
+// type (store.SubagentListed). No description is ever carried.
+type SubagentListed = store.SubagentListed
+
+// SubagentSnapshot is a main-agent Stop's background_tasks, present
+// (store.SubagentSnapshot); MainAgentStop.Snapshot nil is no snapshot.
+type SubagentSnapshot = store.SubagentSnapshot
+
+// MainAgentStop is a main-agent Stop with its optional snapshot
+// (storefix.MainAgentStop). A SubagentStop's listing is
+// SubagentLifecycleEvent.Listing.
 type MainAgentStop = storefix.MainAgentStop
 
 // ApplySubagentStart applies a SubagentStart (the combined soft refresh and
@@ -128,8 +139,8 @@ func ApplyForeignSubagentLaunchFailure(t *testing.T, dbPath, id string, f Subage
 }
 
 // ApplySubagentMainAgentStop applies a main-agent Stop (the ordinary waiting
-// write, then, when it applied and a claimable launch is old enough to close,
-// the turn-end transaction) as the row's own agent.
+// write, then, when it applied and the skip read finds something to change, the
+// turn-end transaction with stop.Snapshot) as the row's own agent.
 func ApplySubagentMainAgentStop(t *testing.T, dbPath, id string, stop MainAgentStop) store.HookApplied {
 	t.Helper()
 	s := openHookStore(t, dbPath, "ApplySubagentMainAgentStop")

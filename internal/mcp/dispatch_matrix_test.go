@@ -57,8 +57,8 @@ func matrixCases() map[string]matrixCase {
 		// TestMCPSpawnAgentReachesRow's.)
 		"spawn": {args: `{"cwd":"/this/path/does/not/exist","agent":"claude","instance_id":"` + matrixID + `"}`},
 
-		"status":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
-		"get":       {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"status": {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
+		"get":    {args: `{"instance_id":"` + matrixID + `"}`, setup: seedEnded("off")},
 
 		// list-subagents: a dropped instance_id tag lists the empty id and
 		// answers ErrSpawnNotFound for the seeded row.

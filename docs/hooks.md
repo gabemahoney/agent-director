@@ -60,14 +60,14 @@ null.
 | `PreToolUse` | tool=`AskUserQuestion` | `ask_user` |
 | `PostToolUse` | — | `working`; with `relay_mode=on`, it first proves the permission requests carrying the same `tool_use_id` gone (see "Hooks that prove a request's dialog gone" below), then closes a fallen-back one (see "A request whose tool ran" below); for the `Agent` tool it also writes subagent data, the state result unchanged |
 | `PostToolUseFailure` | — | as `PostToolUse`: the tool ran and failed; for the `Agent` tool it also writes subagent data, the state result unchanged |
-| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone; a main-agent `Stop` also writes subagent data, the state result unchanged |
+| `Stop` | — | `waiting`; with `relay_mode=on` and no `agent_id`, it first proves the main agent's permission requests recorded before it started gone; a main-agent `Stop` also writes subagent data, among it the subagents its `background_tasks` lists, the state result unchanged |
 | `Notification` | `notification_type` = `idle_prompt`, no `agent_id` | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (see "A relay row left in `check_permission`" below); any other state: soft refresh. Every applied write records `idle_since` (see "The idle-prompt Notification" below). With `relay_mode=on`, it first proves the main agent's permission requests recorded before it started gone, as `Stop` does |
 | `Notification` | any other `notification_type`, or with `agent_id` | soft refresh — bumps `last_seen_at`, state unchanged |
 | `PermissionRequest` | `*` (all tools) | `check_permission` |
 | `SessionEnd` | cause ∈ {`logout`, `prompt_input_exit`, `exit`} | `ended` (also sets `ended_at`, closes the row's permission requests that still await an answer and proves every request of the row gone; see "The agent's end closes its requests" below) |
 | `SessionEnd` | any other cause (including empty / `clear` / `compact` / auto-compaction) | soft refresh: bumps `last_seen_at`, state unchanged |
 | `SubagentStart` | — | soft refresh: bumps `last_seen_at`, state unchanged, `idle_since` and the settle clock untouched. With `agent_id` it records no session id, and writes the subagent's entry in the same write |
-| `SubagentStop` | — | as `SubagentStart` |
+| `SubagentStop` | — | as `SubagentStart`; with `agent_id` its entry write also applies the subagents its `background_tasks` lists |
 
 Unknown event names are treated as soft refreshes — the row's
 `last_seen_at` updates and an info-level log line records the unknown
@@ -378,8 +378,9 @@ other process's hooks.
 
 agent-director keeps one entry for each subagent of the row's agent. An
 entry becomes a record once an Agent call or a launch result confirms
-it; an entry that nothing confirms is an observation, and is not a
-record. An open Agent call is a note that the agent called its `Agent`
+it, or a listing does (the `background_tasks` list of a main-agent `Stop`
+or of a `SubagentStop`); an entry that nothing confirms is an observation,
+and is not a record. An open Agent call is a note that the agent called its `Agent`
 tool and no subagent has yet been matched to the call. An entry belongs
 to one launch of the row: a `resume` or a `reuse` starts a new one. A
 consumer reads the records with `list-subagents`; its output and fields are in
@@ -419,7 +420,13 @@ the hook started.
   earlier time came from a launch result; the new stop's time replaces
   it. What a consumer sees of a record that reads stopped while another
   stop hook blocks the real stop is in
-  [usage.md](usage.md#how-long-a-record-reads-running).
+  [usage.md](usage.md#how-long-a-record-reads-running). After the stop, and
+  whether or not it changed anything, the stop applies the subagents its
+  `background_tasks` lists (see "The `background_tasks` list" below): each
+  one that has a record, of any launch, is confirmed and moved into the
+  current launch, and a null run mode becomes `background`. The listing
+  never creates a record, closes one or reopens one, and never changes a
+  state or a time.
 - **The launch request**, a `PreToolUse` for the `Agent` tool. It opens an
   open Agent call holding the `tool_use_id`, the type from
   `tool_input.subagent_type` and the time. It opens none when the call has
@@ -449,8 +456,42 @@ the hook started.
 - **A main-agent `Stop`** (no `agent_id`) closes the open Agent calls of
   the current launch opened more than 2 s before the `Stop`. Calls of an
   earlier launch stay. A `Stop` carrying `agent_id` writes nothing of
-  this kind. The hook first reads, without taking the store's write lock,
-  whether any call is old enough, and writes nothing when none is.
+  this kind. It also applies its `background_tasks` as a snapshot of the
+  agent's running background subagents (see "The `background_tasks` list"
+  below), in the same transaction:
+  - A listed subagent with no record gets one, `running`, `run_mode`
+    `background`, with the listed type and the `Stop`'s session id. Its
+    description, model, parent, `tool_use_id` and start times are null.
+  - A listed subagent that has a record, of any launch, is confirmed and
+    moved into the current launch, and a null run mode becomes
+    `background`. Its type is not applied, and its state and times never
+    change, so a stopped or lost record is not reopened.
+  - Then every `running` background record of the current launch that the
+    list does not name, and that was opened more than 2 s before the
+    `Stop`'s hook started, becomes `lost` with `close_reason`
+    `absent_from_snapshot` and the `Stop`'s time as `lost_at`. A record
+    opened exactly 2 s before is kept. This holds for every session and for
+    nested subagents, and across a conversation clear. A foreground record,
+    one of unknown run mode, a `stopped` or `lost` one, and one of an
+    earlier launch are never closed.
+  - What a consumer sees is in
+    [usage.md](usage.md#when-a-record-turns-lost).
+
+  The hook first reads, without taking the store's write lock, whether the
+  `Stop` can change anything: its list names a subagent, a call is old
+  enough to close, or it has a list and a `running` background record is old
+  enough to close. It writes nothing when not. A skipped `Stop` only defers a
+  close to a later one.
+- **The `background_tasks` list**, of a main-agent `Stop` and of a
+  `SubagentStop` with `agent_id`. A missing, null or non-array field is no
+  snapshot: nothing is created or closed. An array is a snapshot, even an
+  empty one, which can close records. An element that is not an object, or
+  that is not a running subagent with a non-empty string `id`, lists
+  nothing; of an element that is not a subagent only the `type` is read. Of
+  a running subagent the `id` and the `agent_type` are read, the latter as
+  the listed type, empty when it is missing or not a string. A subagent id repeated in the list counts once,
+  the first. No listed task's description is read or stored. A wrongly typed
+  field is not supplied and fails nothing.
 
 The Agent-tool hooks and the main-agent `Stop` write their subagent data
 after their own row write, in a transaction of its own, and only when the
@@ -474,8 +515,8 @@ a consumer meets are in
 [usage.md](usage.md#which-subagents-show-as-records).
 
 Nothing of a subagent's content is read or stored: not the prompt, the
-messages, the result text, an error, usage counters, an output file or
-the listed background tasks. The only text kept from a launch is the
+messages, the result text, an error, usage counters or an output file. The
+only text kept from a launch is the
 description the call gave, the type, the model and ids. Nothing of it
 reaches the log or the trail.
 
@@ -485,7 +526,15 @@ Limits:
   reached agent-director (a foreground one is still stopped by its completed
   launch result), a row that ends or goes missing, and a `resume` or `reuse`
   that starts a new launch all leave their `running` entries running.
-- A launch whose hooks were all missed has no entry.
+- A later snapshot repairs only one case: a `running` background entry of the
+  current launch whose stop event was dropped or never sent, and which the
+  snapshot does not list, is turned `lost`. A foreground entry, or one of
+  unknown run mode, stays `running`. An entry of an `ended` or `missing` row
+  takes no hooks, so nothing turns it `lost`. After a `resume` or `reuse`
+  the old entries belong to an earlier launch, which a snapshot leaves alone.
+- A background subagent whose hooks were all missed has no entry until a
+  later main-agent `Stop` lists it as running. A `SubagentStop`'s listing
+  never creates an entry.
 
 ## Fail-open invariant
 
@@ -497,7 +546,9 @@ it does not apply:
 - Malformed JSON payload → exit 0, log entry.
 - Payload over 1 MiB → exit 0, log entry. The payload is dropped whole:
   nothing is written, subagent entries included. When both stop signals of
-  a subagent exceed 1 MiB, its record is left `running`; see
+  a subagent exceed 1 MiB, its record is left `running`. A later snapshot
+  turns it `lost` only when it is a background record of the current launch
+  (a foreground record stays `running`); see
   [usage.md](usage.md#how-long-a-record-reads-running).
 - Config malformed → exit 0, log entry.
 - Store open failure → exit 0, log entry.
@@ -535,7 +586,8 @@ it does not apply:
   names the instance id and the event and carries no payload text. A
   `SubagentStart` or `SubagentStop` whose transaction rolled back writes
   nothing, the row refresh included, and its `ad.hook.fired` record has
-  `upsert_outcome` `error`; the entry's next event writes it again. A
+  `upsert_outcome` `error`; the entry's next event, or a later snapshot (see
+  [usage.md](usage.md#when-a-record-turns-lost)), repairs it. A
   failed subagent write after another hook's row write leaves that row
   write and its `upsert_outcome` as they were.
 

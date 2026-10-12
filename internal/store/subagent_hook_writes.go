@@ -68,7 +68,11 @@ func (f SubagentLaunchFailure) cut() SubagentLaunchFailure {
 //  2. When the row write applied and ev.SubagentID is not empty, the entry
 //     writes of ev (a start with its claim, or a stop; see subagent_writes.go),
 //     each statement gated with the four row conditions of SR-3.1. An empty
-//     SubagentID writes no entry and claims nothing.
+//     SubagentID writes no entry and claims nothing. A stop's listing
+//     (ev.Listing, SR-7.6) is applied after the stop, whatever the stop did:
+//     each listed id with an entry of any launch is confirmed, moved to the
+//     current launch and given a background run_mode when it has none; it never
+//     creates, closes, reopens or retypes an entry. No description is an input.
 //
 // Outcome, as ApplyHookTransitionResult's: UpsertUpdated with Applied true when
 // the transaction committed; UpsertNoChange when the row write matched no row,
@@ -140,7 +144,8 @@ func (s *Store) ApplySubagentLifecycle(instanceID string, gate HookGate, ev Suba
 }
 
 // SubagentAfterWrite is what ApplySubagentAfterWrite applies: exactly one of its
-// fields is set. Epic 2's snapshot is another field of the same transaction.
+// fields is set. A main-agent Stop's snapshot is part of TurnEnd, the same
+// transaction as its claimable-launch close.
 type SubagentAfterWrite struct {
 	// LaunchRequest opens a claimable launch (SR-4.5, SR-7.8).
 	LaunchRequest *SubagentLaunchRequest
@@ -148,13 +153,14 @@ type SubagentAfterWrite struct {
 	LaunchDetails *SubagentLaunchDetails
 	// LaunchFailure closes the claimable launch of a failed call.
 	LaunchFailure *SubagentLaunchFailure
-	// TurnEnd closes the current launch's stale claimable launches (SR-4.5).
+	// TurnEnd closes the current launch's stale claimable launches (SR-4.5) and
+	// applies the Stop's snapshot, when it has one (SR-7.4, SR-7.5).
 	TurnEnd *SubagentTurnEnd
 }
 
 // ApplySubagentAfterWrite is the entry and claimable-launch transaction that
 // follows a hook's own row write (SR-3.3): the launch request, the launch result,
-// the launch failure and the main agent's turn end. It runs in its own BEGIN
+// the launch failure and the main agent's turn end with its snapshot. It runs in its own BEGIN
 // IMMEDIATE transaction (inImmediateTx), which the caller starts only after the
 // hook's row write applied (a held working transition counts as applied); it
 // never checks that itself. Each statement carries the hook gate and the row
@@ -198,19 +204,34 @@ func (s *Store) ApplySubagentAfterWrite(instanceID string, gate HookGate, w Suba
 }
 
 // SubagentTurnEndHasWork is the plain read behind a main-agent Stop's skip
-// (SR-12.2): whether the row's current launch has a claimable launch opened
-// strictly more than SubagentGraceMs before receivedMs, so the Stop's entry
-// transaction (ApplySubagentAfterWrite with a TurnEnd) has something to close.
-// It takes no write lock and writes nothing; it only decides whether the
-// transaction runs, so a skip can defer a close to a later Stop or to liveness.
-// A missing row, or one with no launch_token, has nothing. Epic 2 extends it
-// with the snapshot's own conditions.
-func (s *Store) SubagentTurnEndHasWork(instanceID string, receivedMs int64) (bool, error) {
+// (SR-12.2): whether the Stop's entry transaction (ApplySubagentAfterWrite with
+// te as its TurnEnd) can change something. It is true when any of these holds:
+// te has a snapshot that lists a subagent (after the cut; a listing that names a
+// subagent always runs the transaction); te has a snapshot, even an empty one,
+// and the row's current launch has a running background entry opened strictly
+// more than SubagentGraceMs before te.ReceivedMs; the row's current launch has a
+// claimable launch opened strictly more than SubagentGraceMs before it. A Stop
+// with no snapshot never counts entries. It takes no write lock and writes
+// nothing; it only decides whether the transaction runs, so a skip can defer a
+// close to a later Stop or to liveness. A missing row, or one with no
+// launch_token, has nothing unless the snapshot lists a subagent (the
+// transaction's gate then writes nothing).
+func (s *Store) SubagentTurnEndHasWork(instanceID string, te SubagentTurnEnd) (bool, error) {
+	if te.Snapshot != nil && len(cutListed(te.Snapshot.Listed)) > 0 {
+		return true, nil
+	}
+	cutoff := te.ReceivedMs - SubagentGraceMs
 	var has bool
 	err := s.db.QueryRow(`SELECT EXISTS (
 	    SELECT 1 FROM subagent_launches l
 	      JOIN spawns sp ON sp.instance_id = l.instance_id AND sp.launch_token = l.launch_token
-	     WHERE l.instance_id = ? AND l.opened_at < ?)`, instanceID, receivedMs-SubagentGraceMs).Scan(&has)
+	     WHERE l.instance_id = ? AND l.opened_at < ?)
+	  OR (? = 1 AND EXISTS (
+	    SELECT 1 FROM subagents e
+	      JOIN spawns sp ON sp.instance_id = e.instance_id AND sp.launch_token = e.launch_token
+	     WHERE e.instance_id = ? AND e.state = ? AND e.run_mode = ? AND e.opened_at < ?))`,
+		instanceID, cutoff, boolInt(te.Snapshot != nil), instanceID,
+		SubagentStateRunning, SubagentRunModeBackground, cutoff).Scan(&has)
 	if err != nil {
 		return false, fmt.Errorf("store: subagent turn end read: %w", err)
 	}

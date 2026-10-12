@@ -313,7 +313,7 @@ func TestSubagentTurnEndGrace(t *testing.T) {
 			f.seedEntry(saSub)
 			entries := f.rows().Entries
 
-			if work, err := f.s.SubagentTurnEndHasWork(f.id, tc.stopAt); err != nil || work == tc.wantOpen {
+			if work, err := f.s.SubagentTurnEndHasWork(f.id, store.SubagentTurnEnd{ReceivedMs: tc.stopAt}); err != nil || work == tc.wantOpen {
 				t.Errorf("SubagentTurnEndHasWork = %v, %v; want %v", work, err, !tc.wantOpen)
 			}
 			f.mainStop(tc.stopAt)
@@ -398,11 +398,78 @@ func TestSubagentTurnEndHasWork(t *testing.T) {
 
 func saWantWork(t *testing.T, f *saStore, id string, at int64, want bool) {
 	t.Helper()
+	saWantWorkOf(t, f, id, store.SubagentTurnEnd{ReceivedMs: at}, want)
+}
+
+func saWantWorkOf(t *testing.T, f *saStore, id string, te store.SubagentTurnEnd, want bool) {
+	t.Helper()
 	before := f.rows()
-	if got, err := f.s.SubagentTurnEndHasWork(id, at); err != nil || got != want {
+	if got, err := f.s.SubagentTurnEndHasWork(id, te); err != nil || got != want {
 		t.Errorf("SubagentTurnEndHasWork(%q) = %v, %v; want %v", id, got, err, want)
 	}
 	if got := f.rows(); !reflect.DeepEqual(got, before) {
 		t.Errorf("the read changed rows: %+v -> %+v", before, got)
+	}
+}
+
+// TestSubagentStopSkipWithSnapshot checks the full skip read of SR-12.2: a Stop
+// has work when its snapshot lists a subagent, when it has a snapshot and a
+// running background entry of the current launch is past the grace, or when a
+// claimable launch is; otherwise it writes nothing, and one that has work
+// changes the rows.
+func TestSubagentStopSkipWithSnapshot(t *testing.T) {
+	bg := apitest.WithSubagentRunMode(store.SubagentRunModeBackground)
+	stopped := []apitest.SubagentOption{bg, apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentCloseReason(store.SubagentCloseStopEvent),
+		apitest.WithSubagentStoppedAt(saAt(2)), apitest.WithSubagentStoppedAtSource(store.SubagentSourceStop)}
+	empty := &store.SubagentSnapshot{}
+	listing := func(l ...store.SubagentListed) *store.SubagentSnapshot { return &store.SubagentSnapshot{Listed: l} }
+	old := apitest.WithSubagentOpenedAt(saE - store.SubagentGraceMs - 1)
+	for _, tc := range []struct {
+		name      string
+		seed      func(f *saStore)
+		snap      *store.SubagentSnapshot
+		work      bool
+		unchanged bool // a Stop that has work but finds nothing to change
+	}{
+		{"an empty snapshot and nothing to close", func(f *saStore) {}, empty, false, false},
+		{"a listing of only empty ids and nothing to close", func(f *saStore) {}, listing(saL("", "T")), false, false},
+		{"an empty snapshot and a background entry exactly at the grace", func(f *saStore) {
+			f.seedEntry(saSub, bg, apitest.WithSubagentOpenedAt(saE-store.SubagentGraceMs))
+		}, empty, false, false},
+		{"an empty snapshot and a background entry opened after the Stop", func(f *saStore) {
+			f.seedEntry(saSub, bg, apitest.WithSubagentOpenedAt(saE+5000))
+		}, empty, false, false},
+		{"an empty snapshot and a foreground entry past the grace", func(f *saStore) {
+			f.seedEntry(saSub, apitest.WithSubagentRunMode(store.SubagentRunModeForeground), old)
+		}, empty, false, false},
+		{"an empty snapshot and a null-mode entry past the grace", func(f *saStore) { f.seedEntry(saSub, old) }, empty, false, false},
+		{"an empty snapshot and a stopped background entry past the grace", func(f *saStore) { f.seedEntry(saSub, append(stopped, old)...) }, empty, false, false},
+		{"an empty snapshot and an earlier launch's background entry past the grace", func(f *saStore) {
+			f.seedEntry(saSub, bg, old, apitest.WithSubagentLaunchToken("earlier-launch"))
+		}, empty, false, false},
+		{"no snapshot and a background entry past the grace", func(f *saStore) { f.seedEntry(saSub, bg, old) }, nil, false, false},
+		{"a listing that names a subagent", func(f *saStore) {}, listing(saL(saSub, "T")), true, false},
+		{"a listing that names a subagent that is already as the listing leaves it", func(f *saStore) {
+			f.seedEntry(saSub, bg)
+		}, listing(saL(saSub, "")), true, true},
+		{"an empty snapshot and a background entry 1 ms past the grace", func(f *saStore) { f.seedEntry(saSub, bg, old) }, empty, true, false},
+		{"an empty snapshot and a claimable launch past the grace", func(f *saStore) {
+			f.seedLaunch("toolu-1", apitest.WithClaimableOpenedAt(saE-store.SubagentGraceMs-1))
+		}, empty, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSAStore(t, store.StateWorking)
+			tc.seed(f)
+			before := f.rows()
+			te := store.SubagentTurnEnd{ReceivedMs: saE, Snapshot: tc.snap}
+
+			saWantWorkOf(t, f, f.id, te, tc.work)
+			f.applied(storefix.ApplySubagentMainAgentStop(t, f.s, f.id, storefix.MainAgentStop{ReceivedMs: saE, Snapshot: tc.snap}))
+
+			if changed := !reflect.DeepEqual(f.rows(), before); changed == (tc.unchanged || !tc.work) {
+				t.Errorf("rows changed = %v; want %v", changed, !(tc.unchanged || !tc.work))
+			}
+		})
 	}
 }

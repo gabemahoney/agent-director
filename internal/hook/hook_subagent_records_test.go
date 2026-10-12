@@ -248,7 +248,7 @@ func TestSubagentCaptureGateRefusals(t *testing.T) {
 // TestSubagentCaptureNoEntryTransaction: a PreToolUse or PostToolUse of
 // another tool (the name matched exactly), however launch-shaped, writes no
 // entry and opens or closes no claimable launch, and a Stop with an agent_id
-// closes none.
+// closes none, creates none and confirms none from its background_tasks.
 func TestSubagentCaptureNoEntryTransaction(t *testing.T) {
 	seeded := wantLaunch{subToolUseID, subType, apitest.SeededSubagentMs}
 	for _, tool := range []string{"Bash", "agent", "AgentTool", "Task"} {
@@ -269,12 +269,24 @@ func TestSubagentCaptureNoEntryTransaction(t *testing.T) {
 	}
 	t.Run("Stop with an agent_id", func(t *testing.T) {
 		r := newSubRow(t, subRowID)
-		if err := apitest.SeedSubagentLaunch(r.dbPath, r.id, subToolUseID); err != nil {
+		record := filled(r, subAgentID, subType, subLaunchDesc, subModel, subToolUseID, at(1))
+		observed := running(subSecondAgentID, subType, false, at(3))
+		r.script(t, []step{
+			{name: "B1", payload: variant(t, fxStart), at: at(1), entries: []wantEntry{running(subAgentID, subType, false, at(1))}},
+			{name: "B5 makes a background record", payload: variant(t, fxResult), at: at(2),
+				entries: []wantEntry{record}},
+			{name: "a second start, observed", payload: secondStart(t), at: at(3), entries: []wantEntry{record, observed}},
+		})
+		// A claimable launch past the grace, which only a main-agent Stop closes.
+		if err := apitest.SeedSubagentLaunch(r.dbPath, r.id, subSecondToolUseID); err != nil {
 			t.Fatalf("SeedSubagentLaunch: %v", err)
 		}
+		seeded := wantLaunch{subSecondToolUseID, "general-purpose", apitest.SeededSubagentMs}
 		r.script(t, []step{
-			{name: "Stop of a subagent", payload: variant(t, fxMainStop, setKey("agent_id", subAgentID), emptyListing()),
-				at: at(1), launches: []wantLaunch{seeded}},
+			{name: "Stop of a subagent listing an observation and an unseen id, past the grace", at: at(10),
+				payload: variant(t, fxMainStop, setKey("agent_id", subInternalID),
+					tasks(taskEntry(subSecondAgentID, subType, nil), taskEntry(subChildID, subType, nil))),
+				entries: []wantEntry{record, observed}, launches: []wantLaunch{seeded}},
 		})
 	})
 }

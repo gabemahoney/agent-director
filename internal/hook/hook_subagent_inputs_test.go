@@ -15,7 +15,8 @@ import (
 
 // TestSubagentCaptureSessionID: the entry's session id is the payload's
 // session_id, and a start or stop without an agent_id (a main-agent hook of
-// the same name) is the ordinary soft refresh and writes no entry.
+// the same name) is the ordinary soft refresh and writes no entry: its
+// background_tasks listing confirms nothing.
 func TestSubagentCaptureSessionID(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -26,10 +27,12 @@ func TestSubagentCaptureSessionID(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newSubRow(t, subRowID)
+			observed := running(subAgentID, subType, false, at(1))
+			r.script(t, []step{{name: "B1 observed", payload: variant(t, fxStart), at: at(1), entries: []wantEntry{observed}}})
 			before := r.spawn()
-			f := r.fire(tc.payload, at(1))
+			f := r.fire(tc.payload, at(2))
 			after := r.spawn()
-			assertEntries(t, r)
+			assertEntries(t, r, observed) // unconfirmed, run_mode null: no listing applied
 			if f.upsert() != "updated" {
 				t.Errorf("upsert_outcome = %v; want updated", f.upsert())
 			}
@@ -171,12 +174,13 @@ func TestSubagentCaptureWrongTypes(t *testing.T) {
 	})
 }
 
-// TestSubagentCaptureStopHookActive: a SubagentStop on a record already stopped
-// keeps its stopped_at unless the payload's stop_hook_active is the boolean
-// true, which replaces it with the stop's time (SR-6.4).
+// TestSubagentCaptureStopHookActive: a SubagentStop (B3, whose own listing
+// confirms the observation) on a record already stopped keeps its stopped_at
+// unless the payload's stop_hook_active is the boolean true, which replaces it
+// with the stop's time (SR-6.4).
 func TestSubagentCaptureStopHookActive(t *testing.T) {
 	observed := running(subAgentID, subType, false, at(1))
-	stopped := observed.stoppedAt(at(2))
+	stopped := observed.stoppedAt(at(2)).withListing()
 	for _, tc := range []struct {
 		name string
 		edit payloadEdit

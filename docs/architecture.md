@@ -92,7 +92,7 @@ in `init`. The verb registry
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
 | `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Builds env maps and synthesizes `--settings` JSON. Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest` and the row's request fields (`ComposedLaunch{Create, Row}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `PreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; its read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts a Claude pane command with `claudeProgram(cfg)` (`launch.go`), and a Codex request stops there with the unexported `errCodexLaunchUnavailable` and writes nothing (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `CreateRequest`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`, and `send-keys`' named keys, b.146 rule 8; the key is always a fixed name from the calling code, `pause`'s constant or `pkg/api`'s `paneKeyNames` table, never caller text passed through). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only those recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, and proves every request of the row gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only those recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, and proves every request of the row gone, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
 
 ### `[tmux]` timing settings
 
@@ -3468,13 +3468,13 @@ unchanged   (nothing written; one ad.hook.ignored)
 | `PreToolUse` | `tool_name = AskUserQuestion` | `ask_user` |
 | `PreToolUse` | any other tool | `working`; for `tool_name` `Agent`, the row write is followed by its own gated entry transaction (see [Subagent capture](#subagent-capture)); no trail record, and `upsert_outcome` stays the row write's |
 | `PostToolUse`, `PostToolUseFailure` | — | `working` (for `tool_name` `Agent`, followed by its own gated entry transaction, as `PreToolUse`'s); with relay on and a `tool_use_id` in the payload, the ordinary write is preceded by the proof of the row's requests with that `tool_use_id` (`tool_ran`; see "The dialog hold" under [Permission relay](#permission-relay)), then the close of the row's fallen-back request with that `tool_use_id` (see "The PostToolUse close" under [Permission relay](#permission-relay)); a request the proof covers no longer holds the `working` write, closed or not (b.omt) |
-| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds a claimable launch to close, by its own gated entry transaction (see [Subagent capture](#subagent-capture)) |
+| `Stop` | — | `waiting`; with relay on and no `agent_id`, preceded by the proof of the row's requests with no `agent_id` recorded before the hook started (`turn_end`; b.omt); a main-agent `Stop` (no `agent_id`) is followed, when its row write applied and a plain read finds something the transaction can change (a claimable launch or running background entry to close, or a listed subagent), by its own gated entry transaction: the claimable-launch close, then its `background_tasks` snapshot (create, fill, confirm, then close); a `Stop` carrying `agent_id` opens none (see [Subagent capture](#subagent-capture)) |
 | `Notification` | `notification_type = idle_prompt` and no `agent_id` (the main agent idle at the prompt) | `waiting` when the row is `working`, or `check_permission` with `relay_mode=on` and no permission request holding it (one still awaiting an answer and not proven gone; b.omt), as the write lands (`ApplyHookWaitingIfWorking`); any other state: soft refresh — no state change; bumps `last_seen_at`. Every applied write sets `idle_since` (see "The idle-prompt Notification" below). With relay on, preceded by the same proof as `Stop` |
 | `Notification` | any other `notification_type` (`permission_prompt`, `auth_success`, `elicitation_dialog`, missing or unknown), or an idle prompt with `agent_id` | soft refresh — no state change; bumps `last_seen_at` |
 | `PermissionRequest` | — | `check_permission`; with relay on, written by the relay hook's first write (`InsertRelayRequest`) in one transaction with the request (see [Permission relay](#permission-relay)) |
 | `SessionEnd` | `reason ∈ {clear, compact}` | soft refresh — no state change; bumps `last_seen_at` |
 | `SessionEnd` | any other reason | `ended` (also sets `ended_at`), with the close of the row's open permission requests in the same transaction (`applyEndedTransition`; see "The ended transition closes the row's requests" under [Permission relay](#permission-relay)) |
-| `SubagentStart`, `SubagentStop` | — | soft refresh — no state change; bumps `last_seen_at`; `idle_since` and the settle columns are untouched (`ApplySubagentLifecycle`). With an `agent_id` the soft refresh and the subagent's entry writes are one `BEGIN IMMEDIATE` transaction, the entry writes only when the row write applied; no `agent_id`: the soft refresh alone, no entry (a session id is then recorded by today's rule). `ad.hook.fired` `upsert_outcome` is `updated` (committed), `no_change` (the gate did not hold; nothing written) or `error` (rolled back, row and entries as they were). One `ad.spawn.state_transition` (`soft_refresh` true) after the commit; the entry writes emit none |
+| `SubagentStart`, `SubagentStop` | — | soft refresh — no state change; bumps `last_seen_at`; `idle_since` and the settle columns are untouched (`ApplySubagentLifecycle`). With an `agent_id` the soft refresh and the subagent's entry writes are one `BEGIN IMMEDIATE` transaction, the entry writes only when the row write applied (a `SubagentStop`'s are the stop, then its `background_tasks` listing's confirm, move and fill); no `agent_id`: the soft refresh alone, no entry (a session id is then recorded by today's rule). `ad.hook.fired` `upsert_outcome` is `updated` (committed), `no_change` (the gate did not hold; nothing written) or `error` (rolled back, row and entries as they were). One `ad.spawn.state_transition` (`soft_refresh` true) after the commit; the entry writes emit none |
 | unknown event | — | soft refresh + info-level log entry |
 | any event | the gate does not apply (the hook's parent is not the row's recorded pane process, or the row records no pane) | unchanged; one `ad.hook.ignored` (for a `pending` row's SessionStart whose parent is the pane process's child, also one `ad.hook.pane_is_grandparent`; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)) |
 | `SessionStart`, `SessionEnd` | the payload carries a non-empty `agent_id` (a subagent or in-process teammate), any reason or source | unchanged, decided before the gate; one `ad.hook.ignored` `subagent_event` (none when no row has the id) |
@@ -3653,8 +3653,9 @@ and an in-process agent-team teammate's turns, inside the agent's own
 process, so their hooks pass the gate; the payload marks them with a
 non-empty `agent_id` (`ClassifyResult.AgentID`, `internal/hook/classify.go`).
 `agent_type` alone (a session started with `--agent`) does not mark one;
-the classifier does not read it. Only the subagent capture reads it, and only
-on a `SubagentStart`, as the subagent's type (see [Subagent
+the classifier does not read it. Only the subagent capture reads it: on a
+`SubagentStart` as the subagent's type, and in a `background_tasks` entry of a
+running subagent as the listed type (see [Subagent
 capture](#subagent-capture)).
 
 - **SessionStart and SessionEnd** with `agent_id`
@@ -4026,11 +4027,13 @@ an entry to a caller; the one verb that does is `list-subagents` (see [The
 **Where the line is.** `internal/store` (`subagent_hook_writes.go`,
 `subagent_writes.go`) takes agent-neutral events (`SubagentLifecycleEvent`,
 `SubagentLaunchRequest`, `SubagentLaunchDetails`, `SubagentLaunchFailure`,
-`SubagentTurnEnd`) and applies them; it reads no clock, no payload and no
+`SubagentTurnEnd` with its `SubagentSnapshot` of `SubagentListed` ids, and a stop's
+`Listing` of the same) and applies them; it reads no clock, no payload and no
 config. `internal/hook/subagent.go` is the Claude Code side: it names the
 events and the `Agent` tool (`EventNameSubagentStart`, `EventNameSubagentStop`,
-`ToolAgent`), reads the payload fields (`readSubagentFields`), and maps them
-onto the store's events. A second agent maps its own payloads onto the same
+`ToolAgent`), reads the payload fields (`readSubagentFields`) and the
+`background_tasks` list (`readBackgroundTasks`), and maps them onto the store's
+events. A second agent maps its own payloads onto the same
 events and changes no store code.
 
 **The three transactions.**
@@ -4048,21 +4051,31 @@ events and changes no store code.
   other failure, an entry write's or a busy store's, rolls the whole
   transaction back (the row as it was) and the outcome is `error`. One
   `ad.spawn.state_transition` (`soft_refresh` true, prior state to itself) is
-  emitted after the commit; the entry writes emit none.
+  emitted after the commit; the entry writes emit none. A `SubagentStop`'s
+  entry writes are two steps in this order: the stop (`stopEntry`), then its
+  listing (`applyListed` without create). The listing runs whatever the stop did
+  (it may have changed nothing, or found an entry of an earlier launch), only
+  when the row write applied and `SubagentID` is not empty; the hook passes a
+  listing only for a `SubagentStop` that carries an `agent_id`.
 - **`ApplySubagentAfterWrite`**: its own `BEGIN IMMEDIATE`, for the Agent
   tool's `PreToolUse` (a launch request), `PostToolUse` (a launch result),
   `PostToolUseFailure` (a launch failure) and a main-agent `Stop` (the turn
-  end). `Handle` runs it only after the hook's own row write applied (a held
+  end, with its snapshot). `Handle` runs it only after the hook's own row write applied (a held
   `working` transition counts as applied) and never checks that itself. It
   writes no trail record. A failure rolls it back, logs one line
   (`hook: subagent entry transaction (instance=…, event=…): <error>`; no payload
   string) and changes nothing else: `ad.hook.fired`'s `upsert_outcome` stays the
   row write's, and stdout stays empty.
-- **`SubagentTurnEndHasWork`**: a plain read, no write lock, behind the
-  main-agent `Stop`'s skip. The turn-end transaction runs only when the row's
-  current launch has a claimable launch opened more than `SubagentGraceMs`
-  before the Stop; otherwise a `Stop` costs no extra write. A skip defers the
-  close to a later `Stop`.
+- **`SubagentTurnEndHasWork(instanceID, SubagentTurnEnd)`**: a plain read, no
+  write lock, that never writes, behind the main-agent `Stop`'s skip. It takes
+  the whole turn end, snapshot included, and the transaction runs when any of
+  three holds: the snapshot lists a subagent (after the cut; it answers true
+  before reading the row); there is a snapshot (an empty one counts) and the
+  current launch has a `running` background entry opened more than
+  `SubagentGraceMs` before the Stop; the current launch has a claimable launch
+  opened more than `SubagentGraceMs` before it. A `Stop` with no snapshot ignores
+  background entries. Otherwise a `Stop` costs no extra write, and a skip only
+  defers a close to a later `Stop`.
 
 **The gate.** Every statement that creates, changes or deletes an entry or a
 claimable launch carries `hookGateSQL` and four row conditions in its own
@@ -4085,7 +4098,7 @@ the other `cut` methods apply `CutSubagentString`, 1 KiB cut at a character
 boundary, to every payload-derived string on entry, so a caller cuts nothing):
 
 - **Entries and claimable launches.** An entry is a record (`confirmed` 1) once
-  a claim or a launch result confirms it, and an observation (`confirmed` 0)
+  a claim, a launch result or a snapshot or listing confirms it, and an observation (`confirmed` 0)
   until then. A claimable launch is opened by the Agent tool's `PreToolUse`
   (`launchRequest`: it needs a `tool_use_id` and a type, and the type is
   `tool_input.subagent_type`; a call that carries `tool_input.name` opens none,
@@ -4095,6 +4108,34 @@ boundary, to every payload-derived string on entry, so a caller cuts nothing):
   a main-agent `Stop` once it is more than `SubagentGraceMs` (2000) old
   (`turnEnd`). The Stop's close is of the current launch's claimable launches
   only; an earlier launch's leftovers go only with the cap.
+- **Snapshot** (`turnEnd`, after the claimable-launch close, in the same
+  transaction; only when the `Stop` has a snapshot): the listed ids are applied
+  by `applyListed` with create, then `closeAbsent` runs.
+  - *Create*: a listed id with no entry (of any launch) gets a confirmed,
+    `running` entry of the current launch, `run_mode` `background`, the listing's
+    type (NULL when it gave none) and the Stop's session id, `opened_at` and
+    `activity_at` at the receipt time; every other field is NULL. The gated entry
+    cap eviction runs first, as for any create.
+  - *Fill and confirm*: a listed id with an entry of any launch is confirmed,
+    moved into the current launch, and a NULL `run_mode` becomes `background`
+    (never overwritten). State, times, type and description are never touched, so
+    it never reopens a `stopped` or `lost` entry. `activity_at` is set only when
+    something changed (`writeEntry`), so a listing that changes nothing writes
+    nothing.
+  - *Close* (`closeAbsent`): every entry of the current launch that is `running`,
+    `run_mode` `background`, not listed, and has `opened_at` more than
+    `SubagentGraceMs` before the receipt time becomes `lost` with
+    `close_reason` `absent_from_snapshot` and `lost_at` and `activity_at` at the
+    receipt time. An entry opened exactly the grace before is kept. The
+    candidates are read first, and each is closed by its own gated `UPDATE` that
+    re-checks every condition. There is no session or nesting filter, and a
+    foreground or NULL-mode entry, a `stopped` or `lost` one and another launch's
+    are untouched. The close is skipped when the row has no `launch_token`.
+  - A `Stop` with no snapshot creates and closes nothing; its claimable-launch
+    close still runs.
+- **A SubagentStop's listing** (`stop`): the stop first (`stopEntry`), then
+  `applyListed` without create: listed ids with an entry are confirmed, moved and
+  filled as above, and nothing is created, closed or reopened.
 - **Start** (`start`): a start with no entry creates one `running`, with the
   type from `agent_type` and the session id of the event, and, when it has a
   type, claims the oldest open claimable launch of that type (opened_at, then
@@ -4116,20 +4157,41 @@ boundary, to every payload-derived string on entry, so a caller cuts nothing):
   one source takes the higher (type: start over details over snapshot; run
   mode: details over snapshot; `stopped_at`: stop over details) and a source
   never replaces its own value; a field with one source keeps its first value.
-  An event that changes nothing writes nothing, `activity_at` included.
+  The snapshot or listing is the `snapshot` source (`SubagentSourceSnapshot`,
+  the lowest): it sets `subagent_type` only when it creates the entry and
+  `run_mode` `background` only while it is NULL, so a launch result's run mode
+  outranks it. It never sets a description. An event that changes nothing writes
+  nothing, `activity_at` included. A confirmation is a claim, a launch result or
+  a snapshot or listing.
 
 **Receipt time.** The store reads no clock: each event carries its receipt
 time in integer milliseconds, `HandleConfig.Start` (the hook process's first
 clock reading) as `start.UnixMilli()`. `SubagentGraceMs` is the one grace,
-shared by the turn-end close and, later, the snapshot's close.
+shared by the claimable-launch close, the snapshot's close and the skip read.
 
 **The fields the hook reads.** `readSubagentFields` reads a field only as
 supplied: present, not null, of the type it is read as and, for a string, not
 empty, and `tool_input` and `tool_response` only when they are objects. A field
 of the wrong type is not supplied and fails nothing (SR-5.1). It never reads the
 value of `tool_input.name` (only whether it is supplied), the content fields, an
-error, counters, `outputFile`, `tool_response.agent_id` or the background-task
-and cron lists; none reaches the store or a log line.
+error, counters, `outputFile`, `tool_response.agent_id` or the cron list; none
+reaches the store or a log line.
+
+`readBackgroundTasks` reads a `Stop`'s or `SubagentStop`'s `background_tasks`
+(a `SubagentStart`'s is not read). An absent, null or non-array field is no
+snapshot (`nil`); any array, an empty one included, is a snapshot. Each element
+is decoded in two passes. The first decodes into `backgroundTaskHead`, which has
+only a `type` field: an element that is not an object, or whose `type` is not
+`subagent`, is ignored, and nothing but its `type` was decoded. Only a
+`subagent` element goes to the second pass, into `backgroundTaskSubagentFields`
+(`status`, `id` and `agent_type`, all raw values). Neither struct has a
+description field, so none is ever held. The element lists a subagent only when
+`status` is `running` and `id` is a non-empty string; only then is `agent_type`
+used (empty when missing or not a string). The store then cuts the
+listed id and type to 1 KiB and drops an empty id (`cutListed`), and repeated
+ids are deduplicated after the cut, the first in array order, whose type types a
+created entry. A main-agent `Stop`'s snapshot carries the `Stop`'s own session id
+(read leniently); a `SubagentStop` with no `agent_id` carries no listing.
 
 **Extra `row_version` advances.** Each applied `SubagentStart` and
 `SubagentStop` soft refresh advances `row_version` by one, as every applied
@@ -4154,15 +4216,16 @@ accepted; a claim fills no field (`TestSubagentClaimTeammate`).
 
 **What it does not do yet.** A row that ends, goes missing or relaunches leaves
 its running records `running`; nothing closes them yet (liveness closes are later
-work). A launch whose hooks were all missed has no record; the snapshot that
-recovers one is later work too. Until then only the two caps of 300 remove an
-entry or a claimable launch, besides a claim, a launch result and the main
-agent's `Stop`.
+work). The snapshot closes only background entries of the current launch, so a
+foreground or unknown-mode entry stays `running` until its own stop. Only the
+two caps of 300 remove an entry or a claimable launch, besides a claim, a launch
+result, the main agent's `Stop` and the snapshot's close.
 
 **Fail-open.** Every failure here exits 0 with empty stdout and one
 content-free log line. A `SubagentStart` or `SubagentStop` write failure goes
 through `failClosed`, which is silent for every event but `PermissionRequest`,
-with `upsert_outcome` `error`. Each transaction waits at most one `[store]
+with `upsert_outcome` `error`. A background entry whose `SubagentStop` was
+dropped is repaired by a later snapshot that does not list it. Each transaction waits at most one `[store]
 busy_timeout_ms` for the write lock and the hook adds no sleep or poll. A
 payload over 1 MiB is dropped whole before any of this.
 
@@ -4177,10 +4240,26 @@ payload over 1 MiB is dropped whole before any of this.
   it needs is `evictSubagentEntryGated` / `evictSubagentLaunchGated`, never
   `…AtCap`. A new event is a new field of `SubagentAfterWrite`, not a new
   transaction.
+- **Snapshot and listing store inputs.** A main-agent `Stop`'s `background_tasks`
+  reaches the store only as `SubagentTurnEnd.Snapshot` (`SubagentSnapshot`: the
+  Stop's session id and `[]SubagentListed`; nil is no snapshot, non-nil with an
+  empty `Listed` is a snapshot that can close), and a `SubagentStop`'s only as
+  `SubagentLifecycleEvent.Listing`. `SubagentListed` holds an id and a type and
+  has no description field, and a new input must not add one. A new create,
+  confirm, fill or close from a listing goes through `applyListed` or
+  `closeAbsent` (`subagent_writes.go`), never a statement of its own, and a
+  per-entry close re-checks every condition in its own gated `UPDATE`.
 - **The soft refresh.** `ApplySubagentLifecycle` is the only soft refresh that
   runs in a transaction with other writes; a new hook that needs one uses
   `gatedHookUpdate` there, never a refresh of its own, and keeps its
   `idle_since`-free `SET`.
+- **The `background_tasks` reader.** A hook reads a `background_tasks` list only
+  through `readBackgroundTasks` (`internal/hook/subagent.go`), which applies
+  "supplied" to every field and decodes only `backgroundTaskHead` (the `type`)
+  and, for a subagent element, `backgroundTaskSubagentFields`; a field it does
+  not name is never read, and a description never. A new field read from an
+  entry is added to one of those structs (a field of a non-subagent element
+  stays unread) and to the reader, with a wrong type meaning not supplied.
 - **The event helpers.** A payload field the subagent feature reads is read
   through `readSubagentFields` (`rawObject`, `rawString`, `rawBool` for a
   new one: a wrong type is not supplied), and every string headed for an
@@ -4188,23 +4267,34 @@ payload over 1 MiB is dropped whole before any of this.
   receipt time is `HandleConfig.Start`; no store function reads a clock.
 - **The store's optional interfaces.** `subagentLifecycleWriter`,
   `subagentAfterWriter` and `subagentTurnEndReader` are optional extensions of
-  `HookStore`: a test double that has none gets today's write.
+  `HookStore`: a test double that has none gets today's write. A change to what
+  decides a `Stop`'s skip is made in `SubagentTurnEndHasWork` (it takes the whole
+  `SubagentTurnEnd`) and in no caller; every call site passes the turn end it
+  would apply.
+- **The grace.** `SubagentGraceMs` (2000) is the one grace of every close by age;
+  no close uses another number, and a close is by "more than" it, never "at
+  least".
 - **Hook payload fixtures.** A captured payload for a subagent or Agent-tool
   event goes in `internal/hook/testdata/hook-payloads/` and has a row in the
   `payloadFixtures` table of `hook_payload_fixtures_test.go`
   (`TestPayloadFixtureEventsMatchRegistered` fails on a file with none, and on a registered event with no fixture), never inline.
   A test that needs a fixture with keys set or removed, nested ones included,
   builds it with `variant` and the `setKey` and `delKey` edits
-  (`hook_subagent_payloads_test.go`), never a JSON literal; one that checks
+  (`hook_subagent_payloads_test.go`), never a JSON literal; a `background_tasks`
+  listing is built with `taskEntry` (one running subagent, overrides for a type,
+  a status or a wrong-typed id) and `tasks`, or `emptyListing` for an empty
+  array, never a hand-written list; one that checks
   that no content reaches the store or a log line uses `sentinelPayload`.
 - **Event helpers in tests.** A test outside `internal/store` that applies a
   subagent event directly uses `storefix`'s `ApplySubagent*` and
   `ApplyForeignSubagent*` helpers (`internal/testsupport/storefix/
   subagent_hooks.go`) or `apitest`'s (`pkg/api/apitest/subagent_hooks.go`), and
-  `MainAgentStop` with its injected `ReceivedMs` for a turn end; never SQL of
+  `MainAgentStop` with its injected `ReceivedMs` and optional `Snapshot` for a
+  turn end (a `SubagentStop`'s listing is `SubagentLifecycleEvent.Listing`;
+  `apitest` aliases `SubagentListed` and `SubagentSnapshot`); never SQL of
   its own. Each helper follows the handler's call sequence (the one
   lifecycle transaction, or the ordinary row write followed, when it applied, by
-  the entry transaction, with a `Stop`'s skip read), as the row's own agent or,
+  the entry transaction, with a `Stop`'s skip read over the same turn end), as the row's own agent or,
   for `ApplyForeign*`, as another process, which the gate refuses.
 
 ### The `list-subagents` verb

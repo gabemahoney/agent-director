@@ -46,9 +46,10 @@ type subagentAfterWriter interface {
 }
 
 // subagentTurnEndReader is the plain read behind a main-agent Stop's skip
-// decision (store SubagentTurnEndHasWork).
+// decision (store SubagentTurnEndHasWork): it takes the whole turn end, snapshot
+// included.
 type subagentTurnEndReader interface {
-	SubagentTurnEndHasWork(instanceID string, receivedMs int64) (bool, error)
+	SubagentTurnEndHasWork(instanceID string, te store.SubagentTurnEnd) (bool, error)
 }
 
 // subagentFields are the payload fields only the subagent feature reads. A field
@@ -143,6 +144,65 @@ func rawBool(raw json.RawMessage) bool {
 	return b
 }
 
+// backgroundTaskType is the `type` of a background_tasks entry that is a
+// subagent; backgroundTaskRunning is the `status` of one that is running.
+const (
+	backgroundTaskSubagent = "subagent"
+	backgroundTaskRunning  = "running"
+)
+
+// backgroundTaskHead is the only part of any background_tasks entry that is
+// decoded first: its type. A non-subagent (teammate) entry is decoded no
+// further (SR-5.1). It has no field for a description or any other field
+// (SR-5.2, N13). Values stay raw so a wrongly typed one reads as not supplied
+// and never fails the decode. (encoding/json matches the key names without
+// regard to case.)
+type backgroundTaskHead struct {
+	Type json.RawMessage `json:"type"`
+}
+
+// backgroundTaskSubagentFields is what is decoded, in a second pass, of an entry
+// whose type is subagent: its status, id and agent_type. Like
+// backgroundTaskHead it has no field for a description or any other field
+// (SR-5.2, N13), so none is ever held in memory by this reader.
+type backgroundTaskSubagentFields struct {
+	Status    json.RawMessage `json:"status"`
+	ID        json.RawMessage `json:"id"`
+	AgentType json.RawMessage `json:"agent_type"`
+}
+
+// readBackgroundTasks reads a Stop's or a SubagentStop's background_tasks
+// leniently (SR-5.1, SR-5.2). present is false when the field is absent, null or
+// not an array: no snapshot. An array, even an empty one, is present. An element
+// that is not an object lists nothing. Each object's `type` is read; only when it
+// is `subagent` are its `status` and `id` read too, and it lists a subagent when
+// the status is `running` and the id is a non-empty string, and only then is its
+// `agent_type` read (empty when not supplied or not a string). No entry's
+// description, and no field but `type` of a non-subagent entry, is read. It never
+// fails.
+func readBackgroundTasks(raw json.RawMessage) (listed []store.SubagentListed, present bool) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(rawObject(raw)["background_tasks"], &entries); err != nil || entries == nil {
+		return nil, false
+	}
+	for _, el := range entries {
+		var head backgroundTaskHead
+		if err := json.Unmarshal(el, &head); err != nil || rawString(head.Type) != backgroundTaskSubagent {
+			continue
+		}
+		var e backgroundTaskSubagentFields
+		if err := json.Unmarshal(el, &e); err != nil || rawString(e.Status) != backgroundTaskRunning {
+			continue
+		}
+		id := rawString(e.ID)
+		if id == "" {
+			continue
+		}
+		listed = append(listed, store.SubagentListed{ID: id, Type: rawString(e.AgentType)})
+	}
+	return listed, true
+}
+
 // isSubagentLifecycle reports whether res is a SubagentStart or SubagentStop.
 func isSubagentLifecycle(res ClassifyResult) bool {
 	return res.EventName == EventNameSubagentStart || res.EventName == EventNameSubagentStop
@@ -151,7 +211,8 @@ func isSubagentLifecycle(res ClassifyResult) bool {
 // applySubagentLifecycle is the gated write of a SubagentStart or SubagentStop
 // (ApplySubagentLifecycle), with the hook's receipt time. Without an agent_id it
 // is the same soft refresh with no entry writes. A start without a type never
-// claims; a stop carries stop_hook_active. ok is false when st has no such
+// claims; a stop carries stop_hook_active and its background_tasks listing
+// (SR-7.6; none when the field is absent or not an array). ok is false when st has no such
 // method, and the caller makes the ordinary write.
 func applySubagentLifecycle(st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, raw json.RawMessage, receivedMs int64, jsonlPath string, jsonlPresent bool) (outcome store.UpsertOutcome, applied store.HookApplied, ok bool, err error) {
 	w, has := st.(subagentLifecycleWriter)
@@ -169,6 +230,7 @@ func applySubagentLifecycle(st HookStore, instanceID string, gate store.HookGate
 		} else {
 			ev.Kind = store.SubagentLifecycleStop
 			ev.SupersedesBlockedStop = f.StopHookActive
+			ev.Listing, _ = readBackgroundTasks(raw)
 		}
 	}
 	outcome, applied, err = w.ApplySubagentLifecycle(instanceID, gate, ev, res.EventName, jsonlPath, jsonlPresent)
@@ -195,13 +257,18 @@ func isMainAgentStop(res ClassifyResult) bool {
 
 // subagentAfterWrite builds the entry transaction that follows a hook's applied
 // row write: the Agent tool's launch request, launch result or launch failure,
-// or a main-agent Stop's turn end. ok is false when the hook has none (any other
+// or a main-agent Stop's turn end with its background_tasks snapshot (none when
+// the field is absent or not an array). ok is false when the hook has none (any other
 // event, a non-Agent tool, a Stop with an agent_id, a request that opens no
 // claimable launch, or a result that carries nothing to apply).
 func subagentAfterWrite(res ClassifyResult, raw json.RawMessage, receivedMs int64) (w store.SubagentAfterWrite, ok bool) {
 	switch {
 	case isMainAgentStop(res):
-		return store.SubagentAfterWrite{TurnEnd: &store.SubagentTurnEnd{ReceivedMs: receivedMs}}, true
+		te := store.SubagentTurnEnd{ReceivedMs: receivedMs}
+		if listed, present := readBackgroundTasks(raw); present {
+			te.Snapshot = &store.SubagentSnapshot{SessionID: readSubagentFields(raw).SessionID, Listed: listed}
+		}
+		return store.SubagentAfterWrite{TurnEnd: &te}, true
 	case !isAgentToolHook(res):
 		return store.SubagentAfterWrite{}, false
 	}
@@ -251,8 +318,8 @@ func subagentAfterWrite(res ClassifyResult, raw json.RawMessage, receivedMs int6
 
 // runSubagentAfterWrite is Handle's entry transaction after an applied row write
 // (SR-3.3): the Agent tool's launch request, launch result or launch failure,
-// and a main-agent Stop's turn end, the latter only when the skip read finds a
-// claimable launch to close (SR-12.2). It is fail-open: a store without the
+// and a main-agent Stop's turn end with its snapshot, the latter only when the
+// skip read finds something to change (SR-12.2). It is fail-open: a store without the
 // methods does nothing, and a failure logs one line carrying the instance id and
 // event name and changes nothing else, so the hook's upsert_outcome stays the
 // row write's. It adds no sleep, poll or timeout.
@@ -268,7 +335,7 @@ func runSubagentAfterWrite(st HookStore, instanceID string, gate store.HookGate,
 	}
 	if w.TurnEnd != nil {
 		if r, has := st.(subagentTurnEndReader); has {
-			work, err := r.SubagentTurnEndHasWork(instanceID, receivedMs)
+			work, err := r.SubagentTurnEndHasWork(instanceID, *w.TurnEnd)
 			if err != nil {
 				logf(logger, "hook: subagent turn-end read (instance=%s, event=%s): %v", instanceID, res.EventName, err)
 				return

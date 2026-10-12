@@ -129,6 +129,21 @@ func getKey(m map[string]any, path string) (any, bool) {
 // emptyListing is a SubagentStop's or Stop's empty background_tasks (F12).
 func emptyListing() payloadEdit { return setKey("background_tasks", []any{}) }
 
+// taskEntry is one running subagent of a background_tasks listing, with the
+// fixture's description; overrides replace or add keys (a type, a status, a
+// wrong-typed id).
+func taskEntry(id, agentType string, overrides map[string]any) map[string]any {
+	e := map[string]any{"id": id, "type": "subagent", "status": "running", "agent_type": agentType, "description": subListingDesc}
+	for k, v := range overrides {
+		e[k] = v
+	}
+	return e
+}
+
+// tasks sets background_tasks to entries (taskEntry maps, or any other element a
+// test needs).
+func tasks(entries ...any) payloadEdit { return setKey("background_tasks", entries) }
+
 // decodeFixture reads fixture as a map.
 func decodeFixture(t *testing.T, fixture string) map[string]any {
 	t.Helper()

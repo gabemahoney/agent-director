@@ -59,11 +59,14 @@ func (v saGateVariant) launchOpts(extra ...apitest.SubagentLaunchOption) []apite
 	return extra
 }
 
-// seedPre seeds a running entry, a stopped entry, an open launch of type T and an
-// old launch of type U.
+// seedPre seeds a running entry, a running background entry, an unconfirmed
+// observation, a stopped entry, an open launch of type T and an old launch of
+// type U.
 func (v saGateVariant) seedPre(f *saStore) {
 	f.t.Helper()
 	f.seedEntry("run", v.entryOpts()...)
+	f.seedEntry("bg", v.entryOpts(apitest.WithSubagentRunMode(store.SubagentRunModeBackground))...)
+	f.seedEntry("unconf", v.entryOpts(apitest.WithSubagentConfirmed(false))...)
 	f.seedEntry("stopped", v.entryOpts(apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentCloseReason(store.SubagentCloseStopEvent),
 		apitest.WithSubagentStoppedAt(saAt(2)), apitest.WithSubagentStoppedAtSource(store.SubagentSourceStop))...)
 	f.seedLaunch("toolu-open", v.launchOpts(apitest.WithClaimableType("T"), apitest.WithClaimableOpenedAt(saAt(1)))...)
@@ -88,6 +91,10 @@ type saGateWrite struct {
 	name  string
 	life  *store.SubagentLifecycleEvent
 	after store.SubagentAfterWrite
+	// closes is a seeded entry the control's write must turn lost, absent from
+	// the snapshot, so the row fails when the close is gone even if the write
+	// changes other rows (the seeded old claimable launch it also deletes).
+	closes string
 }
 
 var saGateWrites = []saGateWrite{
@@ -102,6 +109,17 @@ var saGateWrites = []saGateWrite{
 	{name: "teammate result", after: store.SubagentAfterWrite{LaunchDetails: &store.SubagentLaunchDetails{ToolUseID: "toolu-open", ReceivedMs: saE}}},
 	{name: "launch failure", after: store.SubagentAfterWrite{LaunchFailure: &store.SubagentLaunchFailure{ToolUseID: "toolu-open"}}},
 	{name: "main agent's turn end", after: store.SubagentAfterWrite{TurnEnd: &store.SubagentTurnEnd{ReceivedMs: saE + 600_000}}},
+	{name: "Stop's snapshot creating a record", after: saSnapshotWrite(saL("bg", ""), saL("snap-new", "T"))},
+	{name: "Stop's snapshot closing an unlisted background record", after: saSnapshotWrite(), closes: "bg"},
+	{name: "Stop's snapshot confirming a listed observation", after: saSnapshotWrite(saL("unconf", ""), saL("bg", ""))},
+	{name: "SubagentStop's listing confirming an observation", life: &store.SubagentLifecycleEvent{Kind: store.SubagentLifecycleStop, SubagentID: "none-such",
+		Listing: []store.SubagentListed{saL("unconf", "")}, ReceivedMs: saE}},
+}
+
+// saSnapshotWrite is a main-agent Stop's turn end carrying a snapshot listing listed.
+func saSnapshotWrite(listed ...store.SubagentListed) store.SubagentAfterWrite {
+	return store.SubagentAfterWrite{TurnEnd: &store.SubagentTurnEnd{ReceivedMs: saE,
+		Snapshot: &store.SubagentSnapshot{SessionID: saSnapSess, Listed: listed}}}
 }
 
 // apply runs the write with the variant's gate; outcome and applied are the
@@ -139,6 +157,11 @@ func TestSubagentGateRefusesEntryWrites(t *testing.T) {
 				if changed != v.control {
 					t.Errorf("rows changed = %v; want %v\nbefore %+v\nafter  %+v", changed, v.control, before, f.rows())
 				}
+				if v.control && w.closes != "" {
+					if e := f.mustEntry(w.closes); e.State != store.SubagentStateLost || e.CloseReason != store.SubagentCloseAbsentFromSnapshot {
+						t.Errorf("entry %q state %v close_reason %v; want lost, absent_from_snapshot", w.closes, e.State, e.CloseReason)
+					}
+				}
 				if w.life == nil || v.rowWrite == "" {
 					return
 				}
@@ -156,8 +179,8 @@ func TestSubagentGateRefusesEntryWrites(t *testing.T) {
 
 // TestSubagentGateAtTheCap checks the gated evictions delete nothing for a
 // refused hook (and exactly one row for the control), and that a refused creating
-// start, creating result or launch request on a full row changes nothing, an
-// eviction included.
+// start, creating result, snapshot or launch request on a full row changes
+// nothing, an eviction included.
 func TestSubagentGateAtTheCap(t *testing.T) {
 	for _, v := range saGateVariants {
 		t.Run(v.name, func(t *testing.T) {
@@ -182,7 +205,7 @@ func TestSubagentGateAtTheCap(t *testing.T) {
 			if got := f.rows(); !reflect.DeepEqual(got, before) {
 				t.Errorf("gated evictions changed rows")
 			}
-			for _, w := range []saGateWrite{saGateWrites[0], saGateWrites[3], saGateWrites[4]} {
+			for _, w := range []saGateWrite{saGateWrites[0], saGateWrites[3], saGateWrites[4], saGateWrites[9]} {
 				if _, _, err := w.apply(f, v); err != nil {
 					t.Errorf("%s: %v", w.name, err)
 				}

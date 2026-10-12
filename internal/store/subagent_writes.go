@@ -30,7 +30,8 @@ import (
 // SubagentGraceMs is the grace of SR-7.5, a fixed constant: a claimable launch
 // closes at a main-agent Stop only when its opened_at is strictly more than this
 // many milliseconds (2 s) before the Stop's receipt time. A snapshot's close of
-// background entries (Epic 2) uses the same constant.
+// background entries uses the same constant: an entry opened exactly this long
+// before the Stop is not closed.
 const SubagentGraceMs int64 = 2000
 
 // SubagentStringMaxBytes is the bound of SR-5.3: every string a hook takes from
@@ -86,6 +87,15 @@ type SubagentLifecycleEvent struct {
 	// earlier stop of this subagent was blocked by another stop hook, so this
 	// stop's receipt time replaces any stopped_at of a stopped entry (SR-7.2).
 	SupersedesBlockedStop bool
+	// Listing (stop only; nil or empty is no listing) is the stop's list of
+	// running background subagents (SR-7.6). After the stop, whatever the stop
+	// did (it may have changed nothing, SR-4.4), each listed id with an entry of
+	// any launch is confirmed and moved to the current launch, and a null
+	// run_mode becomes background (source snapshot). A listing never creates,
+	// closes, reopens or retypes an entry, never changes a state or a time, and
+	// is never applied for an empty SubagentID. Only each id is used; a listed
+	// Type is ignored. No description is ever an input.
+	Listing []SubagentListed
 	// ReceivedMs is the event's receipt time in milliseconds since the epoch.
 	ReceivedMs int64
 }
@@ -142,11 +152,38 @@ type SubagentLaunchFailure struct {
 	ToolUseID string
 }
 
-// SubagentTurnEnd is the main agent's turn end (a Stop without a subagent id):
-// it closes the current launch's claimable launches opened more than
-// SubagentGraceMs before ReceivedMs (SR-4.5).
+// SubagentListed is one subagent a snapshot or a listing names: its id and the
+// type the agent gave it, "" when it gave none. Both are cut to
+// SubagentStringMaxBytes on entry. The store is given only these two values: no
+// description of a listed subagent is ever an input (SR-6.3, N13).
+type SubagentListed struct {
+	ID   string
+	Type string
+}
+
+// SubagentSnapshot is a main-agent Stop's list of running background subagents
+// (SR-7.4): the Stop's `background_tasks` array, present. Present with no listed
+// subagent is still a snapshot and can close entries (SR-7.5).
+type SubagentSnapshot struct {
+	// SessionID is the Stop's session id, recorded by the entries the snapshot
+	// creates and never changed afterwards; "" records none.
+	SessionID string
+	// Listed are the listed subagents in array order. An empty id is dropped; ids
+	// repeated after the cut are applied once, the first in array order, whose Type
+	// types an entry the snapshot creates.
+	Listed []SubagentListed
+}
+
+// SubagentTurnEnd is the main agent's turn end (a Stop without a subagent id): it
+// closes the current launch's claimable launches opened more than SubagentGraceMs
+// before ReceivedMs (SR-4.5) and, when Snapshot is set, applies it (SR-7.4,
+// SR-7.5) in the same transaction.
 type SubagentTurnEnd struct {
 	ReceivedMs int64
+	// Snapshot is the Stop's background_tasks, nil when the Stop carries none (the
+	// field is absent or is not an array): then no entry is created, confirmed,
+	// filled or closed, and only the claimable launches close.
+	Snapshot *SubagentSnapshot
 }
 
 // errSubagentWriteRefused rolls a transaction back when a gated insert that
@@ -188,8 +225,9 @@ const subagentEntryColumns = `created_seq, launch_token, confirmed, session_id, 
 // sourceRank orders the sources of SR-6.3 for the fields that have more than
 // one: type start > details > snapshot, run_mode details > snapshot, stopped_at
 // stop > details. A start and a stop never compete (different fields), so one
-// order serves all. An unknown or NULL source ranks lowest. Epic 2's snapshot
-// source plugs in here without rework.
+// order serves all. An unknown or NULL source ranks lowest. A snapshot or a
+// listing is the snapshot source: it types only an entry it creates and fills
+// only a null run_mode (applyListed).
 func sourceRank(src string) int {
 	switch src {
 	case SubagentSourceStart, SubagentSourceStop:
@@ -447,8 +485,20 @@ func (t *subagentTx) start(ev SubagentLifecycleEvent) error {
 	return t.writeEntry(e, n, at, true, false)
 }
 
-// stop applies a SubagentStop (SR-7.2): the current launch's entry only.
+// stop applies a SubagentStop (SR-7.2, SR-7.6): the stop of the current launch's
+// entry, then, whatever the stop did (even nothing), the stop's listing: it
+// confirms, moves and fills each listed entry of any launch, and never creates,
+// closes or reopens one (applyListed).
 func (t *subagentTx) stop(ev SubagentLifecycleEvent) error {
+	if err := t.stopEntry(ev); err != nil {
+		return err
+	}
+	return t.applyListed(cutListed(ev.Listing), ev.ReceivedMs, false, "")
+}
+
+// stopEntry stops the current launch's entry of ev (SR-7.2); another launch's
+// entry or none changes nothing.
+func (t *subagentTx) stopEntry(ev SubagentLifecycleEvent) error {
 	at := ev.ReceivedMs
 	e, found, err := t.readEntry(ev.SubagentID)
 	if err != nil || !found || e.launchToken != t.token {
@@ -588,15 +638,157 @@ func (t *subagentTx) launchFailure(f SubagentLaunchFailure) error {
 	return t.closeLaunch(f.ToolUseID)
 }
 
-// turnEnd applies the main agent's turn end (SR-4.5, SR-7.5): it deletes the
-// current launch's claimable launches opened strictly more than SubagentGraceMs
-// before the receipt time. Only the current launch's: an earlier launch's
-// leftovers go only with the cap until the closes of SR-8.1 (a stated deviation
-// from SR-12.2's literal "the row"). Epic 2's snapshot joins this transaction.
+// turnEnd applies the main agent's turn end (SR-4.5, SR-7.4, SR-7.5): it deletes
+// the current launch's claimable launches opened strictly more than
+// SubagentGraceMs before the receipt time. Only the current launch's: an earlier
+// launch's leftovers go only with the cap until the closes of SR-8.1 (a stated
+// deviation from SR-12.2's literal "the row"). Then, when the Stop carries a
+// snapshot, it creates, confirms and fills the listed subagents and closes the
+// unlisted running background entries past the grace.
 func (t *subagentTx) turnEnd(te SubagentTurnEnd) error {
 	frag, gateArgs := subagentGateExists(t.instanceID, t.gate, "subagent_launches")
 	args := append([]any{t.instanceID, te.ReceivedMs - SubagentGraceMs}, gateArgs...)
-	_, err := t.exec("close stale subagent launches", `DELETE FROM subagent_launches
-	  WHERE instance_id = ? AND opened_at < ? AND `+frag, args...)
-	return err
+	if _, err := t.exec("close stale subagent launches", `DELETE FROM subagent_launches
+	  WHERE instance_id = ? AND opened_at < ? AND `+frag, args...); err != nil {
+		return err
+	}
+	if te.Snapshot == nil {
+		return nil
+	}
+	listed := cutListed(te.Snapshot.Listed)
+	if err := t.applyListed(listed, te.ReceivedMs, true, CutSubagentString(te.Snapshot.SessionID)); err != nil {
+		return err
+	}
+	return t.closeAbsent(listed, te.ReceivedMs)
+}
+
+// cutListed cuts every listed id and type to SubagentStringMaxBytes, drops an
+// empty id and applies each id once, the first in array order, after the cut
+// (SR-5.3, SR-7.4).
+func cutListed(in []SubagentListed) []SubagentListed {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]SubagentListed, 0, len(in))
+	seen := make(map[string]struct{}, len(in))
+	for _, l := range in {
+		id := CutSubagentString(l.ID)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, SubagentListed{ID: id, Type: CutSubagentString(l.Type)})
+	}
+	return out
+}
+
+// applyListed applies a snapshot's or a SubagentStop's listing to each listed
+// subagent in order (SR-7.4, SR-7.6). An id with an entry of any launch: the
+// entry is confirmed, moves to the current launch and a null run_mode becomes
+// background (source snapshot); its type, description, state and times never
+// change, so a stopped or lost entry is not reopened. When it changes nothing it
+// writes nothing. An id with no entry: with create, a confirmed running entry of
+// the current launch with run_mode background, subagent_type the listing's type
+// (source snapshot; null when none), session_id sessionID (null when empty),
+// opened_at and activity_at at and every other field null (the gated entry-cap
+// eviction runs first); without create, nothing. listed is already cut
+// (cutListed).
+func (t *subagentTx) applyListed(listed []SubagentListed, at int64, create bool, sessionID string) error {
+	for _, l := range listed {
+		e, found, err := t.readEntry(l.ID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			if !create {
+				continue
+			}
+			n := subagentEntry{
+				confirmed: true, sessionID: nullStr(sessionID), state: SubagentStateRunning,
+				runMode: nullStr(SubagentRunModeBackground), runModeSource: nullStr(SubagentSourceSnapshot),
+				openedAt: at, activityAt: at,
+			}
+			applyRanked(&n.subagentType, &n.typeSource, l.Type, SubagentSourceSnapshot)
+			if err := t.create(l.ID, n, ""); err != nil {
+				return err
+			}
+			continue
+		}
+		n := e
+		n.confirmed = true
+		n.launchToken = t.token
+		if !n.runMode.Valid {
+			n.runMode = nullStr(SubagentRunModeBackground)
+			n.runModeSource = nullStr(SubagentSourceSnapshot)
+		}
+		if err := t.writeEntry(e, n, at, true, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// readUnlistedCandidates reads closeAbsent's candidates (every running
+// background entry of the current launch opened strictly more than
+// SubagentGraceMs before at) and returns the created_seq of those whose id is not
+// in named. The rows are closed before it returns, so the caller's writes never
+// overlap an open cursor.
+func (t *subagentTx) readUnlistedCandidates(named map[string]struct{}, at int64) ([]int64, error) {
+	rows, err := t.conn.QueryContext(t.ctx, `SELECT created_seq, subagent_id FROM subagents
+	  WHERE instance_id = ? AND launch_token = ? AND state = ? AND run_mode = ? AND opened_at < ?`,
+		t.instanceID, t.token, SubagentStateRunning, SubagentRunModeBackground, at-SubagentGraceMs)
+	if err != nil {
+		return nil, fmt.Errorf("store: read subagent snapshot candidates: %w", err)
+	}
+	defer rows.Close()
+	var stale []int64
+	for rows.Next() {
+		var seq int64
+		var id string
+		if err := rows.Scan(&seq, &id); err != nil {
+			return nil, fmt.Errorf("store: scan subagent snapshot candidate: %w", err)
+		}
+		if _, ok := named[id]; !ok {
+			stale = append(stale, seq)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read subagent snapshot candidates: %w", err)
+	}
+	return stale, nil
+}
+
+// closeAbsent is a snapshot's close (SR-7.5): every running entry of the current
+// launch with run_mode background that listed does not name and whose opened_at
+// is strictly more than SubagentGraceMs before at becomes lost, with close_reason
+// absent_from_snapshot and lost_at and activity_at at. No session or nesting
+// filter; an entry that is foreground, of unknown mode, stopped, lost or of
+// another launch is never touched. The candidates are read first and each is
+// closed by its own gated statement that checks every condition again.
+func (t *subagentTx) closeAbsent(listed []SubagentListed, at int64) error {
+	if !t.tokenOK {
+		return nil
+	}
+	named := make(map[string]struct{}, len(listed))
+	for _, l := range listed {
+		named[l.ID] = struct{}{}
+	}
+	stale, err := t.readUnlistedCandidates(named, at)
+	if err != nil {
+		return err
+	}
+	frag, gateArgs := subagentGateExists(t.instanceID, t.gate, "subagents")
+	for _, seq := range stale {
+		args := append([]any{SubagentStateLost, SubagentCloseAbsentFromSnapshot, at, at,
+			seq, t.instanceID, SubagentStateRunning, SubagentRunModeBackground, at - SubagentGraceMs}, gateArgs...)
+		if _, err := t.exec("close absent subagent entry", `UPDATE subagents
+		   SET state = ?, close_reason = ?, lost_at = ?, activity_at = ?
+		 WHERE created_seq = ? AND instance_id = ? AND state = ? AND run_mode = ? AND opened_at < ? AND `+frag, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }

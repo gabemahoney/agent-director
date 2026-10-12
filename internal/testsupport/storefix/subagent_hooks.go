@@ -17,8 +17,12 @@ package storefix
 // request, launch result and launch failure are the Agent tool's ordinary
 // working write followed, only when it applied, by the entry transaction
 // (Store.ApplySubagentAfterWrite); a main-agent Stop is its ordinary waiting
-// write followed, when it applied and the skip read finds a claimable launch to
-// close, by the turn-end transaction.
+// write followed, when it applied and the skip read finds something to change (a
+// claimable launch or a running background entry past the grace to close, or a
+// snapshot that lists a subagent), by the turn-end transaction. The Stop's
+// snapshot and a SubagentStop's listing are carried by the inputs
+// (MainAgentStop.Snapshot, store.SubagentLifecycleEvent.Listing); tests use these
+// helpers for them instead of hand-built SQL against the subagent tables.
 
 import (
 	"testing"
@@ -28,11 +32,18 @@ import (
 )
 
 // MainAgentStop is a main-agent Stop (a Stop with no agent_id) as
-// ApplySubagentMainAgentStop applies it. It has no field yet beyond the receipt
-// time; Epic 2's snapshot listings are added here without breaking a caller.
+// ApplySubagentMainAgentStop applies it.
 type MainAgentStop struct {
 	// ReceivedMs is the hook's receipt time in Unix milliseconds, injected.
 	ReceivedMs int64
+	// Snapshot is the Stop's background_tasks: nil when the Stop carries none (the
+	// field is absent or not an array), so nothing is created, filled, confirmed or
+	// closed; a pointer to a store.SubagentSnapshot with no Listed is an empty
+	// array, which is a snapshot and can close entries. Listed holds each listed
+	// subagent's id and optional type (the hook lists only running subagents);
+	// SessionID is the Stop's session id, recorded by an entry the snapshot
+	// creates. No description is ever carried.
+	Snapshot *store.SubagentSnapshot
 }
 
 // subagentHookGate returns the gate of a hook named event from id's own agent,
@@ -86,12 +97,13 @@ func applyMainAgentStopHook(t *testing.T, s *store.Store, id string, stop MainAg
 	if !applied.Applied {
 		return applied
 	}
-	work, err := s.SubagentTurnEndHasWork(id, stop.ReceivedMs)
+	te := store.SubagentTurnEnd{ReceivedMs: stop.ReceivedMs, Snapshot: stop.Snapshot}
+	work, err := s.SubagentTurnEndHasWork(id, te)
 	if err != nil {
 		t.Fatalf("storefix.%s(%q): turn-end read: %v", caller, id, err)
 	}
 	if work {
-		w := store.SubagentAfterWrite{TurnEnd: &store.SubagentTurnEnd{ReceivedMs: stop.ReceivedMs}}
+		w := store.SubagentAfterWrite{TurnEnd: &te}
 		if err := s.ApplySubagentAfterWrite(id, gate, w); err != nil {
 			t.Fatalf("storefix.%s(%q): entry transaction: %v", caller, id, err)
 		}
@@ -120,7 +132,8 @@ func ApplyForeignSubagentStart(t *testing.T, s *store.Store, id string, ev store
 
 // ApplySubagentStop applies a SubagentStop as id's own agent: the combined soft
 // refresh and stop of ev (its Kind is set to stop; SupersedesBlockedStop is the
-// payload's stop_hook_active).
+// payload's stop_hook_active; Listing is the stop's background_tasks, applied
+// after the stop whatever the stop did, and only when the row write applied).
 func ApplySubagentStop(t *testing.T, s *store.Store, id string, ev store.SubagentLifecycleEvent) store.HookApplied {
 	t.Helper()
 	ev.Kind = store.SubagentLifecycleStop
@@ -183,16 +196,19 @@ func ApplyForeignSubagentLaunchFailure(t *testing.T, s *store.Store, id string, 
 }
 
 // ApplySubagentMainAgentStop applies a main-agent Stop as id's own agent: the
-// ordinary waiting write, then, when it applied and the skip read finds a
-// claimable launch of the current launch opened more than the grace period
-// before stop.ReceivedMs, the turn-end transaction that closes them.
+// ordinary waiting write, then, when it applied and the skip read finds something
+// to change, the turn-end transaction: it closes the current launch's claimable
+// launches opened more than the grace period before stop.ReceivedMs and applies
+// stop.Snapshot (create, confirm and fill the listed subagents, then close the
+// unlisted running background entries opened more than the grace before the Stop).
 func ApplySubagentMainAgentStop(t *testing.T, s *store.Store, id string, stop MainAgentStop) store.HookApplied {
 	t.Helper()
 	return applyMainAgentStopHook(t, s, id, stop, false, "ApplySubagentMainAgentStop")
 }
 
 // ApplyForeignSubagentMainAgentStop is ApplySubagentMainAgentStop from another
-// process: nothing is written and no claimable launch is closed.
+// process: nothing is written, no claimable launch is closed and no snapshot is
+// applied.
 func ApplyForeignSubagentMainAgentStop(t *testing.T, s *store.Store, id string, stop MainAgentStop) store.HookApplied {
 	t.Helper()
 	return applyMainAgentStopHook(t, s, id, stop, true, "ApplyForeignSubagentMainAgentStop")

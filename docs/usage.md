@@ -137,14 +137,14 @@ supplied is `null`, never a guess.
 |---|---|---|
 | `subagent_id` | string | The subagent's id, unique within its agent. |
 | `instance_id` | string | The id of the agent the subagent belongs to. |
-| `session_id` | string or null | The session of the first event recorded for the subagent. It never changes, so after a conversation clear it depends on which event came first. |
+| `session_id` | string or null | The session of the first event that recorded the subagent: its start, its launch result or an agent stop that listed it (see [Which subagents show as records](#which-subagents-show-as-records)). It never changes, so after a conversation clear it depends on which event came first. |
 | `subagent_type` | string or null | The subagent's type. |
 | `description` | string or null | The short description the launching call gave it, taken only from that call's own result. Never the prompt text. |
 | `model` | string or null | The model it runs. |
 | `parent_type` | string or null | What launched it: `agent` or `subagent`. |
 | `parent_id` | string or null | The launcher's id: the agent's `instance_id` for `agent`, the launching subagent's `subagent_id` for `subagent`. A null parent belongs to the record's `instance_id`. |
 | `tool_use_id` | string or null | The id of the tool call that launched it. |
-| `run_mode` | string or null | `background` or `foreground`. |
+| `run_mode` | string or null | `background` or `foreground`. A subagent that is listed as running in the background gets `background` when it has none. |
 | `first_started_at` | time or null | When it first started. |
 | `started_at` | time or null | When its latest run started. |
 | `stopped_at` | time or null | When it last stopped; null while it never has. A record that runs again keeps this time until its next stop. |
@@ -156,10 +156,10 @@ The values of the enumerated fields are fixed:
 
 - `state`: `running` (started, neither stopped nor judged lost), `stopped`
   (its agent reported it finished) or `lost` (judged gone without a stop
-  report).
+  report; see [When a record turns lost](#when-a-record-turns-lost)).
 - `close_reason`: `stop_event` (its agent reported it finished),
-  `absent_from_snapshot` (a snapshot of the agent's running background tasks
-  did not list it) or `agent_gone` (its agent ended, went missing or began a
+  `absent_from_snapshot` (the agent's list of running background tasks at a
+  stop did not name it) or `agent_gone` (its agent ended, went missing or began a
   new launch).
 - `parent_type`: `agent` (the agent itself launched it) or `subagent` (another
   subagent launched it, or an in-process teammate, which has no record; see
@@ -171,8 +171,10 @@ Until a foreground subagent finishes, its record holds only what its start
 carried: `session_id`, `subagent_type` and the start times. `description`,
 `model`, `parent_type`, `parent_id`, `tool_use_id` and `run_mode` stay null
 until its launch result arrives, and no other launch's value fills them. A
-foreground subagent known only from its finished launch result has no start
-times.
+background subagent whose launch result was lost keeps a null `run_mode` until
+a stop of the agent lists it as running in the background, so until then it
+reads like a running foreground one. A foreground subagent known only from its
+finished launch result has no start times.
 
 ### Times
 
@@ -186,8 +188,11 @@ result.
 
 ### Which subagents show as records
 
-A subagent shows as a record once a launch result or a launch it matches
-confirms it. These cases show a record late or oddly:
+A subagent shows as a record once a launch result, a launch it matches or an
+agent stop that lists it confirms it. A start that never showed (one that
+matched no launch) is not a record until then; any stop that lists it turns it
+into one, whether the agent's own main-turn stop or the subagent's own stop.
+These cases show a record late or oddly:
 
 - A foreground subagent shows only when it finishes if its launching call named
   it, if it was launched with no type, or if its start finds no open launch of
@@ -198,16 +203,58 @@ confirms it. These cases show a record late or oddly:
   record.
 - A subagent launched by an in-process teammate has `parent_type` `subagent`
   and the teammate's id as `parent_id`, with no record of that teammate.
+- A background subagent whose start and launch result were both missed shows at
+  the agent's next main-turn stop that lists it as running (a subagent's own stop
+  never creates a record). The record is `running`, its
+  `run_mode` is `background`, its `subagent_type` is the type the list gave and
+  its `session_id` is that stop's session. Its `description`, `first_started_at`
+  and `started_at` are null until its launch result or a start supplies them.
+  Nothing from the list's own description is kept.
+- A stop that lists a subagent already known, whether the agent's main-turn
+  stop or the subagent's own stop, confirms it (a start that never showed
+  becomes a record) and gives it a `background` `run_mode` if it has none. It
+  changes no state, no time and no type.
 
 ### How long a record reads running
 
-A record of any run mode stays `running` until a stop signal arrives: a stop
-event, or for a foreground subagent its finished launch result. It stays
+A record stays `running` until a stop signal arrives: a stop event, or for a
+foreground subagent its finished launch result. A record of any run mode stays
 `running` when its agent ends, goes missing or is relaunched, when its subagent
 ends with no stop event (for example when the user interrupts it), and when its
-stop event and its launch result are both over the 1 MiB payload limit (see [Fail-open invariant](hooks.md#fail-open-invariant)).
-No record is written `lost`: `lost`, `absent_from_snapshot` and `agent_gone`
-are in the fixed value sets, but nothing writes them.
+stop event and its launch result are both over the 1 MiB payload limit (see
+[Fail-open invariant](hooks.md#fail-open-invariant)). A later stop turns a
+record `lost` only in one case, described next: a `running` background record
+of the agent's current launch whose stop event was dropped or never sent. A
+foreground record, or one whose run mode is unknown, is never turned `lost`
+and stays `running`, so a foreground subagent whose stop event and launch
+result were both over the limit keeps reading `running`. A record of an agent
+that has ended or gone missing takes no later stop, so it stays `running`, and
+after a relaunch the old records belong to an earlier launch, which a later
+stop leaves alone. No record carries the `agent_gone` reason.
+
+### When a record turns lost
+
+When the agent's main turn ends and its stop carries the list of its running
+background tasks, every `running` background record of the agent's current
+launch that the list does not name turns `lost`: `close_reason` is
+`absent_from_snapshot` and `lost_at` is the time of that stop. This is how a
+background subagent that ended without its stop event reaching agent-director
+stops reading `running`. The rules:
+
+- A record that began running no more than 2 s before the stop is left alone,
+  so a subagent that has only just started is not lost for missing the list.
+- It applies to every session of the agent. After a conversation clear, the new
+  session's stop closes an old session's background record only when the list
+  no longer names it.
+- A stop that carries no list closes nothing. A list that names no subagent is
+  a list, and closes every record it can.
+- A listing never reopens a `stopped` or `lost` record; only a new start does.
+  A later stop event for a `lost` record turns it `stopped`: `close_reason`
+  becomes `stop_event`, `stopped_at` is that stop's time and `lost_at` is null.
+- Records of an earlier launch are left as they are.
+
+What the hooks read and write for the list is in
+[Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
 
 A start for a `stopped` subagent runs its record again. While another stop
 hook blocks a stop, the record reads `stopped` although the subagent keeps

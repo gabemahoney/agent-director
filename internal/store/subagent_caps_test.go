@@ -88,6 +88,16 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 			t.Errorf("want the victim evicted for the new record")
 		}
 	})
+	t.Run("a snapshot creating a record", func(t *testing.T) {
+		t.Parallel()
+		f := newSAStore(t, store.StateWorking)
+		saFillEntries(f)
+		f.snapStop(saE, saL("sa-new", "Explore"))
+		f.wantCounts(store.SubagentCap, 0)
+		if f.hasEntry("victim") || !f.hasEntry("sa-new") {
+			t.Errorf("victim present %v, new present %v; want the closed observation evicted for the new record", f.hasEntry("victim"), f.hasEntry("sa-new"))
+		}
+	})
 	t.Run("a launch request", func(t *testing.T) {
 		t.Parallel()
 		f := newSAStore(t, store.StateWaiting)
@@ -123,6 +133,19 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 			t.Errorf("claimable launch evicted by a write that opened nothing")
 		}
 	})
+}
+
+// TestSubagentSnapshotAtTheCapCreatesNothing checks a snapshot that lists only
+// ids with an entry evicts nothing on a full row.
+func TestSubagentSnapshotAtTheCapCreatesNothing(t *testing.T) {
+	t.Parallel()
+	f := newSAStore(t, store.StateWorking)
+	saFillEntries(f)
+	f.snapStop(saE, saL("filler-1", "Explore"))
+	f.wantCounts(store.SubagentCap, 0)
+	if !f.hasEntry("victim") {
+		t.Errorf("entry evicted by a snapshot that created nothing")
+	}
 }
 
 // TestSubagentStringsAreCutTo1KiB checks a string longer than 1024 bytes is cut

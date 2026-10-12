@@ -3,8 +3,8 @@ package store_test
 // Repeats and arrival order of the subagent events (SR-7.7, N6, N12; b.xjn): an
 // event applied again with its own receipt time writes nothing, and every order
 // of the events Claude Code produces ends in the same fields, confirmation and
-// state, with the times the rules assign. The fixture and helpers are in
-// subagent_transitions_test.go.
+// state, with the times the rules assign, listings included. The fixture and
+// helpers are in subagent_helpers_test.go.
 
 import (
 	"reflect"
@@ -115,37 +115,57 @@ func TestSubagentRepeatsAtALaterTime(t *testing.T) {
 	})
 }
 
-// The receipt times of the order sequences. A launch result's hook can start
-// before the start's yet be applied after it, so the result's time is the
-// earliest.
+// saOrderTimes are the receipt times of the order sequences. A launch result's
+// hook can start before the start's yet be applied after it, so the result's
+// time can be the earliest. request is the time of the launch request that
+// precedes a background launch (t0 of SR-15.2's sequence).
+type saOrderTimes struct{ request, details, start, stop, mainStop int64 }
+
+var saTimes = saOrderTimes{request: saAt(0), details: saAt(1), start: saAt(2), stop: saAt(3), mainStop: saAt(4)}
+
 var (
-	saTimeDetails = saAt(1)
-	saTimeStart   = saAt(2)
-	saTimeStop    = saAt(3)
+	saTimeDetails = saTimes.details
+	saTimeStart   = saTimes.start
+	saTimeStop    = saTimes.stop
 )
 
 // saOrderStep applies one named event of an order sequence at its own receipt
-// time: S a SubagentStart, B a background launch result, F a foreground launch
-// result, P a SubagentStop.
-func saOrderStep(f *saStore, step string) {
+// time (saTimes): S a SubagentStart, B a background launch result, F a foreground
+// launch result, P a SubagentStop with an empty listing, M a main-agent Stop with
+// an empty snapshot.
+func saOrderStep(f *saStore, step string) { f.t.Helper(); saOrderStepAt(f, step, saTimes) }
+
+// saOrderStepAt is saOrderStep at the receipt times tm, with three more steps: R
+// the launch request that opens the claimable launch a start or a background
+// result then claims or closes, L a main-agent Stop whose snapshot lists the
+// subagent and I its SubagentStop, which lists itself.
+func saOrderStepAt(f *saStore, step string, tm saOrderTimes) {
 	f.t.Helper()
 	switch step {
+	case "R":
+		f.request(store.SubagentLaunchRequest{ToolUseID: "toolu-ev", Type: "start-type", ReceivedMs: tm.request})
 	case "S":
 		ev := saStartEv()
-		ev.SessionID, ev.ReceivedMs = "sess-"+f.id, saTimeStart
+		ev.SessionID, ev.ReceivedMs = "sess-"+f.id, tm.start
 		f.start(ev)
 	case "B":
 		d := saDetailsEv(store.SubagentLaunchBackgroundStarted)
-		d.ReceivedMs = saTimeDetails
+		d.ReceivedMs = tm.details
 		f.details(d)
 	case "F":
 		d := saDetailsEv(store.SubagentLaunchForegroundFinished)
-		d.ReceivedMs = saTimeDetails
+		d.ReceivedMs = tm.details
 		f.details(d)
 	case "P":
 		ev := saStopEv(false)
-		ev.ReceivedMs = saTimeStop
+		ev.ReceivedMs, ev.Listing = tm.stop, []store.SubagentListed{}
 		f.stop(ev)
+	case "M":
+		f.snapStop(tm.mainStop)
+	case "L":
+		f.snapStop(tm.mainStop, saL(saSub, "list-type"))
+	case "I":
+		f.listStop(saSub, tm.stop, saL(saSub, "list-type"))
 	default:
 		f.t.Fatalf("unknown order step %q", step)
 	}
@@ -156,10 +176,14 @@ func saOrderStep(f *saStore, step string) {
 // point, N6) and checks the entry ends with the same fields, confirmation and
 // state as the first order, with first_started_at the earliest start receipt,
 // stopped_at the stop's, and started_at the receipt of whichever start came first
-// (N12, SR-7.7).
+// (N12, SR-7.7). The foreground orders include a main-agent Stop with an empty
+// snapshot, which closes nothing of a foreground entry. A background subagent's
+// sequence opens with its launch request, which the start claims or the result
+// closes, whichever comes first, so no claimable launch is left in any order.
 func TestSubagentOrderIndependence(t *testing.T) {
 	cases := []struct {
 		name        string
+		request     bool     // the sequence opens with a launch request
 		orders      []string // each a sequence of steps
 		wantFirst   int64
 		wantStarted map[string]int64 // by order
@@ -167,10 +191,11 @@ func TestSubagentOrderIndependence(t *testing.T) {
 		wantType    string
 		wantMode    string
 	}{
-		{"background", []string{"SBP", "BSP", "SPB"}, saTimeDetails,
+		{"background", true, []string{"SBP", "BSP", "SPB"}, saTimeDetails,
 			map[string]int64{"SBP": saTimeStart, "BSP": saTimeDetails, "SPB": saTimeStart}, saTimeStop, "start-type", store.SubagentRunModeBackground},
-		{"foreground", []string{"SFP", "FSP", "SPF"}, saTimeStart,
-			map[string]int64{"SFP": saTimeStart, "FSP": saTimeStart, "SPF": saTimeStart}, saTimeStop, "start-type", store.SubagentRunModeForeground},
+		{"foreground", false, []string{"SFP", "FSP", "SPF", "SFPM", "SFMP", "FSMP", "MSFP"}, saTimeStart,
+			map[string]int64{"SFP": saTimeStart, "FSP": saTimeStart, "SPF": saTimeStart, "SFPM": saTimeStart, "SFMP": saTimeStart, "FSMP": saTimeStart, "MSFP": saTimeStart},
+			saTimeStop, "start-type", store.SubagentRunModeForeground},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -178,8 +203,15 @@ func TestSubagentOrderIndependence(t *testing.T) {
 			var baseline *apitest.SubagentEntryColumns
 			for _, order := range tc.orders {
 				f := newSAStore(t, store.StateWaiting)
+				if tc.request {
+					saOrderStep(f, "R")
+					f.wantLaunches("toolu-ev")
+				}
 				for _, step := range strings.Split(order, "") {
 					saOrderStep(f, step)
+				}
+				if tc.request {
+					f.wantLaunches()
 				}
 				e := f.mustEntry(saSub)
 				saCheckInvariants(t, e)
@@ -279,5 +311,123 @@ func TestSubagentInterleavedSubagents(t *testing.T) {
 		if len(got.Entries) != 2 {
 			t.Errorf("order %v: %d entries; want 2", order, len(got.Entries))
 		}
+	}
+}
+
+// TestSubagentOrderIndependenceWithListings applies a background subagent's
+// start, launch result, stop and the two listings of it (a main-agent Stop's
+// snapshot and its own SubagentStop's) in every order Claude Code can produce
+// and checks each ends as the first does (N6, N12, SR-7.4, SR-7.6). The times
+// are inside the 2 s grace, so no order closes anything, and the launch request
+// that opens the sequence is claimed by the start or closed by the result. Whichever of the start
+// and the result is applied first gives started_at; the listing never moves a
+// time, a type the start gave or the state the stop gave.
+func TestSubagentOrderIndependenceWithListings(t *testing.T) {
+	base := saAt(1)
+	timings := []struct {
+		name string
+		tm   saOrderTimes
+	}{
+		{"result received before the start", saOrderTimes{request: base, details: base + 1, start: base + 2, mainStop: base + 50, stop: base + 100}},
+		{"result received after the start", saOrderTimes{request: base, start: base + 1, details: base + 2, mainStop: base + 50, stop: base + 100}},
+	}
+	orders := []string{"SBLI", "BSLI", "SLBI", "BLSI", "LSBI", "LBSI", "SBIL", "BSIL", "SIBL", "SILB", "LSIB"}
+	for _, tt := range timings {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var baseline *apitest.SubagentEntryColumns
+			for _, order := range orders {
+				f := newSAStore(t, store.StateWaiting)
+				saOrderStepAt(f, "R", tt.tm)
+				f.wantLaunches("toolu-ev")
+				for _, step := range strings.Split(order, "") {
+					saOrderStepAt(f, step, tt.tm)
+				}
+				e := f.mustEntry(saSub)
+				saCheckInvariants(t, e)
+				wantStarted := tt.tm.start
+				if strings.Index(order, "B") < strings.Index(order, "S") {
+					wantStarted = tt.tm.details
+				}
+				wantFirst := min(tt.tm.start, tt.tm.details)
+				if e.State != store.SubagentStateStopped || e.StoppedAt != tt.tm.stop || e.StoppedAtSource != store.SubagentSourceStop || e.LostAt != nil {
+					t.Errorf("%s: state %v stopped_at %v from %v lost_at %v; want stopped, %d from stop, no lost_at", order, e.State, e.StoppedAt, e.StoppedAtSource, e.LostAt, tt.tm.stop)
+				}
+				if e.FirstStartedAt != wantFirst || e.StartedAt != wantStarted {
+					t.Errorf("%s: first_started_at %v started_at %v; want %d, %d", order, e.FirstStartedAt, e.StartedAt, wantFirst, wantStarted)
+				}
+				if e.Confirmed != int64(1) || e.SubagentType != "start-type" || e.SubagentTypeSource != store.SubagentSourceStart || e.RunMode != store.SubagentRunModeBackground {
+					t.Errorf("%s: confirmed %v type %v from %v run_mode %v; want 1, start-type from start, background", order, e.Confirmed, e.SubagentType, e.SubagentTypeSource, e.RunMode)
+				}
+				if baseline == nil {
+					baseline = &e
+				} else if diff := saSameEntry(*baseline, e); diff != "" {
+					t.Errorf("%s differs from %s: %s", order, orders[0], diff)
+				}
+				f.wantLaunches()
+			}
+		})
+	}
+}
+
+// TestSubagentTwoListingsOfDifferentTypes checks two listings of one id with
+// different types, in both orders (SR-6.3, SR-7.4, SR-7.6): a start's type is
+// never replaced by either, and with no entry only the main-agent Stop's
+// snapshot creates one, so its type is the one kept whichever came first.
+func TestSubagentTwoListingsOfDifferentTypes(t *testing.T) {
+	both := []struct {
+		name string
+		main int64
+		sub  int64
+	}{
+		{"main-agent Stop then SubagentStop", saAt(3), saAt(4)},
+		{"SubagentStop then main-agent Stop", saAt(4), saAt(3)},
+	}
+	apply := func(f *saStore, mainFirst bool, mainAt, subAt int64) {
+		main := func() { f.snapStop(mainAt, saL(saSub, "main-type")) }
+		sub := func() { f.listStop("sa-stopper", subAt, saL(saSub, "stopper-type")) }
+		if mainFirst {
+			main()
+			sub()
+		} else {
+			sub()
+			main()
+		}
+	}
+	for i, o := range both {
+		mainFirst := i == 0
+		t.Run("a start-created entry/"+o.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSAStore(t, store.StateWorking)
+			ev := saStartEv()
+			ev.ReceivedMs = saAt(2)
+			f.start(ev)
+
+			apply(f, mainFirst, o.main, o.sub)
+
+			e := f.mustEntry(saSub)
+			if e.SubagentType != "start-type" || e.SubagentTypeSource != store.SubagentSourceStart || e.RunMode != store.SubagentRunModeBackground || e.RunModeSource != store.SubagentSourceSnapshot {
+				t.Errorf("type %v from %v run_mode %v from %v; want start-type from start, background from snapshot", e.SubagentType, e.SubagentTypeSource, e.RunMode, e.RunModeSource)
+			}
+			if e.State != store.SubagentStateRunning || e.Description != nil {
+				t.Errorf("state %v description %v; want running, nil", e.State, e.Description)
+			}
+		})
+		t.Run("no entry/"+o.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSAStore(t, store.StateWorking)
+
+			apply(f, mainFirst, o.main, o.sub)
+
+			e := f.mustEntry(saSub)
+			if e.SubagentType != "main-type" || e.SubagentTypeSource != store.SubagentSourceSnapshot || e.Description != nil ||
+				e.RunMode != store.SubagentRunModeBackground || e.RunModeSource != store.SubagentSourceSnapshot {
+				t.Errorf("type %v from %v description %v run_mode %v from %v; want main-type from snapshot, nil, background from snapshot",
+					e.SubagentType, e.SubagentTypeSource, e.Description, e.RunMode, e.RunModeSource)
+			}
+			if n := len(f.rows().Entries); n != 1 {
+				t.Errorf("%d entries; want 1", n)
+			}
+		})
 	}
 }
