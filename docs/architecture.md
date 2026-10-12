@@ -1024,25 +1024,22 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     note with the oldest `opened_at`, ties to the lowest `created_seq`. Below
     the cap nothing is evicted.
   - **Must use:** every insert of an entry or a claimable launch calls the
-    cap step first, `evictSubagentEntryAtCap(q, instanceID)` or
-    `evictSubagentLaunchAtCap(q, instanceID)` (`internal/store/subagents.go`),
-    never its own count or delete. Each is one `DELETE` on the caller's
-    transaction, connection or pool (the `querier`), so it commits or rolls
-    back with the caller's write; it never begins or ends a transaction, and
-    returns whether it evicted a row. A writer holds the write lock first
+    gated cap step first, `evictSubagentEntryGated` or
+    `evictSubagentLaunchGated` (`internal/store/subagents.go`), never its own
+    count or delete and never an ungated eviction (none exists). Each is one
+    `DELETE` on the caller's transaction, connection or pool (the `querier`),
+    with the hook gate and the four row conditions in its own `WHERE` (see
+    [Subagent capture](#subagent-capture)), so it commits or rolls back with
+    the caller's write; it never begins or ends a transaction, and returns
+    whether it evicted a row. A writer holds the write lock first
     (`BEGIN IMMEDIATE`, see "the write lock before the read" under "Versioned
     writes"), so the count and the insert see one state. The value sets
     above are `store.Subagent*` constants; compare against them, never
-    against literals. The hook path's entry and claimable-launch inserts evict
-    through the gated forms `evictSubagentEntryGated` and
-    `evictSubagentLaunchGated` (the same one `DELETE`, with the hook gate and
-    the four row conditions in its own `WHERE`; see [Subagent
-    capture](#subagent-capture)); the ungated `…AtCap` forms are for a caller
-    that holds no hook gate, and no product write uses them yet. They are
-    tested through the export shim
-    `internal/store/subagents_export_test.go`
-    (`store.EvictSubagentEntryAtCapForTest` and
-    `store.EvictSubagentLaunchAtCapForTest`, each one committed transaction).
+    against literals. The eviction tests reach the two functions through the
+    export shim `internal/store/subagents_export_test.go`
+    (`store.EvictSubagentEntryGatedForTest` and
+    `store.EvictSubagentLaunchGatedForTest`, each one committed transaction
+    that takes the `HookGate`).
 - `store_meta` (v5, b.fmk; SR-5.1) — `key TEXT PRIMARY KEY, value TEXT NOT
   NULL`, with one row in Phase 1: `store_id`, the store's identity. Every
   `@ad_owner` label carries it as its last field (see `internal/tmux` in the
@@ -4258,8 +4255,8 @@ payload over 1 MiB is dropped whole before any of this.
   deletes an entry or a claimable launch carries the gate in its own `WHERE`
   (`subagentGateExists`, or `subagentRowGateSQL` in an insert-select), reads
   its deciding row inside the transaction after the write lock, and an eviction
-  it needs is `evictSubagentEntryGated` / `evictSubagentLaunchGated`, never
-  `…AtCap`. A new event is a new field of `SubagentAfterWrite`, not a new
+  it needs is `evictSubagentEntryGated` / `evictSubagentLaunchGated`, never an
+  eviction of its own. A new event is a new field of `SubagentAfterWrite`, not a new
   transaction.
 - **Snapshot and listing store inputs.** A main-agent `Stop`'s `background_tasks`
   reaches the store only as `SubagentTurnEnd.Snapshot` (`SubagentSnapshot`: the
@@ -4385,7 +4382,10 @@ record and changes no `row_version`.
 **The store read.** `(*store.Store).ListSubagentRecords(instanceID)`
 (`internal/store/subagent_read.go`) is the one read behind the verb; `pkg/api`
 names it as `ListSubagentsStore`. It returns the row's `subagent_tracking` flag
-and its records from one statement, so the two are one consistent read: a
+and its records from one statement, so the two are one consistent read. The
+flag reads `true` only when the column is the integer 1, as the hook gate and
+`GetSpawn` read it; any other stored value, a text or `NULL` one included, reads
+`false` and is never an error. The statement is a
 `LEFT JOIN` of the row to its `confirmed = 1` entries, of every launch and life
 of the row, in any state. It orders by `first_started_at` ascending with `NULL`
 last, then `subagent_id`. A row with no record gives the flag as stored and an
@@ -17199,11 +17199,11 @@ values, except for a row the test inserted itself.
   - `release` returns once the lock is released; later calls, and the
     test's cleanup, do nothing more.
   - Users: `TestNewOpensStoreWithConfiguredBusyTimeout`,
-    `TestHookCLIUsesConfiguredBusyTimeout` and
-    `TestHookCLISubagentBusyStore` (a `SubagentStart` and a `SubagentStop`
-    against a locked store: at a 1 ms busy timeout each gives up at once,
-    fail-open with the row and its entries untouched and a locked-store line in
-    `errors.log`; at 60000 ms each waits for the release and applies).
+    `TestHookCLIUsesConfiguredBusyTimeout` (which also runs a
+    `SubagentStart` and a `SubagentStop` against a locked store: at a 1 ms
+    busy timeout each gives up at once, fail-open with the row and its entries
+    untouched and a locked-store line in `errors.log`; at 60000 ms each waits
+    for the release and applies).
 
 **Settle-column helpers** (`pkg/api/apitest/settle.go`, b.3ie):
 

@@ -233,17 +233,21 @@ func TestSubagentStopListingRules(t *testing.T) {
 
 // TestSubagentListingDedupe checks an id repeated in one array, after the 1 KiB
 // cut, gives one record typed by the first and the transaction commits (a stale
-// claimable launch closed by the same Stop is gone).
+// claimable launch closed by the same Stop is gone). The first one in array
+// order wins even when its type is empty: a later occurrence's type is not
+// used, so the record's type stays null (SR-7.4).
 func TestSubagentListingDedupe(t *testing.T) {
 	long := strings.Repeat("x", 1024)
 	for _, tc := range []struct {
 		name   string
 		listed []store.SubagentListed
 		wantID string
-		want   string // the type of the one record
+		want   any // the type of the one record; nil for none
 	}{
 		{"one id twice with different types", []store.SubagentListed{saL(saSub, "first-type"), saL(saSub, "second-type")}, saSub, "first-type"},
 		{"two long ids that differ past 1024 bytes", []store.SubagentListed{saL(long+"A", "first-type"), saL(long+"B", "second-type")}, long, "first-type"},
+		{"one id twice, the first without a type", []store.SubagentListed{saL(saSub, ""), saL(saSub, "second-type")}, saSub, nil},
+		{"one id twice, the first with a type and the second without", []store.SubagentListed{saL(saSub, "first-type"), saL(saSub, "")}, saSub, "first-type"},
 		{"an empty id is dropped", []store.SubagentListed{saL("", "empty-type"), saL(saSub, "first-type")}, saSub, "first-type"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -255,7 +259,7 @@ func TestSubagentListingDedupe(t *testing.T) {
 
 			rows := f.rows()
 			if len(rows.Entries) != 1 || rows.Entries[0].SubagentID != tc.wantID || rows.Entries[0].SubagentType != tc.want {
-				t.Errorf("entries %+v; want one with id of %d bytes and type %q", rows.Entries, len(tc.wantID), tc.want)
+				t.Errorf("entries %+v; want one with id of %d bytes and type %v", rows.Entries, len(tc.wantID), tc.want)
 			}
 			f.wantLaunches()
 		})

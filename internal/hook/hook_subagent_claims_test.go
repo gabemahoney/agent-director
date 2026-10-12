@@ -173,6 +173,25 @@ func TestSubagentClaimClosedByStopPastGrace(t *testing.T) {
 	})
 }
 
+// TestSubagentClaimClosedByOtherLaunchStatus (SR-15.1): a launch result whose
+// tool_response.status is neither async_launched nor completed closes its
+// request's claimable launch and creates no record, so the start that follows
+// claims nothing and is an unconfirmed observation (no record in the verb's
+// list).
+func TestSubagentClaimClosedByOtherLaunchStatus(t *testing.T) {
+	r := newSubRow(t, subRowID)
+	r.script(t, []step{
+		{name: "B9", payload: variant(t, fxRequest), at: at(1),
+			launches: []wantLaunch{{subToolUseID, subType, at(1)}}},
+		{name: "B5 with status error", payload: variant(t, fxResult, setKey("tool_response.status", "error")), at: at(2)},
+		{name: "B1 claims nothing", payload: variant(t, fxStart), at: at(3),
+			entries: []wantEntry{running(subAgentID, subType, false, at(3))}},
+	})
+	if got := records(r); len(got) != 0 {
+		t.Errorf("records = %v; want none", got)
+	}
+}
+
 // TestSubagentClaimClosedByFailure: a PostToolUseFailure(Agent) with the
 // request's tool_use_id closes its claimable launch, so a start claims
 // nothing: it is an observation until its result confirms it.

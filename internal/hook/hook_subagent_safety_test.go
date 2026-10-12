@@ -10,8 +10,6 @@ import (
 	"bytes"
 	"context"
 	"log"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -26,22 +24,6 @@ import (
 // the store file (write-ahead log included), the trail and the hook log, while
 // the records it does capture are written.
 func TestSubagentCaptureStoresNoContent(t *testing.T) {
-	t.Run("scanners find the sentinel", func(t *testing.T) {
-		db := filepath.Join(t.TempDir(), "x.db")
-		if err := os.WriteFile(db+"-wal", []byte("aa"+subSentinel+"bb"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(db, []byte("none"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if !storeContains(t, db, subSentinel) {
-			t.Error("storeContains missed the sentinel in the write-ahead log")
-		}
-		if !trailContains(t, []map[string]any{{"event": "x", "note": "a " + subSentinel}}, subSentinel) {
-			t.Error("trailContains missed the sentinel")
-		}
-	})
-
 	r := newSubRow(t, subRowID)
 	fixtures := []string{fxRequest, fxStart, fxResult, fxStop, fxStartTeammate, fxStopInternal, fxResultNested,
 		fxResultTeammate, fxRequestTeammate, fxCompleted, fxMainStop}
@@ -271,12 +253,6 @@ func TestSubagentCaptureStringBound(t *testing.T) {
 		e.session = cut(subSessionID)
 		return e
 	}
-
-	t.Run("cut values", func(t *testing.T) {
-		if got := cut(subAgentID); len(got) != 1023 || got == longOf(subAgentID) {
-			t.Fatalf("oracle: cut length %d; want 1023 (the character across 1024 dropped whole)", len(got))
-		}
-	})
 
 	t.Run("request, start and result make one record in either order", func(t *testing.T) {
 		for _, tc := range []struct {

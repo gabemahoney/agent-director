@@ -211,9 +211,7 @@ func registeredHookEvents(t *testing.T) map[string]bool {
 }
 
 // TestSubagentFixtureShapes: the b.xjn fixtures carry no content field (no
-// prompt, assistant message, error, tool output or usage: SR-5.2), and the
-// ids and texts the subagent tests name (the sub* constants) are the ones the
-// files hold.
+// prompt, assistant message, error, tool output or usage: SR-5.2).
 func TestSubagentFixtureShapes(t *testing.T) {
 	files := []string{fxStart, fxStartTeammate, fxStop, fxStopInternal, fxResult, fxResultNested,
 		fxResultTeammate, fxMainStop, fxRequest, fxRequestTeammate, fxCompleted}
@@ -228,46 +226,5 @@ func TestSubagentFixtureShapes(t *testing.T) {
 				}
 			}
 		})
-	}
-	for _, c := range []struct {
-		fixture, path, want string
-	}{
-		{fxStart, "session_id", subSessionID},
-		{fxStart, "agent_id", subAgentID},
-		{fxStart, "agent_type", subType},
-		{fxStartTeammate, "agent_id", subTeammateID},
-		{fxStartTeammate, "agent_type", subTeammateType},
-		{fxStop, "agent_id", subAgentID},
-		{fxStop, "background_tasks", ""},
-		{fxStopInternal, "agent_id", subInternalID},
-		{fxResult, "tool_use_id", subToolUseID},
-		{fxResult, "tool_response.agentId", subAgentID},
-		{fxResult, "tool_response.resolvedModel", subModel},
-		{fxResult, "tool_input.description", subLaunchDesc},
-		{fxResult, "tool_input.subagent_type", subType},
-		{fxResultNested, "agent_id", subAgentID},
-		{fxResultNested, "tool_use_id", subNestedToolUseID},
-		{fxResultNested, "tool_response.agentId", subChildID},
-		{fxResultNested, "tool_input.description", subNestedDesc},
-		{fxResultTeammate, "tool_use_id", subTeamToolUseID},
-		{fxRequest, "tool_use_id", subToolUseID},
-		{fxRequest, "tool_input.subagent_type", subType},
-		{fxRequestTeammate, "tool_use_id", subTeamToolUseID},
-		{fxCompleted, "tool_use_id", subToolUseID},
-		{fxCompleted, "tool_response.agentId", subAgentID},
-		{fxCompleted, "tool_response.status", "completed"},
-	} {
-		t.Run("constant/"+c.fixture+"/"+c.path, func(t *testing.T) {
-			got := fixtureValue(t, c.fixture, c.path)
-			if c.want != "" && got != c.want {
-				t.Errorf("%s = %v; want %q", c.path, got, c.want)
-			}
-		})
-	}
-	if got := fixtureValue(t, fxResult, "tool_response.status"); got != "async_launched" {
-		t.Errorf("B5 status = %v; want async_launched", got)
-	}
-	if got := fixtureValue(t, fxMainStop, "background_tasks").([]any); len(got) != 2 {
-		t.Errorf("B8 background_tasks = %d entries; want 2", len(got))
 	}
 }

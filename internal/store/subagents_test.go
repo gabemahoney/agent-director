@@ -3,8 +3,9 @@ package store_test
 // The subagents and subagent_launches tables (b.xjn, SR-10.3): a row's delete
 // takes its entries and claimable launches with it (the expire delete's cascade
 // is in expire_candidates_test.go), and both 300 caps evict in the order
-// SR-10.3 gives, through the cap helpers' export shim. The hook writes that
-// call the helpers are another Task's tests.
+// SR-10.3 gives, through the gated evictions' export shim with a gate the row
+// passes (a hook is gated: SR-3.1). The hook writes that call them and the
+// refusals of the gate are subagent_gate_test.go's.
 
 import (
 	"fmt"
@@ -110,11 +111,13 @@ type capEntry struct {
 // capFillerMs is past every candidate's activity, so a filler is evicted last.
 const capFillerMs = apitest.SeededSubagentMs + 1_000_000
 
-// TestEvictSubagentEntryAtCap checks the entry cap: at 300 entries one is
+// TestSubagentEntryEvictionOrder checks the gated entry eviction on a live,
+// tracked row whose hook is its own agent, so the gate passes (an eviction that
+// deletes nothing where a case wants one fails): at 300 entries one is
 // deleted, a closed observation before any closed record before any running
 // entry, then the oldest activity_at, then the lowest created_seq; below the cap
 // none; another row's entries neither count nor go.
-func TestEvictSubagentEntryAtCap(t *testing.T) {
+func TestSubagentEntryEvictionOrder(t *testing.T) {
 	stopped, lost := store.SubagentStateStopped, store.SubagentStateLost
 	cases := []capCase{
 		{name: "closed observation before an older closed record and an older running entry", want: "obs", cands: []capEntry{
@@ -143,8 +146,8 @@ func TestEvictSubagentEntryAtCap(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newV5Store(t)
-			id, other := f.seed(store.StateWaiting, "sess-cap-a"), f.seed(store.StateEnded, "sess-cap-b")
+			f := newSAStore(t, store.StateWaiting)
+			id, other, gate := f.id, f.seed(store.StateEnded, "sess-cap-b"), saGateVariants[0].gate(f, "SubagentStart")
 			// Another row's oldest closed observations: they neither count toward id's cap nor go.
 			for i := 0; i < 5; i++ {
 				if err := apitest.SeedSubagent(f.path, other, fmt.Sprintf("other-%d", i), apitest.WithSubagentConfirmed(false),
@@ -176,7 +179,7 @@ func TestEvictSubagentEntryAtCap(t *testing.T) {
 			}
 			before, otherBefore := f.subagentRowsOf(id), f.subagentRowsOf(other)
 
-			evicted, err := store.EvictSubagentEntryAtCapForTest(f.s, id)
+			evicted, err := store.EvictSubagentEntryGatedForTest(f.s, id, gate)
 			if err != nil || evicted != (tc.want != "") {
 				t.Fatalf("evict = %v, %v; want evicted %v", evicted, err, tc.want != "")
 			}
@@ -196,10 +199,11 @@ func TestEvictSubagentEntryAtCap(t *testing.T) {
 	}
 }
 
-// TestEvictSubagentLaunchAtCap checks the claimable-launch cap: at 300 the one
-// with the oldest opened_at goes, a tie to the lowest created_seq; below the cap
+// TestSubagentLaunchEvictionOrder checks the gated claimable-launch eviction,
+// the gate passing as in TestSubagentEntryEvictionOrder: at 300 the one with the
+// oldest opened_at goes, a tie to the lowest created_seq; below the cap
 // none; another row's launches neither count nor go.
-func TestEvictSubagentLaunchAtCap(t *testing.T) {
+func TestSubagentLaunchEvictionOrder(t *testing.T) {
 	type launch struct {
 		id       string
 		openedAt int64 // ms past the seed epoch
@@ -217,8 +221,8 @@ func TestEvictSubagentLaunchAtCap(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newV5Store(t)
-			id, other := f.seed(store.StateWaiting, "sess-lcap-a"), f.seed(store.StateEnded, "sess-lcap-b")
+			f := newSAStore(t, store.StateWaiting)
+			id, other, gate := f.id, f.seed(store.StateEnded, "sess-lcap-b"), saGateVariants[0].gate(f, "SubagentStart")
 			for i := 0; i < 5; i++ {
 				if err := apitest.SeedSubagentLaunch(f.path, other, fmt.Sprintf("other-%d", i), apitest.WithClaimableOpenedAt(1)); err != nil {
 					t.Fatalf("SeedSubagentLaunch(other): %v", err)
@@ -240,7 +244,7 @@ func TestEvictSubagentLaunchAtCap(t *testing.T) {
 			}
 			before, otherBefore := f.subagentRowsOf(id), f.subagentRowsOf(other)
 
-			evicted, err := store.EvictSubagentLaunchAtCapForTest(f.s, id)
+			evicted, err := store.EvictSubagentLaunchGatedForTest(f.s, id, gate)
 			if err != nil || evicted != (tc.want != "") {
 				t.Fatalf("evict = %v, %v; want evicted %v", evicted, err, tc.want != "")
 			}

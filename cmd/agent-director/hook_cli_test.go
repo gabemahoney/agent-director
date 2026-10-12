@@ -155,17 +155,46 @@ func TestHookCLIOpensTheVerbsStore(t *testing.T) {
 	}
 }
 
-// TestHookCLIUsesConfiguredBusyTimeout (b.c7f): under a held write lock a SessionStart
-// gives up at once, fail-open, with 1 ms, and waits for the release with 60000.
+// TestHookCLIUsesConfiguredBusyTimeout (b.c7f; b.xjn SR-15.1, SR-15.3, SR-18):
+// on one store, a SessionStart, a SubagentStart and a SubagentStop each run
+// behind their own held write lock. With 1 ms each gives up at once, fail-open
+// (exit 0, nothing on stdout or stderr, the row and its entries untouched, a
+// locked-store line in errors.log); with 60000 ms each waits for the release and
+// applies. A SubagentStart's and SubagentStop's soft refresh and entry write are
+// one transaction.
 func TestHookCLIUsesConfiguredBusyTimeout(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		ms   int
-		hold time.Duration // the lock's release, unless the hook returns first
-		want string
+	hookFixture := func(name string) string {
+		b, err := os.ReadFile(filepath.Join("..", "..", "internal", "hook", "testdata", "hook-payloads", name))
+		if err != nil {
+			t.Fatalf("read fixture: %v", err)
+		}
+		return string(b)
+	}
+	steps := []struct {
+		name    string
+		payload string
+		// applied reports whether the hook's write is in the store.
+		applied func(t *testing.T, home, id string) bool
 	}{
-		{"1 ms gives up", 1, 5 * time.Second, store.StatePending},
-		{"60000 ms waits for the release", 60000, 300 * time.Millisecond, store.StateWaiting},
+		{"SessionStart", `{"hook_event_name":"SessionStart","transcript_path":"/x/c7f.jsonl"}`,
+			func(t *testing.T, home, id string) bool { return rowColumns(t, home, id).State == store.StateWaiting }},
+		{"SubagentStart", hookFixture("subagent-start.json"), func(t *testing.T, home, id string) bool {
+			rows := subagentRows(t, home, id)
+			return len(rows.Entries) == 1 && rows.Entries[0].State == store.SubagentStateRunning
+		}},
+		{"SubagentStop", hookFixture("subagent-stop.json"), func(t *testing.T, home, id string) bool {
+			rows := subagentRows(t, home, id)
+			return len(rows.Entries) == 1 && rows.Entries[0].State == store.SubagentStateStopped
+		}},
+	}
+	for _, tc := range []struct {
+		name    string
+		ms      int
+		hold    time.Duration // each lock's release, unless the hook returns first
+		applied bool
+	}{
+		{"1 ms gives up", 1, 5 * time.Second, false},
+		{"60000 ms waits for the release", 60000, 300 * time.Millisecond, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -178,101 +207,44 @@ func TestHookCLIUsesConfiguredBusyTimeout(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(cfg), 0o600); err != nil {
 				t.Fatalf("write config: %v", err)
 			}
-
-			release := apitest.HoldWriteLock(t, stateDB(home), tc.hold)
-			stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id},
-				`{"hook_event_name":"SessionStart","transcript_path":"/x/c7f.jsonl"}`)
-			release()
-
-			if code != 0 || stdout != "" {
-				t.Fatalf("hook exit = %d, stdout = %q; want 0 and empty (stderr=%q)", code, stdout, stderr)
+			locked := func() int {
+				log, _ := os.ReadFile(filepath.Join(directorDir(home), "errors.log"))
+				return strings.Count(string(log), "database is locked")
 			}
-			if got := rowColumns(t, home, id).State; got != tc.want {
-				t.Errorf("row state after the hook = %v; want %s", got, tc.want)
-			}
-			log, _ := os.ReadFile(filepath.Join(directorDir(home), "errors.log"))
-			if locked := strings.Contains(string(log), "database is locked"); locked != (tc.want == store.StatePending) {
-				t.Errorf("errors.log = %q; want a locked-store line exactly when the write gave up", log)
+
+			for _, step := range steps {
+				rowBefore, lockedBefore := rowColumns(t, home, id), locked()
+
+				release := apitest.HoldWriteLock(t, stateDB(home), tc.hold)
+				stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id}, step.payload)
+				release()
+
+				if code != 0 || stdout != "" || stderr != "" {
+					t.Fatalf("%s: hook exit = %d, stdout = %q, stderr = %q; want 0 and both empty", step.name, code, stdout, stderr)
+				}
+				if got := step.applied(t, home, id); got != tc.applied {
+					t.Errorf("%s: applied = %v; want %v", step.name, got, tc.applied)
+				}
+				if rowAfter := rowColumns(t, home, id); (rowAfter.RowVersion != rowBefore.RowVersion) != tc.applied {
+					t.Errorf("%s: row_version %v -> %v; want it moved exactly when the hook applied (%v)",
+						step.name, rowBefore.RowVersion, rowAfter.RowVersion, tc.applied)
+				}
+				if gaveUp := locked() > lockedBefore; gaveUp == tc.applied {
+					t.Errorf("%s: errors.log gained a locked-store line = %v; want one exactly when the write gave up", step.name, gaveUp)
+				}
 			}
 		})
 	}
 }
 
-// TestHookCLISubagentBusyStore (b.xjn; SR-15.1, SR-18): a SubagentStart and a
-// SubagentStop, whose soft refresh and entry write are one transaction, give up
-// at once when the store is locked past a 1 ms busy timeout, fail-open (exit 0,
-// nothing on stdout or stderr, the row and its entries untouched, a locked-store
-// line in errors.log), and wait for the release and apply with 60000 ms.
-func TestHookCLISubagentBusyStore(t *testing.T) {
-	const subagent = "a3f9c2e81b7d4056" // the id both fixtures carry
-	for _, ev := range []struct {
-		name, fixture string
-		seedEntry     bool
-		want          func(rows apitest.SubagentRows) bool // the applied result
-	}{
-		{"SubagentStart", "subagent-start.json", false, func(r apitest.SubagentRows) bool {
-			return len(r.Entries) == 1 && r.Entries[0].State == store.SubagentStateRunning
-		}},
-		{"SubagentStop", "subagent-stop.json", true, func(r apitest.SubagentRows) bool {
-			return len(r.Entries) == 1 && r.Entries[0].State == store.SubagentStateStopped
-		}},
-	} {
-		for _, tc := range []struct {
-			name    string
-			ms      int
-			hold    time.Duration // the lock's release, unless the hook returns first
-			applied bool
-		}{
-			{"1 ms gives up", 1, 5 * time.Second, false},
-			{"60000 ms waits for the release", 60000, 300 * time.Millisecond, true},
-		} {
-			t.Run(ev.name+" "+tc.name, func(t *testing.T) {
-				home := t.TempDir()
-				const id = "id-xjn-busy"
-				if _, err := apitest.SeedSpawn(stateDB(home), id, store.StateWorking, "/tmp", "off", "", true,
-					withTestProcessPane(t)); err != nil {
-					t.Fatalf("SeedSpawn: %v", err)
-				}
-				if ev.seedEntry {
-					if err := apitest.SeedSubagent(stateDB(home), id, subagent); err != nil {
-						t.Fatalf("SeedSubagent: %v", err)
-					}
-				}
-				cfg := fmt.Sprintf("[store]\nbusy_timeout_ms = %d\n", tc.ms)
-				if err := os.WriteFile(filepath.Join(directorDir(home), "config.toml"), []byte(cfg), 0o600); err != nil {
-					t.Fatalf("write config: %v", err)
-				}
-				payload, err := os.ReadFile(filepath.Join("..", "..", "internal", "hook", "testdata", "hook-payloads", ev.fixture))
-				if err != nil {
-					t.Fatalf("read fixture: %v", err)
-				}
-				rowBefore := rowColumns(t, home, id)
-
-				release := apitest.HoldWriteLock(t, stateDB(home), tc.hold)
-				stdout, stderr, code := runHook(t, home, map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": id}, string(payload))
-				release()
-
-				if code != 0 || stdout != "" || stderr != "" {
-					t.Fatalf("hook exit = %d, stdout = %q, stderr = %q; want 0 and both empty", code, stdout, stderr)
-				}
-				rows, err := apitest.ReadSubagentRows(stateDB(home), id)
-				if err != nil {
-					t.Fatalf("ReadSubagentRows: %v", err)
-				}
-				if got := ev.want(rows); got != tc.applied {
-					t.Errorf("entries after the hook = %+v; applied = %v, want %v", rows.Entries, got, tc.applied)
-				}
-				if rowAfter := rowColumns(t, home, id); (rowAfter.RowVersion != rowBefore.RowVersion) != tc.applied {
-					t.Errorf("row_version %v -> %v; want it moved exactly when the hook applied (%v)",
-						rowBefore.RowVersion, rowAfter.RowVersion, tc.applied)
-				}
-				log, _ := os.ReadFile(filepath.Join(directorDir(home), "errors.log"))
-				if locked := strings.Contains(string(log), "database is locked"); locked == tc.applied {
-					t.Errorf("errors.log = %q; want a locked-store line exactly when the write gave up", log)
-				}
-			})
-		}
+// subagentRows reads id's subagent entries and claimable launches from home's store.
+func subagentRows(t *testing.T, home, id string) apitest.SubagentRows {
+	t.Helper()
+	rows, err := apitest.ReadSubagentRows(stateDB(home), id)
+	if err != nil {
+		t.Fatalf("ReadSubagentRows: %v", err)
 	}
+	return rows
 }
 
 // TestHookCLIFailOpen: with no AGENT_DIRECTOR_INSTANCE_ID the hook exits 0

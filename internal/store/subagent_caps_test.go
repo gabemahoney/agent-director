@@ -167,7 +167,7 @@ func TestSubagentStringsAreCutTo1KiB(t *testing.T) {
 			t.Errorf("%s: cut to %d bytes (valid %v); want %d", tc.name, len(got), strings.ToValidUTF8(got, "") == got, tc.wantLen)
 		}
 	}
-	t.Run("through the store, a long id and a long tool_use_id still match", func(t *testing.T) {
+	t.Run("through the store, a long id is cut and found again, and the start claims a launch of a long tool_use_id by type", func(t *testing.T) {
 		t.Parallel()
 		f := newSAStore(t, store.StateWaiting)
 		long := strings.Repeat("x", 2000)

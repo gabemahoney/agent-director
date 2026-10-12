@@ -456,10 +456,10 @@ the hook started.
 - **A main-agent `Stop`** (no `agent_id`) closes the open Agent calls of
   the current launch opened more than 2 s before the `Stop`. No call of an
   earlier launch is left to close: the closes of a row that ends, goes
-  missing or begins a new launch delete them. A `Stop` carrying `agent_id`
-  writes nothing of this kind. It also applies its `background_tasks` as a snapshot of the
-  agent's running background subagents (see "The `background_tasks` list"
-  below), in the same transaction:
+  missing or begins a new launch delete them. A main-agent `Stop` also
+  applies its `background_tasks` as a snapshot of the agent's running
+  background subagents (see "The `background_tasks` list" below), in the same
+  transaction:
   - A listed subagent with no record gets one, `running`, `run_mode`
     `background`, with the listed type and the `Stop`'s session id. Its
     description, model, parent, `tool_use_id` and start times are null.
@@ -468,21 +468,15 @@ the hook started.
     `background`. Its type is not applied, and its state and times never
     change, so a stopped or lost record is not reopened.
   - Then every `running` background record of the current launch that the
-    list does not name, and that was opened more than 2 s before the
-    `Stop`'s hook started, becomes `lost` with `close_reason`
-    `absent_from_snapshot` and the `Stop`'s time as `lost_at`. A record
-    opened exactly 2 s before is kept. This holds for every session and for
-    nested subagents, and across a conversation clear. A foreground record,
-    one of unknown run mode, a `stopped` or `lost` one, and one of an
-    earlier launch are never closed.
-  - What a consumer sees is in
+    list does not name, and that is old enough, becomes `lost` with
+    `close_reason` `absent_from_snapshot` and the `Stop`'s time as `lost_at`.
+    Which records are spared, and what a consumer sees, is in
     [usage.md](usage.md#when-a-record-turns-lost).
 
-  The hook first reads, without taking the store's write lock, whether the
-  `Stop` can change anything: its list names a subagent, a call is old
-  enough to close, or it has a list and a `running` background record is old
-  enough to close. It writes nothing when not. A skipped `Stop` only defers a
-  close to a later one.
+  A `Stop` that can change nothing writes nothing. A skipped `Stop` only
+  defers a close to a later one.
+
+  A `Stop` carrying `agent_id` writes nothing of this kind.
 - **The `background_tasks` list**, of a main-agent `Stop` and of a
   `SubagentStop` with `agent_id`. A missing, null or non-array field is no
   snapshot: nothing is created or closed. An array is a snapshot, even an
@@ -528,11 +522,7 @@ Limits:
   only the hooks above end an entry. A subagent whose stop signals never
   reached agent-director (a foreground one is still stopped by its completed
   launch result) leaves its entry `running` until a close of the row or a
-  snapshot ends it.
-- A snapshot closes only a `running` background entry of the current launch
-  that it does not list, turning it `lost`; it never closes a foreground
-  entry, one of unknown run mode, or one of an earlier launch. What that
-  leaves a consumer reading is in
+  snapshot ends it; which entries a snapshot can end is in
   [usage.md](usage.md#how-long-a-record-reads-running).
 - A background subagent whose hooks were all missed has no entry until a
   later main-agent `Stop` lists it as running. A `SubagentStop`'s listing
@@ -548,9 +538,7 @@ it does not apply:
 - Malformed JSON payload → exit 0, log entry.
 - Payload over 1 MiB → exit 0, log entry. The payload is dropped whole:
   nothing is written, subagent entries included. When both stop signals of
-  a subagent exceed 1 MiB, its record is left `running`. A later snapshot
-  turns it `lost` only when it is a background record of the current launch
-  (a foreground record stays `running`); see
+  a subagent exceed 1 MiB, its record is left `running`; see
   [usage.md](usage.md#how-long-a-record-reads-running).
 - Config malformed → exit 0, log entry.
 - Store open failure → exit 0, log entry.

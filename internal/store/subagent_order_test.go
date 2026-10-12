@@ -171,19 +171,29 @@ func saOrderStepAt(f *saStore, step string, tm saOrderTimes) {
 	}
 }
 
+// saForegroundTimes are the receipt times of SR-15.2's foreground sequence: the
+// launch request at t0, the start at t1, its SubagentStop at t2, the completed
+// result at t3 (after the stop) and the main-agent Stop at t4. The Stop is far
+// past the 2 s grace of the request, so it closes the claimable launch when
+// neither the start nor the result has yet.
+var saForegroundTimes = saOrderTimes{request: saAt(0), start: saAt(1), stop: saAt(2), details: saAt(3), mainStop: saAt(4)}
+
 // TestSubagentOrderIndependence applies the same events of one subagent in each
 // order Claude Code produces (a stop never before its own start; a result at any
 // point, N6) and checks the entry ends with the same fields, confirmation and
 // state as the first order, with first_started_at the earliest start receipt,
 // stopped_at the stop's, and started_at the receipt of whichever start came first
-// (N12, SR-7.7). The foreground orders include a main-agent Stop with an empty
-// snapshot, which closes nothing of a foreground entry. A background subagent's
-// sequence opens with its launch request, which the start claims or the result
-// closes, whichever comes first, so no claimable launch is left in any order.
+// (N12, SR-7.7). Each sequence opens with its launch request (SR-15.2), which the
+// start claims or the result closes, whichever comes first, or, in an order
+// where a main-agent Stop past the grace comes first (MSFP), that Stop closes:
+// no claimable launch is left in any order, and the entry's fields are the same
+// either way. The foreground orders include a main-agent Stop with an empty
+// snapshot, which closes nothing of a foreground entry, and the SRD's times: the
+// completed result comes after the stop, yet stopped_at is the stop's.
 func TestSubagentOrderIndependence(t *testing.T) {
 	cases := []struct {
 		name        string
-		request     bool     // the sequence opens with a launch request
+		tm          saOrderTimes
 		orders      []string // each a sequence of steps
 		wantFirst   int64
 		wantStarted map[string]int64 // by order
@@ -191,11 +201,12 @@ func TestSubagentOrderIndependence(t *testing.T) {
 		wantType    string
 		wantMode    string
 	}{
-		{"background", true, []string{"SBP", "BSP", "SPB"}, saTimeDetails,
+		{"background", saTimes, []string{"SBP", "BSP", "SPB"}, saTimeDetails,
 			map[string]int64{"SBP": saTimeStart, "BSP": saTimeDetails, "SPB": saTimeStart}, saTimeStop, "start-type", store.SubagentRunModeBackground},
-		{"foreground", false, []string{"SFP", "FSP", "SPF", "SFPM", "SFMP", "FSMP", "MSFP"}, saTimeStart,
-			map[string]int64{"SFP": saTimeStart, "FSP": saTimeStart, "SPF": saTimeStart, "SFPM": saTimeStart, "SFMP": saTimeStart, "FSMP": saTimeStart, "MSFP": saTimeStart},
-			saTimeStop, "start-type", store.SubagentRunModeForeground},
+		{"foreground", saForegroundTimes, []string{"SFP", "FSP", "SPF", "SFPM", "SFMP", "FSMP", "MSFP"}, saForegroundTimes.start,
+			map[string]int64{"SFP": saForegroundTimes.start, "FSP": saForegroundTimes.start, "SPF": saForegroundTimes.start, "SFPM": saForegroundTimes.start,
+				"SFMP": saForegroundTimes.start, "FSMP": saForegroundTimes.start, "MSFP": saForegroundTimes.start},
+			saForegroundTimes.stop, "start-type", store.SubagentRunModeForeground},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,20 +214,19 @@ func TestSubagentOrderIndependence(t *testing.T) {
 			var baseline *apitest.SubagentEntryColumns
 			for _, order := range tc.orders {
 				f := newSAStore(t, store.StateWaiting)
-				if tc.request {
-					saOrderStep(f, "R")
-					f.wantLaunches("toolu-ev")
-				}
+				saOrderStepAt(f, "R", tc.tm)
+				f.wantLaunches("toolu-ev")
 				for _, step := range strings.Split(order, "") {
-					saOrderStep(f, step)
+					saOrderStepAt(f, step, tc.tm)
 				}
-				if tc.request {
-					f.wantLaunches()
-				}
+				f.wantLaunches()
 				e := f.mustEntry(saSub)
 				saCheckInvariants(t, e)
 				if e.State != store.SubagentStateStopped || e.StoppedAt != tc.wantStopped || e.StoppedAtSource != store.SubagentSourceStop {
 					t.Errorf("%s: state %v stopped_at %v from %v; want stopped, %d from stop", order, e.State, e.StoppedAt, e.StoppedAtSource, tc.wantStopped)
+				}
+				if e.LostAt != nil {
+					t.Errorf("%s: lost_at %v; want null", order, e.LostAt)
 				}
 				if e.FirstStartedAt != tc.wantFirst || e.StartedAt != tc.wantStarted[order] {
 					t.Errorf("%s: first_started_at %v started_at %v; want %d, %d", order, e.FirstStartedAt, e.StartedAt, tc.wantFirst, tc.wantStarted[order])
@@ -314,9 +324,31 @@ func TestSubagentInterleavedSubagents(t *testing.T) {
 	}
 }
 
+// saPermutations returns every ordering of the distinct characters of steps, as
+// strings, that valid accepts, in lexicographic order of the input's positions.
+func saPermutations(steps string, valid func(string) bool) []string {
+	var out []string
+	var walk func(prefix string, rest []byte)
+	walk = func(prefix string, rest []byte) {
+		if len(rest) == 0 {
+			if valid(prefix) {
+				out = append(out, prefix)
+			}
+			return
+		}
+		for i := range rest {
+			next := append(append([]byte{}, rest[:i]...), rest[i+1:]...)
+			walk(prefix+string(rest[i]), next)
+		}
+	}
+	walk("", []byte(steps))
+	return out
+}
+
 // TestSubagentOrderIndependenceWithListings applies a background subagent's
 // start, launch result, stop and the two listings of it (a main-agent Stop's
 // snapshot and its own SubagentStop's) in every order Claude Code can produce
+// (the 12 with the start before its own SubagentStop)
 // and checks each ends as the first does (N6, N12, SR-7.4, SR-7.6). The times
 // are inside the 2 s grace, so no order closes anything, and the launch request
 // that opens the sequence is claimed by the start or closed by the result. Whichever of the start
@@ -331,7 +363,12 @@ func TestSubagentOrderIndependenceWithListings(t *testing.T) {
 		{"result received before the start", saOrderTimes{request: base, details: base + 1, start: base + 2, mainStop: base + 50, stop: base + 100}},
 		{"result received after the start", saOrderTimes{request: base, start: base + 1, details: base + 2, mainStop: base + 50, stop: base + 100}},
 	}
-	orders := []string{"SBLI", "BSLI", "SLBI", "BLSI", "LSBI", "LBSI", "SBIL", "BSIL", "SIBL", "SILB", "LSIB"}
+	// Every order of the four events but the ones with the SubagentStop's listing
+	// (I) before the start (S): a stop never comes before its own start. 12 of 24.
+	orders := saPermutations("SBLI", func(order string) bool { return strings.Index(order, "S") < strings.Index(order, "I") })
+	if len(orders) != 12 {
+		t.Fatalf("generated %d orders %v; want the 12 with S before I", len(orders), orders)
+	}
 	for _, tt := range timings {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()

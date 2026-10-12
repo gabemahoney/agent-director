@@ -48,10 +48,10 @@ func writeManifest(t *testing.T, dir string, lines ...string) string {
 	return p
 }
 
-// TestRunnerLaunchSuite runs each unpinned run set's suite.tsv (launch/,
+// TestRunnerUnpinnedRunSetSuites runs each unpinned run set's suite.tsv (launch/,
 // subagent/): its props column is accepted, its cfgs come from its cfg/
 // (unpinned) into the job contexts, and every row gets the violation its props name.
-func TestRunnerLaunchSuite(t *testing.T) {
+func TestRunnerUnpinnedRunSetSuites(t *testing.T) {
 	for _, tc := range []struct {
 		dir      string
 		temporal string         // a property TLC reports as a temporal one, not an invariant

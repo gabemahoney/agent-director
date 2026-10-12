@@ -195,7 +195,7 @@ result.
 A subagent shows as a record once a launch result, a launch it matches or an
 agent stop that lists it confirms it. A start that never showed (one that
 matched no launch) is not a record until then; any stop that lists it turns it
-into one, whether the agent's own main-turn stop or the subagent's own stop.
+into one, whether the agent's own main-turn stop or any subagent's stop.
 These cases show a record late or oddly:
 
 - A foreground subagent shows only when it finishes if its launching call named
@@ -208,14 +208,14 @@ These cases show a record late or oddly:
 - A subagent launched by an in-process teammate has `parent_type` `subagent`
   and the teammate's id as `parent_id`, with no record of that teammate.
 - A background subagent whose start and launch result were both missed shows at
-  the agent's next main-turn stop that lists it as running (a subagent's own stop
+  the agent's next main-turn stop that lists it as running (a subagent's stop
   never creates a record). The record is `running`, its
   `run_mode` is `background`, its `subagent_type` is the type the list gave and
   its `session_id` is that stop's session. Its `description`, `first_started_at`
   and `started_at` are null until its launch result or a start supplies them.
   Nothing from the list's own description is kept.
 - A stop that lists a subagent already known, whether the agent's main-turn
-  stop or the subagent's own stop, confirms it (a start that never showed
+  stop or any subagent's stop, confirms it (a start that never showed
   becomes a record) and gives it a `background` `run_mode` if it has none. It
   changes no state, no time and no type.
 
@@ -229,10 +229,15 @@ limit (see [Fail-open invariant](hooks.md#fail-open-invariant)). A later stop
 turns a record `lost` only in one case, described next: a `running` background
 record of the agent's current launch whose stop event was dropped or never
 sent. A foreground record, or one whose run mode is unknown, is never turned
-`lost` by a stop, so a foreground subagent whose stop event and launch result
-were both over the limit keeps reading `running` until its agent's row ends,
+`lost` by a stop, so a foreground or unknown-mode record that gets no stop
+signal (for example a foreground subagent whose stop event and launch result
+were both over the limit) keeps reading `running` until its agent's row ends,
 goes missing or the agent begins a new launch (see
 [When an agent ends, goes missing or relaunches](#when-an-agent-ends-goes-missing-or-relaunches)).
+
+A start for a `stopped` subagent runs its record again. While another stop
+hook blocks a stop, the record reads `stopped` although the subagent keeps
+running; the real stop then updates `stopped_at`.
 
 ### When a record turns lost
 
@@ -257,10 +262,6 @@ stops reading `running`. The rules:
 
 What the hooks read and write for the list is in
 [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
-
-A start for a `stopped` subagent runs its record again. While another stop
-hook blocks a stop, the record reads `stopped` although the subagent keeps
-running; the real stop then updates `stopped_at`.
 
 ### When an agent ends, goes missing or relaunches
 

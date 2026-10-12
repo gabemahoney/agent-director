@@ -65,7 +65,9 @@ const listSubagentRecordsSQL = `SELECT sp.subagent_tracking,
   ORDER BY sa.first_started_at IS NULL, sa.first_started_at, sa.subagent_id`
 
 // ListSubagentRecords returns whether the row of instanceID tracks subagents
-// (its spawns.subagent_tracking flag) and every record of the row: every
+// (its spawns.subagent_tracking flag, read as decodeSubagentTracking reads it:
+// only the integer 1 is tracked, any other stored value, a text or NULL one
+// included, is false and never an error) and every record of the row: every
 // confirmed entry, of every launch and life of the row, in any state. It never
 // returns an observation (an unconfirmed entry) nor a claimable launch. The
 // records are ordered by first_started_at ascending, a NULL one last, then by
@@ -91,7 +93,7 @@ func (s *Store) ListSubagentRecords(instanceID string) (bool, []SubagentRow, err
 	)
 	for rows.Next() {
 		var (
-			flag  int64
+			flag  any
 			id    *string
 			state *string
 			r     SubagentRow
@@ -103,7 +105,7 @@ func (s *Store) ListSubagentRecords(instanceID string) (bool, []SubagentRow, err
 			return false, nil, fmt.Errorf("store: list subagents scan: %w", err)
 		}
 		found = true
-		tracked = flag != 0
+		tracked = decodeSubagentTracking(flag)
 		if id == nil {
 			// The LEFT JOIN's one row of an agent row without a record.
 			continue

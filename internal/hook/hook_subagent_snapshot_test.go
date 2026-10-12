@@ -229,9 +229,9 @@ func TestSubagentSnapshotGrace(t *testing.T) {
 }
 
 // TestSubagentSnapshotNeverClosesForegroundOrUnknown (Epic AC 3): a main-agent
-// Stop with an empty listing past the grace closes a record whose run mode is
-// not background: a running foreground subagent still unfilled (run_mode null)
-// and one restarted after its completed result (run_mode foreground).
+// Stop with an empty listing past the grace leaves running a record whose run
+// mode is not background: a running foreground subagent still unfilled (run_mode
+// null) and one restarted after its completed result (run_mode foreground).
 func TestSubagentSnapshotNeverClosesForegroundOrUnknown(t *testing.T) {
 	t.Run("claimed and running, run mode unknown", func(t *testing.T) {
 		r := newSubRow(t, subRowID)
