@@ -95,6 +95,50 @@
 #                        move" below) nothing is snapshotted: the new bin
 #                        and admin directories hold no earlier binary, and
 #                        the install says so.
+#   --schedule           Schedule the find-missing and expire sweeps for the
+#                        user running this script, who must be the agents'
+#                        user (see "The schedule" below). Default OFF: without
+#                        it, an install with no schedule set up ends with a
+#                        warning on stderr naming the lines to add.
+#
+# The schedule (b.wur). The README's sweep verbs, find-missing (every 2
+# minutes) and expire (daily), keep the row states honest, and nothing runs
+# them until they are scheduled: a live row whose agent is gone stays live. The
+# install ships the schedule as files in schedule/ beside this script (a crontab
+# file, agent-director.cron, and a systemd user .service and .timer for each
+# sweep; a note in each says how to copy it by hand), with placeholders for the
+# binary's absolute path and for PATH, TMUX_TMPDIR (when set) and HOME (when it
+# differs from the passwd home), which cron and systemd do not pass. --schedule installs from those files and nothing
+# else, as the user running this script. When the script is piped to bash (no
+# schedule/ beside it) it fetches the same files from the repository at the
+# release tag (--from-release) or the binaries' full commit stamp, and keeps
+# them in ~/.config/agent-director/schedule/ (see the schedule section near
+# the end of this script). The install is:
+#   - cron, when crontab is available and a cron daemon runs (a process named
+#     cron or crond; checked on Linux only): the lines are added to the user's
+#     crontab, each tagged with the marker comment `# agent-director-schedule`;
+#     a re-run replaces the marked lines, so one copy of each stays, and
+#     every other crontab line is kept;
+#   - else systemd, when `systemctl --user` reaches the user manager: a
+#     .service and .timer per sweep in ~/.config/systemd/user, both timers
+#     enabled; a re-run rewrites them (one copy);
+#   - else nothing: the warning below, with the reason. (crontab working but no
+#     cron daemon running, and no systemd: the crontab lines are put in, the
+#     install says on stderr that no daemon runs, and the warning fires.)
+# The entries run the canonical binary, ~/.config/agent-director/bin/
+# agent-director, so an upgrade needs no change; a re-run of --schedule
+# re-points them at the binary installed now. uninstall.sh removes exactly the
+# marked lines or the units this adds. Whenever neither this install's cron
+# lines (with a cron daemon running) nor its units are present after the run,
+# the install ends with a warning on stderr naming the exact lines (the cron
+# file's, with the installed binary's path), saying to run them as the agents'
+# user and naming the directory the files are in (beside the script, or the
+# kept copy under ~/.config/agent-director/schedule/). It also prints this
+# script's own command line with --schedule added, to run as it is. Exit codes
+# are not changed by it or by --schedule failing.
+# Run the sweeps as the agents' user, in their tmux environment: run as
+# another user, as root or against another tmux server, they can wrongly mark
+# live rows missing or delete rows whose agent still runs.
 #
 # Exit codes:
 #   0  success
@@ -263,7 +307,8 @@
 # --register-mcp, `claude mcp add` refuses a name already registered in
 # its scope, so a re-run from a directory where `mcp get agent-director`
 # already shows this install's binary with `serve --stdio` adds nothing, says
-# so, and still returns 0.
+# so, and still returns 0. With --schedule, the entries are replaced, not
+# added (see "The schedule" above): a re-run leaves one copy of each.
 
 set -euo pipefail
 
@@ -323,6 +368,7 @@ NO_SYMLINK=0
 REGISTER_MCP=0
 NO_HOOKS=0
 KEEP_PRIOR=0
+SCHEDULE=0
 
 # GitHub repo slug used by --from-release. Matches go.mod's module path
 # and the /release skill's asset naming.
@@ -332,6 +378,10 @@ readonly RELEASE_REPO_SLUG="gabemahoney/agent-director"
 if printf '%s' ":${PATH}:" | grep -q ":${HOME}/.local/bin:"; then
     SYMLINK_DEFAULT="${HOME}/.local/bin"
 fi
+
+# The arguments as given, for the schedule warning's re-run advice (b.wur).
+ORIG_ARGS=("$@")
+ORIG_PWD="$PWD"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -363,6 +413,8 @@ while [[ $# -gt 0 ]]; do
             NO_HOOKS=1; shift ;;
         --keep-prior)
             KEEP_PRIOR=1; shift ;;
+        --schedule)
+            SCHEDULE=1; shift ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -479,6 +531,10 @@ ad_exit_cleanup() {
             rm -f "$f"
         fi
     done
+    # The schedule step's download directory (b.wur), when an interrupt left it.
+    if [[ -n "${sched_tmp:-}" ]]; then
+        rm -rf -- "$sched_tmp"
+    fi
 }
 
 # --------------------------------------------------------------------
@@ -2989,7 +3045,16 @@ fi
 # Source tree, and the build advice that names it
 # --------------------------------------------------------------------
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# SCRIPT_REAL is 1 when this script is a file on disk. Read from a pipe (`curl
+# ... | bash -s -- ...`) or a process substitution there is no BASH_SOURCE[0]
+# (or it is not a regular file), SCRIPT_DIR is then only the working
+# directory, and nothing is shipped beside the script (the schedule step
+# fetches its files, see "The schedule").
+SCRIPT_REAL=0
+if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+    SCRIPT_REAL=1
+fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)"
 
 # skills/install-agent-director sits two levels under the repo root;
 # bin/ is at the root. The root is resolved here, physically as the
@@ -5405,9 +5470,1033 @@ ad_mcp_step() {
 
 ad_mcp_step
 
+# --------------------------------------------------------------------
+# The schedule for the sweeps (b.wur)
+#
+# agent-director's two sweep verbs keep the row states honest, and nothing
+# runs them unless they are scheduled: find-missing marks a live row whose
+# agent is gone `missing` (a killed or crashed agent, a reboot), moves a relay
+# row out of check_permission and, through the row, turns a killed agent's
+# running subagent records `lost`; expire deletes finished rows past
+# expire_retention_days. The schedule ships as files, in schedule/ beside this
+# script (the install skill's directory, installed with the skill): a crontab
+# file (agent-director.cron) and a systemd user .service and .timer for each
+# sweep. This script installs from those files and from nothing else, and its
+# warning prints the cron lines from the file, so what is installed, what is
+# warned about and what an operator copies by hand cannot drift apart.
+#
+# Where the files come from. Beside this script when it is a file on disk (the
+# skill's directory, a checkout) and schedule/ there holds all five. Otherwise
+# (the script was piped to bash, as the README's `curl ... | bash -s --
+# --from-release`, or the skill was copied without schedule/) the step fetches
+# the same five files from the repository, never generating them: from
+# https://raw.githubusercontent.com/<RELEASE_REPO_SLUG>/<ref>/skills/
+# install-agent-director/schedule/<file>, with the same curl (and the same
+# INSTALL_SH_TEST_CURL_OVERRIDE) the --from-release download uses. The ref is:
+#   --from-release: the resolved release tag (FROM_RELEASE_TAG);
+#   otherwise: the commit stamp of the binaries being installed (their
+#     `version` result, already required to be a real stamp), when it is a
+#     full 40-hex commit id; any other stamp gives no reliable ref, so nothing
+#     is fetched.
+# The fetched files are kept in ~/.config/agent-director/schedule/ (five files,
+# replaced by each fetch), so the warning can always name a real directory an
+# operator can copy from; uninstall.sh removes it. Nothing is fetched, and
+# nothing is written there, when the files are beside the script, or when the
+# schedule is already in place and --schedule was not given. A fetch that
+# fails (no curl, no network, a ref the repository does not have, a reply that
+# is not a schedule file) writes nothing, never changes an exit status, and
+# the warning gives the reason and points at the repository's copy.
+#
+# The files hold three placeholders this script fills from the install: the
+# binary's absolute path (@@AGENT_DIRECTOR@@, the canonical path; written in
+# double quotes in a unit's ExecStart when it holds a character a bare word
+# cannot), and the environment a cron or systemd job does not get
+# (@@ENV_PREFIX@@ in the cron file, @@ENV_LINES@@ in the units): PATH, always
+# written, set to <the directory of the tmux found on the install's PATH>:
+# /usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin (no tmux directory when tmux is
+# not on the install's PATH); TMUX_TMPDIR, only when it is set and not empty in
+# the install's environment, so the sweep reaches the tmux server the agents
+# use; and HOME, only when the install's $HOME differs from the passwd entry's
+# home directory (getent passwd <uid>, field 6; dscl on macOS), because cron
+# and systemd set HOME from the passwd entry and the binary keeps its files in
+# $HOME/.config/agent-director: a sweep that got another HOME would open
+# another store. (HOME is carried only when it differs, so the usual lines stay
+# short; with the passwd home unknown it is carried.) The binary reads no
+# XDG_CONFIG_HOME or other variable to find its directory, so there is nothing
+# else to carry. A line of a file that starts with two # is a note for the
+# reader and is not installed. Every installed line carries the marker
+# agent-director-schedule, which is how a re-run and uninstall.sh find them.
+# After the placeholders are filled, a line that still holds an @@ placeholder
+# (a file fetched or copied from another version than this script) makes the
+# install refuse, with that reason, and write nothing.
+#
+# --schedule installs it, for the user running this script (the agents' user):
+#   1. cron, when crontab is available, `crontab -l` works and a cron daemon
+#      (a process named cron or crond; checked on Linux only) is running: the
+#      marked lines of the user's crontab are replaced by the file's lines,
+#      every other line kept as it is; a re-run leaves exactly one copy;
+#   2. else a systemd user timer and service per sweep, in
+#      the user manager's unit directory, enabled, when the manager answers
+#      `systemctl --user show-environment`. The directory follows that
+#      answer's environment, not this shell's: its XDG_CONFIG_HOME's
+#      systemd/user when that is an absolute path, else its HOME's
+#      .config/systemd/user (a HOME carried into this run can differ from the
+#      manager's); with neither in the answer, this shell's rule, an absolute
+#      $XDG_CONFIG_HOME's systemd/user, else $HOME/.config/systemd/user;
+#   3. else nothing: the warning below, with the reason. When crontab works but
+#      no cron daemon runs (WSL, a container, a minimal VM) and systemd does
+#      not work either, the cron lines are still put in the crontab, the install
+#      says on stderr that no cron daemon runs, and the host counts as not
+#      scheduled: the warning fires and gives that reason.
+# Piped to bash (no schedule/ beside the script) the five files are fetched at
+# the release tag (--from-release) or the binaries' commit; when that ref has no
+# schedule/ (HTTP 404: a release before it shipped), once more at main, which
+# the fetch line says; if that fails too the warning's link points at main.
+# Whichever of 1 and 2 is used, the other's entries this install made are
+# removed, so one copy is scheduled. A run as a user other than HOME's owner
+# installs nothing (the sweeps must run as the agents' user).
+#
+# Whenever no schedule is set up after the run (both sweeps absent from this
+# install's cron lines, or the cron lines present with no cron daemon running,
+# and no units), the install ends with a warning on stderr naming the lines to
+# add. It never changes the exit status. Its re-run advice is this script's
+# own command line, every argument as given (shell-quoted) plus --schedule,
+# after a `cd` to the directory the install ran in (a relative path and
+# --register-mcp depend on it), so running it verbatim repeats the same install
+# with the schedule; a script
+# piped to bash cannot know its command line and says to run the same install
+# command again with --schedule added.
+#
+# uninstall.sh holds copies of this section's marker (SCHEDULE_MARK), the unit
+# names (SCHEDULE_UNIT_FILES, SCHEDULE_TIMERS), the unit directory rule and the
+# two test switches it reads (INSTALL_SH_TEST_CRONTAB and
+# INSTALL_SH_TEST_SYSTEMCTL, below): change one here, change it there.
+#
+# Test-only switches (not in --help), as INSTALL_SH_TEST_PROC_CHECK above:
+# INSTALL_SH_TEST_CRONTAB and INSTALL_SH_TEST_SYSTEMCTL name the program run in
+# place of `crontab` and `systemctl`. A stand-in for crontab takes `-l`, `-`
+# (the new crontab on stdin) and, in uninstall.sh, `-r`.
+# INSTALL_SH_TEST_CRON_RUNNING=1|0 stands in for the cron daemon check: 1 says a
+# daemon runs, 0 says none does (without it the check looks for a process named
+# cron or crond, with pgrep or /proc; the Docker harness image runs none).
+# INSTALL_SH_TEST_PASSWD_HOME, when set (even empty = unknown), stands in for the
+# passwd entry's home directory that $HOME is compared with.
+# --------------------------------------------------------------------
+
+readonly SCHEDULE_MARK="agent-director-schedule"
+SCHEDULE_DIR=""   # the directory the five files are read from, set by ad_sched_locate
+SCHEDULE_LOCAL_DIR="${DEFAULT_INSTALL_ROOT}/schedule"
+SCHEDULE_RAW_BASE="https://raw.githubusercontent.com/${RELEASE_REPO_SLUG}"
+SCHEDULE_UNIT_FILES=(
+    agent-director-find-missing.service agent-director-find-missing.timer
+    agent-director-expire.service agent-director-expire.timer
+)
+SCHEDULE_TIMERS=(agent-director-find-missing.timer agent-director-expire.timer)
+SCHEDULE_ALL_FILES=(agent-director.cron "${SCHEDULE_UNIT_FILES[@]}")
+
+SCHED_MGR_READ=0     # 1 once ad_sched_mgr_read has asked the user manager
+SCHED_MGR_OK=0       # 1 when the systemd user manager answered
+SCHED_MGR_WHY=""     # why it did not
+SCHED_MGR_HOME=""    # its HOME (absolute) or empty
+SCHED_MGR_XDG=""     # its XDG_CONFIG_HOME (absolute) or empty
+SCHED_FETCH_404=0    # 1 when the last ad_sched_download stopped on an HTTP 404
+SCHED_FETCH_NOTE=""  # set when the files came from main, not the release tag
+SCHED_FETCHED=0      # 1 when the files in SCHEDULE_DIR were fetched
+SCHED_REF=""         # the repository ref the files are (to be) fetched at
+SCHED_FETCH_WHY=""   # why the files could not be found or fetched
+sched_tmp=""         # the fetch's temp directory (removed by ad_exit_cleanup)
+SCHED_WHY=""         # why a mechanism or the install could not be used
+SCHED_CRON_TEXT=""   # the user's crontab, as read by ad_sched_cron_read
+SCHED_CRON_WHY=""    # why ad_sched_cron_read failed
+SCHED_CRON_PREFIX="" # @@ENV_PREFIX@@'s value
+SCHED_CRON_BIN=""    # @@AGENT_DIRECTOR@@'s value in the cron file
+SCHED_UNIT_BIN=""    # @@AGENT_DIRECTOR@@'s value in the units
+SCHED_ENV_LINES=""   # @@ENV_LINES@@'s value
+SCHED_RESULT=""      # what the install did: installed or unchanged
+SCHED_FOUND=""       # cron or systemd, set by ad_sched_present
+SCHED_WARN=0
+SCHED_REASON=""
+SCHED_NODAEMON=0     # 1: this install's cron lines are in the crontab and no cron daemon runs
+SCHED_CRON_PUT=0     # 1: ad_sched_install put the cron lines in with no daemon running
+SCHED_RENDERED=""    # ad_sched_render's output
+SUBST=""
+
+ad_sched_crontab_cmd() { printf '%s' "${INSTALL_SH_TEST_CRONTAB:-crontab}"; }
+ad_sched_systemctl_cmd() { printf '%s' "${INSTALL_SH_TEST_SYSTEMCTL:-systemctl}"; }
+
+# ad_sched_mgr_read — ask the systemd user manager, once per run, whether it
+# answers and what its HOME and XDG_CONFIG_HOME are (`systemctl --user
+# show-environment`). Sets SCHED_MGR_OK (1 when it answers), SCHED_MGR_WHY (why
+# not), SCHED_MGR_HOME and SCHED_MGR_XDG (each empty unless an absolute path).
+# Called in the shell itself, never in a $( ) subshell, so the result is kept.
+ad_sched_mgr_read() {
+    local sc env line
+    [[ "$SCHED_MGR_READ" -eq 0 ]] || return 0
+    SCHED_MGR_READ=1
+    sc="$(ad_sched_systemctl_cmd)"
+    if ! command -v "$sc" >/dev/null 2>&1; then
+        SCHED_MGR_WHY="systemctl is not installed"
+        return 0
+    fi
+    if ! env="$("$sc" --user show-environment 2>/dev/null </dev/null)"; then
+        SCHED_MGR_WHY="the systemd user manager is not reachable (systemctl --user show-environment failed)"
+        return 0
+    fi
+    SCHED_MGR_OK=1
+    while IFS= read -r line; do
+        case "$line" in
+            HOME=/*) SCHED_MGR_HOME="${line#HOME=}" ;;
+            XDG_CONFIG_HOME=/*) SCHED_MGR_XDG="${line#XDG_CONFIG_HOME=}" ;;
+        esac
+    done <<<"$env"
+}
+
+# ad_sched_unit_dir — the directory the systemd user manager reads the user's
+# units from: its own XDG_CONFIG_HOME's systemd/user when that is an absolute
+# path, else its HOME's .config/systemd/user (the manager's environment can
+# differ from this shell's, e.g. a HOME carried into this run). When the manager
+# answers with neither, or does not answer, this shell's rule: an absolute
+# XDG_CONFIG_HOME's systemd/user, else $HOME/.config/systemd/user. Reads the
+# manager's environment on its first call; call it once in the shell (not in a
+# $( )) first, as ad_sched_step does, so later calls in subshells see it.
+ad_sched_unit_dir() {
+    ad_sched_mgr_read
+    if [[ "$SCHED_MGR_OK" -eq 1 ]]; then
+        if [[ -n "$SCHED_MGR_XDG" ]]; then
+            printf '%s' "${SCHED_MGR_XDG}/systemd/user"
+            return 0
+        elif [[ -n "$SCHED_MGR_HOME" ]]; then
+            printf '%s' "${SCHED_MGR_HOME%/}/.config/systemd/user"
+            return 0
+        fi
+    fi
+    case "${XDG_CONFIG_HOME:-}" in
+        /*) printf '%s' "${XDG_CONFIG_HOME}/systemd/user" ;;
+        *) printf '%s' "${HOME}/.config/systemd/user" ;;
+    esac
+}
+
+# ad_sched_subst <text> <from> <to> — set SUBST to <text> with every <from>
+# replaced by <to>, literally (no pattern or & meaning in either, in any bash).
+ad_sched_subst() {
+    local rest="$1" out="" pre
+    while [[ "$rest" == *"$2"* ]]; do
+        pre="${rest%%"$2"*}"
+        out="${out}${pre}${3}"
+        rest="${rest#*"$2"}"
+    done
+    SUBST="${out}${rest}"
+}
+
+# ad_sched_cron_word <text> — set SUBST to <text> as one word of a crontab
+# command: left as it is when it holds only characters a shell never reads,
+# else in single quotes; a % is written \% (cron reads a bare % as a newline).
+ad_sched_cron_word() {
+    local w="$1"
+    if [[ ! "$w" =~ ^[A-Za-z0-9_./:@+=,-]+$ ]]; then
+        ad_sched_subst "$w" "'" "'\\''"
+        w="'${SUBST}'"
+    fi
+    ad_sched_subst "$w" "%" "\\%"
+}
+
+# ad_sched_unit_value <text> — set SUBST to <text> as the inside of a systemd
+# double-quoted word (an Environment="NAME=value" assignment): \ and "
+# backslash-escaped and % written %% (a specifier). A $ is left alone:
+# Environment= does no variable expansion (systemd.exec), so $$ would put two
+# dollar signs in the value.
+ad_sched_unit_value() {
+    ad_sched_subst "$1" "\\" "\\\\"
+    ad_sched_subst "$SUBST" '"' '\"'
+    ad_sched_subst "$SUBST" "%" "%%"
+}
+
+# ad_sched_unit_exec <path> — set SUBST to <path> as the program word of an
+# ExecStart line: left as it is when it holds only characters a bare word keeps,
+# else in double quotes (a space would split the word). \ and " are escaped
+# and % written %%, as in a value. A $ is left as it is, and not doubled: only
+# the arguments after the program are variable-expanded (systemd.service: "the
+# first argument ... may not be a variable"), and a $$ in the program word is
+# taken literally, which would name another file.
+ad_sched_unit_exec() {
+    if [[ "$1" =~ ^[A-Za-z0-9_./:@+=,-]+$ ]]; then
+        SUBST="$1"
+        return 0
+    fi
+    ad_sched_unit_value "$1"
+    SUBST="\"${SUBST}\""
+}
+
+# ad_sched_passwd_home — print the home directory of this user's passwd entry
+# (what cron and systemd set HOME to), or nothing when it cannot be told.
+ad_sched_passwd_home() {
+    local uid line home="" _f
+    if [[ -n "${INSTALL_SH_TEST_PASSWD_HOME+x}" ]]; then
+        printf '%s' "$INSTALL_SH_TEST_PASSWD_HOME"
+        return 0
+    fi
+    uid="$(id -u)"
+    if command -v getent >/dev/null 2>&1; then
+        line="$(getent passwd "$uid" 2>/dev/null </dev/null || true)"
+        IFS=: read -r _f _f _f _f _f home _f <<<"$line" || true
+    fi
+    if [[ -z "$home" && "$(uname -s 2>/dev/null)" == Darwin ]] && command -v dscl >/dev/null 2>&1; then
+        line="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null </dev/null || true)"
+        home="${line#NFSHomeDirectory: }"
+        [[ "$line" == "NFSHomeDirectory: "* ]] || home=""
+    fi
+    if [[ -z "$home" && -r /etc/passwd ]]; then
+        while IFS=: read -r _f _f line _f _f home _f; do
+            if [[ "$line" == "$uid" ]]; then
+                printf '%s' "$home"
+                return 0
+            fi
+        done </etc/passwd
+        home=""
+    fi
+    printf '%s' "$home"
+}
+
+# ad_sched_env — fill the placeholders' values from this install. PATH is the
+# directory of the tmux on this PATH, then /usr/local/bin:/usr/bin:/bin:
+# /usr/sbin:/sbin; TMUX_TMPDIR is added only when set and not empty; HOME only
+# when it differs from the passwd entry's home (or that is unknown). Returns 1
+# with SCHED_WHY when a value holds a character a schedule file cannot carry.
+ad_sched_env() {
+    local tmux_path tmux_dir path_val tmpdir home_val="" pw_home cron_path cron_tmp cron_home unit_path unit_tmp unit_home
+    tmux_path="$(command -v tmux 2>/dev/null || true)"
+    path_val="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    if [[ "$tmux_path" == /* ]]; then
+        tmux_dir="${tmux_path%/*}"
+        path_val="${tmux_dir:-/}:${path_val}"
+    fi
+    tmpdir="${TMUX_TMPDIR:-}"
+    pw_home="$(ad_sched_passwd_home)"
+    if [[ -z "$pw_home" || "${HOME%/}" != "${pw_home%/}" ]]; then
+        home_val="$HOME"
+    fi
+    if [[ "$path_val" == *[[:cntrl:]]* || "$tmpdir" == *[[:cntrl:]]* || "$home_val" == *[[:cntrl:]]* || "$CANONICAL" == *[[:cntrl:]]* ]]; then
+        SCHED_WHY="a path to put in the schedule (the tmux directory, TMUX_TMPDIR, HOME or the binary) holds a control character"
+        return 1
+    fi
+    if [[ "$CANONICAL" == *[\"\'\\]* ]]; then
+        SCHED_WHY="the binary's path holds a quote or a backslash: $CANONICAL"
+        return 1
+    fi
+    ad_sched_cron_word "$path_val"; cron_path="$SUBST"
+    SCHED_CRON_PREFIX="PATH=${cron_path}"
+    ad_sched_unit_value "$path_val"; unit_path="$SUBST"
+    SCHED_ENV_LINES="Environment=\"PATH=${unit_path}\""$'\n'
+    if [[ -n "$tmpdir" ]]; then
+        ad_sched_cron_word "$tmpdir"; cron_tmp="$SUBST"
+        SCHED_CRON_PREFIX="${SCHED_CRON_PREFIX} TMUX_TMPDIR=${cron_tmp}"
+        ad_sched_unit_value "$tmpdir"; unit_tmp="$SUBST"
+        SCHED_ENV_LINES="${SCHED_ENV_LINES}Environment=\"TMUX_TMPDIR=${unit_tmp}\""$'\n'
+    fi
+    if [[ -n "$home_val" ]]; then
+        ad_sched_cron_word "$home_val"; cron_home="$SUBST"
+        SCHED_CRON_PREFIX="${SCHED_CRON_PREFIX} HOME=${cron_home}"
+        ad_sched_unit_value "$home_val"; unit_home="$SUBST"
+        SCHED_ENV_LINES="${SCHED_ENV_LINES}Environment=\"HOME=${unit_home}\""$'\n'
+    fi
+    ad_sched_cron_word "$CANONICAL"; SCHED_CRON_BIN="$SUBST"
+    ad_sched_unit_exec "$CANONICAL"; SCHED_UNIT_BIN="$SUBST"
+}
+
+# ad_sched_render <file> <cron|unit> — set SCHED_RENDERED to the shipped file as
+# it is installed: its notes (lines starting with two #) dropped, the
+# placeholders filled. Returns 1, with SCHED_WHY, when a line still holds an @@
+# placeholder once the three known ones are filled (a file from another version
+# than this script); SCHED_RENDERED is then empty.
+ad_sched_render() {
+    local line bin left known out=""
+    SCHED_RENDERED=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        case "$line" in
+            "##"*) continue ;;
+        esac
+        if [[ "$2" == cron ]]; then
+            ad_sched_subst "$line" "@@ENV_PREFIX@@" ""
+            known="@@AGENT_DIRECTOR@@ and @@ENV_PREFIX@@"
+        else
+            if [[ "$line" == "@@ENV_LINES@@" ]]; then
+                out="${out}${SCHED_ENV_LINES}"
+                continue
+            fi
+            SUBST="$line"
+            known="@@AGENT_DIRECTOR@@ and a line of just @@ENV_LINES@@"
+        fi
+        ad_sched_subst "$SUBST" "@@AGENT_DIRECTOR@@" ""
+        left="$SUBST"
+        if [[ "$left" == *"@@"* ]]; then
+            SCHED_WHY="${1##*/} still holds an unfilled @@ placeholder once ${known} are filled, so it comes from another version than this install.sh: ${line}"
+            return 1
+        fi
+        if [[ "$2" == cron ]]; then
+            bin="$SCHED_CRON_BIN"
+            ad_sched_subst "$line" "@@ENV_PREFIX@@" "$SCHED_CRON_PREFIX"
+            line="$SUBST"
+        else
+            bin="$SCHED_UNIT_BIN"
+        fi
+        ad_sched_subst "$line" "@@AGENT_DIRECTOR@@" "$bin"
+        out="${out}${SUBST}"$'\n'
+    done <"$1"
+    SCHED_RENDERED="$out"
+}
+
+# ad_sched_files_ok — 0 when SCHEDULE_DIR is set and holds every schedule file.
+ad_sched_files_ok() {
+    local f
+    [[ -n "$SCHEDULE_DIR" ]] || return 1
+    for f in "${SCHEDULE_ALL_FILES[@]}"; do
+        [[ -r "${SCHEDULE_DIR}/${f}" ]] || return 1
+    done
+    return 0
+}
+
+# ad_sched_ref — set SCHED_REF to the repository ref that matches what is being
+# installed: the release tag with --from-release, else the binaries' full commit
+# stamp. Returns 1 with SCHED_FETCH_WHY when there is none to rely on.
+ad_sched_ref() {
+    SCHED_REF=""
+    if [[ "$FROM_RELEASE" -eq 1 ]]; then
+        if [[ -n "$FROM_RELEASE_TAG" ]]; then
+            SCHED_REF="$FROM_RELEASE_TAG"
+            return 0
+        fi
+        SCHED_FETCH_WHY="no release tag was resolved"
+        return 1
+    fi
+    if [[ "${stamp_commit:-}" =~ ^[0-9a-f]{40}$ ]]; then
+        SCHED_REF="$stamp_commit"
+        return 0
+    fi
+    SCHED_FETCH_WHY="the installed binaries' commit stamp (${stamp_commit:-none}) is not a full commit id, so there is no reliable repository ref to fetch the files at"
+    return 1
+}
+
+# ad_sched_download <dir> <ref> — GET the five schedule files at <ref> into
+# <dir>; each must be a schedule file (it carries the marker). Returns 1 with
+# SCHED_FETCH_WHY on the first failure, and SCHED_FETCH_404=1 when that was an
+# HTTP 404.
+ad_sched_download() {
+    local curl_cmd="${INSTALL_SH_TEST_CURL_OVERRIDE:-curl}" f url code
+    SCHED_FETCH_404=0
+    for f in "${SCHEDULE_ALL_FILES[@]}"; do
+        url="${SCHEDULE_RAW_BASE}/${2}/skills/install-agent-director/schedule/${f}"
+        code="$("$curl_cmd" -sSL --retry 0 --connect-timeout 10 --max-time 30 \
+            -w '%{http_code}' -o "${1}/${f}" "$url" 2>/dev/null </dev/null || true)"
+        if [[ "$code" != "200" ]]; then
+            SCHED_FETCH_WHY="GET ${url} gave ${code:+HTTP }${code:-no HTTP status}"
+            [[ "$code" != "404" ]] || SCHED_FETCH_404=1
+            return 1
+        fi
+        if [[ ! -s "${1}/${f}" ]] || ! grep -q -F "$SCHEDULE_MARK" "${1}/${f}"; then
+            SCHED_FETCH_WHY="GET ${url} did not return a schedule file"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# ad_sched_fetch — fetch the five schedule files at ad_sched_ref's ref into
+# SCHEDULE_LOCAL_DIR and set SCHEDULE_DIR to it (SCHED_FETCHED=1). When that
+# ref answers 404 (a release tag older than the schedule/ directory, as with
+# --from-release on an older tag), it tries once more at main (SCHED_REF is then
+# main and SCHED_FETCH_NOTE says so); a file from another version is caught
+# later, by the placeholder check of ad_sched_render. All five come down into a
+# temp directory first and each must be a schedule file (it carries the marker);
+# only then are they moved into place, so a failure writes nothing. Returns 1
+# with SCHED_FETCH_WHY on any failure; never exits.
+ad_sched_fetch() {
+    local curl_cmd="${INSTALL_SH_TEST_CURL_OVERRIDE:-curl}" f tmpd first_ref first_why
+    SCHED_FETCH_WHY=""
+    SCHED_FETCH_NOTE=""
+    ad_sched_ref || return 1
+    if ! command -v "$curl_cmd" >/dev/null 2>&1; then
+        SCHED_FETCH_WHY="${curl_cmd} is not installed"
+        return 1
+    fi
+    if ! tmpd="$(mktemp -d "${DEFAULT_INSTALL_ROOT}/.schedule.XXXXXX" 2>/dev/null)"; then
+        SCHED_FETCH_WHY="cannot make a temp directory in ${DEFAULT_INSTALL_ROOT}"
+        return 1
+    fi
+    sched_tmp="$tmpd"
+    if ! ad_sched_download "$tmpd" "$SCHED_REF" && [[ "$SCHED_FETCH_404" -eq 1 && "$SCHED_REF" != main ]]; then
+        first_ref="$SCHED_REF"
+        first_why="$SCHED_FETCH_WHY"
+        for f in "${SCHEDULE_ALL_FILES[@]}"; do
+            rm -f "${tmpd}/${f}"
+        done
+        SCHED_REF=main
+        SCHED_FETCH_WHY=""
+        if ad_sched_download "$tmpd" main; then
+            SCHED_FETCH_NOTE="${first_ref} has no schedule files (${first_why}), so they come from main, which may be newer than this install"
+        else
+            SCHED_FETCH_WHY="${first_why}; and at main: ${SCHED_FETCH_WHY}"
+        fi
+    fi
+    if [[ -z "$SCHED_FETCH_WHY" ]]; then
+        if ! mkdir -p "$SCHEDULE_LOCAL_DIR" 2>/dev/null; then
+            SCHED_FETCH_WHY="cannot create ${SCHEDULE_LOCAL_DIR}"
+        else
+            for f in "${SCHEDULE_ALL_FILES[@]}"; do
+                if ! mv -f "${tmpd}/${f}" "${SCHEDULE_LOCAL_DIR}/${f}" 2>/dev/null; then
+                    SCHED_FETCH_WHY="cannot write ${SCHEDULE_LOCAL_DIR}/${f}"
+                    break
+                fi
+            done
+            if [[ -n "$SCHED_FETCH_WHY" ]]; then
+                for f in "${SCHEDULE_ALL_FILES[@]}"; do
+                    rm -f "${SCHEDULE_LOCAL_DIR}/${f}"
+                done
+            fi
+        fi
+    fi
+    rm -rf -- "$tmpd"
+    sched_tmp=""
+    [[ -z "$SCHED_FETCH_WHY" ]] || return 1
+    SCHEDULE_DIR="$SCHEDULE_LOCAL_DIR"
+    SCHED_FETCHED=1
+    return 0
+}
+
+# ad_sched_locate — find the schedule files: beside this script when it is a
+# file with all five in schedule/, else fetched (ad_sched_fetch). Returns 1,
+# with SCHEDULE_DIR empty and SCHED_FETCH_WHY set, when there are none.
+ad_sched_locate() {
+    SCHEDULE_DIR=""
+    SCHED_FETCHED=0
+    SCHED_FETCH_WHY=""
+    if [[ "$SCRIPT_REAL" -eq 1 ]]; then
+        SCHEDULE_DIR="${SCRIPT_DIR}/schedule"
+        if ad_sched_files_ok; then
+            return 0
+        fi
+        SCHEDULE_DIR=""
+    fi
+    ad_sched_fetch
+}
+
+# ad_sched_cron_read — read the user's crontab into SCHED_CRON_TEXT. Returns 1
+# with SCHED_CRON_WHY when there is no crontab program or `crontab -l` fails
+# for a reason other than the user having no crontab yet ("no crontab for
+# <user>", or busybox's "can't open '<user>': No such file or directory").
+ad_sched_cron_read() {
+    local cmd rc=0 err
+    cmd="$(ad_sched_crontab_cmd)"
+    SCHED_CRON_TEXT=""
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        SCHED_CRON_WHY="crontab is not installed"
+        return 1
+    fi
+    SCHED_CRON_TEXT="$("$cmd" -l 2>/dev/null </dev/null)" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        SCHED_CRON_TEXT=""
+        err="$("$cmd" -l 2>&1 >/dev/null </dev/null || true)"
+        case "$err" in
+            *"no crontab"*|*"No such file or directory"*) return 0 ;;
+        esac
+        SCHED_CRON_WHY="crontab -l failed (exit $rc): ${err:-no output}"
+        return 1
+    fi
+    return 0
+}
+
+# ad_sched_cron_has <sweep> — 0 when SCHED_CRON_TEXT holds this install's
+# marked line for <sweep>.
+ad_sched_cron_has() {
+    local l
+    while IFS= read -r l; do
+        case "$l" in
+            "#"*) continue ;;
+        esac
+        if [[ "$l" == *"$SCHEDULE_MARK"* && "$l" == *" $1 "* ]]; then
+            return 0
+        fi
+    done <<<"$SCHED_CRON_TEXT"
+    return 1
+}
+
+# ad_sched_units_present — 0 when all four of this install's unit files exist.
+ad_sched_units_present() {
+    local dir f
+    dir="$(ad_sched_unit_dir)"
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        [[ -f "${dir}/${f}" ]] || return 1
+    done
+    return 0
+}
+
+# ad_sched_cron_daemon_running — 0 when a cron daemon runs on this machine, or
+# when that cannot be told (not Linux, no pgrep and no /proc): a process named
+# cron (Debian, Ubuntu) or crond (Red Hat, Alpine, busybox). A crontab that
+# `crontab -l` reads is no proof: WSL, a container and a minimal VM have the
+# program and no daemon, and the lines then never run. Stubbed by
+# INSTALL_SH_TEST_CRON_RUNNING=1|0.
+ad_sched_cron_daemon_running() {
+    local d name rc found=0 unknown=0
+    case "${INSTALL_SH_TEST_CRON_RUNNING:-}" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    [[ "$(uname -s 2>/dev/null)" == Linux ]] || return 0
+    if command -v pgrep >/dev/null 2>&1; then
+        for name in cron crond; do
+            rc=0
+            pgrep -x "$name" >/dev/null 2>&1 </dev/null || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+                return 0
+            elif [[ "$rc" -ne 1 ]]; then
+                unknown=1
+            fi
+        done
+        [[ "$unknown" -eq 1 ]] || return 1
+    fi
+    [[ -d /proc/self ]] || return 0
+    for d in /proc/[0-9]*; do
+        name=""
+        { read -r name <"${d}/comm"; } 2>/dev/null || true
+        if [[ "$name" == cron || "$name" == crond ]]; then
+            found=1
+            break
+        fi
+    done
+    [[ "$found" -eq 1 ]]
+}
+
+# ad_sched_present — 0 when both sweeps have an entry of this install's that
+# can run: its lines in the user's crontab with a cron daemon running, or its
+# unit files. Sets SCHED_FOUND. The lines in the crontab with no cron daemon
+# running do not count (SCHED_NODAEMON=1): they never fire.
+ad_sched_present() {
+    SCHED_FOUND=""
+    SCHED_NODAEMON=0
+    if ad_sched_cron_read && ad_sched_cron_has find-missing && ad_sched_cron_has expire; then
+        if ad_sched_cron_daemon_running; then
+            SCHED_FOUND=cron
+            return 0
+        fi
+        SCHED_NODAEMON=1
+    fi
+    if ad_sched_units_present; then
+        SCHED_FOUND=systemd
+        SCHED_NODAEMON=0
+        return 0
+    fi
+    return 1
+}
+
+# ad_sched_systemd_usable — 0 when systemctl exists and the user manager
+# answers; else 1 with SCHED_WHY.
+ad_sched_systemd_usable() {
+    ad_sched_mgr_read
+    if [[ "$SCHED_MGR_OK" -ne 1 ]]; then
+        SCHED_WHY="$SCHED_MGR_WHY"
+        return 1
+    fi
+    return 0
+}
+
+# ad_sched_remove_units — remove this install's systemd units (the timers
+# disabled first when the manager answers). Returns 1 when none was present.
+# Only a file that carries the marker is removed.
+ad_sched_remove_units() {
+    local dir sc f t found=0
+    dir="$(ad_sched_unit_dir)"
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        if [[ -f "${dir}/${f}" ]] && grep -q -F "$SCHEDULE_MARK" "${dir}/${f}"; then
+            found=1
+        fi
+    done
+    [[ "$found" -eq 1 ]] || return 1
+    sc="$(ad_sched_systemctl_cmd)"
+    if ad_sched_systemd_usable; then
+        "$sc" --user disable --now "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null || true
+    fi
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        if [[ -f "${dir}/${f}" ]] && grep -q -F "$SCHEDULE_MARK" "${dir}/${f}"; then
+            rm -f "${dir}/${f}"
+        fi
+    done
+    for t in "${SCHEDULE_TIMERS[@]}"; do
+        if [[ -L "${dir}/timers.target.wants/${t}" ]]; then
+            rm -f "${dir}/timers.target.wants/${t}"
+        fi
+    done
+    if ad_sched_systemd_usable; then
+        "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null || true
+    fi
+    return 0
+}
+
+# ad_sched_cron_remove_lines — remove this install's marked lines from the
+# user's crontab (every other line kept; the crontab removed when nothing else
+# is in it). Quiet, and never fails: used when systemd took over from cron.
+ad_sched_cron_remove_lines() {
+    local cmd l kept="" had=0
+    ad_sched_cron_read || return 0
+    [[ -n "$SCHED_CRON_TEXT" ]] || return 0
+    cmd="$(ad_sched_crontab_cmd)"
+    while IFS= read -r l; do
+        if [[ "$l" == *"$SCHEDULE_MARK"* ]]; then
+            had=1
+        else
+            kept="${kept}${l}"$'\n'
+        fi
+    done <<<"$SCHED_CRON_TEXT"
+    [[ "$had" -eq 1 ]] || return 0
+    if [[ -z "${kept//[[:space:]]/}" ]]; then
+        "$cmd" -r >/dev/null 2>&1 </dev/null || true
+    else
+        printf '%s' "$kept" | "$cmd" - >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# ad_sched_install_cron [keep-units] — put the rendered cron file's lines in the
+# user's crontab in place of the marked ones, then remove this install's systemd
+# units (not with an argument). Sets SCHED_RESULT; returns 1 with SCHED_WHY when
+# cron cannot be used.
+ad_sched_install_cron() {
+    local cmd l kept="" new err rc=0
+    cmd="$(ad_sched_crontab_cmd)"
+    if ! ad_sched_cron_read; then
+        SCHED_WHY="$SCHED_CRON_WHY"
+        return 1
+    fi
+    if [[ -n "$SCHED_CRON_TEXT" ]]; then
+        while IFS= read -r l; do
+            if [[ "$l" != *"$SCHEDULE_MARK"* ]]; then
+                kept="${kept}${l}"$'\n'
+            fi
+        done <<<"$SCHED_CRON_TEXT"
+    fi
+    if ! ad_sched_render "${SCHEDULE_DIR}/agent-director.cron" cron; then
+        return 1
+    fi
+    new="${kept}${SCHED_RENDERED}"
+    if [[ "$new" == "${SCHED_CRON_TEXT}"$'\n' ]]; then
+        SCHED_RESULT=unchanged
+    else
+        err="$(printf '%s' "$new" | "$cmd" - 2>&1 >/dev/null)" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            SCHED_WHY="crontab - refused the new crontab (exit $rc): ${err:-no output}"
+            return 1
+        fi
+        SCHED_RESULT=installed
+    fi
+    if ! ad_sched_cron_read || ! ad_sched_cron_has find-missing || ! ad_sched_cron_has expire; then
+        SCHED_WHY="crontab accepted the lines but crontab -l does not show them"
+        return 1
+    fi
+    if [[ $# -eq 0 ]]; then
+        ad_sched_remove_units >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# ad_sched_install_systemd — write the rendered units, enable the two timers.
+# Sets SCHED_RESULT; returns 1 with SCHED_WHY when systemd cannot be used. A
+# failed daemon-reload, enable or restart puts back what was there before: a
+# unit file this run replaced is restored from its backup, one it created is
+# removed (with its timer's enable link); units an earlier run installed and
+# this run did not touch stay.
+ad_sched_install_systemd() {
+    local dir sc f t tmp bak had_prev=" " before=0 mv_failed=0
+    if ! ad_sched_systemd_usable; then
+        return 1
+    fi
+    sc="$(ad_sched_systemctl_cmd)"
+    dir="$(ad_sched_unit_dir)"
+    if ! mkdir -p "$dir" 2>/dev/null; then
+        SCHED_WHY="cannot create $dir"
+        return 1
+    fi
+    # Render every unit first, then move them into place, so a failure while
+    # rendering or writing changes none.
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        tmp="${dir}/.${f}.tmp.$$"
+        if ! ad_sched_render "${SCHEDULE_DIR}/${f}" unit; then
+            rm -f "${dir}"/.agent-director-*.tmp."$$"
+            return 1
+        fi
+        if ! printf '%s' "$SCHED_RENDERED" >"$tmp" 2>/dev/null; then
+            rm -f "${dir}"/.agent-director-*.tmp."$$"
+            SCHED_WHY="cannot write $tmp"
+            return 1
+        fi
+    done
+    # Back up the unit files that are there now, for the rollback.
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        if [[ -f "${dir}/${f}" ]]; then
+            bak="${dir}/.${f}.prev.$$"
+            if ! cp -p "${dir}/${f}" "$bak" 2>/dev/null; then
+                rm -f "${dir}"/.agent-director-*.tmp."$$" "${dir}"/.agent-director-*.prev."$$"
+                SCHED_WHY="cannot back up ${dir}/${f}"
+                return 1
+            fi
+            had_prev="${had_prev}${f} "
+        fi
+    done
+    for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+        tmp="${dir}/.${f}.tmp.$$"
+        if [[ -f "${dir}/${f}" ]] && cmp -s "$tmp" "${dir}/${f}"; then
+            before=$((before + 1))
+        fi
+        if ! mv -f "$tmp" "${dir}/${f}" 2>/dev/null; then
+            mv_failed=1
+            break
+        fi
+    done
+    if [[ "$before" -eq "${#SCHEDULE_UNIT_FILES[@]}" ]]; then
+        SCHED_RESULT=unchanged
+    else
+        SCHED_RESULT=installed
+    fi
+    if [[ "$mv_failed" -eq 1 ]] \
+        || ! "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null \
+        || ! "$sc" --user enable "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null \
+        || ! "$sc" --user restart "${SCHEDULE_TIMERS[@]}" >/dev/null 2>&1 </dev/null; then
+        if [[ "$mv_failed" -eq 1 ]]; then
+            SCHED_WHY="cannot write the unit files in $dir"
+        else
+            SCHED_WHY="systemctl --user could not enable the timers"
+        fi
+        rm -f "${dir}"/.agent-director-*.tmp."$$"
+        for f in "${SCHEDULE_UNIT_FILES[@]}"; do
+            if [[ "$had_prev" == *" ${f} "* ]]; then
+                mv -f "${dir}/.${f}.prev.$$" "${dir}/${f}" 2>/dev/null || true
+            else
+                rm -f "${dir}/${f}"
+            fi
+        done
+        for t in "${SCHEDULE_TIMERS[@]}"; do
+            if [[ "$had_prev" != *" ${t} "* ]]; then
+                rm -f "${dir}/timers.target.wants/${t}"
+            fi
+        done
+        "$sc" --user daemon-reload >/dev/null 2>&1 </dev/null || true
+        return 1
+    fi
+    rm -f "${dir}"/.agent-director-*.prev."$$"
+    return 0
+}
+
+# ad_sched_install — the --schedule step: cron when crontab works and a cron
+# daemon runs, else systemd, else nothing. With crontab working and no cron
+# daemon, and systemd unusable too, the cron lines are still put in (SCHED_CRON_PUT=1)
+# and the run fails: the host is not scheduled, and SCHED_WHY says why.
+# Sets SCHED_HOW (cron or systemd) and SCHED_RESULT; returns 1 with SCHED_WHY.
+ad_sched_install() {
+    local owner why_cron why_systemd cron_usable=0
+    SCHED_HOW=""
+    SCHED_CRON_PUT=0
+    if ! ad_sched_files_ok; then
+        SCHED_WHY="the schedule files are not beside this script and could not be fetched: ${SCHED_FETCH_WHY:-not found}"
+        return 1
+    fi
+    owner="$(stat -L -c '%u' "$HOME" 2>/dev/null || stat -L -f '%u' "$HOME" 2>/dev/null || true)"
+    if [[ -n "$owner" && "$owner" != "$(id -u)" ]]; then
+        SCHED_WHY="this run is user $(id -un) but $HOME belongs to another user (uid $owner), and the sweeps must run as the agents' user: run install.sh --schedule as that user"
+        return 1
+    fi
+    if ! ad_sched_env; then
+        return 1
+    fi
+    if ad_sched_cron_read; then
+        cron_usable=1
+        if ad_sched_cron_daemon_running; then
+            if ad_sched_install_cron; then
+                SCHED_HOW=cron
+                return 0
+            fi
+            why_cron="$SCHED_WHY"
+        else
+            why_cron="no cron daemon (a process named cron or crond) is running on this machine, so crontab lines would never run"
+        fi
+    else
+        why_cron="$SCHED_CRON_WHY"
+    fi
+    if ad_sched_install_systemd; then
+        SCHED_HOW=systemd
+        if [[ "$cron_usable" -eq 1 ]]; then
+            ad_sched_cron_remove_lines
+        fi
+        return 0
+    fi
+    why_systemd="$SCHED_WHY"
+    if [[ "$cron_usable" -eq 1 ]] && ! ad_sched_cron_daemon_running && ! ad_sched_units_present; then
+        # The lines go in anyway: they run as soon as a cron daemon is started.
+        # (Not with units already in place, an earlier run's or ones just put
+        # back by the rollback: they and the lines would both run.)
+        if ad_sched_install_cron keep-units; then
+            SCHED_CRON_PUT=1
+            SCHED_WHY="no cron daemon (a process named cron or crond) is running on this machine, so the crontab lines just added do not run until one is started; systemd: ${why_systemd}"
+            return 1
+        fi
+        why_cron="$SCHED_WHY"
+    fi
+    SCHED_WHY="cron: ${why_cron}; systemd: ${why_systemd}"
+    return 1
+}
+
+# ad_sched_rerun_cmd — set SUBST to this script's own command line, every
+# argument as given and shell-quoted, with --schedule added when it was not
+# among them, so that running it verbatim repeats the same install (same
+# --binary, --no-hooks, --symlink-dir and the rest) plus the schedule. It starts
+# with `cd <the directory the install ran in> &&`: a relative path argument and
+# --register-mcp (claude mcp add at local scope belongs to the working
+# directory) both depend on it.
+ad_sched_rerun_cmd() {
+    local a has=0 q
+    printf -v SUBST 'cd %q && bash %q' "$ORIG_PWD" "${SCRIPT_DIR}/${BASH_SOURCE[0]##*/}"
+    for a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do
+        printf -v q ' %q' "$a"
+        SUBST="${SUBST}${q}"
+        if [[ "$a" == --schedule ]]; then
+            has=1
+        fi
+    done
+    if [[ "$has" -eq 0 ]]; then
+        SUBST="${SUBST} --schedule"
+    fi
+}
+
+# ad_sched_warn <reason> — the loud warning, on stderr: no schedule is set up.
+# <reason> (may be empty) is why --schedule did not install one. The cron lines
+# are the shipped file's, rendered, and the directory named is where they were
+# read from: beside this script, or ~/.config/agent-director/schedule/ when
+# the step fetched them (a script read from a pipe). With no files at all
+# (the fetch failed) the warning gives the reason and points at them in the
+# repository.
+ad_sched_warn() {
+    local l ref
+    {
+        echo
+        echo "install.sh: WARNING: nothing schedules agent-director's find-missing and expire sweeps on this machine."
+        echo "  Until they run, a live row whose agent is gone (killed, crashed, rebooted) stays live, a relay row"
+        echo "  left in check_permission stays there, a killed agent's running subagent records are not turned lost,"
+        echo "  and finished rows are never expired. find-missing is what keeps the row states honest."
+        if [[ "$SCHED_CRON_PUT" -eq 1 ]]; then
+            echo "  --schedule was asked for and could not schedule the sweeps: $1"
+        elif [[ -n "$1" ]]; then
+            echo "  --schedule was asked for and installed nothing: $1"
+        elif [[ "$SCHED_NODAEMON" -eq 1 ]]; then
+            echo "  This user's crontab holds this install's lines for both sweeps, but no cron daemon (a process named"
+            echo "  cron or crond) is running on this machine, so they never run: start the cron service, or use systemd"
+            echo "  user timers (the files below)."
+        fi
+        echo "  Schedule both now, as the agents' user (the user the agents run as, in their tmux environment). Run as"
+        echo "  another user, as root or against another tmux server, a sweep can wrongly mark live rows missing or"
+        echo "  delete rows whose agent still runs."
+        if ad_sched_files_ok && ad_sched_env && ad_sched_render "${SCHEDULE_DIR}/agent-director.cron" cron; then
+            echo "  These crontab lines (crontab -e, as that user) run this install's binary:"
+            while IFS= read -r l; do
+                case "$l" in
+                    "#"*|"") ;;
+                    *) printf '    %s\n' "$l" ;;
+                esac
+            done <<<"$SCHED_RENDERED"
+            echo "  They ship, with a systemd user timer and service for each sweep, as files in:"
+            echo "    ${SCHEDULE_DIR}/"
+            echo "    (agent-director.cron, agent-director-find-missing.service and .timer, agent-director-expire.service and .timer)"
+            if [[ "$SCHED_FETCHED" -eq 1 ]]; then
+                echo "  This script was not run from a file, so it fetched them from the repository at ${SCHED_REF}"
+                echo "  (skills/install-agent-director/schedule/ at ${SCHEDULE_RAW_BASE}/${SCHED_REF}/) and kept the copy there.${SCHED_FETCH_NOTE:+ (${SCHED_FETCH_NOTE})}"
+            fi
+            echo "  Copy them by hand (the lines above are the cron file's with its placeholders filled in: copy those; a unit"
+            echo "  file's notes say how to fill its placeholders), or let the install script install them, as the user the"
+            echo "  agents run as:"
+            if [[ "$SCRIPT_REAL" -eq 1 ]]; then
+                ad_sched_rerun_cmd
+                echo "    ${SUBST}"
+            else
+                echo "    run the same install command again with --schedule added"
+            fi
+            echo "  (--schedule uses cron when crontab works here and a cron daemon runs, else systemd user timers, else it installs nothing.)"
+        else
+            ref="${SCHED_REF:-main}"
+            if [[ -n "$SCHEDULE_DIR" ]]; then
+                echo "  Could not build the crontab lines from the schedule files in ${SCHEDULE_DIR}/: ${SCHED_WHY:-a value to put in them cannot be written to a schedule file}."
+            elif [[ -n "$SCHED_FETCH_WHY" ]]; then
+                echo "  This script has no schedule files beside it and could not fetch them: ${SCHED_FETCH_WHY}."
+            fi
+            echo "  The schedule files (a crontab file and a systemd user timer and service for each sweep) are in the"
+            echo "  agent-director repository, in skills/install-agent-director/schedule/"
+            echo "  (https://github.com/${RELEASE_REPO_SLUG}/tree/${ref}/skills/install-agent-director/schedule),"
+            echo "  and in the install skill's directory. Copy them by hand as the agents' user (fill the @@...@@"
+            echo "  placeholders: the notes in each file say how), or run an install.sh that has them beside it with"
+            echo "  --schedule, as that user."
+        fi
+        echo "  Already scheduled another way (launchd, your own cron line or unit)? This check sees only the entries"
+        echo "  --schedule adds, so it warns anyway: ignore this, or run --schedule and drop your own entries."
+    } >&2
+}
+
+# ad_sched_step — the schedule step of the install: --schedule installs it;
+# afterwards, with none of this install's entries present, SCHED_WARN is set
+# (SCHED_REASON: why --schedule failed, if it ran).
+ad_sched_step() {
+    local dir
+    ad_sched_mgr_read
+    dir="$(ad_sched_unit_dir)"
+    # The schedule files are needed to install (--schedule) and to warn; with
+    # the schedule already in place and no --schedule, neither happens, and
+    # nothing is looked for or fetched.
+    if [[ "$SCHEDULE" -eq 1 ]] || ! ad_sched_present; then
+        if ad_sched_locate; then
+            if [[ "$SCHED_FETCHED" -eq 1 ]]; then
+                echo "  schedule: the schedule files are not beside this script; fetched them from ${SCHEDULE_RAW_BASE}/${SCHED_REF}/skills/install-agent-director/schedule/ to ${SCHEDULE_DIR}${SCHED_FETCH_NOTE:+ (${SCHED_FETCH_NOTE})}"
+            fi
+        fi
+    fi
+    if [[ "$SCHEDULE" -eq 1 ]]; then
+        if ad_sched_install; then
+            if [[ "$SCHED_HOW" == cron ]]; then
+                if [[ "$SCHED_RESULT" == unchanged ]]; then
+                    echo "  schedule: cron: this user's crontab already holds these entries (find-missing every 2 minutes, expire daily at 03:17); nothing changed. The cron daemon must be running."
+                else
+                    echo "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK. The cron daemon must be running."
+                fi
+            else
+                if [[ "$SCHED_RESULT" == unchanged ]]; then
+                    echo "  schedule: systemd: the user timers already held these units; enabled again, nothing changed (${dir})"
+                else
+                    echo "  schedule: systemd: user timers ${SCHEDULE_TIMERS[0]} (every 2 minutes) and ${SCHEDULE_TIMERS[1]} (daily at 03:17) installed in ${dir} and enabled."
+                fi
+                echo "  schedule: a user timer runs only while this user's systemd manager does: on a host where the user is not always logged in, run loginctl enable-linger $(id -un) once."
+            fi
+            return 0
+        fi
+        SCHED_REASON="$SCHED_WHY"
+        if [[ "$SCHED_CRON_PUT" -eq 1 ]]; then
+            echo "  schedule: cron: find-missing every 2 minutes and expire daily at 03:17 added to this user's crontab, each line tagged # $SCHEDULE_MARK, but NO CRON DAEMON (a process named cron or crond) is running on this machine, so they do not run; start the cron service" >&2
+        fi
+    fi
+    if ad_sched_present; then
+        echo "  schedule: found this install's ${SCHED_FOUND} entries for find-missing and expire; left as they are"
+        if [[ -n "$SCHED_REASON" ]]; then
+            echo "  schedule: --schedule could not re-point them at this install: $SCHED_REASON" >&2
+        fi
+        return 0
+    fi
+    SCHED_WARN=1
+}
+
+SCHED_HOW=""
+ad_sched_step
+
 echo "  admin   : $ADMIN_CANONICAL (operator tool, not on PATH; run it only with a human's explicit approval for that run)"
 if [[ "$MCP_FAILED" -eq 1 ]]; then
+    if [[ "$SCHED_WARN" -eq 1 ]]; then
+        ad_sched_warn "$SCHED_REASON"
+    fi
     echo "install.sh: installed, but the MCP registration failed (see above); exit 6" >&2
     exit 6
 fi
 echo "install.sh: done. Try: $CANONICAL help"
+if [[ "$SCHED_WARN" -eq 1 ]]; then
+    ad_sched_warn "$SCHED_REASON"
+fi

@@ -549,6 +549,92 @@ Then either:
 2. Or take the way back to the previous release:
    [Going back to the previous release](#going-back-to-the-previous-release).
 
+## `install.sh` warns that nothing schedules the sweeps
+
+`install.sh` ended with `install.sh: WARNING: nothing schedules agent-director's
+find-missing and expire sweeps on this machine.` It comes after `install.sh:
+done`; when the MCP registration failed (exit 6), it comes just before the last
+line, `install.sh: installed, but the MCP registration failed`. The exit status
+is unchanged and nothing is broken, but until `find-missing` runs, a row whose
+agent was killed, crashed or lost in a reboot stays live, and until `expire`
+runs, finished rows are never deleted.
+
+Without `--schedule`, the warning means this install's own entries for both
+sweeps are not there: no tagged cron lines for both with a cron daemon running,
+and not all four units. With `--schedule`, it adds a line, `--schedule was asked
+for and installed nothing:` (or `could not schedule the sweeps:` when it put the
+cron lines in anyway), that gives the reason.
+
+The warning, with or without `--schedule`, also prints the exact command to run
+again: `cd <the directory the install ran in> && bash <script> <the original
+arguments> --schedule` (a piped install says to run the same install command
+again with `--schedule` added). It leaves the command out only when the schedule
+files could not be found or rendered; it then points at them in the repository
+instead. Any `schedule:` lines
+the run printed come before the warning; a run that only warns prints none,
+except that a piped run that fetched the schedule files prints `  schedule: the
+schedule files are not beside this script; fetched them from ...` on stdout
+even then. The reason names the step that failed. The usual ones:
+
+- **`HOME` belongs to another user.** `--schedule` schedules only for the user
+  running it, who must be the agents' user. Run `install.sh --schedule` as the
+  agents' user.
+- **Neither cron nor a systemd user manager is usable.** `crontab` is not
+  installed or `crontab -l` fails, and `systemctl --user show-environment`
+  fails. Check both as the agents' user:
+
+  ```sh
+  crontab -l
+  systemctl --user show-environment
+  ```
+
+  Install cron, or start the user manager (log in as that user, or run
+  `loginctl enable-linger <user>` as root), then run `install.sh --schedule`
+  again. Or add the crontab lines the warning prints yourself, as the agents'
+  user.
+- **No cron daemon runs.** `crontab` works but no process named `cron` or
+  `crond` runs (WSL, a container, a minimal VM) and systemd is not usable. The
+  install still adds the cron lines and says on stderr that no cron daemon
+  runs. Start the cron service, or make the user manager usable and run
+  `install.sh --schedule` again.
+- **`crontab -` refused the new crontab, or `crontab -l` does not show the
+  lines afterwards.** The reason holds the program's own message. Fix what it
+  says, or add the lines by hand with `crontab -e`.
+- **`systemctl --user` could not enable the timers.** The units the run wrote
+  are put back as they were before it (units an earlier run installed are
+  kept). Fix the user manager, then run `install.sh --schedule` again.
+- **A path cannot be written into a schedule file.** The binary's path holds a
+  quote or a backslash, or a path (the tmux directory, `TMUX_TMPDIR`, `HOME` or
+  the binary) holds a control character. Install the binary under a plain path
+  or fix the variable, then run `install.sh --schedule` again.
+- **A schedule file still holds an unfilled `@@` placeholder.** The files come
+  from another version than this `install.sh`. Use the files beside the script
+  you run, or run it from a checkout or the installed skill.
+- **The schedule files were not found and could not be fetched** (a piped
+  install with no network, or a binary whose commit stamp is not a full commit
+  id; a release tag with no `schedule/` is retried once at `main` first). The
+  warning gives the reason and the repository directory on `main`,
+  `skills/install-agent-director/schedule/`. Copy the files from there, or run
+  `install.sh --schedule` from a checkout or the installed skill.
+
+Check whether a schedule is already in place, as the agents' user:
+
+```sh
+crontab -l | grep agent-director-schedule
+systemctl --user list-timers 'agent-director-*'
+```
+
+The warning looks only for the entries `--schedule` adds. A schedule made
+another way (launchd, your own cron line or unit) is not seen, so the warning
+appears anyway: ignore it. Never run the crontab lines as another user or as
+root. What the schedule is, how to set it up by hand and how long a user timer
+runs are in [Maintenance](maintenance.md#scheduling-the-sweeps).
+
+`uninstall.sh` removes the schedule it finds. When `crontab -l` fails for a
+reason other than "no crontab", it says so and leaves the crontab alone: remove
+the lines tagged `agent-director-schedule` with `crontab -e`. It does the same
+when it cannot write the crontab back.
+
 ## Going back to the previous release
 
 Use this when the upgrade to this release must be undone. Whatever was written
@@ -558,7 +644,20 @@ store, so there is no other way back; a binary swap or a downgrade of the store
 does not work.
 
 1. Stop whatever starts agents, then every agent, every `serve` and every
-   caller.
+   caller. Remove the schedule `install.sh --schedule` added, if any, because
+   its entries run the binary in the directory step 2 sets aside: delete the
+   crontab lines tagged `agent-director-schedule` (`crontab -e`), or disable
+   the timers and delete the four units:
+
+   ```sh
+   systemctl --user disable --now agent-director-find-missing.timer agent-director-expire.timer
+   rm -- ~/.config/systemd/user/agent-director-find-missing.service ~/.config/systemd/user/agent-director-find-missing.timer ~/.config/systemd/user/agent-director-expire.service ~/.config/systemd/user/agent-director-expire.timer
+   systemctl --user daemon-reload
+   ```
+
+   (Use `$XDG_CONFIG_HOME/systemd/user/` when that is set to an absolute path.
+   `uninstall.sh` would also remove the binaries and hooks: do not run it for
+   this.)
 2. Set the new directory aside:
 
    ```sh

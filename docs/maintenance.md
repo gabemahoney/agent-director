@@ -2,7 +2,7 @@
 
 ## Scheduling the sweeps
 
-Schedule both verbs yourself (launchd, systemd timer, cron, Task Scheduler):
+Nothing runs the two sweep verbs until they are scheduled:
 
 ```sh
 # Mark live rows whose agent is gone `missing`; run often (e.g. every 2 min):
@@ -10,6 +10,81 @@ agent-director find-missing
 # Delete finished rows older than expire_retention_days that nothing runs:
 agent-director expire
 ```
+
+Without `find-missing`, a killed or crashed agent's row, and the row of an
+agent lost in a reboot, stays live. Without `expire`, finished rows pile up
+past `expire_retention_days`.
+
+### Let the install schedule them
+
+Run `install.sh --schedule` as the agents' user (see [install](install.md)).
+It schedules `find-missing` every 2 minutes and `expire` daily at 03:17, for the
+user running it, from the files below:
+
+- **cron**, when `crontab -l` works and a cron daemon (a process named `cron`
+  or `crond`; checked on Linux only) is running: two job lines and a header
+  comment in the user's crontab, all tagged `agent-director-schedule`.
+- **systemd**, when cron is not usable and `systemctl --user show-environment`
+  works: a user `.service` and `.timer` for each sweep in the user manager's
+  unit directory (the absolute `XDG_CONFIG_HOME` that command reports, plus
+  `/systemd/user`; else its absolute `HOME`, plus `/.config/systemd/user`; when
+  it reports neither, this shell's `~/.config/systemd/user/` or an absolute
+  `$XDG_CONFIG_HOME/systemd/user/`), both timers enabled. A user timer runs only while the
+  user's systemd manager does: while the user is logged in, or always after
+  `loginctl enable-linger <user>`.
+- **neither:** it installs nothing, prints why, and ends with the warning
+  below. When `crontab` works but no cron daemon runs and systemd is unusable
+  too, it still adds the two cron lines (they run once a cron daemon starts),
+  says on stderr that no cron daemon runs, and ends with the warning.
+
+Running it again replaces its own entries, so there is never a second copy,
+and points them at the current binary; every other crontab line is kept. It
+never schedules as another user.
+
+An install that does not find entries for both sweeps, with or without
+`--schedule` (both tagged cron lines with a cron daemon running, or all four
+units), ends with a warning on stderr (the exit status is unchanged). It says what is
+unscheduled, names the exact crontab lines for this install's binary and says
+to run them as the agents' user. Its own cron lines in a crontab with no cron
+daemon running do not count as scheduled. It cannot see a schedule you made
+another way (launchd, your own cron line or unit): ignore the warning then. The
+reasons it gives and their fixes are in
+[Operator actions](operator-actions.md#installsh-warns-that-nothing-schedules-the-sweeps).
+To remove what `--schedule` added, run `uninstall.sh` (see
+[Uninstall](install.md#uninstall)).
+
+### Schedule them by hand
+
+The files are in `skills/install-agent-director/schedule/` in a checkout or the
+installed skill, and in `~/.config/agent-director/schedule/` after a piped
+install (`curl ... | bash`) that fetched them:
+
+| File | Holds |
+|---|---|
+| `agent-director.cron` | the two crontab lines |
+| `agent-director-find-missing.service`, `.timer` | `find-missing` every 2 minutes |
+| `agent-director-expire.service`, `.timer` | `expire` daily at 03:17 |
+
+Lines starting with `##` are notes, not part of the schedule. Fill the
+placeholders, then add the cron lines with `crontab -e`, or put the four unit
+files in `~/.config/systemd/user/` and run:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now agent-director-find-missing.timer agent-director-expire.timer
+```
+
+| Placeholder | Value |
+|---|---|
+| `@@AGENT_DIRECTOR@@` | `~/.config/agent-director/bin/agent-director`, written out in full |
+| `@@ENV_PREFIX@@` (cron) | `PATH=<the directory of tmux>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (without the tmux directory and its colon when tmux is not on the PATH); then `TMUX_TMPDIR=<dir>`, only when the agents' tmux server lives in one; then `HOME=<your $HOME>`, only when `$HOME` is not the home directory of your passwd entry |
+| `@@ENV_LINES@@` (units) | the same as `Environment="NAME=value"` lines |
+
+To skip the filling, copy the filled-in crontab lines the install's warning
+prints. cron and systemd give a job a minimal environment, which is why the
+lines carry `PATH` and `TMUX_TMPDIR`: the sweep must reach the tmux server the
+agents use. `HOME` is carried when it differs from the passwd home because the
+binary keeps its files in `$HOME/.config/agent-director`.
 
 `find-missing` marks a live row `missing` when its agent's process is gone or,
 when the process cannot be checked, when tmux shows no session of its launch;
@@ -53,7 +128,9 @@ reason. A row whose recorded tmux session name cannot be used is always kept
 ([Operator actions](operator-actions.md)).
 
 A run of either verb as another user, as root or against another tmux server
-can wrongly mark or delete rows whose agent still runs.
+can wrongly mark or delete rows whose agent still runs: schedule both as the
+agents' user, in their tmux environment, against their
+`~/.config/agent-director`.
 
 ## Recovering after a reboot
 

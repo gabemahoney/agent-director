@@ -1,0 +1,17 @@
+## systemd user timer: starts agent-director-expire.service once a day, at
+## 03:17 local time (Persistent: a run missed while the manager was down is made
+## up when it starts). See agent-director-find-missing.service for how
+## install.sh --schedule installs the pair and how to do it by hand. Lines that
+## start with two # are notes: install.sh does not install them. This file has
+## no placeholder.
+##
+# agent-director-schedule: the expire sweep (install-agent-director skill, schedule/)
+[Unit]
+Description=Run the agent-director expire sweep once a day
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

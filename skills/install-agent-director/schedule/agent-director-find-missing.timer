@@ -1,0 +1,15 @@
+## systemd user timer: starts agent-director-find-missing.service every 2
+## minutes. See that file for how install.sh --schedule installs the pair and
+## how to install it by hand. Lines that start with two # are notes: install.sh
+## does not install them. This file has no placeholder.
+##
+# agent-director-schedule: the find-missing sweep (install-agent-director skill, schedule/)
+[Unit]
+Description=Run the agent-director find-missing sweep every 2 minutes
+
+[Timer]
+OnCalendar=*:0/2
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

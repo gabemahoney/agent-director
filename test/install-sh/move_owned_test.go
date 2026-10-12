@@ -432,7 +432,10 @@ func TestOwnedMCPFailures(t *testing.T) {
 				want: moveWant{Code: 6,
 					Stderr: []string{"was removed, but adding it again failed; nothing is registered now",
 						"    command run: claude mcp add agent-director -s user -- " + canon + " serve --stdio\n    exit status: 1\n    stderr:\n" + claudeErr + "\n",
-						"    claude mcp add agent-director -s user -- " + canon + " serve --stdio\n" + ownedFailLast},
+						"    claude mcp add agent-director -s user -- " + canon + " serve --stdio\n",
+						// The schedule warning (b.wur) now sits between the command to run by hand
+						// and the closing line; the order is pinned in schedule_test.go.
+						ownedFailLast},
 					NoStdout: []string{"re-registered"}},
 			},
 			{
@@ -450,7 +453,10 @@ func TestOwnedMCPFailures(t *testing.T) {
 				want: moveWant{Code: 6,
 					Stderr: []string{"registration failed; nothing was registered",
 						"    command run: claude mcp add agent-director -- " + canon + " serve --stdio\n    exit status: 1\n    stderr:\n" + claudeErr + "\n",
-						"    claude mcp add agent-director -- " + canon + " serve --stdio\n" + ownedFailLast},
+						"    claude mcp add agent-director -- " + canon + " serve --stdio\n",
+						// The schedule warning (b.wur) now sits between the command to run by hand
+						// and the closing line; the order is pinned in schedule_test.go.
+						ownedFailLast},
 					NoStdout: []string{"registered with claude mcp"}},
 			},
 			{

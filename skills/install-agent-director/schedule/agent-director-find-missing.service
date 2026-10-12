@@ -1,0 +1,52 @@
+## systemd user service: one run of the find-missing sweep. The timer
+## agent-director-find-missing.timer starts it every 2 minutes. install.sh
+## --schedule fills the placeholders and writes it to ~/.config/systemd/user/
+## (or $XDG_CONFIG_HOME/systemd/user/ when that is set to an absolute path),
+## then enables the timer.
+##
+## Lines that start with two # are notes for you: install.sh does not install
+## them. The marker agent-director-schedule below is how uninstall.sh knows the
+## file is its own.
+##
+## To install by hand, fill the two placeholders, put this file and the timer in
+## ~/.config/systemd/user/ as the user the agents run as, then run
+##   systemctl --user daemon-reload
+##   systemctl --user enable --now agent-director-find-missing.timer
+## The Environment= lines are the ones install.sh writes: its warning prints the
+## filled-in crontab lines of the cron file, and the values below are the same.
+##   @@AGENT_DIRECTOR@@  the absolute path of the installed agent-director,
+##                       ~/.config/agent-director/bin/agent-director, written out;
+##                       in double quotes when it holds a space or another
+##                       character a bare word cannot (write % as %% and " or \
+##                       with a backslash; leave $ as it is: the program word
+##                       of ExecStart is not variable-expanded).
+##   @@ENV_LINES@@       the environment a user unit does not get, one
+##                       Environment="NAME=value" line each. install.sh writes,
+##                       always, Environment="PATH=<the directory of tmux>:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+##                       (without the tmux directory and its colon when tmux is
+##                       not on the PATH of the install); then, only when the
+##                       agents' tmux server lives in a TMUX_TMPDIR,
+##                       Environment="TMUX_TMPDIR=<that directory>"; then, only
+##                       when the install's $HOME is not the home directory of
+##                       the user's passwd entry (systemd sets HOME from that
+##                       entry, and the binary keeps its files in
+##                       $HOME/.config/agent-director),
+##                       Environment="HOME=<the install's $HOME>". In a value
+##                       write %% for % and \" for "; a $ stays as it is
+##                       (Environment= does no variable expansion). The result
+##                       is never empty.
+## Run as the agents' user, in the agents' tmux environment: find-missing run as
+## another user, as root or against another tmux server can wrongly mark live
+## rows missing. The config directory is $HOME/.config/agent-director, so the
+## sweep needs the install's HOME (see HOME above).
+## A user timer runs only while the user's systemd manager does (while the user is
+## logged in, or always after loginctl enable-linger <user>).
+##
+# agent-director-schedule: the find-missing sweep (install-agent-director skill, schedule/)
+[Unit]
+Description=agent-director find-missing sweep
+
+[Service]
+Type=oneshot
+@@ENV_LINES@@
+ExecStart=@@AGENT_DIRECTOR@@ find-missing

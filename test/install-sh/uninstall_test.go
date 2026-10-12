@@ -28,7 +28,10 @@ func uninstallExit(t *testing.T, home, umask, input string, args []string, pathD
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", append([]string{"-c", `[[ -z "$1" ]] || umask "$1" || exit; exec bash "$0" "${@:2}"`, script, umask}, args...)...)
-	cmd.Env = []string{"HOME=" + home, "PATH=" + strings.Join(slices.Concat(pathDirs, []string{os.Getenv("PATH")}), ":")}
+	cmd.Env = []string{"HOME=" + home, "PATH=" + strings.Join(slices.Concat(pathDirs, []string{os.Getenv("PATH")}), ":"),
+		// The schedule removal (b.wur) runs the real crontab and systemctl unless
+		// told otherwise: name programs that do not exist.
+		"INSTALL_SH_TEST_CRONTAB=" + filepath.Join(home, "no-such-crontab"), "INSTALL_SH_TEST_SYSTEMCTL=" + filepath.Join(home, "no-such-systemctl")}
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}
@@ -1160,7 +1163,8 @@ func uninstallMCPRun(t *testing.T, home, tools, input string, env []string, args
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", append([]string{script}, args...)...)
-	cmd.Env = append([]string{"HOME=" + home, "PATH=" + tools + ":" + os.Getenv("PATH")}, env...)
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + tools + ":" + os.Getenv("PATH"),
+		"INSTALL_SH_TEST_CRONTAB=" + filepath.Join(home, "no-such-crontab"), "INSTALL_SH_TEST_SYSTEMCTL=" + filepath.Join(home, "no-such-systemctl")}, env...)
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)
 	}

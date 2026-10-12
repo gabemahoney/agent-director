@@ -100,6 +100,8 @@ type moveShared struct {
 	// (and admin/agent-director-admin): it runs `serve` until stdin closes.
 	OldBinary string
 	SQLFixt   string // testdata/v0.11.1-store.sql
+	// ScheduleSrc is the repo's skills/install-agent-director/schedule/.
+	ScheduleSrc string
 }
 
 var moveShare struct {
@@ -159,6 +161,12 @@ func moveBuildShared() (*moveShared, error) {
 		return nil, err
 	}
 	if err := os.WriteFile(s.Install, src, 0o755); err != nil {
+		return nil, err
+	}
+	// schedule/ beside it, as the skill's directory has it (b.wur). A case that
+	// wants a script without it builds its own copy (scheduleScript).
+	s.ScheduleSrc = filepath.Join(repo, "skills", "install-agent-director", "schedule")
+	if err := copyDir(s.ScheduleSrc, filepath.Join(filepath.Dir(s.Install), "schedule")); err != nil {
 		return nil, err
 	}
 
@@ -381,7 +389,15 @@ func (h *moveHome) command(args ...string) *exec.Cmd {
 	argv := append([]string{h.S.Install, "--binary", h.Pair.Main, "--admin-binary", h.Pair.Admin}, h.Flags...)
 	cmd := exec.Command(h.S.Bash, append(argv, args...)...)
 	cmd.Dir = h.Cwd
-	cmd.Env = []string{"HOME=" + h.Home, "PATH=" + h.Tools + ":" + h.S.Toolbox, "TMPDIR=" + h.Tmp}
+	// The schedule step (b.wur) reads the real crontab and systemctl unless a case
+	// says otherwise: name programs that do not exist, so no case depends on, or
+	// touches, the host's. The cron daemon is stood in as running and the passwd
+	// home as HOME, so no case depends on the host's processes or passwd entry.
+	// A case that wants otherwise sets its own in h.Env.
+	cmd.Env = []string{"HOME=" + h.Home, "PATH=" + h.Tools + ":" + h.S.Toolbox, "TMPDIR=" + h.Tmp,
+		"INSTALL_SH_TEST_CRONTAB=" + filepath.Join(h.Root, "no-such-crontab"),
+		"INSTALL_SH_TEST_SYSTEMCTL=" + filepath.Join(h.Root, "no-such-systemctl"),
+		"INSTALL_SH_TEST_CRON_RUNNING=1", "INSTALL_SH_TEST_PASSWD_HOME=" + h.Home}
 	keys := make([]string, 0, len(h.Env))
 	for k := range h.Env {
 		keys = append(keys, k)

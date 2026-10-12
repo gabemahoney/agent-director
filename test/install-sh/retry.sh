@@ -149,6 +149,10 @@ die() { echo "retry.sh: setup failed: $*" >&2; exit 1; }
 # version check would refuse BIN, which no checkout's HEAD built.
 INSTALL_SH="$ROOT/loose/skills/install-agent-director/install.sh"
 mkdir -p "${INSTALL_SH%/*}" && cp "$INSTALL_SRC" "$INSTALL_SH" || die "copy install.sh to $INSTALL_SH"
+# schedule/ beside it, as the skill's directory has it (b.wur): without it the
+# install's schedule step fetches the files through the fake curl, whose
+# download count these cases pin.
+cp -R "$REPO_ROOT/skills/install-agent-director/schedule" "${INSTALL_SH%/*}/schedule" || die "copy schedule/ beside $INSTALL_SH"
 
 # Host gate — install.sh hard-refuses anything outside the supported set.
 case "$(uname -s)/$(uname -m)" in
@@ -243,6 +247,8 @@ run_install() {
         env -i HOME="$H" PATH="${PATH_PREFIX:+$PATH_PREFIX:}$FAKES:$PATH" TMPDIR="$ROOT/tmp" \
             ${SQLITERC:+"AGENT_DIRECTOR_TEST_SQLITERC=$SQLITERC"} \
             INSTALL_SH_TEST_CURL_OVERRIDE="$FAKE_CURL" \
+            INSTALL_SH_TEST_CRONTAB="$ROOT/no-such-crontab" INSTALL_SH_TEST_SYSTEMCTL="$ROOT/no-such-systemctl" \
+            INSTALL_SH_TEST_CRON_RUNNING=1 INSTALL_SH_TEST_PASSWD_HOME="$H" \
             FAKE_CURL_STATE_FILE="$STATE" \
             FAKE_CURL_FAIL_FIRST="$fail_first" \
             FAKE_CURL_FAIL_MATCH="$fail_match" \
@@ -786,7 +792,8 @@ while IFS='|' read -r -u 3 name config merged uninstalled; do
     report "$name-config" "$first" "$want"
     report "$name-config-reinstalled" "$(shown "$cfg")" "$want"
     report "$name-list" "$(ad_list)" "0"
-    env -i HOME="$H" PATH="$FAKES:$PATH" bash "$UNINSTALL_SH" >"$OUT" 2>"$ERR"
+    env -i HOME="$H" PATH="$FAKES:$PATH" INSTALL_SH_TEST_CRONTAB="$ROOT/no-such-crontab" INSTALL_SH_TEST_SYSTEMCTL="$ROOT/no-such-systemctl" \
+        bash "$UNINSTALL_SH" >"$OUT" 2>"$ERR"
     report "$name-uninstall-exit-code" "$?" "0"
     left="${uninstalled:-$config}"
     [[ "$uninstalled" == - ]] && left=""
