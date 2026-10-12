@@ -108,7 +108,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 - `agent_args` ([]string): Verbatim argv passed through to the agent program after the supervisor's own flags.
 - `relay_mode` (string): on / off.
 - `jsonl_path` (string): Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + session_id.
-- `session_id` (string): Agent session UUID, extracted from SessionStart hook's transcript_path.
+- `session_id` (string): Agent session id, recorded from the agent's hooks: Claude's is its transcript file's name, Codex's the session_id its hooks report. Empty until the first SessionStart.
 - `labels` (map[string]string): Caller-supplied labels.
 - `started_at` (timestamp): Row insert time.
 - `last_seen_at` (timestamp): Last hook UPSERT time.
@@ -536,11 +536,12 @@ _None._
 
 ## hook
 
-Internal: run by each Spawn's --settings hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).
+Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).
 
 ### Parameters
 
 - `stdin` (json, required): Agent hook payload (hook_event_name, transcript_path, tool_name, reason, ...).
+- `agent` (string, optional): The agent whose hook this is. Absent: claude. Any other value is a hook failure (fail-open; a relayed PermissionRequest is denied).
 - `timeout` (int, optional): The per-hook timeout, in seconds, spawn wrote for this hook in the agent's settings (the PermissionRequest entry: the relay window). The relay hook's kill instant is its start plus it; the hook never acks a verdict without 2 s left before it. Absent, unparseable or not positive: the loaded config's relay.timeout_seconds.
 
 ### Result

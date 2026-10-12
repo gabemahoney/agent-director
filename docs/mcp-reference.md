@@ -108,7 +108,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 - `agent_args`: type=[]string — Verbatim argv passed through to the agent program after the supervisor's own flags.
 - `relay_mode`: type=string — on / off.
 - `jsonl_path`: type=string — Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + session_id.
-- `session_id`: type=string — Agent session UUID, extracted from SessionStart hook's transcript_path.
+- `session_id`: type=string — Agent session id, recorded from the agent's hooks: Claude's is its transcript file's name, Codex's the session_id its hooks report. Empty until the first SessionStart.
 - `labels`: type=map[string]string — Caller-supplied labels.
 - `started_at`: type=timestamp — Row insert time.
 - `last_seen_at`: type=timestamp — Last hook UPSERT time.

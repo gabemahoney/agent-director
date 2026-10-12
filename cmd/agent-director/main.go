@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
@@ -146,7 +147,7 @@ const hookExitCode = 0
 // wrote for it (b.146 rule 4), and the main agent's Stop or idle-prompt
 // Notification proves gone only the requests recorded before its start
 // (b.omt), so the start is read first, and the timeout comes from the hook's
-// --timeout argument (hookTimeout).
+// --timeout argument (parseHookArgs).
 //
 // The function never returns an error; it logs and returns.
 func runHook() int {
@@ -244,7 +245,9 @@ func runHook() int {
 	// pid namespace once, when it records its request. RelayHookGone judges a
 	// request's relay hook for the PostToolUse close (b.146 rule 13), with
 	// the same readers and relay window the verbs judge it with.
+	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
+		Agent:         args.agent,
 		Env:           hook.OSGetenv,
 		Cfg:           cfg.Relay,
 		Clock:         hook.DefaultPollClock(),
@@ -253,7 +256,7 @@ func runHook() int {
 		Now:           time.Now,
 		PendingGrace:  cfg.Tmux.EffectivePendingGrace(),
 		Start:         start,
-		RelayTimeout:  hookTimeout(os.Args[2:]),
+		RelayTimeout:  args.timeout,
 		Self:          hookSelf(probe.NewProcChecker()),
 		RelayHookGone: hookRelayHookGone(cfg.Relay),
 	}
@@ -263,21 +266,104 @@ func runHook() int {
 	return hookExitCode
 }
 
-// hookTimeout parses the hook verb's arguments: --timeout N, the per-hook
-// timeout in seconds spawn writes on the relay hook's settings entry (b.146
-// rule 4). It returns 0 — Handle then reads the loaded config's relay window,
-// the value spawn writes — when the flag is absent (a hook entry spawned
-// before it existed), unparseable or not positive, and for any other argument
-// it does not know: the hook path never fails on its arguments (SRD §3.2).
-func hookTimeout(args []string) time.Duration {
+// hookAgentNoValue is the agent value runHook hands Handle when --agent is
+// given with no value or an empty one: no agent, so an invalid one (a hook
+// failure), where an absent --agent reads "" and means claude.
+const hookAgentNoValue = "(no value)"
+
+// agentFlag is the hook verb's --agent value: the string as given, and
+// whether the flag was given at all.
+type agentFlag struct {
+	val string
+	set bool
+}
+
+func (a *agentFlag) String() string {
+	if a == nil {
+		return ""
+	}
+	return a.val
+}
+
+func (a *agentFlag) Set(s string) error {
+	a.val, a.set = s, true
+	return nil
+}
+
+// lenientValue wraps a flag.Value whose Set never fails the parse: a value it
+// rejects leaves the wrapped value as it was.
+type lenientValue struct{ flag.Value }
+
+func (l lenientValue) Set(s string) error {
+	_ = l.Value.Set(s)
+	return nil
+}
+
+// isAgentFlagArg reports whether arg is the --agent flag by name, in either
+// dash form and with no value attached (-agent, --agent).
+func isAgentFlagArg(arg string) bool {
+	return strings.TrimPrefix(strings.TrimPrefix(arg, "-"), "-") == "agent" && strings.HasPrefix(arg, "-")
+}
+
+// hookArgs is the hook verb's parsed command line.
+type hookArgs struct {
+	// agent is the raw --agent value handed to Handle: "" when the flag is
+	// absent (claude), hookAgentNoValue when it has no value or an empty one.
+	agent string
+	// timeout is --timeout's per-hook timeout; 0 when absent, unparseable or
+	// not positive (Handle then reads the loaded config's relay window).
+	timeout time.Duration
+}
+
+// parseHookArgs parses the hook verb's arguments in one pass, --agent and
+// --timeout in either order (b.146 rule 4; SR-6.1): --agent claude|codex names
+// the agent whose hook table applies and --timeout N is the per-hook timeout in
+// seconds spawn writes on the relay hook's settings entry. The hook path never
+// fails on its arguments (SRD §3.2): --timeout absent, unparseable or not
+// positive gives 0, and an argument it does not know, a positional one
+// included, is skipped without costing --agent or --timeout its value, which
+// the rest of the line still gives. --agent's value is not checked here:
+// Handle rejects one that is neither claude nor codex, as a hook failure.
+func parseHookArgs(args []string) hookArgs {
 	var seconds int
+	var agent agentFlag
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.Var(newDecimalInt(&seconds, 0), "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
-	if err := fs.Parse(args); err != nil || seconds <= 0 || seconds > config.MaxRelayTimeoutSeconds {
-		return 0
+	// An unparseable --timeout value is no parse error: it leaves seconds 0, so
+	// the only parse errors are an unknown flag, a flag with no value left to
+	// take and a malformed flag.
+	fs.Var(lenientValue{newDecimalInt(&seconds, 0)}, "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
+	fs.Var(&agent, "agent", "the agent whose hook this is, claude or codex (absent: claude)")
+	rest := args
+	for len(rest) > 0 {
+		err := fs.Parse(rest)
+		after := fs.Args()
+		switch {
+		case err == nil && len(after) > 0:
+			// Parse stopped at a positional argument: skip it.
+			rest = after[1:]
+			continue
+		case err != nil && len(after) == len(rest):
+			// A malformed argument (---x, -=x) fails without being consumed:
+			// skip it, so every pass advances.
+			rest = rest[1:]
+			continue
+		case err != nil && len(after) == 0 && isAgentFlagArg(rest[len(rest)-1]):
+			// The last argument is --agent, with no value left to take.
+			agent.set, agent.val = true, ""
+		}
+		// A parse error leaves in after what follows the argument that failed
+		// (an unknown flag, or a flag and its value); carry on from there.
+		rest = after
 	}
-	return time.Duration(seconds) * time.Second
+	out := hookArgs{agent: agent.val}
+	if agent.set && agent.val == "" {
+		out.agent = hookAgentNoValue
+	}
+	if seconds > 0 && seconds <= config.MaxRelayTimeoutSeconds {
+		out.timeout = time.Duration(seconds) * time.Second
+	}
+	return out
 }
 
 // hookSelf returns the hook's reader of its own identity (b.146 rules 2 and

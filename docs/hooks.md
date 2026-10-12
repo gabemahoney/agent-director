@@ -1,19 +1,23 @@
 # Hooks
 
 How agent-director's per-Spawn state-tracking hooks coexist with the
-operator's own Claude Code hooks. Each Spawn gets eleven hook entries
+operator's own Claude Code hooks. Each Claude Spawn gets eleven hook entries
 synthesized into its `--settings`; they fire on every Claude lifecycle
 event and write the row update that powers `status` / `get` / `list`,
 but only for the row's own agent (see "Only the row's own agent moves
 the row" below). Some of them also write the agent's subagent records
-(see "What the hooks write for subagent records" below).
+(see "What the hooks write for subagent records" below). A Codex agent's
+hooks run the same `hook` verb with `--agent codex` and map Codex's events
+to states by their own table (see "Hooks from a Codex agent" below).
 
 For Claude Code's own hooks reference, see:
 <https://docs.claude.com/en/docs/claude-code/hooks>.
 
 ## The eleven state-tracking hooks
 
-agent-director registers one entry per event listed below. Each entry
+For a Claude agent, agent-director registers one entry per event listed
+below (a Codex agent's are described under "Hooks from a Codex agent"). A
+hook run with no `--agent` argument is a Claude hook. Each entry
 is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 "args": ["hook"]}` — so Claude Code starts `agent-director hook`
 directly, with no shell in between, and feeds it the payload JSON on
@@ -152,6 +156,127 @@ environment (`spawn`'s `extra_env`) turns off Claude Code's prompt
 suggestions, so the prompt-suggestion fork's stray `PreToolUse` does not
 fire.
 
+## Hooks from a Codex agent
+
+A Codex agent's hook entries run the same verb, `agent-director hook
+--agent codex`. The hook takes its agent from that argument alone: `claude`
+or `codex`, and no `--agent` means `claude`. Neither the payload nor the
+row's recorded agent can change it. An empty `--agent` or any other value
+is a hook failure: it exits 0 with empty stdout and logs the entry, and a
+relayed `PermissionRequest` gets its deny envelope (see "Fail-open
+invariant"). `--agent` and `--timeout` may come in either order.
+
+A Codex hook passes the same gate as a Claude one: it applies only when its
+parent process is the row's recorded pane process (see "Only the row's own
+agent moves the row"). Only the table that maps an event to a state differs.
+
+### The Codex states
+
+| Event | Resulting state |
+| --- | --- |
+| `SessionStart` | `waiting` (also writes `session_id`) |
+| `UserPromptSubmit` | `working` |
+| `PreToolUse` | `working`, for any tool |
+| `PostToolUse` | `working`, for any tool |
+| `Interrupt`, no `agent_id` | `waiting` |
+| `Interrupt` with `agent_id` | soft refresh: bumps `last_seen_at`, state unchanged (Codex does not send it) |
+| `Stop` | `waiting` |
+| `PermissionRequest` | `check_permission` |
+| `SessionEnd`, no `agent_id` | the end report, for any reason (see "The end report" below): soft refresh, state unchanged |
+| `SessionStart` or `SessionEnd` with `agent_id` | ignored, reason `subagent_event` (see "Subagents and in-process teammates") |
+| `Notification`, `PostToolUseFailure`, `SubagentStart`, `SubagentStop`, any unknown event name | soft refresh: bumps `last_seen_at`, state unchanged |
+
+No Codex tool moves a row to `ask_user`: Codex's question tools
+(`request_user_input` and `request_user_input_async`) read `working` like
+every other tool. Codex has no idle-prompt Notification either, so nothing
+returns a `working` row to `waiting` except `Stop` and `Interrupt`.
+
+`Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
+for Claude, a non-empty `agent_id` marks a subagent's hook. Apart from the
+two session events above, such a hook applies its state transition from
+the table, and records no session id.
+
+### The session
+
+- A Codex agent sends `SessionStart` at its first prompt, not when its
+  screen opens. A launched Codex row therefore stays `pending` until the
+  agent's first prompt; until then it looks like any agent that has not
+  reported in (see "A SessionStart that never writes"). What that means for
+  `pause`, `send-keys` and `resume` is in
+  [usage.md](usage.md#spawn-states).
+- The session id comes from the payload's `session_id`, and the transcript
+  path is the path of Codex's session file, kept as Codex gave it. A hook
+  with `agent_id` records neither.
+- `/clear`, `/new`, `/fork` and `/resume` start another session in the same
+  process. Codex names it in a `SessionStart` at the next prompt, so the
+  row's session id follows from then; the earlier session is not ended.
+  Until that prompt the row, and a `resume` of it, use the earlier session.
+- When the agent exits (`/exit`), Codex sends `SessionEnd` for every session
+  the process held, including a `/new` session that never got a prompt.
+  Each one is an end report.
+- Codex gives the `SessionEnd` and `Interrupt` hooks only a few seconds, so
+  a store wait longer than that can get one killed before it writes (see
+  "Fail-open invariant").
+
+If a Codex hook finds the row recording no transcript path, it fills the
+path in from its payload, but only when that file exists and its name
+carries the hook's own session id. A path is never replaced. The trail
+records the fill as an `ad.session.jsonl_healed` record with `source`
+`ad_spawn_store`. A thread Codex starts inside the session, such as the
+one `/review` runs (see the Codex limits below), has its own file, whose name
+carries another id, so it does not fill in the path of a row whose session
+is known.
+
+### The end report
+
+A `SessionEnd` without `agent_id` is Codex reporting that a session ended.
+It does not end the row: Codex sends one for every session the process held,
+and a session that ended does not mean the agent did. The hook keeps the
+row's state, applies a soft refresh and records that a report arrived. It
+closes no permission request and no subagent record. The trail records one
+`ad.spawn.state_transition` from the row's state to the same state, with
+`soft_refresh` true and `triggering_event_name` `SessionEnd`. A later
+`SessionStart` from the agent clears the record of the report.
+
+### Subagent records
+
+A Codex agent's hooks write no subagent records and no open Agent calls: its
+`SubagentStart` and `SubagentStop` are soft refreshes, and its `Stop` makes
+no subagent write. See [usage.md](usage.md#when-an-agent-is-tracked).
+
+### The shell between Codex and the hook
+
+Codex runs each hook through the account's login shell with `-c`: bash or
+zsh, and bash for any other login shell, such as dash or fish. It ignores
+`$SHELL`, and the shell is not a login shell. The entry's command starts with
+`exec`, so the hook replaces the shell and Codex is the hook's parent, which
+the own-agent check needs. This holds for every account shell.
+
+Keep the shell's startup files silent on stdout: for zsh `-c` that is
+`.zshenv` (the only file it reads), for bash the file `BASH_ENV` names (a
+bash `-c` reads no other). Text they print reaches the hook's stdout ahead of
+the hook's own output, and Codex reads the whole as the hook's output. The
+model sees it from the `SessionStart` and `UserPromptSubmit` hooks, and an
+`Interrupt` hook shows "Hook failed" in the pane. Text on stderr does no harm.
+
+A Codex started through a launcher that runs it as a child (the node
+launcher npm installs, or a wrapper that does not `exec`) makes the hook's
+grandparent the pane process: the hook is refused with `pid_mismatch` (see "A
+`claude` that does not exec"). The advice in that record names `codex`, the
+launcher case and `[launch] codex_path`; see [Requirements](install.md#requirements).
+
+### Limits
+
+- **`/review`.** Codex's `/review` runs a review thread inside the session.
+  Its tool and prompt hooks carry the session's id and no `agent_id`, so
+  they set `working`. It sends no `Stop` and no `Interrupt` of its own, and
+  after its last tool nothing returns the row to `waiting`: the row reads
+  `working` until the agent's next prompt (an Esc during the review sends one
+  `Interrupt`).
+- **Other internal threads.** Codex's other internal threads (compaction,
+  memory work) are not known to send hooks marked with `agent_id` either, so
+  they can leave the same trace.
+
 ## Only the row's own agent moves the row
 
 Every hook, of every event, applies only when its parent process (its
@@ -179,13 +304,17 @@ Such a hook:
 
 `/clear`, `/resume` and compaction inside the agent's own Claude Code
 come from the same process, so they apply, and SessionStart records the
-new session id. The payload's session id is recorded, never used to
-decide whether a hook applies. The hook makes no tmux call.
+new session id. The same holds for a Codex agent's `/clear`, `/new`,
+`/fork` and `/resume`, whose new session a SessionStart names at the next
+prompt (see "Hooks from a Codex agent"). The payload's session id is
+recorded, never used to decide whether a hook applies. The hook makes no
+tmux call.
 
 ### A `claude` that does not exec
 
 When the `claude` on PATH is a launcher or shim that runs Claude Code as
-a child instead of exec-ing it, the pane process is the launcher, so
+a child instead of exec-ing it (the same holds for `codex`, see "The shell
+between Codex and the hook"), the pane process is the launcher, so
 every hook is refused with `pid_mismatch` and the row stays `pending`;
 past its grace period `find-missing` finds the launcher running and notes
 the row `unreported`, and no hook clears that note. A
@@ -199,7 +328,9 @@ pid once. When that is the row's pane process, it writes one
 `ad.hook.pane_is_grandparent` record after the `ad.hook.ignored` one, with
 `instance_id`, `pane_pid`, `pane_command` (null when unreadable),
 `parent_pid`, `parent_command`, `advice` (naming both causes) and
-`source` = `ad_hook`. Each such SessionStart (startup, `/clear`,
+`source` = `ad_hook`. The advice follows the row's agent: a Claude row's
+names the launcher or shim and `[launch] claude_path`, a Codex row's names
+`codex`, the launcher case and `[launch] codex_path`. Each such SessionStart (startup, `/clear`,
 compaction, resume) writes one. The row, stdout and exit stay those of
 any ignored hook; an unreadable parent pid writes no record.
 
@@ -360,7 +491,7 @@ carries it and is the agent itself.
 | --- | --- |
 | `pid_mismatch` | The hook's parent is not the row's recorded pane process. |
 | `no_pane_recorded` | The row records no pane yet. For SessionStart, written only after its bounded wait (see "SessionStart before the launch's identity write"). |
-| `subagent_event` | A SessionStart or SessionEnd whose payload carries a non-empty `agent_id`. |
+| `subagent_event` | A SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, from a Claude or a Codex agent. |
 | `no_exec_form` | A no-verb run received a hook payload on stdin, from a Claude Code that does not run exec-form hooks. It is written with no store access. |
 
 Each record carries `instance_id`, `hook_event`, `reason`,
@@ -570,6 +701,9 @@ it does not apply:
   run given a hook payload on stdin) → exit 0, nothing on stdout or
   stderr, no store opened, one `ad.hook.ignored` record with reason
   `no_exec_form`.
+- Hook with an `--agent` that is empty or neither `claude` nor `codex` →
+  exit 0, nothing written, log entry (a relayed PermissionRequest gets its
+  deny envelope, see below).
 - Hook for an id with no row → exit 0, nothing written.
 - `SubagentStart` or `SubagentStop`, or a subagent write after another
   hook's row write, that fails → exit 0 with one log entry. The entry
@@ -605,7 +739,7 @@ write"). It happens only in the race described above; the hook still exits
 
 The relay-mode `PermissionRequest` path is fail-*closed* until its request
 is recorded: any internal error before then, its first store write
-included, emits a `deny` decision envelope on stdout before the hook
+included, or an invalid `--agent`, emits a `deny` decision envelope on stdout before the hook
 exits, so the tool is denied. Once the request is recorded, the hook writes
 only an answer it has first confirmed in the store; any failure after that
 ends with no answer, so Claude Code asks in its own permission prompt and
@@ -831,7 +965,7 @@ survives any DB-side breakage.
 
 `internal/hook/handler.go` runs a `failClosed` helper on every
 failure path before the relay branch (instance id missing or invalid,
-classify failure), and `cmd/agent-director`'s `runHook` writes the same
+an invalid `--agent`, classify failure), and `cmd/agent-director`'s `runHook` writes the same
 deny when the config cannot be loaded or the store cannot be opened. The
 helper writes a deny envelope only when `relayActive`
 is true AND the payload's peeked event name is `PermissionRequest`

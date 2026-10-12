@@ -85,8 +85,9 @@ type SpawnRow struct {
 	// SessionStart hook; legacy rows may be empty. When empty, resume composes
 	// the path on demand from cwd + session_id.
 	JSONLPath string `json:"jsonl_path"`
-	// SessionID is the agent session UUID extracted from the
-	// SessionStart hook's transcript_path basename. Empty until the first
+	// SessionID is the agent's session id, recorded from its hooks: a Claude
+	// Code session's is the basename of the hook's transcript_path, a Codex
+	// session's the session_id its hooks report. Empty until the first
 	// SessionStart fires.
 	SessionID string `json:"session_id"`
 	// Labels are the caller-supplied key-value tags set at spawn time.

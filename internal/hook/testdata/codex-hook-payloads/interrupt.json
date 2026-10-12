@@ -1,0 +1,9 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "Interrupt",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000016",
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-09-00-019f0000-0000-7000-8000-000000000016.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000017"
+}

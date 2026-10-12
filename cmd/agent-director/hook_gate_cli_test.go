@@ -413,8 +413,11 @@ func TestHookGateCLIForeignPaneIgnored(t *testing.T) {
 						t.Errorf("ad.hook.pane_is_grandparent %s = %v (present=%v); want %v", k, got, present, v)
 					}
 				}
-				if advice, _ := events[0]["advice"].(string); !strings.Contains(advice, "a wrapper that execs it") {
-					t.Errorf("ad.hook.pane_is_grandparent advice = %q; want the pane-is-grandparent advice", advice)
+				advice, _ := events[0]["advice"].(string)
+				for _, phrase := range []string{"a wrapper that execs it", "[launch] claude_path"} {
+					if !strings.Contains(advice, phrase) {
+						t.Errorf("ad.hook.pane_is_grandparent advice = %q; want it to contain %q", advice, phrase)
+					}
 				}
 			}
 			// A11: the ignored hook's ad.hook.fired reports no_change.

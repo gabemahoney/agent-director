@@ -369,7 +369,7 @@
         {
           "name": "session_id",
           "type": "string",
-          "description": "Agent session UUID, extracted from SessionStart hook's transcript_path.",
+          "description": "Agent session id, recorded from the agent's hooks: Claude's is its transcript file's name, Codex's the session_id its hooks report. Empty until the first SessionStart.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -1758,7 +1758,7 @@
     },
     {
       "name": "hook",
-      "description": "Internal: run by each Spawn's --settings hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
+      "description": "Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
       "callable": false,
       "handle_free": false,
       "params": [
@@ -1770,6 +1770,18 @@
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
+        },
+        {
+          "name": "agent",
+          "type": "string",
+          "description": "The agent whose hook this is. Absent: claude. Any other value is a hook failure (fail-open; a relayed PermissionRequest is denied).",
+          "required": false,
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": [
+            "claude",
+            "codex"
+          ]
         },
         {
           "name": "timeout",

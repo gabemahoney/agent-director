@@ -1,0 +1,14 @@
+{
+  "agent_id": "019f0000-0000-7000-8000-000000000013",
+  "agent_transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-08-00-019f0000-0000-7000-8000-000000000013.jsonl",
+  "agent_type": "default",
+  "cwd": "/work/demo",
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "child done",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000014",
+  "stop_hook_active": false,
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-11-00-019f0000-0000-7000-8000-000000000014.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000015"
+}

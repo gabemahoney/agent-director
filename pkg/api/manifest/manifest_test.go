@@ -725,3 +725,19 @@ func TestNoVerbListsErrOldLayout(t *testing.T) {
 		}
 	}
 }
+
+// TestHookVerbListsAgentParam pins SR-6.1's flag in the manifest: the hook verb
+// has an optional string param agent, not nullable or empty, whose values are
+// claude and codex (TestSurfaceJSONMirrorsManifest carries it to surface.json).
+func TestHookVerbListsAgentParam(t *testing.T) {
+	for _, p := range verbOf(t, "hook").Params {
+		if p.Name != "agent" {
+			continue
+		}
+		if p.Type != "string" || p.Required || p.Nullable || p.AllowEmpty || !reflect.DeepEqual(p.AllowedValues, []string{"claude", "codex"}) {
+			t.Errorf("hook agent param = %+v; want an optional string, not nullable or empty, with values claude and codex", p)
+		}
+		return
+	}
+	t.Error("hook has no agent param")
+}

@@ -12,6 +12,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // The hook's parent rule on real tmux (SRD SR-20.7's hook bullet, SR-22.9,
@@ -27,7 +31,9 @@ import (
 // of exec-ing it, the pane process is the launcher and the hook's parent its
 // child (ignored, and ad.hook.pane_is_grandparent names the launcher as the
 // pane process); a launcher that execs it, as that warning advises, is the
-// pane process again (applied).
+// pane process again (applied); so is the real program named in [launch]
+// claude_path with the launcher still first on PATH (the Claude advice's other
+// half, followed literally).
 
 // The stand-in reads its mode, control directory and the CLI's path from
 // these variables; the spawned pane has them from the tmux server's global
@@ -162,7 +168,10 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 		paneMode  string // the spawned pane's stand-in mode
 		splitPane bool   // a second pane split in the session fires the hook (mode direct)
 		launcher  string // "noexec" | "exec": a `claude` launcher on PATH runs the stand-in
-		applied   bool
+		// claudePath names the real stand-in in [launch] claude_path, so the
+		// spawn runs it directly and not the launcher first on PATH.
+		claudePath bool
+		applied    bool
 		// parentCommands are the accepted parent_command values of the
 		// ignored record (sh is dash on Debian-based images).
 		parentCommands []string
@@ -180,6 +189,10 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 			parentCommands: []string{"claude"}, wantGrandparent: true},
 		// pane_is_grandparent's advice followed: a wrapper that execs claude.
 		{name: "behind a claude launcher that execs", paneMode: "direct", launcher: "exec", applied: true},
+		// The other half of the advice: the non-exec launcher is still first
+		// on PATH, and [launch] claude_path names the real program.
+		{name: "behind a claude launcher that does not exec, with [launch] claude_path", paneMode: "direct",
+			launcher: "noexec", claudePath: true, applied: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -200,12 +213,29 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 					t.Fatalf("write claude launcher: %v", err)
 				}
 				paneScript = stub
-				if tc.launcher == "noexec" {
+				if tc.launcher == "noexec" && !tc.claudePath {
 					paneScript = launcher
 				}
 			}
 			if err := os.WriteFile(stub, []byte(hookStubScript), 0o755); err != nil {
 				t.Fatalf("write stand-in claude: %v", err)
+			}
+			if tc.claudePath {
+				// Rewrite the fixture's config with [launch] claude_path added,
+				// keeping its [tmux] timeouts. The client loads the config once,
+				// at api.New, so it is reopened over the same store to read it.
+				cfgPath := filepath.Join(home, ".config", "agent-director", "config.toml")
+				apitest.WriteKeysConfig(t, cfgPath,
+					apitest.ConfigKeys{ClaudePath: stub},
+					apitest.TmuxInt(config.TmuxQueryTimeoutMs, clientTimeouts.Query.Milliseconds()),
+					apitest.TmuxInt(config.TmuxActionTimeoutMs, clientTimeouts.Action.Milliseconds()),
+					apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()))
+				reopened, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: cfgPath})
+				if err != nil {
+					t.Fatalf("reopen the client with [launch] claude_path: %v", err)
+				}
+				t.Cleanup(func() { _ = reopened.Close() })
+				f.API = reopened
 			}
 			t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			t.Setenv(hookStubModeEnv, tc.paneMode)
@@ -338,6 +368,7 @@ func TestHookAppliesOnlyFromThePaneProcess(t *testing.T) {
 			for _, cause := range []string{
 				"the claude on PATH is a launcher that runs Claude Code as a child instead of exec-ing it",
 				"Claude Code ran the hook through a shell instead of in exec form",
+				"name that binary in [launch] claude_path",
 			} {
 				if !strings.Contains(advice, cause) {
 					t.Errorf("ad.hook.pane_is_grandparent advice = %q, want it to contain %q", advice, cause)

@@ -9,6 +9,7 @@ package hook_test
 //   - seedAgentRow: a temp store with one row whose pane is recorded.
 //   - agentParent / foreignParent: the row's own agent, or another process
 //     carrying the row's id (pid_mismatch; no_pane_recorded on a pane-less row).
+//   - codexParent: that parent as a Codex agent's (--agent codex, command "codex").
 //   - hookConfig: a HandleConfig whose ParentPID and ParentProc report a parent,
 //     on a virtual clock (Clock, Now) with the default pending grace, so
 //     SessionStart's wait for its launch's identity write never sleeps in real time.
@@ -33,11 +34,20 @@ import (
 
 // hookParent is the process a hook runs under: its pid, start time ("" =
 // unreadable, which never matches a row, decision A1) and command name ("" =
-// unreadable; ad.hook.ignored's parent_command is then null).
+// unreadable; ad.hook.ignored's parent_command is then null). Agent is the
+// --agent the hook runs with: "" is the flag absent (Claude's table); codexParent sets it.
 type hookParent struct {
 	PID   int
 	Start string
 	Name  string
+	Agent string
+}
+
+// codexParent is p as a Codex agent's hook parent: the hook runs with --agent codex
+// and its parent is named "codex".
+func codexParent(p hookParent) hookParent {
+	p.Agent, p.Name = "codex", "codex"
+	return p
 }
 
 // fakeParentProc is a hook.ParentProc double: StartTime comes from
@@ -86,6 +96,7 @@ func hookConfig(env func(string) string, p hookParent) hook.HandleConfig {
 	now := time.Now()
 	clock := &advancingClock{now: &now}
 	return hook.HandleConfig{
+		Agent:        p.Agent,
 		Env:          env,
 		ParentPID:    func() int { return p.PID },
 		ParentProc:   newParentProc(p),

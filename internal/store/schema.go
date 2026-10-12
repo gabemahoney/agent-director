@@ -938,9 +938,9 @@ var v9Renames = []struct{ table, oldName, newName string }{
 //     (v9BackfillSQL), and every write that inserts or resets a row names its
 //     agent, so nothing relies on the default;
 //   - end_reported_at: when a Codex row's verified agent process sent a
-//     SessionEnd, in milliseconds since the epoch (NULL on every row until a
-//     the Codex end report sets it; nothing writes it yet. Always NULL on a
-//     Claude row);
+//     SessionEnd, in milliseconds since the epoch (NULL until the Codex end
+//     report, ApplyHookEndReport, sets it; the SessionStart identity write
+//     clears it. Always NULL on a Claude row);
 //   - subagent_tracking (b.xjn, SR-9): 1 when the settings the row's current
 //     launch was given register the agent's subagent start and stop events.
 //     NOT NULL DEFAULT 0 and no backfill: a row from before the hop reads 0

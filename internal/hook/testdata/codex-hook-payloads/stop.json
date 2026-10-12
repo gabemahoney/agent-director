@@ -1,0 +1,11 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "Stop",
+  "last_assistant_message": "done",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000001",
+  "stop_hook_active": false,
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-01-00-019f0000-0000-7000-8000-000000000001.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000006"
+}

@@ -199,8 +199,9 @@ type Spawn struct {
 	// milliseconds since the epoch; 0 = absent (NULL, or a stored value that is
 	// not a positive integer). Every read that returns a Spawn fills it. No
 	// write takes it from a Spawn: it is NULL on insert and after reuse's
-	// reset, cleared by resume's move to pending, and saved and restored with
-	// the row's raw life.
+	// reset, set by ApplyHookEndReport (a Codex SessionEnd), cleared by the
+	// SessionStart identity write and by resume's move to pending, and saved
+	// and restored with the row's raw life.
 	EndReportedAtMillis int64
 
 	// SubagentTracking is the schema-v9 subagent_tracking column (b.xjn, SR-9):

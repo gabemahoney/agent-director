@@ -19,14 +19,23 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// paneIsGrandparentAdviceText is ad.hook.pane_is_grandparent's advice, word
-// for word. It names both causes (a non-exec launcher, a shell-form hook) and
-// asserts neither.
+// paneIsGrandparentAdviceText is ad.hook.pane_is_grandparent's advice for a Claude
+// row, word for word. It names both causes (a non-exec launcher, a shell-form
+// hook) and asserts neither, and [launch] claude_path (SR-6.1).
 const paneIsGrandparentAdviceText = "The parent of this agent's hooks is a child of its pane process, not the pane process itself, " +
 	"so agent-director ignores every hook of this agent (pid_mismatch). " +
 	"Either the claude on PATH is a launcher that runs Claude Code as a child instead of exec-ing it " +
-	"(replace it with the native claude binary or a wrapper that execs it), " +
+	"(replace it with the native claude binary or a wrapper that execs it, or name that binary in [launch] claude_path), " +
 	"or Claude Code ran the hook through a shell instead of in exec form; parent_command names that parent."
+
+// paneIsGrandparentAdviceTextCodex is the advice for a Codex row, word for word (RN-21):
+// the codex on PATH may be a launcher that runs the native Codex as a child, as the
+// npm launcher does; [launch] codex_path names the native program.
+const paneIsGrandparentAdviceTextCodex = "The parent of this agent's hooks is a child of its pane process, not the pane process itself, " +
+	"so agent-director ignores every hook of this agent (pid_mismatch). " +
+	"Either the codex on PATH is a launcher that runs Codex as a child instead of exec-ing it, such as the npm launcher " +
+	"(name the native codex program in [launch] codex_path, or use a wrapper that execs it), " +
+	"or Codex ran the hook through a shell instead of in exec form; parent_command names that parent."
 
 // paneIsGrandparentKeys is ad.hook.pane_is_grandparent's key set, with the
 // trail envelope's event and ts.
@@ -188,5 +197,46 @@ func assertPaneIsGrandparent(t *testing.T, line map[string]any, want map[string]
 	}
 	if advice, _ := line["advice"].(string); endSessionWords.MatchString(advice) {
 		t.Errorf("advice %q names a way to end a session by hand (%q)", advice, endSessionWords.FindString(advice))
+	}
+}
+
+// TestHookPaneIsGrandparentAdviceByAgent (SR-6.1, RN-21): the advice names the
+// row's agent's program and launch path key, whichever --agent the hook runs
+// with; a pane grandparent still writes one event and the hook changes nothing.
+func TestHookPaneIsGrandparentAdviceByAgent(t *testing.T) {
+	cases := []struct {
+		name, rowAgent, hookAgent, wantAdvice string
+	}{
+		{"claude row, claude hook", store.AgentClaude, "claude", paneIsGrandparentAdviceText},
+		{"claude row, no --agent", store.AgentClaude, "", paneIsGrandparentAdviceText},
+		{"codex row, codex hook", store.AgentCodex, "codex", paneIsGrandparentAdviceTextCodex},
+		{"codex row, claude hook: the advice follows the row", store.AgentCodex, "claude", paneIsGrandparentAdviceTextCodex},
+		{"claude row, codex hook: the advice follows the row", store.AgentClaude, "codex", paneIsGrandparentAdviceText},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "pane-grandparent-agent-" + strconv.Itoa(i)
+			st, _ := ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane), apitest.WithAgent(tc.rowAgent))
+			parent := foreignParent(t, st, id)
+			parent.Agent = tc.hookAgent
+			hc := hookConfig(envHook(id, ""), parent)
+			hc.ParentProc.(*fakeParentProc).ppids[parent.PID] = ssgFreshPane.PanePID
+			payload, _, _ := codexPayload(t, "session-start-startup.json", true, nil)
+			if tc.hookAgent != "codex" {
+				p, _, _ := ssgPayload(t, "startup")
+				payload = []byte(p)
+			}
+			prior := mustGetSpawn(t, st, id)
+			before := len(readTrailLines(t, trailFile()))
+
+			ssgHandleWith(t, st, hc, string(payload), nil)
+
+			assertRowUnchanged(t, st, id, prior)
+			events := linesAfter(t, before, "ad.hook.pane_is_grandparent", id)
+			if len(events) != 1 {
+				t.Fatalf("ad.hook.pane_is_grandparent lines = %d; want 1", len(events))
+			}
+			assertPaneIsGrandparent(t, events[0], map[string]any{"advice": tc.wantAdvice})
+		})
 	}
 }

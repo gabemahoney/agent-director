@@ -140,7 +140,7 @@ func emitIgnored(ctx context.Context, rr ignoredRowReader, pp ParentProc, h igno
 	}
 	_ = trail.Emit(ctx, "ad.hook.ignored", fields)
 	if err == nil && paneIsGrandparent(pp, h, sp) {
-		emitPaneIsGrandparent(ctx, pp, h, sp.Identity.PanePID, fields["parent_command"])
+		emitPaneIsGrandparent(ctx, pp, h, sp.Identity.PanePID, sp.Agent, fields["parent_command"])
 	}
 }
 
@@ -167,16 +167,36 @@ func paneIsGrandparent(pp ParentProc, h ignoredHook, sp store.Spawn) bool {
 	return ok && ppid == sp.Identity.PanePID
 }
 
-// paneIsGrandparentAdvice is ad.hook.pane_is_grandparent's advice: what the
-// operator changes so later launches are tracked. It names both causes
-// paneIsGrandparent cannot tell apart (a non-exec launcher, or a shell-form
-// hook) and asserts neither. Callers branch on the event name; the advice is
-// an English extra. It never advises ending a session by hand.
+// paneIsGrandparentAdvice is ad.hook.pane_is_grandparent's advice for a Claude
+// row: what the operator changes so later launches are tracked. It names both
+// causes paneIsGrandparent cannot tell apart (a non-exec launcher, or a
+// shell-form hook) and asserts neither, and the launch path key
+// ([launch] claude_path). Callers branch on the event name; the advice is an
+// English extra. It never advises ending a session by hand.
 const paneIsGrandparentAdvice = "The parent of this agent's hooks is a child of its pane process, not the pane process itself, " +
 	"so agent-director ignores every hook of this agent (pid_mismatch). " +
 	"Either the claude on PATH is a launcher that runs Claude Code as a child instead of exec-ing it " +
-	"(replace it with the native claude binary or a wrapper that execs it), " +
+	"(replace it with the native claude binary or a wrapper that execs it, or name that binary in [launch] claude_path), " +
 	"or Claude Code ran the hook through a shell instead of in exec form; parent_command names that parent."
+
+// paneIsGrandparentAdviceCodex is the advice for a Codex row (RN-21): the same
+// two causes, with the launcher case Codex has, a `codex` that runs the native
+// Codex as a child (the npm launcher is one), and [launch] codex_path, which
+// should name the native program.
+const paneIsGrandparentAdviceCodex = "The parent of this agent's hooks is a child of its pane process, not the pane process itself, " +
+	"so agent-director ignores every hook of this agent (pid_mismatch). " +
+	"Either the codex on PATH is a launcher that runs Codex as a child instead of exec-ing it, such as the npm launcher " +
+	"(name the native codex program in [launch] codex_path, or use a wrapper that execs it), " +
+	"or Codex ran the hook through a shell instead of in exec form; parent_command names that parent."
+
+// paneIsGrandparentAdviceFor is the advice for a row of agent: Codex's for a
+// codex row, Claude's for any other.
+func paneIsGrandparentAdviceFor(agent string) string {
+	if agent == store.AgentCodex {
+		return paneIsGrandparentAdviceCodex
+	}
+	return paneIsGrandparentAdvice
+}
 
 // emitPaneIsGrandparent writes ad.hook.pane_is_grandparent (b.9n6, b.zde) for
 // a SessionStart refused with pid_mismatch on a pending row whose pane process,
@@ -188,17 +208,17 @@ const paneIsGrandparentAdvice = "The parent of this agent's hooks is a child of 
 // and each such refused SessionStart writes one. Its fields:
 // instance_id, pane_pid, pane_command (read now, through pp; null when
 // unreadable), parent_pid and parent_command (ad.hook.ignored's values),
-// advice (paneIsGrandparentAdvice) and source ad_hook. It reads no store.
+// advice (paneIsGrandparentAdviceFor the row's agent) and source ad_hook. It reads no store.
 // Fail-open: a trail-write failure changes nothing; the gate's decision, the
 // row and the hook's exit are those of any ignored hook.
-func emitPaneIsGrandparent(ctx context.Context, pp ParentProc, h ignoredHook, panePID int, parentCommand any) {
+func emitPaneIsGrandparent(ctx context.Context, pp ParentProc, h ignoredHook, panePID int, agent string, parentCommand any) {
 	fields := map[string]any{
 		"instance_id":    h.instanceID,
 		"pane_pid":       panePID,
 		"pane_command":   nil,
 		"parent_pid":     h.parent.pid,
 		"parent_command": parentCommand,
-		"advice":         paneIsGrandparentAdvice,
+		"advice":         paneIsGrandparentAdviceFor(agent),
 		"source":         "ad_hook",
 	}
 	if name, ok := pp.CommandName(panePID); ok && name != "" {

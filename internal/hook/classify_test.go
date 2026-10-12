@@ -2,23 +2,27 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// TestClassifyEventSRDTable pins the SRD §5.2 event → state table, b.svb (the
+// TestClassifyEventSRDTable pins the SRD §5.2 event → state table of Claude (an
+// empty agent is Claude: a hook entry without --agent) and SR-6.2's of Codex
+// (agent "codex"), b.svb (the
 // main agent's idle prompt), b.pmn (only a known terminal SessionEnd cause, in
 // reason, matcher or endReason, ends the row; none or an unknown one is a soft
 // refresh, and so is `other`, the reason a killed agent's SessionEnd carries,
 // N9, so it closes no subagent record) and the SRD test rig's legacy event_name field.
 func TestClassifyEventSRDTable(t *testing.T) {
 	cases := []struct {
-		name, raw   string
-		wantState   string
-		wantSoft    bool
-		wantUnknown bool
-		wantIdle    bool // WaitingIfWorking (b.svb)
+		name, agent, raw string
+		wantState        string
+		wantSoft         bool
+		wantUnknown      bool
+		wantIdle         bool // WaitingIfWorking (b.svb)
+		wantEnd          bool // EndReport (SR-6.5)
 	}{
 		{name: "SessionStart", raw: `{"hook_event_name":"SessionStart"}`, wantState: store.StateWaiting},
 		{name: "legacy event_name field", raw: `{"event_name":"SessionStart"}`, wantState: store.StateWaiting},
@@ -51,48 +55,128 @@ func TestClassifyEventSRDTable(t *testing.T) {
 		{name: "SubagentStop with agent_id", raw: `{"hook_event_name":"SubagentStop","agent_id":"a1","stop_hook_active":false}`, wantSoft: true},
 		{name: "unknown event", raw: `{"hook_event_name":"BrandNewEvent"}`, wantSoft: true, wantUnknown: true},
 		{name: "empty payload", raw: ``, wantSoft: true},
+		// Codex (SR-6.2, MC-6): no idle path, no ask_user, no ended; SessionEnd is the end report.
+		{name: "codex SessionStart startup", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"startup"}`, wantState: store.StateWaiting},
+		{name: "codex SessionStart clear", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"clear"}`, wantState: store.StateWaiting},
+		{name: "codex SessionStart resume", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"resume"}`, wantState: store.StateWaiting},
+		{name: "codex SessionStart fork", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"fork"}`, wantState: store.StateWaiting},
+		{name: "codex SessionStart compact", agent: "codex", raw: `{"hook_event_name":"SessionStart","source":"compact"}`, wantState: store.StateWaiting},
+		{name: "codex UserPromptSubmit", agent: "codex", raw: `{"hook_event_name":"UserPromptSubmit"}`, wantState: store.StateWorking},
+		{name: "codex PreToolUse Bash", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"Bash"}`, wantState: store.StateWorking},
+		{name: "codex PreToolUse request_user_input", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"request_user_input"}`, wantState: store.StateWorking},
+		{name: "codex PreToolUse request_user_input_async", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"request_user_input_async"}`, wantState: store.StateWorking},
+		{name: "codex PreToolUse AskUserQuestion", agent: "codex", raw: `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion"}`, wantState: store.StateWorking},
+		{name: "codex PostToolUse", agent: "codex", raw: `{"hook_event_name":"PostToolUse","tool_name":"Bash"}`, wantState: store.StateWorking},
+		{name: "codex PostToolUse request_user_input", agent: "codex", raw: `{"hook_event_name":"PostToolUse","tool_name":"request_user_input"}`, wantState: store.StateWorking},
+		{name: "codex Stop", agent: "codex", raw: `{"hook_event_name":"Stop"}`, wantState: store.StateWaiting},
+		{name: "codex Interrupt", agent: "codex", raw: `{"hook_event_name":"Interrupt"}`, wantState: store.StateWaiting},
+		{name: "codex Interrupt with agent_id", agent: "codex", raw: `{"hook_event_name":"Interrupt","agent_id":"a1"}`, wantSoft: true},
+		{name: "codex PermissionRequest", agent: "codex", raw: `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, wantState: store.StateCheckPermission},
+		{name: "codex Notification", agent: "codex", raw: `{"hook_event_name":"Notification"}`, wantSoft: true},
+		{name: "codex Notification idle_prompt is no idle path", agent: "codex", raw: `{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, wantSoft: true},
+		{name: "codex PostToolUseFailure", agent: "codex", raw: `{"hook_event_name":"PostToolUseFailure"}`, wantSoft: true},
+		{name: "codex SubagentStart", agent: "codex", raw: `{"hook_event_name":"SubagentStart","agent_id":"a1"}`, wantSoft: true},
+		{name: "codex SubagentStop", agent: "codex", raw: `{"hook_event_name":"SubagentStop","agent_id":"a1"}`, wantSoft: true},
+		{name: "codex SessionEnd other", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"other"}`, wantSoft: true, wantEnd: true},
+		{name: "codex SessionEnd with a reason Claude ends the row on", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"logout"}`, wantSoft: true, wantEnd: true},
+		{name: "codex SessionEnd no cause", agent: "codex", raw: `{"hook_event_name":"SessionEnd"}`, wantSoft: true, wantEnd: true},
+		{name: "codex SessionEnd with agent_id", agent: "codex", raw: `{"hook_event_name":"SessionEnd","reason":"other","agent_id":"a1"}`, wantSoft: true},
+		{name: "codex unknown event", agent: "codex", raw: `{"hook_event_name":"BrandNewEvent"}`, wantSoft: true, wantUnknown: true},
+		{name: "codex empty payload", agent: "codex", raw: ``, wantSoft: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := ClassifyEvent(json.RawMessage(tc.raw))
+			res, err := ClassifyEvent(tc.agent, json.RawMessage(tc.raw))
 			if err != nil {
 				t.Fatalf("ClassifyEvent: %v", err)
 			}
-			if res.NewState != tc.wantState || res.SoftRefresh != tc.wantSoft || res.UnknownEvent != tc.wantUnknown || res.WaitingIfWorking != tc.wantIdle {
-				t.Errorf("state/soft/unknown/idle = %q/%v/%v/%v; want %q/%v/%v/%v", res.NewState, res.SoftRefresh,
-					res.UnknownEvent, res.WaitingIfWorking, tc.wantState, tc.wantSoft, tc.wantUnknown, tc.wantIdle)
+			if res.NewState != tc.wantState || res.SoftRefresh != tc.wantSoft || res.UnknownEvent != tc.wantUnknown ||
+				res.WaitingIfWorking != tc.wantIdle || res.EndReport != tc.wantEnd {
+				t.Errorf("state/soft/unknown/idle/end = %q/%v/%v/%v/%v; want %q/%v/%v/%v/%v", res.NewState, res.SoftRefresh,
+					res.UnknownEvent, res.WaitingIfWorking, res.EndReport, tc.wantState, tc.wantSoft, tc.wantUnknown, tc.wantIdle, tc.wantEnd)
 			}
 		})
 	}
-	if _, err := ClassifyEvent(json.RawMessage("not json")); err == nil {
-		t.Error("ClassifyEvent(malformed JSON) = nil error; want the parse error")
+	for _, agent := range []string{"claude", "codex"} {
+		if _, err := ClassifyEvent(agent, json.RawMessage("not json")); err == nil {
+			t.Errorf("ClassifyEvent(%s, malformed JSON) = nil error; want the parse error", agent)
+		}
+	}
+}
+
+// TestClassifyEventAgentSelection (SR-6.1): the agent picks the table and the
+// result's flags: an absent --agent is Claude; only Claude's hooks feed subagent
+// capture, only a Codex hook without an agent_id heals a transcript path; any other
+// agent is ErrInvalidAgent.
+func TestClassifyEventAgentSelection(t *testing.T) {
+	cases := []struct {
+		name, agent, raw string
+		wantAgent        string
+		wantCapture      bool
+		wantHeals        bool
+	}{
+		{"absent is claude", "", `{"hook_event_name":"Stop"}`, "claude", true, false},
+		{"claude", "claude", `{"hook_event_name":"Stop"}`, "claude", true, false},
+		{"claude, empty payload", "claude", ``, "claude", true, false},
+		{"codex", "codex", `{"hook_event_name":"Stop"}`, "codex", false, true},
+		{"codex with agent_id", "codex", `{"hook_event_name":"PreToolUse","agent_id":"a1"}`, "codex", false, false},
+		{"codex, empty payload", "codex", ``, "codex", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := ClassifyEvent(tc.agent, json.RawMessage(tc.raw))
+			if err != nil {
+				t.Fatalf("ClassifyEvent: %v", err)
+			}
+			if res.Agent != tc.wantAgent || res.SubagentCapture != tc.wantCapture || res.HealsTranscript != tc.wantHeals {
+				t.Errorf("Agent/SubagentCapture/HealsTranscript = %q/%v/%v; want %q/%v/%v",
+					res.Agent, res.SubagentCapture, res.HealsTranscript, tc.wantAgent, tc.wantCapture, tc.wantHeals)
+			}
+		})
+	}
+	for _, agent := range []string{"gemini", "Codex", " codex", "(no value)"} {
+		t.Run("invalid "+agent, func(t *testing.T) {
+			if _, err := ClassifyEvent(agent, json.RawMessage(`{"hook_event_name":"Stop"}`)); !errors.Is(err, ErrInvalidAgent) {
+				t.Errorf("ClassifyEvent(%q) error = %v; want ErrInvalidAgent", agent, err)
+			}
+		})
 	}
 }
 
 // TestClassifyEventTranscriptPath pins SR-9.1/SR-22.9: every event carries the
 // hook-reported transcript_path verbatim and its basename without extension as
 // the session id; a garbage path ("...", "/") yields no session id but is
-// still carried verbatim.
+// still carried verbatim. A Codex hook's session id is its payload's session_id
+// (SR-6.3), never the rollout's file name, and a Codex hook with an agent_id has none.
 func TestClassifyEventTranscriptPath(t *testing.T) {
 	const uuid = "12345678-1234-1234-1234-123456789012"
 	cases := []struct {
-		name, raw, wantPath, wantSessID string
+		name, agent, raw, wantPath, wantSessID string
 	}{
-		{"SessionStart", `{"hook_event_name":"SessionStart","transcript_path":"~/p/` + uuid + `.jsonl"}`, "~/p/" + uuid + ".jsonl", uuid},
-		{"SessionStart, legacy event_name", `{"event_name":"SessionStart","transcript_path":"~/x/y/abc.jsonl"}`, "~/x/y/abc.jsonl", "abc"},
-		{"SessionStart, no path", `{"hook_event_name":"SessionStart"}`, "", ""},
-		{"SessionStart, empty path", `{"hook_event_name":"SessionStart","transcript_path":""}`, "", ""},
-		{"SessionStart, path dots", `{"hook_event_name":"SessionStart","transcript_path":"..."}`, "...", ""},
-		{"SessionStart, path slash", `{"hook_event_name":"SessionStart","transcript_path":"/"}`, "/", ""},
-		{"SessionStart, other extension", `{"hook_event_name":"SessionStart","transcript_path":"sessionid.txt"}`, "sessionid.txt", "sessionid"},
-		{"UserPromptSubmit", `{"hook_event_name":"UserPromptSubmit","transcript_path":"/abs/abc.jsonl"}`, "/abs/abc.jsonl", "abc"},
-		{"Stop", `{"hook_event_name":"Stop","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
-		{"Stop, no path", `{"hook_event_name":"Stop"}`, "", ""},
-		{"SessionEnd", `{"hook_event_name":"SessionEnd","reason":"logout","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
+		{"SessionStart", "", `{"hook_event_name":"SessionStart","transcript_path":"~/p/` + uuid + `.jsonl"}`, "~/p/" + uuid + ".jsonl", uuid},
+		{"SessionStart, legacy event_name", "", `{"event_name":"SessionStart","transcript_path":"~/x/y/abc.jsonl"}`, "~/x/y/abc.jsonl", "abc"},
+		{"SessionStart, no path", "", `{"hook_event_name":"SessionStart"}`, "", ""},
+		{"SessionStart, empty path", "", `{"hook_event_name":"SessionStart","transcript_path":""}`, "", ""},
+		{"SessionStart, path dots", "", `{"hook_event_name":"SessionStart","transcript_path":"..."}`, "...", ""},
+		{"SessionStart, path slash", "", `{"hook_event_name":"SessionStart","transcript_path":"/"}`, "/", ""},
+		{"SessionStart, other extension", "", `{"hook_event_name":"SessionStart","transcript_path":"sessionid.txt"}`, "sessionid.txt", "sessionid"},
+		{"UserPromptSubmit", "", `{"hook_event_name":"UserPromptSubmit","transcript_path":"/abs/abc.jsonl"}`, "/abs/abc.jsonl", "abc"},
+		{"Stop", "", `{"hook_event_name":"Stop","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
+		{"Stop, no path", "", `{"hook_event_name":"Stop"}`, "", ""},
+		{"SessionEnd", "", `{"hook_event_name":"SessionEnd","reason":"logout","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
+		{"claude ignores session_id", "claude", `{"hook_event_name":"Stop","session_id":"payload-id","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "abc"},
+		{"codex session_id, rollout of another name", "codex", `{"hook_event_name":"SessionStart","session_id":"` + uuid + `","transcript_path":"~/s/rollout-2026-01-15T10-00-00-` + uuid + `.jsonl"}`,
+			"~/s/rollout-2026-01-15T10-00-00-" + uuid + ".jsonl", uuid},
+		{"codex session_id, path of another session", "codex", `{"hook_event_name":"UserPromptSubmit","session_id":"main","transcript_path":"~/s/rollout-2026-01-15T10-00-00-review.jsonl"}`,
+			"~/s/rollout-2026-01-15T10-00-00-review.jsonl", "main"},
+		{"codex, no session_id", "codex", `{"hook_event_name":"Stop","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", ""},
+		{"codex, no path", "codex", `{"hook_event_name":"Stop","session_id":"main"}`, "", "main"},
+		{"codex with agent_id: no session id", "codex", `{"hook_event_name":"PreToolUse","agent_id":"a1","session_id":"main","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", ""},
+		{"codex SessionEnd", "codex", `{"hook_event_name":"SessionEnd","reason":"other","session_id":"main","transcript_path":"~/x/abc.jsonl"}`, "~/x/abc.jsonl", "main"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := ClassifyEvent(json.RawMessage(tc.raw))
+			res, err := ClassifyEvent(tc.agent, json.RawMessage(tc.raw))
 			if err != nil {
 				t.Fatalf("ClassifyEvent: %v", err)
 			}
@@ -178,23 +262,26 @@ func TestClassifyEventSubagentStartStop(t *testing.T) {
 // carries its tool_use_id verbatim.
 func TestClassifyEventToolRan(t *testing.T) {
 	cases := []struct {
-		event, toolUseID string
-		want             bool
+		agent, event, toolUseID string
+		want                    bool
 	}{
-		{"PostToolUse", "toolu_01", true},
-		{"PostToolUseFailure", "toolu_01", true},
-		{"PostToolUse", "", false},
-		{"PostToolUseFailure", "", false},
-		{"PreToolUse", "toolu_01", false},
-		{"PermissionRequest", "toolu_01", false},
+		{"claude", "PostToolUse", "toolu_01", true},
+		{"claude", "PostToolUseFailure", "toolu_01", true},
+		{"claude", "PostToolUse", "", false},
+		{"claude", "PostToolUseFailure", "", false},
+		{"claude", "PreToolUse", "toolu_01", false},
+		{"claude", "PermissionRequest", "toolu_01", false},
+		{"codex", "PostToolUse", "call_01", false},
+		{"codex", "PostToolUseFailure", "call_01", false},
+		{"codex", "PreToolUse", "call_01", false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.event+"/"+tc.toolUseID, func(t *testing.T) {
+		t.Run(tc.agent+"/"+tc.event+"/"+tc.toolUseID, func(t *testing.T) {
 			p := map[string]any{"hook_event_name": tc.event, "tool_name": "Bash"}
 			if tc.toolUseID != "" {
 				p["tool_use_id"] = tc.toolUseID
 			}
-			res := classifyMap(t, p)
+			res := classifyAgentMap(t, tc.agent, p)
 			if res.ToolRan() != tc.want || res.ToolUseID != tc.toolUseID {
 				t.Errorf("ToolRan/ToolUseID = %v/%q; want %v/%q", res.ToolRan(), res.ToolUseID, tc.want, tc.toolUseID)
 			}
@@ -202,14 +289,20 @@ func TestClassifyEventToolRan(t *testing.T) {
 	}
 }
 
-// classifyMap marshals payload and classifies it, failing the test on error.
+// classifyMap marshals payload and classifies it as a Claude hook, failing the test on error.
 func classifyMap(t *testing.T, payload map[string]any) ClassifyResult {
+	t.Helper()
+	return classifyAgentMap(t, "claude", payload)
+}
+
+// classifyAgentMap marshals payload and classifies it as a hook of agent, failing the test on error.
+func classifyAgentMap(t *testing.T, agent string, payload map[string]any) ClassifyResult {
 	t.Helper()
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	res, err := ClassifyEvent(raw)
+	res, err := ClassifyEvent(agent, raw)
 	if err != nil {
 		t.Fatalf("ClassifyEvent: %v", err)
 	}

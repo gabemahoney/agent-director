@@ -558,7 +558,7 @@ var Verbs = []VerbDef{
 			{Name: "agent_args", Type: "[]string", Description: "Verbatim argv passed through to the agent program after the supervisor's own flags.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "relay_mode", Type: "string", Description: "on / off.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"on", "off"}},
 			{Name: "jsonl_path", Type: "string", Description: "Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty. When empty, resume composes the path on demand from cwd + session_id.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
-			{Name: "session_id", Type: "string", Description: "Agent session UUID, extracted from SessionStart hook's transcript_path.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "session_id", Type: "string", Description: "Agent session id, recorded from the agent's hooks: Claude's is its transcript file's name, Codex's the session_id its hooks report. Empty until the first SessionStart.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "labels", Type: "map[string]string", Description: "Caller-supplied labels.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "started_at", Type: "timestamp", Description: "Row insert time.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "last_seen_at", Type: "timestamp", Description: "Last hook UPSERT time.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -1384,7 +1384,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "hook",
-		Description: "Internal: run by each Spawn's --settings hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
+		Description: "Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1396,6 +1396,15 @@ var Verbs = []VerbDef{
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: nil,
+			},
+			{
+				Name:          "agent",
+				Type:          "string",
+				Description:   "The agent whose hook this is. Absent: claude. Any other value is a hook failure (fail-open; a relayed PermissionRequest is denied).",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: []string{"claude", "codex"},
 			},
 			{
 				Name:          "timeout",

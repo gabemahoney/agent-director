@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -173,4 +174,65 @@ func TestGetHistoryHookRotationWithinLife(t *testing.T) {
 			t.Errorf("stored entry %q in life %d; want %d (the row's life)", e.SessionID, e.LifeNumber, life)
 		}
 	}
+}
+
+// TestGetHistoryCodexRotation pins SR-6.3 on get: a Codex row rotated by two
+// Codex SessionStarts lists the first session with its rollout path in
+// prior_sessions, shows the second as its session id and the rollout path
+// verbatim, and its transcript_status follows the second's rollout as for Claude.
+func TestGetHistoryCodexRotation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		present    bool
+		wantStatus string
+	}{
+		{"second rollout on disk is present", true, "present"},
+		{"second rollout not on disk yet is rotated", false, "rotated"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const id = "id-get-hist-codex"
+			s, dbPath := seedGetHistoryRow(t, id, "", apitest.WithAgent(store.AgentCodex))
+			first := codexfix.TempRolloutPath(t, "cx-1", true)
+			second := codexfix.TempRolloutPath(t, "cx-2", tc.present)
+			for _, step := range []struct {
+				session, path string
+				present       bool
+			}{{"cx-1", first, true}, {"cx-2", second, tc.present}} {
+				if got := apitest.ApplyAgentHook(t, dbPath, id, "SessionStart", step.session,
+					apitest.HookAgent(store.AgentCodex), apitest.HookTranscript(step.path, step.present)); !got.Applied {
+					t.Fatalf("Codex SessionStart %s = %+v; want applied", step.session, got)
+				}
+			}
+			got, err := api.Get(s, api.RelayView{}, id)
+			if err != nil || got.SessionID != "cx-2" || got.Agent != store.AgentCodex {
+				t.Fatalf("Get = %q on %q, %v; want session cx-2 on a codex row", got.SessionID, got.Agent, err)
+			}
+			wantPath := ""
+			if tc.present {
+				wantPath = second
+			}
+			if got.JSONLPath != wantPath {
+				t.Errorf("JSONLPath = %q; want %q", got.JSONLPath, wantPath)
+			}
+			assertGetHistory(t, got, tc.wantStatus, []getWantPrior{{id: "cx-1", path: first}})
+		})
+	}
+}
+
+// TestGetCodexSessionWithoutPathBuildsNone pins SR-6.4 on get: a Codex row with
+// a session id and a NULL jsonl_path shows no path (none is built from the
+// session id and cwd, as for a legacy Claude row) and reads never_written.
+func TestGetCodexSessionWithoutPathBuildsNone(t *testing.T) {
+	t.Parallel()
+	s, _ := seedGetHistoryRow(t, "id-get-codex-nopath", "cx-nopath", apitest.WithAgent(store.AgentCodex))
+	got, err := api.Get(s, api.RelayView{}, "id-get-codex-nopath")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SessionID != "cx-nopath" || got.JSONLPath != "" {
+		t.Errorf("session, path = %q, %q; want cx-nopath and no path", got.SessionID, got.JSONLPath)
+	}
+	assertGetHistory(t, got, "never_written", nil)
 }

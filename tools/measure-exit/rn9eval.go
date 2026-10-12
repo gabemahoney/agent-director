@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gabemahoney/agent-director/internal/hook"
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 // RN-9's evaluation: pure functions over the recorder's lines, the
@@ -153,7 +154,7 @@ func isHandledEvent(event string) bool {
 	if err != nil {
 		return false
 	}
-	res, err := hook.ClassifyEvent(raw)
+	res, err := hook.ClassifyEvent(store.AgentClaude, raw)
 	return err == nil && !res.UnknownEvent && event != ""
 }
 

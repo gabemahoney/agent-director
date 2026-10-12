@@ -16,6 +16,20 @@ reported in; it becomes `waiting` once it does. If the agent runs but never
 reports in, `find-missing` notes the row `unreported` (see
 [Maintenance](maintenance.md)).
 
+A Codex agent reports in at its first prompt, not when its screen opens, so
+its row stays `pending` until someone prompts it. Until then `pause` and
+`send-keys` without `allow_pending` (`--allow-pending` on the CLI) are
+refused, as for any `pending` row. Pass the first prompt in the `spawn`
+arguments, or read the pane with `read-pane` and then type with
+`allow_pending`. After the first prompt the row moves
+with Codex's own events: a turn's prompt and tools read `working`, its end
+(`Stop`, or Esc) reads `waiting`, and a permission request reads
+`check_permission`. No Codex tool reads `ask_user`. A session change in the
+agent (`/clear`, `/new`, `/fork`, `/resume`) shows from the next prompt, and
+the `SessionEnd` that `/exit` sends leaves the row's state as it is. After Codex's `/review` the row can
+read `working` until the next prompt. The events and the limits are in
+[Hooks](hooks.md#hooks-from-a-codex-agent).
+
 `spawn` marks the folder as trusted so the agent does not stop at Claude
 Code's folder-trust prompt. `--no-pre-trust` keeps the prompt, and holds for
 every `resume` of the id: none marks the folder, so the agent may wait at the
@@ -123,6 +137,8 @@ start and stop events, so its subagents are recorded. It is `false`, with
 `subagents` `[]`, for an agent that predates subagent tracking; it becomes
 `true` when that agent is next resumed or its id is reused. The hooks that
 write the records are in [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
+A Codex agent's hooks write no records, so its `subagents` stays `[]`
+whatever `tracked` reads.
 
 `subagents` is never null. It holds the records of every launch the agent has
 had, ordered by `first_started_at` ascending (records with a null
@@ -471,6 +487,10 @@ The template names its agent, so that `spawn` needs no `--agent`.
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
 it under the same id with its transcript, so the conversation carries on.
+A resumed Claude row reads `waiting` at once. A resumed Codex row reports in
+only at its first prompt, so it reads `pending` until then and `pause` and
+`send-keys` without `allow_pending` are refused (see
+[Spawn states](#spawn-states)).
 
 ```sh
 agent-director pause --instance-id "$id"

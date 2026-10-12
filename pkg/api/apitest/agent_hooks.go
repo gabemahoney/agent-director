@@ -50,6 +50,19 @@ func HookTranscript(jsonlPath string, present bool) HookOption {
 	return storefix.HookTranscript(jsonlPath, present)
 }
 
+// HookAgent makes the hook one of agent's, store.AgentClaude (the default) or
+// store.AgentCodex, classified by that agent's table (storefix.HookAgent). A
+// Codex SessionEnd is the end report; the session id is the payload's
+// session_id, and HookTranscript gives a codexfix.RolloutPath.
+func HookAgent(agent string) HookOption { return storefix.HookAgent(agent) }
+
+// HookAgentID marks a Codex hook as a subagent's: it carries
+// agent_id and records no session id or path (storefix.HookAgentID).
+func HookAgentID(agentID string) HookOption { return storefix.HookAgentID(agentID) }
+
+// HookReason sets the hook's SessionEnd reason (storefix.HookReason).
+func HookReason(reason string) HookOption { return storefix.HookReason(reason) }
+
 // SeedSessionID records sessionID on id's existing row, which records no
 // session id yet, through the gated soft-refresh hook write played by the
 // row's own agent (storefix.WithSeedPane: a seed pane when the row records

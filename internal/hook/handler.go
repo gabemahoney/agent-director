@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -59,10 +61,30 @@ type waitingIfWorkingTransitioner interface {
 	ApplyHookWaitingIfWorking(instanceID string, gate store.HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
 }
 
+// endReporter is an optional extension of HookStore for a Codex SessionEnd
+// from the verified agent process (ClassifyResult.EndReport, SR-6.5).
+// *store.Store satisfies it; a test double that does not gets the plain soft
+// refresh the classification also carries.
+type endReporter interface {
+	ApplyHookEndReport(instanceID string, gate store.HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (store.UpsertOutcome, store.HookApplied, error)
+}
+
+// jsonlHealer is an optional extension of HookStore for a Codex hook's heal of
+// a NULL jsonl_path (ClassifyResult.HealsTranscript, SR-6.3). *store.Store
+// satisfies it; a test double that does not heals nothing.
+type jsonlHealer interface {
+	HealJsonlPath(instanceID, sessionID, jsonlPath string) (bool, error)
+}
+
 // HandleConfig bundles the inputs Handle takes beyond the store and
 // stdin reader. Bundling them keeps the cmd/-side wiring tidy and
 // lets future relay knobs land here without churning the signature.
 type HandleConfig struct {
+	// Agent is the hook verb's raw --agent value (SR-6.1): "" (the argument is
+	// absent) and "claude" select Claude's classification table, "codex"
+	// Codex's. Any other value is a hook failure (fail-open; closed for a
+	// relayed PermissionRequest), found after ad.hook.fired is armed.
+	Agent string
 	Env   func(string) string
 	Cfg   config.Relay
 	Clock PollClock
@@ -223,7 +245,22 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // tool ran, so its dialog was answered allow), with the same gate, before its
 // ordinary write.
 //
-// Subagent capture (b.xjn; subagent.go): SubagentStart and SubagentStop are one
+// The agent (HandleConfig.Agent, the verb's --agent): its raw value is
+// validated once ad.hook.fired is armed (ResolveAgent); an invalid one is a
+// failure like any other (fail-open, a deny envelope only for a relayed
+// PermissionRequest), and the classification table is the agent's
+// (ClassifyEvent). A Codex hook is otherwise handled as above, with these
+// differences: its session id is the payload's session_id (none recorded for
+// a hook with an agent_id); a Codex SessionEnd without an agent_id is one
+// gated ApplyHookEndReport (the end report: the state is kept and
+// end_reported_at set; SR-6.5), and a marked one is ignored as subagent_event
+// like any subagent's; and after any applied write of a Codex hook without an
+// agent_id, a NULL jsonl_path is healed from the payload's path when that
+// exists and its file name carries the hook's session id (healCodexTranscript,
+// SR-6.3).
+//
+// Subagent capture (b.xjn; subagent.go; Claude hooks only, ClassifyResult.
+// SubagentCapture, which Claude's table alone sets): SubagentStart and SubagentStop are one
 // store transaction instead of the ordinary write, the soft refresh and the
 // entry writes together (applySubagentLifecycle), with HandleConfig.Start as
 // the receipt time; without an agent_id they are the soft refresh alone, and
@@ -331,7 +368,12 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 	}
 	fields["instance_id"] = instanceID
 
-	res, err := ClassifyEvent(raw)
+	agent, err := ResolveAgent(hc.Agent)
+	if err != nil {
+		failClosed(fmt.Sprintf("agent (instance=%s): %v", instanceID, err))
+		return nil
+	}
+	res, err := ClassifyEvent(agent, raw)
 	if err != nil {
 		failClosed(fmt.Sprintf("classify (instance=%s): %v", instanceID, err))
 		return nil
@@ -427,6 +469,12 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			// soft refresh and the entry writes, with the receipt time.
 			upsertOutcome, applied, wrote, err = applySubagentLifecycle(st, instanceID, gate, res, raw, start.UnixMilli(), transcriptPath, jsonlPresent)
 		}
+		if !wrote && err == nil && res.EndReport {
+			// SR-6.5: a Codex SessionEnd from the agent process keeps the
+			// state and sets end_reported_at; a store without it falls
+			// through to the soft refresh.
+			upsertOutcome, applied, wrote, err = applyEndReport(st, instanceID, gate, res, transcriptPath, jsonlPresent)
+		}
 		if !wrote && err == nil {
 			upsertOutcome, applied, err = applyOrdinaryHook(st, instanceID, gate, res, transcriptPath, jsonlPresent)
 		}
@@ -441,6 +489,11 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			// working transition counts as applied.
 			runSubagentAfterWrite(st, instanceID, gate, res, raw, start, logger)
 		}
+	}
+
+	if applied.Applied {
+		// SR-6.3: a Codex hook's applied write heals a NULL jsonl_path.
+		healCodexTranscript(st, instanceID, res, transcriptPath, logger)
 	}
 
 	if !applied.Applied && applied.Reason != "" {
@@ -478,6 +531,45 @@ func applyOrdinaryHook(st HookStore, instanceID string, gate store.HookGate, res
 		return store.UpsertError, applied, err
 	}
 	return store.UpsertNoChange, applied, nil
+}
+
+// applyEndReport is Handle's gated write of a Codex end report
+// (res.EndReport): ApplyHookEndReport, which keeps the state and sets
+// end_reported_at. wrote is false when st has no such method, and the caller
+// makes the ordinary write, the soft refresh the classification also carries.
+func applyEndReport(st HookStore, instanceID string, gate store.HookGate, res ClassifyResult, jsonlPath string, jsonlPresent bool) (outcome store.UpsertOutcome, applied store.HookApplied, wrote bool, err error) {
+	er, ok := st.(endReporter)
+	if !ok {
+		return "", store.HookApplied{}, false, nil
+	}
+	outcome, applied, err = er.ApplyHookEndReport(instanceID, gate, res.EventName, jsonlPath, jsonlPresent)
+	return outcome, applied, true, err
+}
+
+// healCodexTranscript is the hook heal (SR-6.3), for a Codex hook without an
+// agent_id (res.HealsTranscript) whose own gated write applied: a NULL
+// jsonl_path takes the payload's path through HealJsonlPath, guarded on the
+// hook's session id and on the row's NULL path, so it fills a NULL path once
+// and never overwrites one. It heals only a path that exists and whose file
+// name carries the hook's session id, so a /review thread's hook, which has the
+// main session id and its own rollout, never heals to the Review thread's
+// rollout. Claude's hooks never heal (find-missing heals Claude's rows). It is
+// fail-open: a store without HealJsonlPath heals nothing, and an error logs one
+// line.
+func healCodexTranscript(st HookStore, instanceID string, res ClassifyResult, transcriptPath string, logger *log.Logger) {
+	if !res.HealsTranscript || res.SessionID == "" || transcriptPath == "" {
+		return
+	}
+	if !strings.Contains(filepath.Base(transcriptPath), res.SessionID) || !transcriptPresent(transcriptPath) {
+		return
+	}
+	h, ok := st.(jsonlHealer)
+	if !ok {
+		return
+	}
+	if _, err := h.HealJsonlPath(instanceID, res.SessionID, transcriptPath); err != nil {
+		logf(logger, "hook: heal transcript path (instance=%s, event=%s): %v", instanceID, res.EventName, err)
+	}
 }
 
 // closeToolRan is the PostToolUse close (b.146 rule 13): a PostToolUse or
@@ -767,3 +859,5 @@ var _ outcomeTransitioner = (*store.Store)(nil)
 var _ waitingIfWorkingTransitioner = (*store.Store)(nil)
 var _ toolRanCloser = (*store.Store)(nil)
 var _ requestProver = (*store.Store)(nil)
+var _ endReporter = (*store.Store)(nil)
+var _ jsonlHealer = (*store.Store)(nil)

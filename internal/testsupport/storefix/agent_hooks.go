@@ -185,6 +185,9 @@ type HookOption func(*hookPayload)
 type hookPayload struct {
 	jsonlPath    string
 	jsonlPresent bool
+	agent        string // "" = claude
+	agentID      string // a Codex payload's agent_id mark
+	reason       string // the SessionEnd reason; "" = the agent's default
 }
 
 // HookTranscript makes the hook report transcript path jsonlPath, present on
@@ -195,6 +198,31 @@ func HookTranscript(jsonlPath string, present bool) HookOption {
 	return func(p *hookPayload) { p.jsonlPath, p.jsonlPresent = jsonlPath, present }
 }
 
+// HookAgent makes the hook one of agent's (store.AgentClaude, the default, or
+// store.AgentCodex): its payload has that agent's shape and the hook handler's
+// own classifier, hook.ClassifyEvent, classifies it by that agent's table. A
+// Codex payload carries session_id (the sessionID FireHook takes), the
+// transcript path HookTranscript gives (a codexfix.RolloutPath), and for SessionEnd
+// reason "other"; a Codex SessionEnd without an agent_id is the end report
+// (store.ApplyHookEndReport), and an Interrupt without agent_id gives waiting.
+func HookAgent(agent string) HookOption {
+	return func(p *hookPayload) { p.agent = agent }
+}
+
+// HookAgentID marks a Codex hook as one from a subagent: its
+// payload carries agent_id. The hook then records no session id and no
+// transcript path, and Interrupt is a soft refresh; a marked SessionStart or
+// SessionEnd is ignored by the handler, so FireHook fails the test for one.
+func HookAgentID(agentID string) HookOption {
+	return func(p *hookPayload) { p.agentID = agentID }
+}
+
+// HookReason sets the hook's SessionEnd reason, where the default is the
+// agent's own (Claude prompt_input_exit, Codex other).
+func HookReason(reason string) HookOption {
+	return func(p *hookPayload) { p.reason = reason }
+}
+
 // FireHook fires one Claude Code hook event at id's row through the store's
 // gated path, from a hook whose parent is parentPID with start time
 // parentStart, and returns whether it applied. The event is classified by
@@ -203,28 +231,60 @@ func HookTranscript(jsonlPath string, present bool) HookOption {
 // PostToolUse and PermissionRequest are for the Bash tool. sessionID is the
 // payload's Claude session id ("" for none); no transcript path is reported
 // unless HookTranscript says so. SessionStart reads the row for its snapshot
-// and retries once when only the snapshot changed.
+// and retries once when only the snapshot changed. HookAgent makes it a Codex
+// hook (see there); a Claude hook is exactly as without the option.
 func FireHook(s *store.Store, id, event, sessionID string, parentPID int, parentStart string, opts ...HookOption) (store.HookApplied, error) {
 	var in hookPayload
 	for _, o := range opts {
 		o(&in)
 	}
+	agent := in.agent
+	if agent == "" {
+		agent = store.AgentClaude
+	}
 	fields := map[string]string{"hook_event_name": event}
 	switch event {
 	case "SessionEnd":
 		fields["reason"] = "prompt_input_exit"
+		if agent == store.AgentCodex {
+			fields["reason"] = "other"
+		}
+		if in.reason != "" {
+			fields["reason"] = in.reason
+		}
 	case "PreToolUse", "PostToolUse", "PermissionRequest":
 		fields["tool_name"] = "Bash"
+	}
+	if agent == store.AgentCodex {
+		fields["session_id"] = sessionID
+		fields["transcript_path"] = in.jsonlPath
+		if in.agentID != "" {
+			fields["agent_id"] = in.agentID
+		}
 	}
 	payload, err := json.Marshal(fields)
 	if err != nil {
 		return store.HookApplied{}, err
 	}
-	res, err := hook.ClassifyEvent(payload)
+	res, err := hook.ClassifyEvent(agent, payload)
 	if err != nil {
 		return store.HookApplied{}, err
 	}
 	gate := store.HookGate{Event: event, ParentPID: parentPID, ParentStart: parentStart, SessionID: sessionID}
+	if agent == store.AgentCodex {
+		if res.SubagentLifecycle() {
+			return store.HookApplied{}, fmt.Errorf("storefix.FireHook: a Codex %s with an agent_id is ignored by the handler; nothing to fire", event)
+		}
+		// As Handle: a hook with an agent_id records no session id or path.
+		gate.SessionID = res.SessionID
+		if res.AgentID != "" {
+			in.jsonlPath, in.jsonlPresent = "", false
+		}
+		if res.EndReport {
+			_, applied, err := s.ApplyHookEndReport(id, gate, event, in.jsonlPath, in.jsonlPresent)
+			return applied, err
+		}
+	}
 	if event != "SessionStart" {
 		return s.ApplyHookTransition(id, gate, res.NewState, res.SoftRefresh, event, in.jsonlPath, in.jsonlPresent)
 	}

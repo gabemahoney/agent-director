@@ -1,0 +1,22 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "PreToolUse",
+  "model": "codex-fixture-model",
+  "permission_mode": "default",
+  "session_id": "019f0000-0000-7000-8000-000000000011",
+  "tool_input": {
+    "questions": [
+      {
+        "options": [
+          "A",
+          "B"
+        ],
+        "title": "Which one?"
+      }
+    ]
+  },
+  "tool_name": "request_user_input_async",
+  "tool_use_id": "call_fixture_3",
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-07-00-019f0000-0000-7000-8000-000000000011.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000012"
+}

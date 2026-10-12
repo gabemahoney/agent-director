@@ -203,9 +203,11 @@ func readBackgroundTasks(raw json.RawMessage) (listed []store.SubagentListed, pr
 	return listed, true
 }
 
-// isSubagentLifecycle reports whether res is a SubagentStart or SubagentStop.
+// isSubagentLifecycle reports whether res is a SubagentStart or SubagentStop
+// that feeds subagent capture (res.SubagentCapture: Claude's hooks only; a
+// Codex one is a plain soft refresh with no entry write).
 func isSubagentLifecycle(res ClassifyResult) bool {
-	return res.EventName == EventNameSubagentStart || res.EventName == EventNameSubagentStop
+	return res.SubagentCapture && (res.EventName == EventNameSubagentStart || res.EventName == EventNameSubagentStop)
 }
 
 // applySubagentLifecycle is the gated write of a SubagentStart or SubagentStop
@@ -238,9 +240,9 @@ func applySubagentLifecycle(st HookStore, instanceID string, gate store.HookGate
 }
 
 // isAgentToolHook reports whether res is a PreToolUse, PostToolUse or
-// PostToolUseFailure of the Agent tool.
+// PostToolUseFailure of the Agent tool that feeds subagent capture.
 func isAgentToolHook(res ClassifyResult) bool {
-	if res.ToolName != ToolAgent {
+	if !res.SubagentCapture || res.ToolName != ToolAgent {
 		return false
 	}
 	switch res.EventName {
@@ -250,9 +252,10 @@ func isAgentToolHook(res ClassifyResult) bool {
 	return false
 }
 
-// isMainAgentStop reports whether res is a Stop with no agent_id.
+// isMainAgentStop reports whether res is a Stop with no agent_id that feeds
+// subagent capture (a Codex Stop runs no turn-end transaction).
 func isMainAgentStop(res ClassifyResult) bool {
-	return res.EventName == EventNameStop && res.AgentID == ""
+	return res.SubagentCapture && res.EventName == EventNameStop && res.AgentID == ""
 }
 
 // subagentAfterWrite builds the entry transaction that follows a hook's applied

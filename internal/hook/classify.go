@@ -2,6 +2,8 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -70,6 +72,10 @@ type payload struct {
 	// ToolUseID is a tool event's tool_use_id (PreToolUse, PostToolUse,
 	// PostToolUseFailure, PermissionRequest).
 	ToolUseID string `json:"tool_use_id"`
+	// SessionID is the payload's session_id: Codex's session id (SR-6.3), the
+	// one a Codex hook's session is recorded by. Claude's table does not read
+	// it; Claude's session id is the transcript path's basename.
+	SessionID string `json:"session_id"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -96,10 +102,51 @@ func (p payload) eventName() string {
 	return p.EventName
 }
 
+// ErrInvalidAgent is returned (wrapped) by ResolveAgent and ClassifyEvent for
+// an agent value that is neither empty, "claude" nor "codex".
+var ErrInvalidAgent = errors.New("hook: invalid --agent")
+
+// ResolveAgent maps the hook verb's raw --agent value to the agent whose
+// classification table applies (SR-6.1): the empty string, which a hook entry
+// written before --agent existed carries, is claude; claude and codex are
+// themselves; anything else is ErrInvalidAgent (a hook failure).
+func ResolveAgent(raw string) (string, error) {
+	switch raw {
+	case "", store.AgentClaude:
+		return store.AgentClaude, nil
+	case store.AgentCodex:
+		return store.AgentCodex, nil
+	}
+	return "", fmt.Errorf("%w: %q (want claude or codex)", ErrInvalidAgent, raw)
+}
+
 // ClassifyResult is the typed outcome of one classification pass. Callers
 // use NewState / SoftRefresh / SessionID to drive the gated row write, and
 // EventName for telemetry / log lines on unknown events.
 type ClassifyResult struct {
+	// Agent is the agent whose table classified the hook: store.AgentClaude or
+	// store.AgentCodex.
+	Agent string
+
+	// SubagentCapture is true when the hook feeds subagent capture (b.xjn;
+	// subagent.go): Claude's table sets it, Codex's never does (Codex subagent
+	// capture is Epic 5's). The subagent helpers read it, so the hook path
+	// branches on the agent nowhere but the classifier.
+	SubagentCapture bool
+
+	// EndReport is true for a Codex SessionEnd without an agent_id (SR-6.5),
+	// whatever its reason: a hook from the row's own agent process says the
+	// session ended. The write records it (end_reported_at) and keeps the
+	// state; SoftRefresh is true alongside it, so a writer that does not act
+	// on EndReport makes the soft refresh.
+	EndReport bool
+
+	// HealsTranscript is true when an applied write of the hook may heal the
+	// row's NULL jsonl_path from the payload's path (SR-6.3): Codex hooks
+	// without an agent_id. Claude's hooks never heal; find-missing heals
+	// Claude's rows.
+	HealsTranscript bool
+
 	// EventName is the canonical event name as parsed from the payload.
 	// Empty when the payload had no event-name field at all.
 	EventName string
@@ -133,7 +180,9 @@ type ClassifyResult struct {
 	// gate (SR-22.9): SessionStart writes it to spawns.session_id
 	// (SRD §8.3), an applied ordinary hook writes it when the row records no
 	// session id yet and the hook carries no AgentID, and ad.hook.ignored
-	// reports it as hook_session_id (SR-14).
+	// reports it as hook_session_id (SR-14). A Codex result takes it from the
+	// payload's session_id instead (SR-6.3), and has none for a hook with an
+	// agent_id, which records no session id or path.
 	SessionID string
 
 	// TranscriptPath is the full hook-reported transcript_path, for every
@@ -168,8 +217,12 @@ type ClassifyResult struct {
 // ToolRan reports whether the result is a PostToolUse or PostToolUseFailure
 // carrying a tool_use_id: Claude Code ran that tool use, so a permission
 // dialog for it was answered allow (b.146 rule 13).
+//
+// Codex's tool hooks carry a tool_use_id, but its permission requests carry
+// none, so a Codex hook never proves a request's dialog gone this way: it is
+// never true for a Codex result.
 func (r ClassifyResult) ToolRan() bool {
-	return r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
+	return r.Agent != store.AgentCodex && r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
 }
 
 // The tool events whose hook means the tool ran (b.146 rule 13).
@@ -217,29 +270,46 @@ func PeekEventName(raw []byte) string {
 	return p.eventName()
 }
 
-// ClassifyEvent applies the SRD §5.2 hook-event → state table. The
-// function never returns a typed error for unknown / malformed payloads —
-// state-tracking is fail-open, so the result's SoftRefresh / UnknownEvent
-// flags carry the decision and the handler treats it as a no-op write.
+// ClassifyEvent applies the hook-event → state table of agent (store.AgentClaude
+// or store.AgentCodex; "" is claude): SRD §5.2's for Claude, SR-6.2's for
+// Codex. The function never returns a typed error for unknown / malformed
+// payloads — state-tracking is fail-open, so the result's SoftRefresh /
+// UnknownEvent flags carry the decision and the handler treats it as a no-op
+// write.
 //
-// A JSON parse failure is the only error returned: an unparseable payload
-// is logged and the handler exits 0 silently.
-func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
+// A JSON parse failure and an agent that is neither claude nor codex
+// (ErrInvalidAgent) are the only errors returned: the handler logs them and
+// exits 0 silently, except that a relayed PermissionRequest is denied.
+func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
+	agent, err := ResolveAgent(agent)
+	if err != nil {
+		return ClassifyResult{}, err
+	}
 	var p payload
 	if len(raw) == 0 {
-		return ClassifyResult{SoftRefresh: true}, nil
+		return ClassifyResult{Agent: agent, SubagentCapture: agent == store.AgentClaude, SoftRefresh: true}, nil
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return ClassifyResult{}, err
 	}
+	if agent == store.AgentCodex {
+		return classifyCodex(p), nil
+	}
+	return classifyClaude(p), nil
+}
 
+// classifyClaude is Claude's table (SRD §5.2). Claude's session id is the
+// transcript path's basename.
+func classifyClaude(p payload) ClassifyResult {
 	res := ClassifyResult{
-		EventName:      p.eventName(),
-		ToolName:       p.ToolName,
-		SessionID:      extractSessionID(p.TranscriptPath),
-		TranscriptPath: p.TranscriptPath,
-		AgentID:        p.AgentID,
-		ToolUseID:      p.ToolUseID,
+		Agent:           store.AgentClaude,
+		SubagentCapture: true,
+		EventName:       p.eventName(),
+		ToolName:        p.ToolName,
+		SessionID:       extractSessionID(p.TranscriptPath),
+		TranscriptPath:  p.TranscriptPath,
+		AgentID:         p.AgentID,
+		ToolUseID:       p.ToolUseID,
 	}
 
 	switch res.EventName {
@@ -293,8 +363,69 @@ func ClassifyEvent(raw json.RawMessage) (ClassifyResult, error) {
 		res.SoftRefresh = true
 		res.UnknownEvent = true
 	}
+	return res
+}
 
-	return res, nil
+// EventNameInterrupt is Codex's Esc during a running turn (RN-8).
+const EventNameInterrupt = "Interrupt"
+
+// classifyCodex is Codex's table (SR-6.2, MC-6), for payloads shaped like the
+// probe's captures:
+//
+//   - SessionStart → waiting; UserPromptSubmit, PreToolUse and PostToolUse →
+//     working, whatever the tool (`request_user_input` and
+//     `request_user_input_async` included: a Codex row is never ask_user);
+//     Stop → waiting;
+//   - Interrupt without an agent_id → waiting; with one → a soft refresh
+//     (Codex never sends it; the rule is a safety net, Q3);
+//   - PermissionRequest → check_permission;
+//   - SessionEnd without an agent_id → the end report (EndReport), whatever
+//     its reason: no state; with an agent_id it is a subagent lifecycle event
+//     Handle ignores;
+//   - everything else (Notification, PostToolUseFailure, SubagentStart,
+//     SubagentStop, unknown) → a soft refresh, never WaitingIfWorking.
+//
+// The session id is the payload's session_id, none for a hook with an
+// agent_id (it records no session id or path). The transcript path is the
+// rollout's, verbatim. No Codex result is a SubagentCapture or a ToolRan.
+func classifyCodex(p payload) ClassifyResult {
+	res := ClassifyResult{
+		Agent:           store.AgentCodex,
+		EventName:       p.eventName(),
+		ToolName:        p.ToolName,
+		SessionID:       p.SessionID,
+		TranscriptPath:  p.TranscriptPath,
+		AgentID:         p.AgentID,
+		ToolUseID:       p.ToolUseID,
+		HealsTranscript: p.AgentID == "",
+	}
+	if p.AgentID != "" {
+		res.SessionID = ""
+	}
+
+	switch res.EventName {
+	case "SessionStart", EventNameStop:
+		res.NewState = store.StateWaiting
+	case "UserPromptSubmit", EventNamePreToolUse, EventNamePostToolUse:
+		res.NewState = store.StateWorking
+	case EventNameInterrupt:
+		if p.AgentID == "" {
+			res.NewState = store.StateWaiting
+		} else {
+			res.SoftRefresh = true
+		}
+	case "PermissionRequest":
+		res.NewState = store.StateCheckPermission
+	case "SessionEnd":
+		res.SoftRefresh = true
+		res.EndReport = p.AgentID == ""
+	case "Notification", EventNamePostToolUseFailure, EventNameSubagentStart, EventNameSubagentStop:
+		res.SoftRefresh = true
+	default:
+		res.SoftRefresh = true
+		res.UnknownEvent = true
+	}
+	return res
 }
 
 // extractSessionID parses the basename-without-extension of transcript_path

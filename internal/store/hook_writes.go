@@ -159,6 +159,40 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 		triggeringEventName, jsonlPath, jsonlPresent, errPrefix)
 }
 
+// ApplyHookEndReport is the gated write of a Codex SessionEnd from the verified
+// agent process (SR-6.5, MC-1): the end report. It is the soft refresh
+// ApplyHookTransitionResult makes (state kept; last_seen_at bumped;
+// idle_since and the liveness markers NULLed; the session record under the
+// presence rule; the pane start time when NULL; row_version advanced by one;
+// launch_started_at and the settle columns untouched) with one more column,
+// end_reported_at, set to the statement's clock in milliseconds. The gate and
+// every report are applyGatedHookWrite's: an applied write is UpsertUpdated and
+// emits exactly one ad.spawn.state_transition (prior state equal to new state,
+// soft_refresh true); a gate that does not hold changes nothing and reports
+// HookReasonPIDMismatch or HookReasonNoPaneRecorded; no row yields
+// HookApplied{} and no trail event. The report is recorded for any session id:
+// gate.SessionID follows the ordinary session-record rule, never a condition.
+//
+// It is a soft refresh and does not prove the agent gone, so it neither closes
+// the row's open permission requests nor the subagent records
+// (closeSubagentsAgentGone is the four ending writes' alone); the move to
+// ended is a different write.
+func (s *Store) ApplyHookEndReport(instanceID string, gate HookGate, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
+	priorState, found, err := s.selectPriorState(instanceID)
+	if err != nil {
+		return UpsertError, HookApplied{}, err
+	}
+	if !found {
+		return UpsertNoChange, HookApplied{}, nil
+	}
+	if s.hookBeforeUpdateForTest != nil {
+		s.hookBeforeUpdateForTest()
+	}
+	return s.applyGatedHookWrite(instanceID, gate,
+		`last_seen_at = CURRENT_TIMESTAMP, `+idleClear+`, end_reported_at = `+nowMsSQL, nil,
+		priorState, priorState, true, triggeringEventName, jsonlPath, jsonlPresent, "store: end report")
+}
+
 // idleClear is the SET fragment every applied hook write carries except the
 // main agent's idle-prompt Notification, which sets idle_since: any later
 // hook clears it (b.146 problem 3).
@@ -560,8 +594,9 @@ type sessionStartPrior struct {
 // (gate.ParentPID, gate.ParentStart: the pane process, SR-3.8), pane_starttime
 // when NULL; it bumps last_seen_at, clears ended_at, both liveness columns
 // (SessionStart is proof of life, SR-8.2), idle_since (any hook clears it,
-// b.146 problem 3) and launch_started_at, and advances
-// row_version by exactly one (SR-5.2).
+// b.146 problem 3), launch_started_at and end_reported_at (a Codex row's
+// SessionEnd report, which a later SessionStart from the agent supersedes;
+// SR-6.5), and advances row_version by exactly one (SR-5.2).
 //
 // The statement's WHERE carries the gate (hookGateSQL) and the snapshot
 // condition on gate.Examined (snapshotMatchSQL), so the write applies only
@@ -628,6 +663,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             liveness_unverified_since = NULL,
 	             liveness_note             = NULL,
 	             ` + idleClear + `,
+	             end_reported_at           = NULL,
 	             ` + hookPaneStartSet + `,
 	             ` + launchStartClear + `,
 	             ` + rowVersionAdvance + `

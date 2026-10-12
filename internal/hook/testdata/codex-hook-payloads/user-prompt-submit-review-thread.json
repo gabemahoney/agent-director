@@ -1,0 +1,10 @@
+{
+  "cwd": "/work/demo",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "codex-fixture-model",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.",
+  "session_id": "019f0000-0000-7000-8000-000000000007",
+  "transcript_path": "/home/agent/.codex/sessions/2026/01/15/rollout-2026-01-15T10-06-00-019f0000-0000-7000-8000-000000000008.jsonl",
+  "turn_id": "019f0000-0000-7000-8000-000000000009"
+}
