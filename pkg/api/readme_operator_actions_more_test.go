@@ -91,20 +91,14 @@ func acDoc19Items() []acDocItem {
 		},
 		{
 			title: switchOverItemTitle,
-			prose: []string{"step 1 of " + quoted(stoppingItemTitle)},
-			refs:  []string{stoppingItemTitle, pendingItemTitle},
+			prose: []string{"step 1 of " + quoted(stoppingItemTitle), "**Back** (the caller's version cannot be deployed)",
+				"[Going back to the previous release](#going-back-to-the-previous-release)"},
+			refs: []string{stoppingItemTitle, pendingItemTitle},
 			procs: []itemProcedure{
 				{name: "Forward", lead: "**Forward**", steps: []stepSpec{
 					{"end the agent of each live pre-upgrade row", []string{"`get`", "no `tmux_socket`", "no `launch_started_at`",
 						quoted(pendingItemTitle), "`agent-director find-missing`"}, nil},
 					{"deploy the caller's version", []string{"Deploy the caller's version", "never delete them"}, nil},
-				}},
-				{name: "Back", lead: "**Back**", steps: []stepSpec{
-					{"stop the set and every serve", []string{quoted(stoppingItemTitle), "stop every agent of the set and every `serve`"}, nil},
-					{"restore the store or downgrade, then the previous binary", []string{"Put back the pre-upgrade copy of `state.db`",
-						"`-wal`", "`-shm`", "the migrated store is v9", "(migration-guide.md#emergency-downgrade-recipe)",
-						"Install", "the previous binary",
-						"start the caller's old version"}, nil},
 				}},
 			},
 		},

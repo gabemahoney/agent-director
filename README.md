@@ -20,8 +20,9 @@ file, and tmux.
 ## Prerequisites
 
 - Linux x86_64 or Apple Silicon (arm64) macOS.
-- `claude` (Claude Code) 2.1.280 or later on PATH: the native binary, or a
-  wrapper that `exec`s it.
+- At least one of Claude Code and Codex, each on PATH or named by `[launch]
+  claude_path` / `codex_path` in `config.toml`. For Claude Code, `claude` (Claude
+  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it.
 - `tmux` 3.2 or later on PATH.
 - `jq`, `sqlite3` and `file` on PATH.
 

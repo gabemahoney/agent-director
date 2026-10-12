@@ -1,0 +1,12 @@
+agent-director:
+  Scope: User config (available in all your projects)
+  Status: ✓ Connected
+  Type: stdio
+  Command: /opt/tools/other-server
+  Args: --port 8080
+  Issue: Command not found: /opt/tools/other-server
+  Timeout: 30000ms
+  Environment:
+    OTHER_TOKEN=scrubbed
+
+To remove this server, run: claude mcp remove "agent-director" -s user

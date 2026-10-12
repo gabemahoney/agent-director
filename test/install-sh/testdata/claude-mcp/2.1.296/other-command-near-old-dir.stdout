@@ -1,0 +1,8 @@
+agent-director:
+  Scope: User config (available in all your projects)
+  Status: ✗ Failed to connect
+  Type: stdio
+  Command: @HOME@/.agent-director-tools/bin/agent-director
+  Args: serve --stdio
+
+To remove this server, run: claude mcp remove agent-director -s user

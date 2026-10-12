@@ -1,0 +1,2 @@
+Added stdio MCP server agent-director with command: @HOME@/.agent-director/bin/agent-director serve --stdio to local config
+File modified: @HOME@/.claude.json [project: @HOME@/w/a]

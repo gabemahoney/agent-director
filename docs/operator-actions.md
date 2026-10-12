@@ -247,17 +247,9 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 2. Deploy the caller's version; it resumes or reuses those rows (never delete
    them: `resume` uses their history).
 
-**Back** (the caller's version cannot be deployed):
-
-1. With the new binary, stop every agent of the set and every `serve`, as in
-   "Stopping a set of agents before a binary change".
-2. Put back the pre-upgrade copy of `state.db` (with `-wal` and `-shm`; delete
-   any `-wal` or `-shm` the copy lacks; this loses every write since). It is
-   the only way back: the migrated store is v9, and there is no v9 → v8
-   downgrade recipe (see
-   [Emergency downgrade recipe](migration-guide.md#emergency-downgrade-recipe)
-   in the migration guide), so the older recipes (v6 → v5 and below) cannot reach it. Install
-   the previous binary and start the caller's old version.
+**Back** (the caller's version cannot be deployed): follow
+[Going back to the previous release](#going-back-to-the-previous-release); it
+loses every write since the upgrade.
 
 ## A row stays `pending` and the trail shows `no_exec_form`
 
@@ -327,3 +319,302 @@ Fix: run this release's `install.sh` as the agents' user, by any install
 path in [Upgrade](install.md#upgrade). It is the only supported way to bring the old
 directory forward. Do not create `~/.config/agent-director` or copy files into
 it by hand.
+
+## `install.sh` refuses with `ErrMoveConflict`
+
+`install.sh` (exit 5, `err_name=ErrMoveConflict`) found a layout of AD's
+directory it will not move as it is. It changed nothing: the message names the
+cause and a remedy, and the install can be run again once the remedy is done.
+The old directory is `~/.agent-director`; the new one is
+`~/.config/agent-director`. A link at the old path that points to the new
+directory counts as no old directory and never causes this.
+
+Find the cause by its first line, then apply its remedy.
+
+- **The new directory is a dangling link, or not a directory** (on every
+  install). Remove it, or fix it so it is a directory (or a link to one), and
+  re-run.
+- **The old directory is a dangling link** that does not point to the new
+  directory (on every install). Remove it (`rm -- ~/.agent-director`) and
+  re-run.
+- **Both directories exist.** The message names both and the time each one's
+  store last changed. This release moves the old directory into the new place,
+  so one of them has to be set aside. Compare the two, then set one aside by
+  renaming it (a timestamp keeps the name free), and re-run:
+  - When the old directory holds the install in use, rename the new one. The
+    re-run moves the old directory in.
+  - When the new directory holds the install in use, rename the old one.
+  - A new directory that holds only what `make-template` (or the Go
+    client's `MakeTemplate`) created, such as a `templates` directory, next to
+    a real old install is the first case: rename the new directory. Afterwards
+    copy any template you want from it into the moved directory's `templates`.
+    This is a way to end up with both directories: on a host that has only the
+    old directory, the Go client's `MakeTemplate` and the CLI's `make-template`
+    run with `--store-path` create `~/.config/agent-director/templates/`
+    themselves, so running either before the install makes the next install
+    refuse. The CLI's `make-template` without `--store-path` creates nothing
+    there: it returns `ErrOldLayout`.
+
+  ```sh
+  mv -- ~/.config/agent-director ~/.config/agent-director.aside-$(date +%Y%m%d-%H%M%S)
+  mv -- ~/.agent-director ~/.agent-director.aside-$(date +%Y%m%d-%H%M%S)
+  ```
+
+  Run only the command for the case that applies. Delete the set-aside
+  directory once you are sure it holds nothing you need; `uninstall.sh
+  --purge` leaves it and names it.
+- **The old directory is a link or not a directory, or its `config.toml`,
+  `templates`, one template or its store is a link** (while the move is due).
+  The move copies the files and will not follow a link. Replace the link with a
+  copy of what it points at (the message prints the commands), re-run, and make
+  the link again in the new directory afterwards if you want it. A dangling
+  link is removed. When the old path is not a directory at all, rename it aside
+  and re-run: the install then makes a fresh one and moves nothing.
+- **A path key cannot be placed.** `[store] db_path` or `[log] error_log_path`
+  in `config.toml` names a place whose directory is missing or cannot be read,
+  so `install.sh` cannot tell whether it is inside the old directory. Create
+  that directory, or correct the value, and re-run.
+
+## `install.sh` refuses with `ErrAgentsLive`
+
+`install.sh` (exit 5, `err_name=ErrAgentsLive`) found something using the old
+directory. A move would change the path every hook and every running process
+names, so none may run across it. It changed nothing.
+
+The message lists what it found:
+
+- **Rows in a live state** (`pending`, `waiting`, `working`,
+  `check_permission` or `ask_user`) in the old store, with each row's
+  instance id.
+- **Processes running the old binary**, with each pid. A Claude Code session's
+  own MCP server (`agent-director serve --stdio`) is one: it runs the old binary
+  until that session ends.
+- **Rows that could not be read**: the store stayed busy past its busy
+  timeout, or is unreadable, so the install cannot tell whether an agent runs.
+  Nothing else is wrong until a re-run reads them again.
+- **The process check did not run**: this host has no `/proc` and no usable
+  `ps` or `lsof`, so no process was looked for. Check by hand that nothing
+  runs the old binary.
+
+Fix:
+
+1. Stop whatever starts agents (a scheduler, a loop, a caller), then every
+   agent, every `serve` and every caller, as "Stopping a set of agents before a
+   binary change" says.
+2. A row whose agent is already gone stays live until the old binary clears
+   it. The message prints the command, with the old binary's path:
+
+   ```sh
+   ~/.agent-director/bin/agent-director find-missing
+   ```
+
+   A row whose agent still runs is never cleared by it: end that agent first.
+3. Run `install.sh` again from a shell agent-director did not start (not from
+   inside an agent's session).
+
+## `install.sh` stops with `ErrMoveFailed`
+
+`install.sh` (exit 5, `err_name=ErrMoveFailed`) failed while copying the old
+directory into the new one, or was interrupted. The message names the cause.
+The old directory was not changed: the install removed its partial copy of the
+new directory, and `~/.config` as well when the move had created it and left it
+empty. When the failure came before any copy, the message says nothing was
+changed.
+
+Look at the cause the message gives, then:
+
+1. A full disk is the usual cause: free space on the disk that holds `~/` (and
+   on the one that holds the system temp directory, where `install.sh` stages
+   both binaries), or fix the cause the message names.
+2. A fifo, a socket or a device inside the old directory cannot be copied.
+   Remove it or move it out of the old directory.
+3. A temp directory inside either AD directory is refused: set `TMPDIR` to a
+   directory outside them.
+4. Run `install.sh` again. If an earlier run was killed (a power loss, `kill
+   -9`) and left the new directory with a `.move-incomplete` file in it, the
+   re-run deletes that partial directory and moves again. The one case it does
+   not repeat: the file names the kept directory (`~/.agent-director.pre-move-*`)
+   and that directory exists, so the move had finished; the re-run only removes
+   the file. A leftover old directory is then the both-present case in
+   "`install.sh` refuses with `ErrMoveConflict`".
+
+**Stopped after the rename.** A signal (`Ctrl-C`, `kill`) can arrive after the
+old directory was renamed but before the install finished the move. The message
+then says the install was stopped after the move had renamed the old directory.
+The move itself finished: the old directory is now the kept name
+(`~/.agent-director.pre-move-*`), `~/.config/agent-director` holds the complete
+copy, and nothing was removed. Run `install.sh` again: it continues from
+`~/.config/agent-director`, with no move due. The kept directory is the old one
+as it was; delete it once the upgrade is confirmed.
+
+## `install.sh` refuses config.toml or a template
+
+`install.sh` (exit 5; `err_name=ErrConfigMalformed` for `config.toml`,
+`err_name=ErrTemplateMalformed` for a template) read `config.toml` or a stored
+template and will not go on. It changed nothing: the message names the file,
+each line to change and what to do, and the install can be run again once the
+file is fixed. While the directory move is due the files are read in the old
+directory (see [Upgrade](install.md#upgrade)): the message names the copy it
+read there, and that copy is the one to fix.
+
+Find the cause by the message's first line.
+
+`config.toml`:
+
+- **`cannot tell which programs agent-director launches (the [launch] table)`.**
+  A `[launch]` line is outside the form `install.sh` reads. Keep `claude_path`
+  and `codex_path` each once, in lower case, under one `[launch]` header, each
+  on one line as `key = "<path>"` or `key = '<path>'`, with no backslash and at
+  most a `#` comment after it. A value is an absolute path or starts with `~/`;
+  `""`, or no line, leaves the key unset. A blank value, a relative path, `~`
+  alone and `~user/...` are refused (see [configuration](configuration.md)).
+- **`config.toml sets the question-tool key more than once under [defaults]`.**
+  The message lists each line that sets the key, under its old name or its new
+  one, `disable_ask_user`. Keep one, named `disable_ask_user`, and delete the
+  others.
+- **`config.toml sets defaults as a key and names ... in it`.** A line before
+  any header sets `defaults` as a key (an inline table, `defaults = { ... }`)
+  and names the old name of the question-tool key, which the rename cannot reach
+  inside it. Remove the line. Set each key it set on its own line under a
+  `[defaults]` header, the question-tool key as `disable_ask_user`, adding the
+  header at the end of the file when there is none. Add no header in the
+  line's place: the lines below it would fall under that header.
+
+A template (only the lines before its first `[table]` header are read; its
+tables never are):
+
+- **`template <file> holds a line the migration cannot read`.** A line there is
+  none of: blank, a `#` comment, or one `name = value` line with a bare name
+  (letters, digits, `_`, `-`) and a value that ends on the line. A quoted or
+  dotted name, or a value that goes on to the next line (a multi-line array or
+  string), is refused. Rewrite it as one bare `name = value` line.
+- **`template <file> sets ... more than once`** (the old name of the arguments
+  key, set on more than one line) and **`template <file> sets both ... and
+  agent_args`** (the old name and `agent_args` both set). Keep one line, named
+  `agent_args`, and delete the others.
+
+Either file:
+
+- **`cannot read <file>, which the agent-rename migration reads`.** Make it
+  readable by the user running the install.
+- **`cannot migrate <file> through its symlink`.** The file is a link the
+  migration cannot write through: its links loop, or the file they reach is in a
+  directory that is missing or cannot be written in (a dotfiles repository not
+  cloned yet, a read-only `/nix/store`). The migration changes the file, with
+  or without `--no-hooks`, so the link has to be fixed to reach a file in a
+  directory you can write in. Or make the change yourself where the file comes
+  from: in `config.toml` the question-tool key is named `disable_ask_user`; in a
+  template the arguments key is named `agent_args`, and a template with no
+  `agent` among the lines before its first `[table]` header gets the line
+  `agent = "claude"` there. A file that needs no change is neither written nor
+  refused.
+
+Run `install.sh` again after the change. It reads the same files again and
+changes nothing until every one is accepted.
+
+## A migration write failed after the binary swap
+
+`install.sh` (exit 1, no `err_name` line) could not write a file of the
+migration of `config.toml` and the templates, after it had installed the new
+binaries and before it opened the store. The message starts `the agent-rename
+migration could not write <file>; stopping before the store is opened`, and its
+`file` and `error` lines name the file and the cause (a full disk, a permission
+that changed since the checks, a failed copy). The same stop, exit 5, comes with
+the message `the agent-rename migration refuses <file>, which pre-flight
+accepted`: the file changed after the checks and now needs the fix in
+"`install.sh` refuses config.toml or a template".
+
+Nothing is lost. That file is as it was, every copy the install made is kept (a
+`<file>.pre-agent-rename.<YYYYmmdd-HHMMSS>` beside each file it had already
+migrated, and the directory the move kept), and the store is not opened. When
+the install moved the directory first, both stops also print, before the ways on,
+the `references:` lines of `config.toml` and the templates that still name the
+old directory: a re-run has no move due and would not print them, so change
+each by hand now (see [Upgrade](install.md#upgrade)). Look at what the message
+names:
+
+```sh
+ls -l <file> <file>.pre-agent-rename.*
+df -h <file>
+```
+
+Then either:
+
+1. Fix the cause the `error` line names (free space on the disk that holds the
+   file, or restore the permission, or fix the link and its target's
+   directory), then run this release's `install.sh` again, from a shell
+   agent-director did not start. It completes the migration: it changes nothing
+   in a file already migrated and makes no new copy of it, and then migrates the
+   store.
+2. Or take the way back to the previous release:
+   [Going back to the previous release](#going-back-to-the-previous-release).
+
+## Going back to the previous release
+
+Use this when the upgrade to this release must be undone. Whatever was written
+since the upgrade is lost: the previous release reads the directory as it was
+before the upgrade. The previous release's schema cannot read this release's
+store, so there is no other way back; a binary swap or a downgrade of the store
+does not work.
+
+1. Stop whatever starts agents, then every agent, every `serve` and every
+   caller.
+2. Set the new directory aside:
+
+   ```sh
+   mv -- ~/.config/agent-director ~/.config/agent-director.after-upgrade-$(date +%Y%m%d-%H%M%S)
+   ```
+
+3. If `~/.agent-director` exists again (something recreated it since the
+   upgrade), set it aside too. Then rename the newest kept directory back. It
+   holds the store, `config.toml` and templates as they were before the upgrade.
+
+   ```sh
+   mv -- ~/.agent-director ~/.agent-director.recreated-$(date +%Y%m%d-%H%M%S)
+   ls -d ~/.agent-director.pre-move-*
+   mv -- ~/.agent-director.pre-move-<newest> ~/.agent-director
+   ```
+
+   Run the first command only when the old path exists. The newest name is the
+   one with the latest timestamp.
+4. A store kept outside AD's directory (`[store] db_path`) was migrated in
+   place by the upgrade. Put back the copy made before the upgrade: `state.db`
+   with its `-wal` and `-shm`, deleting a `-wal` or `-shm` the copy lacks. Skip
+   this when the store was inside the directory.
+5. In `~/.claude/settings.json`, remove only the entries that hold a hook
+   command starting with `~/.config/agent-director/bin/agent-director` (written
+   out with your home directory). Leave every other entry. Check the result is
+   valid JSON.
+6. From the directory the upgrade ran in (for a `local` registration made
+   inside a git repository, any directory of that repository), remove AD's MCP
+   registration, if there is one, in the scope `claude mcp get agent-director`
+   shows. A name registered in several scopes needs this once per scope:
+
+   ```sh
+   claude mcp get agent-director
+   claude mcp remove agent-director -s <scope>
+   ```
+
+7. From the same directory, install the previous release with that release's
+   own `install.sh`, fetched from its tag, with the flags the original install
+   used (`--register-mcp`, `--no-hooks`, `--symlink-dir` and the rest). It puts
+   back its help hooks. Its `--register-mcp` registers nothing with the current
+   Claude Code (it prints `registration failed (continuing anyway)`), so when
+   step 6 showed a registration, add it back by hand, in the scope step 6
+   showed (`local`, `user` or `project`), with the old path:
+
+   ```sh
+   claude mcp add agent-director -s <scope> -- ~/.agent-director/bin/agent-director serve --stdio
+   claude mcp get agent-director
+   ```
+
+   This release's `install.sh` cannot install the previous release: it refuses
+   an earlier release's binaries.
+8. Change back by hand what was changed by hand to the new path after the
+   upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
+   folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
+   registration made by hand.
+9. Start the caller's previous version.
+
+Delete the `after-upgrade` and `recreated` directories once the previous
+release is confirmed working; `uninstall.sh --purge` removes them.

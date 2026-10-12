@@ -362,7 +362,10 @@ CMD="go test …"` does not get it; pass `-timeout` yourself.
 `install.sh`'s literal-follow tests (`test/install-sh/advice_follow.sh`) skip
 the ones whose advice is known not to work as written;
 `AGENT_DIRECTOR_RUN_KNOWN_BROKEN_ADVICE=1` runs them
-(docs/test-writing-guide.md "Literal-follow tests for error advice").
+(docs/test-writing-guide.md "Literal-follow tests for error advice"). A few
+of them build the previous release's binary and store from its git tag and
+skip when the checkout lacks it (a checkout without the `v0.11.1` tag; no
+workflow runs `test/install-sh`, so nothing in CI depends on it).
 
 The suite exit code propagates to the caller; output streams live. The
 image is built on first use and cached by the engine's layer cache

@@ -86,6 +86,13 @@ var errEmptyPath = errors.New("empty database path")
 // Bump (and add a migration) whenever the DDL in schema.go changes.
 const schemaVersion = 9
 
+// agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
+// migrateV8toV9, b.ssz) produces. install.sh holds the same number as
+// AGENT_RENAME_HOP_VERSION: it migrates config.toml and the templates only
+// for a store below it (SR-11.2), and a Go test fails when the two differ.
+// Unlike schemaVersion it never moves when a later hop is added.
+const agentRenameHopVersion = 9
+
 // dbFileMode is the mode the SQLite file itself is forced to on every Open.
 // 0600 = owner read/write only.
 const dbFileMode os.FileMode = 0o600

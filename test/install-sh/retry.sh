@@ -178,6 +178,13 @@ mkdir -p "$FAKES" "$ROOT/tmp"
 fake() { cat >"$FAKES/$1"; chmod 0755 "$FAKES/$1"; }
 fake claude <<'EOF'
 #!/bin/bash
+# `mcp get` finds no registration (non-zero), as Claude Code does for a server
+# it does not know; install.sh reads any other answer as a registration in
+# another form. Every other call answers as before: its version line, exit 0.
+if [[ "${1:-}" == mcp && "${2:-}" == get ]]; then
+    echo "No MCP server found with name: ${3:-}" >&2
+    exit 1
+fi
 echo "0.0.0 (fake claude, b.kym install-sh retry)"
 EOF
 fake sleep <<'EOF'
@@ -1090,7 +1097,10 @@ HOOKS=""
 # ends up a new file. Neither run nor --help mentions an "already installed"
 # message, which install.sh never prints, and --help's "Idempotent:" paragraph
 # says what this checks (pinned with its line breaks joined, as
-# advice_follow.sh pins --help sentences).
+# advice_follow.sh pins --help sentences). The paragraph also says the
+# agent-rename migration of config.toml and the templates runs only while the
+# store is below the rename's version, and makes no new copy of what an
+# earlier run already migrated.
 new_home rerun-no-flags
 mkdir -p "$H/.local/bin"
 HOOKS=1 PATH_PREFIX="$H/.local/bin"
@@ -1111,7 +1121,7 @@ report rerun-no-flags-already-installed "$(cat "$OUT" "$ERR" | grep -c 'already 
 run_install 0 '*' --help
 report help-exit-code "$RC" "0"
 report help-idempotent-steps-run-again \
-    "$(tr '\n' ' ' <"$OUT" | grep -cF 'Its steps run again: the binaries are copied again (with --keep-prior, not snapshotted: any earlier .prior files are kept), the store is opened (a state.db already at its target version is not migrated) and, with hooks on, settings.json and config.toml are merged again (no hook is added twice), each after a fresh timestamped .bak.')" "1"
+    "$(tr '\n' ' ' <"$OUT" | grep -cF 'Its steps run again: the binaries are copied again (with --keep-prior, not snapshotted: any earlier .prior files are kept), config.toml and the templates are migrated only while the store is below the rename'"'"'s version (a re-run that crosses the rename again changes nothing already migrated and makes no new copy of it), the store is opened (a state.db already at its target version is not migrated) and, with hooks on, settings.json and config.toml are merged again (no hook is added twice), each after a fresh timestamped .bak.')" "1"
 report help-already-installed "$(grep -c 'already installed' "$OUT")" "0"
 
 echo "[b.kym install-sh retry] summary: $pass passed, $fail failed"

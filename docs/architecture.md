@@ -3044,7 +3044,10 @@ overwrite the file at the same absolute path. The directory entry's
 identity is stable across re-installs even though the file's inode may
 change. Hook commands captured into a spawned Claude session therefore
 continue to invoke the same path after the operator runs `install.sh`
-again to upgrade.
+again to upgrade. The one break is the move of the directory: an upgrade from
+a release that kept its files in the old directory changes the path once, so
+no agent may run across it (see [Moving agent-director's
+directory](#moving-agent-directors-directory)).
 
 The library-side absolute-path invariant (SR-1.5) and the spawn-side
 hook-writing invariant (SR-1.8) together form a single contract: any
@@ -6715,7 +6718,15 @@ agent-director ships one installer, `install.sh`, the script of the
 `install-agent-director` skill
 ([Pattern B](#pattern-b--installsh-the-install-skill)). It installs
 `agent-director` and `agent-director-admin`, brings `state.db` to the
-current schema, and merges the Claude Code hooks (unless `--no-hooks`).
+current schema, and merges the Claude Code hooks (unless `--no-hooks`, and
+only with Claude Code present: a host that has only Codex gets no
+`settings.json` read, written or checked). It registers nothing with Codex
+and writes nothing in any Codex folder, and it never writes `[launch]`:
+which agents are present is read from the operator's own `config.toml` and
+from `PATH`, so a Codex-only host installs with no change to either agent.
+An upgrade also migrates `config.toml` and the stored templates to the
+agent-generic keys (see [Config and template migration at
+install-time](#config-and-template-migration-at-install-time)).
 The npm package is not an installer: it installs nothing outside
 `node_modules/`, so it neither installs the CLI nor stages the skill
 (see [Staging the install skill](#staging-the-install-skill)).
@@ -6771,17 +6782,46 @@ claude /install-agent-director (or `bash install.sh`)
     together (exactly one → exit 2)
   → install.sh preflight gates (whitespace-free install path, OS/CPU,
     required tools on PATH incl. sqlite3)
+  → which directory holds the install: ErrMoveConflict (exit 5, nothing on
+    disk changed) on a layout the move will not take; the move is due when
+    the old directory is present and the new one absent or half-made (see
+    "Moving agent-director's directory" below)
   → resolve the store database from [store] db_path in
-    ~/.config/agent-director/config.toml (a form the reader cannot read → exit
-    5, nothing on disk changed)
+    ~/.config/agent-director/config.toml, or in the old directory's
+    config.toml while the move is due (a form the reader cannot read → exit
+    5, nothing on disk changed); the same reader also reads [launch]
+    claude_path and codex_path (a [launch] form it cannot read → exit 5,
+    ErrConfigMalformed, nothing on disk changed)
+  → agent presence (see "Agent presence" below): an agent is present when
+    its [launch] path names an executable file or its program is on PATH;
+    neither Claude Code nor Codex present → exit 2 naming both, nothing
+    on disk changed; nothing is run and no [launch] key is written
+  → migration gate: the store at $state_db has user_version below
+    AGENT_RENAME_HOP_VERSION (see "Config and template migration at
+    install-time" below); a version that cannot be read → exit 5,
+    ErrVersionUnreadable (while the move is due, left to the live-row check
+    below, which reads the same store first)
   → hooks on only: a config.toml that sets defaults as a key before any
     header (defaults = { ... }) → exit 5, nothing on disk changed (see
     "The config.toml merge" below)
-  → hooks on only: a symlinked settings.json or config.toml the merges
-    cannot write through (its links loop, or its target's directory is
-    missing or cannot be written in) → exit 4 for settings.json, exit 5
-    for config.toml, nothing on disk changed (see "A symlinked
+  → gate open only, with or without --no-hooks: the migration's pre-flight
+    over config.toml and every template: a file it cannot read, or a form
+    it refuses → exit 5 (ErrConfigMalformed for config.toml,
+    ErrTemplateMalformed for a template), nothing on disk changed
+  → hooks on, Claude Code present: a symlinked settings.json the merge
+    cannot write through → exit 4, nothing on disk changed
+  → gate open only, with or without --no-hooks: the migration's link check,
+    for each file it will change → exit 5 (ErrConfigMalformed or
+    ErrTemplateMalformed); it never offers --no-hooks
+  → hooks on only: a symlinked config.toml the merge cannot write through
+    (its links loop, or its target's directory is missing or cannot be
+    written in) → exit 5, nothing on disk changed (see "A symlinked
     settings.json or config.toml" below)
+  → move due only: ErrAgentsLive (exit 5, nothing on disk changed) while the
+    old store holds a live row or a process runs the old binary; a gate that
+    was deferred above runs again here, then the migration's two checks
+  → pre-flight OK, then the per-agent summary lines (claude and codex; see
+    "Agent presence")
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
   → find both source binaries (agent-director-admin last from its
@@ -6793,6 +6833,10 @@ claude /install-agent-director (or `bash install.sh`)
   → version-stamp pairing: agent-director and agent-director-admin must
     report the same `version` stamp (version and commit), with a real
     commit, else exit 3
+  → capability check: both binaries' `version` must name config_dir
+    ~/.config/agent-director, else exit 3 (an earlier release's binary)
+  → move due only: the move (steps 0 to 10; ErrMoveFailed, exit 5, the old
+    directory untouched)
   → --keep-prior: snapshot both existing binaries to their .prior,
     unless this is a re-install of the same pair (then neither; the
     .prior files are kept)
@@ -6802,31 +6846,67 @@ claude /install-agent-director (or `bash install.sh`)
     ~/.config/agent-director/bin/agent-director and
     ~/.config/agent-director/admin/agent-director-admin
   → optional ~/.local/bin/agent-director PATH symlink (agent-director
-    only; agent-director-admin never gets one, under any option)
+    only; agent-director-admin never gets one, under any option); after a
+    move, the link install.sh manages is re-pointed and every other link or
+    $PATH entry into the old bin directory is printed
+  → config and template migration, gate open only (see "Config and template
+    migration at install-time" below): after the move and the binary
+    swap, before the first store open; config.toml and each template are
+    migrated in place, each with a .pre-agent-rename.<time> copy; a failed
+    write → exit 1, the store not opened. The move's "references" lines
+    print after it, so their line numbers are those of the migrated files
   → schema migration at install-time (see below): open/migrate state.db
     under a one-shot migrate-authorized sentinel (full six-step flow in
     install-agent-director/SKILL.md)
-  → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json
-    (an empty or whitespace-only file is merged as {}; not valid JSON,
-    more than one JSON document, or valid JSON of another shape → exit
-    4, the file left as it was; see "The settings.json merge" below)
+  → merge SessionStart + SessionEnd hooks into ~/.claude/settings.json,
+    with Claude Code present only (an empty or whitespace-only file is
+    merged as {}; not valid JSON, more than one JSON document, or valid
+    JSON of another shape → exit 4, the file left as it was; see "The
+    settings.json merge" below); entries naming the old directory's binary
+    are removed first (--no-hooks prints them); with Claude Code absent
+    the step prints that it is skipped (even with --no-hooks), and
+    settings.json is not read, written or checked
   → set inject_help_hook = true in config.toml's [defaults] table (see
-    "The config.toml merge" below); --no-hooks skips this and the
-    settings.json merge; both merges keep the file's mode and write
-    through a symlink to its target, keeping the link (see "Merged files
-    keep their mode" and "A symlinked settings.json or config.toml"
-    below)
-  → optional MCP registration (--register-mcp)
+    "The config.toml merge" below), with or without Claude Code present;
+    --no-hooks skips this and the settings.json merge; both merges keep
+    the file's mode and write through a symlink to its target, keeping the
+    link (see "Merged files keep their mode" and "A symlinked
+    settings.json or config.toml" below)
+  → MCP registration, Claude Code present only (absent: one line, that
+    --register-mcp was skipped because Claude Code is not installed, and
+    no `mcp get`): read with `"$CLAUDE_PROG" mcp get agent-director`; a
+    registration naming the old binary is re-pointed with --register-mcp,
+    else printed (see "Moving agent-director's directory" below); one
+    already naming this binary with `serve --stdio` is left alone;
+    --register-mcp otherwise adds it with
+    `"$CLAUDE_PROG" mcp add agent-director -- <path> serve --stdio`; a
+    failed add or remove ends the install with exit 6, after every other
+    step
   → print the admin path once, for the human
 ```
+
+The pre-flight summary prints one line per agent: `  claude  : <version>
+(program: <path>)` or `not installed (<reason>)`, and `  codex   : <path>
+(version not checked: ...)` or `not installed (<reason>)`. A `[launch]`
+path that names no executable file adds a line saying so, and the line that
+follows says which program is used instead.
 
 Pattern B is where the CLI / state / hooks side effects happen.
 
 **Exit codes, and exit 5's cause line (b.cfq).** install.sh's header
-(`--help`) lists its exit codes: 2 pre-flight, 3 the source binaries or
-their version stamps, 4 the `settings.json` hook merge (with hooks on, a
+(`--help`) lists its exit codes: 1 a write of the config and template
+migration that failed after the binaries were swapped (see "Config and
+template migration at install-time" below; it has no `err_name=` line),
+2 pre-flight (neither Claude Code nor Codex found included), 3 the source
+binaries or
+their version stamps and `config_dir`, 4 the `settings.json` hook merge (with hooks on, a
 symlinked `settings.json` it cannot write through included, refused in
-pre-flight), 5 the config file or the store open and schema migration. Exit 5 has causes needing
+pre-flight), 5 the config file, a template or the store open and schema
+migration, 6 the
+MCP registration (`claude mcp add`, or the `claude mcp remove` before a
+re-add; see "MCP registration" under "Moving agent-director's directory"
+below). Exit 6 is the one status that comes after the work: every other step is
+done and kept, and no `err_name=` line is printed. Exit 5 has causes needing
 different remedies, so every exit-5 path ends with one line on stderr, its
 last, `install.sh: err_name=<Name>`. That line is the contract: a caller
 branches on `<Name>`, never on the English above it. The status stays 5
@@ -6834,16 +6914,27 @@ for every cause, so a caller that checks only for 5 is unaffected.
 
 | `<Name>` | Sites | Remedy |
 |---|---|---|
-| `ErrVersionUnreadable` | `ad_fail_unreadable_version`: step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
-| `ErrConfigMalformed` | pre-flight `ad_store_db_path`, `ad_store_busy_timeout_ms` and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run |
+| `ErrVersionUnreadable` | `ad_fail_unreadable_version`: the migration gate's read (pre-flight, before anything on disk changes; "reading state.db's schema version FAILED"), step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
+| `ErrConfigMalformed` | pre-flight `ad_store_db_path` (including its `[launch]` reader), `ad_store_busy_timeout_ms`, the migration's checks of `config.toml` (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, all but the apply's before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
+| `ErrTemplateMalformed` | the migration's checks of a stored template (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) | fix the template the message names (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
 | `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
+| `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
+| `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
+| `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
 | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
 | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
 
-`ErrVersionUnreadable` and `ErrSchemaVerifyFailed` are install.sh's own
-signals, not agent-director error names: they are not in `errnames.Catalog`
-and no verb returns them (b.cfq's decision, overriding b.7b4's "no new
-error name" for these two). The `^Err[A-Za-z0-9]+$` check keeps a relayed
+`ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
+`ErrAgentsLive` and `ErrMoveFailed` are install.sh's own signals, not
+agent-director error names: they are not in `errnames.Catalog` and no verb
+returns them (b.cfq's decision, overriding b.7b4's "no new error name" for
+the first two). `ErrTemplateMalformed` is the other kind: it is agent-director's
+own catalogued name (`LoadTemplate` returns it for a template it refuses),
+which install.sh's pre-flight gives for a template its migration refuses, so
+a caller that branches on it gets one remedy, fix the template, whether the
+refusal came from install.sh or from a verb. `ErrConfigMalformed` is shared
+the same way. The exit-1 write failure of the migration has no `err_name`.
+The `^Err[A-Za-z0-9]+$` check keeps a relayed
 name holding a newline from adding a second cause-line-shaped line at the
 end of stderr, and every relayed output (the open's stderr at step 4, the
 envelope in `ad_fail_config_refused`, a read's output under
@@ -6856,6 +6947,49 @@ exits 5 on a runtime error, so the `settings.json` merge checks jq's status
 and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
 (jq's error is above)"); sqlite3 exits 5 on a busy database, and each
 caller of `ad_user_version` captures the read's status beside its output.
+
+**Agent presence (b.ssz).** `install.sh` needs at least one of Claude Code and
+Codex. The `[launch]` keys come from the same reader as the store path:
+`ad_store_db_path <config> <home> <base> launch` prints the store path, then
+`claude_path`, then `codex_path` (an empty line for a key that is unset), a
+`~/` value joined onto `$HOME`, an absolute one as written, never joined onto
+the base. The reader refuses a `[launch]` form it cannot read (a quoted or
+dotted key, `[launch]` or a key in another letter case, a key set twice, a
+value that is not one line of `"..."` without a backslash or `'...'`, a
+relative path) as every other form, exit 5, `ErrConfigMalformed`, with a
+headline that names the `[launch]` table. `ad_find_agent <name> <launch
+path>` then decides presence, once per agent, right after the reader and
+before anything on disk changes:
+
+- an agent is present when its `[launch]` path names an existing executable
+  file, which is then the program used (`CLAUDE_PROG` for Claude Code), or
+  else when its program name (`claude`, `codex`) is on `PATH`, which is then
+  the program used. A path that is set and names no executable file is
+  reported on the summary's line, and the `PATH` program, when there is one,
+  is used.
+- presence only: nothing is run to decide it, and no `[launch]` key is ever
+  written.
+- neither present is exit 2, nothing on disk changed:
+  `install.sh: neither Claude Code nor Codex was found; refusing to
+  install.`, one reason line per agent, and a pointer to "Requirements" in
+  docs/install.md for a Codex install.
+- `CLAUDE_PRESENT` and `CODEX_PRESENT` carry the result to the later steps.
+  With Claude Code absent, the hooks step prints `hooks   : skipped because
+  Claude Code is not installed (settings.json is not touched)` (this wins
+  over `--no-hooks`, and the old directory's help-hook entries are neither
+  removed nor printed), `settings.json`'s symlink check does not run, and
+  the MCP step prints that `--register-mcp` was skipped because Claude Code
+  is not installed and runs no `mcp get`. `inject_help_hook` is still set
+  unless `--no-hooks`. Codex present needs nothing from `install.sh`: it
+  registers nothing and writes nothing in a Codex folder, and the summary
+  line gives the program's path and says its version was not checked, with
+  the command to check it by hand, because `codex --version` itself writes
+  files there.
+
+`install.sh` and `uninstall.sh` stop at once, exit 2, when `HOME` is unset,
+empty or relative, before any other check. **Must use:** every call to Claude
+Code goes through `"$CLAUDE_PROG"`, which is set only from a present agent,
+never a literal `claude`; Codex is never run.
 
 **The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
 both `agent-director help` entries into `~/.claude/settings.json` with one
@@ -6991,8 +7125,10 @@ and J9 (an installed admin from another build, refused, then
   both `--binary` and `--admin-binary`, never one per binary; a
   `--from-release` tag before 0.11.0, refused at once
   without the CDN retry, because such a release has no admin asset
-  ("release <tag> has no agent-director-admin binary"; the advice is a
-  release of 0.11.0 or later).
+  ("release <tag> has no agent-director-admin binary"; the advice is to
+  install this release or later with `--from-release <tag of this release or
+  later>`, or an earlier release with that release's own `install.sh`,
+  fetched from its tag).
 
 **The source-tree version check (b.go9, b.1rs).** When `agent-director`
 comes from `--binary` or the in-repo build (never from PATH, never with
@@ -7333,6 +7469,131 @@ target edited, `~/.config/agent-director` gone); a `settings.json` linked into a
 unchanged); and end of input (the prompt, exit 1, HOME unchanged). A
 change adds its cases to both scripts' tests.
 
+#### Config and template migration at install-time
+
+This release renames a `config.toml` key under `[defaults]` and a template's
+arguments key, and gives every template an agent, so an install that crosses
+the rename rewrites `config.toml` and every stored template. The store's
+upgrade carries the same rename (see [Store upgrade to agent-generic
+names](#store-upgrade-to-agent-generic-names)); `install.sh` is the only
+code that edits the two kinds of file. The loaders refuse the old shapes
+(see [Refusal of old names](#refusal-of-old-names)), so a file left
+unmigrated is refused when agent-director loads it.
+
+**When it runs (the gate).** The migration runs for an install whose store
+exists at `$state_db` (in the old directory while the move is due) and whose
+`user_version` is below `AGENT_RENAME_HOP_VERSION`, the version the rename's
+store hop produces. Any other install, a fresh one and a re-run over a
+migrated store included, reads and changes neither kind of file. The
+constant is `install.sh`'s one name for that version, on a line of its own
+(`AGENT_RENAME_HOP_VERSION=<n>`); `TestInstallShHopVersionMatchesStore`
+(`internal/store/install_sh_hop_version_test.go`) fails when it differs from
+`internal/store`'s `agentRenameHopVersion`, or when that is above the
+current schema version. The gate reads the version from the database
+header (`ad_header_user_version`) and falls back to `sqlite3 -readonly`
+when the header's magic is wrong, a non-empty `-wal` or `-journal` sits
+beside the file, or the value is negative. A version neither gives stops the
+install with exit 5, `ErrVersionUnreadable` ("reading state.db's schema
+version FAILED"), before anything on disk changes. While the move is due the
+gate defers to the live-row check, which reads the same store and refuses
+first, and runs again after it.
+
+**Pre-flight.** With the gate open, `ad_migrate_preflight_all` runs the
+migration block over `config.toml` and each `templates/*.toml` of the
+directory pre-flight resolves, with or without `--no-hooks`. A file it
+refuses, or cannot read, stops the install with exit 5 and that file's
+name, `ErrConfigMalformed` for `config.toml` and `ErrTemplateMalformed` for a
+template (`ad_agent_rename_err_name`), before anything on disk changes. It
+keeps which files it will change. The link check follows
+(`ad_migrate_link_checks`): a file it will change that is a symlink
+`ad_link_write_check` cannot write through is refused with the same names,
+whether or not `--no-hooks` is given, and the message never offers
+`--no-hooks`: the migration writes the file anyway. It names the changes to
+make by hand where the file comes from. A file that needs no change is not
+link-checked. The `config.toml` check comes before the merge's own, so the
+merge's `--no-hooks` advice is never given for a file the migration writes.
+
+**The accepted line form.** The block holds config files and templates to the
+form `ad_store_db_path` reads: blank lines and `#` comments, `[name]` headers
+(one bare key; blanks around and inside the brackets, a trailing comment),
+and `name = value` lines whose name is one bare key (letters, digits, `_`,
+`-`) and whose value ends on its line, with an optional trailing comment.
+Names match in any ASCII letter case. A UTF-8 byte-order mark on line 1,
+CRLF line ends and a missing final line end are all handled and kept. The
+block runs under `LC_ALL=C`, with bash builtins only.
+
+**`config.toml`.** The `[defaults]` key that set the question-tool switch is
+renamed in place, in any letter case, under any `[defaults]` header (any
+letter case). It is refused when the old or the new key is set more than
+once under `[defaults]` (the count is old hits plus new hits), and when
+`defaults` is set as a key before any header and holds the old key (an inline
+table the block does not edit). A `config.toml` with neither key, and a
+missing one, needs no change. `config.toml` is held to the line form by
+`ad_store_db_path` already, which has run first, so this block reads it for
+those keys only.
+
+**A template.** Only the top-level part is read and changed: the lines
+before the first table header, the first line whose first non-blank
+character, after a byte-order mark on line 1, is `[`. Tables are never read
+or changed, so a table that holds a key of the same name is untouched.
+In that part, the template's old arguments key is renamed `agent_args` in
+place, and `agent = "claude"` is inserted just before the first header (last,
+after a final line end is added, when the file has no header) when the part
+holds no `agent` key. The inserted line takes the file's line end: CRLF when
+the file's first line end is CRLF, else LF. A template is refused when a
+top-level line is outside the accepted form (a quoted or dotted name, a value
+that continues on the next line), when the old arguments key is set more than
+once, and when it sits beside `agent_args`. A template that has `agent`
+already and no old key needs no change.
+
+**The apply.** After the move and the binary swap, and before the first
+store open (`ad_migrate_apply_file`, run over `config.toml` and then each
+template), each file the block changes is written as follows:
+
+1. It decides first, with stdout dropped, whether the file needs a change:
+   nothing is created for a file that needs none (it may sit behind a link
+   into a directory this install cannot write), and a re-run over migrated
+   files makes no new backup.
+2. The new contents are written to `<target>.new`, where `<target>` is the
+   file a symlink resolves to (`ad_resolve_link`), under `umask 077`.
+3. The file is copied, with its mode, to `<file>.pre-agent-rename.<time>`
+   beside the file or link (`ad_backup_keeping_mode`; `<time>` is the one
+   `ad_ts` stamp this run takes once, so every backup of the run shares it).
+4. The `.new` is `chmod`ed to the target's mode and `mv -f`'d over the
+   target. The file is replaced whole, keeping its mode, and a symlink is
+   written through, never replaced.
+
+A failed backup stops at once, before the `mv`. Each file migrated prints
+`migrate : <file> migrated for the agent rename (copy: <backup>)`; with
+nothing to change, one line says that `config.toml` and the templates need
+no change. The move's "references" lines print after the migration, so
+their line numbers are those of the migrated files.
+
+**A failed write, and re-runs.** A step of the apply that fails (the
+`.new`, the copy, the `chmod`, the `mv`) ends the install with exit 1:
+`install.sh: the agent-rename migration could not write <file>; stopping
+before the store is opened.`, then `file    : <file>` and `error   : <what
+failed>`, no `err_name`. The file is as it was, the `.new` is removed, every
+copy this install made is kept, and the new binaries are already installed
+while the store is not opened. `ad_migrate_ways_on` gives the two ways on:
+fix the cause and re-run this release's `install.sh`, which changes nothing
+in a file already migrated and so completes the rest and then migrates the
+store; or take the way back (see [operator-actions.md](operator-actions.md),
+"A migration write failed after the binary swap" and "Going back to the
+previous release"). A file that pre-flight accepted and the apply refuses
+(it changed in between) stops the same way, with exit 5 and the file's
+name and the same two ways on. Both are safe to re-run: a migrated file
+needs no change, and the gate stays open until the store is migrated.
+
+**Must use:** the migration reads and rewrites a file only through the block
+between `# >>> ad_agent_rename_migrate` and `# <<< ad_agent_rename_migrate`,
+whose status (0 changed, 3 nothing to change, 2 refused, 4 a write to stdout
+failed) the caller reads in full, never a status of 1 as "no change"; a
+write of a migrated file goes through the apply above, never a bare `mv`.
+A change to the accepted form, or to either file's rules, adds its cases to
+the migration's matrix (see
+[dbpathfix](#dbpathfix-the-installsh-store-path-matrix-reusable-test-fixture)).
+
 #### Schema migration at install-time
 
 Because the store refuses to auto-migrate under an agent (see the
@@ -7407,17 +7668,22 @@ install. `install.sh` never reads or writes `store_meta`.
 
 **Which store: `[store] db_path` (b.2io).** `state.db` in this flow is the
 database the binary opens: `~/.config/agent-director/state.db`, or the `[store]
-db_path` of `~/.config/agent-director/config.toml` (`pkg/api`'s `resolveStorePath`,
+db_path` of `~/.config/agent-director/config.toml` (while the move is due,
+those of the old directory instead; the reader's `<base>` argument below) (`pkg/api`'s `resolveStorePath`,
 tiers 2 and 3, which are `config.Store.EffectiveDbPath`, the path the hook
 handler opens too; `install.sh` passes no `--store-path`). `install.sh` reads
-`db_path` itself in pre-flight, with `ad_store_db_path` (the
+`db_path` itself in pre-flight, with `ad_store_db_path <config> <home> <base> [log]` (the
 self-contained block between the `# >>> ad_store_db_path` and
 `# <<< ad_store_db_path` lines; bash builtins only), and keeps the result
 in `$state_db`. It resolves as Go does (`internal/config`'s
 `resolvePathField`, then `resolveStorePath`): unset, empty or no config
 gives `~/.config/agent-director/state.db`; a leading `~/` is joined onto `$HOME`;
 an absolute path is used unchanged; anything else (`~`, `~user/x`, `./x`,
-`../x`) is joined onto `~/.config/agent-director/`; every join is cleaned as
+`../x`) is joined onto `<base>`, the directory the config file is in
+(`~/.config/agent-director/`, or the old directory while the move is due);
+with `log` it also prints `[log] error_log_path` on a second line, resolved
+by the same rules, except that a `?` in it is no refusal and an unset or
+empty one prints as empty; every join is cleaned as
 `filepath.Join` cleans it (`ad_clean_path`); `$VAR` stays literal. Step 2
 reads `$state_db`, step 3 writes the sentinel at
 `ad_sentinel_path "$state_db"` (the store's `sentinelPath`,
@@ -7461,7 +7727,9 @@ Drift guards and their matrix: see
 [dbpathfix](#dbpathfix-the-installsh-store-path-matrix-reusable-test-fixture).
 **Must use:** `install.sh` code that needs the store's path uses
 `$state_db`, and its sentinel `ad_sentinel_path`, never
-`~/.config/agent-director/state.db`; a change to the store-path rules on either
+`~/.config/agent-director/state.db`, and calls the reader with the base for
+the directory that holds the install (`PREFLIGHT_ROOT`: the old directory
+while the move is due, the new one otherwise), never a fixed one; a change to the store-path rules on either
 side (`resolvePathField`, `EffectiveDbPath`, `resolveStorePath`,
 `sentinelPath`, or the reader) adds its cases to the `dbpathfix` matrix.
 
@@ -7645,10 +7913,16 @@ agent-director with one script.
 │                                    between an install's sentinel write
 │                                    and the store open that consumes it)
 ├── templates/                     (mode 0700; created lazily)
-│   └── <name>.toml                (mode 0600)
+│   ├── <name>.toml                (mode 0600)
+│   └── <name>.toml.pre-agent-rename.<time>
+│                                  (the template as it was before the
+│                                    migration rewrote it; its mode)
 ├── config.toml                    (operator-owned; a hooks-on install
 │                                    creates it, mode 0600, only when it
 │                                    is missing, and a merge keeps its mode)
+├── config.toml.pre-agent-rename.<time>
+│                                  (config.toml as it was before the
+│                                    migration rewrote it; its mode)
 └── errors.log                     (touched on first hook-fire failure)
 
 ~/.local/bin/agent-director       → ~/.config/agent-director/bin/agent-director   (optional)
@@ -7662,6 +7936,16 @@ agent-director with one script.
 With `[store] db_path` set, `state.db` (with its `-wal` and `-shm`) is at
 that path instead, and `migrate-authorized` beside it (see
 [Schema migration at install-time](#schema-migration-at-install-time)).
+
+The `.pre-agent-rename.<time>` copies are written only by an install that
+migrates the file (see [Config and template migration at
+install-time](#config-and-template-migration-at-install-time)), one per
+file migrated, all with the one `<time>` (`YYYYmmdd-HHMMSS`) of that run.
+Each is a regular copy of the file's contents, made beside the file or its
+symlink, at the file's mode; nothing reads or removes them, so they stay
+until the operator deletes them (`uninstall.sh --purge` removes them with
+the directory). The move's scan for references to the old directory skips
+those in `templates/`.
 
 The install root is `layout.Dir` under `$HOME`: the installer reads no
 `XDG_CONFIG_HOME`. `~/.config` is the directory it lives under, and the
@@ -7710,7 +7994,11 @@ rolling back means removing `agent-director-admin`; a re-run of that
 upgrade keeps `agent-director.prior` and prints the same advice.
 Without `--keep-prior`, rollback is a re-install of the previous tag
 via `install.sh --from-release v<old>`, which refuses a tag before
-0.11.0 (no `agent-director-admin` asset). The
+0.11.0 (no `agent-director-admin` asset). Neither works across the
+move of the directory (see [Moving agent-director's
+directory](#moving-agent-directors-directory)): the upgrade that makes it
+takes no `--keep-prior` snapshot, and a binary swap cannot undo it, so the
+way back there is the kept directory. The
 version-manager pattern (canonical symlink → versioned files) was
 considered and rejected for b.43y: it only earns its complexity when
 multiple concurrent versions are actually being managed.
@@ -7727,9 +8015,13 @@ surfaces `ErrSchemaMismatch`. Roll back only before letting the new
 binary migrate the DB. After it has migrated, first return the store to
 the older version with the emergency downgrade recipes in
 docs/migration-guide.md §5, newest first. A store at v9 has no recipe: the
-v8 → v9 hop renamed columns and added a column and two tables, and no recipe reverses it, so the only way back
-from v9 is a copy of `state.db` taken before the install (see [Store upgrade
-to agent-generic names](#store-upgrade-to-agent-generic-names)). For a store
+v8 → v9 hop renamed columns and added a column and two tables, and no recipe
+reverses it, so the way back from v9
+is the old directory the move kept, which holds the store as it was before
+the install (see [Moving agent-director's
+directory](#moving-agent-directors-directory) and [Store upgrade to
+agent-generic names](#store-upgrade-to-agent-generic-names)); a store kept
+outside the directory is put back from the copy the operator made first. For a store
 at v8 or older the recipes are (for v8 → v7: drop the two
 settle columns, then stamp `user_version = 7`; then, for an older
 release, v7 → v6: drop the twenty v7 columns, then stamp
@@ -7742,6 +8034,258 @@ re-migration creates a new one and every label written before the
 rollback reads as another store's. Stop every agent before the rollback
 and start them again after it.
 
+### Moving agent-director's directory
+
+A release before this one kept its files in a directory directly under the
+home (the old directory; see [`internal/layout`](#internallayout)). This
+release keeps them in `~/.config/agent-director`, so `install.sh` moves an old
+install across. It is the only code that moves files: the binary, the hook and
+the clients refuse with `ErrOldLayout` until it has run (see [Old layout
+(step 2b)](#pkgapi-client-lifecycle)).
+
+**When it is due.** The move is due when the old directory is present and the
+new one is absent or holds the marker `.move-incomplete`. `install.sh`
+decides it with the presence rules of `internal/layout/old.go` (a link at the
+old path whose target is the new directory is a compatibility link and counts
+as no old directory) and reads each pre-flight value in the directory that
+holds the install: the old one while the move is due, the new one otherwise
+(`PREFLIGHT_ROOT`, `PREFLIGHT_CONFIG`). Every install after the move, and
+every fresh install, finds nothing to move and makes no move.
+
+**Order in `install.sh`.** The layout checks (`ErrMoveConflict`) come before
+every other pre-flight reader; with the move due, the live-row and process
+checks (`ErrAgentsLive`) follow the store-path and busy-timeout reads. The
+move itself runs after every pre-flight check and after both binaries are
+found, downloaded and checked (architecture, version-stamp pairing, the
+capability check below), and before the binary swap, the schema migration
+and the other store steps. A refusal before it changes nothing on disk. The
+config and template migration comes after the move and the binary swap and
+before the first store open; while the move is due its pre-flight reads the
+old directory's files, and its apply writes the new directory's copies (see
+[Config and template migration at
+install-time](#config-and-template-migration-at-install-time)).
+
+**Three refusals, one capability check.** `ErrMoveConflict`, `ErrAgentsLive`
+and `ErrMoveFailed` end the install with exit 5 and the cause line (see the
+table above); like `ErrVersionUnreadable` they are `install.sh`'s own names,
+not in `errnames.Catalog`. Their remedies are in
+[operator-actions.md](operator-actions.md). A pair of binaries whose
+`version` output lacks `config_dir`, or names another directory, is refused
+with exit 3 before the move: an earlier release's binary would be installed
+into the new directory. `ad_config_dir_of` reads the field; the check reads no
+store.
+
+- `ErrMoveConflict` causes, in the order they are checked: the new path is a
+  dangling link or not a directory (every install); the old path is a
+  dangling link other than a compatibility link (every install); both
+  directories are present and the new one holds no marker (the message names
+  both with the time each store last changed, and gives the aside command for
+  either); and, only while the move is due, the old path is a link or not a
+  directory, its `config.toml`, `templates/`, a template or a store inside it
+  is a link, or a path key cannot be placed. The last two need the keys the
+  reader has read, so they come after it. A new directory that holds only what
+  `make-template` (`api.MakeTemplate`) created beside a real old install is the
+  both-present case. `MakeTemplate`, and the CLI's `make-template --store-path`
+  with it, creates `~/.config/agent-director/templates/` on a host that has
+  only the old directory, so running it before the install is a way to get
+  both directories, and the next install refuses.
+- `ErrAgentsLive`: the old store holds a row in a live state (`pending`,
+  `waiting`, `working`, `check_permission`, `ask_user`; read with
+  `sqlite3 -readonly`, waiting the busy timeout, a failed read being a
+  refusal too) or a process runs the old binary (`ad_scan_old_processes`:
+  `/proc/<pid>/exe` on Linux; `ps` and `lsof` on macOS; a host with neither
+  prints that the check did not run). The checks run in pre-flight and again
+  as the move's first step.
+- `ErrMoveFailed`: any failure before the rename, an interrupt included.
+
+**The steps.** Step 0 stages both binaries into `mktemp` files outside both
+directories, so the move's removals can never delete what is about to be
+installed (also with `--from-release`). Then:
+
+1. The live-row and process checks run again.
+2. A stale partial new directory is removed; `~/.config` (mode 0700) and the
+   new directory are created.
+3. The marker `.move-incomplete` is written in the new directory.
+4. Everything but `bin/`, `admin/` and a store inside the old directory is
+   copied, each file and directory owner-only (umask 077) and then given the
+   original's mode, never with `cp -p` or `cp -a`; a link stays a link
+   (`ad_move_walk copy`). A fifo, socket or device refuses the move.
+5. The store is copied by SQLite's backup from the original opened
+   `-readonly`, its `-wal` and `-shm` never copied as files, and the copy is
+   checked for the same `user_version` and `.sha3sum --schema`
+   (`ad_move_backup_store`).
+6. Every other copied file is compared byte for byte
+   (`ad_move_walk verify`).
+7. The path keys in the new `config.toml` are rewritten (below).
+8. The kept directory's name is written into the marker.
+9. The old directory is renamed to `~/.agent-director.pre-move-<YYYYmmdd-HHMMSS>`
+   (`-2`, `-3` on a clash). The move makes no backup of its own: the kept
+   directory is the original.
+10. The marker is removed. The store reader and the busy timeout are read
+    again, now in the new directory.
+
+`--keep-prior` snapshots nothing on this install (the new `bin/` and `admin/`
+hold no earlier binary) and says so.
+
+**Path keys.** `[store] db_path` and `[log] error_log_path` are resolved
+against the old directory (`ad_store_db_path ... log`) and classed by
+physical path (`ad_key_class`): `in` (inside lexically and physically),
+`link` (outside lexically, inside physically), `warn` (inside lexically,
+outside physically: an inner link leads out) and `out`. A relative value
+inside stays as written; an absolute or `~/` value inside is rewritten to the
+same place under the new directory in its own form, its quoting and comment
+kept, or to the new place's absolute path when it reaches the old directory
+only through a link; a value outside stays as written, except a relative one,
+which becomes the absolute path it resolves to. A `warn` value, of any form,
+is placed by its physical place: it is written as the absolute physical path
+it reaches today, so the key still names the same place after the rename (a
+value left as written would name nothing once the old directory is renamed
+away, and a relative one would resolve against the new directory, where a
+copied relative link points one level deeper). This is `ad_move_key_newvalue`'s
+`warn` case; no line reports a rewritten key, and the `move`, `moved` and
+`kept` summary lines are all the move prints about them. Only the new copy is
+rewritten, before the rename. A store that is a link to anywhere (class
+`in`, `link` or `warn`) is `ErrMoveConflict`. A `[launch]` value, an `extra_env`
+value or a template's `cwd` that names the old directory is printed with its
+fix and left as written (`ad_move_print_references`).
+
+**A failed move.** `ad_move_fail` removes the partial new directory and, with
+`rmdir` only, a `~/.config` the move created, says why (a full disk is the
+usual cause) and ends with `ErrMoveFailed`; the old directory was not changed.
+The traps are armed for the move only: `EXIT` chains onto the install's own
+`EXIT` trap (`ad_exit_cleanup`) rather than replacing it, and `INT`, `TERM`
+and `HUP` call `ad_move_fail`. After the rename nothing is removed: a signal
+that arrives after `mv` completed but before the traps are put back finds the
+rename done (`ad_move_rename_done`), removes nothing, and ends with
+`ErrMoveFailed` and a message that the move finished (the old directory is now
+the kept name, the new one holds the complete copy) and that a re-run continues
+with no move due. A re-run
+that finds the marker reads the kept name in it: the kept directory exists,
+so the move had finished and only the marker's removal had not: the marker
+goes, and a present old directory is the both-present conflict; otherwise,
+with the old directory present, the new one is a partial copy and is deleted
+and the move runs again; otherwise the marker goes.
+
+**What the move changes outside the directory.** After the rename the
+install writes the new binaries and then, on the path each concerns:
+
+- **Help hooks.** With hooks on, the `settings.json` merge removes every
+  entry that holds a hook command starting with the old directory's
+  `bin/agent-director` path, then adds the new entries. The test is
+  `uninstall.sh`'s `ours` (an object whose `hooks` list holds an object
+  whose `command` starts with that path), so an entry that holds both an
+  old-path hook and another hook is removed whole, the other hook with it.
+  With `--no-hooks` the file is left and each such entry is printed with its
+  fix. With Claude Code absent the file is not touched and the entries are
+  neither removed nor printed (see "Agent presence" above).
+- **MCP registration.** With Claude Code present, at the MCP step (after the
+  store steps, never in pre-flight) `install.sh` runs `"$CLAUDE_PROG" mcp get
+  agent-director` in the directory it runs in and classes the result by
+  stable markers (`ad_mcp_classify`). What `get` finds depends on the directory, as
+  captured from Claude Code 2.1.280 and 2.1.296: a `local` registration made
+  inside a git repository is found from every directory of that repository
+  (it is keyed to the repository root), made outside one only from the exact
+  directory; `project` from the directory holding `.mcp.json` and below, not
+  a parent; `user` everywhere. With one name in several scopes `get` shows
+  one, `local` before `user` before `project`, so a classification reads that
+  one only. The kinds: `none` (non-zero exit), `old_plain` (a `Command:` line naming the old
+  binary with `serve --stdio` and no `Environment:` block), `old_other` (the
+  old binary with other arguments or an environment), `unreadable` (any other
+  shape), `current` (`Command:` is this install's canonical binary and the
+  whole text after `Args:` is `serve --stdio`) and `other` (another command;
+  nothing is printed). An `Environment:`
+  block counts only when an indented `KEY=value` line follows the
+  `Environment:` line: a bare `Environment:` line, which Claude Code prints
+  for `env: {}`, is a plain registration. It ignores the `Status:`, `Issue:`
+  and `Timeout:` lines. `old_plain` with
+  `--register-mcp` is removed and added again in the same scope; without it
+  the two commands are printed. The scope comes from the `-s <scope>` of the
+  remove line. `current` with `--register-mcp` prints "already registered"
+  and runs no add: Claude Code refuses a name that already exists, so an add
+  would fail every re-run. Any other kind with `--register-mcp` (including
+  `other`, a registration under the name for another command) runs the plain
+  add, which then fails with exit 6 until the human removes the other
+  registration (`claude mcp remove agent-director -s <scope>`).
+  **Every add is `claude mcp add agent-director [-s <scope>] -- <path> serve
+  --stdio`** (the re-add keeps the remove line's scope; the plain add has no
+  `-s`, so Claude Code's default `local` applies): Claude Code 2.1.280 and
+  2.1.296 read `--stdio` after the path as an option of `mcp add`, exit 1
+  with `error: unknown option '--stdio'` and register nothing. Every printed
+  add (`ad_mcp_print_add`, `ad_mcp_print_repoint`) has the same form.
+  **Exit 6.** `ad_mcp_exec` runs each `mcp add` and `mcp remove` with stdin
+  closed, stdout dropped and stderr kept, leaving the status in `MCP_RC` and
+  the stderr in `MCP_ERR`; a non-zero status goes to
+  `ad_mcp_report_failure`, which prints the headline, the command run, the
+  exit status, the stderr (or "(none)") and sets `MCP_FAILED`. The headline
+  differs for a failed plain add, a failed add after a successful remove
+  (nothing is registered now) and a failed remove (nothing was added); each
+  is followed by the by-hand command. The step never exits: every later step
+  runs, and `install.sh` prints its last line on stderr and exits 6 in place
+  of "done". `mcp get` is read with its output parsed and its status
+  classed, so it never fails the install. **Must use:** an `mcp add` or
+  `mcp remove` goes through `ad_mcp_exec`, never `2>/dev/null` or `|| true`,
+  and a new add form keeps the `--`.
+- **`uninstall.sh --mcp-also`.** It runs the Claude Code program `install.sh`
+  runs, `[launch] claude_path` when that names an executable file, else
+  `claude` from `PATH`. It reads `claude_path` from the `config.toml` of the
+  directory the run works on, with its own copy of the `[launch]` reader (see
+  "Test Harness" below), before `--purge` removes the directory. It never
+  refuses over `[launch]`: a line the reader cannot read, or a `claude_path`
+  naming no executable file, gets a note naming the line and the run falls
+  back to `PATH`; with no program found at all the step prints
+  `uninstall.sh: --mcp-also skipped: no Claude Code program was found ...`,
+  deregisters nothing and leaves the exit status as it was without the step.
+  With a program it runs `<program> mcp remove agent-director`
+  (no `-s`) and keeps stderr and the status. Status 0 prints "deregistered";
+  status 1 with stderr starting `No MCP server named` prints "no registration
+  found from this directory; nothing to deregister", which is not a failure;
+  anything else (a name in several scopes included: `remove` without `-s`
+  exits 1 and removes nothing) prints the command, status, stderr and a
+  by-hand `claude mcp remove agent-director -s <scope>` to stderr and sets
+  `MCP_REMOVE_FAILED`. Later steps, `--purge` included, still run; the script
+  exits 6 at the end, also on the `--purge aborted` path.
+- **PATH.** The link `install.sh` manages is re-pointed; every other link
+  into the old `bin/` (at `~/.local/bin`, at `--symlink-dir`, where
+  `command -v agent-director` leads) and each `$PATH` entry naming it is
+  printed with its fix (`ad_discover_old_bin_refs`).
+
+**The one break in the hook path.** Spawn-side hooks name the binary's
+absolute path (see [Spawn-side hook stability](#spawn-side-hook-stability-bue3--sr-18)),
+and that path changes once, at this move. A session that was already running
+holds the old path, which is why no agent may run across it. The kept
+directory still holds the old binaries, so the path stays callable, but
+nothing should rely on it.
+
+**The way back.** The previous release's schema cannot read this release's
+store, and nothing here reverses the rename, so the way back is the kept
+directory: rename the new one aside, rename the kept one back, put back a
+store kept outside the directory from its pre-upgrade copy, remove the
+entries this release's binary path wrote, and install the previous release
+with its own `install.sh` (see [operator-actions.md](operator-actions.md),
+"Going back to the previous release"). Whatever was written since is lost.
+
+**Test seam.** `INSTALL_SH_TEST_PROC_CHECK=macos|none` (not in `--help`) runs
+the macOS `ps` and `lsof` branch on any host, or neither branch. Every call
+to Claude Code goes through `CLAUDE_PROG`.
+
+**Must use:** the old directory is named only in the places listed under
+[The old-path test](#the-old-path-test); `install.sh` code that asks whether
+the move is due uses `MOVE_DUE`, built from the presence rules, never its own
+`[[ -e ]]` of the old path. A move step that can fail calls `ad_move_fail`
+with its cause, never `exit`; a new trap the move needs chains onto the
+existing one. `install.sh`'s and `uninstall.sh`'s presence and
+compatibility-link rules (`OLD_PRESENT`, `ad_is_compat_link`) are kept in
+step: a change to one is made in the other, each marked with a comment
+saying so. A call to Claude Code uses `"$CLAUDE_PROG"`, never a literal
+`claude`, and the program's value comes from `[launch] claude_path` (when it
+names an executable file, else `claude` on `PATH`), read through the
+`[launch]` reader and never from a path spelled in the script; `uninstall.sh`
+sets its own `CLAUDE_PROG` the same way for `--mcp-also`. A change to a
+refusal's wording or cause updates its section in
+`docs/operator-actions.md` (`TestOldPathAbsentFromProduct` exempts those
+sections by heading), the cause table above and `advice_follow.sh`'s J23 to
+J25.
+
 ### Uninstall semantics
 
 `uninstall.sh` removes ONLY what `install.sh` wrote: the canonical
@@ -7750,8 +8294,9 @@ legacy versioned-binary siblings left over from pre-b.43y installs),
 `agent-director-admin` with its `.prior` and the `admin/` directory (left
 in place, with a note, when it holds other files),
 the optional PATH symlink, and the two hook entries it injected
-(matched by the install root prefix in their command string; see the
-`ours` test below), and the
+(matched by the install root prefix in their command string, the new
+directory's and the old directory's both, so an install never moved is
+cleaned too; see the `ours` test below), and the
 `inject_help_hook` key the config merge set in `config.toml`'s
 `[defaults]` (see "The config.toml merge" above). Other
 user hooks in `SessionStart` / `SessionEnd` survive verbatim. Each
@@ -7814,13 +8359,47 @@ link holding only odd values) and
 `TestUninstallRemovesHookEntriesBesideOddValues` (odd values beside the
 help hooks, a `null` event list, a `null` document) pin this.
 
+**`--mcp-also` and the Claude Code program.** `--mcp-also` deregisters with
+the program `install.sh` registered with: `[launch] claude_path` from the
+`config.toml` of the directory the uninstall works on, when it names an
+executable file, else `claude` from `PATH`. The file is read before `--purge`
+removes the directory (and after the `inject_help_hook` edit, which leaves
+`[launch]` alone), with `uninstall.sh`'s verbatim copy of `install.sh`'s
+`[launch]` reader, asked for the `launch` lines only. `[launch]` never stops
+an uninstall: a line the reader cannot read gets a note on stderr that names
+the line and the reason, and a `claude_path` naming no executable file gets a
+note naming the path, and both fall back to `PATH`. With no program at all
+the step is skipped with a stdout line saying `--mcp-also` was skipped and
+why (`claude` is not on `PATH`, and `[launch] claude_path` is not set, or
+names no executable file), the registration is left as it is, and the exit
+status is that of an uninstall without the step. The step's other outcomes
+(deregistered, no registration found, a failure and exit 6) are described
+under "What the move changes outside the directory" above.
+
 `~/.config/agent-director/` itself is preserved by default — operators
-frequently want to keep templates and state.db across reinstalls.
+frequently want to keep templates and state.db across reinstalls. An
+install never moved is handled the same way in the old directory: the root
+is the new directory when it exists, else the old one. Without `--purge`
+every other AD directory is named and left: each kept
+`~/.agent-director.pre-move-*`, each `~/.config/agent-director.after-upgrade-*`,
+each `~/.agent-director.recreated-*`, an old directory recreated beside the
+new one, and each `*.aside-*` directory. The first four come with the advice
+to delete them once the upgrade is confirmed; an aside is named as set aside
+to settle a conflict and is never removed. The compatibility link is not
+named.
 
 `--purge` is the explicit nuke path: a full `rm -rf
 ~/.config/agent-director` with an interactive confirmation
 (`--force` skips the prompt). State, templates, and any local
-edits to `config.toml` are lost. `uninstall.sh` does not read `[store]
+edits to `config.toml` are lost. It also removes the other directories the
+upgrade and the way back leave, each named in the prompt with its kind (a
+link is removed as a link, never what it points to): every kept
+`~/.agent-director.pre-move-*`, every
+`~/.config/agent-director.after-upgrade-*`, every
+`~/.agent-director.recreated-*`, an old directory present beside the new one
+and a compatibility link. A `*.aside-*` directory, which an operator set
+aside to settle `ErrMoveConflict`, is never removed: it may hold data the
+operator did not choose, so it is left and named. `uninstall.sh` does not read `[store]
 db_path`, so a store that `db_path` puts outside `~/.config/agent-director`
 survives `--purge`. `rm -rf` removes a symlink under
 `~/.config/agent-director`, never the file it points to.
@@ -8535,8 +9114,13 @@ annotations print that form for `generate`, `surface-json` and
 ### Registration
 
 ```sh
-claude mcp add agent-director /path/to/agent-director serve --stdio
+claude mcp add agent-director -- /path/to/agent-director serve --stdio
 ```
+
+The `--` ends Claude Code's own options. Without it Claude Code 2.1.280 and
+later reads `--stdio` as an option of `mcp add`, exits 1 with `error: unknown
+option '--stdio'` and registers nothing. With a scope: `claude mcp add
+agent-director -s <scope> -- /path/to/agent-director serve --stdio`.
 
 `serve`'s manifest Description does not carry this command, so `help`
 and the generated CLI and MCP references do not show it. It is stated
@@ -14518,6 +15102,8 @@ than `go test ./...`.
 - Copies all of `test/driver/` to `/opt/driver/`: the driver, its prompt,
   `db-reset.sh`, and the helpers cases call (`sql.sh`, `pane-hook.sh` and
   the Docker hook pattern's stand-ins).
+- Bakes the previous release under `/opt/previous-release` (see
+  [The baked previous release](#the-baked-previous-release)).
 - Runs as a non-root `tester` user with `HOME=/home/tester`.
 - Sets `AGENT_DIRECTOR_TEST_HARNESS=1` (an image `ENV`), the marker that
   this is the Docker test harness container. `db-reset.sh` refuses to run
@@ -14634,6 +15220,77 @@ are plain-English bodies. The driver reads `t1.*.md` and `t2.*.md` files
 directly. Each t2 body has a fenced ```bash``` block executed by
 `DRIVER_MODE=shell`; the same prose is the spec the `DRIVER_MODE=claude`
 path hands to the driver-Claude.
+
+### The baked previous release
+
+`test/Dockerfile` fetches the previous release at image build and keeps it,
+whole, under `/opt/previous-release` (not on PATH, so no case meets it by
+accident): `install.sh` from the release's tag, and the `agent-director` and
+`agent-director-admin` assets for the image's architecture, with `TAG` naming
+the tag (`PREV_RELEASE_TAG`, `v0.11.1`). Each of the three files is checked
+against its sha256 pin in the same `RUN`, so a stale pin fails the build:
+`PREV_INSTALL_SH_SHA256` for the script, and `PREV_SHA256_AMD64` /
+`PREV_SHA256_ARM64` and `PREV_ADMIN_SHA256_AMD64` / `PREV_ADMIN_SHA256_ARM64`
+for the two assets. The files are fetched from the network at build time and
+are the release's own, so a case runs that release exactly as an operator on
+it would.
+
+**Bump rule** (a comment in the Dockerfile beside the Go, Bun and Claude Code
+pins, with the steps for finding each hash): the previous release is the last
+one that keeps its files in the old directory, and the upgrade and way-back
+cases model that layout. Do not bump `PREV_RELEASE_TAG` unless the new
+previous release still uses the old layout; a bump moves all five pins
+together.
+
+### Old-layout install from a case: `old-layout.sh` and `tree-snapshot.sh` (reusable driver helpers)
+
+`test/driver/old-layout.sh` (installed at `/opt/driver/old-layout.sh`) builds
+an install of the previous release in the old layout, for the cases that
+upgrade from it or go back to it. `old-layout.sh <abs-home> [--store-outside
+<abs-dir>]` runs the baked release's own `install.sh` in `<abs-home>` (hooks
+on, `--register-mcp`, the default PATH link in `~/.local/bin`), with
+`HOME=<abs-home>` and that directory as the working directory. When that
+release's own registration registers nothing (current Claude Code refuses its
+form of the `claude mcp add` call), the helper registers the MCP server by
+hand, from the same directory and in the same scope, with the `--` form. It
+then adds, with that release's own verbs, one `ended` row, two templates (one
+with the old arguments key, one whose tables hold quoted keys) and the old
+question-tool key under `[defaults]`. With `--store-outside` the store lives
+in the given directory, named by `[store] db_path`. It prints `key=value`
+lines on stdout (`home`, `dir`, `bin`, `admin`, `db`, `instance_id`, `link`,
+`mcp`, `templates`; `mcp` is `install`, `helper` or `none`), and sends the
+install's own output to stderr. A case redirects stdout to a file, not a
+command substitution, as the helper starts a tmux server.
+
+`test/driver/tree-snapshot.sh` (at `/opt/driver/tree-snapshot.sh`) prints one
+line per entry of a directory tree, sorted by path: path, kind, mode, and the
+sha256 of a file's bytes or a link's target. `tree-snapshot.sh <dir> [--skip
+<rel>]...` leaves out each `--skip` path and what is under it. It never lists
+`state.db` or `state.db-shm`, and lists `state.db-wal` only when it holds
+bytes: reading a store, even read-only, creates or changes them.
+
+**Must use:** a Docker case that needs an old-layout install builds it with
+`old-layout.sh`, and one that compares two trees uses `tree-snapshot.sh`;
+never a second builder of the old directory or a second tree lister. Rules for
+the upgrade and way-back cases (`epic-12-install`):
+
+- Compare a store by `PRAGMA user_version`, its tables and indexes
+  (`pragma_table_info`, `pragma_index_info`) and row dumps, all through
+  [`sql.sh`](#store-access-from-a-case-sqlsh-reusable-driver-helper). Never by
+  `.sha3sum --schema`: it hashes rows, `store_id` is random, and a migrated
+  store's `CREATE` text differs from a fresh one's. The previous release's
+  expected `user_version` and structure come from a store that release made,
+  not from a constant.
+- Claude Code writes `~/.claude/telemetry/` on every run: leave it out of any
+  `~/.claude` comparison. Every install's hooks merge writes
+  `config.toml.bak.<ts>` and `settings.json.bak.<ts>`: expect them.
+- The way-back case reads the steps from `/work/source` at run time and
+  compares the way-back text of `docs/operator-actions.md` and of the install
+  skill's `SKILL.md` with its own copy, word for word, so a change to a step
+  in either file turns it red.
+- The driver keeps only about 330 characters of a case's output head and 600 of
+  its `xtrace` tail in `details`, so a case that checks several things collects
+  its failures and repeats them, trimmed, in its last line.
 
 ### Store access from a case: `sql.sh` (reusable driver helper)
 
@@ -15963,18 +16620,58 @@ restore. One test still does: `chdirFor` in
 ### dbpathfix: the install.sh store-path matrix (reusable test fixture)
 
 `internal/testsupport/dbpathfix` (b.2io) runs `install.sh`'s `[store]
-db_path` reader, and its `[store] busy_timeout_ms` reader (b.c7f), on their
-own, and holds the one matrix of configs that the store-path drift guards
-run through the first and through Go's own store-path resolution (see
-[Schema migration at install-time](#schema-migration-at-install-time)). The
+db_path` reader (which also reads `[log] error_log_path` and `[launch]
+claude_path` and `codex_path`), its `[store] busy_timeout_ms` reader
+(b.c7f) and its config and template migration (b.ssz) on their own, and
+holds the matrices of configs that the drift guards run through them and
+through Go's own resolution (see
+[Schema migration at install-time](#schema-migration-at-install-time) and
+[Config and template migration at
+install-time](#config-and-template-migration-at-install-time)). The
 package doc comment carries the detail.
 
 - `NewReader(t, installSh)` extracts the block between `install.sh`'s
   `# >>> ad_store_db_path` and `# <<< ad_store_db_path` lines into a temp
   file, failing the test when the block is missing or unterminated.
-  `Reader.Resolve(t, config, home)` runs `ad_store_db_path` under
-  `bash -uo pipefail`, as `install.sh` runs it, and returns stdout, stderr
-  and status; `Reader.Sentinel(t, db)` runs `ad_sentinel_path`.
+  `Reader.Resolve(t, config, home)` runs `ad_store_db_path <config> <home>
+  <base>` under `bash -uo pipefail`, as `install.sh` runs it, and returns
+  stdout, stderr and status; `Reader.Sentinel(t, db)` runs
+  `ad_sentinel_path`.
+- `Base` is the base-directory column: the directory the reader joins a
+  relative path onto, as a function of `HOME`. `install.sh` passes the old
+  directory while the move is due and the new one after it. The package names
+  only `NewBase` (`~/.config/agent-director` under `home`); the old base is
+  built by the test that runs the matrix under it
+  (`installShOldBase`, in `pkg/api/install_sh_db_path_test.go`), so the old
+  directory is named in no non-test product file of the package.
+  `Reader.ResolveIn(t, config, home, base)` runs the reader under a given
+  base, and `Resolve` is `ResolveIn` with `NewBase`. The `[launch]` cases run
+  under this column as well: a launch path is never joined onto the base, so
+  every case gives the same result under both bases, and the drift guard
+  checks that.
+- `LaunchCases` (`launch_cases.go`) are the `[launch]` half of the matrix:
+  `claude_path` and `codex_path` cases (each per-key shape is written for both
+  keys), run through the launch forms `Reader.ResolveLaunch` and
+  `Reader.ResolveLogLaunch` (`ad_store_db_path <config> <home> <base> launch`,
+  and `log launch`) and through `config.Load`'s `Launch`. Each case is `Same`
+  (the reader prints the paths `config.Load` resolves, an empty line for a
+  key that is unset or empty), `ReaderRefuses` (the reader is stricter than
+  `config.Load`, as for letter case), `BothRefuse` or `GoRefuses`.
+- `RenameCases` (`rename_cases.go`) are the migration's matrix: each
+  `RenameCase` is a `config.toml` or a template (`Kind`), the file's content,
+  and what the migration does with it (`Outcome`): `Migrated` (status 0, the
+  exact migrated bytes in `Out`), `Unchanged` (status 3) or `Refused`
+  (status 2, the headline and shown lines it must print, then the
+  `RefusalTail`), with `Want`, what the loaders read from the file the case
+  ends with. `NewMigrationReader(t, installSh)` extracts the block between
+  `# >>> ad_agent_rename_migrate` and `# <<< ad_agent_rename_migrate` the same
+  way; `Reader.Migrate(t, kind, file)` runs it and `Reader.MigrationErrName`
+  runs `ad_agent_rename_err_name`.
+- `Reader.ResolveWithLog(t, config, home, base)` runs the pre-flight form,
+  `ad_store_db_path <config> <home> <base> log`, which also prints `[log]
+  error_log_path` on a second line; `Result.Split(t)` returns the two lines
+  and fails the test when the output is not exactly two. Use it for every
+  `error_log_path` case: the plain form never reads `[log]`.
 - `NewBusyTimeoutReader(t, installSh)` extracts the
   `# >>> ad_store_busy_timeout_ms` block (b.c7f) the same way;
   `Reader.BusyTimeout(t, config)` runs `ad_store_busy_timeout_ms`. Its
@@ -15989,11 +16686,32 @@ package doc comment carries the detail.
   nothing on stdout) or `GoRefuses` (the reader passes it and `config.Load`
   refuses it). `Homes` is the `HOME` values every case runs under, some
   needing cleaning. `WriteConfig` puts one case on disk.
+- `LogCases` are the `[log] error_log_path` half of the matrix, written for
+  `ResolveWithLog` and Go's `config.Load`: `Same` (the reader prints the
+  path Go resolves; an empty line when the key is unset or empty) or
+  `ReaderRefuses` (the pre-flight wording). A `?` in the value is no refusal
+  here, though it is one in `db_path`.
 - Users: `TestInstallShDbPathMatchesGo` (`pkg/api/install_sh_db_path_test.go`,
-  against `config.Load` and `resolveStorePath`) and
+  against `config.Load` and `resolveStorePath`, under both bases),
+  `TestInstallShErrorLogPathMatchesGo` (the same file: `LogCases` and every
+  `db_path` case the reader accepts, through `ResolveWithLog`, under both
+  bases) and
   `TestInstallShSentinelPathMatchesStore`
   (`internal/store/install_sh_sentinel_path_test.go`, against
-  `sentinelPath`).
+  `sentinelPath`), `TestInstallShLaunchPathMatchesGo`
+  (`pkg/api/install_sh_db_path_test.go`: `LaunchCases` through install.sh's
+  block and uninstall.sh's copy of it, under both bases, against
+  `config.Load`), `TestInstallShUninstallReaderMatchesInstall` (the same
+  file: every store-path and error-log case through both copies in the launch
+  form uninstall.sh reads with, which must agree) and
+  `TestInstallShAgentRenameMatchesLoaders`
+  (`pkg/api/install_sh_agent_rename_test.go`, the drift guard of the
+  migration: each `RenameCase` through the extracted block, which must write
+  exactly the bytes the case names, leave the file, or refuse it with the
+  case's message, and then each migrated file loaded with `config.Load` or
+  `config.LoadTemplate`, which must read what the case's `Want` names; the
+  file as it was is loaded only to show that the loader refuses it when the
+  case says so).
 
 It is a leaf package (standard library only; it imports nothing from
 agent-director), so any test package can use it. The extraction works only
@@ -16002,10 +16720,109 @@ defined inside it, with bash builtins only.
 
 **Must use:** a test of `install.sh`'s store-path reader, or of a Go
 store-path rule it mirrors, gets the reader through `dbpathfix.NewReader`
-and adds its configs to `dbpathfix.Cases`; never a second matrix or a
-second extraction of the block. A test of the `busy_timeout_ms` reader
+and adds its configs to `dbpathfix.Cases` (to `dbpathfix.LogCases` for an
+`error_log_path` rule, run through `ResolveWithLog`); never a second matrix
+or a second extraction of the block. A new base the reader may be given is a
+`Base` in the test that runs it, never a literal directory in a case. A test of the `busy_timeout_ms` reader
 gets it through `dbpathfix.NewBusyTimeoutReader` and adds its configs to
-`busyTimeoutCases`.
+`busyTimeoutCases`. A test of the migration gets the block through
+`dbpathfix.NewMigrationReader` and adds a new migration case to
+`dbpathfix.RenameCases`, never a second matrix or a second extraction of the
+block; a change to either file's rules in the block, or to what
+`config.Load` or `config.LoadTemplate` accepts, adds its case there, where
+the drift guard loads the migrated file with the loaders. The `[launch]` keys
+are read by the store-path reader's marked block (`# >>> ad_store_db_path`),
+whose `launch` form covers them, so a `[launch]` rule adds its cases to
+`dbpathfix.LaunchCases`. `uninstall.sh` carries a verbatim copy of that block
+(it reads `claude_path` for `--mcp-also`), kept in step with `install.sh`'s:
+an edit to one is made in the other, and every `[launch]` case runs through
+both (`NewReader` and `NewUninstallReader`).
+
+### install-sh move fixture (reusable test fixture)
+
+`test/install-sh/move_fixture_test.go` builds one `$HOME` per case for the
+tests of [Moving agent-director's directory](#moving-agent-directors-directory)
+(`move_preflight_test.go`, `move_run_test.go`, `move_owned_test.go`, and the
+literal-follow cases J23 to J25 and G8 of `advice_follow.sh`). It is the one
+way a test builds an old-layout install and runs `install.sh` against it.
+
+- `newMoveHome(t)` gives the case its own `HOME`, tools directory (first on
+  `PATH`), `TMPDIR` and a loose copy of `install.sh` outside any git
+  checkout. `h.BuildOld(opts...)` writes the old directory (`withMoveConfig`,
+  `withMoveStore`, `withMoveNoStore`, `withMoveRollbackStore`,
+  `withMoveLive`); `h.Install(args...)` runs the installer and returns
+  `{Code, Stdout, Stderr}`; `h.StartInstall` runs it asynchronously in its
+  own process group for the interrupt cases (`Signal`, `Wait`).
+- Seams are stand-ins on `PATH`, never edits of `install.sh`:
+  `h.WriteTool(name, script)` replaces a tool (`cp` for a full disk or a
+  blocked copy, `sqlite3`, `ps`, `lsof`, `file`, `claude`), and
+  `h.WrapTool(name, preamble)` runs a preamble and then the real tool.
+  `INSTALL_SH_TEST_PROC_CHECK` selects the process check's branch.
+- `h.Snapshot(ignore...)` and `moveDiff(want, got)` compare two trees for the
+  refusal tests (a refusal changes nothing); paths a read-only store read
+  may create (an empty `-wal` and a `-shm`) are ignored by name.
+  `moveWant{...}.Check` and `runMoveRefusals` are the assertion and table
+  drivers.
+- `testdata/v0.11.1-store.sql` is a v0.11.1 store (schema v5) with rows;
+  `testdata/standin/main.go` builds the stand-in binary, whose `version`
+  result (built with `-X` flags) gives an earlier release's, without
+  `config_dir` or naming another one, and which as `serve` runs until its stdin
+  closes, as a Claude Code session's MCP server does.
+- `testdata/claude-mcp/` holds the stand-in `claude` (`claude.sh`) and the
+  captures it replays for `claude mcp get agent-director`, one directory per
+  Claude Code version. `INDEX.tsv` lists every case (file, version, exit,
+  kind, what); a case's kind is `synthetic` (written from the markers
+  `install.sh` reads) until a real capture replaces it, `captured` once it is
+  one. The index holds real captures from Claude Code 2.1.280 and 2.1.296:
+  per version, 16 of the 19 cases are `captured` and 3 are `synthetic` (the
+  ones no real Claude Code prints: `old-no-scope`, `other-command-near-old-dir`,
+  `other-command-extras`). The 19 are 16 `get` replies (the `current-*` cases
+  are the `current` kind: this install's binary with `serve --stdio`, one per
+  scope) and three `add`/`remove` captures, `add-no-dashes`, `add-with-dashes`
+  and `remove-noscope-multi`, which `claude.sh` does not replay: a test
+  compares the stand-in's own answers with them. A capture holds `@HOME@` in
+  place of the case's home, so a new one drops in with no test change; every
+  version directory must hold every case (`TestOwnedCaptureSets`).
+- The stand-in's `mcp add` behaves as Claude Code does: an option it does not
+  know before the `--` is refused (so the form without `--`, `mcp add
+  agent-director <path> serve --stdio`, exits 1 with `error: unknown option
+  '--stdio'` and registers nothing), and the form with `--` prints `Added stdio
+  MCP server ... to <scope> config` (scope `local` without `-s`).
+  `TestOwnedStandInAnswersLikeClaudeCode` ties its answers to the real
+  captures, and `TestOwnedMCPOldAddFormIsCaught` runs a copy of `install.sh`
+  with each add rewritten to the old form and expects exit 6, so a regression
+  to the old form fails in the tests. Its `mcp remove`
+  without `-s` refuses like Claude Code when `CLAUDE_STANDIN_REMOVE_MULTI` is
+  set (the name in several scopes), and answers the not-found text when
+  `CLAUDE_STANDIN_REMOVE_NONE` is set; `CLAUDE_STANDIN_ADD_FAIL` and
+  `CLAUDE_STANDIN_REMOVE_FAIL` make an accepted call exit 1 with an error on
+  stderr (`CLAUDE_STANDIN_ADD_FAIL=silent`: none), which is how the exit-6 tests
+  reach the failure paths.
+- `advice_follow.sh` runs only the cases whose name matches the extended
+  regular expression in `ADVICE_FOLLOW_ONLY` (cleared by the Go test that
+  runs it). J23's link case, both J24 live-row cases and G8 build the
+  previous release's binary and store from the `v0.11.1` git tag and skip
+  when the tag is not in the checkout. No workflow runs `test/install-sh`, so
+  a checkout without that tag skips those cases and nothing else is affected.
+
+The agent and migration tests build on it. `migration_fixture_test.go` lays
+down `config.toml`, templates and a store at a chosen version in a directory
+(it only reads this fixture); `migration_test.go` has the rewrite, the backups,
+modes, links, a re-run, the gate on the store's version and the migration
+while the move is due, and `migration_refusals_test.go` the pre-flight
+refusals and the failed write after the binary swap. `agent_presence_test.go`
+holds the presence rule, a Codex-only install and the refusal with neither
+(its stand-in `codex` and a `PATH` without `claude` and `codex` are shared
+with `launch_path_test.go`, which has the `[launch]` wiring: the summary lines,
+the program a launch path names running every Claude Code call, the
+refusals, and the table never being written); `home_refusal_test.go` has the
+`HOME` check of both scripts.
+
+**Must use:** a test that needs an old-layout install uses this fixture, with
+`move`-prefixed helper names for anything it adds; never a second builder of
+the old directory, and never an edit of `install.sh` to make a case run. A
+fixture that the product's output depends on (the `claude mcp get`
+captures) is replaced by a real capture, not hand-edited.
 
 ### Which tmux test double to use
 
@@ -17361,8 +18178,10 @@ A text hit is an exact name, with no letter, digit or underscore beside it.
 
 - `TestOldNamesAbsentFromTextSurfaces` scans `api.Help()`, `adminapi.Verbs`,
   `pkg/api/manifest/surface.json`, `README.md`, `pkg/api/README.md`,
-  `pkg/ts-bun-client/README.md`, every `docs/*.md` except the `*-guide.md`
-  files, and every file under `pkg/ts-bun-client/src`.
+  `pkg/ts-bun-client/README.md`, the install skill's `SKILL.md` (every line,
+  with no exception: an old key name is never spelled there), every `docs/*.md`
+  except the `*-guide.md` files, and every file under
+  `pkg/ts-bun-client/src`.
 - `TestOldNamesAbsentFromGoSurface` walks the exported identifiers, struct
   fields, json and toml tags, and the parameter names of exported functions and
   methods in `pkg/api` and its subpackages, `internal/adminapi`'s exported
@@ -19540,9 +20359,10 @@ the section) of each hit.
 
 **What is scanned.** Non-test Go files, the TS client's sources
 (`pkg/ts-bun-client/src/`), shell scripts outside any `test` directory, the
-`Makefile`, `README.md`, `docs/*.md` (not the `docs/*-guide.md` guides) and the
-two package READMEs. `CLAUDE.md`, the guides, `.claude/` and `tickets/` are not
-scanned. The walker and the exception mechanism are in `source_scan_test.go`.
+`Makefile`, `README.md`, `docs/*.md` (not the `docs/*-guide.md` guides), the
+two package READMEs and the install skill's `skills/install-agent-director/SKILL.md`,
+every line of it, frontmatter and fenced code included. `CLAUDE.md`, the
+guides, `.claude/` and `tickets/` are not scanned. The walker and the exception mechanism are in `source_scan_test.go`.
 
 **What matches.** The name as a whole path element, in any quoting: no name
 character (letter, digit, `_`, `-`) or dot before it, and after it no name
@@ -19554,15 +20374,25 @@ one. `TestOldPathMatcher` pins the rule.
 `internal/layout/old.go`; the guards that name both directories
 (`sandboxguard.go`, the `Makefile`, the two release-gate coverage scripts and
 everything under `tools/measure-exit/`); the installer's and uninstaller's
-scripts; and two sections of the user docs, [Upgrade](install.md#upgrade) in
-`docs/install.md` and "A verb refuses with `ErrOldLayout`" in
-`docs/operator-actions.md`. An exception whose file is not scanned is stale
-and fails (`requireAllHit`); an exception named by a heading that its file
-does not have is dropped, which is how a section is added to the list before
-its doc exists. **Must use:** a new place that has to name the old directory
+scripts; and six sections of the user docs, [Upgrade](install.md#upgrade) in
+`docs/install.md` and, in `docs/operator-actions.md`, "A verb refuses with
+`ErrOldLayout`", "`install.sh` refuses with `ErrMoveConflict`",
+"`install.sh` refuses with `ErrAgentsLive`", "`install.sh` stops with
+`ErrMoveFailed`" and "Going back to the previous release"; and two sections
+of `SKILL.md`, "Upgrading an install from the old directory" and "Going back to
+the previous release". A user-doc section runs from its heading to the next
+heading of its level or higher. A `SKILL.md` section sets the exception's
+`anyLevel` flag (in `source_scan_test.go`), so it runs to the next heading of
+any level: it holds no sub-heading and no code-block line led by `#`. An exception whose file is not scanned is stale
+and fails (`requireAllHit`); a user-doc exception named by a heading that its
+file does not have is dropped, which is how a section is added to the list
+before its doc exists, but a missing `SKILL.md` heading fails, as the skill
+always has both. The installed skill has no repo docs, so its way-back
+section restates `docs/operator-actions.md`'s word for word (links reduced to
+their text). **Must use:** a new place that has to name the old directory
 is added to `oldPathRules` with its reason, never allowed by loosening the
 matcher. A user doc that needs to point at the old directory links to one of
-the two exempt sections instead of naming it.
+the exempt sections instead of naming it.
 
 ### sandboxtest: Makefile-plumbing test helpers (reusable test fixture)
 

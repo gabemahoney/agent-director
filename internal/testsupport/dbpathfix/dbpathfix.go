@@ -1,8 +1,16 @@
-// Package dbpathfix runs install.sh's [store] db_path reader (b.2io) and its
-// [store] busy_timeout_ms reader (b.c7f) on their own, and holds the one
-// matrix of config.toml contents and HOME values that the db_path drift guards
-// run through it and through Go's own resolution: pkg/api (config.Load, then
-// resolveStorePath) and internal/store (sentinelPath).
+// Package dbpathfix runs install.sh's [store] db_path reader (b.2io), which
+// also reads [log] error_log_path and [launch] claude_path and codex_path, its
+// [store] busy_timeout_ms reader (b.c7f) and its agent-rename migration
+// (b.ssz) on their own, and holds the matrices of config.toml contents and
+// HOME values that the drift guards run through them and through Go's own
+// resolution: pkg/api (config.Load, then resolveStorePath; LoadTemplate for
+// the migration) and internal/store (sentinelPath). Cases, LogCases and
+// LaunchCases are the reader's; RenameCases are the migration's.
+//
+// The reader takes the base directory its relative paths join onto as an
+// argument (a Base), so a case runs under the new directory (once the move is
+// done) and under the old one (while it is due), and its pre-flight form also
+// reads [log] error_log_path (LogCases, ResolveWithLog).
 //
 // This is a LEAF test-support package: it imports nothing from agent-director,
 // so any test package can use it. The reader runs under bash, as install.sh
@@ -32,6 +40,11 @@ const (
 	// GoRefuses: the reader resolves a path, but config.Load refuses the file,
 	// so the binary's own ErrConfigMalformed stops the install at step 3 or 4.
 	GoRefuses
+	// BothRefuse (LaunchCases): the reader refuses the file as ReaderRefuses
+	// does, and config.Load refuses it too (ErrConfigMalformed), so the
+	// refusal is one the binary would make itself. ReaderRefuses in
+	// LaunchCases is a file config.Load accepts: the reader is stricter.
+	BothRefuse
 )
 
 // Form is how a Case's config file exists on disk.
@@ -199,6 +212,114 @@ var Cases = []Case{
 	{Name: "other-table-key-two-cases", Config: "[Defaults]\nrelay_mode = \"on\"\n\n[defaults]\nrelay_mode = \"off\"\n", Expect: GoRefuses},
 }
 
+// logFile is a [log] table setting error_log_path to v, written as given.
+func logFile(v string) string { return "[log]\nerror_log_path = " + v + "\n" }
+
+// LogCases are the configs of the [log] error_log_path half of the matrix, run
+// through the reader's pre-flight form (ResolveWithLog) and through Go's own
+// resolution. The reader reads error_log_path under db_path's rules, except
+// that a '?' is no refusal in it. Same: the reader accepts the file and prints
+// the error-log path Go resolves (an empty line when the file does not set it,
+// or sets it empty, where Go resolves its default or no log); ReaderRefuses:
+// it refuses the file with the pre-flight wording.
+var LogCases = []Case{
+	{Name: "log-missing-file", Form: NoFile},
+	{Name: "log-empty-file"},
+	{Name: "log-table-only", Config: "[log]\n"},
+	{Name: "log-empty-basic", Config: logFile(`""`)},
+	{Name: "log-empty-literal", Config: logFile(`''`)},
+	{Name: "log-abs", Config: logFile(`"/abs/e.log"`)},
+	{Name: "log-abs-literal", Config: logFile(`'/abs/e.log'`)},
+	{Name: "log-abs-unclean", Config: logFile(`"/abs//y/./z/../w/"`)},
+	{Name: "log-abs-root", Config: logFile(`"/"`)},
+	{Name: "log-abs-double-slash", Config: logFile(`"//e.log"`)},
+	{Name: "log-abs-space", Config: logFile(`"/abs with space/e.log"`)},
+	{Name: "log-tilde-slash", Config: logFile(`"~/e.log"`)},
+	{Name: "log-tilde-alone", Config: logFile(`"~"`)},
+	{Name: "log-tilde-slash-only", Config: logFile(`"~/"`)},
+	{Name: "log-tilde-unclean", Config: logFile(`"~//x/./y/../z/"`)},
+	{Name: "log-tilde-up", Config: logFile(`"~/../../.."`)},
+	{Name: "log-tilde-user", Config: logFile(`"~user/e.log"`)},
+	{Name: "log-rel", Config: logFile(`"e.log"`)},
+	{Name: "log-rel-dot", Config: logFile(`"./e.log"`)},
+	{Name: "log-rel-dotdot", Config: logFile(`"../e.log"`)},
+	{Name: "log-rel-unclean", Config: logFile(`"a//b/./c/"`)},
+	{Name: "log-rel-up-past-root", Config: logFile(`"../../../../.."`)},
+	{Name: "log-dot", Config: logFile(`"."`)},
+	{Name: "log-dotdot", Config: logFile(`".."`)},
+	{Name: "log-rel-space", Config: logFile(`"with space/e.log"`)},
+	{Name: "log-var", Config: logFile(`"$HOME/e.log"`)},
+	{Name: "log-utf8", Config: logFile(`"é/e.log"`)},
+	{Name: "log-hash-in-value", Config: logFile(`"#notcomment"`)},
+	{Name: "log-literal-backslash", Config: logFile(`'C:\e'`)},
+	{Name: "log-trailing-comment", Config: logFile(`"e.log" # comment "q" \ '`)},
+	{Name: "log-spacing", Config: "[log]\n   error_log_path   =   \"e.log\"   #c\n"},
+	{Name: "log-tight", Config: "[log]\nerror_log_path=\"e.log\"#c\n"},
+	{Name: "log-header-spaces", Config: "[ log ]\nerror_log_path = \"/h.log\"\n"},
+	{Name: "log-header-comment", Config: "[log] # here ]\nerror_log_path = \"/h.log\"\n"},
+	{Name: "log-crlf", Config: "[log]\r\nerror_log_path = \"/crlf.log\"\r\n"},
+	{Name: "log-bom", Config: "\xef\xbb\xbf[log]\nerror_log_path = \"/bom.log\"\n"},
+	{Name: "log-no-final-newline", Config: "[log]\nerror_log_path = \"/nonl.log\""},
+	// A '?' is refused in db_path (it starts SQLite options) and accepted here:
+	// the error log is opened as a plain file.
+	{Name: "log-question-mark", Config: logFile(`"/a/b?x.log"`)},
+	{Name: "log-question-mark-rel", Config: logFile(`"a?b.log"`)},
+	// Both keys set, in either order, in any mix of forms.
+	{Name: "log-with-store", Config: "[store]\ndb_path = \"s.db\"\n\n[log]\nerror_log_path = \"e.log\"\n"},
+	{Name: "log-before-store", Config: "[log]\nerror_log_path = \"~/e.log\"\n\n[store]\ndb_path = \"/abs/s.db\"\n"},
+	{Name: "log-store-only", Config: "[store]\ndb_path = \"s.db\"\n"},
+	{Name: "log-other-keys", Config: "[log]\nother = 1\nerror_log_path = \"e.log\"\nmore = [1, 2]\n"},
+	// Not the log's key: ignored, as Go ignores it.
+	{Name: "log-root-key", Config: "error_log_path = \"/nope.log\"\n"},
+	{Name: "log-key-in-store", Config: "[store]\nerror_log_path = \"/nope.log\"\n"},
+	{Name: "log-key-in-defaults", Config: "[defaults]\nerror_log_path = \"/nope.log\"\n"},
+	{Name: "log-db-path-in-log", Config: "[log]\ndb_path = \"/nope.db\"\n"},
+	{Name: "log-go-field-name", Config: "[log]\nErrorLogPath = \"/nope.log\"\n"},
+	{Name: "log-hyphen-key", Config: "[log]\nerror-log-path = \"/nope.log\"\n"},
+	{Name: "log-commented-out", Config: "[log]\n# error_log_path = \"/nope.log\"\n"},
+	{Name: "log-other-table-after-log", Config: "[log]\n[defaults]\nerror_log_path = \"/nope.log\"\n"},
+	{Name: "log-inline-table-in-log-ignored", Config: "[log]\nt = { error_log_path = \"/nope.log\" }\n"},
+
+	// The reader refuses all the rest, with the pre-flight wording.
+	{Name: "log-root-dotted", Config: "log.error_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-root-dotted-case", Config: "Log.error_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-root-dotted-quoted", Config: "\"log\".error_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-root-inline", Config: "log = { error_log_path = \"/x.log\" }\n", Expect: ReaderRefuses},
+	{Name: "log-root-inline-case", Config: "LOG = { error_log_path = \"/x.log\" }\n", Expect: ReaderRefuses},
+	{Name: "log-quoted-key", Config: "[log]\n\"error_log_path\" = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-quoted-key-literal", Config: "[log]\n'error_log_path' = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-quoted-header", Config: "[\"log\"]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-quoted-header-case", Config: "[ \"LOG\" ]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-header-upper", Config: "[LOG]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-header-mixed", Config: "[Log]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-key-upper", Config: "[log]\nERROR_LOG_PATH = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-key-mixed", Config: "[log]\nError_Log_Path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-escape-backslash", Config: logFile(`"a\\b"`), Expect: ReaderRefuses},
+	{Name: "log-escape-unicode", Config: logFile(`"/\u0041"`), Expect: ReaderRefuses},
+	{Name: "log-multiline-basic", Config: logFile(`"""/x.log"""`), Expect: ReaderRefuses},
+	{Name: "log-multiline-literal", Config: logFile(`'''/x.log'''`), Expect: ReaderRefuses},
+	{Name: "log-tab-in-value", Config: logFile("\"a\tb\""), Expect: ReaderRefuses},
+	{Name: "log-array-hides-lines", Config: "[log]\nx = [\n[1]\n]\nerror_log_path = \"/real.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-header-dotted", Config: "[log.x]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-key-dotted-in-log", Config: "[log]\nx.error_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-key-dotted-key", Config: "[log]\nerror_log_path.x = 1\n", Expect: ReaderRefuses},
+	{Name: "log-header-array-of-tables", Config: "[[log]]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-directory", Form: Dir, Expect: ReaderRefuses},
+	{Name: "log-table-twice", Config: "[log]\n[log]\n", Expect: ReaderRefuses},
+	{Name: "log-key-twice", Config: logFile(`"/x.log"`) + "error_log_path = \"/y.log\"\n", Expect: ReaderRefuses},
+	{Name: "log-integer", Config: logFile(`5`), Expect: ReaderRefuses},
+	{Name: "log-boolean", Config: logFile(`true`), Expect: ReaderRefuses},
+	{Name: "log-array", Config: logFile(`["/x.log"]`), Expect: ReaderRefuses},
+	{Name: "log-bare-value", Config: logFile(`~/x.log`), Expect: ReaderRefuses},
+	{Name: "log-no-value", Config: "[log]\nerror_log_path =\n", Expect: ReaderRefuses},
+	{Name: "log-junk-after-value", Config: logFile(`"x" junk`), Expect: ReaderRefuses},
+	{Name: "log-unterminated", Config: logFile(`"x`), Expect: ReaderRefuses},
+	{Name: "log-utf16-bom", Config: "\xff\xfe[log]\nerror_log_path = \"/x.log\"\n", Expect: ReaderRefuses},
+	// A refusal in the other key still stops the read, with the log wording.
+	{Name: "log-store-question-mark", Config: "[log]\nerror_log_path = \"/e.log\"\n[store]\ndb_path = \"/a?b.db\"\n", Expect: ReaderRefuses},
+	{Name: "log-store-key-twice", Config: "[store]\ndb_path = \"/a\"\ndb_path = \"/b\"\n[log]\nerror_log_path = \"/e.log\"\n", Expect: ReaderRefuses},
+}
+
 // WriteConfig puts case number i of the matrix in dir and returns its path.
 func WriteConfig(t *testing.T, dir string, i int, c Case) string {
 	t.Helper()
@@ -231,6 +352,14 @@ type Result struct {
 func NewReader(t *testing.T, installSh string) *Reader {
 	t.Helper()
 	return newBlockReader(t, installSh, "ad_store_db_path", "b.2io")
+}
+
+// NewUninstallReader extracts the same block from uninstall.sh, which carries a
+// verbatim copy of it (b.ssz) for its [launch] claude_path read. Its Reader
+// runs the same functions as NewReader's; a drift guard runs both.
+func NewUninstallReader(t *testing.T, uninstallSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, uninstallSh, "ad_store_db_path", "b.2io")
 }
 
 // NewBusyTimeoutReader extracts install.sh's [store] busy_timeout_ms reader,
@@ -293,10 +422,83 @@ func (r *Reader) run(t *testing.T, fn string, args ...string) Result {
 	return res
 }
 
-// Resolve runs ad_store_db_path <config> <home>.
+// Base is a base-directory column of the matrix: the directory the reader
+// joins a config's relative paths onto, as a function of HOME. install.sh
+// passes the old directory while a move is due (the config file is still
+// there) and the new one otherwise. The package names only the new one, so
+// the old one comes from the _test.go file that runs the matrix under it.
+type Base struct {
+	Name string
+	Dir  func(home string) string
+}
+
+// NewBase is AD's directory under home, written as install.sh joins it (home,
+// a slash, then the directory), so a home that needs cleaning still does. Go's
+// resolution joins onto the same directory.
+var NewBase = Base{Name: "new", Dir: func(home string) string { return home + "/.config/agent-director" }}
+
+// Resolve runs ad_store_db_path <config> <home> <base> with NewBase's
+// directory under home: the base the reader gets once the move is done.
 func (r *Reader) Resolve(t *testing.T, config, home string) Result {
 	t.Helper()
-	return r.run(t, "ad_store_db_path", config, home)
+	return r.ResolveIn(t, config, home, NewBase)
+}
+
+// ResolveIn runs ad_store_db_path <config> <home> <base> with b's directory
+// under home.
+func (r *Reader) ResolveIn(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home))
+}
+
+// ResolveWithLog runs ad_store_db_path <config> <home> <base> log: the
+// pre-flight form, which also reads [log] error_log_path. On success Stdout
+// holds two lines, the store path and the error-log path (an empty line when
+// the file does not set it or sets it empty); Split reads them.
+func (r *Reader) ResolveWithLog(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "log")
+}
+
+// Split returns the store path and the error-log path of a successful
+// ResolveWithLog, failing the test when Stdout is not exactly those two lines.
+func (res Result) Split(t *testing.T) (db, errLog string) {
+	t.Helper()
+	db, rest, ok := strings.Cut(res.Stdout, "\n")
+	errLog, tail, ok2 := strings.Cut(rest, "\n")
+	if !ok || !ok2 || tail != "" {
+		t.Fatalf("stdout %q is not two newline-ended lines", res.Stdout)
+	}
+	return db, errLog
+}
+
+// ResolveLaunch runs ad_store_db_path <config> <home> <base> launch: the form
+// uninstall.sh and install.sh's non-move pre-flight use. On success Stdout
+// holds three lines, the store path, [launch] claude_path and codex_path (an
+// empty line for a key that is unset or empty); Lines(t, 3) reads them.
+func (r *Reader) ResolveLaunch(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "launch")
+}
+
+// ResolveLogLaunch runs ad_store_db_path <config> <home> <base> log launch:
+// the pre-flight form while the move is due. On success Stdout holds four
+// lines, the store path, the error-log path, claude_path and codex_path;
+// Lines(t, 4) reads them.
+func (r *Reader) ResolveLogLaunch(t *testing.T, config, home string, b Base) Result {
+	t.Helper()
+	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "log", "launch")
+}
+
+// Lines returns the n lines of a successful result, failing the test when
+// Stdout is not exactly n newline-ended lines (an empty line counts).
+func (res Result) Lines(t *testing.T, n int) []string {
+	t.Helper()
+	lines := strings.Split(res.Stdout, "\n")
+	if len(lines) != n+1 || lines[n] != "" {
+		t.Fatalf("stdout %q is not %d newline-ended lines", res.Stdout, n)
+	}
+	return lines[:n]
 }
 
 // BusyTimeout runs ad_store_busy_timeout_ms <config>.
@@ -311,6 +513,33 @@ func (r *Reader) Sentinel(t *testing.T, db string) string {
 	res := r.run(t, "ad_sentinel_path", db)
 	if res.Code != 0 || res.Stderr != "" {
 		t.Fatalf("ad_sentinel_path %q: status %d, stderr %q", db, res.Code, res.Stderr)
+	}
+	return strings.TrimSuffix(res.Stdout, "\n")
+}
+
+// NewMigrationReader extracts install.sh's agent-rename migration, the
+// "# >>> ad_agent_rename_migrate" block (b.ssz), as NewReader does. Its Reader
+// runs Migrate and MigrationErrName.
+func NewMigrationReader(t *testing.T, installSh string) *Reader {
+	t.Helper()
+	return newBlockReader(t, installSh, "ad_agent_rename_migrate", "b.ssz")
+}
+
+// Migrate runs ad_agent_rename_migrate <kind> <file>. Stdout holds the
+// migrated bytes, exact, on status 0; the status is 3 for nothing to change
+// (or no such file) and 2 for a refusal, whose message is on Stderr.
+func (r *Reader) Migrate(t *testing.T, kind Kind, file string) Result {
+	t.Helper()
+	return r.run(t, "ad_agent_rename_migrate", string(kind), file)
+}
+
+// MigrationErrName runs ad_agent_rename_err_name <kind>: the err_name the
+// caller reports when Migrate refuses a file of that kind.
+func (r *Reader) MigrationErrName(t *testing.T, kind Kind) string {
+	t.Helper()
+	res := r.run(t, "ad_agent_rename_err_name", string(kind))
+	if res.Code != 0 || res.Stderr != "" {
+		t.Fatalf("ad_agent_rename_err_name %s: status %d, stderr %q", kind, res.Code, res.Stderr)
 	}
 	return strings.TrimSuffix(res.Stdout, "\n")
 }
