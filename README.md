@@ -66,3 +66,12 @@ both up:
 agent-director find-missing   # often, e.g. every 2 minutes
 agent-director expire         # e.g. daily
 ```
+
+`find-missing` keeps row states honest when an agent is killed, crashes, or is
+lost in a reboot: it marks the row `missing` (or `ended` for a Codex agent that
+reported its exit) instead of leaving it `working` or `waiting`. Run it often.
+
+`expire` deletes finished rows older than the retention window (31 days by
+default), so the store does not grow forever. Running it daily is enough.
+
+See [Maintenance](docs/maintenance.md) for details.
