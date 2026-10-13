@@ -10,7 +10,7 @@ Minimum supported versions: **Codex 0.159.2** and **Claude Code 2.1.296**. These
 
 ## Prerelease limitations
 
-Final automated validation passed at `fcb6f9df`: sandbox Go passed 67 packages with 0 failures (12 without tests), and Bun passed 416 tests with 0 failures or skips. The User reports all 14 Docker groups plus install-mode passed with 0 failures at that revision. The authoritative premerge schema comparison remains the releaser’s responsibility. A prior host Go run was stopped after its smoke guard read and printed AD store tails despite a throwaway HOME; owned logs were redacted, and emitted output cannot be retracted. The store was confirmed TEST-ONLY and intact; no further action was directed. No further host tests were run.
+Final validation passed at `5ffdcf51` with 0 failures: lint, the sandboxed Go and Bun suites, and all 14 Docker test groups plus install-mode. The store schema was compared with the `dev/v0.12.0` branch, and that branch is fully contained in this release. What this validation does not cover is listed below.
 
 - **NOT CHECKED LIVE:** sandbox-dependent shell, file-edit, running-command-input, MCP and network approvals; relay holds, cancellation, timeout and fallback dialogs; nested callers and sandbox environment/socket/store access. User namespaces are unavailable on this host, so no working Codex sandbox was established.
 - **NOT CHECKED LIVE:** native Claude → Codex → Claude switch-back. No Claude login was used. Stand-in Docker tests cover this sequence; the final automated gate passed at `fcb6f9df`.
