@@ -64,7 +64,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // gitCmd runs a git command in the given directory, failing the test on

@@ -55,7 +55,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // firstRemoteTag queries origin for tags and returns the bare version number

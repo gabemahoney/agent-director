@@ -60,7 +60,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // envWithout returns os.Environ() with every entry whose key equals stripKey

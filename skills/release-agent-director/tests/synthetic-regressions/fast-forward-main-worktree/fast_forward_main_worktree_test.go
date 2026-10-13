@@ -68,7 +68,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 func orchestratorPath(root string) string {

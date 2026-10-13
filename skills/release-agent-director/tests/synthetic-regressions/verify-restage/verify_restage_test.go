@@ -83,7 +83,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // TestVerifyRestageFires verifies that install.verify-pkg fires (exit 1,

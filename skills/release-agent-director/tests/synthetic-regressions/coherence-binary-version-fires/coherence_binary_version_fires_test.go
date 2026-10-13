@@ -57,7 +57,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // TestCoherenceBinaryVersionFires verifies that the coherence.binary-version

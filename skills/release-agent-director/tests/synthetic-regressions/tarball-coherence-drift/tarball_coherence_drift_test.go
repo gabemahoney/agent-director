@@ -92,7 +92,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // TestTarballCoherenceDriftFires verifies that the coherence.tarball-version

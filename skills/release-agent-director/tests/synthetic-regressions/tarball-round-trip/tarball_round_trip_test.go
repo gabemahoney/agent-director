@@ -88,7 +88,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // stageWorktree copies pkg/ts-bun-client, prebuilt dist/ included, into a

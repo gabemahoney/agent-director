@@ -56,7 +56,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // TestExpiredNpmToken verifies that preflight.npm-whoami fires when the

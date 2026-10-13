@@ -82,7 +82,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // TestPackFirstVersionMismatch verifies that the pack.first gate fires

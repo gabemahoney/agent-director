@@ -142,7 +142,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // isolatedReportDir returns a per-test t.TempDir() and its release-report.json

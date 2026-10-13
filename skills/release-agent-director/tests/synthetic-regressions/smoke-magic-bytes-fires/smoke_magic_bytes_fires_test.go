@@ -58,7 +58,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // smokeOutput is the consolidated JSON emitted by per-binary-smoke.sh.

@@ -79,7 +79,6 @@ func repoRoot(t *testing.T) string {
 		}
 		dir = parent
 	}
-	panic("unreachable")
 }
 
 // isolatedGitEnv returns the process environment with every GIT_* variable,
