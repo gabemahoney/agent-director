@@ -2,9 +2,69 @@ package spawn
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestReadCodexArgsSessionPositions(t *testing.T) {
+	for _, tc := range []struct {
+		name                                string
+		args                                []string
+		command, session, prompt, delimiter int
+		positionals                         []int
+	}{
+		{"resume id and prompt", []string{"resume", "OLD", "prompt"}, 0, 1, 2, -1, []int{0, 1, 2}},
+		{"fork id and prompt", []string{"fork", "OLD", "prompt"}, 0, 1, 2, -1, []int{0, 1, 2}},
+		{"last finalizes first positional as prompt", []string{"resume", "--last", "prompt"}, 0, -1, 2, -1, []int{0, 2}},
+		{"last after operand still finalizes", []string{"fork", "prompt", "--last", "--all"}, 0, -1, 1, -1, []int{0, 1}},
+		{"all does not finalize id as prompt", []string{"resume", "--all", "OLD", "prompt"}, 0, 2, 3, -1, []int{0, 2, 3}},
+		{"bare prompt is session id", []string{"resume", "one token with spaces"}, 0, 1, -1, -1, []int{0, 1}},
+		{"settings before and between operands", []string{"--model", "gpt", "resume", "-c", "a=1", "OLD", "--profile=work", "prompt"}, 2, 5, 7, -1, []int{2, 5, 7}},
+		{"owned model name", []string{"--model", "resume", "fork", "OLD", "prompt"}, 2, 3, 4, -1, []int{2, 3, 4}},
+		{"image list owns names", []string{"--image", "resume", "fork", "--model=x", "resume", "OLD"}, 4, 5, -1, -1, []int{4, 5}},
+		{"attached image takes single value", []string{"-iresume", "fork", "OLD"}, 1, 2, -1, -1, []int{1, 2}},
+		{"equals image takes single value", []string{"--image=resume", "fork", "OLD"}, 1, 2, -1, -1, []int{1, 2}},
+		{"required value owns delimiter", []string{"--model", "--", "resume", "OLD"}, 2, 3, -1, -1, []int{2, 3}},
+		{"command name in prose", []string{"hello", "resume", "OLD"}, 0, -1, -1, -1, []int{0, 1, 2}},
+		{"command name beyond delimiter", []string{"--", "resume", "OLD"}, -1, -1, -1, 0, []int{1, 2}},
+		{"id and protected flag prompt", []string{"resume", "OLD", "--", "--last"}, 0, 1, 3, 2, []int{0, 1, 3}},
+		{"id after delimiter", []string{"resume", "--", "OLD", "fork"}, 0, 2, 3, 1, []int{0, 2, 3}},
+		{"prompt flag does not finalize last", []string{"resume", "--", "--last"}, 0, 2, -1, 1, []int{0, 2}},
+		{"last protects first operand prompt", []string{"resume", "--last", "--", "--all"}, 0, -1, 3, 2, []int{0, 3}},
+		{"unknown option valueless AD policy", []string{"--future", "resume", "OLD"}, 1, 2, -1, -1, []int{1, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ReadCodexArgs(tc.args)
+			if got.Command != tc.command || got.SessionID != tc.session || got.Prompt != tc.prompt || got.DoubleDash != tc.delimiter || !slices.Equal(got.Positionals, tc.positionals) {
+				t.Fatalf("ReadCodexArgs(%q) = %+v; want command/id/prompt/delimiter %d/%d/%d/%d, positions %v", tc.args, got, tc.command, tc.session, tc.prompt, tc.delimiter, tc.positionals)
+			}
+		})
+	}
+}
+
+func TestReadCodexArgsOptionOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		options []ArgOption
+	}{
+		{"detached model", []string{"--model", "resume"}, []ArgOption{{Name: "--model", Canonical: "--model", Spelling: "--model", Values: []string{"resume"}, ValueIndices: []int{1}, Known: true}}},
+		{"attached config", []string{"-ca=1"}, []ArgOption{{Name: "-c", Canonical: "--config", Spelling: "-ca=1", Values: []string{"a=1"}, ClusterStart: 1, ClusterEnd: 5, Known: true}}},
+		{"short equals normalized only in metadata", []string{"-c=a=1"}, []ArgOption{{Name: "-c", Canonical: "--config", Spelling: "-c=a=1", Values: []string{"a=1"}, ClusterStart: 1, ClusterEnd: 6, Known: true}}},
+		{"long equals config", []string{"--config=a=1"}, []ArgOption{{Name: "--config", Canonical: "--config", Spelling: "--config=a=1", Values: []string{"a=1"}, Known: true}}},
+		{"image list indices", []string{"-i", "a", "b", "--last"}, []ArgOption{{Name: "-i", Canonical: "--image", Spelling: "-i", Values: []string{"a", "b"}, ValueIndices: []int{1, 2}, ClusterStart: 1, ClusterEnd: 2, Known: true}, {Index: 3, Name: "--last", Canonical: "--last", Spelling: "--last", Known: true}}},
+		{"help version cluster", []string{"-hV"}, []ArgOption{{Name: "-h", Canonical: "-h", Spelling: "-hV", ClusterStart: 1, ClusterEnd: 2, Known: true}, {Name: "-V", Canonical: "-V", Spelling: "-hV", ClusterStart: 2, ClusterEnd: 3, Known: true}}},
+		{"post delimiter policy metadata", []string{"resume", "--", "--last", "--model", "fork"}, []ArgOption{{Index: 2, Name: "--last", Canonical: "--last", Spelling: "--last", Known: true, After: true}, {Index: 3, Name: "--model", Canonical: "--model", Spelling: "--model", Values: []string{"fork"}, ValueIndices: []int{4}, Known: true, After: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReadCodexArgs(tc.args).Options; !reflect.DeepEqual(got, tc.options) {
+				t.Fatalf("Options = %+v; want %+v", got, tc.options)
+			}
+		})
+	}
+}
 
 const (
 	whyHooks     = "agent-director sets the hooks and their trust for every Codex launch"

@@ -459,7 +459,13 @@ export class SubprocessClient {
     return this.#enqueue<RecordPaneAnswerResult>("record-pane-answer", params);
   }
 
-  /** resume — relaunch the latest session of a finished (ended or missing) row. */
+  /** resume — relaunch the latest session of a finished row interactively,
+   * filtering stored session selectors, Claude print mode and orphaned cloud
+   * controls while preserving other arguments and option-owned values. Claude
+   * inputs missing a recognized required value get literal filtering only;
+   * parsed-role preservation applies when all required values are present. Claude
+   * prompts move behind surviving options and --, and altered short clusters are
+   * re-encoded, only when needed to preserve their original parsed meaning. */
   async resume(params: ResumeParams): Promise<ResumeResult> {
     this.#assertOpen();
     return this.#enqueue<ResumeResult>("resume", params);

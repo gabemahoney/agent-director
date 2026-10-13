@@ -852,6 +852,14 @@ export interface ResumeParams {
 /**
  * Mirrors pkg/api/resume.go::ResumeResult. Resume relaunches only the latest session
  * of the row's recorded agent. Older sessions remain listed for inspection only.
+ * Stored session selectors and Claude print mode are removed from replay;
+ * cloud controls also lose their values when selector removal leaves no parsed
+ * environment/pool context. Other arguments and option-owned values survive.
+ * Claude inputs missing a recognized required value get literal filtering only;
+ * parsed-role preservation applies when all required values are present.
+ * Claude prompts move behind surviving options and --, and altered short clusters
+ * are re-encoded, only when needed to preserve their original parsed meaning;
+ * otherwise their order and spelling survive. Stored agent_args are unchanged.
  * Resume moved the row to `pending`, keeping
  * its session id and history, until the agent reports in (its SessionStart hook),
  * then `waiting`.

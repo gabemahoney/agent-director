@@ -945,7 +945,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "instance_id",
 				Type:          "string",
-				Description:   "Id of the finished (ended or missing) row to resume.",
+				Description:   "Id of the finished (ended or missing) row to resume. Replay removes parsed session selectors, Claude print mode and cloud controls orphaned by selector removal without changing stored agent_args. Claude inputs missing a recognized required value get literal filtering only; otherwise arguments and option-owned values retain parsed meaning. Claude prompts move behind surviving options and --, and altered short clusters are re-encoded, only when needed to preserve that meaning; otherwise order and spelling survive.",
 				Required:      true,
 				Nullable:      false,
 				AllowEmpty:    false,

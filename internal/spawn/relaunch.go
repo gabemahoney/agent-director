@@ -48,8 +48,16 @@ type ComposedRelaunch struct {
 // for a codex row (codex is [launch] codex_path when set, from cfg): nothing of
 // agent-director's stands before `resume`, the replayed arguments follow the
 // id, and the settings come last before any `--`, so the config's
-// question-tool setting wins over stored arguments; resume refuses none of the
-// stored arguments. It writes nothing in any Codex folder. A row whose agent
+// question-tool setting wins over stored arguments. Parsed session selectors
+// and their values are removed, as are Claude print and orphaned cloud controls;
+// other arguments retain parsed ownership when Claude required values are present.
+// Claude inputs missing a recognized required value get literal filtering only.
+// Claude prompts move behind surviving
+// options and --, and changed short clusters are re-encoded, only when removal
+// would change their meaning; otherwise order/spelling survive. Codex's prompt
+// remains one original token after --. Stored AgentArgs is unchanged and no spawn
+// validation runs.
+// It writes nothing in any Codex folder. A row whose agent
 // is neither claude nor codex gets store.ErrRowAgentInvalid.
 //
 // The create is on in.Socket, labelled with in.Token, the row's instance id and
@@ -88,6 +96,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 	var command []string
 	var carried PreTrustOutcome
 	if r.Agent == store.AgentCodex {
+		r.AgentArgs = ExtractResumeArgs(r.Agent, r.AgentArgs).Args
 		carried = CodexPreTrust(r.ExtraEnv, in.Row.NoPreTrust)
 		var err error
 		command, err = composeCodexResumeCommand(in.SessionID, r.AgentArgs, r.CWD, carried, cfg)
@@ -95,6 +104,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 			return ComposedRelaunch{}, err
 		}
 	} else {
+		r.AgentArgs = extractClaudeArgs(in.Row.AgentArgs, true).Args
 		settings, err := synthesizeSettings(r, cfg)
 		if err != nil {
 			return ComposedRelaunch{}, err

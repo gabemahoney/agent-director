@@ -180,8 +180,13 @@ template's `agent_args` combine is in
     `--enable write_stdin_approval` before any `--`, the supervisor adds no
     second one, and Codex itself rejects a flag the arguments repeat (see
     [Codex's layers](settings.md#codexs-layers)).
-  - `resume` never refuses the arguments it replays, for either agent: a
-    stored argument that a `spawn` would now refuse still runs.
+  - `resume` does not apply spawn's argument refusals. It filters recognized
+    session selectors and Claude print mode from stored arguments as described
+    in [Pause and resume](usage.md#pause-and-resume).
+    Argument recognition covers the verified agent options. An option added by
+    a later agent version is treated as having no value until recognized;
+    its value ownership or session-selection behavior may therefore be missed.
+    Do not rely on resume filtering to protect against such options.
 
 ## Permission relay
 

@@ -5113,7 +5113,7 @@ and the others call it.
   `--` on stays the prompt, and after every pass-through option, so
   agent-director's settings win (Codex applies the last `-c` of a key and
   every `--enable` and `--disable` after every `-c`). A resume's argv is
-  `<codex> resume <session id> [replayed args] <block> [-- ...]`: nothing
+  `<codex> resume <session id> [filtered args] <block> [-- prompt]`: nothing
   of agent-director's stands before `resume`. The block leaves out
   `--no-daemon`, `--dangerously-bypass-hook-trust` and
   `--enable write_stdin_approval` when the arguments already carry them
@@ -5172,6 +5172,105 @@ by hand, and never read a pass-through list with a second parser: use
 question-tool setting, which stays last. A new agent adds its program
 selection, its argument check in `Validate`, its composer and its
 pre-trust outcome at the same two entry points.
+
+### Shared agent argument readers and resume extraction
+
+`internal/spawn/claudeargs.go` and `codexargs.go` provide the pure,
+non-validating readers `ReadClaudeArgs` and `ReadCodexArgs`. `ArgOption`
+records the original `Index`, bare `Name`, `Canonical` name, full token
+`Spelling`, decoded `Values`, detached `ValueIndices`, and byte bounds
+`ClusterStart` / `ClusterEnd` for an option and its attached value in a
+short cluster. `Known` distinguishes verified registrations from the
+valueless fallback for unknown options. `After` marks Codex's policy
+reading after `--`; those tokens are operands for extraction. Both readers
+retain original positional and delimiter indices. Codex additionally
+records the original `Command`, `SessionID` and `Prompt` positions, so
+removal never guesses these roles from shifted argv indices.
+
+Claude's `claudeOptionTable` (`claudeoptions.go`) contains all 126 root
+registrations independently verified at 2.1.296, including the 122 at
+2.1.280. Codex's value/flag tables and positional finalization were checked
+independently at 0.156.0 and 0.162.1. Provenance, complete endpoint tables,
+embedded Commander traces, native Codex probes and upstream source hashes
+are in the external probe's `b.ssz/probe/resume-parsers-20261013/findings.md`
+and `claude-validator-review.json`, alongside `answers.md`. Update tables
+from actual parsers at the pre-release check; runtime reads no agent help.
+
+Required Claude values own even a dash-prefixed token or `--`; optional
+values consume a following non-option token; required lists own their first
+value and subsequent non-option tokens. Attached values keep their original
+spelling, including the leading equals in `-r=S1`. Exact short registrations
+such as `-d2e` precede cluster splitting. A value-taking short option owns
+the remaining suffix: `-dc` is debug value `c`, `-nrocket` is name value
+`rocket`; `-cd` is continue plus debug, and `-pc` is print plus continue.
+`--model -c` and `--append-system-prompt --resume foo` preserve their owned
+values. The reader's `HasPrint` inspects the whole parsed list before any
+extraction. Unknown options are treated as valueless; this policy does not
+guarantee ownership or selector recognition for later agent options.
+
+`resumeargs.go` owns the canonical selector sets:
+
+| Set | Members |
+| --- | --- |
+| `ClaudeResumeArgs` | `--resume` (`-r`), `--continue` (`-c`), `--fork-session`, `--from-pr`, `--teleport`, `--resume-session-at`, `--resume-drops-turn`, `--rewind-files`, `--reply-on-resume`, `--cloud`, `--remote`, `--attach-serve` |
+| `CodexResumeArgs` | command-position `resume` / `fork`, their `--last` / `--all`, and `--include-non-interactive` for `resume` only |
+
+Claude's `--session-id` creates a new session and is outside the selector
+set. Codex command names in option values or prompt text are not selectors.
+`--last` makes the first operand the prompt instead of a session id.
+Codex extraction protects surviving prompt tokens behind an unowned `--`,
+keeping each original token intact; it never joins or splits prompt text.
+
+`ExtractResumeArgs(agent, args)` returns copied surviving `Args`, `Dropped`
+original token spellings in argv order, and parsed `Removed` options.
+It removes selectors and their owned values. For Claude, parsed-role
+preservation requires every recognized required scalar or variadic option
+in the original reading to have its required value. If any lacks one, even
+an option being removed, extraction returns only literal filtering of options,
+owned values and selected cluster bytes. It retains surviving order and
+spelling without prompt movement, an inserted delimiter or cluster
+re-encoding; rejection belongs to the actual agent parser. Optional options
+without values and booleans do not trigger this exception.
+Otherwise, rendering preserves surviving option identities, owned values
+and original prompt tokens, first checking literal survivors against the
+original reading. Order and spelling remain unchanged when those parsed roles
+survive. Only when removal
+changes them does it move original prompt tokens behind all surviving options
+and an unowned `--`, or split/re-encode an altered short cluster. An
+option-owned `--` remains its option's value. For example, removing continue
+from `--debug --continue prompt --model=sonnet` renders
+`--debug --model=sonnet -- prompt`, so debug does not acquire the prompt as
+its optional value. Removing continue from `-cd2e` renders `--debug=2e`,
+so debug's value does not become the exact `-d2e` flag. Safe literal survivors
+keep their original order and spelling, including surviving cluster bytes.
+Prompt text and prompt-token order remain exact.
+When actual Claude `--cloud` / `--remote` removal leaves no surviving parsed
+`--environment` / `--pool` with its required value, it also removes
+`--forward-home-settings`, `--ref` and `--on-branch` with their owned values.
+It preserves these controls when that context survives, or when no actual
+cloud/remote selector was removed. Value-owned or prompt spellings do not
+provide context; explicit environment takes precedence over the pool alias
+upstream. Extraction performs no implicit-home environment lookup or general
+mode validation. Rendering is separate from removal metadata: `Dropped`
+retains original token spellings and order, and `Removed` retains original
+option indices, spellings and cluster bounds. Prompt movement and cluster
+re-encoding add no removal entries. `Dropped` is extraction metadata, not a
+resume result field.
+
+`ComposeRelaunch` filters a copied stored list using this extraction;
+Claude replay additionally removes parsed `-p` / `--print`, including
+print bytes in clusters. It then composes the row's current session selected
+by [Resume](#resume), preserving stored `AgentArgs` unchanged and applying
+no general spawn validation. Codex's per-launch settings follow surviving
+options before the protected prompt, retaining their settings precedence.
+
+**Must use:** future argument processing uses `ReadClaudeArgs` /
+`ReadCodexArgs` and their ownership metadata, and selector removal uses
+`ExtractResumeArgs` and these shared sets. Any filtered Claude replay uses the
+shared rendering: preserve surviving parsed roles when original required values
+are complete, and apply literal filtering only when any is missing. Keep rendered
+arguments separate from original storage and removal metadata. Do not add ad-hoc token scans,
+another option/value table, or another cluster or session/prompt parser.
 
 ### Collision pre-check
 
@@ -12213,13 +12312,18 @@ written, harmlessly:
 9. A new launch token (`spawn.NewLaunchToken`; a failure → `ErrInternal`),
    then `spawn.ComposeRelaunch` composes env, the row's agent's settings
    and the argv into a `CreateRequest`: for a Claude row
-   `claude --resume <session_id> --settings <json> [user agent_args]`, for
-   a Codex row `<codex> resume <session_id> [stored args] <settings block>
-   [-- and what follows]` (`<codex>` is `[launch] codex_path` or `codex`).
-   Both run before the move, so a failure writes nothing. The Codex
-   relaunch refuses none of the stored arguments, whatever they hold: they
-   were checked when the row was spawned, and refusing one now would strand
-   a row that cannot be spawned again with them.
+   `claude --resume <session_id> --settings <json> [filtered agent_args]`, for
+   a Codex row `<codex> resume <session_id> [filtered args] <settings block>
+   [-- prompt]` (`<codex>` is `[launch] codex_path` or `codex`).
+   Both run before the move, so a failure writes nothing. Relaunch applies
+   no spawn argument validation; it removes parsed session selectors and
+   values, Claude print mode and orphaned cloud controls through the
+   [shared argument extraction](#shared-agent-argument-readers-and-resume-extraction).
+   For Claude, that extraction preserves parsed ownership when original required
+   values are complete, moving prompts or re-encoding altered clusters only
+   when necessary and retaining relative option order. Incomplete required
+   values get literal filtering only, with rejection left to the agent parser.
+   The stored list is unchanged.
 10. Pre-trust (`spawn.RunPreTrust`, SR-8.1 step 4, SR-22.6) for the row's
     cwd and extra env, off when the row records the spawn's opt-out
     (`NoPreTrust`). For a Claude row it is `spawn.PreTrust`; for a Codex row
@@ -12774,9 +12878,10 @@ resume:
 A Codex row carries no synthesized settings to begin with: its relaunch
 rebuilds the per-launch settings block from the config in force at the
 resume (a changed `inject_help_hook` or `disable_ask_user` applies to it),
-and its stored arguments are replayed after `resume <id>`, ahead of the
-block, so the question-tool setting wins over a stored argument that turns
-the tool on.
+and its filtered stored arguments are replayed after `resume <id>`, ahead
+of the block and protected prompt, so the question-tool setting wins over
+a surviving stored argument that turns the tool on. See
+[Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction).
 
 `ExtraEnv` **is** carried over. The original spawn's extra env vars
 (e.g. `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`) are persisted on the
@@ -20305,6 +20410,16 @@ detail.
   `TestResumeRefusedBeforeLookup` (`resume_test.go`) use it. **Must
   use:** a test that records a socket whose per-user directory vanished takes it from
   `vanishedUserSocket`, never its own path arithmetic.
+
+**Stored argument replay tests.** Use `newResumeEnv` and its seeding options
+with `apitest.WithRawAgentArgs` for persisted replay cases; observe the
+launch through `tmuxfix.Recorder`, seed the current transcript under the
+test's temporary agent home, and assert the stored argument list is unchanged.
+Composition-only cases use `internal/spawn/relaunch_test.go`'s
+`newRelaunchEnv`, `relaunch` and `onlyCreate`, which supply a persisted-shaped
+row, isolated socket and Recorder. **Must use:** these existing fixtures for
+new replay coverage; do not duplicate store/socket/create arrangements or
+mix transcript-selection fallback cases into argument extraction tests.
 
 **Lookup and held-name scenes on the kill fixture.** Tests of resume's
 pre-launch lookup and of its path after "duplicate session" build on

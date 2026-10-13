@@ -34,9 +34,9 @@ const (
 )
 
 // codexValueLong is the constant list of Codex's long options that take a
-// value (SR-2.3, confirmed unchanged by RN-13), each with the long name it
+// value (SR-2.3, actual parser verified at 0.156.0 and 0.162.1), each with the long name it
 // stands for. codexValueShort is the same for the short flags. AD reads no
-// Codex help at run time; the pre-release check compares both with the help
+// Codex help at run time; the pre-release check compares both with the parser
 // of the newest and the minimum Codex (SR-16).
 var codexValueLong = map[string]bool{
 	"--config":                true,
@@ -64,6 +64,18 @@ var codexValueShort = map[byte]string{
 	'a': "--ask-for-approval",
 }
 
+// Verified flattened TUI flags; these are valueless. Selector validity depends
+// on command position, handled by CodexResumeArgs extraction.
+var codexFlagLong = map[string]bool{
+	"--help": true, "--version": true, "--oss": true, "--strict-config": true,
+	"--approve-for-me": true, "--not-so-yolo": true,
+	"--dangerously-bypass-approvals-and-sandbox": true, "--yolo": true,
+	"--worktree": true, "--search": true,
+	"--no-alt-screen": true, "--no-daemon": true,
+	"--dangerously-bypass-hook-trust": true, "--last": true, "--all": true,
+	"--include-non-interactive": true,
+}
+
 // codexSubcommands is the constant list of Codex's subcommands and their
 // aliases (SR-2.3 as amended by RN-13: mcp-server is not one; tcp-tunnel,
 // execpolicy, responses-api-proxy, stdio-to-uds, cloud-tasks and app are).
@@ -86,13 +98,7 @@ var codexSubcommands = map[string]bool{
 // and its values (the attached one, or the words after it; none for a flag).
 // Index is the position of the option's own token; a cluster of short flags
 // (`-hV`) gives one option per flag with the same Index.
-type CodexOption struct {
-	Index     int
-	Name      string
-	Canonical string
-	Values    []string
-	After     bool
-}
+type CodexOption = ArgOption
 
 // CodexArgs is the reading of one argument list.
 type CodexArgs struct {
@@ -105,6 +111,13 @@ type CodexArgs struct {
 	// positional word before any `--` (neither an option nor an option's
 	// value), or -1 when there is none. It is not necessarily a subcommand.
 	Command int
+	// Positionals are original operand positions, including every token after
+	// the unowned delimiter regardless of its option-shaped spelling.
+	Positionals []int
+	// SessionID and Prompt are original positions in command-position
+	// resume/fork, or -1. --last reinterprets the first operand as prompt.
+	SessionID int
+	Prompt    int
 }
 
 // ReadCodexArgs reads args as Codex's command line is read (RN-13): an option
@@ -114,13 +127,16 @@ type CodexArgs struct {
 // handling of the words before it, and nothing after it is in command
 // position. It does no I/O and never fails.
 func ReadCodexArgs(args []string) CodexArgs {
-	out := CodexArgs{DoubleDash: -1, Command: -1}
+	out := CodexArgs{DoubleDash: -1, Command: -1, SessionID: -1, Prompt: -1}
 	after := false
 	for i := 0; i < len(args); {
 		a := args[i]
 		switch {
 		case a == "--" && !after:
 			out.DoubleDash = i
+			for p := i + 1; p < len(args); p++ {
+				out.Positionals = append(out.Positionals, p)
+			}
 			after = true
 			i++
 		case strings.HasPrefix(a, "--") && len(a) > 2:
@@ -128,20 +144,41 @@ func ReadCodexArgs(args []string) CodexArgs {
 		case strings.HasPrefix(a, "-") && len(a) > 1:
 			i = out.readShort(args, i, after)
 		default:
+			if !after {
+				out.Positionals = append(out.Positionals, i)
+			}
 			if !after && out.Command < 0 {
 				out.Command = i
 			}
 			i++
 		}
 	}
+	out.readSessionPositions(args)
 	return out
+}
+
+func (c *CodexArgs) readSessionPositions(args []string) {
+	if c.Command < 0 || (args[c.Command] != "resume" && args[c.Command] != "fork") {
+		return
+	}
+	last := c.Has("--last")
+	for _, p := range c.Positionals {
+		if p <= c.Command {
+			continue
+		}
+		if !last && c.SessionID < 0 {
+			c.SessionID = p
+		} else if c.Prompt < 0 {
+			c.Prompt = p
+		}
+	}
 }
 
 // readLong reads the long option at args[i] and returns the index after it
 // and its value words.
 func (c *CodexArgs) readLong(args []string, i int, after bool) int {
 	name, val, inline := strings.Cut(args[i], "=")
-	opt := CodexOption{Index: i, Name: name, Canonical: name, After: after}
+	opt := CodexOption{Index: i, Name: name, Canonical: name, Spelling: args[i], After: after, Known: codexValueLong[name] || codexFlagLong[name]}
 	next := i + 1
 	if codexValueLong[name] {
 		if inline {
@@ -162,13 +199,15 @@ func (c *CodexArgs) readShort(args []string, i int, after bool) int {
 	next := i + 1
 	for p := 1; p < len(tok); p++ {
 		ch := tok[p]
-		opt := CodexOption{Index: i, Name: "-" + string(ch), Canonical: "-" + string(ch), After: after}
+		opt := CodexOption{Index: i, Name: "-" + string(ch), Canonical: "-" + string(ch), Spelling: tok, After: after, ClusterStart: p, ClusterEnd: p + 1}
 		long, valued := codexValueShort[ch]
+		opt.Known = valued || ch == 'h' || ch == 'V'
 		if !valued {
 			c.Options = append(c.Options, opt)
 			continue
 		}
 		opt.Canonical = long
+		opt.ClusterEnd = len(tok)
 		if rest := tok[p+1:]; rest != "" {
 			opt.Values = []string{strings.TrimPrefix(rest, "=")}
 		} else {
@@ -189,6 +228,7 @@ func (c *CodexArgs) takeValues(args []string, next int, many, after bool, opt *C
 			break
 		}
 		opt.Values = append(opt.Values, args[next])
+		opt.ValueIndices = append(opt.ValueIndices, next)
 		next++
 		if !many {
 			break

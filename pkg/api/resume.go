@@ -117,6 +117,13 @@ type ResumeParams struct {
 // ResumeResult is the typed return shape: the id and what the launch's
 // pre-trust did (pre_trust). The id field is the same id the caller passed
 // in; resume preserves the instance id (SRD §8.1).
+// Replay filters parsed session selectors and Claude print mode, including
+// orphaned cloud controls under the shared extraction rule, while preserving
+// unrelated arguments and option-owned values without changing stored AgentArgs.
+// Claude inputs missing a recognized required value get literal filtering only;
+// parsed-role preservation applies when all required values are present.
+// Claude prompts move behind surviving options and --, and changed clusters are
+// re-encoded, only when needed to preserve the original parsed meaning.
 type ResumeResult struct {
 	// InstanceID is the id of the resumed row — identical to the
 	// value passed in ResumeParams.InstanceID.
@@ -490,7 +497,8 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     the move's ErrSpawnNotFound (SR-8.6).
 //  4. A new launch token (a failure → ErrInternal, nothing written), then
 //     the environment, settings and argv (spawn.ComposeRelaunch, for the row's
-//     agent), all before the move, so a failure writes nothing.
+//     agent), filtering stored session selectors and Claude print mode plus
+//     orphaned cloud controls, all before the move, so a failure writes nothing.
 //  5. Pre-trust (spawn.RunPreTrust, SR-8.1 step 4, SR-22.6): after every check
 //     above that can refuse without a write and immediately before the move,
 //     for the row's cwd and extra env, off when the row records the opt-out of

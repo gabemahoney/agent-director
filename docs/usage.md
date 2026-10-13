@@ -568,9 +568,27 @@ its next `resume` continues that new session. Agent-director adds no in-session
 picker and does not control the agent's own picker; its resume guarantee applies
 to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)
 for refusals and recovery.
-A Codex agent carries on the same conversation, and `resume` replays the
-arguments the `spawn` stored, with today's settings winning over the ones
-stored. `resume` refuses none of them, even one a new `spawn` would refuse.
+`resume` replays stored `agent_args` except recognized session selectors and
+their values, and Claude's `-p` / `--print`, so those options cannot replace
+the latest session or request print mode. A value or prompt that spells a
+selector is preserved. When the original Claude arguments include every
+recognized required value, surviving options keep their meaning and owned
+values. Arguments keep their order and spelling unless removal would change
+their meaning. Only then, prompt tokens move behind surviving options and
+`--`, or an altered short-option cluster is split or re-encoded to preserve
+its options and values. Prompt tokens keep their exact text and order.
+If any recognized required Claude scalar or list option originally lacks its value,
+filtering only deletes the selected options, owned values and cluster bytes;
+it preserves the surviving order and spelling, without moving prompts,
+inserting `--` or re-encoding clusters. The agent's own parser handles rejection.
+Claude's `--forward-home-settings`, `--ref` and `--on-branch`, with their
+values, are also removed when removing an actual `--cloud` / `--remote`
+leaves no parsed `--environment` / `--pool` option with its required value.
+They remain when that context survives, or when no cloud selector was removed.
+The stored list is unchanged. Codex prompt text remains an original argument
+after `--`, and today's per-launch settings take precedence over replayed
+settings. `resume` does not apply spawn's argument refusals; see the
+[argument recognition limits](caller-contract.md#spawn-and-template-input-refusals).
 A resumed Claude row reads `waiting` at once. A resumed Codex row reports in
 only at its first prompt, so it reads `pending` until then and `pause` and
 `send-keys` without `allow_pending` are refused (see

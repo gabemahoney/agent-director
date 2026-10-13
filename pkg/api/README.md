@@ -136,7 +136,10 @@ subcommand as the first word that is neither an option nor an option's value,
 would override agent-director's hooks, typing setting or, while
 `disable_ask_user` is on, question-tool setting. The refused forms are in
 [docs/caller-contract.md](../../docs/caller-contract.md#spawn-and-template-input-refusals).
-`Resume` never refuses the `AgentArgs` it replays.
+`Resume` filters stored `AgentArgs` without applying spawn's argument refusals;
+see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules and
+[Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals)
+for argument recognition limits.
 
 `SpawnParams.ReuseFinished` on a finished id starts a fresh conversation.
 Same-agent reuse retains current-life session history and subagent records;
