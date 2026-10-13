@@ -2,7 +2,7 @@
  * version-floor.test.ts — SR-8.6: version-floor.json is the single source of
  * the binary floor (SR-5): strict SemVer, never the dev sentinel (SR-5.2),
  * byte-identical in dist and equal to the bundle's MIN_BINARY_VERSION (SR-5.4),
- * and readable with `jq` alone (SR-5.5). The floor is at or above 0.12.0-0,
+ * and readable with `jq` alone (SR-5.5). The confirmed floor is exactly 0.12.0,
  * the first binary that takes the agent-generic keys (SR-11.5), and a binary
  * below it is refused (SR-14.4).
  */
@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Client } from "../src/client.js";
 import { ErrSystemInstallTooOld, MIN_BINARY_VERSION } from "../src/index.js";
-import { compareVersions, parseVersion } from "../src/internal/semver.js";
+import { parseVersion } from "../src/internal/semver.js";
 import { requireBuiltDist } from "./internal/builtDist.js";
 import { openClient } from "./internal/helper.js";
 
@@ -46,9 +46,9 @@ test("`jq -r .min_binary_version` reads the shipped floor byte-exact (SR-5.5)", 
   expect(new TextDecoder().decode(proc.stdout)).toBe(`${floor}\n`);
 });
 
-// SR-11.5: the keys this client sends (instance_id, agent_args) need a binary that takes them.
-test("the floor is at or above 0.12.0-0", () => {
-  expect(compareVersions(floor, "0.12.0-0")).toBeGreaterThanOrEqual(0);
+// User/Gabe 2026-10-13 confirmed stable 0.12.0 as the SR-11.5 floor.
+test("the floor is exactly the confirmed stable release 0.12.0", () => {
+  expect(floor).toBe("0.12.0");
 });
 
 /** A stand-in agent-director in a throwaway dir that reports `version`; the Client opened on it, or its rejection. */
@@ -64,7 +64,7 @@ async function openOnBinaryReporting(version: string): Promise<{ client?: Client
   }
 }
 
-test.each(["0.11.0", "0.11.1", "0.11.99", "0.11.9-rc.1"])(
+test.each(["0.11.0", "0.11.1", "0.11.99", "0.11.9-rc.1", "0.12.0-0", "0.12.0-rc.1"])(
   "a binary reporting %s is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4)",
   async (version) => {
     const { client, error } = await openOnBinaryReporting(version);
