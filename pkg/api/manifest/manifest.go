@@ -200,7 +200,7 @@ const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whos
 	"A live row (pending included) still collides with ErrInstanceIdCollision, as does a row that changed or was removed after this spawn examined it; nothing is changed then. " +
 	"No effect without an explicit instance_id (a minted id cannot collide). " +
 	"Applies to this call only; no template or config setting carries it. The default (off) is unchanged: any existing row with the id collides. " +
-	"A successful spawn does not say whether it created a fresh row or reset a finished one. " +
+	"With no dropped arguments, a successful spawn does not say whether it created a fresh row or reset a finished one. Nonempty dropped_args identifies reuse that switches a finished row's agent; the CLI prints a notice when arguments are dropped. " +
 	"The spawn names its agent (agent, or the template's) and the reused row takes it: to reuse a row for the agent it ran, pass the row's agent, which get shows. " +
 	"Only an agent switch starts a new life; same-agent reuse keeps session history and subagent records but starts a fresh conversation. A switch back also starts with no memory of its earlier lives: resume and get never use or show an earlier life's history. Resume continues only the latest session; older sessions remain listed for inspection only. " +
 	"Retrying a failed plain spawn: after a held-name refusal (duplicate session) the row is already ended unless the error says otherwise, so the retry's lookup decides it at once; after any other failed launch the row stays pending and an opted-in retry collides until find-missing marks it missing, which happens only after the pending grace period (60 s by default). " +
@@ -415,7 +415,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). For a claude agent, refused: --settings, --resume, --continue, --print, --output-format. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks, and --disable hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat.",
+				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks, and --disable hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -466,6 +466,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
 			},
+			{Name: "dropped_args", Type: "[]string", Description: "Original resume arguments removed on a finished-agent switch, in argv order. Omitted when empty; starts fresh and resumes nothing.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrCwdMissing",

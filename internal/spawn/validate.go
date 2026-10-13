@@ -20,16 +20,13 @@ import (
 const MaxTmuxSessionNameBytes = 64
 
 // deniedClaudeArgs is the set of flags agent-director must own end-to-end.
-// --settings would race with our hook synthesis; --resume/--continue would
-// bypass our session-id tracking; --print/--output-format exit before any
+// --settings would race with our hook synthesis; --print/--output-format exit before any
 // hook fires so the supervision model breaks (SRD §7.2 step 3).
 //
 // --setting-sources is intentionally not on this list: clean-slate Spawns
 // (suppressing the user tier) are a supported configuration per SRD §19 Q5.
 var deniedClaudeArgs = map[string]struct{}{
 	"--settings":      {},
-	"--resume":        {},
-	"--continue":      {},
 	"--print":         {},
 	"--output-format": {},
 }
@@ -94,7 +91,9 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //  4. Argument ownership (SR-2.1): inherited template agent_args belong to
 //     the resolved agent, else ErrAgentArgsMismatch.
 //  5. agent_args contains no denied flag (both --flag VALUE and
-//     --flag=VALUE forms). Claude's set is deniedClaudeArgs; Codex's is
+//     --flag=VALUE forms), except resume selectors removed on a verified
+//     finished-agent switch. Claude print is checked on the full original
+//     list, before removal. Claude uses deniedClaudeArgs and ClaudeResumeArgs; Codex uses
 //     CheckCodexArgs (subcommands, --remote, and the hooks, paste-burst and
 //     question-tool settings agent-director owns), which reads the
 //     question-tool setting from r.DisableAskUser.
@@ -119,15 +118,8 @@ func Validate(r *Resolved) error {
 	if err := validateArgsOwnership(r); err != nil {
 		return err
 	}
-	switch r.Agent {
-	case config.AgentClaude:
-		if err := validateClaudeArgs(r.AgentArgs); err != nil {
-			return err
-		}
-	case config.AgentCodex:
-		if err := CheckCodexArgs(r.AgentArgs, r.DisableAskUser); err != nil {
-			return err
-		}
+	if err := validateSpawnArgs(r); err != nil {
+		return err
 	}
 	if r.Agent == config.AgentCodex && r.Permissions != nil {
 		if err := RefuseCodexPermissions(r.Permissions.Allow, r.Permissions.Deny, r.Permissions.Ask); err != nil {
@@ -285,19 +277,77 @@ func validateRelayMode(m string) error {
 	}
 }
 
-// validateClaudeArgs applies SRD §7.2 step 3. Detection handles both forms
-// (--flag VALUE and --flag=VALUE) so callers cannot smuggle a denied flag
-// past the check by inlining its value.
-func validateClaudeArgs(args []string) error {
-	for _, a := range args {
-		// Slice off the value half of --flag=VALUE before matching so the
-		// detection key is the bare flag name.
-		key := a
-		if i := strings.IndexByte(a, '='); i >= 0 {
-			key = a[:i]
+// validateSpawnArgs inspects original ownership before extraction. Exact denied
+// long tokens owned as values are always refused; dropping them would change
+// the option's value. Claude print is checked before any selector is removed.
+func validateSpawnArgs(r *Resolved) error {
+	original := r.AgentArgs
+	if r.Agent == config.AgentClaude {
+		if err := refuseClaudePrint(original); err != nil {
+			return err
 		}
-		if _, denied := deniedClaudeArgs[key]; denied {
+	}
+	// Preserve Codex's first-argument refusal order on ordinary paths.
+	if r.Agent == config.AgentCodex && !r.DropResumeArgs {
+		return CheckCodexArgs(original, r.DisableAskUser)
+	}
+	extracted := ExtractResumeArgs(r.Agent, original)
+	removed := make(map[int]ArgOption, len(extracted.Removed))
+	for _, o := range extracted.Removed {
+		if _, exists := removed[o.Index]; !exists {
+			removed[o.Index] = o
+		}
+	}
+	for i, token := range original {
+		key, _, _ := strings.Cut(token, "=")
+		deniedLong := false
+		switch r.Agent {
+		case config.AgentClaude:
+			_, deniedLong = deniedClaudeArgs[key]
+			deniedLong = deniedLong || ClaudeResumeArgs[key]
+		case config.AgentCodex:
+			deniedLong = key == codexOptRemote || key == codexOptRemoteAuthTokenEnv || CodexResumeArgs[key] && strings.HasPrefix(key, "--")
+		}
+		o, drops := removed[i]
+		if deniedLong && !(r.DropResumeArgs && drops && o.Canonical == key) {
 			return fmt.Errorf("%w: %s", ErrSpawnDeniedFlag, key)
+		}
+		if drops && !r.DropResumeArgs {
+			return fmt.Errorf("%w: %s", ErrSpawnDeniedFlag, o.Name)
+		}
+	}
+	args := original
+	if r.DropResumeArgs {
+		args = extracted.Args
+	}
+	if r.Agent == config.AgentCodex {
+		if err := CheckCodexArgs(args, r.DisableAskUser); err != nil {
+			return err
+		}
+	}
+	if r.DropResumeArgs {
+		r.AgentArgs = args
+		r.DroppedArgs = extracted.Dropped
+	}
+	return nil
+}
+
+// refuseClaudePrint checks the full original list, including exact long
+// tokens owned as values, before selector extraction can alter a cluster.
+func refuseClaudePrint(args []string) error {
+	parsed := make(map[int]string)
+	for _, o := range ReadClaudeArgs(args).Options {
+		if o.Canonical == "--print" {
+			parsed[o.Index] = o.Name
+		}
+	}
+	for i, token := range args {
+		key, _, _ := strings.Cut(token, "=")
+		if key == "--print" {
+			return fmt.Errorf("%w: %s", ErrSpawnDeniedFlag, key)
+		}
+		if name, print := parsed[i]; print {
+			return fmt.Errorf("%w: %s", ErrSpawnDeniedFlag, name)
 		}
 	}
 	return nil

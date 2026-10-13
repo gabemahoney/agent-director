@@ -60,7 +60,9 @@ type SpawnParams struct {
 	// config key or environment variable supplies it (SR-1.1).
 	Agent string
 
-	// AgentArgs is the verbatim argv passed through to the agent program.
+	// AgentArgs is argv passed through to the agent program. A verified
+	// finished-agent switch drops existing-session selectors and owned values;
+	// the launch and stored row both use the sanitized fresh arguments.
 	// For claude they follow the supervisor's own flags and the denied-flag
 	// check rejects supervisor-owned flags. For codex they precede
 	// agent-director's per-launch settings block, which sits before the
@@ -99,9 +101,12 @@ type SpawnParams struct {
 	// explicit InstanceID (a minted id cannot collide) and applies to
 	// this call only; templates and config never carry it. Default false
 	// keeps the collision behaviour: any existing row gives
-	// ErrInstanceIdCollision. A successful spawn does not say whether it
-	// created a fresh row or reset a finished one. Same-agent reuse starts a
-	// fresh conversation and retains session history and subagent records.
+	// ErrInstanceIdCollision. With no dropped arguments, a successful spawn
+	// does not say whether it created a fresh row or reset a finished one.
+	// Nonempty DroppedArgs identifies reuse that switches a finished row's
+	// agent; the CLI prints a notice when arguments are dropped. Same-agent
+	// reuse starts a fresh conversation and retains session history and
+	// subagent records.
 	// Only an agent switch starts a new life; switching back also starts with
 	// no memory of its earlier lives: resume and get never use or show an
 	// earlier life's history. Resume continues only the latest session; older
@@ -130,6 +135,12 @@ type Permissions struct {
 // exercise them against synthesized inputs without touching disk.
 type Resolved struct {
 	SpawnParams
+
+	// DropResumeArgs is set only from a successful finished reuse snapshot
+	// whose raw stored agent differs exactly from the resolved agent.
+	DropResumeArgs bool
+	// DroppedArgs contains original removed tokens in argv order.
+	DroppedArgs []string
 
 	// InheritedArgsAgent is the agent of the template whose non-empty
 	// agent_args this spawn inherited, and "" when it inherited none (no

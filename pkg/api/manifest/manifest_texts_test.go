@@ -120,7 +120,7 @@ func manifestTextCases() []textCase {
 		{verb: "make-template", param: "agent_args", c: apitest.DescCase{Name: "per-call spelling",
 			Require: []string{"Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES"}, Forbid: []string{"--agent-args", "--claude-args"}}},
 		{verb: "spawn", param: "agent_args", c: apitest.DescCase{Name: "pass-through for both agents",
-			Require: []string{"Pass-through argv to the agent program, one argument per array element", "For a claude agent, refused: --settings"},
+			Require: []string{"Pass-through argv to the agent program, one argument per array element", "Claude refuses --settings, --output-format and print (-p/--print, clusters included)", "Session selectors/owned values are refused except on a finished-agent switch", "Exact denied long tokens owned as values always refuse"},
 			Forbid:  []string{"after the supervisor's own flags"}}},
 		{verb: "spawn", param: "agent_args", c: tokens("codex refusals",
 			"For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position", "--remote, --remote-auth-token-env",

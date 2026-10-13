@@ -32,10 +32,12 @@ var ErrCwdNotADirectory = errors.New("ErrCwdNotADirectory")
 var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 
 // ErrSpawnDeniedFlag is returned when the agent_args of a spawn contain an
-// argument the supervisor must own. For a claude spawn: --settings, --resume,
-// --continue, --print, --output-format; the match handles both --flag VALUE
-// and --flag=VALUE forms, and --setting-sources is deliberately not on this
-// list (SRD §19 Q5). For a codex spawn (CheckCodexArgs): a Codex subcommand in
+// argument the supervisor must own. Claude's print (-p/--print and parsed
+// clusters), --settings and --output-format are always refused, as are exact
+// denied long names owned as option values. Existing-session selectors and
+// their owned values are refused except on a verified finished-agent switch,
+// where they are dropped and the agent starts fresh. --setting-sources is not
+// on the refused list (SRD §19 Q5). For a codex spawn (CheckCodexArgs): a Codex subcommand in
 // command position, --remote, --remote-auth-token-env, a -c/--config key at,
 // above or under hooks, tui.disable_paste_burst or features.hooks, and
 // --disable hooks; while disable_ask_user is on, also --enable

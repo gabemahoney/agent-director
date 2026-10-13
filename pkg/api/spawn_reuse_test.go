@@ -229,7 +229,7 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 		archived = sid
 	}
 	assertTrailRecord(t, recs[0], rutReusedKeys, map[string]any{"instance_id": r.ID, "prior_state": run.before.cols.State,
-		"archived_session_id": archived, "lookup_outcome": "gone", "source": "ad_spawn"})
+		"archived_session_id": archived, "lookup_outcome": "gone", "source": "ad_spawn", "dropped_args": nil})
 }
 
 // rchgJSONKeys is v's JSON object keys, sorted.
@@ -260,7 +260,8 @@ func (e *killEnv) rchgAssertLikeFresh(t *testing.T, id string, p api.SpawnParams
 	if err != nil {
 		t.Fatalf("fresh Spawn: %v", err)
 	}
-	if want := (api.SpawnResult{InstanceID: id, PreTrust: fresh.PreTrust}); run.res != want ||
+	if want := (api.SpawnResult{InstanceID: id, PreTrust: fresh.PreTrust}); run.res.InstanceID != want.InstanceID || run.res.PreTrust != want.PreTrust ||
+		!slices.Equal(run.res.DroppedArgs, fresh.DroppedArgs) ||
 		!slices.Equal(rchgJSONKeys(t, run.res), rchgJSONKeys(t, fresh)) {
 		t.Errorf("reuse result %+v; want %+v, a fresh spawn's fields", run.res, want)
 	}

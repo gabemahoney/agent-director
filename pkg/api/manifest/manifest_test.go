@@ -741,3 +741,21 @@ func TestHookVerbListsAgentParam(t *testing.T) {
 	}
 	t.Error("hook has no agent param")
 }
+
+func TestSpawnDroppedArgsContract(t *testing.T) {
+	for _, field := range verbOf(t, "spawn").ResultFields {
+		if field.Name != "dropped_args" {
+			continue
+		}
+		if field.Type != "[]string" || field.Nullable || !field.AllowEmpty || field.AllowedValues != nil {
+			t.Errorf("field=%+v", field)
+		}
+		for _, phrase := range []string{"Original resume arguments", "in argv order", "Omitted when empty", "starts fresh and resumes nothing"} {
+			if !strings.Contains(field.Description, phrase) {
+				t.Errorf("description=%q lacks %q", field.Description, phrase)
+			}
+		}
+		return
+	}
+	t.Fatal("spawn missing dropped_args")
+}

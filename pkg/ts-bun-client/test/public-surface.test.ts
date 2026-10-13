@@ -314,3 +314,8 @@ test("public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)", () => {
   const src = fs.readFileSync(distIndexDts, "utf-8");
   expect(src).not.toContain("_cliPath");
 });
+
+
+test("public-surface: SpawnResult carries optional nonnullable dropped_args", () => {
+  expect(interfaceBody(typesGolden(), "SpawnResult")).toMatch(/\bdropped_args\?\s*:\s*string\[\]\s*;/);
+});

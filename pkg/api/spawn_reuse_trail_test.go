@@ -36,7 +36,7 @@ const (
 
 // The full key sets of reuse's two events: SR-14's fields plus the envelope's.
 var (
-	rutReusedKeys   = []string{"event", "ts", "instance_id", "prior_state", "archived_session_id", "lookup_outcome", "source"}
+	rutReusedKeys   = []string{"event", "ts", "instance_id", "prior_state", "archived_session_id", "lookup_outcome", "source", "dropped_args"}
 	rutRestoredKeys = []string{"event", "ts", "instance_id", "applied", "launch_error", "restore_error", "source"}
 )
 

@@ -13,7 +13,8 @@ import (
 )
 
 // SpawnResult is the typed return shape of Spawn: the new row's id and what
-// the launch's pre-trust did (pre_trust). The CLI marshals this directly to
+// the launch's pre-trust did (pre_trust), plus DroppedArgs on a switching
+// reuse. The CLI marshals this directly to
 // its single-JSON-object stdout (SRD §12.3); the MCP server returns it as the
 // tool result.
 type SpawnResult struct {
@@ -38,6 +39,9 @@ type SpawnResult struct {
 	//
 	// A pre-trust failure never fails the spawn.
 	PreTrust string `json:"pre_trust"`
+	// DroppedArgs lists original resume tokens removed for a switching reuse,
+	// in argv order. Omitted when empty; the switched agent starts fresh.
+	DroppedArgs []string `json:"dropped_args,omitempty"`
 }
 
 // spawnTmux is plain spawn's tmux surface (Appendix F.5): the create, the
@@ -100,11 +104,13 @@ func runSpawn(s *store.Store, collisions spawn.CollisionChecker, t spawnTmux, pc
 //
 // The reuse branch is taken only when the caller opted in (ReuseFinished)
 // and supplied a non-empty instance id, after the control-character check,
-// template resolution and validation; a minted id, and every call without
+// template resolution; validation follows the snapshot read. A minted id,
+// and every call without
 // the opt-in, take exactly the plain path above (without the opt-in the
 // pre-check refuses a finished row too, with ErrInstanceIdCollision, before
 // Launch resolves its socket, pre-trusts or inserts). On the branch,
-// rs.ReadForReuse is the one pre-check read: its answer feeds ApplyDefaults
+// rs.ReadForReuse is the one pre-check read, before Validate, used only for
+// switching argument eligibility there: its saved answer feeds ApplyDefaults
 // through reusePreCheck, so the live-row collision (ErrInstanceIdCollision, a
 // pending row included, with no tmux call and nothing written) and the read
 // failure (spawn.PreCheckReadError, ErrInternal) keep their single mappings,
@@ -119,14 +125,16 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	if err := spawn.Validate(&r); err != nil {
-		return SpawnResult{}, err
-	}
 	reuse := r.ReuseFinished && r.InstanceID != ""
 	var reused reusePreCheck
 	if reuse {
 		reused.row, reused.found, reused.err = rs.ReadForReuse(r.InstanceID)
 		collisions = reused
+		r.DropResumeArgs = reused.err == nil && reused.found &&
+			(reused.row.State == "ended" || reused.row.State == "missing") && reused.row.Agent != r.Agent
+	}
+	if err := spawn.Validate(&r); err != nil {
+		return SpawnResult{}, err
 	}
 	idCheck, err := spawn.ApplyDefaults(&r, cfg, collisions)
 	if err != nil {
@@ -148,7 +156,7 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	return SpawnResult{InstanceID: id, PreTrust: string(preTrust)}, nil
+	return SpawnResult{InstanceID: id, PreTrust: string(preTrust), DroppedArgs: r.DroppedArgs}, nil
 }
 
 // validateExplicitInstanceID rejects a caller-supplied instance id that
@@ -179,7 +187,9 @@ func hasControlChar(id string) bool {
 }
 
 // Spawn launches a tracked agent inside a new tmux session.
-// The call returns the instance_id and pre_trust (what the launch's
+// The call returns the instance_id, DroppedArgs (original resume arguments
+// removed on a switching reuse; omitted when empty), and pre_trust (what
+// the launch's
 // folder-trust pre-trust did: ok, skipped or failed; a failure never fails
 // the spawn) without waiting for the agent; the row is pending from its
 // insert until the agent reports in (its SessionStart hook), then
@@ -248,7 +258,10 @@ func hasControlChar(id string) bool {
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent
 //     than this spawn's and the call supplies no AgentArgs of its own.
 //   - ErrSpawnDeniedFlag: a refused argument was passed in AgentArgs: for a
-//     claude spawn a denied claude flag; for a codex spawn a Codex subcommand
+//     claude spawn --settings, --output-format, print (-p/--print, clusters
+//     included), or an existing-session selector; selectors are dropped only
+//     on a verified finished-agent switch. Exact denied long tokens owned as
+//     option values are always refused. For a codex spawn a Codex subcommand
 //     in command position, --remote, or a setting agent-director owns (a
 //     -c/--config key at, above or under hooks, tui.disable_paste_burst or
 //     features.hooks, --disable hooks, and while disable_ask_user is on the

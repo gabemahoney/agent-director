@@ -341,8 +341,11 @@ export interface SpawnParams {
      */
     extra_env?: Record<string, string>;
     /**
-     * Pass-through argv to the agent's program. For claude, `--settings`, `--resume`,
-     * `--continue`, `--print` and `--output-format` are refused. For codex, a Codex subcommand in
+     * Pass-through argv to the agent's program. Claude always refuses `--settings`,
+     * `--output-format` and print (`-p`/`--print`, parsed clusters included). Session
+     * selectors and owned values are refused except on a finished-agent switch:
+     * removed tokens appear in `dropped_args`; the agent starts fresh and resumes nothing.
+     * Exact denied long tokens owned as option values always refuse. For codex, a Codex subcommand in
      * command position, `--remote`, `--remote-auth-token-env`, `-c`/`--config` keys at, above or
      * under `hooks`, `tui.disable_paste_burst` or `features.hooks`, and `--disable hooks` are
      * refused (`ErrSpawnDeniedFlag`); with `disable_ask_user` on, `--enable
@@ -398,6 +401,8 @@ export interface SpawnResult {
      * spawn.
      */
     pre_trust: "ok" | "skipped" | "failed";
+    /** Original resume tokens removed on a finished-agent switch, in argv order; omitted when empty. */
+    dropped_args?: string[];
 }
 /** Mirrors the `status` verb's `instance_id` param (pkg/api.Client.Status arg). */
 export interface StatusParams {

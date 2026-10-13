@@ -314,3 +314,74 @@ func jsonOf(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+// TestSpawnCLISwitchResumeOutput pins the CLI notice and fresh-start envelope.
+func TestSpawnCLISwitchResumeOutput(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, args := range [][]string{{"--resume", "S1"}, nil} {
+		t.Run(jsonOf(t, args), func(t *testing.T) {
+			transcript := apitest.SeedJsonlUnder(t, t.TempDir(), t.TempDir(), "S1")
+			home, id, _ := seedRowOnSocket(t, store.StateEnded, apitest.WithAgent("codex"), apitest.WithLifeNumber(1),
+				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "S1", JSONLPath: transcript, Life: 0}))
+			argv := append([]string{"spawn", "--cwd", t.TempDir(), "--instance-id", id, "--reuse-finished", "--agent", "claude", "--no-pre-trust", "--"}, args...)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
+			var result map[string]json.RawMessage
+			if code != 0 || json.Unmarshal([]byte(stdout), &result) != nil {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			if string(result["instance_id"]) != jsonOf(t, id) || string(result["pre_trust"]) != `"skipped"` {
+				t.Fatalf("result=%s", stdout)
+			}
+			if len(args) > 0 {
+				if string(result["dropped_args"]) != jsonOf(t, args) {
+					t.Errorf("drops=%s want %s", result["dropped_args"], jsonOf(t, args))
+				}
+				if stderr != "Dropped original arguments [\"--resume\" \"S1\"]: switching agents starts fresh and resumes nothing.\n" {
+					t.Errorf("notice=%q", stderr)
+				}
+			} else if _, present := result["dropped_args"]; present || stderr != "" {
+				t.Errorf("empty result=%s stderr=%q", stdout, stderr)
+			}
+			row := getRow(t, home, fakeDir, id)
+			if row["agent"] != "claude" || row["state"] != "pending" || row["session_id"] != "" || jsonOf(t, row["prior_sessions"]) != "[]" {
+				t.Errorf("fresh row=%v", row)
+			}
+			stored := rowColumns(t, home, id)
+			if stored.AgentArgs != "[]" || stored.LifeNumber != int64(2) {
+				t.Errorf("stored args=%v", stored.AgentArgs)
+			}
+			for _, invocation := range assertInvocationKinds(t, home, "list-sessions", "new-session") {
+				if slices.Contains(invocation, "--resume") || slices.Contains(invocation, "S1") {
+					t.Errorf("launch resumes old session: %q", invocation)
+				}
+			}
+		})
+	}
+}
+
+func TestSpawnCLIResumePolicyRefusals(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, tc := range []struct {
+		name, agent, bare string
+		args              []string
+	}{
+		{"same agent short", "claude", "-r", []string{"-rS1"}},
+		{"switch print cluster", "codex", "-p", []string{"-pc"}},
+		{"switch value owned long", "codex", "--resume", []string{"--append-system-prompt", "--resume", "S1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home, id, _ := seedRowOnSocket(t, store.StateEnded, apitest.WithAgent(tc.agent))
+			before := rowColumns(t, home, id)
+			argv := append([]string{"spawn", "--agent", "claude", "--cwd", t.TempDir(), "--instance-id", id, "--reuse-finished", "--no-pre-trust", "--"}, tc.args...)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, argv...)
+			envelope := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrSpawnDeniedFlag")
+			if envelope.ErrDescription != tc.bare || strings.Contains(envelope.ErrDescription, "-rS1") {
+				t.Errorf("description=%q want bare %q", envelope.ErrDescription, tc.bare)
+			}
+			if jsonOf(t, rowColumns(t, home, id)) != jsonOf(t, before) {
+				t.Error("refusal changed row")
+			}
+			assertInvocationKinds(t, home)
+		})
+	}
+}

@@ -106,7 +106,8 @@ func DescReuseHistoryByLife() DescCase {
 
 // DescReuseFinishedParam is spawn's reuse_finished parameter text (SR-18.10,
 // SR-10.7, SR-18.7), by key phrase: finished rows only, explicit id, this
-// call only, default unchanged, silent success, no memory of earlier lives,
+// call only, default unchanged, ambiguous success without dropped arguments,
+// switching evidence and CLI notice with dropped arguments, no memory of earlier lives,
 // the agent the reuse names (SR-4.4), the failed-plain-spawn retry with the
 // pending grace default, feature
 // detection per surface, development builds and older binaries, serve
@@ -122,7 +123,9 @@ func DescReuseFinishedParam() DescCase {
 			"No effect without an explicit instance_id", "Applies to this call only",
 			"no template or config setting carries it",
 			"The default (off) is unchanged: any existing row with the id collides",
-			"does not say whether it created a fresh row or reset a finished one",
+			"With no dropped arguments, a successful spawn does not say whether it created a fresh row or reset a finished one",
+			"Nonempty dropped_args identifies reuse that switches a finished row's agent",
+			"the CLI prints a notice when arguments are dropped",
 			"The spawn names its agent (agent, or the template's) and the reused row takes it: to reuse a row for the agent it ran, pass the row's agent, which get shows",
 			"starts with no memory of its earlier lives",
 			"resume and get never use or show an earlier life's history",

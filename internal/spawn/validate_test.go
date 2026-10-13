@@ -94,7 +94,7 @@ func TestValidateOrder(t *testing.T) {
 		{"codex refuses a subcommand", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec", "hello"}}, ErrSpawnDeniedFlag, "codex subcommand exec", false, ""},
 		{"codex refuses a hooks override", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"-c", "hooks.Stop=[]"}}, ErrSpawnDeniedFlag, "-c hooks.Stop", false, ""},
 		{"codex arguments pass through", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"-m", "exec", "--", "a", "b"}}, nil, "", false, ""},
-		{"codex's refused arguments do not apply to claude", SpawnParams{CWD: cwdGood, AgentArgs: []string{"exec", "--remote", "x", "-c", "hooks.Stop=[]", "--disable", "hooks"}}, nil, "", false, ""},
+		{"codex's refused arguments do not apply to claude", SpawnParams{CWD: cwdGood, AgentArgs: []string{"exec", "--remote-auth-token-env", "AUTH", "--config", "hooks.Stop=[]", "--disable", "hooks"}}, nil, "", false, ""},
 		{"relay_mode outranks codex's refused arguments", SpawnParams{CWD: cwdGood, RelayMode: "bogus", Agent: "codex", AgentArgs: []string{"exec"}}, ErrRelayModeInvalid, "", false, ""},
 		{"an invalid agent outranks codex's refused arguments", SpawnParams{CWD: cwdGood, Agent: "gemini", AgentArgs: []string{"exec"}}, ErrAgentInvalid, "", false, ""},
 		{"ownership outranks codex's refused arguments", SpawnParams{CWD: cwdGood, Agent: "codex", AgentArgs: []string{"exec"}}, ErrAgentArgsMismatch, "", false, "claude"},
@@ -105,7 +105,7 @@ func TestValidateOrder(t *testing.T) {
 			TmuxSessionName: "bad:name", TmuxSessionNameSupplied: true}, ErrSpawnDeniedFlag, "", false, ""},
 		{"happy path", SpawnParams{CWD: cwdGood}, nil, "", false, ""},
 	}
-	for _, flag := range []string{"--settings", "--resume", "--continue", "--print", "--output-format"} {
+	for _, flag := range []string{"--settings", "--output-format"} {
 		cases = append(cases,
 			validateCase{"denied " + flag, SpawnParams{CWD: cwdGood, AgentArgs: []string{flag, "value"}}, ErrSpawnDeniedFlag, "", false, ""},
 			validateCase{"denied " + flag + "=", SpawnParams{CWD: cwdGood, AgentArgs: []string{flag + "=value"}}, ErrSpawnDeniedFlag, "", false, ""})

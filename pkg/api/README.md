@@ -129,12 +129,16 @@ and no agent: give it one; `MakeTemplate` returns it too) and
 deny or ask entry; `MakeTemplate` returns it too).
 
 `ErrSpawnDeniedFlag` refuses an `AgentArgs` entry the supervisor must own,
-before anything is written: for `"claude"` five flags (`--settings`,
-`--resume`, `--continue`, `--print`, `--output-format`), for `"codex"` a Codex
-subcommand as the first word that is neither an option nor an option's value,
-`--remote`, and a `-c` key or feature that
-would override agent-director's hooks, typing setting or, while
-`disable_ask_user` is on, question-tool setting. The refused forms are in
+before anything is written. Claude always refuses `--settings`,
+`--output-format` and print (`--print`, `-p`, parsed clusters included).
+Session selectors and their owned values are refused except on a verified
+finished-agent switch, where they are removed from launch and storage and the
+remainder is checked as for a plain spawn. Exact denied long names owned as
+option values always refuse. Codex also refuses other command-position
+subcommands, `--remote`, `--remote-auth-token-env`, and config keys or features
+that override its hooks, typing setting or, while `disable_ask_user` is on,
+question-tool setting. The complete selector lists, recognition rules and
+switch policy are in
 [docs/caller-contract.md](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 `Resume` filters stored `AgentArgs` without applying spawn's argument refusals;
 see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules and
@@ -150,7 +154,12 @@ transcript exists. See [Transcript recovery](../../docs/caller-contract.md#trans
 for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
 for restoration and children.
 
-Returns `SpawnResult` (`.InstanceID`, `.PreTrust`). `.PreTrust` is
+Returns `SpawnResult` (`.InstanceID`, `.PreTrust`, `.DroppedArgs`).
+`.DroppedArgs` lists removed original argument tokens in argv order on a
+switching reuse, which starts fresh and resumes nothing. JSON omits
+`dropped_args` when empty. Reporting details are in the
+[caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+`.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
 either agent (a failed pre-trust never fails the spawn; see the
 `SpawnResult.PreTrust` godoc and

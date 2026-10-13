@@ -396,7 +396,7 @@ export class SubprocessClient {
   // Verb methods — one per callable verb in src/internal/verbs.ts.
   // -------------------------------------------------------------------------
 
-  /** spawn — launch a tracked agent instance in a new tmux session. */
+  /** spawn — launch a tracked agent in tmux; dropped_args reports removed resume tokens on a switch that starts fresh. */
   async spawn(params: SpawnParams): Promise<SpawnResult> {
     this.#assertOpen();
     return this.#enqueue<SpawnResult>("spawn", params);

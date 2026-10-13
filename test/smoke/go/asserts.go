@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 //   - AllowEmpty=true: field must exist; value may be the empty form of its
 //     type. Slice/map kinds must be non-nil but may be length-zero; scalar
 //     kinds may be the zero value (e.g. empty string, 0, false).
+//     Optional collections tagged omitempty may be nil (omitted on the wire).
 //   - AllowedValues != nil: field must be one of the listed values.
 //   - Default (none of the above): field must exist AND be non-zero.
 func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result any) {
@@ -51,7 +53,6 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 				verbDef.Name, fd.Name, result)
 			continue
 		}
-		_ = sf // available if we need type info
 
 		// Nullable: a nil value bypasses AllowedValues (the field is permitted
 		// to be JSON null per the manifest contract; the enum applies only
@@ -89,7 +90,8 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 		// AllowEmpty: per the manifest's semantics, the field is permitted
 		// to be the empty value of its type. For slice/map kinds the empty
 		// form must be a non-nil empty collection (pkg/api verbs normalize
-		// nil→[] explicitly so callers never see `null` on the wire). For
+		// nil→[] explicitly so callers never see `null` on the wire), unless
+		// the field is optional and omitempty removes it from the wire. For
 		// scalar kinds (string, int, bool, pointer) the zero value is
 		// acceptable as the "empty form" — strings like `parent_id` /
 		// `jsonl_path` / `session_id` are documented as routinely
@@ -97,7 +99,7 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 		if fd.AllowEmpty {
 			k := fv.Kind()
 			if k == reflect.Slice || k == reflect.Map {
-				if fv.IsNil() {
+				if fv.IsNil() && !slices.Contains(strings.Split(sf.Tag.Get("json"), ",")[1:], "omitempty") {
 					t.Errorf("AssertResultMatchesManifest(%s): field %q (AllowEmpty) is nil; expected empty %s not nil",
 						verbDef.Name, fd.Name, k)
 				}

@@ -124,6 +124,13 @@ const result = await client.spawn({ cwd: "~/my-project", agent: "claude" });
 console.log(result.instance_id);
 ```
 
+The `SpawnResult` has `instance_id`, `pre_trust` and optional
+`dropped_args?: string[]`. On a switching reuse, `dropped_args` contains
+removed original argument tokens in argv order; it is omitted when empty.
+The switch starts fresh and resumes nothing. Selector lists and reporting
+rules are in the
+[caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+
 Same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
 `resume` continues only the recorded agent's latest reported session and
@@ -638,7 +645,7 @@ These 61 classes are generated one-to-one from the shared `err_name` catalog ([`
 | Error | When it fires |
 |---|---|
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
-| `ErrSpawnDeniedFlag` | The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn: `--settings`, `--resume`, `--continue`, `--print` or `--output-format`. A `"codex"` spawn: a Codex subcommand as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst` or `features.hooks`, `--disable hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` filters stored arguments without applying spawn's argument refusals; see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules. The refused forms and argument recognition limits are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
+| `ErrSpawnDeniedFlag` | The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn always refuses `--settings`, `--output-format` and print (`--print`, `-p`, parsed clusters included). Session selectors and owned values are refused except on a verified finished-agent switch, where they are removed and the remainder is checked as for a plain spawn. Exact denied long names owned as option values always refuse. A `"codex"` spawn also refuses other Codex subcommands as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst` or `features.hooks`, `--disable hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` filters stored arguments without applying spawn's argument refusals; see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules. The refused forms and argument recognition limits are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
 | `ErrAgentMissing` | `spawn` got no `agent` and its template names none; nothing is written. Pass `agent` (`"claude"` or `"codex"`), or put one in the template. |
 | `ErrAgentInvalid` | `agent` is neither `"claude"` nor `"codex"` (the value is case-sensitive); nothing is written. |
 | `ErrAgentArgsMismatch` | The template's `agent_args` are for another agent than the one this spawn resolves to, so they are not inherited; nothing is written. Spawn that agent, or pass this call's own non-empty `agent_args`, which replace the template's. |

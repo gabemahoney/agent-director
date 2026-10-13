@@ -156,11 +156,55 @@ template's `agent_args` combine is in
   [Permissions](permissions.md#codex-spawns).
 - `ErrSpawnDeniedFlag`: the `agent_args` hold an argument the supervisor must
   own. Remove it and re-issue; the error names the argument.
-  - A `claude` spawn: `--settings`, `--resume`, `--continue`, `--print` and
-    `--output-format`.
+  - A `claude` spawn always refuses `--settings`, `--output-format` and
+    print mode: `--print`, `-p`, or a short cluster parsed as containing `-p`.
+    Print is checked on the full original list before any selector is removed:
+    `-pc` is refused even on a switching reuse.
+  - Claude session selectors are `--resume` (`-r`, optional session),
+    `--continue` (`-c`), `--fork-session`, `--from-pr` (optional value),
+    `--teleport` (optional session), `--resume-session-at`,
+    `--resume-drops-turn`, `--rewind-files` (each with a required value),
+    `--reply-on-resume`, `--cloud` and `--remote` (optional value), and
+    `--attach-serve` (required value). `--session-id` names a new session
+    and is not a selector. Selectors and their owned values are refused on a
+    plain spawn, reuse with no row, same-agent reuse, or a reuse whose row is
+    live or could not be read. The error names the bare option: `-r` for
+    `-rS1`, for example.
+    Only a reuse with an explicit id and a successfully read finished
+    (`ended` or `missing`) row whose stored agent differs from the resolved
+    agent removes selectors from the launch and the stored arguments.
+    The remainder is checked as for a plain spawn; the agent starts fresh
+    and resumes nothing.
+  - When removing an actual Claude `--cloud` or `--remote` leaves no parsed
+    `--environment` or `--pool` with its required value, also removed are
+    `--forward-home-settings`, `--ref` and `--on-branch`, with their owned
+    values. They follow the same refusal policy on other spawn paths.
+    With surviving environment/pool context, those controls remain; without
+    actual cloud/remote removal, no such cleanup occurs. A spelling owned as
+    another option's value or occurring as prompt text supplies no context.
+  - Claude required scalar and list options own even a dash-prefixed first
+    value; optional values consume a following non-option word. A value is
+    not an option: `--model -c` and `--append-system-prompt "-concise answers"`
+    pass. An exact denied long name or its `=` form is matched wherever it
+    stands. When another option owns that token as a value, it is refused
+    even on a switching reuse: `--append-system-prompt --resume foo`
+    refuses `--resume`, and an owned `--resume=S1` is refused too. Such
+    option-owned tokens are never dropped independently.
+    Short clusters follow Claude's option/value rules: `-rS1` selects a
+    session, `-cd` contains continue, `-dc` is debug value `c`, and `-nrocket`
+    is name value `rocket`. Exact registered short options take precedence
+    over splitting a cluster.
   - A `codex` spawn: a Codex subcommand or its alias as the first word
     before any `--` that is neither an option nor an option's value (`exec`,
-    `resume`, `fork`, `login` and the rest). The `--` meant is one inside
+    `resume`, `fork`, `login` and the rest). On a verified finished-agent
+    switch, command-position `resume` or `fork`, their selector options
+    (`--last`, `--all`, and `--include-non-interactive` for resume only), and
+    the selected session id are removed. With `--last`, the first operand
+    is the prompt rather than an id. Original prompt tokens survive behind
+    `--` and the remainder is checked as for a plain spawn.
+    Exact denied long names owned as another option's value always refuse,
+    including on a switch. Other subcommands remain refused.
+    The `--` meant is one inside
     `agent_args`; on the CLI that is a second `--`. A word after it is the
     prompt and passes. `-i` or `--image` takes every word up to the next
     option, so `-i a.png exec` passes (`exec` is a value) and `--image=a exec`
@@ -186,7 +230,20 @@ template's `agent_args` combine is in
     Argument recognition covers the verified agent options. An option added by
     a later agent version is treated as having no value until recognized;
     its value ownership or session-selection behavior may therefore be missed.
-    Do not rely on resume filtering to protect against such options.
+    Do not rely on resume filtering or switching-spawn removal to protect
+    against such options.
+
+On a successful switching spawn, `dropped_args` reports the removed original
+argument tokens in their original order, including owned values and a
+partially removed cluster's original spelling. It is omitted from CLI/MCP
+JSON and TypeScript results when empty; Go exposes `SpawnResult.DroppedArgs`.
+The CLI prints exactly one stderr notice when the list is non-empty, naming
+those tokens and saying the switch starts fresh and resumes nothing. Stdout
+keeps the usual result envelope. Surviving arguments retain their meaning;
+only necessary prompt placement behind options and `--`, or altered-cluster
+re-encoding, changes their order or spelling. When an original recognized
+required scalar or list option lacks its required value, only literal
+filtering applies and the agent's parser rejects incomplete input.
 
 ## Permission relay
 

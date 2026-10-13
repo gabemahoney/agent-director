@@ -21,7 +21,7 @@ import {
   homeStore, openClient, rejection, spawnClaude,
 } from "../internal/helper.js";
 import {
-  ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
+  ErrSpawnDeniedFlag, ErrCwdMissing, ErrInvalidFlags, ErrInstanceIdCollision, ErrAgentMissing, ErrAgentInvalid, AgentDirectorError,
 } from "../../src/index.js";
 
 /** fake-tmux invocations in logPath whose argv includes new-session. */
@@ -39,6 +39,7 @@ test.each([
     const result = await spawnClaude(client, { cwd: homeDir, ...(noPreTrust ? { no_pre_trust: true } : {}) });
     expect(result.instance_id.length).toBeGreaterThan(0);
     expect(result.pre_trust).toBe(want);
+    expect(result).not.toHaveProperty("dropped_args");
     expect((await client.get({ instance_id: result.instance_id })).agent).toBe("claude");
     if (noPreTrust) expect(fs.readFileSync(claudeJson, "utf8")).toBe(CLAUDE_JSON);
     // The entry is keyed by the canonical cwd (the spawn resolves symlinks).
@@ -138,8 +139,9 @@ test("spawn: reuse_finished over an ended codex row, spawned as claude → the r
     runHelper("seed-spawn", { store: storePath, id, state: "ended", agent: "codex", "create-store": true, socket: privateTmuxSocket(homeDir) });
     using client = await openClient(storePath);
     expect((await client.get({ instance_id: id })).agent).toBe("codex");
-    await spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: true });
-    expect(await client.get({ instance_id: id })).toMatchObject({ state: "pending", agent: "claude" });
+    const result = await spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: true, agent_args: ["--resume", "S1"] });
+    expect(result.dropped_args).toEqual(["--resume", "S1"]);
+    expect(await client.get({ instance_id: id })).toMatchObject({ state: "pending", agent: "claude", agent_args: [], session_id: "", prior_sessions: [] });
   });
 }, 10_000);
 
@@ -168,3 +170,27 @@ test.each([
     });
   });
 }, 20_000);
+
+test.each([
+  ["same agent short", "claude", ["-rS1"], "-r"],
+  ["switch print", "codex", ["-pc"], "-p"],
+  ["switch value owned long", "codex", ["--append-system-prompt", "--resume", "S1"], "--resume"],
+] as const)("spawn: typed argument refusal — %s", async (_label, agent, args, bare) => {
+  await withTempHome(async (homeDir) => {
+    const storePath = homeStore(homeDir);
+    const id = `reuse-policy-${crypto.randomUUID().slice(0, 8)}`;
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    seedOuterParent(storePath);
+    runHelper("seed-spawn", { store: storePath, id, state: "ended", agent, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    using client = await openClient(storePath);
+    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+      const before = await client.get({ instance_id: id });
+      const err = await rejection(spawnClaude(client, { cwd: homeDir, instance_id: id, reuse_finished: true, agent_args: [...args] }));
+      expect(err).toBeInstanceOf(ErrSpawnDeniedFlag);
+      expect((err as AgentDirectorError).message).toBe(`ErrSpawnDeniedFlag: ${bare}`);
+      expect((err as AgentDirectorError).message).not.toContain("-rS1");
+      expect(await client.get({ instance_id: id })).toEqual(before);
+      expect(newSessionCount(logPath)).toBe(0);
+    });
+  });
+}, 10_000);

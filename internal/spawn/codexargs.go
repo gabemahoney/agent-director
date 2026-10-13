@@ -325,7 +325,7 @@ var codexFeatureRefusals = []struct {
 // ErrSpawnDeniedFlag the first argument of args (in order) that is
 //
 //   - a Codex subcommand or alias in command position (every one, codexSubcommands);
-//   - --remote or --remote-auth-token-env;
+//   - --remote, --remote-auth-token-env, or existing-session selectors;
 //   - -c/--config whose key path (split on `.` as Codex does) equals, lies
 //     above or lies under hooks, tui.disable_paste_burst or features.hooks;
 //   - --disable hooks;
@@ -334,7 +334,8 @@ var codexFeatureRefusals = []struct {
 //     features.default_mode_request_user_input or
 //     tools.experimental_request_user_input;
 //
-// a refused option form after `--` included (the words there are never in
+// Exact denied long names owned as option values are refused too. A refused
+// option form after `--` is included (the words there are never in
 // command position, so a subcommand name after `--` passes). Every spelling is
 // recognised (value as the next word, after `=`, attached to a short flag).
 // The description names the flag bare, as written without its value, plus the
@@ -343,11 +344,23 @@ var codexFeatureRefusals = []struct {
 func CheckCodexArgs(args []string, questionToolOff bool) error {
 	read := ReadCodexArgs(args)
 	best, bestAt := error(nil), len(args)
-	if read.Command >= 0 && codexSubcommands[args[read.Command]] {
+	// Exact denied long tokens are refused even when a required option owns
+	// them as a value. Merge those matches with parsed checks by original
+	// position so the existing first-argument error precedence is retained.
+	for i, token := range args {
+		key, _, _ := strings.Cut(token, "=")
+		if key == codexOptRemote || key == codexOptRemoteAuthTokenEnv ||
+			strings.HasPrefix(key, "--") && CodexResumeArgs[key] {
+			best, bestAt = fmt.Errorf("%w: %s", ErrSpawnDeniedFlag, key), i
+			break
+		}
+	}
+
+	if read.Command >= 0 && read.Command < bestAt && codexSubcommands[args[read.Command]] {
 		best, bestAt = fmt.Errorf("%w: codex subcommand %s: a spawn launches the interactive agent, and this subcommand picks or resumes another session, runs non-interactively or attaches to a remote or shared service", ErrSpawnDeniedFlag, args[read.Command]), read.Command
 	}
 	for _, o := range read.Options {
-		if o.Index >= bestAt {
+		if o.Index > bestAt {
 			break
 		}
 		if err := refuseCodexOption(o, questionToolOff); err != nil {

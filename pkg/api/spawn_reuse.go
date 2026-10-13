@@ -301,7 +301,8 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     Every path that ends with no identity write applied and no restore
 //     applied ends the launch's hold (finishedLaunch's release, b.kdf).
 //
-// Success does not say whether a reset happened (SR-10.7).
+// Success with no dropped arguments does not say whether a reset happened
+// (SR-10.7); nonempty DroppedArgs identifies a finished-agent switch.
 func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (SpawnResult, error) {
 	id := r.InstanceID
 	socket := ex.pre.Socket
@@ -337,22 +338,27 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	req.Token = token
 	req.StoreID = d.storeID
 	out := spawn.CreateAndLabel(d.t, req)
-	emitReused(id, ex, archived)
+	emitReused(id, ex, archived, r.DroppedArgs)
 	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {
 		return SpawnResult{}, err
 	}
-	return SpawnResult{InstanceID: id, PreTrust: string(preTrust)}, nil
+	return SpawnResult{InstanceID: id, PreTrust: string(preTrust), DroppedArgs: r.DroppedArgs}, nil
 }
 
 // emitReused writes the one ad.spawn.reused record of an applied change
 // (SR-10.6), fail-open: instance_id; prior_state, the state examined
 // before the reset; archived_session_id, the session id the reset archived,
 // null when it archived none (""); lookup_outcome, the old-row lookup's
-// verdict token as the decision kept it (never a literal); source ad_spawn.
-func emitReused(instanceID string, ex reuseExamined, archivedSessionID string) {
+// verdict token as the decision kept it (never a literal); source ad_spawn;
+// dropped_args, the original removed tokens, always present and null if empty.
+func emitReused(instanceID string, ex reuseExamined, archivedSessionID string, droppedArgs []string) {
 	var archived any
 	if archivedSessionID != "" {
 		archived = archivedSessionID
+	}
+	var dropped any
+	if len(droppedArgs) > 0 {
+		dropped = droppedArgs
 	}
 	_ = trail.Emit(context.Background(), reuseReusedEvent, map[string]any{
 		"instance_id":         instanceID,
@@ -360,6 +366,7 @@ func emitReused(instanceID string, ex reuseExamined, archivedSessionID string) {
 		"archived_session_id": archived,
 		"lookup_outcome":      ex.verdict,
 		"source":              nameHeldSourceSpawn,
+		"dropped_args":        dropped,
 	})
 }
 

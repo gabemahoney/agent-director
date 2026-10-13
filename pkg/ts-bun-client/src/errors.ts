@@ -421,7 +421,7 @@ export class ErrCwdNotFound extends AgentDirectorError {}
 export class ErrCwdNotADirectory extends AgentDirectorError {}
 /** Mirrors ErrRelayModeInvalid (package: spawn) */
 export class ErrRelayModeInvalid extends AgentDirectorError {}
-/** Mirrors ErrSpawnDeniedFlag (package: spawn) */
+/** Mirrors ErrSpawnDeniedFlag (spawn): forbidden agent arguments. A finished-agent switch drops session selectors; Claude print and exact denied long tokens owned as values always refuse. */
 export class ErrSpawnDeniedFlag extends AgentDirectorError {}
 /** Mirrors ErrReservedEnvKey (package: spawn) */
 export class ErrReservedEnvKey extends AgentDirectorError {}

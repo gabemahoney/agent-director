@@ -17,6 +17,16 @@ life. Earlier lives' history and records stay stored but are hidden. A switch
 neither hides nor stops child spawns: `list --parent <id>` still lists them.
 The record rules are in [Read an agent's subagent records](#read-an-agents-subagent-records).
 
+For example, Claude runs and ends on an id, then Codex runs and ends on
+that id, then `spawn --reuse-finished --agent claude` on the same id carries
+`--resume` in its agent arguments. Claude starts fresh: the selector is
+removed, resumes nothing, and never reopens the old Claude session. Switching
+back always starts another new life. In the reverse direction, a Codex
+`resume` or `fork` request on a finished Claude id starts Codex fresh while
+keeping its prompt. Removed arguments appear in `dropped_args`; the policy
+and reporting rules are in
+[Caller contract](caller-contract.md#spawn-and-template-input-refusals).
+
 Failed-reuse recovery is in
 [Caller contract](caller-contract.md#transcript-recovery).
 
