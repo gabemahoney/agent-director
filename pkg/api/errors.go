@@ -150,7 +150,7 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 // PostToolUse or PostToolUseFailure (the same tool_use_id; Claude rows only),
 // by the main agent's Stop or idle-prompt Notification, or a Codex main
 // agent's Interrupt, written after it (a request with
-// no agent_id: the main agent's, or one recorded before this release), or by
+// no agent_id, including a main-agent request), or by
 // its Spawn's end (marked missing, ended, or resumed). agent-director's own
 // records prove nothing: a request whose relay hook acked its verdict
 // (delivery delivered), one answered at the pane through send-keys, and one

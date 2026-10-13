@@ -210,7 +210,7 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 		}
 	}
 	if want := map[bool]int64{false: 0, true: 1}[p.NoPreTrust]; cols.NoPreTrust != want {
-		t.Errorf("no_pre_trust = %#v; want the call's %d, not the old life's", cols.NoPreTrust, want)
+		t.Errorf("no_pre_trust = %#v; want the call's %d, not the previous spawn's", cols.NoPreTrust, want)
 	}
 	r.Trust.check(t, cwd, !p.NoPreTrust, "after the reuse")
 	if got, err := apitest.ReadSessionHistoryAllLives(e.dbPath, r.ID); err != nil || !slices.Equal(rchgHistory(got), rchgArchived(run.before)) {
@@ -274,7 +274,7 @@ func (e *killEnv) rchgAssertLikeFresh(t *testing.T, id string, p api.SpawnParams
 
 // TestSpawnReuseAppliedRow (AC-REUSE-27 too): an ended or missing row, its new
 // name free, reuses: the reset's values, the socket rule, the parent from the
-// environment, pre-trust by the call's own opt-out (the old life's the
+// environment, pre-trust by the call's own opt-out (the previous spawn's the
 // opposite), no permission requests, children kept, and a fresh spawn's result.
 func TestSpawnReuseAppliedRow(t *testing.T) {
 	// Serial: its parent cases set AGENT_DIRECTOR_INSTANCE_ID with t.Setenv; its other cases run in

@@ -533,25 +533,11 @@ A Codex pane's keys and an example are in
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,
 `outside` or `tool_ran`) says how it was closed.
 
-Plain `send-keys` (no `--request-token`) also takes `--no-enter` (type
-`--text` with no Enter) and `--key` (send one key alone), and
-`--expect-pane-sha256` optionally. While a permission request of the agent
-may still have its dialog open, a plain `send-keys` and `pause` are held
-(see the [caller contract](caller-contract.md#permission-relay)). To stop a
-held agent, `kill` it, or close any fallen-back request (above), then have
-a person or an LLM read the pane, answer any dialog, check the prompt is
-empty, send `/exit` with that read's hash and poll `status` until the row
-is `ended` (a Codex row needs one more step, see the
-[caller contract](caller-contract.md#when-a-codex-agent-exits)):
-
-```sh
-agent-director send-keys --instance-id "$id" --text /exit \
-    --expect-pane-sha256 "$hash"
-```
-
-Never pass `--expect-pane-sha256` from an automatic flow: it says that a
-person or an LLM judged that exact screen, and passed blindly it lets
-through the Enter the hold exists to stop.
+For plain typing, `send-keys` also accepts `--no-enter`, `--key` and
+`--expect-pane-sha256`. Permission holds and stopping a held agent are in
+the [caller contract](caller-contract.md#permission-relay). Never pass a
+pane hash from an automatic flow: it means a person or an LLM judged that
+exact screen.
 
 ## Templates
 
@@ -599,7 +585,9 @@ The stored list is unchanged. Codex prompt text remains an original argument
 after `--`, and today's per-launch settings take precedence over replayed
 settings. `resume` does not apply spawn's argument refusals; see the
 [argument recognition limits](caller-contract.md#spawn-and-template-input-refusals).
-A resumed Claude row reads `waiting` at once. A resumed Codex row reports in
+A resumed Claude row stays `pending` until Claude reports SessionStart,
+then becomes `waiting`; startup or trust waits and missed hooks can prolong
+`pending`. A resumed Codex row reports in
 only at its first prompt, so it reads `pending` until then and `pause` and
 `send-keys` without `allow_pending` are refused (see
 [Spawn states](#spawn-states); once the agent has exited with an end report,

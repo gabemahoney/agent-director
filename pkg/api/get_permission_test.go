@@ -13,7 +13,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestGetPermission pins SR-9.2 on a row by token: an open row with tool_input
+// TestGetPermission pins SR-9.2 on a row by token: an undecided row with tool_input
 // byte for byte (SR-7.4) and decision, decision_reason and decided_at null; an
 // allow row with no reason (SR-1.3); a deny row per canonical reason; decided_at
 // an RFC3339 string.
@@ -24,7 +24,7 @@ func TestGetPermission(t *testing.T) {
 		name, decision, reason string
 		wantJSON               []string
 	}{
-		{name: "open", wantJSON: []string{`"decision":null`, `"decision_reason":null`, `"decided_at":null`}},
+		{name: "undecided", wantJSON: []string{`"decision":null`, `"decision_reason":null`, `"decided_at":null`}},
 		{name: "allow", decision: "allow", wantJSON: []string{`"decision":"allow"`, `"decision_reason":null`, `"decided_at":"`}},
 		{name: "deny operator", decision: "deny", reason: store.DecisionReasonOperator},
 		{name: "deny timeout", decision: "deny", reason: store.DecisionReasonTimeout},

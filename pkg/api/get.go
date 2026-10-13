@@ -9,7 +9,7 @@ import (
 // PermissionRequestInfo is the projection of one permission request with its
 // delivery facts: an open one (still awaiting an answer, b.146 rule 9) in the
 // permission_requests of a `get` or `list` row in state `check_permission`;
-// one Claude Code has not proven gone (b.146 step 2c), open or closed in
+// one the agent has not proven gone (b.146 step 2c), open or closed in
 // agent-director's own records, in `get`'s unproven_requests (a row in any
 // state but ended and missing); and the request an err_details names (the
 // base of RelayFallenBackDetails and DialogMaybeOpenDetails). ToolInput is
@@ -71,7 +71,7 @@ type SpawnRow struct {
 	// TmuxSocket is the absolute path of the tmux socket the row's latest
 	// launch recorded, shown for a row in any state (a finished row keeps
 	// its latest launch's socket). Empty (and omitted from JSON) for a row
-	// from before this release, which records none. Display only: no verb
+	// with no recorded socket. Display only: no verb
 	// reads it back (SR-3.3, SR-16.1).
 	TmuxSocket string `json:"tmux_socket,omitempty"`
 	// AgentArgs is the verbatim argv passed through to the agent program after the
@@ -143,10 +143,10 @@ type SpawnRow struct {
 	// Callers use the request_token of each element to target a specific row
 	// with the decide verb.
 	PermissionRequests []PermissionRequestInfo `json:"permission_requests"`
-	// UnprovenRequests is every permission request of the row that Claude
-	// Code has not proven gone (b.146 step 2c: proven_gone_at null), oldest
+	// UnprovenRequests is every permission request of the row that the agent
+	// has not proven gone (b.146 step 2c: proven_gone_at null), oldest
 	// first, each with its delivery facts, in any state but ended and missing
-	// (a finished row's agent is gone). It lists requests that still await an
+	// ([] for those states). It lists requests that still await an
 	// answer and, unlike PermissionRequests, those agent-director's own
 	// records read closed: acked (delivery delivered), answered at the pane or
 	// recorded answered outside it; such a request carries unproven_since.

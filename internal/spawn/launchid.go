@@ -72,7 +72,7 @@ func ResolveScanSocket() (string, error) {
 }
 
 // ResolveQuerySocket returns the socket a single-row verb's calls use for a
-// row that records no tmux_socket (a row from before the release; SR-3.3):
+// row that records no tmux_socket (SR-3.3):
 // the same resolution as ResolveScanSocket, creating nothing (tmux.ResolveSocket
 // with create false; LFR H1), so a missing per-user directory is no error and
 // its would-be socket path is returned. A refusal matches
@@ -94,7 +94,7 @@ func ResolveQuerySocket(consequence string) (string, error) {
 //     vanished per-user directory, tmux-<real uid> under an existing parent,
 //     is created again with mode 0700 and checked as tmux checks it (after a
 //     reboot, for example). Any other missing directory is refused.
-//   - No recorded socket (a row from before the release) resolves one from
+//   - No recorded socket resolves one from
 //     the caller's environment exactly as a plain spawn does
 //     (ResolveLaunchSocket), and the absolute path is returned for the launch
 //     to record.

@@ -85,16 +85,7 @@ Launch a tracked agent inside a new tmux session.
 `Spawn` returns immediately with the `instance_id`; the row is
 `pending` from its insert until the agent reports in (its
 `SessionStart` hook), then `waiting`. Use `Status` or `Get` to observe
-progress.
-
-```bash
-# CLI: spawn in current directory, tagged for later filtering
-agent-director spawn \
-  --cwd "$PWD" \
-  --agent claude \
-  --label project=widget \
-  --relay-mode on
-```
+progress. Shared CLI commands are in [Usage](../../docs/usage.md).
 
 ```go
 result, err := c.Spawn(api.SpawnParams{
@@ -163,38 +154,11 @@ switching reuse, which starts fresh and resumes nothing. JSON omits
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
 either agent (a failed pre-trust never fails the spawn; see the
 `SpawnResult.PreTrust` godoc and
-[docs/settings.md](../../docs/settings.md#pre-trust-for-codex)). Most-likely sentinel errors:
-`ErrCwdNotFound`, `ErrCwdNotADirectory`, `ErrRelayModeInvalid`,
-`ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`, `ErrTmuxUnresponsive` (the
-session-creating call timed out, here or in `Resume`: the row stays
-`pending`; do not retry until `Get` shows it `ended` or `missing`; then
-`Spawn` an explicit `InstanceID` again with `ReuseFinished` and the row's
-`Agent` (`Get` shows it), since without `ReuseFinished` the spawn collides with
-the id's finished row. When the launch
-did start, the row may instead stay `pending` with `LivenessNote`
-`unreported`, because its agent runs: use that agent (`ReadPane`, then
-`SendKeys` with `AllowPending`; only a caller that looked should type) or
-end it with `Kill` and the live-row sequence and retry once `Get` shows it
-`ended` or `missing`) and `ErrTmuxSessionConflict`
-(an explicit id with no row whose labelled session from an earlier life
-still runs, or conflicting labels; nothing is written. Also a held name:
-tmux answered "duplicate session" and the requested name is held by a
-session left over from an earlier life of this id, another row's session,
-a session of another agent-director store, or one with no valid instance
-id, or the labels conflict; the new row is ended and the error names the
-blocking session. Another row's or another store's session is another
-agent and is never ended; the other cases need a human, see "Operator
-actions" in [docs/operator-actions.md](../../docs/operator-actions.md)).
-After "duplicate session" the new row is ended too when the holding
-session is gone by the re-lookup (`ErrTmuxSessionCreate`), the re-lookup
-cannot be read (`ErrTmuxUnresponsive`), or tmux cannot be run or the
-re-lookup found a different tmux server (`ErrTmuxNotAvailable`); in every
-case the error says if the new row was not ended. The
-`ErrTmuxSessionCreate` and `ErrTmuxUnresponsive` errors also name the
-instance id (a minted one included) and the retry: that id with
-`ReuseFinished` and the row's `Agent` once the name is free (and, if the row was not ended,
-once `Get` shows it `ended` or `missing`).
-The holding session is never ended, read or typed into.
+[docs/settings.md](../../docs/settings.md#pre-trust-for-codex)). Most-likely sentinel errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
+`ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
+`ErrTmuxUnresponsive` and `ErrTmuxSessionConflict`. Timeout and held-name
+recovery are owned by the [caller contract](../../docs/caller-contract.md#caller-contract)
+and [Operator actions](../../docs/operator-actions.md).
 See `(*Client).Spawn` godoc for the full enumeration.
 
 ---
@@ -209,11 +173,6 @@ agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
 session id and history; a caller tells it from a fresh one by its non-empty
 `session_id`, shown by `Get`.
-
-```bash
-agent-director status \
-  --instance-id claude_2026-05-22T18-23-15
-```
 
 ```go
 res, err := c.Status("claude_2026-05-22T18-23-15")
@@ -244,13 +203,6 @@ Enumerate Spawn rows matching a filter set. All filters AND together;
 state values OR together. Returned order is unspecified — sort with
 `jq` or in Go as needed.
 
-```bash
-# CLI: running spawns tagged project=widget
-agent-director list \
-  --state waiting,working \
-  --label project=widget
-```
-
 ```go
 res, err := c.List(api.ListParams{
     State:  []string{"waiting", "working"},
@@ -280,11 +232,6 @@ Return the subagent records across launches of one agent's current life and
 whether the agent is tracked. `SubagentID` is unique among the returned
 records; earlier-life records remain stored but are hidden. See
 [visibility and retention](../../docs/usage.md#read-an-agents-subagent-records).
-
-```bash
-agent-director list-subagents \
-  --instance-id claude_2026-05-22T18-23-15
-```
 
 ```go
 res, err := c.ListSubagents("claude_2026-05-22T18-23-15")
@@ -327,13 +274,7 @@ its `NLines`) the pane is checked first and nothing is sent if it changed
 (`ErrPaneChanged`); on a relayed Spawn a match also passes the dialog hold
 (`ErrDialogMaybeOpen`, below). Set it only for a pane a person or an LLM
 judged, never from an automatic flow. There is no flag to suppress CR
-stripping — the behavior is unconditional by design (SRD §4.3).
-
-```bash
-agent-director send-keys \
-  --instance-id claude_2026-05-22T18-23-15 \
-  --text "what is 2+2?"
-```
+stripping; it applies to every call.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
@@ -346,61 +287,13 @@ if err != nil {
 ```
 
 Returns `SendKeysResult` (empty struct, reserved for future fields).
-Most-likely sentinel errors:
-
-- `ErrSpawnNotFound`: no row has this id.
-- `ErrSpawnNotInteractive`: the state is not `waiting/working/ask_user/
-  check_permission` (a `pending` row needs `AllowPending`, below); nothing
-  was sent.
-- `ErrInvalidFlags`: the params' shape is refused (for example `Key` with
-  a non-empty `Text`, `NoEnter` with neither, `As` without
-  `RequestToken`, a malformed hash); nothing was read or sent.
-- `ErrSendKeysWhileRelayed`: relay_mode=on, in any live state, and a
-  relay hook of the row may still answer its request (its process runs,
-  or it cannot be checked and the request's `confirm_by` has not passed);
-  the relay still owns the answer and nothing was sent. The message names
-  that request and states no release time. If it is undecided, it says to
-  answer it with decide (`… on request <request_token>; answer it with
-  decide`), and `Decide` answers it. If its verdict is already recorded,
-  it says to retry later (`… the relayed permission verdict on request
-  <request_token> is recorded and its relay hook may still be delivering
-  it; retry send-keys later`; from `Pause`, `… retry later`); `Decide` on
-  it would return `ErrAlreadyDecided`. Once that hook has ended, a plain
-  retry can get `ErrDialogMaybeOpen` until the agent's hooks prove the
-  request gone.
-- `ErrRelayFallenBack`: a plain call (no `RequestToken`) while a request
-  of the row has fallen back with no pane answer recorded (its relay hook
-  is gone and acked no verdict); nothing was sent. `api.ErrDetails(err)`
-  is a `RelayFallenBackDetails` naming that request (the oldest) and the
-  row's other open requests. Close it with a pane answer or with
-  `RecordPaneAnswer` (see [Permission relay](#permission-relay)).
-- `ErrDialogMaybeOpen`: a plain call without `ExpectPaneSHA256` while a
-  permission request of the row is not proven gone by the agent's hooks
-  (a Claude agent's tool's PostToolUse, the main agent's end of turn after
-  it, or the agent's end), whatever agent-director's records say of it;
-  nothing was sent. `api.ErrDetails(err)` is a `DialogMaybeOpenDetails` naming that
-  request (the oldest), the row's `State` and its other
-  `UnprovenRequests`. Retry later; if it stays held, have a person or an
-  LLM look at the pane and send with its hash (see
-  [Permission relay](#permission-relay)).
-- `ErrPaneChanged`: `ExpectPaneSHA256` no longer matches the pane;
-  nothing was sent. Read the pane again: the error does not carry the new
-  hash.
-- `ErrTmuxSendKeys`: the row's session or pane is not there.
-- `ErrTmuxSessionConflict`: the agent's pane was not found, a session an
-  earlier launch left behind is there on a live row, or tmux holds
-  conflicting labels; nothing was sent.
-- `ErrTmuxUnresponsive`: tmux did not answer usably; after a timed-out
-  send the keys may have been delivered, and after a failed Enter the
-  text may be typed but not submitted. Then the error names the next step
-  instead of "retry later", because the same call would type the text a
-  second time: after a timed-out text call, `ReadPane` and, if the text
-  is typed, `SendKeys` with empty `Text`, otherwise the same `SendKeys`;
-  after a failed or timed-out Enter, `SendKeys` with empty `Text`, which
-  submits it.
-- `ErrTmuxNotAvailable`: tmux could not be run, its socket is not
-  accessible to this user, or this is not the tmux server the agent was
-  launched on.
+Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
+`ErrInvalidFlags`, `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`,
+`ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
+`ErrTmuxSessionConflict`, `ErrTmuxUnresponsive` and `ErrTmuxNotAvailable`.
+`api.ErrDetails(err)` gives structured permission and pane refusal facts.
+Permission holds, retry rules and timeout recovery are in the
+[caller contract](../../docs/caller-contract.md#permission-relay).
 
 After the state and relay refusals, a row whose recorded tmux session name
 cannot be used (empty, with a control character, or with a character tmux
@@ -425,45 +318,22 @@ behind (not this launch's session). The keys reach the agent's pane, but
 the caller cannot be sure the prompt it saw is still showing when they
 arrive.
 
-A `pending` row whose `LivenessNote` is `unreported` (written by
-`FindMissing`) has a running agent that has not reported in since its
-launch: it may show a Claude Code startup screen or sit idle at its
-prompt. Read it with `ReadPane` first and send with `AllowPending` only
-having looked; without it the row is refused like any `pending` row. A
-caller that cannot judge the pane ends the launch with `Kill` and the
-live-row sequence (see `Kill` below) or hands it to a human. A later
-`FindMissing` that finds the agent alive keeps the note; the agent's next
-hook clears it.
+`LivenessNote` `unreported` means an alive agent has not reported since
+launch. For action on pending rows see the
+[caller contract](../../docs/caller-contract.md#caller-contract).
 
 #### Pure `SendKeys` function
 
-`(*Client).SendKeys` is a thin wrapper over a pure package-level function
-that takes how it judges the relay as an explicit `SendKeysEnv`, so the
-relay guard's verdict is deterministic and testable:
+The package-level function accepts explicit store, tmux and environment
+interfaces for callers that supply their own dependencies:
 
 ```go
 func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (SendKeysResult, error)
 ```
 
-`SendKeysStore` is the row read, the permission-request read, the
-conditional adoption write, the `hook_gone_at` write, a pane answer's three
-writes (`RecordPaneIntent`, `RecordPaneSent`, `ReleasePaneIntent`) and the
-store id; `SendKeysTmux` is the lookup, the pane listing, the text and the
-named-key sends by pane id and the capture `ExpectPaneSHA256` is checked
-against. `SendKeysEnv` holds a `RelayView` (the start-time reader, which
-also checks the agent process, the reader's own pid namespace, the clock
-and the relay window), `Self` (the identity a pane answer records as its
-sender) and `IntentHold` (how long an intent whose sender cannot be
-checked counts as in progress). The `Client` method passes its store, tmux
-client and its own env: its start-time reader, pid namespace and clock,
-the window from `cfg.Relay.EffectiveTimeoutSeconds()` (the single source
-for the window: a missing or 0 `relay.timeout_seconds` gives the default,
-and `New` refuses a config whose value is negative or above 2147483), its
-own process as sender, and the `[tmux]` action timeout plus the pipe-close
-wait plus 2 s as `IntentHold`; then it records the call on the
-`ad.send_keys.called` trail event. Most callers use the `Client` method;
-the pure function is for tests and callers that need to control the relay
-judgement.
+`SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity and
+`IntentHold`. Most callers use the Client method, which supplies these.
+See their godoc for each field's contract.
 
 ```go
 _, err := c.SendKeys(api.SendKeysParams{
@@ -483,12 +353,6 @@ if err != nil {
 Capture the last N lines of the agent's own pane. Default 25 lines
 (`NLines` 0); no upper cap. ANSI escape codes are stripped by default
 (pass `ANSI: true` to get raw bytes).
-
-```bash
-agent-director read-pane \
-  --instance-id claude_2026-05-22T18-23-15 \
-  --n-lines 50
-```
 
 Call `c.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 50})`.
 Returns `ReadPaneResult` (`.Pane` string, and `.PaneSHA256`, the SHA-256 in
@@ -544,11 +408,6 @@ A finished row (`ended`, `missing`) is a no-op success with no tmux call;
 that is not verification that the agent exited. Kill never changes the
 row's state: `find-missing` marks the row once its agent process is gone.
 
-```bash
-agent-director kill \
-  --instance-id claude_2026-05-22T18-23-15
-```
-
 ```go
 res, err := c.Kill(api.KillParams{
     InstanceID: "claude_2026-05-22T18-23-15",
@@ -568,8 +427,8 @@ Errors (check them with `errors.Is` against the exported sentinels):
 | Sentinel | Class | Meaning |
 |---|---|---|
 | `ErrSpawnNotFound` | — | No row has this id |
-| `ErrTmuxKillFailed` | UNAVAILABLE | The agent process, or another process of the session's panes, still ran after the kill exit wait; or it cannot be checked and its labelled session is still there; or no session or pane of this launch was found while it runs. Retry later; never delete the row |
-| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, before or after a kill was sent. Retry later with backoff |
+| `ErrTmuxKillFailed` | UNAVAILABLE | The agent process, or another process of the session's panes, still ran after the kill exit wait; or it cannot be checked and its labelled session is still there; or no session or pane of this launch was found while it runs. See [Caller contract](../../docs/caller-contract.md) for retry and refusal handling |
+| `ErrTmuxUnresponsive` | UNAVAILABLE | tmux did not answer usably, before or after a kill was sent. See [Caller contract](../../docs/caller-contract.md) for retry handling |
 | `ErrTmuxSessionConflict` | CONFLICT | The session found is not this launch's session, or tmux holds conflicting labels; no kill was sent. A human must look: see "Operator actions" in [docs/operator-actions.md](../../docs/operator-actions.md) |
 | `ErrTmuxNotAvailable` | ENVIRONMENT | tmux could not be run, its socket is not accessible to this user, or this is not the tmux server the agent was launched on |
 
@@ -586,7 +445,8 @@ the caller waits and checks again.
 _, err := c.Kill(api.KillParams{InstanceID: id})
 switch {
 case err == nil:
-    // the agent process is gone
+    // live-row success verifies exit; finished-row success is a no-op
+    // follow the caller contract before relaunching the id
 case errors.Is(err, api.ErrTmuxKillFailed), errors.Is(err, api.ErrTmuxUnresponsive):
     // retry later with backoff; never delete the row
 case errors.Is(err, api.ErrTmuxSessionConflict):
@@ -594,8 +454,7 @@ case errors.Is(err, api.ErrTmuxSessionConflict):
 }
 ```
 
-The caller must run as the same user and in the same tmux environment as
-the agents. What to do next with a stuck live row is the live-row sequence
+The live-row sequence and finished-row no-op limits are owned
 in
 [Caller contract](../../docs/caller-contract.md#caller-contract). See `(*Client).Kill`
 godoc.
@@ -628,81 +487,17 @@ stays closed after `Resume`; `Get` and `List` no longer show it.
 `GetPermission` still reads its delivery, which is `delivered` only if its
 relay hook confirmed a verdict.
 
-`ErrRelayFallenBack` means the request's relay hook is gone and acked no
-verdict, and no pane answer is recorded on it through agent-director.
-`Decide` returns it for that request, and a plain `SendKeys` and `Pause`
-for the Spawn's oldest such request. `api.ErrDetails(err)` returns its facts as a
-`RelayFallenBackDetails`: the request's `PermissionRequestInfo`, the
-Spawn's `State`, and `OpenRequests`, the Spawn's other open requests. It
-is closed in one of these ways, each recorded in `PaneAnswer` (`PaneAs`
-holds the caller's claim, never checked):
-
-- **A pane answer**: `SendKeys` with `RequestToken`, `As` (`"allow"` or
-  `"deny"`), `Key` (the one key, sent with no Enter) and
-  `ExpectPaneSHA256` (the `PaneSHA256` of the `ReadPane` you looked at;
-  never set it from an automatic flow). It records its intent before the
-  key and `PaneAnswer` `"sent"`, `Decision` `As` and `DecisionReason`
-  `"pane"` after it. `ErrPaneAnswerInProgress`: another pane answer to the
-  request is still being sent (do nothing). A retry after a sender that
-  died needs a fresh hash. An error classified `ErrInternal` whose
-  `ErrDetails` is a `PaneKeySentDetails` (`KeySent` true) means the key
-  was sent but not recorded: read the pane before you send anything
-  again, and close the request with `RecordPaneAnswer` if it shows the
-  request answered.
-- **`RecordPaneAnswer`**, when it was answered outside agent-director (it
-  types nothing): `RecordPaneAnswerParams{RequestToken, As, ExpectPaneSHA256,
-  NLines}`, `As` `"allow"`, `"deny"` or `"unknown"` (pass `"unknown"`
-  unless you saw the answer). It records `PaneAnswer` `"outside"`,
-  `Decision` the claim (nil for `"unknown"`) and `DecisionReason`
-  `"pane_outside"`. `ErrClaimTooSoon`: the relay hook may still answer or
-  has not been gone 2 s yet; retry at the `NotBefore` of its
-  `ClaimTooSoonDetails` (nil only while the hook is seen running).
-- **The agent's PostToolUse or PostToolUseFailure** for the request's
-  tool (a Claude Spawn only: a Codex request has no tool use id, so a Codex
-  request closes only by the two ways above), which records
-  `PaneAnswer` `"tool_ran"`, `Decision` `"allow"`, `DecisionReason`
-  `"tool_ran"`.
-
-None of these, nor the relay hook's ack (`Delivery` `delivered`), proves
-that the agent's dialog for the request is gone. Only the agent's own
-hooks do, recorded on the request as `ProvenGoneAt` and `ProvenGoneHow`
-(`"tool_ran"`: a Claude agent's tool's PostToolUse, never on a Codex
-Spawn; `"turn_end"`: the turn of the agent that asked ended after it was
-written, which the main agent's Stop or idle prompt, or a Codex main
-agent's Stop or Interrupt, proves for a request with no agent id;
-`"agent_gone"`: the Spawn's end). Until then a plain `SendKeys` without
-`ExpectPaneSHA256` returns `ErrDialogMaybeOpen`: after an allow until the
-tool has run (on a Codex Spawn, until the turn ends), after a deny until
-the main agent's turn ends. `Get`'s `SpawnRow.UnprovenRequests`
-lists every request not proven gone, each with `UnprovenSince` (when
-agent-director's records stopped awaiting an answer); one that stays
-unproven a while is a reason to read the pane. A plain `SendKeys` whose
-`ExpectPaneSHA256` matches the pane passes the hold: it means a person or
-an LLM judged that screen, so never set it from an automatic flow. A
-subagent's denied request is proven only by the Spawn's end, and on a Codex
-Spawn so is a subagent's allowed one (see
-[Permissions](../../docs/permissions.md#how-the-hold-differs-on-codex-rows)).
-
-`Pause` types `/exit` and Enter as a plain `SendKeys` without
-`ExpectPaneSHA256` would (on a Codex Spawn it clears a draft of up to 64 lines
-first, and ends the row itself once the agent exits; see the
-[caller contract](../../docs/caller-contract.md#when-a-codex-agent-exits)), so on a relayed Spawn it is held as one: it
-returns `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or
-`ErrDialogMaybeOpen`, with the same `ErrDetails`, typing nothing and
-starting no wait, whenever that `SendKeys` would. It takes no pane hash, so
-it stays held until the agent's hooks prove each request gone (after a
-subagent's denied request, or on a Codex Spawn an allowed one, until the
-Spawn ends). To stop a held Spawn,
-`Kill` it, or have a person or an LLM read the pane, first close any
-fallen-back request (a pane answer with its `RequestToken`, or
-`RecordPaneAnswer`: a pane hash gets a plain `SendKeys` past
-`ErrDialogMaybeOpen` only, never past `ErrRelayFallenBack`), answer any
-other dialog, read the pane again and check the prompt is empty
-(`SendKeys` does not clear a draft as `Pause` does), then send `/exit`
-with `SendKeys` and that read's `PaneSHA256` as `ExpectPaneSHA256`, and
-poll `Status` until the row reads `ended` (`SendKeys` does not wait for
-it). A Codex row reads `ended` only once `FindMissing` (or `Pause`) sees its
-agent gone: call it after the agent has exited.
+`ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`: the
+request, spawn state and other open requests. `SendKeys` can answer a pane
+request using `RequestToken`, `As`, `Key` and `ExpectPaneSHA256`.
+`RecordPaneAnswer` records an answer made outside agent-director, using
+`RequestToken`, `As`, `ExpectPaneSHA256` and `NLines`, without typing.
+`PaneAnswer` is `sent`, `outside` or `tool_ran`; `PaneAs` is the caller's claim.
+`Pause` accepts no pane hash and is held by the same permission checks as
+a plain `SendKeys`. These calls and `Decide` can return structured refusals;
+handling, dialog proof, Codex differences and stopping a held agent are in
+[Permissions](../../docs/permissions.md) and the
+[caller contract](../../docs/caller-contract.md#permission-relay).
 
 `api.DetailedError` is the error type that carries such facts: its `Err`
 holds the catalogued sentinel (`errors.Is` sees through it) and `Details`
@@ -733,13 +528,11 @@ requires CLI binary `v0.X.Y`. The two components share an envelope shape
 the binary produces. Mixing versions risks silent field mismatches that
 are not detectable at compile time.
 
-> **Note:** the version-coupling policy is provisional and may change.
-
 ---
 
 ## Errors
 
-All errors returned by `pkg/api` are sentinel values. Use `errors.Is`
+Named errors can wrap sentinel values and structured details. Use `errors.Is`
 to inspect them — never compare error strings.
 
 ```go
@@ -769,12 +562,12 @@ Common sentinels across verbs:
 | `ErrSpawnNotFound` | No row for the given `instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
-| `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id — install the matching binary for a newer store; restore the pre-install copy of `state.db` for a store with no valid id. Never delete `state.db` |
+| `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id; see [Operator actions](../../docs/operator-actions.md#a-migration-write-failed-after-the-binary-swap) |
 | `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — answer the undecided request the message names with `Decide`, or, when the message says its verdict is recorded, retry the call later |
-| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — answer it at the pane with `SendKeys` and its `RequestToken`, or close it with `RecordPaneAnswer`; `ErrDetails` gives its facts |
-| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by the agent's hooks; nothing was sent — retry later, or have a person or an LLM look and send with the pane's hash (for `Pause`, `/exit`; or `Kill`); `ErrDetails` gives its facts |
+| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
+| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
+| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by the agent's hooks; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---
@@ -783,5 +576,4 @@ Common sentinels across verbs:
 
 - [`../../docs/architecture.md`](../../docs/architecture.md) — internal architecture and topology
 - [`../../docs/cli-reference.md`](../../docs/cli-reference.md) — manifest-derived CLI reference
-- [`../../docs/test-writing-guide.md`](../../docs/test-writing-guide.md) — for contributors writing tests against this package
 - <https://pkg.go.dev/github.com/gabemahoney/agent-director/pkg/api> — godoc index

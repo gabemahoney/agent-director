@@ -340,6 +340,22 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 [Going back to the previous release](#going-back-to-the-previous-release); it
 loses every write since the upgrade.
 
+## A user hook interferes with supervised agents
+
+A user hook that stalls, blocks a tool or emits malformed permission output
+can interfere with a supervised agent. To skip that hook only inside
+agent-director spawns, put this guard at the start of its command:
+
+```sh
+if [ -n "$AGENT_DIRECTOR_INSTANCE_ID" ]; then
+  exit 0
+fi
+```
+
+The same variable is present in Claude and Codex agents. Keep any hook that
+should run for those agents outside this exclusion; other sessions still
+run the guarded command. Hook layering is described in [Hooks](hooks.md#fire-order).
+
 ## A row stays `pending` and the trail shows `no_exec_form`
 
 Claude Code is too old for exec-form hooks. Upgrade `claude` to the minimum in

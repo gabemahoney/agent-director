@@ -145,7 +145,7 @@ steps in order from a startup script:
 
 ```sh
 agent-director find-missing                       # end or mark dead rows `missing`
-agent-director resume --instance-id <id>   # relaunch with history
+agent-director resume --instance-id <id>   # relaunch the latest reported session
 ```
 
 `resume` acts on any finished row (`ended` or `missing`); `find-missing` first

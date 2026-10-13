@@ -2,7 +2,7 @@ package api_test
 
 // get_tmux_socket_test.go covers tmux_socket (SR-3.3, SR-16.1, AC-LKP-22):
 // get shows the row's recorded socket in any state and omits the key (never
-// null or "") on a row from before this release; status and list never carry
+// null or "") when the row records no socket; status and list never carry
 // it. The socket a spawn records is spawn_launch_test.go's.
 
 import (
@@ -28,7 +28,7 @@ type socketShape struct {
 func (s socketShape) id() string { return "sock-" + strings.ReplaceAll(s.name, " ", "-") }
 
 // socketShapes covers an explicit socket (live, pending, ended and missing
-// rows), the seed default socket, and pre-release rows (live and ended) with none.
+// rows), the seed default socket, and rows (live and ended) with no recorded socket.
 func socketShapes() []socketShape {
 	const work = "/tmp/tmux-1000/work sock"
 	return []socketShape{
@@ -37,8 +37,8 @@ func socketShapes() []socketShape {
 		{"explicit ended", store.StateEnded, []apitest.SpawnOption{apitest.WithTmuxSocket(work)}, work},
 		{"explicit missing", store.StateMissing, []apitest.SpawnOption{apitest.WithTmuxSocket(work)}, work},
 		{"default working", store.StateWorking, nil, apitest.TestSocket},
-		{"pre-release waiting", store.StateWaiting, []apitest.SpawnOption{apitest.WithNoLaunchToken()}, ""},
-		{"pre-release ended", store.StateEnded, []apitest.SpawnOption{apitest.WithNoLaunchToken()}, ""},
+		{"unrecorded waiting", store.StateWaiting, []apitest.SpawnOption{apitest.WithNoLaunchToken()}, ""},
+		{"unrecorded ended", store.StateEnded, []apitest.SpawnOption{apitest.WithNoLaunchToken()}, ""},
 	}
 }
 

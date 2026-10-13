@@ -101,8 +101,11 @@ only restricts what the model allows, changes field values, or is one more
 instance of a step the model already has. The SRD (SR-14.1) rests on this
 argument.
 
-- **Entries keyed by (instance id, subagent id), with the launch a field.** A
-  start in a new launch moves the entry to that launch. The model's one record
+- **Entries keyed by (instance id, life_number, subagent id), with the launch a field.**
+  Reads and writes select the row's current life. Only an agent switch
+  advances the life; a same-agent reuse retains its records, and a switch
+  back is another life. A start in a new launch of the same life moves the
+  entry to that launch. The model's one record
   per launch is a superset representation: the old launch's record is closed
   by `Launch`'s `SubClose` before any new start, so every property holds.
 - **Confirmation.** Unconfirmed observations are hidden, and the launch
@@ -145,6 +148,31 @@ argument.
   launch, a gated write that never creates a running entry. The eviction order
   only chooses which entry a deletion removes, a running one only when nothing
   closed remains, as before.
+
+## LifeRule and the Phase4 interpretation
+
+The checked [LifeRule evidence](../../../tickets/handoff/b.ssz/Ideas/b.ssz/tla/life/README.md)
+records final job `j20261012213844-d4b7e2`: the design passed every invariant
+and action property with 6,202,169 distinct states; controls failed their
+expected properties and probes reached their states. It checks same-agent
+retention, fresh switching and switching back, current-life subagent reads,
+latest-session-only resume, failed-reuse restoration and independent children.
+The model does not compose store concurrency or the hook gate.
+
+`Phase5Hook`'s `subs` remains a record-by-launch abstraction, with neither
+a subagent id nor a life. Its `Launch` still represents reuse. Adding
+`life_number` to the stored key and filtering to the current life restricts
+visible records without changing that gate or launch abstraction.
+
+In `Phase4` and `Phase4Split`, `life` means launch generation rather than
+the implemented agent life. Their historical `HistC` and `Sel` fallback
+interpretation and `GetNoEarlierLife` / `ResumeNoEarlierLife` history claims
+are superseded by LifeRule's `HistTruth`, `SwitchForgets`, `NeverOlder` and
+`ResumeLatest`. `Sel` has no implementation counterpart: resume never selects
+an older history entry. The valid tmux, provenance and kill properties
+remain supported by their captured runs and refinement arguments. This is
+a prose interpretation of existing evidence, with no model/config change
+and no new run.
 
 Claimable launches are not records, and no property speaks of them.
 

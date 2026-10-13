@@ -127,6 +127,9 @@ func DescReuseFinishedParam() DescCase {
 			"Nonempty dropped_args identifies reuse that switches a finished row's agent",
 			"the CLI prints a notice when arguments are dropped",
 			"The spawn names its agent (agent, or the template's) and the reused row takes it: to reuse a row for the agent it ran, pass the row's agent, which get shows",
+			"Only an agent switch starts a new life",
+			"same-agent reuse keeps session history and subagent records but starts a fresh conversation",
+			"Resume continues only the latest session; older sessions remain listed for inspection only",
 			"starts with no memory of its earlier lives",
 			"resume and get never use or show an earlier life's history",
 			"after a held-name refusal (duplicate session)", "decides it at once",
@@ -177,8 +180,8 @@ const (
 )
 
 // DescReuseRecourse is SR-18.4's recovery recourse at site: spawn again with
-// the same id, opting in to reuse by the site's spelling, the reused id
-// having no memory of the earlier conversation; never delete-then-spawn. A Go
+// the same id, opting in to reuse by the site's spelling, an agent switch
+// having no memory of the earlier life; never delete-then-spawn. A Go
 // doc also says the spawn passes the row's agent (SR-4.4, P-66); the
 // TypeScript README's rows say it too, as "and the row's `agent`" after the opt-in.
 // Check it with AssertAgentTextCase.

@@ -33,37 +33,16 @@ The `PermissionRequest` entry's arguments are `["hook", "--timeout",
 (`[relay] timeout_seconds`), so the relay hook knows when Claude Code will
 end it (see "PermissionRequest relay path" below).
 
-A Claude Code version older than that ignores `args` and runs the bare
-binary through `/bin/sh`, so each hook reaches agent-director with no
-verb and its payload on stdin. No hook applies, and the row stays
-`pending`; past its grace period `find-missing` notes it `unreported`
-(see "A SessionStart that never writes" below), and no hook clears that
-note. A no-verb run checks stdin for this case:
+A hook payload delivered to a no-verb invocation produces empty stdout and
+exit 0, with `ad.hook.ignored` reason `no_exec_form`. It opens no store and
+loads no config. The record takes `instance_id` from the environment;
+`row_session_id` and `row_pane_pid` are null. Non-terminal stdin is read
+with a 1 MiB cap and a 1-second deadline. Other input prints help. A run
+with only global flags follows the same rule; `--home` selects the trail home.
+`version` never reads stdin; `help` reads it only in a Codex agent's environment.
+For diagnosis and repair see [no exec form](operator-actions.md#a-row-stays-pending-and-the-trail-shows-no_exec_form).
 
-- When stdin is not a terminal, the run reads it with a 1 MiB cap and a
-  1-second deadline.
-- If the input is a hook payload (a JSON object whose `hook_event_name`
-  is a non-empty string; the `event_name` alias does not count), the run
-  prints nothing, exits 0 and writes one `ad.hook.ignored` trail record
-  with reason `no_exec_form`. It opens no store, loads no config, writes
-  no `ad.hook.fired` and writes nothing on stderr.
-- In every other case it prints help as before: a terminal, a read
-  error, empty input, input over 1 MiB, input still open at the deadline,
-  or input that is not a hook payload.
-- A run with only global flags counts as a no-verb run. With `--home`,
-  the record goes under that home.
-- `version` and its aliases (`--version`, `-v`) never read stdin. `help` and
-  its aliases (`--help`, `-h`) read it only in a Codex agent's environment,
-  with the same cap and deadline (see "What `agent-director help` actually
-  outputs" below).
-
-The `no_exec_form` record has the fields every `ad.hook.ignored` record
-has (see "The `ad.hook.ignored` reasons" below). Because it reads no
-row, its `instance_id` comes from the environment (null when
-absent or invalid), and `row_session_id` and `row_pane_pid` are always
-null.
-
-| Event | Tool matcher | Resulting state (SRD §5.2) |
+| Event | Tool matcher | Resulting state |
 | --- | --- | --- |
 | `SessionStart` | — | `waiting` (also writes `session_id`) |
 | `UserPromptSubmit` | — | `working` |
@@ -111,7 +90,7 @@ Claude Code sends a `Notification` with `notification_type`
 `agent_id`:
 
 - a row that is `working` when the write lands returns to `waiting`.
-  The write is one statement under the same gate as every hook (see
+  The update applies only for the row's own agent (see
   "Only the row's own agent moves the row"). The trail records an
   `ad.spawn.state_transition` from `working` to `waiting` with
   `soft_refresh` false and `triggering_event_name` `Notification`;
@@ -152,8 +131,8 @@ Limits:
   Notification's write can land after the new turn's first hook. The
   row then reads `waiting` until the turn's next hook.
 - On Claude Code 2.1.280 through 2.1.287, the idle-prompt Notification
-  can fire while a background subagent is still running (fixed in
-  2.1.288, anthropics/claude-code#93672). If that subagent's hook had
+  can fire while a background subagent is still running; 2.1.288 and later
+  wait until background subagents finish. If that subagent's hook had
   moved the row to `working`, the row reads `waiting`, possibly while
   the subagent's tool still runs, until the subagent's next tool hook
   (`PreToolUse`, `PostToolUse` or `PermissionRequest`).
@@ -246,7 +225,7 @@ every other tool. Codex has no idle-prompt Notification either, so nothing
 returns a `working` row to `waiting` except `Stop` and `Interrupt`. A Codex
 row left `working` (the hook that would end the turn was lost) is therefore
 never repaired: `find-missing` repairs only a row stuck at `check_permission`
-(see "A relay row left in `check_permission`" below). Check the pane (`read-pane`) to see where the agent is.
+(see "A relay row left in `check_permission`" below). For action on a stale row see the [caller contract](caller-contract.md#caller-contract).
 
 `Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
 for Claude, a non-empty `agent_id` marks a subagent's hook. Apart from the
@@ -318,8 +297,7 @@ pane records the end report only, so the row stays in its last state until
 - **Judged on tmux evidence alone** (the process cannot be checked, or was
   never recorded): `find-missing` marks the row `missing`, whatever report it
   holds.
-- **The move closes the row's requests** and its `running` subagent records, in
-  the same store transaction (see "The agent's end closes its requests" below).
+- **The move closes the row's requests** and its `running` subagent records, together (see "The agent's end closes its requests" below).
   The row keeps its end report.
 
 Whichever verb makes the move, it writes `find-missing`'s records: one
@@ -369,8 +347,7 @@ and, for the steps, [A row stays `pending` and the trail shows
   they set `working`. It sends no `Stop` and no `Interrupt` of its own, and
   after its last tool nothing returns the row to `waiting`: the row reads
   `working` until the agent's next prompt (an Esc during the review sends one
-  `Interrupt`). Check the pane (`read-pane`) to tell a finished review from a
-  running one.
+  `Interrupt`). For action on a stale review state see the [caller contract](caller-contract.md#caller-contract).
 - **Other internal threads.** Codex's other internal threads (compaction,
   memory work) are not known to send hooks marked with `agent_id` either, so
   they can leave the same trace.
@@ -378,12 +355,11 @@ and, for the steps, [A row stays `pending` and the trail shows
 ## Only the row's own agent moves the row
 
 Every hook, of every event, applies only when its parent process (its
-`getppid()`, with that pid's start time) is the row's recorded pane
+pid, with that process's start time) is the row's recorded pane
 process: the process agent-director created the session with, which is
-the agent's Claude Code itself. When the row's recorded pane start time
+the agent itself. When the row's recorded pane start time
 is unknown, the pid alone decides and the first applied hook records the
-start time. The check is part of each database write, so nothing can
-change the row between the check and the write.
+start time. A hook cannot write on behalf of another launch.
 
 A hook from any other process that carries the row's
 `AGENT_DIRECTOR_INSTANCE_ID` changes nothing: a nested `claude` or `codex`
@@ -410,143 +386,49 @@ tmux call.
 
 ### A `claude` that does not exec
 
-When the `claude` on PATH is a launcher or shim that runs Claude Code as
-a child instead of exec-ing it (the same holds for `codex`, see "The shell
-between Codex and the hook"), the pane process is the launcher, so
-every hook is refused with `pid_mismatch` and the row stays `pending`;
-past its grace period `find-missing` finds the launcher running and notes
-the row `unreported`, and no hook clears that note. A
-hook run through a shell instead of in exec form looks the same: either
-way the pane process is the hook's grandparent, and agent-director does
-not tell the two apart.
-
-For a SessionStart refused with `pid_mismatch` while the row is
-`pending`, and for no other hook, the hook reads its parent's own parent
-pid once. When that is the row's pane process, it writes one
-`ad.hook.pane_is_grandparent` record after the `ad.hook.ignored` one, with
-`instance_id`, `pane_pid`, `pane_command` (null when unreadable),
-`parent_pid`, `parent_command`, `advice` (naming both causes) and
-`source` = `ad_hook`. The advice follows the row's agent: a Claude row's
-names the launcher or shim and `[launch] claude_path`, a Codex row's names
-`codex`, the launcher case and `[launch] codex_path`. Each such SessionStart (startup, `/clear`,
-compaction, resume) writes one. The row, stdout and exit stay those of
-any ignored hook; an unreadable parent pid writes no record.
+A launcher that starts the agent as a child, instead of replacing itself,
+leaves its hooks with another parent than the recorded pane process. Such
+hooks are ignored with `pid_mismatch`; this applies to Claude and Codex.
+A refused SessionStart on a pending row whose hook grandparent is the pane
+also writes `ad.hook.pane_is_grandparent`, with `instance_id`, `pane_pid`,
+`pane_command`, `parent_pid`, `parent_command`, `advice` and `source` `ad_hook`.
+Unreadable commands are null. Each such SessionStart may write the record;
+it changes no state or output. See [diagnosis and repair](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 ### SessionStart before the launch's identity write
 
-The agent starts inside the call that creates its tmux session.
-agent-director records the pane process (the launch's identity) only
-after that call returns, so the agent's first SessionStart can arrive
-while the row still records no pane. An idle agent fires no further
-hook, so ignoring that SessionStart would leave the row `pending`.
+A first SessionStart can arrive before the launch has recorded its pane.
+It waits while the row is pending, has a launch start, records no pane and
+remains within its pending grace period. The wait ends at the earlier of
+launch start plus `pending_grace_seconds` and 540 s after waiting began.
+The 540 s cap uses elapsed time, so a wall-clock change cannot extend it.
+Only SessionStart waits; subagent and in-process teammate session hooks
+never do. A row with no launch start, or already past grace, never waits.
 
-So when SessionStart's gated write does not apply only because the row
-records no pane, the hook waits instead of logging `no_pane_recorded`
-at once. It waits while all of these hold:
+The row is checked every 250 ms. A recorded pane, a changed or deleted row
+or a failed read ends the wait. The final own-agent check applies the hook
+if its parent is now recorded; otherwise it records `pid_mismatch` or
+`no_pane_recorded`. A deleted row produces no record.
 
-- the row is `pending`;
-- the row records no pane;
-- the row has a launch start;
-- the time is before the launch start plus the effective
-  `pending_grace_seconds` (the same grace period `find-missing` uses);
-- less than 540 s have passed since the hook began waiting.
-
-So the wait has two bounds, and it ends at whichever comes first: the
-grace bound (the launch start plus the grace period) or the cap (540 s
-after the hook began waiting). The cap is measured on the monotonic
-clock, so a launch start in the future or a step of the wall clock
-cannot stretch the wait past it. `pending_grace_seconds` has no maximum;
-with a grace above 540 s the cap ends the wait, while `find-missing`
-still counts the row as inside its grace period.
-
-The SessionStart `agent-director hook` entry in the synthesized
-`--settings` carries `"timeout": 600`, Claude Code's current default
-for command hooks. It is stated explicitly so that a change to Claude
-Code's default cannot move the kill below the cap. No other
-agent-director entry for SessionStart carries a timeout.
-
-The cap bounds the wait, not the hook. The wait ends about 60 s before
-Claude Code would kill the hook, but Claude Code counts its 600 s from the
-hook's start, and the hook's store writes before and after the wait (up
-to four) can each wait up to `[store] busy_timeout_ms` for a busy store's
-lock. `busy_timeout_ms` is accepted up to 2147483647 ms and is not capped
-against those 60 s, so a long store wait can still get the hook killed
-before it writes its result or its `ad.hook.ignored` record, with no trail
-record. So can any other death of the hook (a crash, an out-of-memory
-kill). See "A SessionStart that never writes" below for how
-`find-missing` reports the row.
-
-While it waits, it re-reads the row every 250 ms. Each re-read is a
-read only, so it never blocks the identity write. No sleep runs past
-either bound. The wait ends early when:
-
-- a pane is recorded;
-- the row changes (it leaves `pending`, or its version moves);
-- the row is gone;
-- a read fails (logged; the hook stays fail-open).
-
-After the wait, the hook makes the ordinary gated write once more with
-the row as it is then, and that write decides the result:
-
-- applied, when the pane now recorded is the hook's parent;
-- `pid_mismatch`, when another process waited (a leftover or a stray);
-- `no_pane_recorded`, when the row still records no pane at either
-  bound;
-- no record, when the row is gone.
-
-An identity written just before either bound therefore still applies.
-
-Only SessionStart waits. It is the first hook a launch's agent fires, and
-Claude Code holds the agent's first response until its SessionStart hooks
-finish, so the hooks of that response fire after the wait. A subagent's
-or in-process teammate's SessionStart never waits
-(see below). A row with no launch start, or one already past the grace
-period, never waits. The wait makes no tmux
-call and writes nothing until its final gated write.
+The SessionStart state entry has a 600 s timeout. The cap bounds the wait,
+not all work of the hook: busy-store waits can still consume the remaining
+time and get the hook killed without a result or trail record. See
+[store timeout](configuration.md#keys) and the recovery links below.
 
 ### A SessionStart that never writes
 
-An agent whose SessionStart hook died before its write (killed at its
-timeout after a long store wait, a crash, an out-of-memory kill), or
-whose SessionStart was ignored, runs while its row stays `pending`, and
-an idle agent fires no later hook to move it. A row looks the same while
-its agent is held at a Claude Code startup screen that comes before any
-hook (folder trust, a warning, onboarding or login, an approval).
-agent-director cannot tell these apart without reading the screen.
+A missed or ignored SessionStart, a startup screen before the first hook,
+or a Codex launch awaiting its first prompt can leave a running agent
+`pending`. Agent-director cannot tell these from the row alone. A scheduled
+`find-missing` notes an alive, past-grace row `unreported`, once its launch
+owner no longer holds it and its pane is recorded or adopted. It keeps
+`launch_started_at` and the first `liveness_unverified_since` of that launch.
+An existing `provenance_conflict` note is kept. A later applied hook clears
+the note; a working move held by a permission request clears only `idle_since`.
 
-`find-missing` reports such a row and never moves it. Once the row is
-past its pending grace period, the `spawn` or `resume` that launched it
-is no longer running, its pane is recorded (or adopted by the sweep) and
-that pane's process is alive, the sweep writes the `liveness_note`
-`unreported` and leaves the row `pending`, in one write that applies only
-if no hook wrote first. So the row is noted within
-`pending_grace_seconds` plus one `find-missing` period, provided
-`find-missing` is scheduled. A dead pane process marks the row `missing`
-instead. The note keeps the row's `launch_started_at`. Its
-`liveness_unverified_since` is the time a note first flagged the row in
-this launch, kept across note changes. A later sweep that finds the agent
-alive keeps the note; a sweep that cannot check the agent process may
-replace it with an unverified note. The note never replaces a
-`provenance_conflict` note: a sweep that finds such a `pending` row's
-agent alive keeps `provenance_conflict` rather than clearing it.
-
-`unreported` means the agent is alive but no hook has reported since its
-launch: it may sit at a startup screen or idle at its prompt. To act on
-it, the caller reads the pane (`read-pane`), then types (`send-keys`
-with `allow_pending`, `--allow-pending` on the CLI); only a caller that
-looked should type. A caller that cannot judge the pane ends the launch
-with the live-row sequence of caller-contract.md (`kill`,
-then `find-missing`) or hands it to a human. `send-keys` still refuses a
-`pending` row without `allow_pending`, noted or not.
-
-The agent's next applied hook clears the note and
-`liveness_unverified_since`, as every applied hook clears both. A
-SessionStart that arrives later records the session id and identity and moves the row to
-`waiting`; a UserPromptSubmit (for example from the prompt the caller
-typed) moves it to `working` and records the session id. A
-UserPromptSubmit held because a permission request of the row holds it
-(see "A relay row left in `check_permission`" below) writes nothing but
-the clearing of `idle_since`, so the note stays.
+For caller action see the [live-row sequence](caller-contract.md#caller-contract);
+for hook configuration repair see [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch)
+and [Codex pending rows](operator-actions.md#a-codex-row-stays-pending-or-goes-missing-for-another-reason).
 
 ### Subagents and in-process teammates
 
@@ -558,8 +440,7 @@ Claude Code marks them with a non-empty `agent_id` in the payload.
 carries it and is the agent itself.
 
 - **SessionStart or SessionEnd with `agent_id`:** the hook changes
-  nothing. It is decided from the payload, before the parent-process
-  check and before any write. It writes no state and no session id, and
+  nothing. It is identified by the payload. It writes no state and no session id, and
   exits 0 with empty stdout. It writes one `ad.hook.ignored` record with
   reason `subagent_event`, and its `ad.hook.fired` record has
   `upsert_outcome` `no_change`. If no row has the id, no
@@ -594,10 +475,12 @@ carries it and is the agent itself.
 
 Each record carries `instance_id`, `hook_event`, `reason`,
 `parent_pid`, `parent_command`, `hook_session_id`, `row_session_id`,
-`row_pane_pid` and `source` = `ad_hook`. `hook_session_id` is the
-basename of the payload's `transcript_path` with its extension removed
-(the text from its last `.` on), or null when the payload gives none. It
-never names another row.
+`row_pane_pid` and `source` = `ad_hook`. For Claude, `hook_session_id` is
+the basename of the payload's `transcript_path` with its extension removed
+(the text from its last `.` on), or null when the payload gives none. For
+Codex, it is the payload's `session_id`, or null when absent; a Codex hook
+marked with a non-empty `agent_id` records no `hook_session_id`. It never
+names another row.
 
 Consequences: a nested agent's or a teammate pane's work is not
 reflected in the row, and an `ended` row stays `ended` against every
@@ -693,8 +576,7 @@ the hook started.
   earlier launch is left to close: the closes of a row that ends, goes
   missing or begins a new launch delete them. A main-agent `Stop` also
   applies its `background_tasks` as a snapshot of the agent's running
-  background subagents (see "The `background_tasks` list" below), in the same
-  transaction:
+  background subagents (see "The `background_tasks` list" below), with the same snapshot:
   - A listed subagent with no record gets one, `running`, `run_mode`
     `background`, with the listed type and the `Stop`'s session id. Its
     description, model, parent, `tool_use_id` and start times are null.
@@ -724,15 +606,11 @@ the hook started.
   the first. No listed task's description is read or stored. A wrongly typed
   field is not supplied and fails nothing.
 
-The Agent-tool hooks and the main-agent `Stop` write their subagent data
-after their own row write, in a transaction of its own, and only when the
-row write applied (a move to `working` held by a permission request
-counts as applied). It writes no trail record, and the hook's
-`ad.hook.fired` `upsert_outcome` stays the row write's. A `PostToolUse` or
-`PostToolUseFailure` makes it after the relay proofs and the close of a
-fallen-back request, and after the ordinary write. `SubagentStart` and
-`SubagentStop` write the row and the entry in one transaction, so their
-`upsert_outcome` covers both.
+Subagent data is accepted only from the row's own agent on an applied
+hook. It adds no stdout or trail record; `ad.hook.fired` reports the row
+write's outcome. `SubagentStart` and `SubagentStop` apply their row refresh
+and entry together, so a failure leaves both unchanged. Agent-tool and
+main-agent Stop entry failures leave any applied row update intact.
 
 Internal agents (Claude Code's own, for one) produce no record, and
 teammates produce none except by one residual. A teammate's launch
@@ -766,7 +644,7 @@ Limits:
 
 ## Fail-open invariant
 
-State-tracking hooks **must never block Claude Code**. The `hook` verb
+State-tracking failures leave the agent running. The `hook` verb
 exits 0 with empty stdout on every internal failure, and on every hook
 it does not apply:
 
@@ -813,19 +691,17 @@ it does not apply:
 - `SubagentStart` or `SubagentStop`, or a subagent write after another
   hook's row write, that fails → exit 0 with one log entry. The entry
   names the instance id and the event and carries no payload text. A
-  `SubagentStart` or `SubagentStop` whose transaction rolled back writes
+  `SubagentStart` or `SubagentStop` whose combined update fails writes
   nothing, the row refresh included, and its `ad.hook.fired` record has
   `upsert_outcome` `error`; the entry's next event, or a later snapshot (see
   [usage.md](usage.md#when-a-record-turns-lost)), repairs it. A
   failed subagent write after another hook's row write leaves that row
   write and its `upsert_outcome` as they were.
 
-The subagent hooks add nothing to stdout, whatever they write: no context,
-no decision, and a `SubagentStop` never blocks a stop. Each of their store
-transactions waits at most `[store] busy_timeout_ms` for the write lock, so
-a hook that makes two (an Agent-tool hook or a main-agent `Stop`: its row
-write, then the subagent write) can wait that long twice. They add no sleep
-or poll.
+The subagent hooks add nothing to stdout: no context or decision, and
+SubagentStop never blocks a stop. Busy-store waits are bounded by
+`[store] busy_timeout_ms` per write; a hook that needs more than one write
+can spend that bound more than once.
 
 All log entries land in `~/.config/agent-director/errors.log` (configurable
 via `[log] error_log_path` in `config.toml`), or on stderr when that
@@ -849,7 +725,7 @@ exits, so the tool is denied. Once the request is recorded, the hook writes
 only an answer it has first confirmed in the store; any failure after that
 ends with no answer, so the agent asks in its own permission prompt and
 the request reads `fallen_back`. See "PermissionRequest relay path" below
-and "Permission relay" in `architecture.md`.
+and [Permissions](permissions.md).
 
 ## Fire order
 
@@ -866,7 +742,7 @@ user (~/.claude/settings.json)
 
 agent-director's hook is *last among user-installed tiers*. For state
 tracking this is fine — by the time our hook runs, every user hook has
-already had its turn; our UPSERT lands on top with the most recent
+already had its turn; its state update lands with the most recent
 `last_seen_at`. For relay-mode permission decisions the ordering
 matters: our decision envelope on stdout is the one Claude consumes,
 regardless of what earlier-running user hooks emit.
@@ -878,12 +754,12 @@ malformed stdout. Each of these has a different blast radius:
 
 - **Slow user hook** — Claude Code waits for every hook entry to return
   before consuming the event. A 30-second user-script hook stalls the
-  entire pipeline; agent-director's state UPSERT doesn't land until
+  entire pipeline; agent-director's state update doesn't land until
   the user hook returns. The `status` verb will keep showing the
   pre-event state during the stall.
 - **Non-zero user hook** — for `PreToolUse`, a non-zero exit can block
   the tool call (Claude Code's policy). agent-director's hook still
-  runs and writes its UPSERT either way; the row state is independent
+  runs and writes its state update either way; the row state is independent
   of whether the tool was actually executed.
 - **Malformed user hook stdout** — irrelevant for state-tracking hooks
   (they don't emit stdout). A poorly-formed permission-decision
@@ -891,26 +767,13 @@ malformed stdout. Each of these has a different blast radius:
   agent-director's relay hook is always last, so it wins the decision
   channel.
 
-The recommended mitigation is to put hooks the operator does NOT want
-running inside agent-director Spawns behind a `AGENT_DIRECTOR_INSTANCE_ID`
-env-var guard:
-
-```bash
-# Inside ~/.claude/settings.json hook command:
-if [ -n "$AGENT_DIRECTOR_INSTANCE_ID" ]; then
-  exit 0  # skip user hook for agent-director Spawns
-fi
-# ... normal user-hook body ...
-```
-
-This lets the operator opt-out per Spawn surface without flipping
-`--setting-sources project,local` at every `spawn` call. The same guard works
-in a Codex user, group or project hook: it runs in the agent's environment,
-which carries the variable.
+To exclude a user hook from supervised spawns, see
+[Operator actions](operator-actions.md#a-user-hook-interferes-with-supervised-agents). Hooks receive `AGENT_DIRECTOR_INSTANCE_ID` in
+both Claude and Codex agents.
 
 ## Persistent hooks (the `help`-on-SessionStart pair)
 
-The install skill (Epic 12) adds two persistent hook entries to the
+The installer adds two persistent hook entries to the
 user's `~/.claude/settings.json`:
 
 - `agent-director help` on `SessionStart`
@@ -920,7 +783,7 @@ These are **not** per-Spawn; they fire on every Claude session the
 operator runs, regardless of whether agent-director launched it.
 They inject the verb list into the new conversation so the model
 knows the supervision API surface after a `/compact` or fresh
-session. Mirrors the `bees sting` pattern.
+session.
 
 Both entries are in shell form (`"command": "<install path> help"`, no
 `args`) and name the `help` verb explicitly. A Claude Code that does not
@@ -933,42 +796,12 @@ above); a Codex folder gets a help entry of its own, for the agents you start
 there by hand, only when you add it (see [Set up agent-director in a Codex
 folder](settings.md#set-up-agent-director-in-a-codex-folder)).
 
-### Why both events
+### Persistent hook layering
 
-- **`SessionStart`** — a brand-new Claude session starts with no
-  context about agent-director. The hook injects the verb list so
-  the model can reference `mcp__agent-director__spawn` and friends
-  immediately.
-- **`SessionEnd matcher=compact`** — `/compact` is Claude Code's
-  manual conversation compaction. It tears down the current session
-  and starts a fresh one. The compact-side hook fires BEFORE the
-  new session boots, so by the time SessionStart runs, the verb
-  list is already queued for re-injection.
-
-### Why not embed in the synthesized `--settings`?
-
-The per-Spawn hooks are injected inline via `--settings` at spawn
-time and only apply to Spawns agent-director launched. The
-`help`-on-SessionStart pair, by contrast, must fire on EVERY Claude
-session — including the operator's own interactive ones where
-they want to spawn something from inside Claude. That requires
-persistent settings, not per-Spawn settings.
-
-The asymmetry is deliberate: per-Spawn state-tracking is for
-agent-director's own correctness; persistent help is for the
-operator's discoverability.
-
-### Idempotency and preserve-other-hooks
-
-The install script uses `jq` to add the entries to
-`hooks.SessionStart` and `hooks.SessionEnd` (with matcher=compact)
-without disturbing what's already there. Re-running `install.sh`
-matches existing entries by command string and skips duplicates
-(SRD §16.2 idempotency).
-
-The uninstall script matches entries by the install-root prefix in
-their `command` field — it removes ONLY what install.sh wrote.
-Pre-existing user hooks in those events stay verbatim.
+The help pair applies to every operator Claude session; the per-spawn
+entries apply only to supervised launches. Reinstalling skips matching
+help commands and preserves other entries. Uninstall removes only the
+installer's entries. See [Installation](install.md) and [Settings](settings.md).
 
 ### What `agent-director help` actually outputs
 
@@ -983,7 +816,7 @@ JSON object whose `hookSpecificOutput` names the event `SessionStart` and
 carries the list as its `additionalContext`. `help` prints it only when the
 launch marked the agent as Codex and the hook payload on stdin is a
 `SessionStart`; in every other case, a Codex agent's own `agent-director help`
-in its shell included, it prints the plain list as before. In a Codex agent
+in its shell included, it prints the plain list. In a Codex agent
 `help` reads stdin for this with the 1 MiB cap and 1-second deadline of a
 no-verb run, and prints the plain list when the read fails. The whole list
 reaches the agent at every session start: its first prompt, and the next
@@ -991,14 +824,8 @@ prompt after `/clear`, `/new`, `/resume` or `/fork`.
 
 ### Caveat — install fail-closed gap
 
-If `agent-director` is missing from PATH at session start time
-(e.g. mid-uninstall), the hook fails to invoke and Claude Code
-falls back to no-injection — the conversation proceeds without the
-verb list. This is the install-side analogue of the
-permissions.md "structural caveat": fail-closed requires the
-binary to actually run. The install script's upgrade-safety
-pattern (versioned binary + atomic symlink swap) is specifically
-designed to keep this window closed.
+A help command that cannot run injects no verb list; the conversation
+proceeds. For installation checks and repairs see [Installation](install.md).
 
 ## PermissionRequest relay path
 
@@ -1030,96 +857,54 @@ no time to answer.
 
 ### The steps
 
-1. **The first write.** One store transaction moves the row to
-   `check_permission` and records the request, both or neither, under the
-   same gate as every hook (see "Only the row's own agent moves the row";
-   a PermissionRequest from another process records nothing and writes
-   nothing to stdout). The request carries the hook's own pid, start time
-   and pid namespace, the payload's `tool_use_id` and `agent_id`, and its
-   settle instant. Its wait for the store's write lock ends at the 2 s
-   reserve; a lock not taken by then, or any other failure, writes nothing
-   and returns a deny envelope (the tool is denied).
-2. **The poll.** `internal/hook/polling.go`'s `Poll` reads the hook's own
-   request (by the UUIDv4 `request_token` it minted) every
-   `max(50ms, relay.poll_base_ms + uniform(0, relay.poll_jitter_ms))`,
-   never sleeping past the poll's end. The 50 ms floor is load-bearing: a
-   misconfigured `relay.poll_base_ms=0, relay.poll_jitter_ms=0` must not
-   pin CPU. The loop only reads; it never writes the request.
-3. **The ack, then the answer.** On reading a verdict the hook commits
-   `delivered_at` in one statement that returns the verdict it confirmed,
-   and only then writes that verdict as its envelope and exits. Inside
-   that write's transaction, once it holds the store's write lock and
-   before the statement, the hook checks that its parent process is still
-   the agent that started it (pid and start time); if not, nothing
-   is written. So an agent that exited while the hook waited for the
-   lock gets no confirmation.
-4. **The timeout deny.** At the poll's end, one guarded statement, with
-   the same parent check inside its transaction, records `deny`,
-   `decision_reason` `timeout` and `delivered_at` together, only while the
-   request is still undecided; a verdict that landed first is confirmed
-   and written instead. The deny leaves the row's state as it is.
+1. The hook records the request and moves the row to `check_permission`
+   together, only for the row's own agent. The request carries its token,
+   hook identity, settle instant and payload's tool and agent ids. A Codex
+   request has no `tool_use_id`. Failure before recording returns a deny.
+2. It polls its own request at `max(50ms, relay.poll_base_ms +
+   uniform(0, relay.poll_jitter_ms))`, stopping by the poll deadline.
+3. A verdict is answered only after its delivery is confirmed in the
+   store and the parent is still the agent that started the hook.
+4. At the deadline, an undecided request receives a confirmed timeout deny.
+   A verdict that arrived first is confirmed instead. The deny changes no state.
 
-The hook never writes an answer it has not confirmed in the store, because
-Claude Code acts on a hook's JSON whatever its exit code. A changed parent,
-a store write that fails or misses the reserve, a request deleted under it
-(its spawn row removed) or five failed reads in a row end the hook with
-empty stdout: the agent asks in its own permission prompt, and readers
-find the request fallen back once they see the hook gone. A Codex request
-is recorded with no `tool_use_id`.
+After recording, a failed confirmation, a changed parent, a deleted
+request or five consecutive failed reads produces empty stdout. The agent
+then asks in its own permission prompt; the request reads `fallen_back`
+once readers see the relay hook gone. See the [caller contract](caller-contract.md#permission-relay)
+for handling this outcome.
 
 ### Writing the envelope
 
 The handler emits exactly one line on stdout — the
-`hookSpecificOutput` envelope per SRD §6.3 — or nothing.
+`hookSpecificOutput` envelope — or nothing.
 Non-PermissionRequest events leave stdout empty (state-tracking has no
 envelope contract).
 
 ### `AGENT_DIRECTOR_RELAY_MODE` env var
 
-The handler reads the relay mode from
-`os.Getenv("AGENT_DIRECTOR_RELAY_MODE")`, NOT from the DB's
-`spawns.relay_mode` column. This separation is the SRD §6.5
-fail-closed safety guarantee: a DB-unreachable or schema-mismatch
-failure still surfaces the correct relay decision because the env
-var was set on the Spawn's tmux session at launch time (Epic 3) and
-survives any DB-side breakage.
+The hook takes relay mode from its launch environment's
+`AGENT_DIRECTOR_RELAY_MODE`, so a store or config failure still has the
+launch's relay policy.
 
 ### Fail-closed boundary
 
-`internal/hook/handler.go` runs a `failClosed` helper on every
-failure path before the relay branch (instance id missing or invalid,
-an invalid `--agent`, classify failure), and `cmd/agent-director`'s `runHook` writes the same
-deny when the config cannot be loaded or the store cannot be opened. The
-helper writes a deny envelope only when `relayActive`
-is true AND the payload's peeked event name is `PermissionRequest`
-(the gate that keeps a deny from landing on another event). Failures where the event name is unknowable —
-stdin read failure, unparseable payload — exit silently instead,
-because a permission-shaped envelope from a non-PermissionRequest
-process would be routed by fd to the in-flight tool and race the
-legitimate PermissionRequest sibling. `runRelay` denies the same way
-when it cannot mint a token or its first write fails or is cut; once
-the request is recorded it writes a confirmed answer or nothing (see
-"The steps" above). See `permissions.md` for the enumerated failure
-modes.
+With relay on, failures before a PermissionRequest is recorded return a
+deny envelope when the event name can be read. Unreadable stdin or
+unparseable payloads produce no envelope: the event cannot be identified.
+After recording, the hook writes a confirmed answer or nothing. Other
+events receive no permission envelope. See [Permissions](permissions.md).
 
 ### Per-request rows in `permission_requests`
 
-The v2 schema keys `permission_requests` by a composite
-`UNIQUE(instance_id, request_token)`. Each relay invocation
-mints its own UUIDv4 `request_token` and INSERTs its own row, so
-concurrent PermissionRequest events for the same Spawn coexist and
-are decided independently — a decision targets exactly one row, and
-one poller. Rows are INSERT-only: nothing replaces an open row, and a
-polling loop that sees `sql.ErrNoRows` (possible via `ON DELETE
-CASCADE` when the spawn row is deleted) ends with no answer. Closed rows
-(those no longer awaiting an answer) are evicted oldest-first when the
-table exceeds `relay.permission_request_cap`, once proven gone (see
-"Hooks that prove a request's dialog gone" below) or once their spawn is
-`ended` or `missing`; a closed row not yet proven gone on a live spawn is
-kept, past the cap if need be. A spawn's newest request is kept too while
-that spawn has a request that still awaits an answer (`decide` relies on
-it for a request recorded by an older binary; see
-[permissions.md](permissions.md#requests-recorded-by-an-older-binary)).
+Every relay invocation has its own UUIDv4 `request_token`. Concurrent
+requests coexist and are decided independently; nothing replaces an open
+request. Deleting its spawn removes its requests; a hook whose request
+disappears returns no answer. Closed requests are evicted oldest-first
+only when eligible under the configured cap; open requests and unproven
+closed requests of a live spawn are retained, past the cap if necessary.
+See [Permissions](permissions.md) for retention and
+[requests recorded by an older binary](permissions.md#requests-recorded-by-an-older-binary).
 
 ### A relay row left in `check_permission`
 
@@ -1162,28 +947,11 @@ Limits:
 - A request recorded in the same second a `Stop`, idle prompt or Codex
   Interrupt started is not proven by it, and holds until a later turn end.
 
-If the hook that would move the row is lost:
-
-- the idle-prompt Notification (Claude rows) moves the row to `waiting` (see
-  "The idle-prompt Notification" above);
-- a scheduled `find-missing` moves the row out of `check_permission` in
-  one guarded statement once none of its requests holds it
-  and none has a relay hook that may still run (one whose `confirm_by` has
-  not passed and that is not provably gone, a proven request's included):
-  to `waiting` when `idle_since`
-  is set, otherwise to `working`; a Codex row always goes to `working`,
-  whatever `idle_since` reads, since Codex sends no idle-prompt
-  Notification. A request closed with the row (when
-  `find-missing` marked it `missing` or its agent ended it) is not judged:
-  the row is back in `check_permission` only through a later hook (after a
-  `resume`), and that request's leftover hook cannot move the row, so a
-  hook that cannot be checked does not hold the row there until its
-  `confirm_by`. The statement applies only while the row
-  is still in `check_permission` with `relay_mode=on`, holds the snapshot
-  the sweep read and has no request holding it, so a hook or a new
-  request that lands first wins. It writes one `ad.find_missing.tick` with
-  `reconciliation_reason` `stale_check_permission`; the row is in neither
-  of `find-missing`'s result lists.
+For a missed hook and stale `check_permission` recovery, see
+[Permissions](permissions.md) and the [caller contract](caller-contract.md#permission-relay).
+A scheduled `find-missing` repairs an eligible Claude row to `waiting`
+when `idle_since` is set, otherwise `working`; a Codex row always repairs
+to `working`, since it sends no idle-prompt Notification.
 
 A row with the relay off is in `check_permission` while the agent's own
 prompt waits, with no request on record, so neither move applies to it.
@@ -1201,40 +969,31 @@ tool failed, `PostToolUseFailure`) hook carries the tool use's
 `tool_use_id`, the same one the relay hook recorded on the request.
 
 So on a relay-on agent (`AGENT_DIRECTOR_RELAY_MODE=on`), a `PostToolUse` or
-`PostToolUseFailure` with a `tool_use_id`, after its proof (see "Hooks that
-prove a request's dialog gone" below) and before its ordinary write:
+`PostToolUseFailure` with a `tool_use_id`, with a proof of the dialog gone (see "Hooks that
+prove a request's dialog gone" below):
 
-- reads the row's requests recorded from this release on that carry that
+- reads the row's requests recorded with a `tool_use_id` that carry that
   `tool_use_id` and still await an answer;
 - judges each one's relay hook as the readers do (its process provably
   gone, or, when it cannot be checked, its `confirm_by` passed) and skips
   one whose hook may still answer it;
-- closes each other one with one guarded statement, under the same gate as
-  every hook (only the row's own agent): `pane_answer` `tool_ran`,
+- closes each other one only from the row's own agent: `pane_answer` `tool_ran`,
   `decision` `allow`, `decision_reason` `tool_ran`, `hook_gone_at` when
   not yet set, and `proven_gone_at` with `proven_gone_how` `tool_ran` when
-  not yet proven, only while the request still awaits an answer. Each
-  close is written to the trail as one `ad.row_mutation.committed`
-  (`writer_process` `hook`).
+  not yet proven, only while the request still awaits an answer. Each close writes `ad.row_mutation.committed` with `writer_process` `hook`.
 
-The close runs first so that the hook's own move to `working` is no longer
-held by the request it closed. The proof before it already ends that hold
-for every request it covers, so the move applies even when the close
-leaves a request open because its relay hook may still answer it: the
-tool ran, so its dialog is gone. It closes only allows: Claude Code runs no
-hook for a deny at its prompt, so a request denied at the pane outside
-agent-director is closed with `record-pane-answer` (see
-[permissions.md](permissions.md#a-request-answered-outside-agent-director)).
-The close is fail-open, and the hook that makes it can die like any other,
-so it is a help, not a guarantee. A hook with another `tool_use_id`, or
-none, closes nothing.
+A matching tool-use hook proves the dialog gone even when the request
+is left open because its relay hook may still answer. It closes only allows:
+a deny runs no tool-use hook. A missed close can leave a request open;
+see [a request answered outside agent-director](permissions.md#a-request-answered-outside-agent-director).
+A different or missing `tool_use_id` closes nothing.
 
 ### The agent's end closes its requests
 
 A request still awaiting an answer when its agent ends can never be
 answered by that agent. The terminal `SessionEnd` (cause `logout`,
 `prompt_input_exit` or `exit`) moves the row to `ended` and, in the same
-store transaction, closes every request of the row that still awaits an
+update, closes every request of the row that still awaits an
 answer: both are written or neither is. Each gets `closed_at`; an
 undecided one is also denied with `decision_reason` `ended` (so a relay
 hook still polling for it reads a deny), and a decided one whose relay
@@ -1249,7 +1008,7 @@ Codex row ends" above), made by `find-missing` or by `pause`, closes them
 too, as the `ended` close does: `decision_reason` `ended` and
 `writer_process` `find_missing`, so `decide` on such a request returns
 `ErrNoOpenPermissionRequest`. Each of these also proves every request of
-the row gone in the same transaction, closed now or before
+the row gone together, closed now or before
 (`proven_gone_how` `agent_gone`; see "Hooks that prove a request's dialog
 gone" below).
 
@@ -1298,22 +1057,18 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
   its write waits for the store's write lock, and its write covers no
   later request: a request recorded while the hook waits belongs to a
   later turn and stays unproven.
-- **Order and gate.** The proof is the hook's first write, before the
-  `PostToolUse` close and the ordinary state write, in one statement
-  under the same gate as every hook: a hook from another process proves
-  nothing.
+- **Own agent.** A hook from another process proves nothing.
 - **Fail-open.** A failed proof write logs to `errors.log` and changes
   nothing else; the requests stay unproven until a later proof.
 - **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark,
   the move of a Codex row to `ended` and `resume`'s move prove every request
   of the row gone (`agent_gone`),
-  in the transaction of their close (see "The agent's end closes its
-  requests" above). The upgrade to this release proves the requests of a
-  row already `ended` or `missing` the same way.
+  with their close (see "The agent's end closes its
+  requests" above). A retained request of a finished row is proven by the same rule.
 - **What a proof releases.** A request proven gone holds no move of the
   row, even while it still awaits an answer (see "A relay row left in
   `check_permission`" above). Nothing else changes for it:
-  `get-permission` reads it, `decide` judges it as before, and a plain
+  `get-permission` reads it, `decide` uses its recorded state, and a plain
   `send-keys` is still refused on its account until it is closed.
 - **Subagents.** A request with an `agent_id` is proven only by its
   tool's `PostToolUse` or the agent's end. A denied subagent request runs
@@ -1327,5 +1082,3 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
 ## References
 
 - Claude Code hooks: <https://docs.claude.com/en/docs/claude-code/hooks>
-- Empirical investigation (gitignored, in-repo):
-  `reference/claude-settings-research.md`

@@ -35,7 +35,7 @@ func ssgPane(token string, pid int) store.LaunchIdentity {
 
 var (
 	ssgFreshPane = ssgPane("0123456789abcdef", 4101)
-	ssgOldPane   = ssgPane("1111111111111111", 4102) // a resumed row's earlier life
+	ssgOldPane   = ssgPane("1111111111111111", 4102) // a resumed row's earlier launch
 	ssgNewPane   = ssgPane("2222222222222222", 4103) // a resumed row's new launch
 	ssgNoPane    = store.LaunchIdentity{Token: "3333333333333333", Socket: apitest.TestSocket}
 )
@@ -92,7 +92,7 @@ func ssgSeed(t *testing.T, id, state, sessionID string, opts ...apitest.SpawnOpt
 }
 
 // ssgResumed leaves id as resume's move and identity write do (Tasks mg, gp):
-// pending, the kept session id, the earlier life's pane replaced by ssgNewPane.
+// pending, the kept session id, the earlier launch's pane replaced by ssgNewPane.
 func ssgResumed(t *testing.T, id string) (*store.Store, string) {
 	t.Helper()
 	st, dbPath := ssgSeed(t, id, store.StateEnded, ssgKept,
@@ -266,7 +266,7 @@ func TestSessionStartGateApplied(t *testing.T) {
 // with no wait (SR-22.9: a pane-less pending row here has no launch start or
 // one past the pending grace, so SessionStart has nothing to wait for).
 func TestSessionStartGateIgnored(t *testing.T) {
-	leftoverOfOldLife := func(*testing.T, *store.Store, string) hookParent {
+	leftoverOfOldLaunch := func(*testing.T, *store.Store, string) hookParent {
 		return hookParent{PID: ssgOldPane.PanePID, Start: ssgOldPane.PaneStarttime, Name: "claude"}
 	}
 	endedWithPane := func(t *testing.T, id string) (*store.Store, string) {
@@ -292,7 +292,7 @@ func TestSessionStartGateIgnored(t *testing.T) {
 		{"leftover on a fresh pending row", func(t *testing.T, id string) (*store.Store, string) {
 			return ssgSeed(t, id, store.StatePending, "", apitest.WithLaunchIdentity(ssgFreshPane))
 		}, foreignParent, store.HookReasonPIDMismatch, nil, float64(ssgFreshPane.PanePID)},
-		{"earlier life's leftover on a resumed pending row", ssgResumed, leftoverOfOldLife,
+		{"earlier launch's leftover on a resumed pending row", ssgResumed, leftoverOfOldLaunch,
 			store.HookReasonPIDMismatch, ssgKept, float64(ssgNewPane.PanePID)},
 		{"leftover on an ended row with a pane", endedWithPane, foreignParent,
 			store.HookReasonPIDMismatch, "sess-ended", float64(ssgFreshPane.PanePID)},

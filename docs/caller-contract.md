@@ -53,6 +53,17 @@ error:
 - A TypeScript call that outlasts `callTimeoutMs` (30 s by default) returns
   `ErrCallTimeout` while the verb may still complete: check the row first.
 
+`kill` success on a live row verifies the process checks of that call. A
+finished-row call is a no-op without checking the process; it is not proof
+of exit. `missing` is the sweep's judgement on available evidence, not an
+exit proof. Follow the sequence below before relaunching an id.
+
+A pending row noted `unreported` has an alive agent with no applied hook
+since launch. Read its pane, then type with `allow_pending` only after a
+person or an LLM judged that screen. A caller that cannot judge it uses the
+live-row sequence or hands it to a human. Hook configuration diagnosis is
+in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
+
 To end a live row (`pending` included) and relaunch its id:
 
 1. `agent-director kill --instance-id <id>`; on an error follow its

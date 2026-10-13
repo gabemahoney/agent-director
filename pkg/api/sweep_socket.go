@@ -22,7 +22,7 @@ type sweepSockets struct {
 //
 //   - a recorded socket is used exactly as recorded; the caller's environment
 //     is not consulted;
-//   - for a row that records none (from before the release), the caller's
+//   - for a row that records none, the caller's
 //     socket, resolved as tmux would through rowSocket
 //     (spawn.ResolveQuerySocket), creating nothing (LFR H1), at most once per
 //     run and only when such a row reaches the lookup. A missing per-user

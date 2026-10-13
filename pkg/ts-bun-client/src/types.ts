@@ -11,13 +11,13 @@ export interface Logger {
 }
 
 /**
- * Options accepted by the `Client` constructor (SRD SR-1.2).
+ * Options accepted by the `Client` constructor.
  *
- * All fields are optional. When omitted, the bundled CLI binary's own
+ * All fields are optional. When omitted, the installed CLI binary's own
  * three-tier default resolution applies (config.toml value, then the CLI's
  * hardcoded fallback such as `~/.config/agent-director/state.db`). The TS Client
  * does NOT provide a fallback; it forwards user input verbatim to keep the
- * CLI as the single source of truth for default resolution. See bug b.32k.
+ * CLI as the single source of truth for default resolution.
  *
  * `storePath`, `home` and `tmuxCommand` are forwarded verbatim; the TS Client
  * does no tilde expansion of its own. The CLI subprocess, which inherits this
@@ -28,11 +28,11 @@ export interface Logger {
  * passwd home: with `HOME` unset or empty, a `~` or `~/` `home` rejects every
  * call with `ErrInvalidFlags`, and with no `home` either, every call that
  * opens the store is refused. Other values, relative paths included, are
- * forwarded unchanged and the CLI resolves them. b.38a.
+ * forwarded unchanged and the CLI resolves them.
  *
  * An empty `storePath`, `home` or `tmuxCommand` is forwarded as given (e.g.
  * `--store-path ""`); the CLI rejects it on every verb call, which then
- * rejects with `ErrInvalidFlags`. It never falls back to the default. b.pu2.
+ * rejects with `ErrInvalidFlags`. It never falls back to the default.
  */
 export interface ClientOptions {
   /**
@@ -40,11 +40,11 @@ export interface ClientOptions {
    * CLI subprocess, which expands a leading `~/`.
    *
    * When omitted, the CLI's three-tier default resolution applies:
-   *   1. CLI flag (this field, when set) → 2. cfg.Store.DbPath in
+   *   1. CLI flag (this field, when set) → 2. [store] db_path in
    *   ~/.config/agent-director/config.toml → 3. hardcoded fallback
    *   ~/.config/agent-director/state.db.
    *
-   * The TS Client no longer provides a fallback (b.32k).
+   * The TS Client forwards the option unchanged.
    */
   storePath?: string;
   /**
@@ -62,7 +62,7 @@ export interface ClientOptions {
    * environment (which is the correct default — set HOME at the
    * test-process level via withTempHome or similar). Set this only when you
    * need the CLI to resolve `~/...` paths against a specific directory that
-   * differs from the calling process's HOME. b.32k.
+   * differs from the calling process's HOME.
    */
   home?: string;
   /**
@@ -80,7 +80,7 @@ export interface ClientOptions {
    * `true` and `false` mirror `pkg/api.Options.CreateIfMissing`; unlike that
    * field, omitting this one keeps the CLI's default, which creates the store.
    * `false` needs a CLI binary that knows `--create-if-missing`: an older
-   * binary rejects every call made with it. b.78b.
+   * binary rejects every call made with it.
    */
   createIfMissing?: boolean;
   /** Optional logger for client-side warnings (e.g., non-fatal close errors). */
@@ -93,14 +93,13 @@ export interface ClientOptions {
    * in-flight call's promise rejects with ErrCallTimeout.
    *
    * Zero or negative values are rejected at Client construction time.
-   * (SRD SR-6.1)
    *
    * Each store statement a call runs can wait up to the store's busy
    * timeout (`[store] busy_timeout_ms`, 10 s by default) while another
    * process holds the store locked. A call whose waits add up to this
    * timeout, one wait at this length or more or several shorter ones, is
    * cut off with ErrCallTimeout before SQLite gives up. Nothing adjusts this
-   * timeout to that key: raise it to match when raising the key (b.c7f).
+   * timeout to that key: raise it to match when raising the key.
    */
   callTimeoutMs?: number;
 }
@@ -109,7 +108,7 @@ export interface ClientOptions {
 // Shared sub-shapes
 // ---------------------------------------------------------------------------
 
-/** Mirrors pkg/api.VerbSummary — one entry in the `help` verb result. */
+/** One entry in the `help` verb result. */
 export interface VerbSummary {
   /** Canonical CLI/MCP verb name (e.g. "spawn", "send-keys"). */
   name: string;
@@ -118,8 +117,8 @@ export interface VerbSummary {
 }
 
 /**
- * A permission request's delivery state (b.146 rule 15):
- * - `"delivered"`: the request's relay hook acked a verdict before writing it to the agent.
+ * A permission request's delivery state:
+ * - `"delivered"`: the request's relay hook acknowledged a verdict.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
  * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
  *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
@@ -129,7 +128,7 @@ export interface VerbSummary {
 export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
 
 /**
- * How a permission request was answered at the pane (b.146 step 2b):
+ * How a permission request was answered at the pane:
  * - `"none"`: no pane answer recorded through agent-director (something outside it, such as a
  *   person at tmux, may still have answered it).
  * - `"intent"`: a pane answer through `sendKeys` was started; whether its key was typed is unknown.
@@ -143,8 +142,7 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
 
 /**
- * Mirrors pkg/api/relay_delivery.go::RequestDelivery — a permission request's delivery facts
- * (b.146 rule 15), with whether the agent's hooks proved its dialog gone (b.146 step 2c), on every
+ * A permission request's delivery facts, with whether the agent's hooks proved its dialog gone, on every
  * `get` / `list` permission request and `get`'s `unproven_requests`, on `getPermission` and on
  * `decide`'s result. Derived on every read. A recorded `decision` is not the outcome:
  * `delivery` is.
@@ -154,13 +152,12 @@ export interface RequestDelivery {
   delivery: Delivery;
   /**
    * RFC3339 time by which `not_confirmed` ends: the relay hook's kill instant plus 2 s. For a
-   * request recorded before this release: `requested_at` plus the relay window plus 2 s.
+   * request with no recorded settle instant: `requested_at` plus the relay window plus 2 s.
    */
   confirm_by: string;
   /**
    * Whether the relay hook process runs: true, false, or null when it cannot be checked
-   * (another or unreadable pid namespace, unreadable /proc, or a request recorded before this
-   * release).
+   * (another or unreadable pid namespace, unreadable /proc, or no recorded hook identity).
    */
   hook_alive: boolean | null;
   /** When a reader first found the request fallen back; null until then. */
@@ -179,7 +176,7 @@ export interface RequestDelivery {
    */
   pane_as: "allow" | "deny" | "unknown" | null;
   /**
-   * When the agent's hooks proved the request's permission dialog gone (b.146 step 2c); null until
+   * When the agent's hooks proved the request's permission dialog gone; null until
    * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
    * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`,
    * and a `pause`, reject with `ErrDialogMaybeOpen`.
@@ -190,26 +187,25 @@ export interface RequestDelivery {
   /**
    * For a request not proven gone that no longer awaits an answer in agent-director's records:
    * when its record stopped awaiting one (its relay hook's ack, its pane answer's or
-   * `recordPaneAnswer`'s write, or the close of its Spawn's requests; a request recorded before
-   * this release: its recorded verdict). Null while it still awaits an answer, and once proven
+   * `recordPaneAnswer`'s write, or the close of its Spawn's requests; a request with no recorded settle instant: its recorded verdict). Null while it still awaits an answer, and once proven
    * gone. A request that stays unproven a while after it is a reason to read the pane.
    */
   unproven_since: string | null;
 }
 
 /**
- * How the agent's hooks proved a permission request's dialog gone (b.146 step 2c):
+ * How the agent's hooks proved a permission request's dialog gone:
  * - `"tool_ran"`: a Claude PostToolUse or PostToolUseFailure carried its `tool_use_id` (never on a
  *   Codex row).
  * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
  *   Stop or idle-prompt Notification, or a Codex main agent's Interrupt (Esc), proves a request
- *   with no agent_id (the main agent's, or one recorded before this release).
+ *   with no agent_id (including a main-agent request).
  * - `"agent_gone"`: its Spawn was marked missing, ended or resumed.
  */
 export type ProvenGoneHow = "tool_ran" | "turn_end" | "agent_gone";
 
 /**
- * Mirrors pkg/api/get.go::PermissionRequestInfo — one permission request with its delivery facts:
+ * One permission request with its delivery facts:
  * an open one (still awaiting an answer) in the `permission_requests` of a `get` or `list` row in
  * state check_permission; one not proven gone, open or read closed, in `get`'s
  * `unproven_requests`; and the request an `errDetails` names (the base of
@@ -232,7 +228,7 @@ export interface PermissionRequestInfo extends RequestDelivery {
   decision_reason: string | null;
 }
 
-/** Mirrors pkg/api/list.go::ListRow — one Spawn row returned by the list verb. */
+/** One Spawn row returned by the list verb. */
 export interface ListRow {
   /** Stable Spawn id. */
   instance_id: string;
@@ -325,7 +321,7 @@ export interface ListRow {
 // Result wire names follow the json:"..." tags on pkg/api result structs.
 // ---------------------------------------------------------------------------
 
-/** Mirrors pkg/api.SpawnParams (json tags) — alias of internal/spawn.SpawnParams. */
+/** Parameters for launching a tracked agent. */
 export interface SpawnParams {
   /** Absolute (or ~/-prefixed) path the Spawn's agent starts in. Required. */
   cwd: string;
@@ -408,7 +404,7 @@ export interface SpawnParams {
 }
 
 /**
- * Mirrors pkg/api/spawn.go::SpawnResult. The row is `pending` from its insert until
+ * The launch result. The row is `pending` from its insert until
  * the agent reports in (its SessionStart hook), then `waiting`.
  */
 export interface SpawnResult {
@@ -431,13 +427,13 @@ export interface SpawnResult {
   dropped_args?: string[];
 }
 
-/** Mirrors the `status` verb's `instance_id` param (pkg/api.Client.Status arg). */
+/** The id whose state is requested. */
 export interface StatusParams {
   /** Id of the Spawn to inspect. */
   instance_id: string;
 }
 
-/** Mirrors pkg/api/status.go::StatusResult */
+/** The row's reported lifecycle state. */
 export interface StatusResult {
   /**
    * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
@@ -462,13 +458,13 @@ export interface StatusResult {
   launch_started_at?: string | null;
 }
 
-/** Mirrors the `get` verb's `instance_id` param (pkg/api.Client.Get arg). */
+/** The id whose row is requested. */
 export interface GetParams {
   /** Id of the Spawn to fetch. */
   instance_id: string;
 }
 
-/** Mirrors pkg/api/get.go::SpawnRow */
+/** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
   instance_id: string;
   parent_id: string;
@@ -491,7 +487,7 @@ export interface GetResult {
   /** The agent the row runs: `"claude"` (Claude Code) or `"codex"` (Codex). Set at spawn; resume follows it. */
   agent: string;
   tmux_session_name: string;
-  /** The tmux socket the row's launch uses; omitted for a row from before this release. */
+  /** The tmux socket the row's launch uses; omitted when the row has no recorded socket. */
   tmux_socket?: string | null;
   agent_args: string[];
   relay_mode: string;
@@ -570,8 +566,8 @@ export interface GetResult {
 }
 
 /**
- * Mirrors pkg/api.SendKeysParams (json tags). A call is plain, or a pane answer when
- * `request_token` is set (b.146 rule 8): a pane answer needs `as`, `key` and
+ * Parameters for sending keys. A call is plain, or a pane answer when
+ * `request_token` is set: a pane answer needs `as`, `key` and
  * `expect_pane_sha256`, takes no `text`, and sends exactly one key with no Enter.
  */
 export interface SendKeysParams {
@@ -618,11 +614,11 @@ export interface SendKeysParams {
   as?: "allow" | "deny";
 }
 
-/** Mirrors pkg/api/sendkeys.go::SendKeysResult (empty; reserved for future fields). */
+/** Successful sendKeys calls return an empty object. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface SendKeysResult {}
 
-/** Mirrors pkg/api.ReadPaneParams (json tags). */
+/** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
   /** Id of the Spawn whose pane will be captured. */
   instance_id: string;
@@ -638,7 +634,7 @@ export interface ReadPaneParams {
   allow_pending?: boolean;
 }
 
-/** Mirrors pkg/api/readpane.go::ReadPaneResult */
+/** Captured pane text and its checksum. */
 export interface ReadPaneResult {
   /** Captured pane text. */
   pane: string;
@@ -650,31 +646,33 @@ export interface ReadPaneResult {
   pane_sha256: string;
 }
 
-/** Mirrors pkg/api.KillParams. */
+/** Parameters for stopping the tracked agent. */
 export interface KillParams {
   /** Id of the Spawn to kill. */
   instance_id: string;
 }
 
-/** Mirrors pkg/api/kill.go::KillResult (json tags). */
+/** Whether the call sent a kill. */
 export interface KillResult {
   /** True exactly when a pane kill or a session kill was sent. */
   kill_sent: boolean;
 }
 
-/** Mirrors pkg/api.DecideParams (json tags). */
+/** Parameters for deciding one permission request. */
 export interface DecideParams {
   /** Id of the Spawn whose open permission request is being decided. */
   instance_id: string;
-  /** UUIDv4 token identifying the specific permission request to decide. Required by the Go backend (ErrMissingRequestToken returned when absent); optional here for backward-compatible call shape. */
+  /** UUIDv4 token identifying the specific permission request to decide. Required (`ErrMissingRequestToken` when absent); optional here for backward-compatible call shape. */
   request_token?: string;
   /** Orchestrator verdict. */
   decision: "allow" | "deny";
-  /** Optional free-text message surfaced to the agent on deny. */
+  /** Accepted but ignored; a deny records decision_reason operator regardless of this value. */
   reason?: string;
   /**
-   * Optional bound on the whole call, in milliseconds from its start (no default). Reached
-   * before the verdict is recorded: `ErrStoreBusy`, nothing recorded, so a retry is safe. Once
+   * Optional bound on the whole call, in milliseconds from its start (no default). Required
+   * waits before recording, for the store or a request with no recorded settle instant, must
+   * fit within it; otherwise `ErrStoreBusy`, nothing recorded, so a retry is safe. With no time
+   * left, recording proceeds only if the store is free at once. Once
    * the verdict is recorded the call never rejects with `ErrStoreBusy`: the wait for the relay
    * hook's ack ends at the bound with `not_confirmed`. Pass at most your deadline minus 1 s.
    * Negative: `ErrInvalidFlags`.
@@ -683,7 +681,7 @@ export interface DecideParams {
 }
 
 /**
- * Mirrors pkg/api/decide.go::DecideResult — the request's delivery facts once the verdict is
+ * The request's delivery facts once the verdict is
  * recorded, read after decide's wait of at most 1 s for the relay hook's ack. `delivery` is
  * `"delivered"` or `"not_confirmed"` (poll `getPermission`, at the latest at `confirm_by`); a
  * request whose relay hook fell back rejects with `ErrRelayFallenBack` instead.
@@ -692,15 +690,16 @@ export interface DecideResult extends RequestDelivery {
   delivery: "delivered" | "not_confirmed";
 }
 
-/** Mirrors pkg/api.GetPermissionParams (json tags). */
+/** Parameters for reading one permission request. */
 export interface GetPermissionParams {
   /** UUIDv4 token identifying the permission_requests row to fetch. Required; empty string rejected by the backend. */
   request_token: string;
 }
 
 /**
- * Mirrors pkg/api/get_permission.go::GetPermissionResult, with the request's delivery facts.
- * A recorded `decision` is not the outcome: `delivery` is.
+ * One permission request with its delivery facts.
+ * A decided request can remain open until acknowledged. A recorded `decision` is not
+ * the outcome: `delivery` is.
  */
 export interface GetPermissionResult extends RequestDelivery {
   /** UUIDv4 token the row is keyed under (echoed back). */
@@ -714,7 +713,7 @@ export interface GetPermissionResult extends RequestDelivery {
   /** RFC3339 timestamp when the permission request row was created. */
   requested_at: string;
   /**
-   * "allow" or "deny" once decided; null while the row is open (decision IS NULL in the DB), and
+   * "allow" or "deny" once decided; null while undecided, and
    * for a recordPaneAnswer claiming unknown.
    */
   decision?: "allow" | "deny" | null;
@@ -722,16 +721,16 @@ export interface GetPermissionResult extends RequestDelivery {
    * Canonical decision-reason string: "operator" | "timeout" | "find_missing" | "ended" for deny
    * rows ("find_missing" / "ended": still undecided when find-missing marked its spawn missing, or
    * when its spawn ended or was resumed, and closed); "pane" | "pane_outside" | "tool_ran" for a
-   * request closed at the pane; null for open rows and for allow rows decided by decide.
+   * request closed at the pane; null while undecided and for allow rows decided by decide.
    */
   decision_reason?: "operator" | "timeout" | "find_missing" | "ended" | "pane" | "pane_outside" | "tool_ran" | null;
-  /** RFC3339 timestamp when the verdict was written; null while the row is open. */
+  /** RFC3339 timestamp when the verdict was written; null while undecided. */
   decided_at?: string | null;
 }
 
 /**
- * Mirrors pkg/api.RecordPaneAnswerParams (json tags) — record that a fallen-back permission
- * request was answered outside agent-director (b.146 rule 13). It types nothing.
+ * Record that a fallen-back permission
+ * request was answered outside agent-director. It types nothing.
  */
 export interface RecordPaneAnswerParams {
   /** Token of the permission request answered outside agent-director. */
@@ -747,7 +746,7 @@ export interface RecordPaneAnswerParams {
   n_lines?: number;
 }
 
-/** Mirrors pkg/api.RecordPaneAnswerResult — the request as recordPaneAnswer recorded it. */
+/** The request as recordPaneAnswer recorded it. */
 export interface RecordPaneAnswerResult {
   /** The request's token (echoed back). */
   request_token: string;
@@ -762,7 +761,7 @@ export interface RecordPaneAnswerResult {
 }
 
 // ---------------------------------------------------------------------------
-// err_details shapes (b.146 rule 15)
+// err_details shapes
 //
 // AgentDirectorError.errDetails carries one of these for the errors that give
 // facts as fields (an ErrInternal included: PaneKeySentDetails); it is null for
@@ -770,7 +769,7 @@ export interface RecordPaneAnswerResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Mirrors pkg/api.OpenRequestFacts — one other open request of the Spawn in
+ * One other open request of the Spawn in
  * {@link RelayFallenBackDetails}.
  */
 export interface OpenRequestFacts {
@@ -783,7 +782,7 @@ export interface OpenRequestFacts {
 }
 
 /**
- * Mirrors pkg/api.RelayFallenBackDetails — ErrRelayFallenBack's errDetails (from decide, a plain
+ * ErrRelayFallenBack's errDetails (from decide, a plain
  * sendKeys and pause): the request that fell back (its fields and delivery facts), the Spawn's
  * state and its other open requests (null when they could not be read).
  */
@@ -793,7 +792,7 @@ export interface RelayFallenBackDetails extends PermissionRequestInfo {
 }
 
 /**
- * Mirrors pkg/api.DialogMaybeOpenDetails — ErrDialogMaybeOpen's errDetails (from a plain
+ * ErrDialogMaybeOpen's errDetails (from a plain
  * sendKeys without `expect_pane_sha256`, and from pause): the oldest request of the Spawn that
  * the agent's hooks have not proven gone (its fields and delivery facts: how agent-director's records
  * say it closed, `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's
@@ -805,7 +804,7 @@ export interface DialogMaybeOpenDetails extends PermissionRequestInfo {
 }
 
 /**
- * Mirrors pkg/api.PaneAnswerInProgressDetails — ErrPaneAnswerInProgress's errDetails: another
+ * ErrPaneAnswerInProgress's errDetails: another
  * pane answer on the request is still being sent.
  */
 export interface PaneAnswerInProgressDetails {
@@ -819,7 +818,7 @@ export interface PaneAnswerInProgressDetails {
 }
 
 /**
- * Mirrors pkg/api.ClaimTooSoonDetails — ErrClaimTooSoon's errDetails: retry recordPaneAnswer
+ * ErrClaimTooSoon's errDetails: retry recordPaneAnswer
  * at `not_before` (null only while the request's relay hook is seen running).
  */
 export interface ClaimTooSoonDetails {
@@ -830,7 +829,7 @@ export interface ClaimTooSoonDetails {
 }
 
 /**
- * Mirrors pkg/api.PaneKeySentDetails — the errDetails of an ErrInternal from a pane answer
+ * The errDetails of an ErrInternal from a pane answer
  * (`sendKeys` with `request_token`) whose key was sent but whose record of it failed: the key
  * reached the pane, so read it before anything else is sent.
  */
@@ -840,7 +839,7 @@ export interface PaneKeySentDetails {
 }
 
 /**
- * Mirrors pkg/api.PaneChangedDetails — ErrPaneChanged's errDetails. It never carries the pane's
+ * ErrPaneChanged's errDetails. It never carries the pane's
  * new hash: read the pane again before any retry.
  */
 export interface PaneChangedDetails {
@@ -848,14 +847,14 @@ export interface PaneChangedDetails {
   request_token?: string;
 }
 
-/** Mirrors pkg/api.ResumeParams (json tags). */
+/** Parameters for relaunching the latest session. */
 export interface ResumeParams {
   /** Id of the finished (ended or missing) row whose latest session is resumed. */
   instance_id: string;
 }
 
 /**
- * Mirrors pkg/api/resume.go::ResumeResult. Resume relaunches only the latest session
+ * Resume relaunches only the latest session
  * of the row's recorded agent. Older sessions remain listed for inspection only.
  * Stored session selectors and Claude print mode are removed from replay;
  * cloud controls also lose their values when selector removal leaves no parsed
@@ -897,7 +896,7 @@ export interface FindMissingParams {
   timeout_ms?: number;
 }
 
-/** Mirrors pkg/api/find_missing.go::FindMissingResult */
+/** Rows marked missing, ended or left unverified by the sweep. */
 export interface FindMissingResult {
   /**
    * Number of rows this sweep marked `missing` (the length of `ids`); a Codex
@@ -936,7 +935,7 @@ export interface FindMissingResult {
   unverified_ids: string[];
 }
 
-/** Mirrors the `expire` verb's `older_than` param (pkg/api.Client.Expire arg). */
+/** The minimum finished-row age for cleanup. */
 export interface ExpireParams {
   /**
    * Duration override (e.g. "7d", "2h", "0d"). When omitted, the config
@@ -945,7 +944,7 @@ export interface ExpireParams {
   older_than?: string;
 }
 
-/** Mirrors pkg/api/expire.go::ExpireResult */
+/** Rows deleted or kept by the cleanup. */
 export interface ExpireResult {
   /**
    * Number of rows deleted (the length of `ids`): rows deleted after tmux
@@ -979,7 +978,7 @@ export interface ExpireResult {
   kept_ids: string[];
 }
 
-/** Mirrors pkg/api.MakeTemplateParams (json tags). */
+/** Parameters for writing a named template. */
 export interface MakeTemplateParams {
   /** Template filename (without extension). Must be filename-safe. Required. */
   name: string;
@@ -1023,13 +1022,13 @@ export interface MakeTemplateParams {
   overwrite?: boolean;
 }
 
-/** Mirrors pkg/api/make_template.go::MakeTemplateResult */
+/** The template's saved path. */
 export interface MakeTemplateResult {
   /** Absolute path of the written template TOML file. */
   path: string;
 }
 
-/** Mirrors pkg/api.ListParams (json tags). */
+/** Filters for listing tracked agent rows. */
 export interface ListParams {
   /**
    * Filter by state (multiple values OR together). With `[state] settle_ms` set it matches the
@@ -1048,20 +1047,20 @@ export interface ListParams {
   limit?: number;
 }
 
-/** Mirrors pkg/api/list.go::ListResult */
+/** Matching tracked agent rows. */
 export interface ListResult {
   /** Matching Spawn rows. Empty array when none match. */
   spawns: ListRow[];
 }
 
-/** Mirrors the `list-subagents` verb's `instance_id` param (pkg/api.Client.ListSubagents arg). */
+/** The id whose subagent records are requested. */
 export interface ListSubagentsParams {
   /** Id of the Spawn whose subagents to list. */
   instance_id: string;
 }
 
 /**
- * Mirrors pkg/api/list_subagents.go::SubagentRecord. Every key is always present; a field with
+ * One subagent record. Every key is always present; a field with
  * no known value is `null`. Each time is an RFC3339 UTC string with millisecond precision
  * (trailing zeros dropped, no fraction on a whole second), exactly as the CLI prints it.
  */
@@ -1111,7 +1110,7 @@ export interface SubagentRecord {
   close_reason: "stop_event" | "absent_from_snapshot" | "agent_gone" | null;
 }
 
-/** Mirrors pkg/api/list_subagents.go::ListSubagentsResult */
+/** The current life's subagent records and tracking status. */
 export interface ListSubagentsResult {
   /**
    * Whether the row's launch registered subagent tracking: false for a row launched before
@@ -1126,23 +1125,23 @@ export interface ListSubagentsResult {
   subagents: SubagentRecord[];
 }
 
-/** Mirrors pkg/api.PauseParams (json tags). */
+/** Parameters for asking a waiting agent to exit. */
 export interface PauseParams {
   /** Id of the Spawn to pause gracefully. */
   instance_id: string;
 }
 
-/** Mirrors pkg/api/pause.go::PauseResult (empty; reserved for future fields). */
+/** Successful pause calls return an empty object. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PauseResult {}
 
-/** Mirrors the `version` CLI verb (no user params; pkg/api.Client.Version takes none). */
+/** The version call takes no parameters. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface VersionParams {}
 
-/** Mirrors pkg/api/version.go::VersionResult */
+/** The installed npm package's version. */
 export interface VersionResult {
-  /** npm package version (e.g. "0.5.0"). Sourced from the installed agent-director package's package.json — not the CLI binary. See b.6o1. */
+  /** npm package version (e.g. "0.5.0"). Sourced from the installed agent-director package's package.json — not the CLI binary. */
   version: string;
   /** CLI binary's full git SHA. "unknown" for unstamped builds. */
   commit: string;

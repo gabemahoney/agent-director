@@ -42,6 +42,7 @@ import "testing"
 // (SR-20.6, b198cae5 having shrunk help by 3 B) and was then raised to 14700
 // with the user's approval, 107 B for list-subagents' own entry only.
 // On 2026-10-12 latest-spawn wording trimmed it to 14662 (free downward step).
+// On 2026-10-13 caller wording trimmed it to 14642 (free downward step).
 //
 // SR-20.6: this guard checks growth only, with no slack: help stdout one byte
 // over this count fails. Re-recording it downward, to the newly measured
@@ -49,7 +50,7 @@ import "testing"
 // it upward needs the user's approval before the commit and a recorded reason
 // in the commit message (what grew, by how many bytes, why it cannot be
 // shorter); never to make a failing guard pass.
-const helpStdoutBytes = 14662
+const helpStdoutBytes = 14642
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

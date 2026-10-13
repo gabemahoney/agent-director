@@ -66,7 +66,7 @@ const repairIdleMovesRow = "timeout deny delivered, then the idle Notification"
 // unproven (b.omt: one proven gone does not hold it) and no relay hook may
 // still run (alive, or can't tell before its confirm_by): to waiting when the
 // idle Notification came last, to working otherwise. A request the mark closed
-// in the Spawn's earlier life does not hold it, its hook gone, alive or not
+// before the Spawn's resume does not hold it, its hook gone, alive or not
 // checkable.
 func TestRepairCheckPermission(t *testing.T) {
 	t.Parallel()

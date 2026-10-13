@@ -54,7 +54,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
-	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); default off (pre-trust IS performed); the choice is recorded on the row for its life and every resume of that life follows it")
+	fs.BoolVar(&p.NoPreTrust, "no-pre-trust", false, "skip the folder pre-trust: for claude, pre-writing the cwd's folder-trust key into .claude.json (<CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra-env, otherwise ~/.claude.json); for codex, putting the cwd's trust and the hook-trust bypass on the launch's command line (no file is written); default off (pre-trust IS performed); the choice is recorded on the row until the next spawn or reuse and every resume follows it")
 	fs.BoolVar(&p.ReuseFinished, "reuse-finished", false, "reuse an explicit --instance-id whose row is finished (ended or missing); a live row, pending included, still collides; no effect without --instance-id; this call only; default off (any existing row collides with ErrInstanceIdCollision); success without dropped arguments does not say whether a row was reset; nonempty dropped_args identifies a finished-agent switch and prints a notice")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys, HOME (any value) and a template's key that is empty or holds '=' or a NUL byte are refused with ErrReservedEnvKey, a template's included; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config")
@@ -366,7 +366,7 @@ func decideHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.StringVar(&p.RequestToken, "request-token", "", "UUIDv4 token identifying the specific permission request to decide")
 	fs.StringVar(&p.Decision, "decision", "", "allow or deny")
 	fs.StringVar(&p.Reason, "reason", "", "deprecated; currently ignored — the canonical operator reason is persisted")
-	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); reached before the verdict is recorded: ErrStoreBusy, nothing recorded")
+	fs.Var(optionalInt64Value{&p.MaxWaitMs}, "max-wait-ms", "bound on the whole call in milliseconds (no default); a required wait cannot fit before recording the verdict: ErrStoreBusy, nothing recorded")
 	if err := fs.Parse(args); err != nil {
 		cliOutcome = "ErrInvalidFlags"
 		return writeApiErrorAndDispatch("ErrInvalidFlags", flagErr(fs, err).Error())

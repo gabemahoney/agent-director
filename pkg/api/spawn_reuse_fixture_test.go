@@ -52,7 +52,7 @@ type reuseRowSpec struct {
 	Held        bool          // Age is measured from heldInstant, the rule's reading after "duplicate session"
 	EndedAt     reuseEndedAt  // default endedAged
 	NoSessionID bool          // no session id or transcript; with agentNotRecorded, neither pid nor session id
-	NoPreTrust  bool          // the old life's pre-trust opt-out (no_pre_trust 1)
+	NoPreTrust  bool          // the previous spawn's pre-trust opt-out (no_pre_trust 1)
 	Malformed   bool          // malformed labels, agent_args and extra_env text (seeded raw)
 	Bare        bool          // no parent, history or permission requests
 	Child       bool          // also a finished child row whose parent_id is the row's id

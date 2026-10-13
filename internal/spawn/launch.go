@@ -64,7 +64,7 @@ func launchAgentError(agent string) error {
 //     milliseconds), the token, the socket and the launch owner, this
 //     process as CurrentLaunchOwner reads it through pc (b.kdf); the row
 //     carries the NoPreTrust choice step 3 used, so it records what the
-//     spawn did for its life and every resume of that life follows it
+//     latest spawn did until the next spawn or reuse; every resume follows it
 //     (SR-22.2, SR-3.3, SR-5.2, SR-22.6). Between the insert and the create
 //     there is only in-process work (SR-13.4).
 //  5. Creates the session and labels it through CreateAndLabel, on the

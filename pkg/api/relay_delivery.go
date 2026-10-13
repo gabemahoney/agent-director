@@ -50,7 +50,7 @@ type RelayView struct {
 }
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),
-// with whether Claude Code proved its dialog gone (b.146 step 2c), on every
+// with whether the agent proved its dialog gone (b.146 step 2c), on every
 // request of get's and list's permission_requests and get's
 // unproven_requests, on get-permission and on decide's result. They are
 // derived from the record and a check of the request's relay hook process
@@ -62,7 +62,7 @@ type RequestDelivery struct {
 	Delivery string `json:"delivery"`
 	// ConfirmBy is when not_confirmed ends: the relay hook's kill instant
 	// plus a 2 s reserve, by when its hook has acked or is gone. For a
-	// request recorded before schema v7 it is created_at plus the relay
+	// request with no recorded settle instant it is created_at plus the relay
 	// window plus 2 s.
 	ConfirmBy time.Time `json:"confirm_by"`
 	// HookAlive is whether the relay hook process runs: true, false, or null
@@ -84,14 +84,14 @@ type RequestDelivery struct {
 	// outside it, such as a person at tmux, may still have answered it),
 	// intent (a pane answer through send-keys was started; whether its key
 	// was typed is unknown), sent (its key was sent), outside (a caller
-	// recorded it answered outside agent-director) or tool_ran (Claude Code
+	// recorded it answered outside agent-director) or tool_ran (the agent
 	// reported its tool ran).
 	PaneAnswer string `json:"pane_answer"`
 	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
 	// outside record that did not see the answer); null when none was
 	// recorded. It is the caller's claim, stored and never checked.
 	PaneAs *string `json:"pane_as"`
-	// ProvenGoneAt is when Claude Code proved the request's permission dialog
+	// ProvenGoneAt is when the agent proved the request's permission dialog
 	// gone (b.146 step 2c); null until then. While it is null, the request
 	// holds plain send-keys without a pane hash, and pause (b.zdz), to its
 	// live Spawn (ErrDialogMaybeOpen).
@@ -106,8 +106,8 @@ type RequestDelivery struct {
 	// an answer in agent-director's own records, when its record stopped
 	// awaiting one: its relay hook's ack, its pane answer's or
 	// record-pane-answer's write, or the close of its Spawn's requests (a
-	// request recorded before this release: its recorded verdict). From then
-	// agent-director reads it closed while Claude Code has not shown its
+	// request with no recorded settle instant: its recorded verdict). From then
+	// agent-director reads it closed while the agent has not shown its
 	// dialog gone. Null while it still awaits an answer, and once it is
 	// proven gone.
 	UnprovenSince *time.Time `json:"unproven_since"`
@@ -229,7 +229,7 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 //     answer is given only to a request that had fallen back, a request
 //     recorded before schema v7 included.
 //   - Recorded before schema v7 (no ack, no hook identity on record), by
-//     time as before the upgrade: until confirm_by not_confirmed; after it,
+//     time: until confirm_by not_confirmed; after it,
 //     delivered when a verdict was recorded (a relay hook from before v7
 //     delivered it with no ack), fallen_back when none was (a close's deny
 //     of an undecided request, find-missing's or the ended row's, counts as

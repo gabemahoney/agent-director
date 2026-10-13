@@ -115,7 +115,7 @@ func preLaunchRowOf(row Spawn, name, socket string) preLaunchRow {
 // (killRun.abandonedLaunch, b.6sa). A launch the row records no session of
 // can never report in (the hook gate needs a recorded pane), so that label
 // and this predicate are the whole evidence that such a session is this id's.
-// A row with no token (from before this release) never qualifies: every
+// A row with no recorded token never qualifies: every
 // session labelled with its id is then of an earlier launch whose relation to
 // the row cannot be told.
 func recordsNoLaunchSession(id LaunchIdentity) bool {

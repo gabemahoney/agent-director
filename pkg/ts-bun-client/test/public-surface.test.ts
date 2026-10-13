@@ -214,8 +214,8 @@ test.each(["StatusResult", "GetResult", "ListRow"])(
 );
 
 test("public-surface: GetResult carries additive-optional nullable tmux_socket (SR-16.4, AC-LKP-22)", () => {
-  // Optional (`?`) mirrors the Go omitempty key that is absent for a row
-  // from before this release; `| null` follows the manifest's nullable field.
+  // Optional (`?`) mirrors the Go omitempty key that is absent when a row
+  // has no recorded socket; `| null` follows the manifest's nullable field.
   expect(
     interfaceBody(typesGolden(), "GetResult"),
     "GetResult must declare tmux_socket as additive-optional nullable"

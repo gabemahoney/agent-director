@@ -558,11 +558,11 @@ func DescSpawnScanRefusal() DescCase {
 }
 
 // DescTmuxSocketField is tmux_socket as get's manifest result text states it
-// (SR-3.3, SR-16.1): the tmux socket the row's launch uses, omitted for a row
-// from before this release. Check it with AssertAgentTextCase.
+// (SR-3.3, SR-16.1): the tmux socket the row's launch uses, omitted when no socket
+// is recorded. Check it with AssertAgentTextCase.
 func DescTmuxSocketField() DescCase {
 	return DescCase{
 		Name:    "manifest result, tmux_socket",
-		Require: []string{"tmux socket the row's launch uses", "omitted for a row from before this release"},
+		Require: []string{"tmux socket the row's launch uses", "omitted when the row has no recorded socket"},
 	}
 }

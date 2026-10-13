@@ -8,13 +8,13 @@ package api
 // lifeEntries is not modified, and the result is an empty non-nil slice when
 // nothing remains.
 //
-// Session history belongs to a life: each entry is a session that ran while
-// that life's id was current. resume and get use only the visible history, so
-// the entry for the session the row currently points at is never a history
-// candidate, never counts as history in the ErrJsonlNeverWritten /
-// ErrJsonlMissing decision, and never appears in prior_sessions or makes
-// transcript_status rotated. This is the only place that rule is applied; it
-// works on the row the caller already read and never reads the store.
+// Session history belongs to a life. Same-agent reuse keeps it; a switch or
+// switch back starts a new life. Get shows this visible history; resume uses
+// it only to distinguish ErrJsonlNeverWritten from ErrJsonlMissing, never to
+// select an older session. Resume continues only the latest session. The
+// current session's entry never counts toward that distinction, appears in
+// prior_sessions or makes transcript_status rotated. This filter works on
+// the row the caller already read and never reads the store.
 func visibleHistory(row Spawn, lifeEntries []SessionHistoryEntry) []SessionHistoryEntry {
 	out := make([]SessionHistoryEntry, 0, len(lifeEntries))
 	for _, e := range lifeEntries {

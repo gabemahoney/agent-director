@@ -174,7 +174,7 @@ func unreadableError(cause *tmux.CallError, r cantTellRefusal) error {
 
 // rowSocket returns the socket every call for a row uses (SR-3.3): its
 // recorded tmux_socket exactly as recorded, without consulting the caller's
-// environment; for a row that records none (from before the release), the
+// environment; for a row that records none, the
 // caller's socket resolved as tmux would, creating nothing
 // (spawn.ResolveQuerySocket; LFR H1). A resolution refusal is
 // tmux.ErrTmuxNotAvailable with the unusable-socket-directory description,

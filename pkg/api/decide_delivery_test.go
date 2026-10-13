@@ -383,8 +383,8 @@ func minTime(a, b time.Time) time.Time {
 // alike, nothing recorded.
 func TestAdviceFollow_F9_DecideStoreBusyRetry(t *testing.T) {
 	t.Parallel()
-	adviceAssertGoDoc(t, "decide.go", "Decide", "[ErrStoreBusy]: MaxWaitMs was reached before the verdict was recorded; nothing was recorded, so retry.")
-	adviceAssertManifest(t, "decide", "max_wait_ms", "decide returns ErrStoreBusy and has recorded nothing, so a retry is safe")
+	adviceAssertGoDoc(t, "decide.go", "Decide", "[ErrStoreBusy]: MaxWaitMs prevents completing a required wait before recording the verdict; nothing was recorded, so retry.")
+	adviceAssertManifest(t, "decide", "max_wait_ms", "if they cannot finish in time, ErrStoreBusy records nothing and a retry is safe")
 	e := newRelayEnv(t, relayEnvHook)
 	decide := func() error {
 		_, _, err := e.decideWith(t, e.s, "allow", ptr(int64(100)), nil)

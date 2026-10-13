@@ -115,7 +115,9 @@ type DecideParams struct {
 	// call of this process holds it, and its locks) at most what is left of
 	// it (none when nothing is left: the write then goes ahead only if the
 	// lock is free at once), and when one is not taken in that time Decide
-	// returns ErrStoreBusy having recorded nothing. The wait of at most 1 s
+	// returns ErrStoreBusy having recorded nothing. A required wait for a
+	// request with no recorded settle instant must fit within the bound too.
+	// The wait of at most 1 s
 	// for the relay hook's ack ends at the bound too, with not_confirmed. A
 	// caller with a deadline passes at most its deadline minus 1 s. nil: no
 	// bound, the store's waits apply as before. Negative: ErrInvalidFlags.
@@ -193,8 +195,8 @@ const decideAckPoll = 50 * time.Millisecond
 //     lock wait cut at what is left, and returns delivered or not_confirmed
 //     with the request's delivery facts. It never returns ErrStoreBusy after
 //     the commit.
-//   - A request recorded before schema v7 is decided as before the upgrade,
-//     by time (decidePreV7): see ErrRelayFallenBack. No ack is awaited, since
+//   - A request with no recorded settle instant is judged by time using its
+//     relay window (decidePreV7): see ErrRelayFallenBack. No ack is awaited, since
 //     a relay hook from before v7 never writes one.
 //   - params.Reason is currently discarded; DecisionReasonOperator is always
 //     written for deny decisions regardless of its value.
@@ -486,7 +488,7 @@ func (c *decideCall) decidePreV7(pr PermissionRow) (DecideResult, error) {
 }
 
 // refusePreV7 names a refused verdict write on a request recorded before
-// schema v7, as decide named it before the upgrade: the request is absent,
+// schema v7: the request is absent,
 // already decided, or open but undeliverable. It disambiguates via a
 // follow-up read. Precedence (PM-pinned): ErrAlreadyDecided wins for decided
 // rows; ErrRelayFallenBack applies ONLY to open rows.
@@ -511,7 +513,7 @@ func (c *decideCall) refusePreV7() error {
 	if err == nil && pr.AwaitsAnswer() && RelayRequestUndeliverable(pr.CreatedAt, window, now) {
 		if settled := relayHookSettledAt(pr.CreatedAt, window); now.Before(settled) {
 			if c.bounded && c.deadline.Before(settled) {
-				return fmt.Errorf("%w: %s request %s was recorded before this release and its relay hook may still answer it until %s, after the call's max_wait_ms bound; nothing was recorded",
+				return fmt.Errorf("%w: %s request %s has no recorded settle instant and its relay hook may still answer it until %s, after the call's max_wait_ms bound; nothing was recorded",
 					store.ErrStoreBusy, c.p.InstanceID, c.p.RequestToken, settled.UTC().Format(time.RFC3339))
 			}
 			c.sleep(settled.Sub(now))
@@ -800,7 +802,7 @@ func decideOutcome(err error) string {
 //     find-missing marked it missing, before the request's relay hook
 //     delivered a verdict recorded on it (the Spawn resumed since or not);
 //     nothing is recorded. Or a
-//     request recorded before this release is still open past its relay
+//     request with no recorded settle instant is still open past its relay
 //     window but the Spawn is not shown to be sitting on it alone. Do not
 //     answer it at the pane.
 //   - [ErrAlreadyDecided]: a verdict is already recorded: a concurrent
@@ -817,10 +819,11 @@ func decideOutcome(err error) string {
 //     at once; the verdict is kept as the request's attempted_decision. Its
 //     err_details ([RelayFallenBackDetails]) give the request's facts and the
 //     Spawn's other open requests.
-//   - [ErrStoreBusy]: MaxWaitMs was reached before the verdict was recorded;
-//     nothing was recorded, so retry. The wait it cut was for the store's
-//     write lock, or for its connection while another call of this process
-//     held it.
+//   - [ErrStoreBusy]: MaxWaitMs prevents completing a required wait before
+//     recording the verdict; nothing was recorded, so retry. That wait is
+//     for the store's write lock or its connection while another call holds
+//     it, or until a request with no recorded settle instant can safely be
+//     judged fallen back.
 //   - [ErrInvalidDecision]: Decision is not "allow" or "deny".
 //
 // Nondeterminism: the delivery facts depend on the clock and on whether the

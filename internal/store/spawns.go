@@ -58,7 +58,7 @@ func validateRowAgent(agent string) error {
 // exactly one source of truth for valid state strings.
 //
 // StatePending means a launch (spawn, reuse or resume) is in progress and
-// the agent has not reported in yet (Claude Code's SessionStart); it may be
+// the agent has not reported in yet (its SessionStart hook); it may be
 // loading or waiting at a startup prompt, and a resumed pending row keeps its
 // session id and history (SR-22.1). The writes that set it are a spawn's
 // insert (InsertPending), reuse's reset (ResetForReuse) and resume's move

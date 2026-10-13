@@ -27,19 +27,15 @@ type GetPermissionParams struct {
 	RequestToken string `json:"request_token"`
 }
 
-// GetPermissionResult is the SR-7.4 wire projection of a permission_requests
-// row. Nullable columns (decision, decision_reason, decided_at) surface as
-// pointer fields — a nil pointer marshals to JSON null. Open (not-yet-decided)
-// rows carry nil for all three. Allow rows carry a non-nil Decision pointing
-// to "allow" and a non-nil DecidedAt, with DecisionReason still nil (SR-1.3:
-// allow does not carry a reason). Deny rows carry all three non-nil.
+// GetPermissionResult is one permission request with its delivery facts.
+// Undecided requests have nil Decision and DecidedAt; a decided request may
+// still be open until its relay hook acknowledges it. DecisionReason is nil
+// while undecided and for an allow from Decide; pane answers can carry a
+// reason on either verdict. A RecordPaneAnswer claiming unknown leaves
+// Decision nil. Nil fields marshal to JSON null.
 //
-// ToolInput is the raw JSON string from the DB column — callers parse it
-// themselves. The verb MUST NOT re-encode, validate, or normalize whitespace
-// on it; the byte-identical pass-through is contract per SR-7.4.
-//
-// The embedded RequestDelivery carries the request's delivery facts (b.146
-// rule 15): a recorded decision is not the outcome, delivery is.
+// ToolInput is the raw JSON string, passed through byte for byte for callers
+// to parse. A recorded decision is not the outcome: read Delivery.
 type GetPermissionResult struct {
 	// RequestToken is the UUIDv4 token this row is keyed under.
 	RequestToken string `json:"request_token"`
@@ -57,17 +53,16 @@ type GetPermissionResult struct {
 	// wire).
 	RequestedAt time.Time `json:"requested_at"`
 	// Decision is "allow" or "deny" once a verdict is recorded; nil while the
-	// row is open (decision IS NULL in the DB). A nil pointer marshals to JSON
-	// null. A recorded verdict has reached the agent only when Delivery is
+	// request is undecided or RecordPaneAnswer claims unknown. A nil pointer
+	// marshals to JSON null. A recorded verdict has reached the agent only when Delivery is
 	// delivered.
 	Decision *string `json:"decision"`
-	// DecisionReason is the canonical store.DecisionReason* string when the
-	// row is a deny; nil for open rows AND for allow rows (SR-1.3 closed-allow
-	// rows carry no reason annotation). A nil pointer marshals to JSON null.
+	// DecisionReason is the recorded reason; nil while undecided and for an
+	// allow from Decide. Pane answers may record a reason for either verdict.
+	// A nil pointer marshals to JSON null.
 	DecisionReason *string `json:"decision_reason"`
 	// DecidedAt is the RFC3339 timestamp when the verdict was written; nil
-	// while the row is open (decided_at IS NULL in the DB). A nil pointer
-	// marshals to JSON null.
+	// while the request is undecided. A nil pointer marshals to JSON null.
 	DecidedAt *time.Time `json:"decided_at"`
 	RequestDelivery
 }

@@ -22,36 +22,13 @@ Only the current session is tried: its recorded path first, then its path
 recomputed from the current row's cwd and config directory after any stat
 failure. No earlier session's path or config folder is a resume candidate.
 
-`extra_env` may not set `HOME`, whatever its value (an empty one
-included): `spawn` refuses it with `ErrReservedEnvKey`, a template's
-`extra_env` included, before anything is written or launched, and
-`make-template` refuses it the same way, saving no template. A key
-such as `HOME=/x` is refused too, since tmux sets the variable named by
-the part of the key before its first `=`. The
-agent's hooks find agent-director's config and store from the pane's
-`HOME`, so an `extra_env` `HOME` would send the agent's hook events to
-another agent-director store and leave the spawn's row `pending`. To
-give a Spawn its own Claude config, set an absolute
-`CLAUDE_CONFIG_DIR` instead. `resume` refuses a row whose stored
-`extra_env` has `HOME` (a row spawned before this refusal) with
-`ErrReservedEnvKey`, writing and launching nothing; to run that agent
-again, spawn its id with `reuse_finished` (`--reuse-finished` on the
-CLI), the row's agent (`--agent`; `get` shows it) and an `extra_env` without
-`HOME` (a reused id starts a fresh conversation with no memory of the earlier
-conversation; same-agent reuse keeps its life).
-
-Each `extra_env` key must be the variable's own name. A key that is
-empty or contains `=` or a NUL byte is refused with `ErrReservedEnvKey`
-too, a template's included, before anything is written or launched, and
-`make-template` refuses it the same way, saving no template; the
-description says the key is not a valid env-var name. tmux splits each
-entry at its first `=`, so the key `CLAUDE_CONFIG_DIR=/x` would give the
-agent a `CLAUDE_CONFIG_DIR` that pretrust and `resume` never see; pass
-`{"CLAUDE_CONFIG_DIR": "/x"}` instead. `resume` refuses a row whose
-stored `extra_env` has such a key (a row spawned before this refusal)
-with `ErrReservedEnvKey`, writing and launching nothing; to run that
-agent again, spawn its id with `reuse_finished`, the row's agent and an
-`extra_env` without that key.
+Use an absolute `CLAUDE_CONFIG_DIR` for a separate Claude config. `HOME`
+and malformed environment keys are refused; shared validation and recovery
+are in [Spawn and template input refusals](caller-contract.md#spawn-and-template-input-refusals).
+A same-agent reuse retains the life and earlier sessions, but starts a fresh
+conversation; another config directory does not resume those sessions.
+A switch starts a new life with no memory of the earlier life; switching
+back does not recover the old one.
 
 For Claude Code's own auth reference, see:
 
@@ -67,11 +44,8 @@ For Claude Code's own auth reference, see:
 | API-key (`sk-ant-api...`) | `ANTHROPIC_API_KEY` | 108-char `sk-ant-...` |
 | Max / OAuth (`sk-ant-oat01-...`) | `CLAUDE_CODE_OAUTH_TOKEN` | 108-char `sk-ant-oat01-...` |
 
-Both env-var paths bypass the local `~/.claude.json` auth cache —
-verified empirically against Claude Code 2.1.120 (see
-`reference/anthropic-api-key-auth-research.md` and
-`reference/max-account-auth-research.md`). The bogus-token failure mode
-proves the env var is *the* auth path, not a fallback to a cached file.
+Both environment variables select auth without the local `~/.claude.json`
+auth cache.
 
 ## Passing the env var at spawn time
 
@@ -91,28 +65,11 @@ agent-director spawn \
   --extra-env CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-The reserved-key validation (SRD §7.2 step 4) rejects `AGENT_DIRECTOR_*`
-keys and `HOME` with `ErrReservedEnvKey` but *does not reserve* the auth
-env vars — they pass through to
-the tmux session and into Claude verbatim. agent-director never logs
-the value. It *does* persist the per-spawn `extra_env` map
-(`--extra-env` on the CLI) to the store — with no opt-out — so `resume` can restore a finished (`ended` or
-`missing`) row's original env (see `internal/spawn/relaunch.go`: "ExtraEnv is restored
-from the persisted row … including CLAUDE_CONFIG_DIR and any auth vars").
-That means the auth token sits at rest in `~/.config/agent-director/state.db`;
-the store file is forced `0600` in a `0700` directory on every open, so
-it is readable only by the owner. (See also the secrets-at-rest caveat
-in configuration.md.)
-
-**Caveat — templates persist `extra_env` as plaintext TOML.** Both
-paths now put auth vars on disk; the difference is *where*. Per-spawn
-`extra_env` values land in the owner-only (`0600`) state DB described
-above. Auth vars baked into a template's `extra_env`, by contrast, are
-written verbatim to the template's plaintext TOML under
-`~/.config/agent-director/templates/` (see `pkg/api/make_template.go`), and
-spawn merges them back in at resolve time (`internal/spawn/params.go`).
-Prefer per-spawn `extra_env` for auth, and do not bake auth tokens
-into a template unless you accept them sitting on disk in plaintext.
+Auth variables pass through to the pane; agent-director never logs their
+values. It persists `extra_env` for resume, including auth values, in its
+owner-only database. Templates persist their environment as plaintext TOML.
+See [Configuration](configuration.md) for secrets at rest and
+[Settings](settings.md#templates-and-per-call-merge) for template merging.
 
 ## Use `claude setup-token` for long-lived OAuth tokens
 
@@ -136,13 +93,12 @@ agent-director spawn \
 
 This is the same pattern Claude's official GitHub Action uses.
 
-## Multi-container parallelism
+## Parallel agents
 
-Env-var auth avoids the concurrent-write race that file-based auth has
-on `~/.claude.json`. Multiple Spawns (or test containers — see
-`architecture.md`'s "Test Harness" section) can run side-by-side without
-fighting over a shared credential file. Each Spawn gets a fresh
-`~/.claude/` directory inside its working tree on first contact.
+Environment-variable auth does not give each spawn a separate Claude
+configuration directory. Spawns sharing a home or `CLAUDE_CONFIG_DIR` share
+that directory; it is not created inside each spawn's working tree. Use
+separate absolute config directories when isolation is required.
 
 ## What the env var does NOT cover
 
@@ -218,6 +174,3 @@ and `CODEX_HOME` moves it. Agents that share an account share a group folder.
   <https://docs.claude.com/en/docs/claude-code/iam#anthropic-api-key>
 - `claude setup-token`:
   <https://docs.claude.com/en/docs/claude-code/headless#setup-token>
-- Empirical investigation (gitignored, in-repo):
-  `reference/anthropic-api-key-auth-research.md`,
-  `reference/max-account-auth-research.md`

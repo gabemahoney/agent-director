@@ -296,8 +296,8 @@ func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeout
 const codexLineClearPresses = 127
 
 // launchKey identifies a row's launch for the wait's end check: the launch
-// token and the life number, the two a resume or a reuse rewrite (SR-7.3's
-// "same launch"). It leaves out the server and pane identity: the adoption write
+// token and the life number: every launch replaces the token, and a switch
+// advances the life (SR-7.3's "same launch"). It leaves out the server and pane identity: the adoption write
 // (SR-3.6), by pause's own tmux phase or a find-missing during the wait, fills
 // those in on the SAME launch, so keying on them would read the row as another
 // launch and the wait would never move it. A row moved onto a new launch while

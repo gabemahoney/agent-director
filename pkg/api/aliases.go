@@ -137,10 +137,10 @@ var ErrAlreadyDecided = store.ErrAlreadyDecided
 var ErrPermissionRequestNotFound = store.ErrPermissionRequestNotFound
 
 // ErrStoreBusy is returned by decide called with a max_wait_ms bound
-// (DecideParams.MaxWaitMs; b.146 decision 9 B) when the bound is reached
+// (DecideParams.MaxWaitMs) when a required wait cannot fit within the bound
 // before its verdict commits: another process held the store's write lock,
 // or another call of this process held the store's connection, for longer
-// than what was left of the bound, or a request recorded before schema v7
+// than what was left of the bound, or a request with no recorded settle instant
 // could not be settled within it. Nothing was recorded, so the call
 // can be retried. Once the verdict has committed, decide never returns it: a
 // bound reached during the wait for the relay hook's ack returns
