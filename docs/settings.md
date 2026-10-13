@@ -235,9 +235,6 @@ The merge rules depend on the value type at each key:
 - **Primitives** (e.g. `theme`, `model`, `defaultMode`) — higher tier
   wins outright.
 
-This is empirically verified — see `reference/claude-settings-research.md`
-for the source read of Claude Code's `B4H` merger function.
-
 ### Worked example: `permissions.allow`
 
 | Tier | `allow` entries |
@@ -289,10 +286,10 @@ final `hooks.<event>` array is:
 
 Claude Code executes entries in array order. Hooks the operator has
 installed via `~/.claude/settings.json` fire *before*
-agent-director's. This is fine for state tracking (agent-director's
-hook records the row UPSERT regardless of what user hooks did) and is
-the expected behavior for relay-mode permission decisions (the relay
-hook fires last and emits the decision envelope Claude consumes).
+agent-director's. Agent-director records the spawn's state when its tracking
+hook runs.
+In relay mode, its permission hook fires last and returns the decision
+to Claude Code.
 
 A misbehaving user hook can still suppress agent-director's state
 recording — see `hooks.md` for the caveat and mitigations.
@@ -302,7 +299,7 @@ recording — see `hooks.md` for the caveat and mitigations.
 An agent-director **template** is a TOML file at
 `~/.config/agent-director/templates/<name>.toml` that bakes a default
 spawn-parameter set. A spawn's `template` param (`--template <name>` on
-the CLI) layers the per-call params on top per a fixed merge contract (SRD §7.1).
+the CLI) layers the per-call params on top per the merge rules below.
 
 Templates are not the same as Claude Code's `settings.json` tier
 stack. The tier stack belongs to Claude Code; templates belong to

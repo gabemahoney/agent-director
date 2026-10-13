@@ -13,8 +13,8 @@
 import { test, expect } from "bun:test";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, seedFallenBackRelayRow, paneSends, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
-import { ErrClaimTooSoon, ErrPermissionRequestNotFound, type AgentDirectorError, type ClaimTooSoonDetails } from "../../src/index.js";
+import { runHelper, seedFallenBackRelayRow, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
+import { ErrInvalidFlags, ErrClaimTooSoon, ErrPermissionRequestNotFound, type AgentDirectorError, type ClaimTooSoonDetails } from "../../src/index.js";
 
 const ZERO_HASH = "0".repeat(64);
 
@@ -62,5 +62,26 @@ test("record-pane-answer: error — unknown token → ErrPermissionRequestNotFou
       as: "deny", expect_pane_sha256: ZERO_HASH }))) as AgentDirectorError;
     expect(err).toBeInstanceOf(ErrPermissionRequestNotFound);
     expect(err.errDetails).toBeNull();
+  });
+}, 10_000);
+
+
+test("record-pane-answer: negative n_lines rejects before reading or recording a claim", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = "smoke-rpa-negative-lines";
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    const { token } = seedFallenBackRelayRow(homeDir, id, "check_permission");
+    using client = await openClient(store);
+    const { pane_sha256 } = await client.readPane({ instance_id: id });
+    const before = await client.getPermission({ request_token: token });
+
+    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+      await expect(client.recordPaneAnswer({ request_token: token, as: "allow", expect_pane_sha256: pane_sha256,
+        n_lines: -1 })).rejects.toBeInstanceOf(ErrInvalidFlags);
+    });
+
+    expect(fakeTmuxCalls(logPath)).toEqual([]);
+    expect(await client.getPermission({ request_token: token })).toEqual(before);
   });
 }, 10_000);

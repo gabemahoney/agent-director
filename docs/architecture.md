@@ -3338,8 +3338,9 @@ a missing store is already the CLI's default (see
 that opens a missing store rejects with `ErrStoreOpen` (cause
 `database not initialized`) and creates none of it; calls that open no store,
 such as `version`, are unaffected, and an existing store opens as usual. The
-version floor (`0.12.0-0`) requires a binary that knows the flag, so every
-binary `Client.create` admits takes it. **Must not:** forward
+version floor (`0.12.0`) requires a binary that knows the flag, so every
+binary `Client.create` admits takes it. The floor is stable `0.12.0`;
+`0.12.0-0` and `0.12.0-rc.1` do not satisfy it. **Must not:** forward
 `--create-if-missing true`, which changes nothing: creating a missing store is
 already the CLI's default.
 
@@ -10238,6 +10239,55 @@ one statement of each. A reading verb records the `hook_gone_at` of the
 requests it found fallen back through one `recordGone` call with
 `readerLockWait` (0); a writing verb (`send-keys`, `record-pane-answer`)
 through `spawnRequests.recordFallenBackGone` with `DefaultLockWait`.
+
+### Why env-var, not DB
+
+`AGENT_DIRECTOR_RELAY_MODE` is set on the Spawn's tmux session at
+launch (SRD §6.5). The hook reads it from the OS process env, NOT
+from the spawns row's `relay_mode` column. This separation preserves
+the fail-closed safety guarantee across multiple failure modes:
+
+- DB unreachable → env still says `on` → fail-closed deny.
+- Schema mismatch → env still says `on` → fail-closed deny.
+- Config malformed → env still says `on` → fail-closed deny.
+
+Storing the mode in the DB and reading it from there would create a
+race: any failure path that hits the DB before the relay
+determination would not know whether to fail closed or fail open.
+The env var lifts that decision above every DB-dependent failure
+mode.
+
+### Atomic verdict recording
+
+The decide verb writes the decision via a single-statement UPDATE in its
+own write transaction, guarded by the first-call-wins `decision IS NULL`
+predicate, the request being unconfirmed, without a pane answer and not
+closed with its spawn, a `created_at > ?` deliverability predicate that
+applies only to a request recorded by an older binary (one with no
+`settled_at`), and a check that the request's spawn is not `ended` or
+`missing` (the checks and the write are one atomic statement):
+
+```sql
+UPDATE permission_requests
+   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
+ WHERE instance_id = ? AND request_token = ? AND decision IS NULL
+   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
+   AND (settled_at IS NOT NULL OR created_at > ?)
+   AND NOT EXISTS (SELECT 1 FROM spawns
+                    WHERE instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
+```
+
+First call wins; concurrent second calls see RowsAffected==0. The
+verb then does a follow-up SELECT (and, for an open row, a read of its
+spawn) to disambiguate the outcome. Before the write, `decide` has already
+refused a request that has fallen back (`ErrRelayFallenBack`; see the
+delivery contract in `docs/permissions.md`). The follow-up disambiguation
+resolves to one of the refusals described in `docs/permissions.md`.
+
+The spawn state is checked in the same UPDATE, so a spawn that finishes
+between the initial read and the write receives no recorded verdict.
+Request closure and its associated spawn transition commit in the same
+store transaction: both are written or neither is.
 
 ### `decide` (decision 1 A, rule 16, decision 9 B)
 
@@ -21655,3 +21705,15 @@ outside it `_require-sandbox` refuses before any build starts (see
 [Sandbox guard and the CI bypass](#sandbox-guard-and-the-ci-bypass)). It is
 wired into `make test` so `go test ./...` will not run unless the TS
 envelope-diff suite passes first.
+
+## Claude settings merge evidence and template layering
+
+The settings tier merge documented in `docs/settings.md` was empirically
+verified by the source read of Claude Code's private `B4H` merger function
+in `reference/claude-settings-research.md`: arrays concatenate in tier
+order, objects recurse, and higher-tier primitives replace lower ones.
+Template/per-call layering follows SRD §7.1 and feeds the synthesized
+`--settings` JSON; it is separate from Claude Code's settings tiers.
+Tracking hooks record the row UPSERT when invoked, regardless of what
+prior user hooks did; a user hook that prevents invocation can still
+suppress tracking, as documented in `docs/hooks.md`.

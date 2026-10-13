@@ -68,6 +68,11 @@ test.each([
     ["record-pane-answer", "--request-token", "tok", "--as", "unknown", "--expect-pane-sha256", "ab"]],
   ["record-pane-answer: n_lines", "record-pane-answer", { request_token: "tok", as: "allow", expect_pane_sha256: "ab", n_lines: 30 },
     ["record-pane-answer", "--request-token", "tok", "--as", "allow", "--expect-pane-sha256", "ab", "--n-lines", "30"]],
+  ["send-keys: negative n_lines passed through", "send-keys", { instance_id: "id-1", text: "hi", n_lines: -1 },
+    ["send-keys", ...ID, "--text", "hi", "--n-lines", "-1"]],
+  ["record-pane-answer: negative n_lines passed through", "record-pane-answer", {
+    request_token: "tok", as: "allow", expect_pane_sha256: "ab", n_lines: -1,
+  }, ["record-pane-answer", "--request-token", "tok", "--as", "allow", "--expect-pane-sha256", "ab", "--n-lines", "-1"]],
   ["read-pane: all options", "read-pane", { instance_id: "id-1", n_lines: 50, ansi: true, allow_pending: true },
     ["read-pane", ...ID, "--n-lines", "50", "--ansi", "--allow-pending"]],
   ["read-pane: false booleans omitted", "read-pane", { instance_id: "id-1", ansi: false, allow_pending: false },

@@ -92,11 +92,14 @@ The old names are refused, not ignored.
 | Template key | `claude_args` | `agent_args` |
 | Trail field: every record that carries it (written after the upgrade) | `claude_instance_id` | `instance_id` |
 | Trail field: every record that carries it (`ad.resume.moved_to_pending`, `ad.session.archive_failed`, `ad.session.jsonl_healed` and any other) | `claude_session_id` | `session_id` |
+| Trail event | `ad.hook.launcher_detected` | `ad.hook.pane_is_grandparent` |
+| Fields on that trail event | `launcher_pid`, `launcher_command` | `pane_pid`, `pane_command` |
+| Field on `ad.hook.ignored` | `launcher_pid` | Removed; stop reading this field. |
 | AD's directory, in every default, description, message and doc | `~/.agent-director` | `~/.config/agent-director` |
 
 Help text, descriptions and error advice that said "Claude Code" where either agent is meant now use agent-generic wording; text specific to one agent names that agent.
 
-Unchanged: `AGENT_DIRECTOR_INSTANCE_ID`, `AGENT_DIRECTOR_RELAY_MODE`, `AGENT_DIRECTOR_LABEL_*`, `parent_id`, `jsonl_path`, `transcript_status`, `prior_sessions`, `relay_mode`, `inject_help_hook`, `no_pre_trust`, `reuse_finished`, `extra_env`, `labels`, `allow`/`deny`/`ask`, `--register-mcp`, `--no-hooks`, `--mcp-also`, `trail-emit --instance-id`, `hook_session_id`, `row_session_id`, `prior_session_id`, `new_session_id`, every existing error name, trail event name and trail reason, the arguments after `--` on `spawn` (they belong to the spawn's agent), and Claude Code's own `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `.claude.json`, `~/.claude/settings.json`, `--settings`, `--resume` and `AskUserQuestion`.
+Unchanged: `AGENT_DIRECTOR_INSTANCE_ID`, `AGENT_DIRECTOR_RELAY_MODE`, `AGENT_DIRECTOR_LABEL_*`, `parent_id`, `jsonl_path`, `transcript_status`, `prior_sessions`, `relay_mode`, `inject_help_hook`, `no_pre_trust`, `reuse_finished`, `extra_env`, `labels`, `allow`/`deny`/`ask`, `--register-mcp`, `--no-hooks`, `--mcp-also`, `trail-emit --instance-id`, `hook_session_id`, `row_session_id`, `prior_session_id`, `new_session_id`, every existing error name and trail reason, the arguments after `--` on `spawn` (they belong to the spawn's agent), and Claude Code's own `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `.claude.json`, `~/.claude/settings.json`, `--settings`, `--resume` and `AskUserQuestion`.
 
 ## New
 
@@ -122,6 +125,37 @@ Unchanged: `AGENT_DIRECTOR_INSTANCE_ID`, `AGENT_DIRECTOR_RELAY_MODE`, `AGENT_DIR
 - Every recognized existing-session selector is refused at spawn on a plain spawn or same-agent reuse, including inherited template arguments, and dropped on a verified finished-agent switch, which starts fresh without an error. `make-template` stores `agent_args` unchanged; selector validation happens at spawn. Claude selectors include `--resume` / `-r`, `--continue` / `-c`, `--fork-session`, `--from-pr`, `--teleport`, `--resume-session-at`, `--resume-drops-turn`, `--rewind-files`, `--reply-on-resume`, `--cloud`, `--remote` and `--attach-serve`. Codex selectors include command-position `resume` / `fork` and their `--last`, `--all` and resume-only `--include-non-interactive`. Claude print (`--print` / `-p`, parsed clusters included) is always refused at spawn. Exact denied long names used as another option's value are refused, never dropped. Claude, Codex, then Claude with `--resume` on one id starts a fresh Claude conversation and reports the removed selector; it never resumes the first Claude session.
 - `resume` removes recognized selectors and their owned values, and Claude print options, from the arguments it replays; stored arguments are unchanged. Claude `--forward-home-settings`, `--ref` and `--on-branch` and their values are removed only when removing an actual cloud/remote selector leaves no parsed environment/pool context with its required value. Complete Claude inputs preserve surviving parsed roles, repairing spelling or prompt placement only where literal removal would change their meaning. Inputs missing a recognized required value receive literal filtering only, with no repair. `dropped_args` reports removals, not rendering changes.
 - The guarantee covers agent-director's launches, not an agent's own in-session picker. Recognition covers the supported parser options; a newer agent option can escape it until the option table is updated. Whether the agent can reopen its latest session remains up to that agent.
+
+## Other breaking contracts since v0.11.1
+
+### Relay recovery and result types
+
+Ordinary `send-keys` no longer answers a fallen-back permission request. Read the pane, then use `send-keys` with `request_token`, `as`, one `key` and `expect_pane_sha256` to answer it; if it was answered outside agent-director, use `record-pane-answer` with the token, verdict and pane hash. Acknowledgement of a relay verdict or recording a pane answer does not by itself release ordinary sends: a dialog hold remains until the request is proven gone. `pause` now observes the same holds as plain `send-keys`, including `ErrRelayFallenBack` and `ErrDialogMaybeOpen`. Follow [Permission relay recovery](https://github.com/gabemahoney/agent-director/blob/main/docs/caller-contract.md#permission-relay) for these refusals.
+
+A successful `decide` records a verdict and reports `delivery` (`delivered` or `not_confirmed`); a recorded decision alone does not mean the agent received it. Inspect delivery and poll `get-permission` after `not_confirmed`; confirmation ends by `confirm_by`.
+
+TypeScript's `GetResult.permission_request` is removed: read the required `permission_requests` array instead. Relay result types now require delivery fields; update constructed results, fixtures and mocks to include them and base recovery on delivery rather than `decision` alone.
+
+### Direct Go handlers and store interfaces
+
+Direct callers of the exported `pkg/api` handlers must supply new view/environment arguments, in addition to applying the rename table above:
+
+| Handler | Required signature |
+|---|---|
+| `Decide` | `Decide(s DecideStore, v RelayView, params DecideParams)` |
+| `Get` | `Get(s GetStore, v RelayView, instanceID string)` |
+| `GetPermission` | `GetPermission(s GetPermissionStore, v RelayView, params GetPermissionParams)` |
+| `List` | `List(s ListStore, v RelayView, params ListParams)` |
+| `Pause` | `Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams)` |
+| `SendKeys` | `SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams)` |
+
+Update direct callers and test doubles to the current exported store interfaces, including relay request reads, bounded reads and guarded writes where required. Supply the process reader, caller PID namespace, clock and relay window in `RelayView`; `SendKeysEnv` also supplies the sender identity and intent hold, and `PauseEnv` supplies the intent hold. The Go `Client` constructs these arguments for its callers. Use the current [Go API](https://github.com/gabemahoney/agent-director/blob/main/pkg/api/README.md) and exported type declarations when updating mocks.
+
+### Tightened input acceptance
+
+- `HOME` is reserved in spawn/template `extra_env`, and `resume` refuses stored rows containing it. Remove the override before spawning or making a template; have an operator repair a stored override before resuming. Environment keys that are empty or contain `=` or NUL are also refused; correct these keys rather than relying on truncation or reinterpretation.
+- Integer CLI flags accept base-10 integers only. Base-0 spellings such as `0x10`, underscores such as `1_000`, and leading `+` are refused. `010` means decimal ten. Rewrite scripts to use decimal digits.
+- `older_than` accepts no leading sign: `+2h` and `-0s` are refused. Spell these as `2h` and `0s`. Negative counts, including `n_lines`, are refused; zero retains the documented default.
 
 ## The way back
 

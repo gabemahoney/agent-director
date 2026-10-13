@@ -330,7 +330,7 @@ function buildSendKeys(p: SendKeysParams): string[] {
   if (p.no_enter === true) f.push("--no-enter");
   if (p.key !== undefined) f.push("--key", p.key);
   if (p.expect_pane_sha256 !== undefined) f.push("--expect-pane-sha256", p.expect_pane_sha256);
-  if (p.n_lines !== undefined && p.n_lines > 0) f.push("--n-lines", String(p.n_lines));
+  if (p.n_lines !== undefined && p.n_lines !== 0) f.push("--n-lines", String(p.n_lines));
   if (p.request_token !== undefined) f.push("--request-token", p.request_token);
   if (p.as !== undefined) f.push("--as", p.as);
   return f;
@@ -380,7 +380,7 @@ function buildRecordPaneAnswer(p: RecordPaneAnswerParams): string[] {
     "--expect-pane-sha256",
     p.expect_pane_sha256,
   ];
-  if (p.n_lines !== undefined && p.n_lines > 0) f.push("--n-lines", String(p.n_lines));
+  if (p.n_lines !== undefined && p.n_lines !== 0) f.push("--n-lines", String(p.n_lines));
   return f;
 }
 

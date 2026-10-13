@@ -14,9 +14,9 @@ import { test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, paneSends, withProcessEnv, homeStore, openClient,
+import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient,
   rejection } from "../internal/helper.js";
-import { ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
+import { ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
   type PaneKeySentDetails } from "../../src/index.js";
 
 test("send-keys: happy path — sends the text, then Enter, to the row's pane by id", async () => {
@@ -107,5 +107,25 @@ test("send-keys: error — unknown id → ErrSpawnNotFound", async () => {
   await withTempHome(async (homeDir) => {
     using client = await openClient(homeStore(homeDir));
     await expect(client.sendKeys({ instance_id: "smoke-bogus-id", text: "hello" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
+  });
+}, 10_000);
+
+
+test("send-keys: negative n_lines rejects before reading or sending, leaving the row unchanged", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = "smoke-send-negative-lines";
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    runHelper("seed-row-session", { store, id });
+    using client = await openClient(store);
+    const before = await client.get({ instance_id: id });
+
+    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+      await expect(client.sendKeys({ instance_id: id, text: "hello", n_lines: -1 })).rejects.toBeInstanceOf(ErrInvalidFlags);
+    });
+
+    expect(fakeTmuxCalls(logPath)).toEqual([]);
+    expect(await client.get({ instance_id: id })).toEqual(before);
   });
 }, 10_000);

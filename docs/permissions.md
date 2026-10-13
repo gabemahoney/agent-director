@@ -211,8 +211,8 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
 
 1. The agent fires the PermissionRequest hook with the tool name + tool
    input.
-2. The hook handler reads `AGENT_DIRECTOR_RELAY_MODE` from its env
-   (NOT the DB — see "Why env-var, not DB" below).
+2. The hook uses the relay mode fixed at launch in
+   `AGENT_DIRECTOR_RELAY_MODE`.
 3. If the env var is `on`, the relay hook:
    - Mints a per-request UUIDv4 `request_token` and, in one store
      transaction, moves the Spawn to `check_permission` and records the
@@ -526,52 +526,23 @@ differences:
   to `working`, never to `waiting` (see
   [A relay row left in check_permission](hooks.md#a-relay-row-left-in-check_permission)).
 
-### Why env-var, not DB
-
-`AGENT_DIRECTOR_RELAY_MODE` is set on the Spawn's tmux session at
-launch (SRD §6.5). The hook reads it from the OS process env, NOT
-from the spawns row's `relay_mode` column. This separation preserves
-the fail-closed safety guarantee across multiple failure modes:
-
-- DB unreachable → env still says `on` → fail-closed deny.
-- Schema mismatch → env still says `on` → fail-closed deny.
-- Config malformed → env still says `on` → fail-closed deny.
-
-Storing the mode in the DB and reading it from there would create a
-race: any failure path that hits the DB before the relay
-determination would not know whether to fail closed or fail open.
-The env var lifts that decision above every DB-dependent failure
-mode.
+`AGENT_DIRECTOR_RELAY_MODE` is fixed at launch. With relay mode `on`,
+an unreachable store, schema mismatch or malformed configuration causes
+a fail-closed deny.
 
 ### Race-freeness of `decide`
 
-The decide verb writes the decision via a single-statement UPDATE in its
-own write transaction, guarded by the first-call-wins `decision IS NULL`
-predicate, the request being unconfirmed, without a pane answer and not
-closed with its spawn, a `created_at > ?` deliverability predicate that
-applies only to a request recorded by an older binary (one with no
-`settled_at`), and a check that the request's spawn is not `ended` or
-`missing` (the checks and the write are one atomic statement):
+Only the first accepted verdict is recorded. Concurrent later calls receive
+`ErrAlreadyDecided`. A request that has fallen back is refused with
+`ErrRelayFallenBack`; a closed request cannot accept a verdict. Success
+reports delivery separately from the recorded decision (see "Delivery"
+below). For recovery, follow [Permission relay](caller-contract.md#permission-relay).
 
-```sql
-UPDATE permission_requests
-   SET decision = ?, decision_reason = ?, decided_at = CURRENT_TIMESTAMP
- WHERE instance_id = ? AND request_token = ? AND decision IS NULL
-   AND delivered_at IS NULL AND pane_answer = 'none' AND closed_at IS NULL
-   AND (settled_at IS NOT NULL OR created_at > ?)
-   AND NOT EXISTS (SELECT 1 FROM spawns
-                    WHERE instance_id = ? AND state IN (?, ?))  -- 'ended', 'missing'
-```
-
-First call wins; concurrent second calls see RowsAffected==0. The
-verb then does a follow-up SELECT (and, for an open row, a read of its
-spawn) to disambiguate the outcome. Before the write, `decide` has already
-refused a request that has fallen back (`ErrRelayFallenBack`, see
-"Delivery" below). The follow-up disambiguation resolves to exactly one of
+Depending on the request's current state, `decide` returns one of
 these outcomes:
 
 - No row at all → `ErrNoOpenPermissionRequest`.
-- Row exists with non-NULL decision → `ErrAlreadyDecided` (including a
+- Request has a recorded decision → `ErrAlreadyDecided` (including a
   request the relay hook denied at its timeout, one `find-missing` denied
   when it marked the spawn `missing`, and one closed at the pane with a
   verdict).
@@ -611,14 +582,12 @@ with an existing error name:
   to answer it at the pane;
 - no such request → `ErrNoOpenPermissionRequest`, as for a live spawn.
 
-`decide` checks the spawn's state when it reads the spawn, and its write
-checks it again in the same statement, so a spawn that finishes between
-the two still gets nothing recorded. `send-keys` refuses an `ended` or
-`missing` spawn before its relay guard reads any request
+`decide` records no verdict if the spawn finishes before the decision is
+recorded. `send-keys` refuses an `ended` or
+`missing` spawn before checking its permission requests
 (`ErrSpawnNotInteractive`).
 
-Four writes close a spawn's open requests, each in the same store
-transaction as its own change, so both are written or neither is:
+A spawn's open requests close together with these changes:
 
 - `find-missing`'s mark of the spawn `missing`;
 - the agent's terminal SessionEnd, which moves the spawn to `ended`;
