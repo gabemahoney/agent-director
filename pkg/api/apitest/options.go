@@ -388,11 +388,16 @@ func (o *subagentOpts) set(column string, value any) {
 
 // SubagentOption configures one subagents row seeded by SeedSubagent. A column
 // no option names takes SeedSubagent's default: a confirmed, running entry of
-// the row's current launch, opened_at and activity_at SeededSubagentMs, every
+// the row's current life and launch, opened_at and activity_at SeededSubagentMs, every
 // other field NULL. Options write raw column values and enforce no SR-6.5
 // invariant, so a test can also seed a row that breaks one; a later option for
 // the same column wins.
 type SubagentOption func(*subagentOpts)
+
+// WithSubagentLife stores the life the entry belongs to; otherwise the owning row supplies it.
+func WithSubagentLife(life int64) SubagentOption {
+	return func(o *subagentOpts) { o.set("life_number", life) }
+}
 
 // WithSubagentState stores state (running, stopped or lost, or any text) as the
 // entry's state.

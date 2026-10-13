@@ -605,13 +605,18 @@ other process's hooks.
 
 ## What the hooks write for subagent records
 
-agent-director keeps one entry for each subagent of the row's agent. An
+agent-director keeps one entry for each subagent id in each life of the row's
+agent. An
 entry becomes a record once an Agent call or a launch result confirms
 it, or a listing does (the `background_tasks` list of a main-agent `Stop`
 or of a `SubagentStop`); an entry that nothing confirms is an observation,
 and is not a record. An open Agent call is a note that the agent called its `Agent`
-tool and no subagent has yet been matched to the call. An entry belongs
-to one launch of the row: a `resume` or a `reuse` starts a new one. A
+tool and no subagent has yet been matched to the call. An entry's life never
+changes. Its launch association can change within that life: a `resume` or
+a `reuse` starts a new launch. The rules below look up entries only in the
+row's current life. An id found only in an earlier life counts as having no
+entry: a creating event makes a separate current-life entry, and a stop or
+listing that cannot create leaves the earlier entry untouched. A
 consumer reads the records with `list-subagents`; its output and fields are in
 [usage.md](usage.md#read-an-agents-subagent-records).
 
@@ -652,7 +657,8 @@ the hook started.
   [usage.md](usage.md#how-long-a-record-reads-running). After the stop, and
   whether or not it changed anything, the stop applies the subagents its
   `background_tasks` lists (see "The `background_tasks` list" below): each
-  one that has a record, of any launch, is confirmed and moved into the
+  one that has a record, of any launch within the current life, is confirmed
+  and moved into the
   current launch, and a null run mode becomes `background`. The listing
   never creates a record, closes one or reopens one, and never changes a
   state or a time.
@@ -692,7 +698,8 @@ the hook started.
   - A listed subagent with no record gets one, `running`, `run_mode`
     `background`, with the listed type and the `Stop`'s session id. Its
     description, model, parent, `tool_use_id` and start times are null.
-  - A listed subagent that has a record, of any launch, is confirmed and
+  - A listed subagent that has a record, of any launch within the current life,
+    is confirmed and
     moved into the current launch, and a null run mode becomes
     `background`. Its type is not applied, and its state and times never
     change, so a stopped or lost record is not reopened.

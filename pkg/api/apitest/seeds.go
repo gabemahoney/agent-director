@@ -431,7 +431,7 @@ func currentLaunchToken(raw *sql.DB, who, instanceID string) (string, error) {
 // record or observation, of the current or an earlier launch, with any field
 // null or set. Defaults for a column no option names: subagent_id as given, the
 // row's current launch token, confirmed 1, state running, opened_at and
-// activity_at SeededSubagentMs, every other column NULL (see SubagentOption).
+// activity_at SeededSubagentMs, life_number the owning row's current life, every other column NULL (see SubagentOption).
 // The row must exist. Install writefailfix's subagent kind
 // (storefix.WriteFailSubagentRecord) after seeding: it fails this insert too.
 func SeedSubagent(dbPath, instanceID, subagentID string, opts ...SubagentOption) error {
@@ -451,7 +451,12 @@ func SeedSubagent(dbPath, instanceID, subagentID string, opts ...SubagentOption)
 			return err
 		}
 	}
+	var life int64
+	if err := raw.QueryRow(`SELECT life_number FROM spawns WHERE instance_id = ?`, instanceID).Scan(&life); err != nil {
+		return fmt.Errorf("SeedSubagent: current life: %w", err)
+	}
 	defaults := map[string]any{
+		"life_number": life,
 		"confirmed":   int64(1),
 		"state":       store.SubagentStateRunning,
 		"opened_at":   SeededSubagentMs,

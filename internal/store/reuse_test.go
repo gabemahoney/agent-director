@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -313,10 +314,9 @@ func splitHistory(h []apitest.HistoryEntry, sessionID string) (cur, others []api
 	return cur, others
 }
 
-// TestReuseResetRowComesBack checks a reset row, once its relaunch records the
-// pane again, keeps every closed entry closed until a SubagentStart names it
-// (SR-8.3): the start reopens the entry in the new life's launch, and nothing else.
-func TestReuseResetRowComesBack(t *testing.T) {
+// TestReuseResetNewLifeEntry checks an agent switch creates a distinct entry,
+// leaving the previous life closed and hidden.
+func TestReuseResetNewLifeEntry(t *testing.T) {
 	f := newV5Store(t)
 	r := seedReuseRow(t, f, reuseSpec{})
 	mix := f.seedCloseMix(r.id)
@@ -330,5 +330,22 @@ func TestReuseResetRowComesBack(t *testing.T) {
 		t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
 	}
 	f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
-	f.assertStartReopens(r.id, fresh.Identity.Token, fresh.LaunchStartedAtMillis+60_000)
+	before := f.subagentRowsOf(r.id)
+	if tracked, rows, err := f.s.ListSubagentRecords(r.id); err != nil || !tracked || len(rows) != 0 {
+		t.Fatalf("new life read: %v, %+v, %v", tracked, rows, err)
+	}
+	if a := storefix.ApplySubagentStart(t, f.s, r.id, store.SubagentLifecycleEvent{SubagentID: cmRecord, ReceivedMs: fresh.LaunchStartedAtMillis + 60_000}); !a.Applied {
+		t.Fatal("start did not apply")
+	}
+	after := f.subagentRowsOf(r.id)
+	if len(after.Entries) != len(before.Entries)+1 {
+		t.Fatalf("entries: %d -> %d; want one new", len(before.Entries), len(after.Entries))
+	}
+	if !reflect.DeepEqual(after.Entries[:len(before.Entries)], before.Entries) || !reflect.DeepEqual(after.Launches, before.Launches) {
+		t.Fatal("new life start changed previous entries or claims")
+	}
+	e := after.Entries[len(before.Entries)]
+	if e.LifeNumber != reuseLife+1 || e.SubagentID != cmRecord || e.LaunchToken != fresh.Identity.Token || e.State != store.SubagentStateRunning {
+		t.Errorf("new entry: %+v", e)
+	}
 }

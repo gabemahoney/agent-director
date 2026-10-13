@@ -165,6 +165,7 @@ func ReadSessionHistoryAllLives(dbPath, instanceID string) ([]HistoryEntry, erro
 // int64 or string), so NULL is distinct from 0 and "". CreatedSeq is the
 // table's created_seq.
 type SubagentEntryColumns struct {
+	LifeNumber         int64
 	CreatedSeq         int64
 	InstanceID         any
 	SubagentID         any
@@ -230,7 +231,7 @@ func ReadSubagentRows(dbPath, instanceID string) (SubagentRows, error) {
 	                         first_started_at, started_at, stopped_at, lost_at,
 	                         state, close_reason, opened_at, activity_at,
 	                         subagent_type_source, run_mode_source,
-	                         stopped_at_source
+	                         stopped_at_source, life_number
 	                    FROM subagents
 	                   WHERE instance_id = ?
 	                ORDER BY created_seq`
@@ -246,7 +247,7 @@ func ReadSubagentRows(dbPath, instanceID string) (SubagentRows, error) {
 			&e.Model, &e.ParentType, &e.ParentID, &e.ToolUseID, &e.RunMode,
 			&e.FirstStartedAt, &e.StartedAt, &e.StoppedAt, &e.LostAt,
 			&e.State, &e.CloseReason, &e.OpenedAt, &e.ActivityAt,
-			&e.SubagentTypeSource, &e.RunModeSource, &e.StoppedAtSource); err != nil {
+			&e.SubagentTypeSource, &e.RunModeSource, &e.StoppedAtSource, &e.LifeNumber); err != nil {
 			return SubagentRows{}, fmt.Errorf("ReadSubagentRows: scan entry: %w", err)
 		}
 		out.Entries = append(out.Entries, e)

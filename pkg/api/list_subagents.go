@@ -14,7 +14,7 @@ import (
 // RFC3339 with the millisecond fraction, trailing zeros dropped, no fraction on
 // a whole second, ending Z.
 type SubagentRecord struct {
-	// SubagentID is the subagent's id, unique within its agent.
+	// SubagentID is the subagent's id, unique among the records shown for its agent.
 	SubagentID string `json:"subagent_id"`
 	// InstanceID is the instance_id of the agent the subagent belongs to.
 	InstanceID string `json:"instance_id"`
@@ -70,10 +70,10 @@ type ListSubagentsResult struct {
 	// no records, and for a row whose launch registers no subagent events; any
 	// other row is true.
 	Tracked bool `json:"tracked"`
-	// Subagents is every subagent record of the agent, every launch and life
-	// of it, ordered by first_started_at ascending (records with no
-	// first_started_at last), then by subagent_id. Never nil: [] when the
-	// agent has none.
+	// Subagents is every subagent record of the agent row's current life,
+	// across every launch of it, ordered by first_started_at ascending
+	// (records with no first_started_at last), then by subagent_id. Never nil:
+	// [] when the agent has none.
 	Subagents []SubagentRecord `json:"subagents"`
 }
 
@@ -82,8 +82,9 @@ type ListSubagentsResult struct {
 // implements it.
 type ListSubagentsStore interface {
 	// ListSubagentRecords returns the row's tracking flag and every record of
-	// it (confirmed entries only), in one consistent read, ordered by
-	// first_started_at ascending with unknown last, then subagent_id. A row
+	// its current life across every launch (confirmed entries only), in one
+	// consistent read, ordered by first_started_at ascending with unknown
+	// last, then subagent_id. A row
 	// that does not exist returns an error matching ErrSpawnNotFound.
 	ListSubagentRecords(instanceID string) (tracked bool, records []SubagentRow, err error)
 }
@@ -132,8 +133,8 @@ func emptyListSubagentsResult() ListSubagentsResult {
 }
 
 // ListSubagents returns whether the agent row of instanceID tracks subagents
-// and every subagent record of it (every launch and life of the row), read
-// once from s. It changes nothing.
+// and every subagent record of the row's current life across every launch of
+// it, in one consistent read from s. It changes nothing.
 // Missing rows surface store.ErrSpawnNotFound for the CLI to translate.
 //
 // Every failure returns tracked false and a non-nil empty slice.
@@ -152,13 +153,13 @@ func ListSubagents(s ListSubagentsStore, instanceID string) (ListSubagentsResult
 // ListSubagents returns the subagent records of one agent: whether the agent
 // tracks subagents (tracked; false for a row launched before subagent tracking
 // existed, which has none, and for a row whose launch registers no subagent
-// events) and every subagent of it, every launch and life of
-// the row, ordered by first_started_at (unknown last), then subagent_id. Each
-// record carries subagent_id, instance_id, session_id, subagent_type,
+// events) and every subagent record of the row's current life, across every
+// launch of it, ordered by first_started_at (unknown last), then subagent_id.
+// Each record carries subagent_id, instance_id, session_id, subagent_type,
 // description, model, parent_type, parent_id, tool_use_id, run_mode,
 // first_started_at, started_at, stopped_at, lost_at, state and close_reason;
-// a field with no known value is null. The call reads once and changes
-// nothing.
+// a field with no known value is null. The call reads the tracking flag and
+// current-life records once consistently and changes nothing.
 //
 // CLI: agent-director list-subagents
 //

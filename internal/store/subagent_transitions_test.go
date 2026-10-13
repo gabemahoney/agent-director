@@ -10,6 +10,7 @@ package store_test
 // the saEvents table are in subagent_helpers_test.go, shared by those files.
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -126,32 +127,50 @@ func TestSubagentTransitionsFromNoEntry(t *testing.T) {
 		}},
 		{5, nil},
 	}
-	for _, tc := range cases {
-		ev := saEvents[tc.ev]
-		t.Run(ev.name, func(t *testing.T) {
-			t.Parallel()
-			f := newSAStore(t, store.StateWaiting)
-			ev.apply(f)
-
-			entries := f.rows().Entries
-			if tc.want == nil {
-				if len(entries) != 0 {
-					t.Fatalf("entries %+v; want none", entries)
+	for _, earlier := range []bool{false, true} {
+		for _, tc := range cases {
+			ev := saEvents[tc.ev]
+			t.Run(ev.name+fmt.Sprintf("/earlier-only=%v", earlier), func(t *testing.T) {
+				t.Parallel()
+				f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
+				var hidden apitest.SubagentEntryColumns
+				if earlier {
+					f.seedEntry(saSub, saStoppedSeed(store.SubagentSourceStop, apitest.WithSubagentLife(3))...)
+					hidden, _ = f.entryInLife(saSub, 3)
 				}
-				return
-			}
-			want := apitest.SubagentEntryColumns{InstanceID: f.id, SubagentID: saSub, LaunchToken: f.token(), State: str,
-				OpenedAt: saE, ActivityAt: saE}
-			tc.want(f, &want)
-			if len(entries) != 1 {
-				t.Fatalf("entries %+v; want one", entries)
-			}
-			want.CreatedSeq = entries[0].CreatedSeq
-			if !reflect.DeepEqual(entries[0], want) {
-				t.Errorf("new entry\n got %+v\nwant %+v", entries[0], want)
-			}
-			saCheckInvariants(t, entries[0])
-		})
+				ev.apply(f)
+				if earlier {
+					got, ok := f.entryInLife(saSub, 3)
+					if !ok || !reflect.DeepEqual(got, hidden) {
+						t.Fatalf("hidden entry changed: %+v -> %+v", hidden, got)
+					}
+				}
+
+				entries := []apitest.SubagentEntryColumns{}
+				for _, e := range f.rows().Entries {
+					if e.LifeNumber == 4 {
+						entries = append(entries, e)
+					}
+				}
+				if tc.want == nil {
+					if len(entries) != 0 {
+						t.Fatalf("entries %+v; want none", entries)
+					}
+					return
+				}
+				want := apitest.SubagentEntryColumns{LifeNumber: 4, InstanceID: f.id, SubagentID: saSub, LaunchToken: f.token(), State: str,
+					OpenedAt: saE, ActivityAt: saE}
+				tc.want(f, &want)
+				if len(entries) != 1 {
+					t.Fatalf("entries %+v; want one", entries)
+				}
+				want.CreatedSeq = entries[0].CreatedSeq
+				if !reflect.DeepEqual(entries[0], want) {
+					t.Errorf("new entry\n got %+v\nwant %+v", entries[0], want)
+				}
+				saCheckInvariants(t, entries[0])
+			})
+		}
 	}
 }
 

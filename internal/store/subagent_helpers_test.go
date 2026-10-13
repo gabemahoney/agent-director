@@ -78,11 +78,16 @@ func (f *saStore) mainStop(ms int64) {
 
 func (f *saStore) rows() apitest.SubagentRows { f.t.Helper(); return f.subagentRowsOf(f.id) }
 
-// entry returns the entry with subagent id sub.
+// entry returns the current-life entry with subagent id sub.
 func (f *saStore) entry(sub string) (apitest.SubagentEntryColumns, bool) {
 	f.t.Helper()
+	return f.entryInLife(sub, f.rawColumns(f.id).LifeNumber.(int64))
+}
+
+func (f *saStore) entryInLife(sub string, life int64) (apitest.SubagentEntryColumns, bool) {
+	f.t.Helper()
 	for _, e := range f.rows().Entries {
-		if e.SubagentID == sub {
+		if e.SubagentID == sub && e.LifeNumber == life {
 			return e, true
 		}
 	}

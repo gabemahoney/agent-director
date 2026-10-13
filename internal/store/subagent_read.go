@@ -5,13 +5,13 @@ import "fmt"
 // SubagentRow is one subagent record as the store holds it (SR-6.1): a
 // confirmed entry of the subagents table. It carries the SR-6.1 fields and
 // nothing internal (no launch_token, confirmed, opened_at, activity_at,
-// created_seq or *_source column). A nil pointer is a NULL in the table
-// (unknown or not applicable), distinct from an empty string or a zero; times
-// are the stored integer milliseconds since the epoch. The value sets of State,
+// created_seq, life_number or *_source column). A nil pointer is a NULL in the
+// table (unknown or not applicable), distinct from an empty string or a zero;
+// times are the stored integer milliseconds since the epoch. The value sets of State,
 // CloseReason, ParentType and RunMode are the Subagent* constants of this
 // package.
 type SubagentRow struct {
-	// SubagentID is the subagent's id, unique within its agent row.
+	// SubagentID is the subagent's id, unique within its agent row's current life.
 	SubagentID string
 	// InstanceID is the agent row the subagent belongs to.
 	InstanceID string
@@ -48,9 +48,9 @@ type SubagentRow struct {
 }
 
 // listSubagentRecordsSQL reads the tracking flag of one agent row with every
-// confirmed entry of the row, in one statement, so the flag and the records
-// come from one consistent read. The LEFT JOIN returns the row once with NULL
-// entry columns when it has no confirmed entry, and returns no row when the
+// confirmed entry of the row's current life, in one statement, so the flag and
+// the records come from one consistent read. The LEFT JOIN returns the row
+// once with NULL entry columns when it has no confirmed entry, and returns no row when the
 // row does not exist. Observations (confirmed = 0) are never selected. Order:
 // first_started_at ascending with NULL last, then subagent_id.
 const listSubagentRecordsSQL = `SELECT sp.subagent_tracking,
@@ -60,7 +60,7 @@ const listSubagentRecordsSQL = `SELECT sp.subagent_tracking,
         sa.state, sa.close_reason
    FROM spawns sp
    LEFT JOIN subagents sa
-          ON sa.instance_id = sp.instance_id AND sa.confirmed = 1
+          ON sa.instance_id = sp.instance_id AND sa.life_number = sp.life_number AND sa.confirmed = 1
   WHERE sp.instance_id = ?
   ORDER BY sa.first_started_at IS NULL, sa.first_started_at, sa.subagent_id`
 
@@ -68,9 +68,9 @@ const listSubagentRecordsSQL = `SELECT sp.subagent_tracking,
 // (its spawns.subagent_tracking flag, read as decodeSubagentTracking reads it:
 // only the integer 1 is tracked, any other stored value, a text or NULL one
 // included, is false and never an error) and every record of the row: every
-// confirmed entry, of every launch and life of the row, in any state. It never
-// returns an observation (an unconfirmed entry) nor a claimable launch. The
-// records are ordered by first_started_at ascending, a NULL one last, then by
+// confirmed entry of the row's current life, across every launch of it, in any
+// state. It never returns an observation (an unconfirmed entry) nor a claimable
+// launch. The records are ordered by first_started_at ascending, a NULL one last, then by
 // subagent_id; with none it returns tracked as stored and an empty slice (a
 // pre-upgrade row is tracked false with no records).
 //

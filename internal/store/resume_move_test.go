@@ -292,6 +292,9 @@ func TestMoveToPendingRowComesBack(t *testing.T) {
 				t.Fatalf("MoveToPending = %v, %d, %v; want CondApplied", res, v, err)
 			}
 			f.assertMixClosedAt(mix, moveLaunchMillis)
+			if got := f.rawColumns(r.id).LifeNumber; got != mix.rows.Entries[0].LifeNumber {
+				t.Fatalf("resume changed life to %v", got)
+			}
 			if res, err := f.s.RecordLaunchIdentity(r.id, v, moveToken, moveIdentity()); err != nil || res != store.CondApplied {
 				t.Fatalf("RecordLaunchIdentity = %v, %v; want CondApplied", res, err)
 			}

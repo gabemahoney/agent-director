@@ -52,7 +52,13 @@ func TestListSubagentRecordsTrackedDecoding(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
 				f := newV5Store(t)
-				id := f.seed(store.StateWaiting, "sess-tracked")
+				id, err := apitest.SeedSpawn(f.path, "", store.StateWaiting, "/tmp", "", "sess-tracked", false, apitest.WithLifeNumber(4))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := apitest.SeedSubagent(f.path, id, "sa-rec", apitest.WithSubagentLife(3), apitest.WithSubagentDescription("hidden")); err != nil {
+					t.Fatal(err)
+				}
 				if withRecord {
 					if err := apitest.SeedSubagent(f.path, id, "sa-rec"); err != nil {
 						t.Fatalf("SeedSubagent: %v", err)
@@ -69,7 +75,7 @@ func TestListSubagentRecordsTrackedDecoding(t *testing.T) {
 				if withRecord {
 					wantRows = 1
 				}
-				if len(rows) != wantRows || (withRecord && rows[0].SubagentID != "sa-rec") {
+				if len(rows) != wantRows || (withRecord && (rows[0].SubagentID != "sa-rec" || rows[0].Description != nil)) {
 					t.Errorf("records = %+v; want %d", rows, wantRows)
 				}
 			})

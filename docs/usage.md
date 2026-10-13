@@ -135,8 +135,8 @@ It never sees a turn shorter than the settle time.
 
 ## Read an agent's subagent records
 
-`list-subagents` returns the subagents an agent has launched, one record each,
-and whether the agent is tracked. It is `mcp__agent-director__list_subagents`
+`list-subagents` returns the subagents of an agent's current life, one record
+each, and whether the agent is tracked. It is `mcp__agent-director__list_subagents`
 over MCP, `Client.ListSubagents` in Go and `listSubagents` in TypeScript (see
 [pkg/api/README.md](../pkg/api/README.md#listsubagents) and
 [pkg/ts-bun-client/README.md](../pkg/ts-bun-client/README.md#listsubagents)).
@@ -175,8 +175,9 @@ for reading:
 }
 ```
 
-`(instance_id, subagent_id)` identifies a record for good: a caller that
-reads the list again can match records by it.
+`subagent_id` is unique among the records shown for an agent. Within the
+same life, a caller can match records by `(instance_id, subagent_id)` across
+reads and launches. A new life can record the same subagent id separately.
 
 ### When an agent is tracked
 
@@ -189,8 +190,9 @@ A Codex agent's hooks write no records, so its row reads `tracked: false` and
 its `subagents` stays `[]`, from its spawn and after every resume or reuse of
 its id.
 
-`subagents` is never null. It holds the records of every launch the agent has
-had, ordered by `first_started_at` ascending (records with a null
+`subagents` is never null. It holds the records across launches of the agent's
+current life. Earlier lives' records remain stored but are hidden. The list is
+ordered by `first_started_at` ascending (records with a null
 `first_started_at` last), then by `subagent_id`.
 
 ### The record's fields
@@ -200,7 +202,7 @@ supplied is `null`, never a guess.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `subagent_id` | string | The subagent's id, unique within its agent. |
+| `subagent_id` | string | The subagent's id, unique among the agent's visible records. |
 | `instance_id` | string | The id of the agent the subagent belongs to. |
 | `session_id` | string or null | The session of the first event that recorded the subagent: its start, its launch result or an agent stop that listed it (see [Which subagents show as records](#which-subagents-show-as-records)). It never changes, so after a conversation clear it depends on which event came first. |
 | `subagent_type` | string or null | The subagent's type. |
@@ -357,12 +359,14 @@ Each string field holds at most 1 KiB, cut at a whole character. Only the
 agent's own hooks write records, and no prompt, message or tool output is
 stored.
 
-An agent keeps at most 300 entries: its records plus starts that nothing has
-confirmed, which are never shown. When a new entry arrives at the limit, one is
+An agent keeps at most 300 entries across all lives: its records plus starts
+that nothing has confirmed, which are never shown. Hidden earlier-life entries
+count toward this limit. When a new entry arrives at the limit, one is
 evicted first: a closed unconfirmed start, else a closed record, else a
 `running` entry only when nothing closed remains; within each, the one changed
 longest ago goes first. A `resume` or reuse keeps every record, the `running`
-ones closed as above, so none of an earlier launch reads `running`. They are
+ones closed as above, so none of an earlier launch reads `running`. Visibility
+still depends on the row's current life. They are
 deleted with the row (see [Maintenance](maintenance.md) for `expire` and
 [Operator actions](operator-actions.md) for `agent-director-admin delete`).
 

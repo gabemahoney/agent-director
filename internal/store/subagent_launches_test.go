@@ -473,3 +473,47 @@ func TestSubagentStopSkipWithSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestSubagentEarlierLifeClaimAndResult(t *testing.T) {
+	for _, outcome := range []store.SubagentLaunchOutcome{store.SubagentLaunchOther, store.SubagentLaunchBackgroundStarted, store.SubagentLaunchForegroundFinished} {
+		t.Run(string(outcome), func(t *testing.T) {
+			t.Parallel()
+			f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
+			f.seedEntry(saSub, saSaturated(apitest.WithSubagentLife(3))...)
+			hidden, _ := f.entryInLife(saSub, 3)
+			f.seedLaunch("toolu-ev", apitest.WithClaimableType("start-type"))
+			f.details(saDetailsEv(outcome))
+			f.wantLaunches()
+			if old, ok := f.entryInLife(saSub, 3); !ok || !reflect.DeepEqual(old, hidden) {
+				t.Fatalf("hidden record changed: %+v -> %+v", hidden, old)
+			}
+			if outcome == store.SubagentLaunchOther {
+				if _, ok := f.entry(saSub); ok {
+					t.Fatal("other result created a current entry")
+				}
+			} else {
+				f.start(saStartEv())
+				if e := f.mustEntry(saSub); e.LifeNumber != 4 || e.SubagentType != "start-type" {
+					t.Errorf("current entry after its start: %+v", e)
+				}
+				if old, _ := f.entryInLife(saSub, 3); !reflect.DeepEqual(old, hidden) {
+					t.Errorf("current-life update changed hidden entry: %+v -> %+v", hidden, old)
+				}
+			}
+		})
+	}
+	t.Run("start claims despite earlier-only id", func(t *testing.T) {
+		t.Parallel()
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
+		f.seedEntry(saSub, saSaturated(apitest.WithSubagentLife(3))...)
+		hidden, _ := f.entryInLife(saSub, 3)
+		f.seedLaunch("toolu-1", apitest.WithClaimableType("Explore"))
+		if !saStartOf(f, saSub, "Explore") {
+			t.Fatal("current entry was not confirmed by claim")
+		}
+		f.wantLaunches()
+		if old, _ := f.entryInLife(saSub, 3); !reflect.DeepEqual(old, hidden) {
+			t.Errorf("hidden entry changed: %+v -> %+v", hidden, old)
+		}
+	})
+}

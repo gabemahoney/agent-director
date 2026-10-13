@@ -1002,7 +1002,7 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     `connQuerier` (fail-closed: a history error rolls the whole change
     back and returns an error holding `ErrReuseArchive`). Every new code
     path that archives a session must call it too, never a second upsert.
-- `subagents` (v9, b.xjn) — one row per subagent entry of a spawn row: a
+- `subagents` (v9, b.xjn) — one row per subagent id and life of a spawn row: a
   record (`confirmed` 1) or an observation (`confirmed` 0). Only
   `internal/store` reads or writes it; `list-subagents` returns its confirmed
   records through the store read. The
@@ -1012,8 +1012,9 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   - `created_seq INTEGER PRIMARY KEY AUTOINCREMENT` grows with each insert and
     is never reused, so it orders creation and breaks every tie.
   - `instance_id TEXT NOT NULL REFERENCES spawns(instance_id) ON DELETE
-    CASCADE`, with `UNIQUE(instance_id, subagent_id)`: one entry per row and
-    subagent id. That constraint's implicit index serves the per-row read, the
+    CASCADE`, with `UNIQUE(instance_id, life_number, subagent_id)`: one entry
+    per row, life and subagent id. That constraint's implicit index serves the
+    per-row read, the
     per-launch transitions and the cap, which all lead with `instance_id`;
     the table has no explicit index.
   - `launch_token TEXT NOT NULL`, the launch the entry belongs to;
@@ -1036,6 +1037,10 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     nullable TEXT: which source set a value that has more than one
     (`SubagentSourceStart`, `SubagentSourceDetails`, `SubagentSourceSnapshot`,
     `SubagentSourceStop`; NULL while the value is unknown).
+  - `life_number INTEGER NOT NULL`, appended after `stopped_at_source` in
+    both fresh and migrated schemas. An entry's life is immutable: its insert
+    reads `spawns.life_number` in the same gated `INSERT … SELECT` that reads
+    the current launch token; later entry updates never change its life.
 - `subagent_launches` (v9, b.xjn) — one row per open claimable launch: an
   internal note that an agent's Agent tool call has not yet been matched to a
   subagent. Internal to `internal/store`, and never shown by any verb.
@@ -1049,7 +1054,8 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   current launch and type.
   - **Lifetime.** Both tables belong to the row, not to a launch: no end or
     start of a launch deletes an entry, so entries survive a resume and a reuse
-    (an entry's `launch_token` says which launch it belongs to), their
+    (an entry's immutable `life_number` says which life it belongs to, and its
+    mutable `launch_token` which launch within that life), their
     `running` ones closed and the row's notes deleted by the liveness close
     (see [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)). They go with the row through the foreign key's
     cascade: `expire`'s `DeleteFinishedIfSameLife` and the admin `delete`
@@ -1057,7 +1063,8 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     [`expire`](#expire) and [`delete`](#delete)).
   - **Retention: two caps of 300.** One row holds at most
     `store.SubagentCap` (300) entries (records and observations of every launch
-    together) and at most 300 claimable launches. At the cap, one more insert
+    and life together, including hidden earlier-life entries) and at most 300
+    claimable launches. At the cap, one more insert
     evicts exactly one row first. Entries: the closed observation (`confirmed`
     0, `state` not `running`) with the oldest `activity_at`; when no
     observation is closed, the closed record with the oldest `activity_at`;
@@ -2473,7 +2480,10 @@ shape (names, positions, index columns and foreign keys).
    [`internal/store`](#internalstore)). It runs after the renames, so the
    tables' foreign keys to `spawns(instance_id)` name the renamed column.
    Both tables start empty and every existing row keeps `subagent_tracking`
-   0: there is no backfill for them.
+   0: there is no backfill for them. The `subagents` definition includes the
+   required `life_number INTEGER NOT NULL` after `stopped_at_source` and
+   `UNIQUE(instance_id, life_number, subagent_id)`, exactly as the fresh schema
+   does; these are part of this v8 → v9 hop, not a separate migration.
 3. **One backfill**: phase 3, `v9BackfillSQL` (`UPDATE spawns SET agent =
    'claude' WHERE agent = ''`), after the renames, the three columns and the
    subagent tables and before the stamp, makes every row that existed at the migration a Claude row.
@@ -4368,6 +4378,14 @@ of another process, or of a row that is not live, writes nothing.
 the other `cut` methods apply `CutSubagentString`, 1 KiB cut at a character
 boundary, to every payload-derived string on entry, so a caller cuts nothing):
 
+Every entry lookup uses `readEntry` (`subagent_writes.go`), which requires the
+entry's `life_number` to equal its owning row's current life. An id present
+only in an earlier life therefore takes the no-entry branch below: creating
+events insert a separate entry, while no-create events leave it untouched.
+Existing entries can move between launches only within their immutable life.
+**Must use:** entry transition writers use this current-life lookup and the
+shared `insertEntry`/`writeEntry` helpers; no second lookup, insert or life update.
+
 - **Entries and claimable launches.** An entry is a record (`confirmed` 1) once
   a claim, a launch result or a snapshot or listing confirms it, and an observation (`confirmed` 0)
   until then. A claimable launch is opened by the Agent tool's `PreToolUse`
@@ -4383,12 +4401,13 @@ boundary, to every payload-derived string on entry, so a caller cuts nothing):
 - **Snapshot** (`turnEnd`, after the claimable-launch close, in the same
   transaction; only when the `Stop` has a snapshot): the listed ids are applied
   by `applyListed` with create, then `closeAbsent` runs.
-  - *Create*: a listed id with no entry (of any launch) gets a confirmed,
+  - *Create*: a listed id with no current-life entry gets a confirmed,
     `running` entry of the current launch, `run_mode` `background`, the listing's
     type (NULL when it gave none) and the Stop's session id, `opened_at` and
     `activity_at` at the receipt time; every other field is NULL. The gated entry
     cap eviction runs first, as for any create.
-  - *Fill and confirm*: a listed id with an entry of any launch is confirmed,
+  - *Fill and confirm*: a listed id with a current-life entry of any launch is
+    confirmed,
     moved into the current launch, and a NULL `run_mode` becomes `background`
     (never overwritten). State, times, type and description are never touched, so
     it never reopens a `stopped` or `lost` entry. `activity_at` is set only when
@@ -4592,7 +4611,8 @@ payload over 1 MiB is dropped whole before any of this.
 ### The `list-subagents` verb
 
 `list-subagents` is the one read of an agent's subagent records: its tracking
-flag and every confirmed record, as structured fields on every machine-readable
+flag and every confirmed current-life record across launches, as structured
+fields on every machine-readable
 surface (CLI, MCP, Go, TypeScript). The verb and the store read behind it are
 agent-neutral: they carry no Claude Code name and return the row's tracking
 flag and confirmed records through the same read. `tracked` is the row's
@@ -4665,8 +4685,12 @@ and its records from one statement, so the two are one consistent read. The
 flag reads `true` only when the column is the integer 1, as the hook gate and
 `GetSpawn` read it; any other stored value, a text or `NULL` one included, reads
 `false` and is never an error. The statement is a
-`LEFT JOIN` of the row to its `confirmed = 1` entries, of every launch and life
-of the row, in any state. It orders by `first_started_at` ascending with `NULL`
+`LEFT JOIN` of the row to its `confirmed = 1` entries whose `life_number`
+equals `spawns.life_number`, across launches of that life and in any state.
+Earlier-life entries remain stored and count toward the all-life cap, but
+are hidden. The same subagent id can have a separate entry in another life;
+it is unique among the records returned. It orders by `first_started_at`
+ascending with `NULL`
 last, then `subagent_id`. A row with no record gives the flag as stored and an
 empty non-nil slice, so a row from before the upgrade is `false` with none. A
 row that does not exist is an error matching `ErrSpawnNotFound`. It never
@@ -6195,8 +6219,11 @@ and only while the row is still finished with the examined snapshot:
 - the deletion of every permission request of the id. Children keep
   their parent id;
 - the close of the row's running subagent entries and claimable launches
-  (`lost`, `agent_gone`, at the new `launch_started_at`; the entries stay
-  listed and a start reopens one in the new launch; see
+  (`lost`, `agent_gone`, at the new `launch_started_at`; retained entries stay
+  stored in their prior lives and are hidden from the new life's listing.
+  A start with the same subagent id creates a separate current-life entry;
+  reopening an existing entry is only within its life, as described in
+  [Subagent capture](#subagent-capture). See
   [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)).
 
 Outcomes: changed or removed since examined → the lost-race
@@ -10339,7 +10366,8 @@ row write applied:
 - reuse's reset (`ResetForReuse`).
 
 **What it writes.** One UPDATE turns every `running` entry of the row, records
-and observations of every launch, `lost` with `close_reason` `agent_gone` and
+and observations of every launch and life, `lost` with `close_reason`
+`agent_gone` and
 sets its `lost_at` and `activity_at` to the instant; no other column changes,
 and a `stopped` or `lost` entry is untouched. One DELETE removes every
 claimable launch of the row. It deletes no entry. It ignores the row's
@@ -10374,10 +10402,16 @@ has no entry. Also nothing: `kill`, which writes no row; a SessionEnd that is
 not terminal (a soft refresh); a Codex end report (`ApplyHookEndReport`: a gated soft refresh that keeps the state, sets `end_reported_at` and closes no request or entry; see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)); `find-missing`'s liveness note, its clear, its
 `unreported` note and its adoption; and a result it leaves unverified.
 
+The restore of a failed reuse also restores the row's prior `life_number`,
+so that life's retained records become visible again through
+`ListSubagentRecords`. Restoring visibility never reopens the entries closed
+by the reset. A failed resume restores the launch within the same life.
+
 **A row that comes back.** A hook moves an `ended` or `missing` row back to a
 live state (the gate checks only the hook's parent process and the ended and
 mark writes leave `subagent_tracking` and `launch_token` as they were), and
-its closed entries stay closed. Only a `SubagentStart` for an entry reopens it,
+its closed entries stay closed. Only a `SubagentStart` for a current-life entry
+reopens it,
 in the current launch; a listing never does, and a stop of an earlier launch's
 entry changes nothing. A stop of a `lost` entry of the current launch, or a
 `completed` launch result for a `lost` entry, turns it `stopped` (`close_reason`
@@ -19125,14 +19159,18 @@ unchanged. When two options set the same column, the later one wins.
   a raw connection, enforce no invariant of the entries (an option can make a
   row that breaks one), and return an error wrapping `store.ErrSpawnNotFound`
   for a missing row. By default an entry is confirmed, `running` and of the
-  row's current launch token (read at seed time), with `opened_at` and
+  row's current launch token and `life_number` (read at seed time), with
+  `opened_at` and
   `activity_at` at `apitest.SeededSubagentMs` and every other field NULL; a
   launch note takes the current launch token, type `general-purpose` and
   `opened_at` `SeededSubagentMs`. `SubagentOption` has one `WithSubagent*`
   option per column (`WithSubagentState`, `WithSubagentCloseReason`,
   `WithSubagentLaunchToken`, `WithSubagentConfirmed`, `WithSubagentOpenedAt`,
   `WithSubagentActivityAt`, and so on; a later option for the same column
-  wins); `SubagentLaunchOption` has `WithClaimableLaunchToken`,
+  wins). `WithSubagentLife(life int64)` overrides the owning row's default
+  life, independently of `WithSubagentLaunchToken`, so tests can seed retained
+  earlier-life entries and the same id in multiple lives. `SubagentLaunchOption`
+  has `WithClaimableLaunchToken`,
   `WithClaimableType` and `WithClaimableOpenedAt`. **Must use** them to seed
   the two tables, never raw SQL: a test that seeds to the cap sets
   `activity_at` or `opened_at` explicitly so the eviction order is the one
@@ -19247,13 +19285,19 @@ values, except for a row the test inserted itself.
   - A missing row returns an error wrapping `store.ErrSpawnNotFound`. It
     never creates a store file.
 - `ReadSubagentRows(dbPath, instanceID) (SubagentRows, error)`
-  - Returns the id's `subagents` entries and `subagent_launches` notes raw, in
+  - Returns the id's `subagents` entries across all lives and
+    `subagent_launches` notes raw, in
     `created_seq` order: `SubagentRows{Entries []SubagentEntryColumns,
     Launches []SubagentLaunchColumns}`, both slices non-nil. Each column comes
-    back as `any` (nil for NULL, `int64` for an integer), `CreatedSeq` as
-    `int64`. It reads the tables directly, never through the store, so it
+    back as `any` (nil for NULL, `int64` for an integer), except `CreatedSeq`
+    and `SubagentEntryColumns.LifeNumber`, which are `int64`. Use `LifeNumber`
+    to distinguish entries sharing a subagent id across lives. It reads the
+    tables directly, never through the store, so it
     works on rows no store method decodes. An id with no rows (or no row of
     `spawns`) gives empty slices and no error; it never creates a store file.
+  - **Must use:** raw storage assertions use this reader; visibility assertions
+    use `ListSubagentRecords` or `api.ListSubagents`. Tests seed entries through
+    `SeedSubagent` and `WithSubagentLife`, never a second raw seeder or reader.
 - `ReadSessionHistoryAllLives(dbPath, instanceID) ([]HistoryEntry, error)`
   - Returns the id's `session_history` entries from every life:
     `SessionID`, `JSONLPath` (`sql.NullString`), `LifeNumber` and

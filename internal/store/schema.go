@@ -94,14 +94,15 @@ import (
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
 // (unconfirmed): created_seq grows with each insert and is never reused, so it
-// orders creation; launch_token is the launch the entry belongs to; times are
+// orders creation; life_number is the row's life at insert and never changes;
+// launch_token is the launch the entry belongs to within that life; times are
 // integer milliseconds since the epoch; opened_at is the latest time the entry
 // became running (or its creation time) and activity_at the instant of the
 // latest write that changed it; the three *_source columns say which source set
 // a value that has more than one, NULL while the value is unknown. The
-// UNIQUE(instance_id, subagent_id) constraint's implicit index serves the
-// per-row read, the per-launch transitions and the cap, which all lead with
-// instance_id.
+// UNIQUE(instance_id, life_number, subagent_id) constraint's implicit index
+// serves the per-row read, the per-launch transitions and the cap, which all
+// lead with instance_id.
 //
 // subagent_launches holds one row per open claimable launch: an internal note
 // of an Agent tool call not yet matched to a subagent. UNIQUE(instance_id,
@@ -231,7 +232,8 @@ CREATE TABLE IF NOT EXISTS subagents (
     subagent_type_source TEXT,
     run_mode_source      TEXT,
     stopped_at_source    TEXT,
-    UNIQUE(instance_id, subagent_id)
+    life_number          INTEGER NOT NULL,
+    UNIQUE(instance_id, life_number, subagent_id)
 );
 
 CREATE TABLE IF NOT EXISTS subagent_launches (
@@ -994,7 +996,8 @@ CREATE TABLE IF NOT EXISTS subagents (
     subagent_type_source TEXT,
     run_mode_source      TEXT,
     stopped_at_source    TEXT,
-    UNIQUE(instance_id, subagent_id)
+    life_number          INTEGER NOT NULL,
+    UNIQUE(instance_id, life_number, subagent_id)
 );
 
 CREATE TABLE IF NOT EXISTS subagent_launches (

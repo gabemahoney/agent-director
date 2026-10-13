@@ -1,7 +1,7 @@
 package api_test
 
 // list_subagents_test.go covers api.ListSubagents over a real store (SR-11.1 to
-// 11.4, 6.1, 6.2): the tracked flag, records only, every launch and life, the
+// 11.4, 6.1, 6.2): the tracked flag, records only, every launch of the current life, the
 // order, the JSON shape with explicit nulls, the time encoding, the failure
 // results, and that a read changes nothing. The store read is tested here only.
 
@@ -145,20 +145,22 @@ func TestListSubagentsTracked(t *testing.T) {
 	}
 }
 
-// TestListSubagentsRecordsOnly: a row's records of every launch and life come back,
-// each (instance_id, subagent_id) once, in any state; observations, claimable
+// TestListSubagentsRecordsOnly: current-life records across launches come back,
+// each subagent_id once, in any state; earlier lives, observations, claimable
 // launches and other rows' records never do.
 func TestListSubagentsRecordsOnly(t *testing.T) {
 	t.Parallel()
-	dbPath, s := newSubagentStore(t, "subs-main")
+	dbPath, s := newSubagentStore(t, "subs-main", apitest.WithLifeNumber(4))
 	seedWaiting(t, dbPath, "subs-other")
 	const earlier = "earlier-launch-token"
 	lost := []apitest.SubagentOption{apitest.WithSubagentState(store.SubagentStateLost), apitest.WithSubagentCloseReason(store.SubagentCloseAgentGone)}
 	stopped := []apitest.SubagentOption{apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentCloseReason(store.SubagentCloseStopEvent)}
+	seedSub(t, dbPath, "subs-main", "run", apitest.WithSubagentLife(3), apitest.WithSubagentDescription("hidden same-id"), apitest.WithSubagentState("lost"))
+	seedSub(t, dbPath, "subs-main", "hidden-only", apitest.WithSubagentLife(3))
 	seedSub(t, dbPath, "subs-main", "run")
 	seedSub(t, dbPath, "subs-main", "stop", stopped...)
 	seedSub(t, dbPath, "subs-main", "lost", lost...)
-	seedSub(t, dbPath, "subs-main", "earlier-life", append([]apitest.SubagentOption{apitest.WithSubagentLaunchToken(earlier)}, lost...)...)
+	seedSub(t, dbPath, "subs-main", "earlier-launch", append([]apitest.SubagentOption{apitest.WithSubagentLaunchToken(earlier)}, lost...)...)
 	seedSub(t, dbPath, "subs-main", "observation", apitest.WithSubagentConfirmed(false))
 	seedSub(t, dbPath, "subs-main", "earlier-observation", apitest.WithSubagentConfirmed(false), apitest.WithSubagentLaunchToken(earlier))
 	if err := apitest.SeedSubagentLaunch(dbPath, "subs-main", "toolu_claimable"); err != nil {
@@ -168,7 +170,12 @@ func TestListSubagentsRecordsOnly(t *testing.T) {
 	seedSub(t, dbPath, "subs-other", "other-only")
 
 	res := listSubs(t, s, "subs-main")
-	if want := []string{"earlier-life", "lost", "run", "stop"}; !slices.Equal(subIDs(res), want) {
+	for _, r := range res.Subagents {
+		if r.SubagentID == "run" && (r.Description != nil || r.State != "running") {
+			t.Errorf("same id did not select current entry: %+v", r)
+		}
+	}
+	if want := []string{"earlier-launch", "lost", "run", "stop"}; !slices.Equal(subIDs(res), want) {
 		t.Errorf("subs-main records = %v; want %v", subIDs(res), want)
 	}
 	for _, r := range res.Subagents {
@@ -180,7 +187,7 @@ func TestListSubagentsRecordsOnly(t *testing.T) {
 	for _, r := range res.Subagents {
 		states[r.SubagentID] = r.State
 	}
-	if want := map[string]string{"run": "running", "stop": "stopped", "lost": "lost", "earlier-life": "lost"}; !reflect.DeepEqual(states, want) {
+	if want := map[string]string{"run": "running", "stop": "stopped", "lost": "lost", "earlier-launch": "lost"}; !reflect.DeepEqual(states, want) {
 		t.Errorf("states = %v; want %v", states, want)
 	}
 	if other := listSubs(t, s, "subs-other"); !slices.Equal(subIDs(other), []string{"other-only", "run"}) {
@@ -375,7 +382,8 @@ func TestListSubagentsFailures(t *testing.T) {
 func TestListSubagentsReadsOnly(t *testing.T) {
 	t.Parallel()
 	const id = "readonly-row"
-	dbPath, s := newSubagentStore(t, id)
+	dbPath, s := newSubagentStore(t, id, apitest.WithLifeNumber(4))
+	seedSub(t, dbPath, id, "run", apitest.WithSubagentLife(3), apitest.WithSubagentDescription("hidden"))
 	seedSub(t, dbPath, id, "run", apitest.WithSubagentFirstStartedAt(launchFracMillis))
 	seedSub(t, dbPath, id, "obs", apitest.WithSubagentConfirmed(false))
 	if err := apitest.SeedSubagentLaunch(dbPath, id, "toolu_claimable"); err != nil {

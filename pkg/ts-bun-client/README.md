@@ -164,7 +164,10 @@ Each row, like `get`'s result, carries `agent` (`"claude"` or `"codex"`), the ag
 
 ### listSubagents
 
-Read the subagent records of one agent, and whether the agent is tracked.
+Read the subagent records across launches of one agent's current life, and
+whether the agent is tracked. `subagent_id` is unique among the returned
+records; earlier-life records remain stored but are hidden. See
+[visibility and retention](../../docs/usage.md#read-an-agents-subagent-records).
 
 ```sh
 agent-director list-subagents --instance-id <id>

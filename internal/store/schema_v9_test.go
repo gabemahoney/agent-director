@@ -55,41 +55,71 @@ func TestV9MigrationKeepsV8Rows(t *testing.T) {
 	}
 }
 
-// TestV9MigratedStoreEnforcesSubagentForeignKeys: the subagent tables of a
-// migrated store are usable and keep their foreign keys to the renamed
-// spawns(instance_id): an entry and a claimable launch for a row that exists
-// insert, ones for no row are refused, and deleting the row removes its
-// entries and launches while another row's stay. (Written through the store's
-// own connection, which runs with foreign keys on.)
-func TestV9MigratedStoreEnforcesSubagentForeignKeys(t *testing.T) {
-	_, s, _ := migrateV8Fixture(t)
-	const entry = `INSERT INTO subagents (instance_id, subagent_id, launch_token, confirmed, state, opened_at, activity_at)
-		VALUES (?, 'agent-1', 'tok', 1, 'running', 1, 1)`
-	const launch = `INSERT INTO subagent_launches (instance_id, launch_token, tool_use_id, subagent_type, opened_at)
-		VALUES (?, 'tok', 'toolu_1', 'general-purpose', 1)`
-	for _, id := range []string{v8OptedOutID, v8LiveID} {
-		for _, q := range []string{entry, launch} {
-			if _, err := s.db.Exec(q, id); err != nil {
-				t.Fatalf("insert for %s: %v", id, err)
+// TestV9SubagentConstraints checks required life identity, uniqueness and
+// foreign keys with cascade deletion on fresh and migrated stores.
+func TestV9SubagentConstraints(t *testing.T) {
+	for _, migrated := range []bool{false, true} {
+		name := "fresh"
+		if migrated {
+			name = "v8-to-v9"
+		}
+		t.Run(name, func(t *testing.T) {
+			var s *Store
+			if migrated {
+				_, s, _ = migrateV8Fixture(t)
+			} else {
+				s, _ = openTempStore(t)
+				for _, id := range []string{v8OptedOutID, v8LiveID} {
+					insertRow(t, s.db, "spawns", map[string]any{
+						"instance_id": id, "state": "waiting", "cwd": "/tmp",
+						"tmux_session_name": id, "relay_mode": "off", "agent": "claude",
+					})
+				}
 			}
-		}
-	}
-	for _, q := range []string{entry, launch} {
-		if _, err := s.db.Exec(q, "no-such-row"); err == nil {
-			t.Errorf("insert for a row that does not exist succeeded; want a foreign key refusal:\n%s", q)
-		}
-	}
-	if _, err := s.db.Exec(`DELETE FROM spawns WHERE instance_id = ?`, v8OptedOutID); err != nil {
-		t.Fatalf("delete the row: %v", err)
-	}
-	for table, want := range map[string]int{"subagents": 1, "subagent_launches": 1} {
-		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8OptedOutID).Scan(&n); err != nil || n != 0 {
-			t.Errorf("%s rows of the deleted row = %d, %v; want 0 (cascade)", table, n, err)
-		}
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8LiveID).Scan(&n); err != nil || n != want {
-			t.Errorf("%s rows of the kept row = %d, %v; want %d", table, n, err, want)
-		}
+			const entry = `INSERT INTO subagents (instance_id, subagent_id, launch_token, confirmed, state, opened_at, activity_at, life_number)
+				VALUES (?, 'agent-1', ?, 1, 'running', 1, 1, ?)`
+			const launch = `INSERT INTO subagent_launches (instance_id, launch_token, tool_use_id, subagent_type, opened_at)
+				VALUES (?, 'tok', 'toolu_1', 'general-purpose', 1)`
+			for _, id := range []string{v8OptedOutID, v8LiveID} {
+				for _, life := range []int{0, 2} {
+					mustExec(t, s.db, entry, id, "tok", life)
+				}
+				mustExec(t, s.db, launch, id)
+			}
+			for _, life := range []int{0, 2} {
+				if _, err := s.db.Exec(entry, v8LiveID, "another-launch", life); err == nil || !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+					t.Errorf("duplicate subagent in life %d = %v; want unique constraint refusal across launches", life, err)
+				}
+			}
+			for _, tc := range []struct {
+				name    string
+				query   string
+				args    []any
+				refusal string
+			}{
+				{"omitted life", `INSERT INTO subagents (instance_id, subagent_id, launch_token, confirmed, state, opened_at, activity_at)
+					VALUES (?, 'no-life', 'tok', 1, 'running', 1, 1)`, []any{v8LiveID}, "NOT NULL constraint failed: subagents.life_number"},
+				{"null life", entry, []any{v8LiveID, "tok", nil}, "NOT NULL constraint failed: subagents.life_number"},
+				{"entry without spawn", entry, []any{"no-such-row", "tok", 2}, "FOREIGN KEY constraint failed"},
+				{"launch without spawn", launch, []any{"no-such-row"}, "FOREIGN KEY constraint failed"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					if _, err := s.db.Exec(tc.query, tc.args...); err == nil || !strings.Contains(err.Error(), tc.refusal) {
+						t.Errorf("insert = %v; want %s", err, tc.refusal)
+					}
+				})
+			}
+			mustExec(t, s.db, `DELETE FROM spawns WHERE instance_id = ?`, v8OptedOutID)
+			for table, want := range map[string]int{"subagents": 2, "subagent_launches": 1} {
+				var n int
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8OptedOutID).Scan(&n); err != nil || n != 0 {
+					t.Errorf("%s rows of the deleted row = %d, %v; want 0 (cascade across lives)", table, n, err)
+				}
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE instance_id = ?`, v8LiveID).Scan(&n); err != nil || n != want {
+					t.Errorf("%s rows of the kept row = %d, %v; want %d", table, n, err, want)
+				}
+			}
+		})
 	}
 }
 

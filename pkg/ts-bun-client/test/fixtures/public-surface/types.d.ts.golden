@@ -979,7 +979,7 @@ export interface ListSubagentsParams {
  * (trailing zeros dropped, no fraction on a whole second), exactly as the CLI prints it.
  */
 export interface SubagentRecord {
-    /** The subagent's id, unique within its row. */
+    /** The subagent's id, unique among the records shown for its row. */
     subagent_id: string;
     /** The id of the row (agent) the subagent belongs to. */
     instance_id: string;
@@ -1032,8 +1032,8 @@ export interface ListSubagentsResult {
      */
     tracked: boolean;
     /**
-     * Every subagent record of the row, ordered by `first_started_at` ascending (a null one last),
-     * then `subagent_id`. Empty array when it has none.
+     * Every subagent record of the row's current life, across every launch of it, ordered by
+     * `first_started_at` ascending (a null one last), then `subagent_id`. Empty array when it has none.
      */
     subagents: SubagentRecord[];
 }

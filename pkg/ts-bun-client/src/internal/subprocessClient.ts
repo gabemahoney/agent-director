@@ -493,8 +493,8 @@ export class SubprocessClient {
   }
 
   /**
-   * listSubagents — whether an agent tracks subagents, and every subagent record of it (every
-   * launch and life of the row). Rejects with ErrSpawnNotFound when no row has the id.
+   * listSubagents — whether an agent tracks subagents, and every subagent record of the row's
+   * current life, across every launch of it. Rejects with ErrSpawnNotFound when no row has the id.
    */
   async listSubagents(params: ListSubagentsParams): Promise<ListSubagentsResult> {
     this.#assertOpen();

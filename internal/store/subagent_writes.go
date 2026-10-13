@@ -90,9 +90,9 @@ type SubagentLifecycleEvent struct {
 	// Listing (stop only; nil or empty is no listing) is the stop's list of
 	// running background subagents (SR-7.6). After the stop, whatever the stop
 	// did (it may have changed nothing, SR-4.4), each listed id with an entry of
-	// any launch is confirmed and moved to the current launch, and a null
-	// run_mode becomes background (source snapshot). A listing never creates,
-	// closes, reopens or retypes an entry, never changes a state or a time, and
+	// any launch of the current life is confirmed and moved to the current
+	// launch, and a null run_mode becomes background (source snapshot). A listing
+	// never creates, closes, reopens or retypes an entry, never changes a state or a time, and
 	// is never applied for an empty SubagentID. Only each id is used; a listed
 	// Type is ignored. No description is ever an input.
 	Listing []SubagentListed
@@ -318,14 +318,17 @@ func (t *subagentTx) exec(what, stmt string, args ...any) (int64, error) {
 	return n, nil
 }
 
-// readEntry reads the entry (instance id, subagentID) of any launch.
+// readEntry reads the entry (instance id, subagentID) of any launch of the
+// row's current life. An entry held only by an earlier life is absent.
 func (t *subagentTx) readEntry(subagentID string) (subagentEntry, bool, error) {
 	var (
 		e         subagentEntry
 		confirmed int
 	)
 	err := t.conn.QueryRowContext(t.ctx, `SELECT `+subagentEntryColumns+`
-	    FROM subagents WHERE instance_id = ? AND subagent_id = ?`, t.instanceID, subagentID,
+	    FROM subagents WHERE instance_id = ? AND subagent_id = ?
+	      AND life_number = (SELECT sp.life_number FROM spawns sp WHERE sp.instance_id = ?)`,
+		t.instanceID, subagentID, t.instanceID,
 	).Scan(&e.createdSeq, &e.launchToken, &confirmed, &e.sessionID, &e.subagentType,
 		&e.description, &e.model, &e.parentType, &e.parentID, &e.toolUseID, &e.runMode,
 		&e.firstStartedAt, &e.startedAt, &e.stoppedAt, &e.lostAt, &e.state, &e.closeReason,
@@ -345,7 +348,7 @@ func (t *subagentTx) readEntry(subagentID string) (subagentEntry, bool, error) {
 // writes nothing, activity_at included (SR-7.7). The statement is gated
 // (subagentGateExists); move puts the entry into the row's current launch, read
 // in the statement, and currentOnly makes the statement act only on an entry
-// that already belongs to it. session_id is never written.
+// that already belongs to it. session_id and life_number are never written.
 func (t *subagentTx) writeEntry(old, next subagentEntry, at int64, move, currentOnly bool) error {
 	next.activityAt = old.activityAt
 	if next == old {
@@ -378,9 +381,9 @@ func (t *subagentTx) writeEntry(old, next subagentEntry, at int64, move, current
 	return err
 }
 
-// insertEntry creates e, an entry of the row's current launch, with the subagent
-// id: one gated insert-select from the spawns row, so the launch_token is read
-// in the statement. It reports whether a row was inserted.
+// insertEntry creates e, an entry of the row's current life and launch, with
+// the subagent id: one gated insert-select from the spawns row reads both
+// life_number and launch_token. It reports whether a row was inserted.
 func (t *subagentTx) insertEntry(subagentID string, e subagentEntry) (bool, error) {
 	args := []any{subagentID, boolInt(e.confirmed), e.sessionID, e.subagentType, e.description, e.model,
 		e.parentType, e.parentID, e.toolUseID, e.runMode,
@@ -390,15 +393,16 @@ func (t *subagentTx) insertEntry(subagentID string, e subagentEntry) (bool, erro
 	n, err := t.exec("insert subagent entry", `INSERT INTO subagents
 	    (instance_id, subagent_id, launch_token, confirmed, session_id, subagent_type, description, model,
 	     parent_type, parent_id, tool_use_id, run_mode, first_started_at, started_at, stopped_at, lost_at,
-	     state, close_reason, opened_at, activity_at, subagent_type_source, run_mode_source, stopped_at_source)
-	SELECT sp.instance_id, ?, sp.launch_token, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+	     state, close_reason, opened_at, activity_at, subagent_type_source, run_mode_source, stopped_at_source,
+	     life_number)
+	SELECT sp.instance_id, ?, sp.launch_token, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, sp.life_number
 	  FROM spawns sp WHERE `+subagentRowGateSQL, args...)
 	return n > 0, err
 }
 
-// create makes room for and inserts a new entry of the current launch: the
-// gated entry-cap eviction first, then (claimType not empty) the gated claim of
-// the oldest open claimable launch of the current launch with that type, which
+// create makes room for and inserts a new entry of the current life and launch:
+// the gated entry-cap eviction first, then (claimType not empty) the gated claim
+// of the oldest open claimable launch of the current launch with that type, which
 // confirms the entry and fills no field, then the gated insert. When the insert
 // inserts nothing after an eviction or a claim happened, it returns
 // errSubagentWriteRefused so the caller's transaction rolls back whole.
@@ -487,8 +491,8 @@ func (t *subagentTx) start(ev SubagentLifecycleEvent) error {
 
 // stop applies a SubagentStop (SR-7.2, SR-7.6): the stop of the current launch's
 // entry, then, whatever the stop did (even nothing), the stop's listing: it
-// confirms, moves and fills each listed entry of any launch, and never creates,
-// closes or reopens one (applyListed).
+// confirms, moves and fills each listed entry of any launch of the current
+// life, and never creates, closes or reopens one (applyListed).
 func (t *subagentTx) stop(ev SubagentLifecycleEvent) error {
 	if err := t.stopEntry(ev); err != nil {
 		return err
@@ -686,13 +690,14 @@ func cutListed(in []SubagentListed) []SubagentListed {
 }
 
 // applyListed applies a snapshot's or a SubagentStop's listing to each listed
-// subagent in order (SR-7.4, SR-7.6). An id with an entry of any launch: the
-// entry is confirmed, moves to the current launch and a null run_mode becomes
-// background (source snapshot); its type, description, state and times never
+// subagent in order (SR-7.4, SR-7.6). An id with an entry of any launch of the
+// current life: the entry is confirmed, moves to the current launch and a null
+// run_mode becomes background (source snapshot); its type, description, state and times never
 // change, so a stopped or lost entry is not reopened. When it changes nothing it
-// writes nothing. An id with no entry: with create, a confirmed running entry of
-// the current launch with run_mode background, subagent_type the listing's type
-// (source snapshot; null when none), session_id sessionID (null when empty),
+// writes nothing. An id with no current-life entry: with create, a confirmed
+// running entry of the current life and launch with run_mode background,
+// subagent_type the listing's type (source snapshot; null when none),
+// session_id sessionID (null when empty),
 // opened_at and activity_at at and every other field null (the gated entry-cap
 // eviction runs first); without create, nothing. listed is already cut
 // (cutListed).

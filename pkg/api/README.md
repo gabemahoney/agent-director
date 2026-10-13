@@ -255,7 +255,10 @@ read: `ErrListInvalidLabel` (label not in `key=value` form) and
 
 ### ListSubagents
 
-Return the subagent records of one agent and whether the agent is tracked.
+Return the subagent records across launches of one agent's current life and
+whether the agent is tracked. `SubagentID` is unique among the returned
+records; earlier-life records remain stored but are hidden. See
+[visibility and retention](../../docs/usage.md#read-an-agents-subagent-records).
 
 ```bash
 agent-director list-subagents \

@@ -57,8 +57,8 @@ func columnsByName(shape map[string]any) map[string]any {
 // old positions, the v3, v5, v6, v7, v8 and v9 columns (in order, last on their
 // tables; v9's end with subagent_tracking), the subagents and subagent_launches
 // tables (b.xjn: columns in order with types and NOT NULL, each foreign key to
-// spawns(instance_id) ON DELETE CASCADE, the unique pairs (instance_id,
-// subagent_id) and (instance_id, tool_use_id) and the claim index), store_meta,
+// spawns(instance_id) ON DELETE CASCADE, the unique keys (instance_id,
+// life_number, subagent_id) and (instance_id, tool_use_id) and the claim index), store_meta,
 // WAL and foreign keys on, no sentinel, and a 0700 parent and 0600 file that a
 // second open does not widen.
 func TestFreshStoreSchema(t *testing.T) {

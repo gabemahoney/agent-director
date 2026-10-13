@@ -1224,7 +1224,7 @@ func col(name, typ string, notNull bool, pk int) tableColumn {
 
 // v9SubagentTable is one table of the subagent storage the v8→v9 hop creates
 // (b.xjn SR-10.1, SR-10.5), written out here and not read from the hop: its
-// columns in order, the foreign key and unique pair, and the CREATE text a
+// columns in order, the foreign key and unique key, and the CREATE text a
 // part-migrated store is given (preAddV9SubagentObjects).
 type v9SubagentTable struct {
 	name    string
@@ -1248,10 +1248,10 @@ var v9SubagentTables = []v9SubagentTable{
 			col("state", "TEXT", true, 0), col("close_reason", "TEXT", false, 0),
 			col("opened_at", "INTEGER", true, 0), col("activity_at", "INTEGER", true, 0),
 			col("subagent_type_source", "TEXT", false, 0), col("run_mode_source", "TEXT", false, 0),
-			col("stopped_at_source", "TEXT", false, 0),
+			col("stopped_at_source", "TEXT", false, 0), col("life_number", "INTEGER", true, 0),
 		},
 		fk:     "instance_id -> spawns(instance_id) on delete CASCADE",
-		unique: []string{"instance_id", "subagent_id"},
+		unique: []string{"instance_id", "life_number", "subagent_id"},
 		ddl: `CREATE TABLE subagents (
 			created_seq INTEGER PRIMARY KEY AUTOINCREMENT,
 			instance_id TEXT NOT NULL REFERENCES spawns(instance_id) ON DELETE CASCADE,
@@ -1262,7 +1262,8 @@ var v9SubagentTables = []v9SubagentTable{
 			state TEXT NOT NULL, close_reason TEXT,
 			opened_at INTEGER NOT NULL, activity_at INTEGER NOT NULL,
 			subagent_type_source TEXT, run_mode_source TEXT, stopped_at_source TEXT,
-			UNIQUE(instance_id, subagent_id))`,
+			life_number INTEGER NOT NULL,
+			UNIQUE(instance_id, life_number, subagent_id))`,
 	},
 	{
 		name: "subagent_launches",
@@ -1294,7 +1295,7 @@ var v9ClaimIndexColumns = []string{"instance_id", "launch_token", "subagent_type
 
 // assertV9SubagentSchema checks db's two subagent tables: each one's columns in
 // order with type, NOT NULL and primary key; its foreign key to
-// spawns(instance_id) ON DELETE CASCADE; its one unique pair (the implicit
+// spawns(instance_id) ON DELETE CASCADE; its one unique key (the implicit
 // index sqlite_autoindex_<table>_1, unique); and that the claim index is the
 // only explicit index on them.
 func assertV9SubagentSchema(t *testing.T, db *sql.DB) {
@@ -1309,7 +1310,7 @@ func assertV9SubagentSchema(t *testing.T, db *sql.DB) {
 		}
 		auto := "sqlite_autoindex_" + tbl.name + "_1"
 		if got := shape["index "+auto]; !reflect.DeepEqual(got, tbl.unique) {
-			t.Errorf("index %s = %v; want the unique pair %v", auto, got, tbl.unique)
+			t.Errorf("index %s = %v; want the unique key %v", auto, got, tbl.unique)
 		}
 		var unique int
 		if err := db.QueryRow(`SELECT "unique" FROM pragma_index_list(?) WHERE name = ?`, tbl.name, auto).Scan(&unique); err != nil || unique != 1 {

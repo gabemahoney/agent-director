@@ -109,6 +109,9 @@ func TestReuseRestoreApplied(t *testing.T) {
 			fresh := reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust)
 			r := rrDoReset(t, f, id, fresh)
 			reset := f.subagentRowsOf(id)
+			if _, rows, err := f.s.ListSubagentRecords(id); err != nil || len(rows) != 0 {
+				t.Fatalf("reset still reveals previous records: %+v, %v", rows, err)
+			}
 			if reflect.DeepEqual(reset, mix.rows) || !reflect.DeepEqual(reset, cmClosed(mix.rows, fresh.LaunchStartedAtMillis)) {
 				t.Fatalf("the reset left the entries and launches %+v from %+v; want the close mix closed at the launch start, or the restore check is vacuous", reset, mix.rows)
 			}
@@ -142,6 +145,19 @@ func TestReuseRestoreApplied(t *testing.T) {
 			}
 			if got := f.subagentRowsOf(id); !reflect.DeepEqual(got, reset) {
 				t.Errorf("subagent rows %+v -> %+v; want unchanged by the restore", reset, got)
+			}
+			_, visible, err := f.s.ListSubagentRecords(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantVisible := 0
+			for _, e := range reset.Entries {
+				if e.Confirmed == int64(1) && e.LifeNumber == r.before.LifeNumber {
+					wantVisible++
+				}
+			}
+			if len(visible) != wantVisible || wantVisible == 0 {
+				t.Errorf("restore shows %d records; want %d previous-life records", len(visible), wantVisible)
 			}
 			f.assertBystanderKept(mix)
 			if reqs := f.reuseRequests(t, id); len(seeded.requests) == 0 || len(reqs) != 0 {

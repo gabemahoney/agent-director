@@ -36,7 +36,7 @@ func cmMs(n int64) int64 { return apitest.SeededSubagentMs + n*1000 }
 // seedCloseMix adds to id (a row whose launch token, if any, is its current
 // launch) a running record and a running observation of the current launch, a
 // stopped record, a lost absent_from_snapshot record, a stopped and a running
-// entry of an earlier launch, and a claimable launch in each launch; and gives a
+// entry of another life and launch, and a claimable launch in each launch; and gives a
 // new row a running entry and a claimable launch. Whatever id already holds
 // stays, and mix.rows is every subagent row of id as it is after seeding.
 func (f *v5Store) seedCloseMix(id string) closeMix {
@@ -46,6 +46,10 @@ func (f *v5Store) seedCloseMix(id string) closeMix {
 		current = "cm-current-launch"
 	}
 	const earlier = "cm-earlier-launch"
+	otherLife := int64(0)
+	if f.rawColumns(id).LifeNumber == int64(0) {
+		otherLife = 1
+	}
 	record := func(n int64, launch string, extra ...apitest.SubagentOption) []apitest.SubagentOption {
 		return append([]apitest.SubagentOption{
 			apitest.WithSubagentLaunchToken(launch), apitest.WithSubagentType("cm-type"), apitest.WithSubagentDescription("cm description"),
@@ -67,8 +71,8 @@ func (f *v5Store) seedCloseMix(id string) closeMix {
 		{"cm-stopped", record(3, current, stopped(4)...)},
 		{"cm-lost", record(5, current, apitest.WithSubagentState(store.SubagentStateLost), apitest.WithSubagentCloseReason(store.SubagentCloseAbsentFromSnapshot),
 			apitest.WithSubagentLostAt(cmMs(6)), apitest.WithSubagentActivityAt(cmMs(6)))},
-		{"cm-earlier-stopped", record(7, earlier, stopped(8)...)},
-		{"cm-earlier-running", record(9, earlier)},
+		{"cm-earlier-stopped", record(7, earlier, append(stopped(8), apitest.WithSubagentLife(otherLife))...)},
+		{"cm-earlier-running", record(9, earlier, apitest.WithSubagentLife(otherLife))},
 	} {
 		if err := apitest.SeedSubagent(f.path, id, e.id, e.opts...); err != nil {
 			f.t.Fatalf("SeedSubagent(%s): %v", e.id, err)
@@ -119,7 +123,7 @@ func (f *v5Store) assertMixClosedAt(m closeMix, at int64) {
 // lies between lo and hi, the clock read just before and just after the write.
 func (f *v5Store) assertMixClosedInWindow(m closeMix, lo, hi int64) {
 	f.t.Helper()
-	e, ok := f.entryOf(m.id, cmRecord)
+	e, ok := f.entryOf(m.id, cmRecord, m.rows.Entries[0].LifeNumber)
 	at, isInt := e.LostAt.(int64)
 	if !ok || !isInt || at < lo || at > hi {
 		f.t.Fatalf("lost_at of %s = %#v; want an instant in [%d, %d]", cmRecord, e.LostAt, lo, hi)
@@ -144,11 +148,15 @@ func (f *v5Store) assertBystanderKept(m closeMix) {
 	}
 }
 
-// entryOf returns id's entry with subagent id sub.
-func (f *v5Store) entryOf(id, sub string) (apitest.SubagentEntryColumns, bool) {
+// entryOf returns the current-life entry unless an explicit life is supplied.
+func (f *v5Store) entryOf(id, sub string, life ...int64) (apitest.SubagentEntryColumns, bool) {
 	f.t.Helper()
+	wantedLife := f.rawColumns(id).LifeNumber.(int64)
+	if len(life) > 0 {
+		wantedLife = life[0]
+	}
 	for _, e := range f.subagentRowsOf(id).Entries {
-		if e.SubagentID == sub {
+		if e.SubagentID == sub && e.LifeNumber == wantedLife {
 			return e, true
 		}
 	}

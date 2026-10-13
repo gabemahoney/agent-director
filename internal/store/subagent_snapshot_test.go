@@ -9,6 +9,7 @@ package store_test
 // subagent_helpers_test.go.
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -60,20 +61,25 @@ func TestSubagentSnapshotCreates(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newSAStore(t, store.StateWorking)
+			f := newSAStore(t, store.StateWorking, apitest.WithLifeNumber(4))
+			f.seedEntry(saSub, saStoppedSeed(store.SubagentSourceStop, apitest.WithSubagentLife(3))...)
+			hidden, _ := f.entryInLife(saSub, 3)
 			snap := &store.SubagentSnapshot{SessionID: tc.session, Listed: []store.SubagentListed{tc.listed}}
 			f.applied(storefix.ApplySubagentMainAgentStop(t, f.s, f.id, storefix.MainAgentStop{ReceivedMs: saE, Snapshot: snap}))
 
 			got := f.mustEntry(saSub)
-			want := apitest.SubagentEntryColumns{CreatedSeq: got.CreatedSeq, InstanceID: f.id, SubagentID: saSub, LaunchToken: f.token(),
+			want := apitest.SubagentEntryColumns{LifeNumber: 4, CreatedSeq: got.CreatedSeq, InstanceID: f.id, SubagentID: saSub, LaunchToken: f.token(),
 				Confirmed: int64(1), SessionID: tc.wantSess, SubagentType: tc.wantType, RunMode: store.SubagentRunModeBackground,
 				State: store.SubagentStateRunning, OpenedAt: saE, ActivityAt: saE,
 				SubagentTypeSource: tc.wantSrc, RunModeSource: store.SubagentSourceSnapshot}
 			if got != want {
 				t.Errorf("entry\n got %+v\nwant %+v", got, want)
 			}
-			if n := len(f.rows().Entries); n != 1 {
-				t.Errorf("%d entries; want 1", n)
+			if old, ok := f.entryInLife(saSub, 3); !ok || !reflect.DeepEqual(old, hidden) {
+				t.Errorf("earlier entry changed: %+v -> %+v", hidden, old)
+			}
+			if n := len(f.rows().Entries); n != 2 {
+				t.Errorf("%d entries; want 2", n)
 			}
 		})
 	}
@@ -329,4 +335,15 @@ func TestSubagentListingPrecedence(t *testing.T) {
 			t.Errorf("entry %+v; want %+v unchanged, activity_at included", got, before)
 		}
 	})
+}
+
+func TestSubagentListingEarlierLifeCreatesNothing(t *testing.T) {
+	t.Parallel()
+	f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
+	f.seedEntry(saSub, saSaturated(apitest.WithSubagentLife(3))...)
+	before := f.rows()
+	f.listStop("stopper", saE, saL(saSub, "Explore"))
+	if got := f.rows(); !reflect.DeepEqual(got, before) {
+		t.Errorf("subagent listing changed earlier-only entry: %+v -> %+v", before, got)
+	}
 }

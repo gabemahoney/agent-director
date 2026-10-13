@@ -20,7 +20,7 @@ import (
 func saFillEntries(f *saStore, extra ...apitest.SubagentOption) {
 	f.t.Helper()
 	f.seedEntry("victim", append([]apitest.SubagentOption{apitest.WithSubagentConfirmed(false),
-		apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentActivityAt(1)}, extra...)...)
+		apitest.WithSubagentState(store.SubagentStateStopped), apitest.WithSubagentLife(0), apitest.WithSubagentActivityAt(1)}, extra...)...)
 	for i := 1; i < store.SubagentCap; i++ {
 		f.seedEntry(fmt.Sprintf("filler-%d", i), append([]apitest.SubagentOption{apitest.WithSubagentActivityAt(capFillerMs + int64(i))}, extra...)...)
 	}
@@ -42,7 +42,14 @@ func (f *saStore) wantCounts(entries, launches int) {
 	}
 }
 
-func (f *saStore) hasEntry(sub string) bool { _, ok := f.entry(sub); return ok }
+func (f *saStore) hasEntry(sub string) bool {
+	for _, e := range f.rows().Entries {
+		if e.SubagentID == sub {
+			return true
+		}
+	}
+	return false
+}
 
 func (f *saStore) hasLaunch(tool string) bool {
 	for _, id := range saToolIDs(f.rows().Launches) {
@@ -59,7 +66,7 @@ func (f *saStore) hasLaunch(tool string) bool {
 func TestSubagentCapsOnRealWrites(t *testing.T) {
 	t.Run("a creating start", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		saFillEntries(f)
 		f.start(store.SubagentLifecycleEvent{SubagentID: "sa-new", ReceivedMs: saE})
 		f.wantCounts(store.SubagentCap, 0)
@@ -69,7 +76,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 	})
 	t.Run("a creating start that claims a launch", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		saFillEntries(f)
 		f.seedLaunch("toolu-claim", apitest.WithClaimableType("Explore"))
 		f.start(store.SubagentLifecycleEvent{SubagentID: "sa-new", Type: "Explore", ReceivedMs: saE})
@@ -80,7 +87,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 	})
 	t.Run("creating launch details", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		saFillEntries(f)
 		f.details(saDetailsEv(store.SubagentLaunchBackgroundStarted))
 		f.wantCounts(store.SubagentCap, 0)
@@ -90,7 +97,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 	})
 	t.Run("a snapshot creating a record", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWorking)
+		f := newSAStore(t, store.StateWorking, apitest.WithLifeNumber(4))
 		saFillEntries(f)
 		f.snapStop(saE, saL("sa-new", "Explore"))
 		f.wantCounts(store.SubagentCap, 0)
@@ -100,7 +107,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 	})
 	t.Run("a launch request", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		saFillLaunches(f)
 		f.request(store.SubagentLaunchRequest{ToolUseID: "toolu-new", Type: "Explore", ReceivedMs: saE})
 		f.wantCounts(0, store.SubagentCap)
@@ -110,7 +117,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 	})
 	t.Run("writes that create nothing evict nothing", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		saFillEntries(f)
 		saFillLaunches(f)
 		f.seedEntry("sa-known", apitest.WithSubagentToolUseID("toolu-known"))
@@ -139,7 +146,7 @@ func TestSubagentCapsOnRealWrites(t *testing.T) {
 // ids with an entry evicts nothing on a full row.
 func TestSubagentSnapshotAtTheCapCreatesNothing(t *testing.T) {
 	t.Parallel()
-	f := newSAStore(t, store.StateWorking)
+	f := newSAStore(t, store.StateWorking, apitest.WithLifeNumber(4))
 	saFillEntries(f)
 	f.snapStop(saE, saL("filler-1", "Explore"))
 	f.wantCounts(store.SubagentCap, 0)
@@ -169,7 +176,7 @@ func TestSubagentStringsAreCutTo1KiB(t *testing.T) {
 	}
 	t.Run("through the store, a long id is cut and found again, and the start claims a launch of a long tool_use_id by type", func(t *testing.T) {
 		t.Parallel()
-		f := newSAStore(t, store.StateWaiting)
+		f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 		long := strings.Repeat("x", 2000)
 		f.request(store.SubagentLaunchRequest{ToolUseID: long, Type: "Explore", ReceivedMs: saE})
 		f.start(store.SubagentLifecycleEvent{SubagentID: long, Type: "Explore", ReceivedMs: saE})

@@ -60,7 +60,7 @@ func TestDeleteSpawnCascadesSubagents(t *testing.T) {
 		}{
 			{"running", nil},
 			{"observation", []apitest.SubagentOption{apitest.WithSubagentConfirmed(false), apitest.WithSubagentState(store.SubagentStateLost)}},
-			{"earlier-launch", []apitest.SubagentOption{apitest.WithSubagentLaunchToken("earlier-launch-token")}},
+			{"earlier-launch", []apitest.SubagentOption{apitest.WithSubagentLife(1), apitest.WithSubagentLaunchToken("earlier-launch-token")}},
 		} {
 			if err := apitest.SeedSubagent(f.path, id, e.subagentID, e.opts...); err != nil {
 				t.Fatalf("SeedSubagent(%s, %s): %v", id, e.subagentID, err)
@@ -105,6 +105,7 @@ type capEntry struct {
 	state       string
 	observation bool
 	earlier     bool
+	hidden      bool
 	activity    int64
 }
 
@@ -120,6 +121,8 @@ const capFillerMs = apitest.SeededSubagentMs + 1_000_000
 func TestSubagentEntryEvictionOrder(t *testing.T) {
 	stopped, lost := store.SubagentStateStopped, store.SubagentStateLost
 	cases := []capCase{
+		{name: "hidden running life has no priority over closed current record", want: "closed", cands: []capEntry{{id: "hidden", hidden: true, activity: 1}, {id: "closed", state: stopped, activity: 500}}},
+		{name: "hidden closed life counts toward cap and ordinary age", want: "hidden", cands: []capEntry{{id: "hidden", hidden: true, state: stopped, activity: 1}, {id: "closed", state: stopped, activity: 500}}},
 		{name: "closed observation before an older closed record and an older running entry", want: "obs", cands: []capEntry{
 			{id: "run", activity: 10}, {id: "rec", state: stopped, activity: 20}, {id: "obs", state: lost, observation: true, activity: 500}}},
 		{name: "closed record before an older running entry", want: "rec", cands: []capEntry{
@@ -146,7 +149,7 @@ func TestSubagentEntryEvictionOrder(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newSAStore(t, store.StateWaiting)
+			f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 			id, other, gate := f.id, f.seed(store.StateEnded, "sess-cap-b"), saGateVariants[0].gate(f, "SubagentStart")
 			// Another row's oldest closed observations: they neither count toward id's cap nor go.
 			for i := 0; i < 5; i++ {
@@ -164,6 +167,9 @@ func TestSubagentEntryEvictionOrder(t *testing.T) {
 					apitest.WithSubagentConfirmed(!c.observation)}
 				if c.state != "" {
 					opts = append(opts, apitest.WithSubagentState(c.state))
+				}
+				if c.hidden {
+					opts = append(opts, apitest.WithSubagentLife(3))
 				}
 				if c.earlier {
 					opts = append(opts, apitest.WithSubagentLaunchToken("earlier-launch-token"))
@@ -221,7 +227,7 @@ func TestSubagentLaunchEvictionOrder(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newSAStore(t, store.StateWaiting)
+			f := newSAStore(t, store.StateWaiting, apitest.WithLifeNumber(4))
 			id, other, gate := f.id, f.seed(store.StateEnded, "sess-lcap-b"), saGateVariants[0].gate(f, "SubagentStart")
 			for i := 0; i < 5; i++ {
 				if err := apitest.SeedSubagentLaunch(f.path, other, fmt.Sprintf("other-%d", i), apitest.WithClaimableOpenedAt(1)); err != nil {

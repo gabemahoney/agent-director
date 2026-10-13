@@ -32,12 +32,17 @@ func seedSubagentRow(t *testing.T, home string, opts ...apitest.SpawnOption) str
 // first_started_at with unknown last.
 func TestListSubagentsCLIPrintsRecords(t *testing.T) {
 	home := t.TempDir()
-	id := seedSubagentRow(t, home)
+	id := seedSubagentRow(t, home, apitest.WithLifeNumber(4))
+	for _, sub := range []string{"sub-bare", "hidden-only"} {
+		if err := apitest.SeedSubagent(stateDB(home), id, sub, apitest.WithSubagentLife(3), apitest.WithSubagentDescription("hidden earlier life")); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, sub := range []struct {
 		id   string
 		opts []apitest.SubagentOption
 	}{
-		{"sub-bare", nil},
+		{"sub-bare", []apitest.SubagentOption{apitest.WithSubagentLaunchToken("earlier-launch-same-life")}},
 		{"sub-full", []apitest.SubagentOption{
 			apitest.WithSubagentState("stopped"), apitest.WithSubagentCloseReason("stop_event"),
 			apitest.WithSubagentSessionID("sess-1"), apitest.WithSubagentType("Explore"),
