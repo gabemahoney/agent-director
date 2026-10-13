@@ -279,17 +279,19 @@ if (result.delivery === "not_confirmed") {
 ```
 
 `"delivered"`: the relay hook confirmed the verdict before handing it to
-the agent. `"not_confirmed"`: poll `getPermission` until `delivery` reads
-`"delivered"` or `"fallen_back"`, which it does by `confirm_by`. `decision`
+the agent. `"not_confirmed"`: the relay hook has not confirmed the verdict;
+`getPermission` exposes subsequent delivery and `confirm_by`. See the
+[caller contract](../../docs/caller-contract.md#permission-relay) for
+confirmation handling. `decision`
 is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
 bounds the whole call, its reads and its write, and has no default; without
 it `decide` can wait up to the store's busy timeout. `decide` rejects,
 recording no verdict, with `ErrRelayFallenBack` when the request's relay
-hook is gone and took no verdict (answer it at the pane, or record it
-answered: see below), with `ErrStoreBusy` when `max_wait_ms` ran out
-before the verdict was recorded (retry), and with
+hook is gone and took no verdict, with `ErrStoreBusy` when `max_wait_ms`
+ran out before the verdict was recorded, and with
 `ErrNoOpenPermissionRequest` when no open request has that token or the
-request is closed (do not answer it at the pane). The
+request is closed. Pane answers, retries and closed-request handling are
+in the [caller contract](../../docs/caller-contract.md#permission-relay). The
 `permission_requests` of `get` and of each `list` row carry the same
 delivery fields, `pane_answer` and `pane_as` included, for requests that
 still await an answer only; a row can read `waiting`, `working` or
@@ -308,14 +310,15 @@ ended after it was written, which a Codex main agent's Interrupt also proves; or
 hooks showed the request's dialog gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
 every request not yet proven gone, each with `unproven_since`. A request
-that reads `"delivered"` or closed at the pane but stays unproven for a
-while is a reason to read the pane: its dialog may still be there.
+that reads `"delivered"` or closed at the pane can remain unproven; its dialog
+may still be there. Handling is in the
+[caller contract](../../docs/caller-contract.md#permission-relay).
 
 ### Answering a request at the pane
 
-A request that fell back (`delivery` `"fallen_back"`) is closed only at the
-pane. Read the pane, and having looked, send the one key that answers it,
-naming the request:
+`sendKeys` with a `request_token` answers a request at the pane.
+The [caller contract](../../docs/caller-contract.md#permission-relay) owns
+when to use a pane answer and how to judge the screen. Example:
 
 ```ts
 const seen = await client.readPane({ instance_id: "<id>" });
@@ -331,12 +334,12 @@ await client.sendKeys({
 
 It sends exactly that key and no Enter, then records the request
 `pane_answer` `"sent"` with `decision` your `as` and `decision_reason`
-`"pane"`. `as`, `key` and `expect_pane_sha256` are required; never pass the
-hash from an automatic flow, since it says a person or an LLM judged that
-exact screen. An `ErrInternal` whose `errDetails` is a `PaneKeySentDetails`
-(`key_sent` `true`) means the key was sent but not recorded: read the pane
-before you send anything again. If the request was answered outside
-agent-director, record it instead (it types nothing):
+`"pane"`. `as`, `key` and `expect_pane_sha256` are required.
+An `ErrInternal` whose `errDetails` is a `PaneKeySentDetails`
+(`key_sent` `true`) means the key was sent but not recorded; hash use and
+recovery are in the [caller contract](../../docs/caller-contract.md#permission-relay).
+`recordPaneAnswer` records an answer made outside agent-director and types
+nothing:
 
 ```ts
 try {

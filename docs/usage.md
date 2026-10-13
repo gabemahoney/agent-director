@@ -601,6 +601,5 @@ agent-director resume --instance-id "$id"
 
 On a Codex row `pause` clears a draft of up to 64 lines before it types
 `/exit`, and ends the row itself once the agent exits (see the
-[caller contract](caller-contract.md#when-a-codex-agent-exits)). Past 64 lines
-the rest of the draft and the `/exit` are submitted to the agent as a prompt,
-the row goes `working` and `pause` times out.
+[caller contract](caller-contract.md#when-a-codex-agent-exits), which also
+covers drafts exceeding that limit).

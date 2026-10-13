@@ -438,8 +438,9 @@ error classified `ErrInternal`, with no tmux call. None of these errors
 means that the agent is dead.
 
 A repeated kill right after the last session on its tmux server ends can
-get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the server exits;
-the caller waits and checks again.
+get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable` while the server exits.
+See [Caller contract](../../docs/caller-contract.md)
+for handling.
 
 ```go
 _, err := c.Kill(api.KillParams{InstanceID: id})
@@ -466,9 +467,10 @@ godoc.
 `(*Client).Decide` records a verdict on a relayed permission request, waits
 at most 1 s for the agent's relay hook to confirm it, and returns a
 `DecideResult`, which embeds `RequestDelivery`: read `Delivery`
-(`delivered` or `not_confirmed`), not the recorded decision. On
-`not_confirmed`, poll `GetPermission` until `Delivery` reads `delivered` or
-`fallen_back`, which it does by `ConfirmBy`.
+(`delivered` or `not_confirmed`), not the recorded decision.
+`GetPermission` exposes subsequent delivery and `ConfirmBy`; see the
+[caller contract](../../docs/caller-contract.md#permission-relay) for
+confirmation handling.
 
 `DecideParams.MaxWaitMs` bounds the whole call, its reads and its write,
 and has no default; pass at most your deadline minus 1 s. A bound reached
@@ -478,7 +480,9 @@ call on the same `Client` (a `Client` uses one store connection).
 Once the verdict is recorded, `Decide` never returns `ErrStoreBusy`.
 
 `ErrNoOpenPermissionRequest` means no open request has that token, or the
-request is closed: do not answer it at the pane. A request still awaiting
+request is closed; see the
+[caller contract](../../docs/caller-contract.md#permission-relay) for handling.
+A request still awaiting
 an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
 of a Codex Spawn to `ended` by `FindMissing` or by `Pause` once its agent is
 gone with an end report) or when `find-missing` marked it `missing` is closed in the same write, an

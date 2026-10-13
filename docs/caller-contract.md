@@ -140,6 +140,10 @@ its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
   outcomes: `ErrTmuxSendKeys` for a waiting row's keys, or `ErrPauseTimeout`.
   `find-missing` then settles the row.
 
+If a live Codex row has a draft exceeding 64 lines, `pause` submits the
+rest of the draft and the `/exit` to the agent as a prompt, the row goes
+`working`, and `pause` returns `ErrPauseTimeout`.
+
 The look-and-send recovery for a held agent (send `/exit` with the pane's hash,
 poll `status` until `ended`) gains, on a Codex row, one step: once the agent has
 exited, run `find-missing` (or `pause`).
@@ -261,6 +265,9 @@ filtering applies and the agent's parser rejects incomplete input.
 - A relayed request's `decision` is the verdict recorded, not the outcome:
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s (see [Intercept permission prompts](usage.md#intercept-permission-prompts)).
+- After `decide` returns `delivery` `not_confirmed`, poll `get-permission`
+  until `delivery` reads `delivered` or `fallen_back`, which it does by
+  `confirm_by`.
 - `get`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
   `get` and `list` show the settled state, up to the settle time behind, and
