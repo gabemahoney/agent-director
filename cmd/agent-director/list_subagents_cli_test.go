@@ -81,6 +81,7 @@ func TestListSubagentsCLIEmpty(t *testing.T) {
 	}{
 		{"tracked", nil, `{"tracked":true,"subagents":[]}` + "\n"},
 		{"pre-upgrade row", []apitest.SpawnOption{apitest.WithNoSubagentTracking()}, `{"tracked":false,"subagents":[]}` + "\n"},
+		{"codex", []apitest.SpawnOption{apitest.WithAgent("codex"), apitest.WithNoSubagentTracking()}, `{"tracked":false,"subagents":[]}` + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()

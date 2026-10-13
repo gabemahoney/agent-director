@@ -47,8 +47,8 @@ func goldenLaunch(t *testing.T, g codexfix.HookTrustGolden, sc codexfix.GoldenSc
 	return codexfix.Split(t, append([]string{"codex"}, args...))
 }
 
-// notCodexEvent is whether e names an event AD does not register on Codex yet
-// (SubagentStart and SubagentStop, Epic 5): its golden entries are not composed.
+// notCodexEvent is whether e names an event AD does not register on Codex
+// (SubagentStart and SubagentStop): its golden entries are not composed.
 func notCodexEvent(ev string) bool { return ev == "SubagentStart" || ev == "SubagentStop" }
 
 // TestCodexLaunchStateMatchesGolden: for every golden scenario AD's launch can
@@ -145,7 +145,7 @@ func TestCodexHashFunctionMatchesGolden(t *testing.T) {
 					continue
 				}
 				if _, known := codexEventLabels[hookEventName(e.Event)]; !known {
-					continue // SubagentStart and SubagentStop: Epic 5
+					continue // Codex subagents are untracked
 				}
 				ev := hookEventName(e.Event)
 				grp := codexGroup{}

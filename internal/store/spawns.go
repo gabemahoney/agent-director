@@ -213,9 +213,8 @@ type Spawn struct {
 	// and MoveToPending each write it for the launch they begin, from the
 	// launch's agent and taking nothing else from a Spawn: 1 for a claude
 	// launch, whose synthesized settings register the subagent events, and 0
-	// for a codex launch, whose settings register none until Codex's
-	// subagent events are registered (subagentTrackedParamSQL,
-	// subagentTrackedColumnSQL); a row from before the
+	// for a codex launch, whose settings register no subagent events
+	// (subagentTrackedParamSQL, subagentTrackedColumnSQL); a row from before the
 	// v9 migration reads false until its next launch. Never on SpawnRow,
 	// ListRow or any verb output.
 	SubagentTracking bool
@@ -232,8 +231,7 @@ type Spawn struct {
 // The tracking flag every launch write stores (b.xjn, SR-9): the launch's
 // agent decides it. A claude launch's synthesized settings always register
 // SubagentStart and SubagentStop, so it stores 1; a codex launch's settings
-// register neither, so it stores 0, until Codex's subagent events are
-// registered. InsertPending and ResetForReuse state the
+// register neither, so it stores 0. InsertPending and ResetForReuse state the
 // launch's agent as one parameter of the statement (subagentTrackedParamSQL, the
 // agent the statement writes: ResetForReuse can change it); MoveToPending keeps
 // the row's agent, so it reads the column (subagentTrackedColumnSQL).

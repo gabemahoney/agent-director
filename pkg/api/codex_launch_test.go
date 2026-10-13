@@ -19,7 +19,7 @@ const codexProgram = "codex"
 // assertCodexLaunch fails unless creates holds exactly one create, running
 // program (first, one element) as a Codex launch command, and instance id is a
 // pending row recording agent codex that registered no subagent tracking
-// (subagent_tracking 0, until Codex rows are tracked). It returns the create's
+// (subagent_tracking 0; Codex subagents are untracked). It returns the create's
 // command split into parts for the caller's own checks of what stands in it.
 func assertCodexLaunch(t *testing.T, creates []tmuxfix.SocketCall, dbPath, id, program string) codexfix.Launch {
 	t.Helper()

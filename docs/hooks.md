@@ -196,6 +196,11 @@ shell (see "The shell between Codex and the hook" below), and `exec` leaves the
 hook as Codex's child. A Codex launch registers no `Notification`,
 `PostToolUseFailure`, `SubagentStart` or `SubagentStop` entry.
 
+A `SubagentStart` or `SubagentStop` sent to a manually registered
+`agent-director hook --agent codex` entry applies a soft refresh: it bumps
+`last_seen_at`, keeps the state and writes no subagent record. It proves no
+permission request gone. See [When an agent is tracked](usage.md#when-an-agent-is-tracked).
+
 Two more entries come with their settings:
 
 - While `inject_help_hook` is on, a help entry on `SessionStart`:

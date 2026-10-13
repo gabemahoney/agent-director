@@ -14,7 +14,8 @@
 //	                     (--no-pre-trust records the pre-trust opt-out;
 //	                     --no-launch-identity seeds a row from before the
 //	                     release, with no launch token, socket or identity;
-//	                     --agent seeds a row's agent, claude by default).
+//	                     --agent seeds a row's agent, claude by default;
+//	                     --no-subagent-tracking disables record capture).
 //	seed-parent-child    Link an existing child spawn to an existing parent.
 //	seed-permission-request  Insert an open permission request for a spawn
 //	                     (--created-ago-seconds backdates it,
@@ -117,17 +118,18 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		storePath   = fs.String("store", "", "path to SQLite store file (required)")
-		state       = fs.String("state", "waiting", "spawn state (waiting|working|ended|check_permission|…)")
-		cwd         = fs.String("cwd", "/tmp", "working directory for the spawn row")
-		id          = fs.String("id", "", "instance_id (UUID); auto-generated if empty")
-		relayMode   = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
-		sessionID   = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
-		createStore = fs.Bool("create-store", false, "create the store if it does not exist")
-		socket      = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
-		noPreTrust  = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
-		agent       = fs.String("agent", "", "the row's agent (claude|codex); empty keeps SeedSpawn's claude (apitest.WithAgent)")
-		noIdentity  = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
+		storePath          = fs.String("store", "", "path to SQLite store file (required)")
+		state              = fs.String("state", "waiting", "spawn state (waiting|working|ended|check_permission|…)")
+		cwd                = fs.String("cwd", "/tmp", "working directory for the spawn row")
+		id                 = fs.String("id", "", "instance_id (UUID); auto-generated if empty")
+		relayMode          = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
+		sessionID          = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
+		createStore        = fs.Bool("create-store", false, "create the store if it does not exist")
+		socket             = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
+		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
+		agent              = fs.String("agent", "", "the row's agent (claude|codex); empty keeps SeedSpawn's claude (apitest.WithAgent)")
+		noSubagentTracking = fs.Bool("no-subagent-tracking", false, "disable subagent tracking on the row (apitest.WithNoSubagentTracking); default keeps tracking enabled")
+		noIdentity         = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -157,6 +159,10 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 	}
 	if *agent != "" {
 		opts = append(opts, apitest.WithAgent(*agent))
+	}
+
+	if *noSubagentTracking {
+		opts = append(opts, apitest.WithNoSubagentTracking())
 	}
 
 	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore, opts...)

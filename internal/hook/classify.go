@@ -129,8 +129,8 @@ type ClassifyResult struct {
 	Agent string
 
 	// SubagentCapture is true when the hook feeds subagent capture (b.xjn;
-	// subagent.go): Claude's table sets it, Codex's never does (Codex subagent
-	// capture is Epic 5's). The subagent helpers read it, so the hook path
+	// subagent.go): Claude's table sets it, Codex's never does; Codex rows
+	// do not track subagents. The subagent helpers read it, so the hook path
 	// branches on the agent nowhere but the classifier.
 	SubagentCapture bool
 

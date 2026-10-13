@@ -299,11 +299,8 @@ func TestCodexHookFromForeignParent(t *testing.T) {
 	}
 }
 
-// TestCodexSubagentEventsWriteNoSubagentRows (b.xjn, Epic 5): a Codex
-// SubagentStart, SubagentStop (each with an agent_id) and a main-agent Stop
-// write no row to subagents or subagent_launches, close no running record and
-// delete no claimable launch, and list-subagents on the row stays empty. The
-// same payload shapes on a Claude row still write their entries.
+// TestCodexSubagentEventsWriteNoSubagentRows: Codex hooks capture no subagents,
+// independently guarded by classification and the row tracking flag.
 func TestCodexSubagentEventsWriteNoSubagentRows(t *testing.T) {
 	fixtures := []string{"subagent-start.json", "subagent-stop.json", "stop.json"}
 	t.Run("fresh Codex row", func(t *testing.T) {
@@ -330,6 +327,96 @@ func TestCodexSubagentEventsWriteNoSubagentRows(t *testing.T) {
 		}
 		assertGateSubagentsUnchanged(t, dbPath, id, before)
 	})
+	listing := map[string]any{"background_tasks": []any{map[string]any{
+		"type": "subagent", "status": "running", "id": "cx-listed-new", "agent_type": "default",
+	}}}
+	for _, tracked := range []bool{true, false} {
+		name := "classifier guard"
+		if !tracked {
+			name = "tracking flag guard"
+		}
+		t.Run(name, func(t *testing.T) {
+			id := "cx-subagent-" + strings.ReplaceAll(name, " ", "-")
+			var opts []apitest.SpawnOption
+			if !tracked {
+				opts = append(opts, apitest.WithNoSubagentTracking())
+			}
+			st, dbPath := cxSeed(t, id, store.StateWorking, opts...)
+			if got := mustGetSpawn(t, st, id).SubagentTracking; got != tracked {
+				t.Fatalf("SubagentTracking = %v; want %v", got, tracked)
+			}
+			aged := time.Now().Add(-time.Minute).UnixMilli()
+			if err := apitest.SeedSubagent(dbPath, id, cxSubagentID,
+				apitest.WithSubagentRunMode("background"), apitest.WithSubagentConfirmed(false),
+				apitest.WithSubagentOpenedAt(aged)); err != nil {
+				t.Fatalf("SeedSubagent: %v", err)
+			}
+			const useID = "toolu_cx_claimable"
+			if err := apitest.SeedSubagentLaunch(dbPath, id, useID, apitest.WithClaimableOpenedAt(aged)); err != nil {
+				t.Fatalf("SeedSubagentLaunch: %v", err)
+			}
+			before := readGateSubagents(t, dbPath, id)
+			parent := agentParent(t, st, id)
+			if tracked {
+				parent = cxOwn(t, st, id)
+			}
+			type captureCase struct {
+				fixture   string
+				extra     map[string]any
+				lifecycle string
+			}
+			cases := []captureCase{
+				{"subagent-start.json", nil, "SubagentStart"},
+				{"subagent-stop.json", nil, "SubagentStop"},
+				{"stop.json", listing, ""},
+			}
+			if tracked {
+				cases = append(cases, []captureCase{
+					{"pre-tool-use-bash.json", map[string]any{"tool_name": "Agent", "tool_use_id": "toolu_cx_new", "tool_input": map[string]any{"subagent_type": "default"}}, ""},
+					{"post-tool-use-bash.json", map[string]any{"hook_event_name": "PostToolUseFailure", "tool_name": "Agent", "tool_use_id": useID}, ""},
+					{"post-tool-use-bash.json", map[string]any{"tool_name": "Agent", "tool_use_id": useID,
+						"tool_input":    map[string]any{"subagent_type": "default", "description": "launch details"},
+						"tool_response": map[string]any{"agentId": cxSubagentID, "status": "async_launched", "resolvedModel": "fixture-model"}}, ""},
+				}...)
+			}
+			for _, tc := range cases {
+				t.Run(tc.fixture+tc.lifecycle, func(t *testing.T) {
+					prior := mustGetSpawn(t, st, id)
+					run := cxFire(t, st, id, parent, cxFixture(t, tc.fixture, tc.extra))
+					assertGateSubagentsUnchanged(t, dbPath, id, before)
+					if tracked && tc.lifecycle != "" {
+						row := mustGetSpawn(t, st, id)
+						if row.State != prior.State || row.RowVersion != prior.RowVersion+1 {
+							t.Errorf("state/version = %s/%d; want %s/%d", row.State, row.RowVersion, prior.State, prior.RowVersion+1)
+						}
+						transitions := run.lines("ad.spawn.state_transition")
+						if len(transitions) != 1 {
+							t.Fatalf("state transitions = %v; want one soft refresh", transitions)
+						}
+						tr := transitions[0]
+						if tr["soft_refresh"] != true || tr["prior_state"] != prior.State || tr["new_state"] != prior.State || tr["triggering_event_name"] != tc.lifecycle {
+							t.Errorf("state transition = %v; want state kept, soft_refresh true, trigger %s", tr, tc.lifecycle)
+						}
+						if strings.Contains(run.Log, "unknown event") {
+							t.Errorf("log = %q; want no unknown event", run.Log)
+						}
+					}
+				})
+			}
+			if tracked {
+				const newID = "cx-no-flag-new"
+				cxFire(t, st, id, agentParent(t, st, id), cxFixture(t, "subagent-start.json", map[string]any{"agent_id": newID}))
+				after := readGateSubagents(t, dbPath, id)
+				if len(after.Entries) != len(before.Entries)+1 {
+					t.Fatalf("entries = %+v; want one new entry under no --agent", after.Entries)
+				}
+				entry := after.Entries[len(after.Entries)-1]
+				if entry.SubagentID != newID || entry.Confirmed != int64(0) {
+					t.Errorf("new entry = %+v; want %s unconfirmed", entry, newID)
+				}
+			}
+		})
+	}
 	t.Run("Claude row still writes its entry", func(t *testing.T) {
 		const id = "cx-subagent-claude"
 		st, dbPath := seedAgentRow(t, id, store.StateWorking)

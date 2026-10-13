@@ -101,12 +101,13 @@ func TestListSubagentsMCPResultShape(t *testing.T) {
 
 // TestListSubagentsMCPTracked: a tracked row without records reads
 // {"tracked":true,"subagents":[]}, a row launched before tracking
-// {"tracked":false,"subagents":[]}; the empty list is an array, never null.
+// or a Codex row {"tracked":false,"subagents":[]}; the list is never null.
 func TestListSubagentsMCPTracked(t *testing.T) {
 	e := newEnv(t)
 	e.seed(t, "mls-tracked", store.StateWaiting)
 	e.seed(t, "mls-untracked", store.StateWaiting, apitest.WithNoSubagentTracking())
-	for id, want := range map[string]string{"mls-tracked": "true", "mls-untracked": "false"} {
+	e.seed(t, "mls-codex", store.StateWaiting, apitest.WithAgent("codex"), apitest.WithNoSubagentTracking())
+	for id, want := range map[string]string{"mls-tracked": "true", "mls-untracked": "false", "mls-codex": "false"} {
 		t.Run(id, func(t *testing.T) {
 			obj := callToolText(t, e.d, "list_subagents", paramJSON(t, map[string]any{"instance_id": id}))
 			if got := string(obj["tracked"]); got != want {

@@ -74,9 +74,10 @@ one entry per scenario row, not one per version.
   (explicit versus default timeouts, the SessionEnd and Interrupt clamp,
   matchers dropped on UserPromptSubmit, Stop and Interrupt, context-limit
   values 0, 2500, 3790, 4000, 100000).
-- Also holds SubagentStart and SubagentStop entries. AD does not register them
-  in Epic 4 (Epic 5, gated on b.xjn): a test of AD's composed entries compares
-  only the events AD registers and ignores these.
+- Also retains captured SubagentStart and SubagentStop entries. AD never
+  composes these lifecycle entries: Codex rows do not track subagents. Tests
+  of AD's composed entries compare only the events AD registers and exclude
+  these retained captures.
 - Does NOT cover the Q1 deny group (the PreToolUse group whose matcher is
   `request_user_input_async`): its hash follows `FORMAT.md` but was never
   listed by a live Codex. Epic 6 (SR-16.2) re-captures it. Until then a test

@@ -225,10 +225,10 @@ func TestPayloadFixtureParses(t *testing.T) {
 }
 
 // codexNotRegistered are the events Codex sends that agent-director does not
-// register on a Codex launch yet, with the reason; each has a fixture.
+// register on a Codex launch, with the reason; each has a fixture.
 var codexNotRegistered = map[string]string{
-	"SubagentStart": "subagent tracking for Codex is Epic 5",
-	"SubagentStop":  "subagent tracking for Codex is Epic 5",
+	"SubagentStart": "Codex subagents are untracked",
+	"SubagentStop":  "Codex subagents are untracked",
 }
 
 // TestPayloadFixtureEventsMatchRegistered: for each agent, every event

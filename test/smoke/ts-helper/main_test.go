@@ -204,14 +204,16 @@ func TestDispatch(t *testing.T) {
 		})
 	}
 
-	// --agent seeds the row's agent; without it the row runs claude.
+	// --agent and --no-subagent-tracking seed the requested launch columns.
 	for _, tc := range []struct {
-		name  string
-		flags []string
-		want  string
+		name         string
+		flags        []string
+		want         string
+		wantTracking int64
 	}{
-		{"a_success_seed_spawn_default_agent", nil, "claude"},
-		{"a_success_seed_spawn_agent_codex", []string{"--agent", "codex"}, "codex"},
+		{"a_success_seed_spawn_default_agent", nil, "claude", 1},
+		{"a_success_seed_spawn_agent_codex", []string{"--agent", "codex"}, "codex", 1},
+		{"a_success_seed_spawn_codex_untracked", []string{"--agent", "codex", "--no-subagent-tracking"}, "codex", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dbPath := filepath.Join(t.TempDir(), "spawn.db")
@@ -220,12 +222,18 @@ func TestDispatch(t *testing.T) {
 			if code := dispatch(args, &stdout, &stderr); code != 0 {
 				t.Fatalf("expected exit 0, got %d; stderr: %s", code, stderr.String())
 			}
+			if stderr.Len() != 0 || stdout.String() != `{"instance_id":"ts-helper-agent"}`+"\n" {
+				t.Fatalf("stdout = %q, stderr = %q; want single-line instance_id JSON and empty stderr", stdout.String(), stderr.String())
+			}
 			cols, err := apitest.ReadSpawnColumns(dbPath, "ts-helper-agent")
 			if err != nil {
 				t.Fatalf("ReadSpawnColumns: %v", err)
 			}
 			if cols.Agent != tc.want {
 				t.Fatalf("agent = %#v, want %q", cols.Agent, tc.want)
+			}
+			if cols.SubagentTracking != tc.wantTracking {
+				t.Fatalf("subagent_tracking = %#v, want %d", cols.SubagentTracking, tc.wantTracking)
 			}
 		})
 	}

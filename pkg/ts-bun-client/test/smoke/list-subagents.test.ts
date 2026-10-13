@@ -5,7 +5,7 @@
  * included, and the three time encodings as Go writes them (whole second,
  * trailing zero dropped, full milliseconds), in the verb's order (first start
  * ascending, nulls last); a tracked row with no records reads an empty list.
- * Error path: unknown id → ErrSpawnNotFound.
+ * Codex returns an untracked empty array. Unknown id → ErrSpawnNotFound.
  */
 
 import { test, expect } from "bun:test";
@@ -61,6 +61,20 @@ test("list-subagents: a tracked row with no records reads an empty list", async 
     using client = await openClient(store);
     expect(await client.listSubagents({ instance_id: "smoke-list-subagents-empty-id" }))
       .toEqual({ tracked: true, subagents: [] });
+  });
+}, 10_000);
+
+test("list-subagents: a Codex row returns an untracked empty array", async () => {
+  await withTempHome(async (homeDir) => {
+    const id = "smoke-list-subagents-codex-id";
+    const store = homeStore(homeDir);
+    runHelper("seed-spawn", {
+      store, id, state: "working", "create-store": true,
+      agent: "codex", "no-subagent-tracking": true,
+    });
+    using client = await openClient(store);
+    expect(await client.listSubagents({ instance_id: id }))
+      .toEqual({ tracked: false, subagents: [] });
   });
 }, 10_000);
 

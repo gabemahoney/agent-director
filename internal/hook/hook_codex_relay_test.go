@@ -218,15 +218,8 @@ func TestCodexRelayFailsClosed(t *testing.T) {
 	}
 }
 
-// TestCodexHookProvesRequestsGone: on a relayed Codex row the main agent's
-// Interrupt or Stop, started in a later second than a request with no agent_id,
-// proves it gone (turn_end) and the row reads waiting. Proven by nothing: a
-// hook before the request or in its second, a marked (subagent) Interrupt, the
-// /review thread's or a plain PreToolUse or UserPromptSubmit, a subagent's
-// request (only agent_gone proves it), a relay-off or another process's hook,
-// and an Interrupt under the Claude flag. An unproven request still lets the
-// row move to waiting; only a move to working is held, so the plain and
-// /review-thread hooks leave check_permission and the marked Interrupt moves nothing.
+// TestCodexHookProvesRequestsGone: later main-agent turn ends prove main-agent
+// requests gone; subagent lifecycle hooks prove neither request origin gone.
 func TestCodexHookProvesRequestsGone(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -255,6 +248,10 @@ func TestCodexHookProvesRequestsGone(t *testing.T) {
 			wantState: store.StateWaiting},
 		{name: "Stop after a subagent's request", agent: "codex", fixture: "stop.json", agentID: cxSubagentID,
 			wantState: store.StateWaiting},
+		{name: "SubagentStart after a main-agent request", agent: "codex", fixture: "subagent-start.json", wantState: store.StateCheckPermission},
+		{name: "SubagentStop after a main-agent request", agent: "codex", fixture: "subagent-stop.json", wantState: store.StateCheckPermission},
+		{name: "SubagentStart after a subagent request", agent: "codex", fixture: "subagent-start.json", agentID: cxSubagentID, wantState: store.StateCheckPermission},
+		{name: "SubagentStop after a subagent request", agent: "codex", fixture: "subagent-stop.json", agentID: cxSubagentID, wantState: store.StateCheckPermission},
 		{name: "review thread PreToolUse", agent: "codex", fixture: "pre-tool-use-review-thread.json", wantState: store.StateCheckPermission},
 		{name: "review thread UserPromptSubmit", agent: "codex", fixture: "user-prompt-submit-review-thread.json",
 			wantState: store.StateCheckPermission},

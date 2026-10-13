@@ -27,7 +27,8 @@ const hookInterrupt hookEventName = "Interrupt"
 // codexHookEvents enumerates the eight events agent-director registers on
 // every Codex launch, in the order their -c values stand in argv. It is
 // separate from hookEvents (Claude's eleven) and registers no SubagentStart
-// or SubagentStop (Epic 5), no Notification and no compaction event (RN-3).
+// or SubagentStop: Codex rows do not track subagents. It also registers no
+// Notification and no compaction event (RN-3).
 var codexHookEvents = []hookEventName{
 	hookSessionStart, hookUserPromptSubmit, hookPreToolUse, hookPostToolUse,
 	hookPermissionRequest, hookStop, hookInterrupt, hookSessionEnd,

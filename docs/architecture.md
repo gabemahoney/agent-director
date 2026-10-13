@@ -77,8 +77,8 @@ branches on the agent anywhere else. Each seam's own section states its rule
   checks](#the-agent-resolution-ownership-and-checks).
 - **Hooks.** The event-to-write decision comes from the classifier: [The
   agent-aware hook classifier](#the-agent-aware-hook-classifier). Its output
-  also gates subagent capture, so a new agent gets no subagent entry write
-  until its classifier says so; a Codex row stores `subagent_tracking` 0. The
+  gates subagent capture: Claude's table enables it, Codex's never does. A
+  Codex launch stores `subagent_tracking` 0, an independent store guard. The
   close of a row's subagent entries when its agent is gone is [The liveness
   close of subagent entries](#the-liveness-close-of-subagent-entries).
 - **The permission relay.** What a row's relay proves and holds, per agent: [The
@@ -1004,7 +1004,8 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     path that archives a session must call it too, never a second upsert.
 - `subagents` (v9, b.xjn) — one row per subagent entry of a spawn row: a
   record (`confirmed` 1) or an observation (`confirmed` 0). Only
-  `internal/store` reads or writes it, and no verb shows it yet. The
+  `internal/store` reads or writes it; `list-subagents` returns its confirmed
+  records through the store read. The
   columns, with their exact text in `schemaDDL` for a fresh store and in
   `v9SubagentTablesSQL`, the v8 → v9 hop's own copy
   (`internal/store/schema.go`):
@@ -4195,7 +4196,7 @@ own stdout; the gate and the writes do not read it. A marked Codex hook (a
 non-empty `agent_id`) follows the Claude rules: a `SessionStart` or
 `SessionEnd` is ignored as `subagent_event` before the gate, and any other
 applies its table row, records no session id or path, and writes no subagent
-entry (subagent capture is Claude only for now).
+entry (subagent capture is Claude only).
 
 **No resolver, no tmux.** The hook path makes no tmux call and walks no
 process ancestry: `internal/hook` imports neither `internal/tmux` nor
@@ -4288,18 +4289,23 @@ config. `internal/hook/subagent.go` is the Claude Code side: it names the
 events and the `Agent` tool (`EventNameSubagentStart`, `EventNameSubagentStop`,
 `ToolAgent`), reads the payload fields (`readSubagentFields`) and the
 `background_tasks` list (`readBackgroundTasks`), and maps them onto the store's
-events. A second agent maps its own payloads onto the same
-events and changes no store code.
+events. The store applies these agent-neutral events without parsing an
+agent's payloads.
 
-**Capture is Claude only for now.** `internal/hook` takes the capture path
+**Capture is Claude only.** `internal/hook` takes the capture path
 only for a result whose `SubagentCapture` flag is set, and the classifier sets
 it for Claude's table alone (see [The agent-aware hook
 classifier](#the-agent-aware-hook-classifier)): `isSubagentLifecycle`,
 `isAgentToolHook` and `isMainAgentStop` each require it. A Codex hook, a
 `SubagentStart` and `SubagentStop` included, makes its ordinary gated write (a
 soft refresh for those two) and no entry transaction, and a Codex `Stop` makes
-no turn-end transaction. The payload mapping a second agent needs is the one
-this paragraph's line describes: it lands in `subagent.go`, not in the store.
+no turn-end transaction. Independently, each store entry write requires the
+row's `subagent_tracking` to be 1 (see "The gate" below). A Codex launch
+stores 0, so even a hand-registered hook classified as Claude cannot write
+its records. Conversely, Codex's classifier disables capture even for a
+seeded row whose tracking flag is 1. These guards do not change the ordinary
+gated row write or the permission relay: a Codex `SubagentStart` or
+`SubagentStop` soft-refreshes the row and proves no request gone.
 
 **The three transactions.**
 
@@ -4588,8 +4594,8 @@ payload over 1 MiB is dropped whole before any of this.
 `list-subagents` is the one read of an agent's subagent records: its tracking
 flag and every confirmed record, as structured fields on every machine-readable
 surface (CLI, MCP, Go, TypeScript). The verb and the store read behind it are
-agent-neutral: they carry no Claude Code name, so another agent's rows read the
-same way once its hooks write the same entries. `tracked` is the row's
+agent-neutral: they carry no Claude Code name and return the row's tracking
+flag and confirmed records through the same read. `tracked` is the row's
 `subagent_tracking` flag, which a launch sets by its agent: true for a Claude
 launch, whose settings register the subagent events, and false for a Codex
 launch, whose settings register none, so a Codex row reads `tracked` false
@@ -21309,7 +21315,7 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 
 | Subcommand | Key flags | Result shape |
 | --- | --- | --- |
-| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude` or `codex`, via `apitest.WithAgent`; default `claude`), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude` or `codex`, via `apitest.WithAgent`; default `claude`), `--no-subagent-tracking` (stores tracking 0 via `apitest.WithNoSubagentTracking`; default tracking 1, including with `--agent codex`), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
 | `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool`, `--created-ago-seconds` (backdates `created_at`; past the relay window the request has fallen back), `--hook-gone-ago-seconds` (records `hook_gone_at` that long ago), both through `apitest.AgePermissionRequest` | `{"request_id": <number>, "request_token": "..."}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
@@ -21345,9 +21351,15 @@ row.
 `seed-spawn` and each record with `seed-subagent --instance-id <id>`, never by
 writing the `subagents` table itself. A flag it does not give keeps the
 seeder's default (a `running` record, `NULL` for every other text field and
-time); a record it must not list is seeded with `--confirmed=false`. The
-helper has no seed for an untracked row; that case is covered on the Go side
-(`apitest.WithNoSubagentTracking`).
+time); a record it must not list is seeded with `--confirmed=false`.
+
+**Must use:** a TypeScript test that needs an untracked row seeds it with
+`seed-spawn --no-subagent-tracking`, which uses the shared
+`apitest.WithNoSubagentTracking` option; a Codex launch-shaped seed also gives
+`--agent codex`. Do not clear the tracking column directly. Omitting the
+tracking flag keeps the factory default of tracking 1, even for a Codex seed;
+this permits tests to isolate the classifier guard and does not represent a
+production Codex launch.
 
 **Makefile target.**
 
