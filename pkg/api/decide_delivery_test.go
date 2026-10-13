@@ -255,12 +255,13 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 		t.Parallel()
 		s, dbPath := apitest.SeedDecideFixture(t, "on")
 		apitest.SeedPermissionRow(t, s, "id-d-1")
-		// created_at, in whole seconds, lands 0.5 to 1.5 s before window ago:
-		// undeliverable, its hook settling 0.5 to 1.5 s from now.
 		storefix.SeedUndeliverablePermissionRequest(t, s, dbPath, "id-d-1", storefix.TestRequestTokenA, time.Hour+500*time.Millisecond)
+		// Use persisted created_at: undeliverable, exactly 1 s before its hook
+		// settles, regardless of scheduling delays between seeding and decide.
+		now := rowA(t, s).CreatedAt.Add(time.Hour + time.Second)
 		var slept time.Duration
 		start := time.Now()
-		_, err := api.DecideWithSleep(s, api.RelayView{Now: time.Now, Window: time.Hour}, func(d time.Duration) { slept += d },
+		_, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }, Window: time.Hour}, func(d time.Duration) { slept += d },
 			api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(100))})
 		took := time.Since(start)
 
