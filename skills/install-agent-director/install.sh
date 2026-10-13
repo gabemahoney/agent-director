@@ -5263,7 +5263,7 @@ fi
 #     directory with other Args or      installer says it could not read the
 #     an Environment: block, or no            registration, and prints the commands
 #     Command: line, or no scope        that re-point one; --register-mcp
-#                                       adds as before
+#                                       leaves it unchanged too
 #   exit 0, Command: this install's   nothing changes; with --register-mcp one
 #     binary, Args: `serve --stdio`     line says it is already registered and
 #                                       no add runs (Claude Code refuses a
@@ -5441,6 +5441,9 @@ ad_mcp_step() {
                 fi
                 ;;
             old_other|unreadable)
+                # A local add could shadow custom arguments or environment
+                # in another scope, or fail on an existing local name.
+                plain_add=0
                 echo "  mcp     : could not read the registration from this directory as one this installer can re-point (it names the old directory's binary with other arguments or an environment, or its text was not as expected); it was left as it is. To re-point one that names the old directory (use the scope that 'mcp get agent-director' shows, and keep any arguments or environment you set):"
                 ad_mcp_print_repoint "$scope"
                 ;;

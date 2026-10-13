@@ -292,6 +292,8 @@ func ownedExpect(h *moveHome, c ownedCase, register bool) (calls []string, want 
 			want.NoStdout = []string{"could not read"}
 		}
 	case "oldOther":
+		// E6-F1 selects SR-11.7 preservation over its conflicting plain-add sentence.
+		want.NoStdout = []string{"mcp     : registered with claude mcp"}
 		want.Stdout = []string{"could not read the registration", remove, add}
 	case "current":
 		// Claude Code refuses a name already registered in its scope, so no add runs.
@@ -307,7 +309,7 @@ func ownedExpect(h *moveHome, c ownedCase, register bool) (calls []string, want 
 			want.NoStdout = append(want.NoStdout, "  mcp     :")
 		}
 	}
-	if register && c.kind != "oldPlain" && c.kind != "current" {
+	if register && c.kind != "oldPlain" && c.kind != "oldOther" && c.kind != "current" {
 		calls = []string{plain}
 		want.Stdout = append(want.Stdout, "mcp     : registered with claude mcp")
 	}
@@ -408,6 +410,44 @@ func ownedCheckInstalled(t *testing.T, h *moveHome, res moveResult) {
 	}
 	if res.Last() != ownedFailLast {
 		t.Errorf("last stderr line = %q, want %q", res.Last(), ownedFailLast)
+	}
+}
+
+// TestOwnedMCPCustomScopes preserves custom registrations with --register-mcp
+// (E6-F1), including native unreadable HTTP registrations with no Command line.
+func TestOwnedMCPCustomScopes(t *testing.T) {
+	for _, set := range ownedSets(t) {
+		for _, scope := range []string{"user", "project", "local"} {
+			for _, capture := range []string{"old-args", "old-env", "old-other-form"} {
+				if scope == map[string]string{"old-args": "project", "old-env": "user", "old-other-form": "local"}[capture] {
+					continue // Already covered by TestOwnedMCPOutcomes.
+				}
+				t.Run(set+"/"+scope+"/"+capture, func(t *testing.T) {
+					t.Parallel()
+					h := newMoveHome(t)
+					ownedClaude(t, h, set, capture)
+					ownedWorkDir(t, h)
+					original := ownedReadCapture(t, set, capture, ".stdout", h.Home)
+					// Scope variants are synthetic; retain the original captured family.
+					original = regexp.MustCompile(`-s (user|project|local)`).ReplaceAllString(original, "-s "+scope)
+					original = regexp.MustCompile(`(?m)^  Scope: .*`).ReplaceAllString(original, "  Scope: "+map[string]string{"user": "User config (available in all your projects)", "project": "Project config (shared via .mcp.json)", "local": "Local config (private to you in this project)"}[scope])
+					cap := filepath.Join(h.Root, "custom-registration")
+					h.Write(cap+".stdout", original, 0o600)
+					h.Write(cap+".exit", "0\n", 0o600)
+					h.Env["CLAUDE_STANDIN_CAPTURE"] = cap
+					// Any unintended mutation would fail rather than quietly pass.
+					h.Env["CLAUDE_STANDIN_ADD_FAIL"] = "1"
+					h.Env["CLAUDE_STANDIN_REMOVE_FAIL"] = "1"
+					h.BuildOld(withMoveNoStore())
+
+					res := h.Install("--register-mcp")
+
+					calls, want := ownedExpect(h, ownedCase{capture, "oldOther", scope}, true)
+					want.Check(t, h, res)
+					ownedCheckGets(t, h, calls)
+				})
+			}
+		}
 	}
 }
 

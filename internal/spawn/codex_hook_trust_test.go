@@ -1,12 +1,9 @@
 package spawn
 
 import (
-	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"os"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
@@ -189,35 +186,37 @@ func TestCodexHashWorkedExample(t *testing.T) {
 	}
 }
 
-// TestCodexDenyGroupTrust: with disable_ask_user on, the deny group is
-// PreToolUse group 1, handler 0 (AD's own entry is group 0), and hooks.state
-// carries its key with the hash FORMAT.md's rules give: the tool-event
-// identity with the matcher, the default timeout of 600 and no limit. The
-// golden data holds no deny entry; the expected text is written out here, with
-// its command encoded by encoding/json rather than the code under test.
+// TestCodexDenyGroupTrust compares Q1's command, key and hash with native
+// Codex 0.159.2 hooks/list, independently captured in Task1 (E6, SR-16.2).
 func TestCodexDenyGroupTrust(t *testing.T) {
+	b, err := os.ReadFile("testdata/hook-trust-deny-native.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var native struct {
+		Entry struct {
+			Key, Command, CurrentHash, Matcher string
+			TimeoutSec                         int
+			AdditionalContextLimit             *int
+		}
+	}
+	if err := json.Unmarshal(b, &native); err != nil {
+		t.Fatal(err)
+	}
 	args := CodexSettingsArgs(codexSettingsInput{Exe: "/x/ad", Relay: 86400, QuestionOff: true, CWD: "/work/proj"})
 	l := codexfix.Split(t, append([]string{"codex"}, args...))
 	deny := l.HooksOfKind(codexfix.HookDeny)
 	if len(deny) != 1 || deny[0].Event != "PreToolUse" || deny[0].Group != 1 || deny[0].Handler != 0 {
 		t.Fatalf("deny groups = %+v; want one at PreToolUse group 1 handler 0", deny)
 	}
-	var cmd bytes.Buffer
-	enc := json.NewEncoder(&cmd)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(deny[0].Command); err != nil {
-		t.Fatal(err)
+	if deny[0].Command != native.Entry.Command || deny[0].Matcher != native.Entry.Matcher {
+		t.Errorf("deny command/matcher = %q / %q; native = %q / %q", deny[0].Command, deny[0].Matcher, native.Entry.Command, native.Entry.Matcher)
 	}
-	identity := `{"event_name":"pre_tool_use","hooks":[{"async":false,"command":` + strings.TrimSpace(cmd.String()) +
-		`,"timeout":600,"type":"command"}],"matcher":"request_user_input_async"}`
-	sum := sha256.Sum256([]byte(identity))
-	wantHash := "sha256:" + hex.EncodeToString(sum[:])
-	const wantKey = "/<session-flags>/config.toml:pre_tool_use:1:0"
 	state, _ := l.State()
-	if got, ok := state[wantKey]; !ok || got != wantHash {
-		t.Errorf("hooks.state[%s] = %q (present %v); want %q", wantKey, got, ok, wantHash)
+	if got, ok := state[native.Entry.Key]; !ok || got != native.Entry.CurrentHash {
+		t.Errorf("hooks.state[%s] = %q (present %v); native = %q", native.Entry.Key, got, ok, native.Entry.CurrentHash)
 	}
-	if deny[0].HasTimeout || deny[0].HasLimit {
-		t.Errorf("deny entry passes timeout %v limit %v; want neither", deny[0].HasTimeout, deny[0].HasLimit)
+	if deny[0].HasTimeout || deny[0].HasLimit || native.Entry.TimeoutSec != 600 || native.Entry.AdditionalContextLimit != nil {
+		t.Errorf("deny passes timeout %v limit %v; native default timeout %d limit %v", deny[0].HasTimeout, deny[0].HasLimit, native.Entry.TimeoutSec, native.Entry.AdditionalContextLimit)
 	}
 }

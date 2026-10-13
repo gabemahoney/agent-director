@@ -22,8 +22,8 @@ file, and tmux.
 - Linux x86_64 or Apple Silicon (arm64) macOS.
 - At least one of Claude Code and Codex, each on PATH or named by `[launch]
   claude_path` / `codex_path` in `config.toml`. For Claude Code, `claude` (Claude
-  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it. For
-  Codex, `codex` (Codex) 0.156.0 or later: its native program, or a wrapper that
+  Code) 2.1.296 or later: the native binary, or a wrapper that `exec`s it. For
+  Codex, `codex` (Codex) 0.159.2 or later: its native program, or a wrapper that
   `exec`s it. An npm-installed `codex` does not qualify: set `[launch]
   codex_path` in `~/.config/agent-director/config.toml` to the native program.
 - `tmux` 3.2 or later on PATH.

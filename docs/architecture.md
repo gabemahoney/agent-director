@@ -4608,6 +4608,11 @@ payload over 1 MiB is dropped whole before any of this.
   Codex row (`hook_codex_relay_test.go`, the `internal/mcp` and
   `cmd/agent-director` relay tests) reads one of them and does not write a
   `PermissionRequest` payload inline.
+  These retained fixtures are historical probe evidence. The 2026-10-13
+  native Codex 0.159.2 prerelease run observed subagent launch against a local
+  mock provider and retained the empty, untracked view; it did not re-capture
+  sandbox approvals, `/review` or actual memory consolidation. Those gaps
+  establish no new marking, lifecycle or relay rule.
   A test that needs a fixture with keys set or removed, nested ones included,
   builds it with `variant` and the `setKey` and `delKey` edits
   (`hook_subagent_payloads_test.go`), never a JSON literal; a `background_tasks`
@@ -5201,11 +5206,19 @@ removal never guesses these roles from shifted argv indices.
 Claude's `claudeOptionTable` (`claudeoptions.go`) contains all 126 root
 registrations independently verified at 2.1.296, including the 122 at
 2.1.280. Codex's value/flag tables and positional finalization were checked
-independently at 0.156.0 and 0.162.1. Provenance, complete endpoint tables,
+independently at historical endpoints 0.156.0 and 0.162.1. Provenance,
+complete endpoint tables,
 embedded Commander traces, native Codex probes and upstream source hashes
 are in the external probe's `b.ssz/probe/resume-parsers-20261013/findings.md`
 and `claude-validator-review.json`, alongside `answers.md`. Update tables
 from actual parsers at the pre-release check; runtime reads no agent help.
+The 2026-10-13 prerelease checks used only installed native Codex 0.159.2
+and Claude Code 2.1.296 and found no table or extraction correction. Claude's
+embedded-parser traces use a registration adapter; native missing-value and
+help probes independently check arities, but do not establish authenticated
+cloud or session eligibility. These checks do not relabel the historical
+captures as current runs; their sanitized evidence is in external
+`b.ssz/prerelease/task1/` and `task2/`.
 
 Required Claude values own even a dash-prefixed token or `--`; optional
 values consume a following non-option token; required lists own their first
@@ -6989,7 +7002,12 @@ empty input, input held open past the deadline, not JSON, another event)
 leaves the plain form, so the plain form is the default and the
 structured form the one exception. The Codex entry set registers no
 compaction hook for the help entry: Codex accepts no model context from
-one.
+one. The 2026-10-13 native Codex 0.159.2 run observed the full help list in
+primary local mock requests at startup, after `/clear` and after AD resume.
+Actual remote compaction was not rechecked: the run could not use the
+existing login in place while keeping `CODEX_HOME` disposable without
+prohibited credential copies or real-account configuration access. The
+earlier compaction probe remains historical evidence.
 
 ## Interact: `send-keys` + `read-pane`
 
@@ -8932,10 +8950,16 @@ install writes the new binaries and then, on the path each concerns:
   the two commands are printed. The scope comes from the `-s <scope>` of the
   remove line. `current` with `--register-mcp` prints "already registered"
   and runs no add: Claude Code refuses a name that already exists, so an add
-  would fail every re-run. Any other kind with `--register-mcp` (including
-  `other`, a registration under the name for another command) runs the plain
-  add, which then fails with exit 6 until the human removes the other
-  registration (`claude mcp remove agent-director -s <scope>`).
+  would fail every re-run. `old_other` and `unreadable` set `plain_add=0`
+  regardless of `--register-mcp`: no remove or add runs, so a local add cannot
+  shadow custom arguments or environment in another scope or fail on an
+  existing local name. The existing manual re-point advice names the scope
+  and requires retaining custom arguments or environment. `none` with
+  `--register-mcp` runs the plain add; no existing registration causes a
+  name collision. `other` with `--register-mcp` also runs the plain add.
+  An actual name collision may cause exit 6 until the human removes the
+  conflicting registration (`claude mcp remove agent-director -s <scope>`);
+  an entry in another scope does not necessarily make the add fail.
   **Every add is `claude mcp add agent-director [-s <scope>] -- <path> serve
   --stdio`** (the re-add keeps the remove line's scope; the plain add has no
   `-s`, so Claude Code's default `local` applies): Claude Code 2.1.280 and
@@ -17387,7 +17411,10 @@ its quoting by hand: use `Override`, `Hook` and `ShellWords`.
 reproduce: for 18 scenarios (a plain and a special path, each help-entry
 layout, relay windows, matcher forms and controls), the key and the trust
 hash that Codex itself lists for every hook entry AD composes, captured from
-three Codex releases that agree entry for entry.
+historical Codex releases 0.156.0, 0.159.2 and 0.162.1 that agree entry for
+entry. The 2026-10-13 installed native Codex 0.159.2 listing independently
+matched all 211 entries; the historical corpus and its capture provenance
+remain unchanged.
 
 - `hook-trust-golden.json` is the capture. `hook-trust-format.json` and
   `FORMAT.md` state the same rules (key layout, the hashed identity object,
@@ -17401,6 +17428,15 @@ three Codex releases that agree entry for entry.
   `GoldenScenario`, `GoldenEntry`); `ScenarioNames` lists the scenarios and
   `GoldenScenario.KeyHashes` returns a scenario's key to hash map, the shape
   of a launch's `hooks.state`. The loader reads and computes nothing.
+- `hook-trust-deny-native.json` separately holds Q1's deny entry from the
+  installed native Codex 0.159.2 `hooks/list` response on 2026-10-13. It is
+  extracted from the sanitized prerelease `actual-composed` listing, including
+  the command, matcher, key, `currentHash` and default limits, without
+  recomputing expected data from AD's composer. `TestCodexDenyGroupTrust`
+  reads this independent fixture directly; the historical corpus does not
+  contain Q1. The listing establishes trust identity, not execution of the
+  async question deny hook: that endpoint rejects the unavailable async tool
+  before hook execution.
 
 **Must use:** a test of the hook entries' commands, keys or trust hashes
 (`codexHandlerHash`, `codexQuotePath`, the settings block's `hooks.state`)

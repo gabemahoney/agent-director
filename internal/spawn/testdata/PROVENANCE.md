@@ -32,7 +32,9 @@ Read the golden data through `codexfix.LoadHookTrustGolden`
 
 ## Codex versions
 
-0.156.0 (the documented minimum), 0.159.2 and 0.162.1. All three list the same
+Historical captures: 0.156.0, 0.159.2 and 0.162.1. The current supported
+floor is 0.159.2; these original capture endpoints remain historical.
+All three list the same
 keys, hashes, timeouts and limits for every entry (`versionsAgree` is true in
 the golden file; 633 entries listed in all, 0 mismatches), so the file holds
 one entry per scenario row, not one per version.
@@ -78,10 +80,20 @@ one entry per scenario row, not one per version.
   composes these lifecycle entries: Codex rows do not track subagents. Tests
   of AD's composed entries compare only the events AD registers and exclude
   these retained captures.
-- Does NOT cover the Q1 deny group (the PreToolUse group whose matcher is
-  `request_user_input_async`): its hash follows `FORMAT.md` but was never
-  listed by a live Codex. Epic 6 (SR-16.2) re-captures it. Until then a test
-  of it checks only that the entry's identity is built by `FORMAT.md`'s rules.
+- The historical corpus does not include the Q1 deny group. Its separate
+  `hook-trust-deny-native.json` fixture is the native Codex 0.159.2
+  `app-server` `hooks/list` response from Epic 6 Task1's `actual-composed`
+  listing on 2026-10-13, including Codex's `currentHash`, command and matcher.
+  It is extracted from `prerelease/task1/captures/native-golden-listings.json`
+  by selecting the `request_user_input_async` matcher, without recomputing
+  the hash or composing expected data. The native executable was
+  `/usr/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex`.
+  The listing used an isolated host HOME/CODEX_HOME, no login or model turn;
+  the composed launch source was Task1's local mock evidence. The key's
+  `/<session-flags>/config.toml` path and the deny command need no path scrub.
+  Native 0.159.2 also matched all 211 historical corpus entries; their original
+  versions and capture provenance above remain unchanged.
+  SHA-256 of the separate fixture: `bc9cee0f4cc76e6e8deeac01d81e9f0c1a21e0ad63be7d3dc503012736e7b03f`.
 - Open edges not probed (not AD's forms): `statusMessage`, a timeout of 0 or
   below on events other than SessionEnd and Interrupt, handler types other
   than `command`, `async: true`.
@@ -95,7 +107,7 @@ Re-capture, never edit by hand, never regenerate from AD's own composer
    changes (SR-16.2: the live checks Epic 6 runs).
 2. AD's entry shape changes: a command string, a timeout, a matcher, the help
    entry's `additionalContextLimit`, a new event, or the Q1 deny group
-   (its hash is unverified until then).
+   (re-capture the independent deny fixture).
 3. A golden test fails and the cause might be Codex (a Codex release changed
    its hashing). First re-run Codex's own `hooks/list` on every supported
    version; only a listing that differs from this file justifies a new file.

@@ -1,0 +1,23 @@
+{
+  "codexVersion": "0.159.2",
+  "source": "native app-server hooks/list, Task1 actual-composed; no model turn for listing",
+  "entry": {
+    "key": "/<session-flags>/config.toml:pre_tool_use:1:0",
+    "eventName": "preToolUse",
+    "handlerType": "command",
+    "command": "cat >/dev/null; echo \"agent-director: the question tool is off for this agent (disable_ask_user); put the question in your reply instead\" >&2; exit 2",
+    "async": false,
+    "matcher": "request_user_input_async",
+    "timeoutSec": 600,
+    "statusMessage": null,
+    "additionalContextLimit": null,
+    "sourcePath": "/<session-flags>/config.toml",
+    "source": "sessionFlags",
+    "pluginId": null,
+    "displayOrder": 2,
+    "enabled": true,
+    "isManaged": false,
+    "currentHash": "sha256:659e44cade8650501c491400847e099c5844d583c56117f620e1f7b7bef12b6f",
+    "trustStatus": "trusted"
+  }
+}

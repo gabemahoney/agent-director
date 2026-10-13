@@ -8,10 +8,10 @@
   [configuration](configuration.md)) names an executable file, or its program
   name (`claude`, `codex`) is on PATH. With neither, the install stops and names
   both.
-- For Claude Code: `claude` (Claude Code) 2.1.280 or later
+- For Claude Code: `claude` (Claude Code) 2.1.296 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.
-- For Codex: `codex` (Codex) 0.156.0 or later, the native Codex program, not a
+- For Codex: `codex` (Codex) 0.159.2 or later, the native Codex program, not a
   launcher that runs it as a child. Codex installed with npm puts a node
   launcher script on PATH: set `[launch] codex_path` to the native program
   instead. On Linux x86_64 it is the file
@@ -281,9 +281,13 @@ binary needs the matching release.
   file is not touched.
 - With Claude Code present, reads agent-director's MCP registration from the
   directory the install runs in. With `--register-mcp` it re-points a
-  registration that names the old binary; without it, it prints the commands to
-  do so. A registration it cannot read as one it can re-point is left as it is,
-  with the commands printed.
+  registration that names the old binary with exactly `serve --stdio` and no
+  custom environment; without it, it prints the commands to do so. A
+  registration with custom arguments or environment, or one it cannot read,
+  is left as it is even with `--register-mcp`, and no registration is added
+  over it. The printed commands are a starting point for a manual re-point:
+  use the scope `claude mcp get agent-director` shows, and retain the
+  registration's custom arguments and environment.
 - Re-points the PATH link it manages to the new binary, and prints each other
   link and each `$PATH` entry that leads into the old `bin` directory, with its
   fix.
