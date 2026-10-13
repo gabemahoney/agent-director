@@ -1,8 +1,25 @@
-# BREAKING: agent-director <VERSION>
+# BREAKING: agent-director 0.12.0
 
-<!-- Releaser: replace <VERSION> (here and in the TypeScript floor line below) with the version being cut, and put this whole file at the top of the release notes. -->
+<!-- Releaser: put this whole file at the top of the 0.12.0 release notes. -->
 
 This is a **breaking** release. It adds Codex as a second agent next to Claude Code, and it renames every Claude-named name on agent-director's own surface, with no alias for the old names. It also moves agent-director's directory from `~/.agent-director` to `~/.config/agent-director`. Callers, scripts, templates and the config file that use an old name must change. Read the upgrade steps before you run the installer: the upgrade cannot be done by copying binaries, and a running agent breaks it.
+
+## Required agents
+
+Minimum supported versions: **Codex 0.159.2** and **Claude Code 2.1.296**. These are the installed endpoints used for this prerelease research; no version matrix was run.
+
+## Prerelease limitations
+
+This release handoff is **HELD** for safe final validation and the authoritative premerge schema comparison. Final Go/Bun and integration groups have not completed at the final revision. A host Go run was stopped after its real-home smoke guard read and printed real agent-director store tails despite a throwaway HOME. The owned logs were redacted; already emitted tool output cannot be retracted. No real mutation was established, and real-folder preservation was not independently proved. No further host tests were run.
+
+- **NOT CHECKED LIVE:** sandbox-dependent shell, file-edit, running-command-input, MCP and network approvals; relay holds, cancellation, timeout and fallback dialogs; nested callers and sandbox environment/socket/store access. User namespaces are unavailable on this host, so no working Codex sandbox was established.
+- **NOT CHECKED LIVE:** native Claude → Codex → Claude switch-back. No Claude login was used. Historical stand-in Docker tests cover this sequence; they are not a current final pass.
+- **NOT CHECKED LIVE:** same-account continuity, signed-in behavior and actual remote compaction/help reinjection. Codex reads its login from CODEX_HOME; a disposable CODEX_HOME cannot use the existing login in place within the authorized isolation rules. No login or credentials were copied or used; billed turns were zero.
+- **NOT CHECKED LIVE:** actual memory consolidation and `/review` as the first action, including their internal-thread hook ordering and row effects. Native subagent launch and the untracked empty view were observed with a local scripted model, without establishing every marked/unmarked hook case.
+- Native `/new`, `/fork`, older-session picker selection, latest-session AD resume and the 64-visible-line pause were observed with a local scripted model. The prior product question about the native picker's place in AD's guarantee remains unresolved; this observation does not settle it.
+- Default/Plan synchronous question controls were observed with suppression enabled and disabled. The installed Codex endpoint rejects forced asynchronous question calls as unsupported before hook execution; the asynchronous deny hook is **NOT CHECKED LIVE**.
+- **NOT CHECKED LIVE:** wrapper/npm launcher ancestry, full shell and startup-file variants, every-tool matcher behavior, long runtime hook holds, broader replay/image/prompt/settings cases, signed-in timing/load guarantees and desktop command survival after Esc under `systemd --user`. Native listings match the historical trust corpus, but listings do not prove runtime duration or unavailable tool execution. macOS parity remains an assumption.
+- Rollback is **NOT CHECKED BY DECISION**: the User chose roll forward and dropped rollback testing from acceptance. The existing way-back procedure below is retained unchanged; missing previous-release artifacts are no longer an acceptance hold.
 
 ## Upgrade steps
 
@@ -38,11 +55,12 @@ The installer cannot find these. Change each to the new path:
 
 ### TypeScript client floor
 
-The TypeScript client's minimum installed CLI is now `<VERSION>`. A client of this release refuses an older installed CLI with `ErrSystemInstallTooOld`, rather than sending names the old CLI does not know. Upgrade the CLI before the client.
+The TypeScript client's minimum installed CLI is now `0.12.0`. A client of this release refuses an older installed CLI with `ErrSystemInstallTooOld`, rather than sending names the old CLI does not know. Upgrade the CLI before the client.
 
 ### Installer fixes in this release
 
-- `--register-mcp` now works on Claude Code 2.1.280 and later. Before, it registered nothing and still exited 0, printing only `registration failed (continuing anyway)`. It now runs `claude mcp add agent-director -- <path> serve --stdio` and, when that add fails, reports the command, its exit status and its stderr and exits 6 after every other step has run.
+- Custom arguments, environment and unreadable MCP registrations are preserved even with `--register-mcp`; the installer adds no local entry that shadows them. Follow its manual advice with the original scope, arguments and environment.
+- `--register-mcp` uses the supported command form on Claude Code 2.1.296. Before, it registered nothing and still exited 0, printing only `registration failed (continuing anyway)`. It now runs `claude mcp add agent-director -- <path> serve --stdio` and, when that add fails, reports the command, its exit status and its stderr and exits 6 after every other step has run.
 
 ## Every spawn names its agent
 
