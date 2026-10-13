@@ -15,12 +15,12 @@ import { PKG_VERSION, openClient } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
-// The upcoming release is the higher of package.json's version and the floor's
-// release (the floor minus its prerelease): package.json stays at the last
-// release until the release pipeline bumps it, so it can sit below the floor,
-// and an RC of it would then be refused by the floor.
+// An RC of the stable floor is below that floor. Use the next patch above
+// both package.json and the floor so this acceptance fixture remains eligible.
 const floorRelease = MIN_BINARY_VERSION.replace(/-.*$/, "");
-const upcoming = compareVersions(PKG_VERSION, floorRelease) >= 0 ? PKG_VERSION : floorRelease;
+const baseRelease = compareVersions(PKG_VERSION, floorRelease) >= 0 ? PKG_VERSION : floorRelease;
+const [major, minor, patch] = baseRelease.replace(/-.*$/, "").split(".").map(Number);
+const upcoming = `${major}.${minor}.${patch + 1}`;
 const rc = `${upcoming}-rc.1`;
 
 // `make release-binaries` artifact suffix for this host; null skips the build test.

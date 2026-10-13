@@ -252,6 +252,7 @@ rm -f "$TOOLBOX/agent-director" "$TOOLBOX/gh" "$TOOLBOX/claude" "$TOOLBOX/curl" 
 fake() { cat >"$TOOLBOX/$1"; chmod 0755 "$TOOLBOX/$1"; }
 fake claude <<'EOF'
 #!/bin/bash
+printf '%s\n' "$*" >>"$HOME.claude-calls"
 echo "0.0.0 (fake claude, b.fji install-sh tests)"
 EOF
 fake sleep <<'EOF'
@@ -1221,7 +1222,8 @@ j7_schema_unreadable() {
 # migration expected, its advice word for word, <next> (as for j7_unreadable)
 # the line after "<unreadable>", no failure wording, stdout's state.db line at
 # <unreadable>, and the install carried on past step 5: hooks, this run's
-# config.toml merge and MCP registration done (J7FULL) and the install's last
+# config.toml merge and MCP preservation advice done (J7FULL), with no
+# add/remove for the stand-in's unreadable registration, and the install's last
 # line printed (b.xd9).
 j7_warned() {
     local want="install.sh: warning: state.db's schema version is unreadable after the store open" db line
@@ -1234,10 +1236,19 @@ j7_warned() {
         bad "the warning speaks as if the install failed: $(flat "$ERR")"
     fi
     j7_schema_unreadable
-    for line in "  hooks   : injected into $J7H/.claude/settings.json" "  mcp     : registered with claude mcp" \
+    for line in "  hooks   : injected into $J7H/.claude/settings.json" \
+        "  mcp     : could not read the registration from this directory as one this installer can re-point (it names the old directory's binary with other arguments or an environment, or its text was not as expected); it was left as it is. To re-point one that names the old directory (use the scope that 'mcp get agent-director' shows, and keep any arguments or environment you set):" \
         "install.sh: done. Try: $J7H/.config/agent-director/bin/agent-director help"; do
         grep -qxF "$line" "$OUT" || bad "no \"$line\" line: the install stopped at step 5: $(flat "$OUT")"
     done
+    for line in "    claude mcp remove agent-director -s <scope>" \
+        "    claude mcp add agent-director -s <scope> -- $(printf %q "$J7H/.config/agent-director/bin/agent-director") serve --stdio"; do
+        grep -qxF "$line" "$OUT" || bad "no manual repoint advice: $line"
+    done
+    grep -qxF 'mcp get agent-director' "$J7H.claude-calls" || bad "MCP registration was not checked"
+    if grep -qE '^mcp (add|remove)( |$)' "$J7H.claude-calls"; then
+        bad "the unreadable registration was changed instead of preserved"
+    fi
     grep -qE '^  config  : (merged|created) ' "$OUT" \
         || bad "no \"config  : merged/created\" line: this run skipped the config merge: $(flat "$OUT")"
     expect_installed "$J7H" "$BIN" "$ADMIN"
