@@ -257,12 +257,12 @@ test("public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-
 
 test("public-surface: extra_env is INPUT-only — absent from GetResult & ListRow OUTPUT types (SR-9.3/SR-10.3)", () => {
   const golden = typesGolden();
-  // Output-negative: extra_env must never appear on a result row type.
+  // Check declarations; JSDoc may explain transcript lookup using input extra_env.
   for (const iface of ["GetResult", "ListRow"]) {
     expect(
       interfaceBody(golden, iface),
       `${iface} must NOT declare extra_env — it is a spawn/make-template INPUT param, not an output field`
-    ).not.toMatch(/\bextra_env\b/);
+    ).not.toMatch(/^\s*extra_env\??\s*:/m);
   }
   // Input pole: extra_env must still be present on the param types so the
   // negative is scoped to output, not a blanket deletion of the surface.

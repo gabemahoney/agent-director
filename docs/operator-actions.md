@@ -128,6 +128,9 @@ A human removes the row, in order:
 
 ## A spawn refused as "left over from an earlier life"
 
+This phrase means a session left by any earlier launch of this id, including
+a launch in the same life. It does not imply that the agent type changed.
+
 `ErrTmuxSessionConflict` ("left over from an earlier life") from a plain
 `spawn` (for `--reuse-finished`, see the leftover item): a session of this store
 carries the `--instance-id` and no row exists, or holds the
@@ -331,7 +334,7 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
    no `launch_started_at`) by hand, as "A `pending` row with no launch start or
    token" says, then run `agent-director find-missing`.
 2. Deploy the caller's version; it resumes or reuses those rows (never delete
-   them: `resume` uses their history).
+   them: `resume` needs their current session and launch settings).
 
 **Back** (the caller's version cannot be deployed): follow
 [Going back to the previous release](#going-back-to-the-previous-release); it

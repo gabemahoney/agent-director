@@ -17,14 +17,11 @@ import (
 // AssertMustNot checks over any text, Go source and Markdown included.
 
 // historyByLifeClaims present reattaching an earlier conversation, a false
-// lost-transcript report or transcript_status rotated as an effect of reuse,
+// cross-life history access,
 // or the history leak as an accepted risk or known limitation (SR-18.16,
 // AC-DOC-13). The false-report and accepted-risk forms are whole clauses, so
 // an unrelated "falsely reports" or accepted risk (SR-18.12) does not match.
-var historyByLifeClaims = concatStrings(reattachClaims(), falseReportClaims(), historyRiskClaims(), []string{
-	"false lost-transcript", "reports a lost transcript", "reports the transcript as lost",
-	"rotated after a reuse", "rotated after reuse", "reuse makes transcript_status rotated",
-	"reused row shows rotated", "reused row reports rotated",
+var historyByLifeClaims = concatStrings(reattachClaims(), historyRiskClaims(), []string{
 	"history leak", "leaks history", "leak history", "leaks an earlier life", "leaks the earlier",
 })
 
@@ -101,8 +98,7 @@ const (
 )
 
 // DescReuseHistoryByLife is SR-18.16's forbidden-only case: no claim that
-// reuse reattaches an earlier conversation, gives a false lost-transcript
-// report or transcript_status rotated, or that the history leak is an
+// reuse reattaches an earlier conversation or that a cross-life history leak is an
 // accepted risk. Use it on any text.
 func DescReuseHistoryByLife() DescCase {
 	return DescCase{Name: "history by life, reuse claims", MustNot: append([]string(nil), historyByLifeClaims...)}

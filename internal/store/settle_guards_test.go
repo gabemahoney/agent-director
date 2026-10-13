@@ -68,30 +68,30 @@ func TestSettleGuardedWritesAreRaw(t *testing.T) {
 	cases := []struct {
 		name          string
 		raw, reported string
-		write         func(t *testing.T, f *v5Store, id string, examined store.RowSnapshot) store.CondResult
+		write         func(t *testing.T, f *v5Store, id string, examined store.ReuseRow) store.CondResult
 		want          store.CondResult
 	}{
 		{"find-missing's mark of a raw live row reported missing", store.StateWaiting, store.StateMissing,
-			func(t *testing.T, f *v5Store, id string, e store.RowSnapshot) store.CondResult {
-				_, res, err := f.s.MarkMissingIfSameLife(id, e)
+			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
+				_, res, err := f.s.MarkMissingIfSameLife(id, e.Snapshot)
 				wantNoErr(t, err)
 				return res
 			}, store.CondApplied},
 		{"resume's move of a raw live row reported missing", store.StateWaiting, store.StateMissing,
-			func(t *testing.T, f *v5Store, id string, e store.RowSnapshot) store.CondResult {
-				res, _, err := f.s.MoveToPending(id, e, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
+			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
+				res, _, err := f.s.MoveToPending(id, e.Snapshot, rvMoveStart, rvMoveToken, rvMoveSocket, "", store.LaunchOwner{})
 				wantNoErr(t, err)
 				return res
 			}, store.CondChanged},
 		{"reuse's reset of a raw live row reported missing", store.StateWorking, store.StateMissing,
-			func(t *testing.T, f *v5Store, id string, e store.RowSnapshot) store.CondResult {
-				res, _, _, err := f.s.ResetForReuse(id, e, rvReuseFresh(""))
+			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
+				res, _, _, err := f.s.ResetForReuse(id, e.Snapshot, e.Agent, rvReuseFresh(""))
 				wantNoErr(t, err)
 				return res
 			}, store.CondChanged},
 		{"expire's delete of a raw live row reported ended", store.StateWaiting, store.StateEnded,
-			func(t *testing.T, f *v5Store, id string, e store.RowSnapshot) store.CondResult {
-				res, err := f.s.DeleteFinishedIfSameLife(id, e)
+			func(t *testing.T, f *v5Store, id string, e store.ReuseRow) store.CondResult {
+				res, err := f.s.DeleteFinishedIfSameLife(id, e.Snapshot)
 				wantNoErr(t, err)
 				return res
 			}, store.CondChanged},
@@ -106,7 +106,7 @@ func TestSettleGuardedWritesAreRaw(t *testing.T) {
 				t.Fatalf("row reports %q; want %q", got, tc.reported)
 			}
 			before := f.rawColumns(id)
-			if got := tc.write(t, f, id, rvExamine(t, f, id).Snapshot); got != tc.want {
+			if got := tc.write(t, f, id, f.readForReuse(t, id)); got != tc.want {
 				t.Errorf("write on raw %s = %v; want %v", tc.raw, got, tc.want)
 			}
 			if after := f.rawColumns(id); tc.want != store.CondApplied && !reflect.DeepEqual(after, before) {

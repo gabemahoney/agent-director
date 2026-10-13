@@ -372,10 +372,10 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("ReadForReuse = found %v, %v", found, err)
 	}
-	fresh := Spawn{CWD: "/work/reused", TmuxSessionName: "ad-reused", RelayMode: "off", Agent: AgentClaude,
+	fresh := Spawn{CWD: "/work/reused", TmuxSessionName: "ad-reused", RelayMode: "off", Agent: AgentCodex,
 		StartedAt: time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: 1772323200000,
 		Identity: LaunchIdentity{Token: "00112233aabbccdd", Socket: "/tmp/ad-sock"}}
-	if res, _, _, err := s.ResetForReuse(reused, rr.Snapshot, fresh); err != nil || res != CondApplied {
+	if res, _, _, err := s.ResetForReuse(reused, rr.Snapshot, rr.Agent, fresh); err != nil || res != CondApplied {
 		t.Fatalf("ResetForReuse = %v, %v; want CondApplied", res, err)
 	}
 	if sp, err := s.GetSpawn(reused); err != nil || len(visible(sp.LifeNumber)) != 0 {

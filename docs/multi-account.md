@@ -17,8 +17,10 @@ pane's cwd): pretrust writes nothing and reports `pre_trust: failed`
 (the spawn still goes ahead, and the agent may stop at Claude Code's
 folder-trust prompt), and `resume` recomputes under `~/.claude`
 instead, so it does not find a transcript Claude Code wrote under the
-relative dir unless the row's recorded `jsonl_path` (or a
-`prior_sessions` entry's) still points at it.
+relative dir unless the row's current `jsonl_path` still points at it.
+Only the current session is tried: its recorded path first, then its path
+recomputed from the current row's cwd and config directory after any stat
+failure. No earlier session's path or config folder is a resume candidate.
 
 `extra_env` may not set `HOME`, whatever its value (an empty one
 included): `spawn` refuses it with `ErrReservedEnvKey`, a template's
@@ -35,8 +37,8 @@ give a Spawn its own Claude config, set an absolute
 `ErrReservedEnvKey`, writing and launching nothing; to run that agent
 again, spawn its id with `reuse_finished` (`--reuse-finished` on the
 CLI), the row's agent (`--agent`; `get` shows it) and an `extra_env` without
-`HOME` (a reused id starts a new life with no memory of the earlier
-conversation).
+`HOME` (a reused id starts a fresh conversation with no memory of the earlier
+conversation; same-agent reuse keeps its life).
 
 Each `extra_env` key must be the variable's own name. A key that is
 empty or contains `=` or a NUL byte is refused with `ErrReservedEnvKey`
@@ -181,8 +183,8 @@ and `CODEX_HOME` moves it. Agents that share an account share a group folder.
 - **No agent-director command writes, moves, links or deletes anything in a
   Codex folder,** and agent-director never logs in or out. `spawn`, `pause`,
   `resume`, `kill` and `expire` leave the folder as they found it.
-- **`resume` finds a Codex transcript only by the paths recorded for the row:**
-  its own `jsonl_path` and those of its earlier sessions, newest first. It
+- **`resume` finds a Codex transcript only by the current session's recorded
+  `jsonl_path`.** Earlier sessions are never tried. It
   never builds a path from the cwd and the session id, and never looks under a
   Claude config directory.
 

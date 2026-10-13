@@ -262,7 +262,7 @@ func TestAdviceFollow_C11_LiveRowSequence(t *testing.T) {
 		step4        bool
 	}{
 		{"live row, conversation wanted", advKillLive, true, "resume", true, false},
-		{"live row, a new life wanted", advKillLive, false, "reuse", true, false},
+		{"live row, a fresh conversation wanted", advKillLive, false, "reuse", true, false},
 		{"pending fresh spawn, its session running", advKillPendingSpawn, true, "reuse", true, false},
 		{"pending resume, its session running", advKillPendingResume, true, "resume", true, false},
 		{"pending fresh spawn, its create made no session", advKillCreateTimedOut(false), true, "reuse", false, false},

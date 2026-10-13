@@ -59,19 +59,19 @@ func rlOneCreate(t *testing.T, e *killEnv, socket string, want ...tmux.Call) tmu
 	return e.rec.SocketCallsOf(tmux.CallCreate)[0]
 }
 
-// rlAssertNewLife fails unless cols is the reset's new life after a launch
-// from launchStart with token tok: pending, life + 1, a new token, no session
+// rlAssertNewLife fails unless cols is the reset's new launch in the retained life
+// from launchStart with token tok: pending, the retained life, a new token, no session
 // id, pid or ended_at.
 func rlAssertNewLife(t *testing.T, r reuseRow, cols apitest.SpawnColumns, tok string, launchStart time.Time) {
 	t.Helper()
 	if !spawnTokenRE.MatchString(tok) || tok == r.Token {
 		t.Errorf("create token %q; want a new 16-hex token (old %q)", tok, r.Token)
 	}
-	if cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 || cols.LaunchToken != tok ||
+	if cols.State != store.StatePending || cols.LifeNumber != reuseLife || cols.LaunchToken != tok ||
 		cols.LaunchStartedAt != launchStart.UnixMilli() || cols.SessionID != nil || cols.PID != nil || cols.EndedAt != nil {
 		t.Errorf("row {state %v, life %v, token %v, launch start %v, session %v, pid %v, ended_at %v}; want pending, %d, %s, %d, all NULL",
 			cols.State, cols.LifeNumber, cols.LaunchToken, cols.LaunchStartedAt, cols.SessionID, cols.PID, cols.EndedAt,
-			reuseLife+1, tok, launchStart.UnixMilli())
+			reuseLife, tok, launchStart.UnixMilli())
 	}
 }
 

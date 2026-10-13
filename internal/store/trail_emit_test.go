@@ -235,7 +235,7 @@ func trailReset(t *testing.T, s *Store, id string) (RawLife, int64) {
 	fresh := Spawn{Agent: AgentClaude, CWD: "/tmp", TmuxSessionName: "cd-trail-reused-" + id, RelayMode: "off",
 		StartedAt: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), LaunchStartedAtMillis: trailMoveStart,
 		Identity: LaunchIdentity{Token: trailReuseToken, Socket: "/tmp/trail-reuse-sock"}}
-	res, _, v, err := s.ResetForReuse(id, row.Snapshot, fresh)
+	res, _, v, err := s.ResetForReuse(id, row.Snapshot, row.Agent, fresh)
 	if err != nil || res != CondApplied {
 		t.Fatalf("ResetForReuse = %v, %v; want CondApplied", res, err)
 	}

@@ -161,8 +161,8 @@ type Spawn struct {
 	// their caller's pre-trust choice here (1 = opted out, 0 = allowed), and
 	// an applied reuse restore (RestoreAfterFailedReuse) writes the old life's
 	// value back as stored. Resume's move and restore, hooks, find-missing and
-	// every other write leave it unchanged (SR-5.2), so every resume of a life
-	// follows the spawn or reuse that began it.
+	// every other write leave it unchanged (SR-5.2), so every resume follows
+	// the latest spawn until the next spawn or reuse.
 	// Rows that existed at the migration carry the column default, 0, and so
 	// read as pre-trust allowed.
 	NoPreTrust bool
@@ -269,8 +269,8 @@ func boolInt(b bool) int {
 // writes NULL, following LaunchIdentity's zero-means-NULL convention. It
 // also records the caller's pre-trust choice: no_pre_trust is 1 when
 // sp.NoPreTrust is true and 0 when it is false. Only reuse's reset (which
-// begins a new life) and an applied reuse restore change that column later
-// (see Spawn.NoPreTrust), so the choice holds for this first life. The
+// begins a fresh launch) and an applied reuse restore change that column later
+// (see Spawn.NoPreTrust), so the choice holds until the next spawn or reuse. The
 // server and pane identity columns (tmux_server_pid, tmux_server_started,
 // tmux_server_starttime, pane_id, pane_pid, pane_starttime) stay NULL
 // whatever sp.Identity carries: RecordLaunchIdentity writes them after the

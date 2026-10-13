@@ -93,7 +93,7 @@ func (s interleavedStore) ListLiveSpawnIdentities() ([]store.LiveSpawnIdentity, 
 }
 
 // TestFindMissingChangedBetweenReadAndWrite (AC-FM-03, AC-FM-07/08/09): a row relaunched, written by its own
-// agent's hook, reused (a new life, same second) or deleted between the sweep's read and its guarded write (on the
+// agent's hook, reused (a new launch, same second) or deleted between the sweep's read and its guarded write (on the
 // process path a mark, note, unusable-name note, clear or a pending row's unreported note, b.kdf, which so never
 // overwrites a newer hook write; on the tmux path an adoption, note, provenance_conflict note or mark) is left as
 // the change left it: no write, tick, adopted record or log line, in neither list.

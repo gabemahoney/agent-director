@@ -168,9 +168,9 @@ type advSpawnRestoreCase struct {
 // advSpawnRestoreCases are the restore's four results.
 func advSpawnRestoreCases() []advSpawnRestoreCase {
 	return []advSpawnRestoreCase{
-		{"restored", "the row was restored to its prior state, ended", store.StateEnded, nil, reuseLife + 1},
+		{"restored", "the row was restored to its prior state, ended", store.StateEnded, nil, reuseLife},
 		{"changed", "the row changed after this spawn reset it and was left as it is", store.StatePending,
-			advSpawnChangeAfterReset, reuseLife + 2},
+			advSpawnChangeAfterReset, reuseLife},
 		{"removed", "the row was removed after this spawn reset it, so nothing was restored", "",
 			func(t *testing.T, e *killEnv, id string, _ *hookedReuseStore) {
 				adviceOnceAfter(e.rec, tmux.CallCreate, func() {
@@ -182,7 +182,7 @@ func advSpawnRestoreCases() []advSpawnRestoreCase {
 		{"stays pending", "the row could not be restored and stays pending", store.StatePending,
 			func(t *testing.T, e *killEnv, id string, _ *hookedReuseStore) {
 				storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, id)
-			}, reuseLife + 2},
+			}, reuseLife},
 	}
 }
 
@@ -297,7 +297,7 @@ func TestAdviceFollow_A13_ReuseLostRaceGetThenAct(t *testing.T) {
 			if err := e.st.SetParentID(id, adviceOtherRow(t, e)); err != nil {
 				t.Errorf("SetParentID(%s): %v", id, err)
 			}
-		}, reuseLife + 1},
+		}, reuseLife},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

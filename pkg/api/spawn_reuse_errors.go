@@ -22,7 +22,7 @@ const reuseNothingChanged = "nothing was changed"
 
 // reuseRowResetStaysPending is reuse's row sentence for a launch timeout
 // (SR-1.4 row "ErrTmuxUnresponsive, launch timeout"; SR-10.4), passed as the
-// consequence of spawn.LaunchTimeoutError: the row was reset to its new life
+// consequence of spawn.LaunchTimeoutError: the row was reset for its fresh launch
 // and stays pending, since the session may have been created. It never says
 // that nothing was done or to retry later.
 const reuseRowResetStaysPending = "the row was reset; " + spawn.RowStaysPending

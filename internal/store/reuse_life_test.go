@@ -14,18 +14,15 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestReuseLifeHistory plays one row through reuses: a reset starts an empty
-// life and archives the outgoing session into the ending one; a restore
-// returns the row to its life, whose number the next reset hands out again;
-// a rotation stays in its life; an earlier life's entry whose session is
-// current again moves to the current life on the next reset.
+// TestReuseLifeHistory follows switch, restore, rotation and switch back,
+// keeping each archive in its outgoing life and never reviving an earlier life.
 func TestReuseLifeHistory(t *testing.T) {
 	f := newV5Store(t)
 	entry := func(sid string, life int64, day int) apitest.SpawnOption {
 		return apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: sid, JSONLPath: "/x/" + sid + ".jsonl",
 			Life: life, RecordedAt: time.Date(2020, 1, day, 0, 0, 0, 0, time.UTC)})
 	}
-	id := f.seed(store.StateEnded, "S2", apitest.WithLifeNumber(2), apitest.WithJsonlPath("/x/S2.jsonl"),
+	id := f.seed(store.StateEnded, "S2", apitest.WithLifeNumber(2), apitest.WithAgent(store.AgentCodex), apitest.WithJsonlPath("/x/S2.jsonl"),
 		entry("E1", 1, 1), entry("R2", 2, 2))
 	check := func(step string, life int64, reads map[int64][]string) {
 		t.Helper()
@@ -60,7 +57,9 @@ func TestReuseLifeHistory(t *testing.T) {
 	if got := storefix.ApplyAgentHook(t, f.s, id, "SessionEnd", "R2"); !got.Applied {
 		t.Fatalf("SessionEnd = %+v; want applied", got)
 	}
-	if r = rrDoReset(t, f, id, reuseFresh("", false)); r.archived != "R2" {
+	fresh := reuseFresh("", false)
+	fresh.Agent = store.AgentCodex // switching back starts life 4
+	if r = rrDoReset(t, f, id, fresh); r.archived != "R2" {
 		t.Errorf("archived session = %q; want R2", r.archived)
 	}
 	check("second reuse", 4, map[int64][]string{4: {}, 2: {"S2"}, 1: {"E1"}}) // life 3: D and R2, ordered by time

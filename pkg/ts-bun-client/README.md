@@ -124,6 +124,12 @@ const result = await client.spawn({ cwd: "~/my-project", agent: "claude" });
 console.log(result.instance_id);
 ```
 
+Same-agent reuse retains current-life session history and subagent records;
+switching agents starts another life, including when switching back.
+`resume` continues only the recorded agent's latest reported session and
+never selects an archived one. See [Usage](../../docs/usage.md#naming-the-agent)
+and [Transcript recovery](../../docs/caller-contract.md#transcript-recovery).
+
 ### status
 
 Get the current lifecycle state of a Spawn.
@@ -659,7 +665,7 @@ These 61 classes are generated one-to-one from the shared `err_name` catalog ([`
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. Retry the pause; the agent may still be running. |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. If that launch was abandoned or failed, `find-missing` marks the row `missing` once the pending grace period has passed; then a row with a `session_id` (typically a resume's launch) can be resumed, and one without (typically a spawn's or reuse's launch), if `get` still shows no `session_id`, is spawned again with `reuse_finished: true` and the row's `agent` (`get` shows it), as the error says. An agent that reports in late records a `session_id`, and its row, once `missing`, can be resumed instead. Also returned when the row changed after `resume` examined it; nothing is written. |
 | `ErrNoSessionId` | The spawn has no `session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
-| `ErrJsonlMissing` | The resume JSONL could not be located at any candidate path (for a Codex agent, only the paths recorded for it) — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
+| `ErrJsonlMissing` | The current session's resume JSONL could not be located at any candidate path (for a Codex agent, only its current recorded path; older sessions are never tried) — spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 

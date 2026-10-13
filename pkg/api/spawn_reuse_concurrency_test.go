@@ -82,11 +82,11 @@ func (e *killEnv) rcoAssertHistory(t *testing.T, id string, want []string) {
 }
 
 // rcoAssertReuseWon fails unless r's row is one reuse's launch under name
-// with parent: life reuseLife+1, the old session archived once and one
+// with parent: life reuseLife, the old session archived once and one
 // ad.spawn.reused.
 func (e *killEnv) rcoAssertReuseWon(t *testing.T, r reuseRow, name, parent string, seeded writesSnapshot) {
 	t.Helper()
-	e.rcoAssertOneLaunch(t, r, name, reuseLife+1, parent)
+	e.rcoAssertOneLaunch(t, r, name, reuseLife, parent)
 	e.rcoAssertHistory(t, r.ID, rchgArchived(seeded))
 	if n := len(pendTrail(t, "ad.spawn.reused", r.ID)); n != 1 {
 		t.Errorf("ad.spawn.reused lines = %d; want the winner's one", n)

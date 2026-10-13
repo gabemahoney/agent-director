@@ -371,7 +371,7 @@ func (f *spawnFix) reuseRows(t testing.TB) *killFix {
 }
 
 // TestSpawnReuseLabelsSessionWithNewToken reuses an ended row whose session is
-// gone: a new life on the recorded socket's server, labelled with a new token.
+// gone: a new launch in the retained life on the recorded socket's server, labelled with a new token.
 func TestSpawnReuseLabelsSessionWithNewToken(t *testing.T) {
 	f := newSpawnFix(t)
 	k := f.reuseRows(t)
@@ -386,10 +386,10 @@ func TestSpawnReuseLabelsSessionWithNewToken(t *testing.T) {
 	s := f.mustLaunch(t, old.InstanceID, true)
 	f.assertSpawned(t, s, recorded.Socket, before.RowVersion.(int64)+2) // the reset, then the identity write
 	if s.Row.LaunchToken == before.LaunchToken {
-		t.Errorf("launch_token is the old life's; want a new token")
+		t.Errorf("launch_token is the old launch's; want a new token")
 	}
-	if s.Row.EndedAt != nil || fmt.Sprint(s.Row.LifeNumber) != fmt.Sprint(before.LifeNumber.(int64)+1) {
-		t.Errorf("ended_at %v, life_number %v; want NULL, %v + 1", s.Row.EndedAt, s.Row.LifeNumber, before.LifeNumber)
+	if s.Row.EndedAt != nil || fmt.Sprint(s.Row.LifeNumber) != fmt.Sprint(before.LifeNumber.(int64)) {
+		t.Errorf("ended_at %v, life_number %v; want NULL, %v", s.Row.EndedAt, s.Row.LifeNumber, before.LifeNumber)
 	}
 	if srv := s.rt.formatInt(t, s.SessionID, "#{pid}"); srv != keep.ServerPID || s.SessionID == old.Reply.SessionID {
 		t.Errorf("new session %s on server pid %d; want a new session on the recorded server %d", s.SessionID, srv, keep.ServerPID)

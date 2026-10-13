@@ -459,7 +459,7 @@ export class SubprocessClient {
     return this.#enqueue<RecordPaneAnswerResult>("record-pane-answer", params);
   }
 
-  /** resume — relaunch a finished (ended or missing) row. */
+  /** resume — relaunch the latest session of a finished (ended or missing) row. */
   async resume(params: ResumeParams): Promise<ResumeResult> {
     this.#assertOpen();
     return this.#enqueue<ResumeResult>("resume", params);

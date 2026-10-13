@@ -151,8 +151,8 @@ func rchgArchived(before writesSnapshot) []string {
 }
 
 // rchgAssertReset checks r's applied reset by run with p as get, the store and
-// the trail show it: the request's fields, nothing of the old life, times from
-// one clock reading, life + 1, a new token, every call on socket, the call's
+// the trail show it: the request's fields, cleared launch identity, times from
+// one clock reading, the retained life, a new token, every call on socket, the call's
 // pre-trust choice, the old session archived and exactly one ad.spawn.reused,
 // written after the create on the reset (pending) row.
 func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, run *rchgRun, socket string) {
@@ -176,6 +176,10 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 			g.SessionID, g.JSONLPath, g.LivenessUnverifiedSince, g.LivenessNote, g.EndedAt)
 	}
 	cols := e.columns(t, r.ID)
+	wantLife := reuseLife
+	if run.before.cols.Agent != p.Agent {
+		wantLife++
+	}
 	var env map[string]string
 	if s, _ := cols.ExtraEnv.(string); json.Unmarshal([]byte(s), &env) != nil || !reflect.DeepEqual(env, p.ExtraEnv) {
 		t.Errorf("extra_env = %v; want the request's %v", cols.ExtraEnv, p.ExtraEnv)
@@ -197,8 +201,8 @@ func (e *killEnv) rchgAssertReset(t *testing.T, r reuseRow, p api.SpawnParams, r
 	if creates[0].Target != p.TmuxSessionName || creates[0].Cwd != cwd {
 		t.Errorf("create name %q in %q; want the request's %q in %q", creates[0].Target, creates[0].Cwd, p.TmuxSessionName, cwd)
 	}
-	if cols.TmuxSocket != socket || creates[0].Socket != socket || cols.LifeNumber != reuseLife+1 {
-		t.Errorf("tmux_socket %v, create's socket %q, life %v; want %q and life %d", cols.TmuxSocket, creates[0].Socket, cols.LifeNumber, socket, reuseLife+1)
+	if cols.TmuxSocket != socket || creates[0].Socket != socket || cols.LifeNumber != wantLife {
+		t.Errorf("tmux_socket %v, create's socket %q, life %v; want %q and life %d", cols.TmuxSocket, creates[0].Socket, cols.LifeNumber, socket, wantLife)
 	}
 	for _, c := range e.rec.SocketCalls() {
 		if c.Socket != socket {

@@ -946,26 +946,31 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   `recorded_at`, composite `UNIQUE(instance_id, session_id)`,
   indexed on `instance_id`. When a session rotates (the agent's row
   is reported with a new session id), the prior `(session id, jsonl_path)`
-  is archived here before the `spawns` row is overwritten, so the earlier
-  session's transcript is never orphaned.
+  is archived here within the gated transaction. Successful archival keeps
+  its reference inspectable; a fail-open archive error can strand it.
   - **History belongs to a life.** Each entry carries the life it belongs to
     (`life_number`, see "v5 columns" below): the life the row was in when that
-    session ran. A life runs from the spawn that created the row, or from a
-    reuse's reset, to the next reuse. The rotation archive, inside SessionStart's gated write,
+    session ran. A life begins at insert or an agent-switch reset and ends at the
+    next switch. Same-agent reuse, resume and session rotation keep it.
+    The rotation archive, inside SessionStart's gated write,
     takes the outgoing session id from the snapshot the hook examined and
     that session's jsonl path and life from a read pinned to that same
     snapshot, so all three belong to one row version. The reuse archive,
     inside `ResetForReuse`'s transaction, takes the current session id,
     path and life from its own in-transaction read and tags the entry with
-    the life the reuse ends; it moves an entry archived in an earlier life
-    to that life. The reset is the only write that starts a new life
-    (`life_number` + 1), so a reused row's visible history starts empty and
-    no earlier life's entry is ever shown or tried again. An applied restore
+    the outgoing life, whether or not the agent changes; it moves an entry
+    archived in an earlier life to that life. Only a reset whose raw agent
+    differs exactly from `fresh.Agent` advances `life_number`. Same-agent
+    reuse retains visible history; switching either way, including back,
+    starts empty visible history. Earlier lives' entries remain hidden.
+    Resume never tries archived sessions, even within the current life.
+    An applied restore
     after a failed reuse writes the pre-reuse life number back, so that
     life's visible history is exactly as before the attempt (the entry the
     reuse archived is the row's current session id, which the visible
-    history drops). A restored number is safe to hand out again: the next
-    reset starts the same life number afresh, and no entry belongs to the
+    history drops). After a restored switch, its abandoned number can be
+    used by the next switch; a same-agent reset keeps the restored life.
+    No entry belongs to the
     abandoned attempt's life, because the reset row records no pane, so no
     hook (and so no rotation archive) applies to it before the restore.
   - **One entry per instance and session id.** Re-archiving a session id
@@ -982,7 +987,9 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
     id (`visibleHistory` in `pkg/api/visible_history.go`). The visible
     history is the queryable link from a row back to the earlier sessions of
     its current life, surfaced through `get`'s `prior_sessions` and consulted
-    by `resume` as a fallback candidate source. **Must use:** every
+    by `resume` only to classify a failed current-session lookup as
+    never-written or missing. No history entry is statted or selected.
+    **Must use:** every
     `pkg/api` reader of session history applies the current-session rule
     through `visibleHistory` (`pkg/api/visible_history.go`), never its own
     filter.
@@ -1138,11 +1145,12 @@ No verb reports any other v5 column.
   both `INTEGER NOT NULL DEFAULT 0`. The row's current life and the life each
   history entry belongs to, so the history of a reused id can be split by
   life. `spawns.life_number` changes only through reuse: the reset
-  (`ResetForReuse`) advances it by one, and an applied restore after a
+  (`ResetForReuse`) advances it by one only on an exact raw-agent mismatch;
+  same-agent reuse keeps it. Recorded older lives are never renumbered. An applied restore after a
   failed reuse (`RestoreAfterFailedReuse`) sets it back to the pre-reuse
   value. A `resume` keeps it.
 - **Pre-trust choice** — `spawns.no_pre_trust INTEGER NOT NULL DEFAULT 0`. The
-  pre-trust choice of the spawn or reuse that began the row's current life:
+  pre-trust choice of the latest spawn or reuse, until the next spawn or reuse:
   0 means pre-trust allowed, anything else means the caller opted out.
 - **Launch identity** — eight nullable `spawns` columns: `launch_token` (TEXT,
   the launch's token), `tmux_socket` (TEXT, the tmux socket the launch uses),
@@ -1393,7 +1401,7 @@ names](#store-upgrade-to-agent-generic-names)).
   saves them (`ReadForReuse`) and a failed reuse puts them back
   (`RestoreAfterFailedReuse`, through `rawLifeColumns`). `ResetForReuse`
   writes the new call's agent and sets `end_reported_at` to NULL, so a reused
-  row starts a life with no end report. Resume's `MoveToPending` sets
+  row starts a launch with no end report. Resume's `MoveToPending` sets
   `end_reported_at` to NULL, and `RestoreAfterFailedResume` writes the prior
   value back (`ResumePrior.EndReportedAtMillis`). Resume keeps `agent`: it
   neither writes nor restores it.
@@ -1590,10 +1598,9 @@ still the one it read, so it knows the row has not changed since. As built:
   read tells `CondChanged` from `CondAbsent` (`store.CondResult`,
   `rowsnapshot.go`; every conditional write shares the helper
   `condNotApplied`). Only reuse's two writes touch `life_number` and
-  `no_pre_trust` after the insert: the reset writes life + 1 and its own
-  call's choice, and an applied restore writes the pre-reuse values back.
-  So the choice of the spawn or reuse that began a life holds for that
-  life.
+  `no_pre_trust` after the insert: the reset advances life only on an agent switch and writes its own
+  call's choice; an applied restore writes the pre-reuse values back.
+  The choice lasts until the next spawn or reuse, including same-agent reuse.
 - The release of a launch's hold (b.kdf; `internal/store/spawns.go`,
   `releaseLaunchOwnerSQL`). `ReleaseLaunchOwner(instanceID, token)` is one
   UPDATE, guarded on `state = 'pending'`, the given `launch_token` (so it
@@ -1656,7 +1663,10 @@ still the one it read, so it knows the row has not changed since. As built:
   the reuse opt-in, see [Reuse of a finished id](#reuse-of-a-finished-id)).
   None emits a trail event.
   - `ReadForReuse(id) (ReuseRow, found, error)`: the one pre-check read,
-    one SELECT by primary key. `ReuseRow` holds `State`, `EndedAtText`
+    one SELECT by primary key. `ReuseRow.Agent` is the exact stored text,
+    without canonicalization; NULL or any non-text storage class reads `""`.
+    The same reading (`reuseAgentTextSQL`) is used in both reset guards.
+    `ReuseRow` holds `State`, `EndedAtText`
     (`ended_at` as stored text, `""` for NULL), `EndedAt` (as the driver
     parses it, the way `scanSpawn` does; nil for NULL or a value that does
     not parse), `Snapshot` and `Identity` (through `lifeColumns`, so equal
@@ -1668,17 +1678,18 @@ still the one it read, so it knows the row has not changed since. As built:
     never decodes `labels`, `agent_args` or `extra_env`, and no stored timestamp, token or
     pre-trust value fails it, so a hand-edited malformed row can be reused
     and restored byte for byte. No row: `found` false, no error.
-  - `ResetForReuse(id, examined, fresh) (CondResult, archivedSessionID,
+  - `ResetForReuse(id, examined, examinedAgent, fresh) (CondResult, archivedSessionID,
     resetVersion, error)`: the change, one transaction. It encodes the
     request fields first (a failure begins nothing), then takes one
     connection from the pool and runs `BEGIN IMMEDIATE`, so it holds the
     write lock before it reads (see the write-lock-before-read rule
     below). Its in-transaction read takes the session id, path and
-    `life_number` and decides, with `finishedStateGuardSQL` and
-    `snapshotMatchSQL`, whether the row is still finished with the
-    examined snapshot: no row is `CondAbsent`, a live or changed row
+    `life_number` and the identical raw-agent reading and decides, with
+    `finishedStateGuardSQL`, `snapshotMatchSQL` and the `examinedAgent`
+    equality guard, whether the row is still finished with the examined
+    snapshot and agent: no row is `CondAbsent`, a live or changed row
     `CondChanged`, both writing nothing. Otherwise, in order: the keyed
-    archive of a non-empty session id in the ending life through
+    archive of a non-empty session id in the outgoing life through
     `upsertSessionHistoryEntry` (fail-closed; its error holds
     `ErrReuseArchive`); the reset UPDATE, still guarded and required to
     change exactly one row: state `pending`; `session_id`,
@@ -1692,7 +1703,9 @@ still the one it read, so it knows the row has not changed since. As built:
     launch-owner columns from `fresh.LaunchOwner` (the reusing process);
     `agent` from `fresh.Agent`, refused before anything is written, with an
     error holding `ErrRowAgentInvalid`, when it is not exactly `claude` or
-    `codex`; `subagent_tracking` by that agent (1 for `claude`, 0 for `codex`, `subagentTrackedParamSQL`); `life_number` + 1; `row_version` + 1; then the deletion of every
+    `codex`; `subagent_tracking` by that agent (1 for `claude`, 0 for `codex`, `subagentTrackedParamSQL`); `life_number` advances by one only when
+    `reuseAgentTextSQL` differs exactly from `fresh.Agent` in this UPDATE;
+    `row_version` + 1; then the deletion of every
     permission request of the id, decided or not; then the subagent close
     (`closeSubagentsAgentGone`: every running entry of the id turns `lost`,
     `agent_gone`, at `fresh.LaunchStartedAtMillis`, and every claimable launch
@@ -1701,7 +1714,11 @@ still the one it read, so it knows the row has not changed since. As built:
     the examined version + 1. Any failure rolls everything back and
     returns a wrapped error with a zero `CondResult`; only an archive
     failure holds `ErrReuseArchive`. Children keep their `parent_id`; the
-    store reads no clock.
+    store reads no clock. Both the transactional read and UPDATE guard
+    `examinedAgent` using `reuseAgentTextSQL`; an agent-only edit produces
+    `CondChanged` with no committed writes. Invalid text and non-text values
+    count as switches to either valid fresh agent. No trimmed or defaulted
+    agent comparison may replace this rule.
   - `RestoreAfterFailedReuse(id, resetVersion, prior, failedAt)`: one
     UPDATE, guarded on `state = 'pending'` and `row_version =
     resetVersion`. It writes every `RawLife` column back exactly as
@@ -3562,18 +3579,18 @@ pending   (keeps its session id and history)
 ended / missing
   │
   ▼   spawn() with the reuse opt-in: the reset (one transaction: the
-  │   archive, the reset to a new life, the permission requests
+  │   archive, the reset (a new life only on an agent switch), the permission requests
   │   deleted), then the launch under the requested name
-pending   (life + 1, no session id; the new life's history starts empty)
+pending   (no session id; same agent keeps life/history, switch: life + 1)
   │
-  ├──► SessionStart hook fires (the new life's agent reports in, only
+  ├──► SessionStart hook fires (the new launch's agent reports in, only
   │    under the hook gate, from the launch's own pane) ──► waiting
   │
   ├──► the launch fails other than by timing out: the restore, applied
   │    only at the reset's row_version ──► the prior ended / missing,
   │    in its pre-reuse life
   │
-  └──► the create times out ──► stays pending (in the new life)
+  └──► the create times out ──► stays pending (in the reset life)
 
 any state
   │
@@ -6063,17 +6080,19 @@ surface shows spells it `manifest.ReuseOptInSpelling`, "reuse_finished
   [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)),
   and the reset gives the row that agent, whatever agent the earlier life
   had: a Claude row can be reused as a Codex one and the reverse. The new
-  life's arguments, extra env, end report and subagent-tracking flag are
+  launch's arguments, extra env, end report and subagent-tracking flag are
   the new call's, composed for that agent (see [Per-agent launch
   composition](#per-agent-launch-composition)), so nothing of the earlier
   agent's launch carries over. The advice that points a caller at a reuse
   (`spawn.ReuseSpawn`) carries the row's agent, which `get` shows.
 - A successful spawn does not say whether it created a fresh row or reset
   a finished one; the result is the id and `pre_trust`.
-- A reused id starts with no memory of its earlier lives: `resume` and
-  `get` never use or show an earlier life's history, so the earlier
-  conversation cannot be resumed through agent-director after a reuse
-  (SR-8.7; see "History belongs to a life" under
+- A reused id starts a fresh conversation with no memory of the old
+  conversation. Same-agent reuse keeps its life and visible history/records.
+  An exact stored-agent change starts a fresh life, including a switch back.
+  `get` never shows an earlier life's history; `resume` never uses an
+  archived session, even within the current life. Children remain listed
+  and running across either switch (see "History belongs to a life" under
   [internal/store](#internalstore)).
 - Retrying a failed plain spawn: after "duplicate session" the row is
   already `ended` (unless the error says the end write did not apply), so
@@ -6188,7 +6207,7 @@ the `ad.provenance.disagree` records may have been written.
 **Token, composition, pre-trust.** On proceed, `reuseChangeAndLaunch`
 mints a launch token (`spawn.NewLaunchToken`; a failure is `ErrInternal`,
 nothing written) and composes the launch with `spawn.ComposeLaunch` (the
-create request and the new life's request fields, the parent id from the
+create request and the new launch's request fields, the parent id from the
 caller's `AGENT_DIRECTOR_INSTANCE_ID`; a failure writes nothing). The
 composition is the new call's agent's: a Codex reuse of a Claude row gets
 Codex's argv, environment and carried pre-trust outcome, with the refused
@@ -6198,21 +6217,28 @@ this call's own `no_pre_trust`. It never refuses; its outcome is the
 result's `pre_trust`. A reset that then loses its race leaves the
 trust entry written, which is harmless.
 
+**Must use:** every reuse path uses `ReadForReuse`, `ResetForReuse` and
+`RestoreAfterFailedReuse`, passing the examined snapshot and raw
+`ReuseRow.Agent` unchanged. Never duplicate their guards, archive or restore.
+See [Subagent capture](#subagent-capture) for current-life storage/listing.
+
 **The single change** (SR-10.3; `ResetForReuse`). One reading of the
-Client clock gives the new life's `started_at`, `last_seen_at` and launch
+Client clock gives the new launch's `started_at`, `last_seen_at` and launch
 start. The fresh row is `ComposeLaunch`'s row with that reading, the new
 token, the prepared socket and the call's `NoPreTrust`. `ResetForReuse`
 applies, in one transaction that holds the write lock before it reads,
-and only while the row is still finished with the examined snapshot:
+and only while the row is still finished with the examined snapshot and
+exact raw-agent reading (`ReuseRow.Agent`, passed as `examinedAgent`):
 
 - the keyed archive of the current session (if any) into
-  `session_history`, in the life the reuse ends, fail-closed;
-- the reset to `pending` in life + 1: session id, transcript path, pid,
+  `session_history`, in the outgoing life, fail-closed;
+- the reset to `pending`: life retained for an exact same-agent reuse,
+  life + 1 on either agent switch (a switch back advances again); session id, transcript path, pid,
   start time, liveness columns, `ended_at` and the six server and pane
   identity columns cleared; the new token and socket; the request fields
   (the `agent`, `agent_args` and `extra_env` of the new call among them)
   and `parent_id` from the new request; `no_pre_trust` from this call;
-  `end_reported_at` NULL, so the new life has no end report;
+  `end_reported_at` NULL, so the new launch has no end report;
   `subagent_tracking` by the new agent (1 for `claude`, 0 for `codex`);
   `launch_started_at` set; version advanced. The raw stored `labels`,
   `agent_args` and `extra_env` are never decoded;
@@ -6220,9 +6246,9 @@ and only while the row is still finished with the examined snapshot:
   their parent id;
 - the close of the row's running subagent entries and claimable launches
   (`lost`, `agent_gone`, at the new `launch_started_at`; retained entries stay
-  stored in their prior lives and are hidden from the new life's listing.
-  A start with the same subagent id creates a separate current-life entry;
-  reopening an existing entry is only within its life, as described in
+  stored. Same-agent reuse keeps them visible; a later start reopens the
+  same entry within that life. A switch hides earlier-life entries and
+  a start with the same subagent id creates a separate current-life entry, as described in
   [Subagent capture](#subagent-capture). See
   [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)).
 
@@ -6244,7 +6270,7 @@ before any restore. The outcome goes through `finishedLaunch.outcome`
 | --- | --- |
 | Labelled | The identity write (`spawn.RecordLaunchIdentity` with the reset's version and the new token; a failure logs one WARN line and does not fail the call); success: the id and `pre_trust` |
 | Reply lost with exit 0 | Success, no identity written |
-| Timed out, or a non-zero-exit reply that does not parse | `ErrTmuxUnresponsive` with the launch-timeout description and "the row was reset; the row stays pending"; no restore, the row stays `pending` in its new life |
+| Timed out, or a non-zero-exit reply that does not parse | `ErrTmuxUnresponsive` with the launch-timeout description and "the row was reset; the row stays pending"; no restore, the row stays `pending` in its reset life |
 | "duplicate session" | `finishedLaunch.heldName`: one re-lookup of the requested name against the examined launch identity, the restore, the holder's classified error (as in [After "duplicate session"](#after-duplicate-session), with the examined `ended_at`), the re-lookup's disagree reasons not already written, and one `ad.launch.name_held` (`launch` `reuse`) |
 | tmux unavailable (the binary cannot be run, or the socket-permission reply) | The restore, then `ErrTmuxNotAvailable` |
 | A session that could not be labelled, or any other failure | The restore, then `ErrTmuxSessionCreate` |
@@ -6528,22 +6554,21 @@ nothing, touches no file and prints nothing.
 
 The choice is recorded on the row at the spawn's pending insert
 (`no_pre_trust`, see [internal/store](#internalstore)), and every
-`resume` of that life honours it: `resume` passes the recorded
+`resume` until the next spawn or reuse honours it: `resume` passes the recorded
 `NoPreTrust` as `off`, so over an opt-out it attempts no pre-trust and
 writes no trust entry. The move to `pending` and the restore after a
 failed launch keep the column, so a retry after a restored launch
 failure honours it too. `resume` has no pre-trust parameter, and no
-verb, parameter or setting turns pre-trust back on over a recorded
-opt-out. Rows from before this release carry the column's default
+resume parameter or setting turns pre-trust back on over a recorded
+opt-out; the next spawn or reuse supplies a new choice. Rows from before this release carry the column's default
 (pre-trust allowed), so their `resume` pre-trusts whatever their
 original spawn chose.
 
 A reuse is a new spawn call: it pre-trusts through the same shared step
-by its own call's `no_pre_trust`, whatever an earlier life chose, and its
-reset records that choice on the row, overwriting the previous life's
-(SR-18.13, SR-22.6). Every `resume` of the new life then follows it. A
-failed reuse's applied restore writes the previous life's choice back
-with the rest of that life.
+by its own call's `no_pre_trust`, whatever an earlier launch chose, and its
+reset records that choice on the row (SR-18.13, SR-22.6), including when
+it keeps the life. Every `resume` until the next spawn or reuse follows
+it. A failed reuse's applied restore writes the previous choice back.
 
 Pre-trust is best effort on both verbs: a failure never fails the
 launch. When the write cannot be made (the extra env's
@@ -6576,9 +6601,8 @@ result carries `pre_trust`, always exactly one of three values:
   hook-trust bypass).
 - `skipped`: pre-trust was off for this launch, so nothing was attempted.
   For `spawn`, a reuse included, the caller passed `no_pre_trust`. For
-  `resume`, the row records that the spawn or reuse that began its life
-  opted out; this holds on
-  every `resume` of that life, including a retry after a launch failure
+  `resume`, the row records that the latest spawn or reuse
+  opted out; this holds until the next spawn or reuse, including a retry after a launch failure
   whose row was restored.
 - `failed`: pre-trust was attempted and the entry was not written (the
   `.claude.json` file is missing, or could not be read, parsed or
@@ -6612,7 +6636,8 @@ pre-trust is not a write. `spawn.CodexPreTrust(extraEnv, off)`
 that reads and writes no file and takes no lock:
 
 - `off` (the spawn's `no_pre_trust`, or for `resume` the row's recorded
-  one, held for the life as for Claude): `skipped`.
+  latest spawn or reuse choice, held until the next spawn or reuse as for
+  Claude): `skipped`.
 - The extra env sets `CODEX_HOME` to a value that is not an absolute
   path (an empty value counts as unset): `failed`. Codex resolves a
   relative value against its pane's cwd, which agent-director cannot
@@ -12074,7 +12099,7 @@ written, harmlessly:
    recourse). Recourse: spawn again
    with the same id, opting in to reuse with `reuse_finished`
     (`--reuse-finished` on the CLI) and the row's agent (`--agent` on the
-   CLI; `get` shows it); the new life starts with no memory of the old
+   CLI; `get` shows it); the fresh conversation starts with no memory of the old
    one.
 4. The row's stored extra env has no key that sets `HOME`, whatever its
    value, an empty one included: neither the key `HOME` nor one such as
@@ -12093,7 +12118,7 @@ written, harmlessly:
    the row's agent (`spawn.ReuseSpawn`) and an extra env without `HOME`
    (`spawn.ReservedHomeAlternative` for the row's agent: an absolute
    `CLAUDE_CONFIG_DIR` gives a Claude Code agent its own config, an
-   absolute `CODEX_HOME` a Codex one); the new life starts with no
+   absolute `CODEX_HOME` a Codex one); the fresh conversation starts with no
    memory of the old conversation. Then the stored extra env must have
    no malformed key: one that is empty or holds `=` or a NUL byte
    (`spawn.InvalidEnvKey`, the rule spawn validation shares) → otherwise
@@ -12108,91 +12133,49 @@ written, harmlessly:
     gives the recourse: spawn the id again with the reuse opt-in and the
    row's agent (`spawn.ReuseSpawn`) and an extra env without that key,
    each variable
-   named by its own key (`spawn.InvalidEnvKeyAlternative`); the new life
+   named by its own key (`spawn.InvalidEnvKeyAlternative`); the fresh conversation
    starts with no memory of the old conversation. See [Malformed
    `extra_env` keys](#malformed-extra_env-keys-bvpb).
 5. JSONL transcript file exists on disk → otherwise `ErrJsonlMissing` or
    `ErrJsonlNeverWritten` (see below). Pure `os.Stat` pre-flight; no read.
-   Candidate resolution follows a strict precedence (decision of record, bug
-   b.1ba, extended by b.v2c). The precedence below is a Claude row's. **A
-   Codex row has only the recorded paths:** its candidates are the persisted
-   `jsonl_path` and each visible-history entry's recorded `jsonl_path`,
-   newest first, and nothing else. No path is ever built from the cwd and the
-   session id, and neither `CLAUDE_CONFIG_DIR` nor `~/.claude` is looked
-   under, because Codex's transcript path is not derived from either (item 2
-   and the recomputed half of item 3 do not apply to it). The first recorded
-   path that exists wins, and its session id goes to the relaunch, as for a
-   Claude row. With no path ever recorded the refusal is `ErrJsonlNeverWritten`
-   or `ErrJsonlMissing` by the same two cases below, and the attempts list
-   reads "no transcript path was ever recorded" when it is empty:
-   1. The persisted `jsonl_path` is tried first, if non-empty. If its
-      `os.Stat` succeeds it **wins outright** — no fallback is computed.
-   2. If `jsonl_path` is NULL/empty **or** its `os.Stat` fails for ANY
-      reason (not just ENOENT — a permission-broken persisted path must
-      not block an otherwise-resumable row), a fallback path is
-      recomputed from the row's `ExtraEnv["CLAUDE_CONFIG_DIR"]` (or
-      `~/.claude` when that value is absent, empty or not an absolute
-      path: `spawn.ConfigDirUsable`, the rule pre-trust shares) `+
-      slug(cwd) + session id`, and that is `os.Stat`'d.
-   3. If neither the current session's persisted path nor its fallback
-      exists, `resume` walks the row's *visible history* (newest first,
-      b.v2c AC6): the `session_history` entries of the row's current life,
-      minus any entry whose session id equals the row's current session id
-      (see `internal/store`, `session_history`). That entry is never tried;
-      its session's own two candidates were already tried above, and a path
-      recorded only on it is never stat'd. Each visible entry gets the **same
-      persisted→fallback two-step the current session gets** (bug b.5jm):
-      the recorded `jsonl_path` is stat'd first, and on ANY stat failure of
-      a non-empty path — the b.1ba rot mode — the `CLAUDE_CONFIG_DIR`-aware
-      path is recomputed and stat'd for that same session id before
-      advancing to the next, older entry. (A NULL/empty recorded path skips
-      straight to the recomputed path.) Without this two-step, a newer entry
-      whose recorded path had rotted would be skipped and an older entry
-      could silently win. The first visible
-      transcript that exists **wins**: `resume` relaunches `claude
-      --resume` against the archived id so it points at the recovered
-      transcript (the id is only passed to the launch: resume never
-      rewrites the row's `session_id`, the move keeps it, and the
-      relaunched Claude's subsequent SessionStart re-stamps it). This
-      is what stops a rotation (the agent's row reported with a new session
-      id, for example after the caller restarts its agents) from stranding
-      intact history. The walk never leaves the current life: after a
-      reuse, which starts a new life, no earlier life's transcript is a
-      candidate, so the earlier conversation is never reattached; after a
-      failed reuse whose restore applied, the row is back in its pre-reuse
-      life and the walk sees exactly that life's history, as before the
-      attempt.
+   Candidate resolution uses only the current session, the latest reported
+   in the current life. Claude first stats its non-empty persisted
+   `jsonl_path`. A successful stat wins without recomputation. When the path
+   is empty or stat fails for any reason, including permission errors or
+   ENOTDIR, it stats the current session's path recomputed from the row's
+   cwd and usable absolute `ExtraEnv["CLAUDE_CONFIG_DIR"]` (else `~/.claude`,
+   through `spawn.ConfigDirUsable`). Codex stats only its current recorded
+   path: no cwd-derived path and no Claude config directory.
 
-   This heals legacy rows written before the SessionStart hook persisted
-   `jsonl_path`, rows whose recorded path has rotted, and rows whose history
-   moved to an earlier session id on rotation — a successful fallback resume
-   re-fires SessionStart, which re-persists the correct path. When **every**
-   candidate (persisted, fallback, and every visible-history transcript)
-   fails, the verb distinguishes two cases (b.v2c AC2), decided on the
-   visible history:
-   - `ErrJsonlNeverWritten` when the persisted `jsonl_path` was NULL/empty
-     **and** the visible history is empty (a history holding only the
-     current session id counts as empty) — nothing was ever written in the
-     row's current life (a freshly restarted agent the caller has not yet
-     messaged; a fresh Claude session writes no `.jsonl` until its first
-     user turn). `resume` returns it only for a finished row, which
-     `send-keys` refuses, so the row cannot be messaged. Recourse: spawn
-     again with the same id, opting in to reuse with `reuse_finished`
-     (`--reuse-finished` on the CLI); the new life starts with no memory of
-     the old conversation.
-   - `ErrJsonlMissing` otherwise — the persisted path was set and has
-     rotted, or the visible history is non-empty and none of its
-     transcripts exists. Recourse: spawn again with the same id, opting in
-     to reuse with `reuse_finished` (`--reuse-finished` on the CLI); the new
-     life starts with no memory of the old conversation, which cannot be
-     resumed through agent-director
-     afterwards.
+   No archived session is statted, recomputed or selected. There is no
+   older-folder resume check: older sessions are never launch candidates,
+   even if same-agent reuse retained history from another cwd/config folder.
+   Future resume changes MUST keep the current session id and use the shared
+   [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo); do not
+   reintroduce a history walk. AD's guarantee covers its managed launches;
+   it supplies no in-session picker and does not control the agent's picker.
+   Whether the agent can reopen its session is the agent's capability.
 
-   Both messages report each path tried with its source (`persisted`,
-   `fallback`, or `history`) and its stat error; every path named comes
-   from the current session's own two candidates or the current life's
-   visible history (see
-   [JSONL path resolver](#jsonl-path-resolver-internalspawnjsonlgo)).
+   When all current candidates fail, classification is unchanged:
+   - `ErrJsonlNeverWritten`: persisted `jsonl_path` NULL/empty and visible
+     history empty (an archived entry equal to the current id is excluded).
+     Nothing was written in this life under that contract. Recovery is a
+     spawn again with the same id, opting in to reuse with `reuse_finished`
+     (`--reuse-finished` on the CLI), and the row's agent. The fresh
+     conversation starts with no memory of the old conversation.
+   - `ErrJsonlMissing`: otherwise, even if a visible older transcript exists.
+     Recovery is the same fresh spawn, with no memory of the old conversation,
+     which cannot be resumed through agent-director afterwards.
+
+   History is read only for classification, never statted for it. A
+   same-agent reuse followed by a session with no transcript can therefore
+   read `transcript_status` `rotated` and return `ErrJsonlMissing`. Do not
+   substitute a disk-existence-based never-written classification. With a
+   Codex current path empty and history non-empty, this is `ErrJsonlMissing`
+   with zero tries; the message says no transcript path is recorded for the
+   current session. No-session refusal still precedes this lookup.
+   Tries name only current-session sources `persisted` and `fallback`,
+   never `history`, each with its stat error. No refusal changes the row.
    Steps 1 to 5 read the row once (`GetSpawn`). Everything after works
    from that read: the row is never altered in memory, and the winning
    candidate's session id is passed on as the session to resume. The row
@@ -12698,16 +12681,15 @@ snapshot's; its path and the row's life come from a read pinned to that
 snapshot, taken just before the transaction. The entry is written through
 `upsertSessionHistoryEntry` on the transaction. The archive is fail-open: a
 history error still commits the SessionStart write and emits
-`ad.session.archive_failed`. The earlier session's transcript is therefore never
-orphaned: while the row stays in that life and the entry is not the row's
-current session id, it is reachable through `get`'s `prior_sessions` and is a
-resume fallback candidate. A life runs from the spawn that created the row,
-or from a reuse's reset, to the next reuse. A reuse archives the current
-session itself (fail-closed, in the life it ends) and starts a new life, so
-`resume` and `get` of the reused row see only the new life's history and
-never reattach the earlier conversation; a failed reuse whose restore
-applied returns the row to its pre-reuse life, whose visible history is
-exactly as before.
+`ad.session.archive_failed`. With successful archival, the earlier session is inspectable through
+`get`'s `prior_sessions` while its life remains current and it is not the
+current session id. Fail-open archival can leave an earlier reference
+stranded. Archived sessions are never resume candidates. Same-agent reuse
+archives the outgoing session fail-closed and keeps the life and visible
+history. A switch starts another life with empty visible history; switching
+back starts another new life. An applied restore returns the pre-reuse
+agent and life, with their visible history and records, while deleted
+requests remain deleted and closed records remain closed.
 
 **Lazy transcript healing in `find-missing` (b.v2c AC3).** `find-missing`
 already sweeps every live row; on each sweep it also lists rows with a NULL
@@ -12731,7 +12713,7 @@ classifier](#the-agent-aware-hook-classifier).
 
 The resolvers below are **Claude-only**: a Codex row's resume never calls
 them (see item 5 of the verb's steps). Its transcript path is whatever its
-own hooks recorded, in `jsonl_path` and in the history, and there is no
+own hooks recorded for the current session in `jsonl_path`, and there is no
 layout to rebuild from the cwd.
 
 The resume pre-flight prefers the transcript path **persisted on the
@@ -13923,16 +13905,15 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
    **required first**: `resume` refuses any non-terminal row with
    `ErrSpawnNotResumable`, so a row still frozen at `waiting`/`working`
    cannot be resumed until `find-missing` moves it to `missing`.
-2. **`resume`** — relaunches each missing row via `claude --resume` in a
-   fresh tmux session under the same `instance_id`, restoring the
+2. **`resume`** — relaunches each missing row with its recorded agent: Claude via `claude --resume` in a
+   fresh tmux session under the same `instance_id` (Codex uses its own
+   relaunch command with its current session id), restoring the
    persisted `ExtraEnv` (auth/config, incl. `CLAUDE_CONFIG_DIR`) and
    replaying the JSONL transcript. The transcript is located by the
    [pre-flight precedence](#verb-pkgapiresumego) (persisted `jsonl_path`,
-   then the `CLAUDE_CONFIG_DIR`-aware fallback, then any transcript of the
-   row's visible history: the current life's archived `session_history`
-   entries, minus the entry for the row's current session id), which is
-   what lets a Spawn that ran under a custom config dir — or whose session
-   rotated when its agent restarted — recover across a reboot. Each
+   then the current session's `CLAUDE_CONFIG_DIR`-aware recomputation for
+   Claude; Codex uses only the current recorded path). No history entry is
+   tried: only the latest reported session can recover across a reboot. Each
    resumed row shows `pending`, keeping its session id and history,
    until its agent reports in (SessionStart), then `waiting`.
 
@@ -13952,12 +13933,14 @@ ways, and the errors mean different things:
   user turn. There is genuinely nothing to resume, and the finished row
   cannot be messaged (`send-keys` refuses it). Recovery: spawn again with
   the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
-  on the CLI); the new life starts with no memory of the old one.
+  on the CLI); the fresh conversation starts with no memory of the old one.
 - `ErrJsonlMissing` — the persisted path was recorded and has since rotted, or
-  the visible history is non-empty and none of its transcripts exists. The
-  paths it names all come from the current life. Recovery: spawn again with
+  the visible history is non-empty while the current session's candidates
+  fail, even if an older transcript exists. The paths it names are only
+  the current session's; Codex can have zero tries when no current path is
+  recorded. Recovery: spawn again with
   the same id, opting in to reuse with `reuse_finished` (`--reuse-finished`
-  on the CLI); the new life starts with no memory of the old conversation,
+  on the CLI); the fresh conversation starts with no memory of the old conversation,
   which cannot be resumed through
   agent-director afterwards.
 
@@ -13967,24 +13950,15 @@ is non-empty, i.e. history exists under a different session id — see
 `prior_sessions`, which lists that visible history), `present`, or
 `no_session`.
 
-**Recovering a pre-v4 orphaned transcript (manual).** When a session rotated and
-intact history was stranded under an earlier session id that the store does not
-currently point at **and was never archived** — only possible for a pre-v4
-rotation, since `session_history` archives every rotation from schema v4 onward —
-recovery is a manual operator task, not a product verb. The repair tooling was
-deliberately not shipped (a permanent CLI/MCP surface to fix a class of incident
-that can no longer occur is a bad trade). Instead, the
-`repair-orphaned-transcript` skill
-(`.claude/skills/repair-orphaned-transcript/`) walks an operator (or an LLM)
-through locating the orphaned transcript across both config dirs and issuing the
-single-transaction SQL that archives the row's current
-`(session_id, jsonl_path)` pair into `session_history`, as an entry of
-the row's current life, and re-points the row. Post-v4 rotations self-archive
-and need no repair. The repair applies only to a row that has never been
-reused (its current life is its first, `life_number` 0): re-pointing a
-reused row at a pre-v4 orphan would bring an earlier life's conversation
-into the current life, so the skill stops for such a row, and its SQL is
-guarded on `life_number = 0`.
+**Recovering a pre-v4 orphaned transcript (manual).** An earlier session
+reference can be absent because it predates archival or an archive failed
+open. Inspecting such a transcript is a manual operator task outside AD's
+resume contract. Neither an archived transcript nor an unarchived one may
+be selected by `resume`; do not repoint the row to an older session to
+make AD resume it. `life_number = 0` establishes the first life, not that
+a row was never reused: same-agent reuse retains that number. A human
+may inspect an older transcript independently in the agent's own tools;
+agent-director offers no historical-session recovery verb.
 
 **Recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
 then `resume` brings the conversation back. When `resume` cannot
@@ -13995,7 +13969,9 @@ has a malformed key; see [Reserved `HOME` in
 `extra_env` keys](#malformed-extra_env-keys-bvpb)), the recovery is to
 spawn the id again, opting in to reuse with `reuse_finished`
 (`--reuse-finished` on the CLI), with an `extra_env` without the key the `ErrReservedEnvKey` description names:
-the agent starts a new life with no memory of the old conversation. Callers cannot delete a row (`delete` is on the
+the agent starts a fresh conversation with no memory of the old conversation. Same-agent reuse keeps the life
+and inspectable history; only an agent switch starts a new life. Callers
+cannot delete a row (`delete` is on the
 operator tool only), and a human's `delete` is not a recovery step: it
 removes the row along with its `session_id`, labels and
 `extra_env`. (A resume that fails with
@@ -14010,9 +13986,8 @@ unit, a startup script, a `find-missing` cron loop — is owned and
 operated by the caller, not by agent-director. Before giving up on a
 conversation after a failed resume, check `get`'s `transcript_status` and
 `prior_sessions`: `rotated` means the current life's visible history is
-non-empty, and a plain `resume` already walks the current life's archived
-sessions (minus the row's current session id); nothing from an earlier
-life is ever reattached. `never_written` means no transcript was written
+non-empty, but `resume` tries only the current session. An older transcript
+can be inspected independently; it is never a resume candidate. `never_written` means no transcript was written
 in the current life, so there is nothing to resume, and the recourse is a
 reuse.
 
@@ -14182,7 +14157,7 @@ adds it here.
   typing `/exit` (see [`pause`](#pause)).
 - The launch-timeout rule: after a timed-out spawn, reuse or `resume`
   (`ErrTmuxUnresponsive`, "the session may have been created") the row
-  stays `pending` (after a reuse, in its new life: "the row was reset");
+  stays `pending` (after a reuse, in its reset life: "the row was reset");
   do not retry until `get` shows the row `ended` or `missing`. A retried
   plain spawn without an explicit id would start a second agent, and a
   retried `resume` or reuse of the `pending` row is refused and changes
@@ -14340,16 +14315,21 @@ adds it here.
 - Every successful launch reports `pre_trust` (`ok`, `skipped` or
   `failed`). agent-director never pre-trusts over an opt-out: a spawn,
   reuse included, follows its own call's `no_pre_trust`, and `resume`
-  follows the choice recorded by the spawn or reuse that began the row's
-  life; a row from before this release has pre-trust allowed, the
+  follows the choice recorded by the latest spawn or reuse, until the
+  next spawn or reuse; a row from before this release has pre-trust allowed, the
   column's default (see [Workspace-trust pre-write](#workspace-trust-pre-write)).
   A result without `pre_trust` comes from a binary older than this
   release.
-- A reused id starts with no memory of its earlier lives: `resume` and
-  `get` see only the current life's history, so after a reuse the earlier
-  conversation cannot be resumed through agent-director (SR-8.7).
+- A reuse starts a fresh conversation with no memory of the old conversation.
+  Same-agent reuse retains visible history and records; an agent switch
+  hides earlier lives, including after switching back. `resume` launches
+  only the latest reported session; `get` exposes current-life history.
 
 ### The lookup rule
+
+The refusal phrase "left over from an earlier life" refers to any earlier
+launch of this id, including one in the current life; it is tmux ownership
+terminology, not evidence of an agent switch.
 
 - A row's session is the one carrying its `@ad_owner` label with the row's
   launch token and this store's id, found on the row's recorded socket
@@ -14503,9 +14483,9 @@ back unnoticed.
    shows (a spawn names its agent). A caller whose ids agent-director mints spawns fresh
    instead of reusing (OFR 6). A `pending` row, a resumed one included,
    enters this sequence, so a stuck `resume` handled this way can still get
-   its conversation back; a reuse makes that conversation unreachable for
-   good, because a row's session history belongs to one life and a reuse
-   starts a new one (SR-8.7).
+   its latest conversation back; a reuse starts a fresh conversation with
+   no memory of the old conversation. Same-agent history stays inspectable,
+   but no archived session can be resumed through agent-director.
 
 ## Known limitations
 
@@ -15188,8 +15168,9 @@ meaning and links to the section that describes it in detail.
   the run (see [`expire`](#expire)).
 - **Opted-in `spawn` success**, with `reuse_finished` (`--reuse-finished`
   on the CLI): a fresh row or a
-  reset finished row. Afterwards the earlier life's conversation is
-  unreachable through `resume` and `get` (see
+  reset finished row, starting a fresh conversation. Same-agent history
+  remains inspectable through `get`; a switch hides earlier lives. No
+  older session is reachable through `resume` (see
   [Reuse of a finished id](#reuse-of-a-finished-id)).
 - **`resume` success:** no session of the agent's current or earlier
   launches, and no holder of its name, was on its server; the row is then
@@ -19942,9 +19923,9 @@ the Codex case naming the main agent's `Stop` or `Interrupt` and never a
       `wrongServerSecondAgent`). Its must-nots are the history-by-life
       claims and the other older-serve form's claim.
     - `DescReuseHistoryByLife()`: forbidden-only (SR-18.16): no claim that
-      reuse reattaches an earlier conversation, gives a false lost-transcript
-      report or `transcript_status` `rotated`, or that the history leak is
-      an accepted risk.
+      reuse reattaches an earlier conversation, resurrects pre-switch history,
+      or that a history leak is an accepted risk. Same-agent history can
+      accurately produce `rotated` and `ErrJsonlMissing`; these are allowed.
     - `DescInstanceIDCollision(CollisionSite{Full, Code})`: SR-18.9's
       collision text: `ErrInstanceIdCollision` and, without the opt-in, any
       existing row "in any state". `Full` adds the opt-in's live row
@@ -21289,6 +21270,8 @@ SR-20.2), with methods on `*killEnv`. Its doc comments carry the detail.
   `afterRead`, `beforeReset` and `afterReset` run a function once (a
   competing write such as `SetParentID` or `DeleteSpawn`, or a competing
   call); `readCount()` counts reads (the lost-race re-read shows as 2).
+  The reset seam forwards the original `examinedAgent` together with
+  the snapshot; never refresh it after an injected race.
   Store write failures go through `storefix.InjectWriteFailure` with the
   `WriteFailReuse*` kinds.
 - **A real reuse.** `e.reuseLaunch(t, r, a, q)` reuses `r` with `q`
@@ -21303,6 +21286,18 @@ SR-20.2), with methods on `*killEnv`. Its doc comments carry the detail.
   create, or every create when `id` is `""`); `newReuseEnv(t)` is a kill
   fixture with it set for every create, for tests that reuse rows more
   than once.
+- **Life/history checks.** Reuse-history tests use `rlfReportIn`,
+  `rlfGet`, `rlfAssertListed`, `rlfAssertStored`, `rlfAssertEarlierUnused`
+  and `rlvAssertLife` for hook reporting, exact visible history, retained
+  storage, current-only resume and life assertions. Future tests in this
+  fixture MUST use these helpers instead of duplicating their checks.
+  `assertReuseLifeAndHistory` pins same-agent retention versus switched
+  visibility. Store fixtures use `reuseAgentRaw` to seed raw storage classes.
+  Snapshot guards remain necessary even when life is unchanged: reuse
+  advances row version and token. Guard tests cover an agent-only edit
+  before the transaction and a trigger edit before UPDATE, whose failed
+  guard rolls archive/reset back; BEGIN IMMEDIATE prevents an external
+  competing writer between the transaction's read and UPDATE.
 - **Other arrangements.** `killRow.withName(name)` places a holder of a requested
   name through `seedHolder`; `e.snapshotReuse(t, r)` takes the
   `writesSnapshot` for `assertWroteNothing`; "duplicate session" is

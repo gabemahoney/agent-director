@@ -406,7 +406,7 @@ func (e *killEnv) seedLeftover(t *testing.T, r killRow, token string, age ...tim
 
 // pendingKind is the launch a pending row is in (SR-7.1, SR-22.8): a fresh
 // spawn's (seeded) or a reuse's, made by a real reuse (seedReusedPending:
-// life + 1, a new token, no session id). The verbs never branch on the life,
+// the retained life, a new token, no session id). The verbs never branch on the life,
 // so a resumed row's launch is not a kind of its own.
 type pendingKind int
 
@@ -468,7 +468,7 @@ func (e *killEnv) seedPending(t *testing.T, k pendingKind, v pendingShape) killR
 //   - pendingLostReply: the create made the labelled session but its reply was lost:
 //     no server or pane recorded, the token pane's agent alive;
 //   - pendingLeftover: the create timed out making nothing (reuseTimesOut), then a
-//     session labelled with the earlier life's token came up under the recorded name.
+//     session labelled with the earlier launch's token came up under the recorded name.
 func (e *killEnv) seedReusedPending(t *testing.T, v pendingShape) killRow {
 	t.Helper()
 	var r reuseRow

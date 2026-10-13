@@ -12,9 +12,10 @@ import (
 // spawn previously pointed at before a session rotation (b.v2c). Session
 // history belongs to a life: every entry belongs to the life (SR-5.9) of the
 // id that was current when its session ran, and the life-taking read returns
-// one life's entries only. A reuse starts a new life, so the reused row's
-// reads see none of its earlier lives' entries; a failed reuse's restore
-// returns the row to its pre-reuse life, whose entries are read again.
+// one life's entries only. Same-agent reuse retains the life; an agent
+// switch or switch back starts a new life, hiding earlier lives' entries.
+// A failed reuse's restore returns the row to its pre-reuse life, whose
+// entries are read again.
 // jsonl_path is the empty string when the archived
 // session never had a recorded transcript path (NULL in the column). Ordered
 // newest-first by callers.
@@ -29,17 +30,17 @@ type SessionHistoryEntry struct {
 // lives, and of every other instance, never appear. Session history belongs to
 // a life: every entry belongs to the life of the id that was current when its
 // session ran. Callers pass the life_number of the row they already read
-// (Spawn.LifeNumber); after a reuse that is the new life, so no earlier
-// life's entry appears. No entries — including an absent instance — yields an
-// empty (non-nil) slice; there is nothing to distinguish "no history" from
+// (Spawn.LifeNumber). Same-agent reuse keeps it; a switch or switch back
+// starts a new life, so no earlier life's entry appears. No entries, including
+// an absent instance, yields an empty (non-nil) slice; there is nothing to distinguish "no history" from
 // "no row" here, so callers that need that distinction check the spawns row
 // separately.
 //
 // The read keeps the entry for the row's current session id, if any; it does
-// not apply the current-session rule. resume and get do: they show that life's
-// history minus the entry for the row's current session id (SR-8.7), and use
-// it to surface the "history exists under a different session id" case
-// (AC6/AC8).
+// not apply the current-session rule. Get lists that life's history minus
+// the entry for the row's current session id (SR-8.7); resume uses those
+// entries only for refusal classification, never as candidates. They surface
+// the "history exists under a different session id" case (AC6/AC8).
 func (s *Store) ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error) {
 	const q = `SELECT session_id, COALESCE(jsonl_path, ''), recorded_at
 	             FROM session_history

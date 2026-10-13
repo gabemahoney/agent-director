@@ -44,8 +44,8 @@ type reuseStore interface {
 	// false with no error when no row has the id.
 	ReadForReuse(instanceID string) (row store.ReuseRow, found bool, err error)
 	// ResetForReuse is the single change (SR-10.3), applied only while the row
-	// is finished and holds examined.
-	ResetForReuse(instanceID string, examined RowSnapshot, fresh Spawn) (res CondResult, archivedSessionID string, resetVersion int64, err error)
+	// is finished and holds examined and the examined text-or-empty agent.
+	ResetForReuse(instanceID string, examined RowSnapshot, examinedAgent string, fresh Spawn) (res CondResult, archivedSessionID string, resetVersion int64, err error)
 	// RestoreAfterFailedReuse writes prior back after a failed launch
 	// (SR-10.4), applied only while the row is pending at resetVersion.
 	RestoreAfterFailedReuse(instanceID string, resetVersion int64, prior store.RawLife, failedAt time.Time) (CondResult, error)
@@ -324,7 +324,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	fresh.LaunchStartedAtMillis = now.UnixMilli()
 	fresh.Identity = LaunchIdentity{Token: token, Socket: socket}
 	fresh.LaunchOwner = spawn.CurrentLaunchOwner(d.pc)
-	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, fresh)
+	res, archived, resetVersion, err := d.rs.ResetForReuse(id, ex.row.Snapshot, ex.row.Agent, fresh)
 	if err != nil {
 		return SpawnResult{}, reuseChangeError(id, err)
 	}

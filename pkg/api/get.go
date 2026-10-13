@@ -63,7 +63,7 @@ type SpawnRow struct {
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude" or "codex": set by the spawn
-	// that began the row's life (replaced by a reuse's spawn), followed by
+	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`
 	// TmuxSessionName is the tmux session under which the Spawn is running.
@@ -81,12 +81,11 @@ type SpawnRow struct {
 	// RelayMode is "on" or "off" — whether this Spawn participates in the
 	// permission-relay flow.
 	RelayMode string `json:"relay_mode"`
-	// JSONLPath is the last known transcript path, persisted by the
-	// SessionStart hook; legacy rows may be empty. When empty, resume of a
-	// claude row composes the path on demand from cwd + session_id (under
-	// CLAUDE_CONFIG_DIR when its extra env sets one). A codex row's path is
-	// the transcript path its hooks report; resume never builds one for it, so
-	// an empty one leaves only the visible history's recorded paths to try.
+	// JSONLPath is the current session's transcript path, persisted by its
+	// hooks; legacy rows may be empty. Resume tries it, then for Claude
+	// recomputes only the current session's path from cwd + session_id under
+	// a usable absolute CLAUDE_CONFIG_DIR (otherwise ~/.claude). Codex uses
+	// only the recorded path. Older sessions are never resume candidates.
 	JSONLPath string `json:"jsonl_path"`
 	// SessionID is the agent's session id, recorded from its hooks: a Claude
 	// Code session's is the basename of the hook's transcript_path, a Codex
@@ -171,17 +170,18 @@ type SpawnRow struct {
 	//                      the case a bare jsonl_path could not distinguish
 	//                      from "never_written".
 	//   - "no_session":    no session_id yet (pre-first-SessionStart).
-	// A reuse starts a new life, so its status is decided on that life's
-	// history alone; a failed reuse's restore returns the row to its
+	// Same-agent reuse retains history; a switch or switch back starts a new
+	// life with no history; a failed reuse's restore returns the row to its
 	// pre-reuse life, whose history counts again.
 	TranscriptStatus string `json:"transcript_status"`
 	// PriorSessions is the row's visible history, newest first: the archived
 	// sessions of the current life (session history belongs to a life),
 	// minus the entry for the row's current session id. It is the queryable
 	// link from this row back to earlier sessions orphaned by a rotation
-	// (b.v2c AC6/AC8). A reuse starts a new life, so after a reuse it lists
-	// none of the earlier lives' sessions; a failed reuse's restore returns
-	// the row to its pre-reuse life, whose sessions are listed again. Always
+	// (b.v2c AC6/AC8). Same-agent reuse retains these sessions; a switch or
+	// switch back starts a new life and hides earlier lives. Older sessions
+	// are listed for inspection only, never resumed; a failed reuse's restore
+	// returns the row to its pre-reuse life, whose sessions are listed again. Always
 	// a non-nil slice (encodes as []).
 	PriorSessions []PriorSession `json:"prior_sessions"`
 }
@@ -281,8 +281,8 @@ type GetStore interface {
 	// current-session rule; Get does, keeping the visible history (that
 	// life's entries minus the entry for the row's current session id) to
 	// populate PriorSessions and derive TranscriptStatus (b.v2c AC6/AC8).
-	// A reuse starts a new life, so after a reuse no earlier life's entry is
-	// read.
+	// Same-agent reuse retains the history; a switch or switch back starts a
+	// new life, so no earlier life's entry is read.
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 }
 
@@ -477,8 +477,9 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // agent's launch began. When the row records
 // one, it carries tmux_socket, the tmux socket the row's latest launch
 // uses, in any state. prior_sessions and transcript_status come from the
-// current life's history only: after a reuse (spawn with ReuseFinished),
-// which starts a new life, Get shows none of the earlier lives' history.
+// current life's history only. Same-agent reuse retains it; an agent switch
+// or switch back starts a new life and hides earlier lives. Older sessions
+// are listed for inspection only; resume continues only the current session.
 // With [state] settle_ms set, state is the settled state: a hook-written
 // change shows only once it has held that long, the last settled state until
 // then; terminal states and command-driven changes show at once. The

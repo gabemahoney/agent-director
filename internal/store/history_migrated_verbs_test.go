@@ -192,8 +192,8 @@ func TestMigratedV4HistoryResume(t *testing.T) {
 		wantInMsg  string   // substring of the error message
 	}{
 		{name: "rotated", row: rotatedRow, plantAll: true, wantErr: api.ErrSpawnNotResumable},
-		{name: "never_written_missing", row: neverWrittenRow, wantErr: api.ErrJsonlMissing, wantInMsg: "history /t/nw-prior.jsonl"},
-		{name: "never_written_prior_planted", row: neverWrittenRow, plant: []string{"sess-nw-prior"}, wantResume: "sess-nw-prior"},
+		{name: "never_written_missing", row: neverWrittenRow, wantErr: api.ErrJsonlMissing, wantInMsg: "fallback "},
+		{name: "never_written_prior_planted", row: neverWrittenRow, plant: []string{"sess-nw-prior"}, wantErr: api.ErrJsonlMissing, wantInMsg: "fallback "},
 		{name: "holds_current", row: holdsCurrentRow, plantAll: true, wantErr: api.ErrSpawnNotResumable},
 		{name: "interleaved_a", row: interleavedARow, plantAll: true, wantErr: api.ErrSpawnNotResumable},
 		{name: "interleaved_b", row: interleavedBRow, plantAll: true, wantErr: api.ErrSpawnNotResumable},

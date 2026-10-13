@@ -3,9 +3,9 @@ package api_test
 // resume_transcript_test.go covers how resume finds the transcript it resumes
 // (SR-8.7; b.1ba, b.v2c, b.5jm, b.nje), through the real store (whose read
 // keeps the current-id entry, so the rule is pkg/api's): the persisted path,
-// the CLAUDE_CONFIG_DIR-aware fallback, the visible history newest first, and
-// the ErrJsonl* refusals naming every path tried. A Codex row's check (SR-7.4)
-// tries only the persisted path and the history's recorded paths, newest first,
+// the CLAUDE_CONFIG_DIR-aware current-session fallback, and refusals that
+// never select older history (SR-6.8.9). A Codex row's check (SR-7.4)
+// tries only its current recorded path,
 // and never a path composed from its cwd and session id. Which CLAUDE_CONFIG_DIR
 // values are usable is internal/spawn's TestConfigDirUsable.
 
@@ -83,6 +83,11 @@ func newHistEnv(t *testing.T, row histRow) *histEnv {
 	switch row.persisted {
 	case "present":
 		plantJsonl(t, e.persistedPath())
+		opts = append(opts, apitest.WithJsonlPath(e.persistedPath()))
+	case "blocked":
+		if err := os.WriteFile(filepath.Dir(e.persistedPath()), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		opts = append(opts, apitest.WithJsonlPath(e.persistedPath()))
 	case "rotted":
 		opts = append(opts, apitest.WithJsonlPath(e.persistedPath()))
@@ -170,111 +175,41 @@ func (historyErrStore) ListSessionHistory(string, int64) ([]api.SessionHistoryEn
 func TestResumeTranscript(t *testing.T) {
 	t.Parallel()
 	fallback := func(e *histEnv) string { return "fallback " + e.recomputed(histCurrent) }
-	history := func(e *histEnv, ids ...string) []string {
-		var out []string
-		for _, id := range ids {
-			out = append(out, "history "+e.recorded(id), "history "+e.recomputed(id))
-		}
-		return out
-	}
 	cases := []histCase{
-		// The current session's own candidates (b.1ba, b.nje).
-		{name: "persisted path wins", row: histRow{persisted: "present"}, want: histCurrent},
-		{name: "NULL path heals via CLAUDE_CONFIG_DIR", row: histRow{cfg: "dir", current: true}, want: histCurrent},
-		{name: "rotted path heals via CLAUDE_CONFIG_DIR", row: histRow{persisted: "rotted", cfg: "dir", current: true}, want: histCurrent},
-		{name: "rotted path heals via ~/.claude", row: histRow{persisted: "rotted", current: true}, want: histCurrent},
-		{name: "NULL path, relative CLAUDE_CONFIG_DIR treated as absent: ~/.claude", row: histRow{cfg: "rel/dir", current: true}, want: histCurrent},
-		// The visible history (b.v2c AC6, b.5jm, SR-8.7).
-		{name: "archived session's recorded transcript", row: histRow{entries: []histEntry{{id: "sess-older", age: 1, onDisk: true}}},
-			want: "sess-older"},
-		{name: "archived entry with no recorded path, at its path under CLAUDE_CONFIG_DIR", row: histRow{cfg: "dir",
-			entries: []histEntry{{id: "sess-older", age: 1, noPath: true, recomputedOnDisk: true}}}, want: "sess-older"},
-		{name: "newer entry's rotted path recomputed beats an older intact one (b.5jm/1)", row: histRow{cfg: "dir",
-			entries: []histEntry{{id: "sess-newer", age: 1, recomputedOnDisk: true}, {id: "sess-older", age: 2, onDisk: true}}},
-			want: "sess-newer"},
-		{name: "current-id entry on disk is skipped for an older one", row: histRow{entries: []histEntry{
-			{id: histCurrent, age: 1, onDisk: true}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-older"},
-		{name: "newest entry of the life wins", row: histRow{entries: []histEntry{
-			{id: "sess-newer", age: 1, onDisk: true}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-newer"},
-		{name: "gone newer entry falls through to the older", row: histRow{entries: []histEntry{
-			{id: "sess-newer", age: 1}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-older"},
-		{name: "life-1 row takes its life-1 entry over a newer life-0 one", row: histRow{life: 1, entries: []histEntry{
-			{id: "sess-newer", age: 1, onDisk: true}, {id: "sess-older", life: 1, age: 2, onDisk: true}}}, want: "sess-older"},
-		// AC-REUSE-24: a rotation the SessionStart hook archived stays a candidate. SR-22.9: only the
-		// row's own pane moves the row, so it is live when its agent restarts with a new id whose
-		// transcript is not yet written (the hook archives histCurrent and nulls jsonl_path), and that
-		// agent's SessionEnd finishes it.
-		{name: "rotation archived by the hook stays a candidate", row: histRow{life: 1, persisted: "present", state: store.StateWaiting,
-			entries: []histEntry{{id: "sess-older", life: 1, age: 1, onDisk: true}}}, hooks: true, want: histCurrent},
-		// The refusals, decided on the visible history (AC2).
-		{name: "NULL path, only the current-id entry: never written", row: histRow{cfg: "dir",
-			entries: []histEntry{{id: histCurrent, age: 1}}}, wantErr: api.ErrJsonlNeverWritten,
-			named:    func(e *histEnv) []string { return []string{fallback(e)} },
-			notNamed: func(e *histEnv) []string { return []string{e.recorded(histCurrent), "history ", "persisted"} }},
-		{name: "rotted path, only the current-id entry: missing", row: histRow{persisted: "rotted", cfg: "dir",
-			entries: []histEntry{{id: histCurrent, age: 1}}}, wantErr: api.ErrJsonlMissing,
-			named:    func(e *histEnv) []string { return []string{"persisted " + e.persistedPath(), fallback(e)} },
-			notNamed: func(e *histEnv) []string { return []string{e.recorded(histCurrent), "history "} }},
-		{name: "older ids only, no CLAUDE_CONFIG_DIR: every candidate named, newest first", row: histRow{entries: []histEntry{
-			{id: "sess-newer", age: 1}, {id: "sess-older", age: 2}}}, wantErr: api.ErrJsonlMissing,
-			named: func(e *histEnv) []string {
-				return append([]string{fallback(e)}, history(e, "sess-newer", "sess-older")...)
-			}},
-		{name: "never-messaged life-1 row with only a life-0 entry: never written", row: histRow{life: 1, cfg: "dir",
-			entries: []histEntry{{id: "sess-life0", age: 1, onDisk: true, recomputedOnDisk: true}}}, wantErr: api.ErrJsonlNeverWritten,
-			named: func(e *histEnv) []string { return []string{fallback(e)} }, notNamed: func(*histEnv) []string { return []string{"sess-life0"} }},
-		{name: "life-1 entry gone, newer life-0 one on disk: names only life 1", row: histRow{life: 1, cfg: "dir", entries: []histEntry{
-			{id: "sess-life0", age: 1, onDisk: true, recomputedOnDisk: true}, {id: "sess-life1", life: 1, age: 2}}},
-			wantErr: api.ErrJsonlMissing, named: func(e *histEnv) []string { return append([]string{fallback(e)}, history(e, "sess-life1")...) },
-			notNamed: func(*histEnv) []string { return []string{"sess-life0"} }},
-		// A Codex row (SR-7.4): the persisted rollout path and the history's recorded paths, newest
-		// first, and never a path composed from the cwd and the session id.
-		{name: "codex: persisted rollout wins", row: histRow{agent: "codex", persisted: "present"}, want: histCurrent},
-		{name: "codex: stored arguments a spawn refuses (--remote) are replayed, none refused", row: histRow{agent: "codex", persisted: "present",
-			args: `["--remote","ws://x","--model","gpt"]`}, want: histCurrent,
-			wantPass: []string{"--remote", "ws://x", "--model", "gpt"}},
-		{name: "codex: archived session's recorded rollout", row: histRow{agent: "codex",
-			entries: []histEntry{{id: "sess-older", age: 1, onDisk: true}}}, want: "sess-older"},
-		{name: "codex: newest entry on disk wins", row: histRow{agent: "codex", entries: []histEntry{
-			{id: "sess-newer", age: 1, onDisk: true}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-newer"},
-		{name: "codex: gone newer entry falls through to the older", row: histRow{agent: "codex", entries: []histEntry{
-			{id: "sess-newer", age: 1}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-older"},
-		{name: "codex: rotted persisted rollout falls through to the history", row: histRow{agent: "codex", persisted: "rotted",
-			entries: []histEntry{{id: "sess-older", age: 1, onDisk: true}}}, want: "sess-older"},
-		{name: "codex: current-id entry on disk is skipped for an older one", row: histRow{agent: "codex", entries: []histEntry{
-			{id: histCurrent, age: 1, onDisk: true}, {id: "sess-older", age: 2, onDisk: true}}}, want: "sess-older"},
-		{name: "codex: a file at the Claude-composed path does not satisfy a NULL path: never written",
-			row: histRow{agent: "codex", cfg: "dir", current: true}, wantErr: api.ErrJsonlNeverWritten,
-			named:    func(*histEnv) []string { return []string{"no transcript path was ever recorded"} },
-			notNamed: func(e *histEnv) []string { return []string{e.recomputed(histCurrent), "fallback"} }},
-		{name: "codex: a file at the Claude-composed path does not satisfy a rotted path: missing",
-			row: histRow{agent: "codex", persisted: "rotted", cfg: "dir", current: true}, wantErr: api.ErrJsonlMissing,
-			named:    func(e *histEnv) []string { return []string{"persisted " + e.persistedPath()} },
-			notNamed: func(e *histEnv) []string { return []string{e.recomputed(histCurrent), "fallback"} }},
-		{name: "codex: an entry with no recorded path is not recomputed: missing, nothing tried",
-			row:     histRow{agent: "codex", cfg: "dir", entries: []histEntry{{id: "sess-older", age: 1, noPath: true, recomputedOnDisk: true}}},
-			wantErr: api.ErrJsonlMissing,
-			named:   func(*histEnv) []string { return []string{"no transcript path was ever recorded"} },
-			notNamed: func(e *histEnv) []string {
-				return []string{e.recomputed("sess-older"), "fallback", "history "}
-			}},
-		{name: "codex: a rotted rollout's Claude-composed twin is not tried: missing, recorded paths newest first",
-			row: histRow{agent: "codex", persisted: "rotted", cfg: "dir", entries: []histEntry{
-				{id: "sess-newer", age: 1, recomputedOnDisk: true}, {id: "sess-older", age: 2}}},
-			wantErr: api.ErrJsonlMissing,
-			named: func(e *histEnv) []string {
-				return []string{"persisted " + e.persistedPath(), "history " + e.recorded("sess-newer"), "history " + e.recorded("sess-older")}
-			},
-			notNamed: func(e *histEnv) []string {
-				return []string{e.recomputed(histCurrent), e.recomputed("sess-newer"), e.recomputed("sess-older"), "fallback"}
-			}},
-		{name: "codex: NULL path and an empty history: never written", row: histRow{agent: "codex"}, wantErr: api.ErrJsonlNeverWritten,
-			named: func(*histEnv) []string { return []string{"no transcript path was ever recorded"} }},
-		{name: "codex: NULL path, only the current-id entry: never written", row: histRow{agent: "codex",
-			entries: []histEntry{{id: histCurrent, age: 1}}}, wantErr: api.ErrJsonlNeverWritten,
-			notNamed: func(e *histEnv) []string { return []string{e.recorded(histCurrent), "history "} }},
+		{name: "persisted current wins over older transcript", row: histRow{persisted: "present", entries: []histEntry{{id: "sess-older", onDisk: true}}}, want: histCurrent},
+		{name: "NULL path heals via config dir", row: histRow{cfg: "dir", current: true}, want: histCurrent},
+		{name: "non-ENOENT persisted stat failure heals via config dir", row: histRow{persisted: "blocked", cfg: "dir", current: true}, want: histCurrent},
+		{name: "rotted path heals via config dir", row: histRow{persisted: "rotted", cfg: "dir", current: true}, want: histCurrent},
+		{name: "rotted path heals via default folder", row: histRow{persisted: "rotted", current: true}, want: histCurrent},
+		{name: "relative config dir uses default folder", row: histRow{cfg: "rel/dir", current: true}, want: histCurrent},
+		{name: "NULL path only current-id history is never written", row: histRow{entries: []histEntry{{id: histCurrent, onDisk: true}}}, wantErr: api.ErrJsonlNeverWritten},
+		{name: "NULL path only earlier-life history is never written", row: histRow{life: 1, entries: []histEntry{{id: "sess-older", onDisk: true}}}, wantErr: api.ErrJsonlNeverWritten},
+		{name: "rotation refuses older on-disk sessions", row: histRow{persisted: "present", state: store.StateWaiting}, hooks: true, wantErr: api.ErrJsonlMissing},
+		{name: "codex current wins over older rollout", row: histRow{agent: "codex", persisted: "present", entries: []histEntry{{id: "sess-older", onDisk: true}}}, want: histCurrent},
+		{name: "codex replays unrelated stored arguments", row: histRow{agent: "codex", persisted: "present", args: `["--remote","ws://x","--model","gpt"]`}, want: histCurrent, wantPass: []string{"--remote", "ws://x", "--model", "gpt"}},
+		{name: "codex NULL path never written", row: histRow{agent: "codex", current: true}, wantErr: api.ErrJsonlNeverWritten},
+		{name: "codex only current-id history never written", row: histRow{agent: "codex", entries: []histEntry{{id: histCurrent, onDisk: true}}}, wantErr: api.ErrJsonlNeverWritten},
 		{name: "history read fails", historyErr: true, wantErr: errHistory},
 	}
+	for _, agent := range []string{"claude", "codex"} {
+		for _, persisted := range []string{"", "rotted"} {
+			cases = append(cases, histCase{name: agent + " missing current " + persisted + " never opens older history after folder change",
+				row:     histRow{agent: agent, persisted: persisted, cfg: "dir", current: agent == "codex", entries: []histEntry{{id: "sess-newer", age: 1, recomputedOnDisk: true}, {id: "sess-older", age: 2, onDisk: true}}},
+				wantErr: api.ErrJsonlMissing, named: func(e *histEnv) []string {
+					var paths []string
+					if persisted != "" {
+						paths = append(paths, "persisted "+e.persistedPath())
+					}
+					if agent == "claude" {
+						paths = append(paths, fallback(e))
+					} else if persisted == "" {
+						paths = append(paths, "no transcript path is recorded for the current session")
+					}
+					return paths
+				}})
+		}
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -325,6 +260,10 @@ func runHistCase(t *testing.T, tc histCase) {
 		}
 	}
 	before := e.env.columns(t, e.id)
+	var trustBefore []byte
+	if e.cfgDir != "" {
+		trustBefore, _ = os.ReadFile(filepath.Join(e.cfgDir, ".claude.json"))
+	}
 	var s api.ResumeStore = e.env.store
 	if tc.historyErr {
 		s = historyErrStore{e.env.store}
@@ -367,6 +306,17 @@ func runHistCase(t *testing.T, tc histCase) {
 		t.Errorf("err %v matches both ErrJsonlMissing and ErrJsonlNeverWritten", err)
 	}
 	msg, last := err.Error(), -1
+	if !tc.historyErr && strings.Contains(msg, "history ") {
+		t.Errorf("refusal includes historical attempts: %s", msg)
+	}
+	if e.codex && strings.Contains(msg, "fallback ") {
+		t.Errorf("Codex refusal includes a recomputed candidate: %s", msg)
+	}
+	for _, h := range tc.row.entries {
+		if h.id != histCurrent && strings.Contains(msg, h.id) {
+			t.Errorf("refusal names older session %q: %s", h.id, msg)
+		}
+	}
 	if tc.named != nil {
 		for _, p := range tc.named(e) {
 			i := strings.Index(msg, p)
@@ -389,6 +339,12 @@ func runHistCase(t *testing.T, tc histCase) {
 	}
 	if n, s := len(e.env.rec.Calls()), len(e.env.rec.SocketCalls()); n != 0 || s != 0 {
 		t.Errorf("tmux calls = %d name-based, %d socket; want none on refusal", n, s)
+	}
+	if e.cfgDir != "" {
+		trustAfter, _ := os.ReadFile(filepath.Join(e.cfgDir, ".claude.json"))
+		if !reflect.DeepEqual(trustBefore, trustAfter) {
+			t.Error("refused resume changed trust file")
+		}
 	}
 	if after := e.env.columns(t, e.id); !reflect.DeepEqual(before, after) {
 		t.Errorf("row changed on refusal:\nbefore %+v\nafter  %+v", before, after)

@@ -300,8 +300,8 @@ func TestPauseCodexWaitDoesNotEnd(t *testing.T) {
 				return e.codexOtherLaunch(t, r, false)
 			})
 		}, otherLaunch: true},
-		{name: "gone, end report, but the row is on another launch (a reuse's new life)", do: func(t *testing.T, e *killEnv, r killRow) {
-			e.onceAfter(t, tmux.CallSendEnter, "new life and Codex exit", func() (bool, string) {
+		{name: "gone, end report, but the row is on another launch (a reuse's new launch)", do: func(t *testing.T, e *killEnv, r killRow) {
+			e.onceAfter(t, tmux.CallSendEnter, "new launch and Codex exit", func() (bool, string) {
 				return e.codexOtherLaunch(t, r, true)
 			})
 		}, otherLaunch: true},
@@ -359,7 +359,11 @@ func (e *killEnv) codexOtherLaunch(t *testing.T, r killRow, reuse bool) (bool, s
 	if reuse {
 		fresh := store.Spawn{Agent: store.AgentCodex, StartedAt: e.clock.Now(), LaunchStartedAtMillis: e.clock.Now().UnixMilli(),
 			RelayMode: "off", Identity: store.LaunchIdentity{Token: token, Socket: r.Socket}}
-		res, _, moved, err = e.st.ResetForReuse(r.ID, row.Snapshot, fresh)
+		examined, exists, readErr := e.st.ReadForReuse(r.ID)
+		if readErr != nil || !exists {
+			return false, fmt.Sprintf("ReadForReuse = %v, %v", exists, readErr)
+		}
+		res, _, moved, err = e.st.ResetForReuse(r.ID, examined.Snapshot, examined.Agent, fresh)
 	} else {
 		res, moved, err = e.st.MoveToPending(r.ID, row.Snapshot, e.clock.Now().UnixMilli(), token, r.Socket, "", store.LaunchOwner{})
 	}

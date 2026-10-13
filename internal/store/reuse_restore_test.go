@@ -35,7 +35,7 @@ type rrReset struct {
 func rrDoReset(t *testing.T, f *v5Store, id string, fresh store.Spawn) rrReset {
 	t.Helper()
 	before, row := f.rawColumns(id), f.readForReuse(t, id)
-	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, fresh)
+	res, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, fresh)
 	if err != nil || res != store.CondApplied {
 		t.Fatalf("ResetForReuse = %v, %q, %d, %v; want CondApplied", res, archived, v, err)
 	}
@@ -48,9 +48,8 @@ func (f *v5Store) rrRestore(r rrReset, version int64) (store.CondResult, error) 
 	return f.s.RestoreAfterFailedReuse(r.id, version, r.prior, rrFailedAt)
 }
 
-// rrNoPreTrustClass reads typeof(no_pre_trust), which tells a zero-length
-// blob from NULL where the raw column reads cannot.
-func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
+// rrStorageClass distinguishes an empty blob from NULL for restoration checks.
+func rrStorageClass(t *testing.T, f *v5Store, id, column string) string {
 	t.Helper()
 	db, err := sql.Open("sqlite", f.path)
 	if err != nil {
@@ -58,8 +57,8 @@ func rrNoPreTrustClass(t *testing.T, f *v5Store, id string) string {
 	}
 	defer func() { _ = db.Close() }()
 	var class string
-	if err := db.QueryRow(`SELECT typeof(no_pre_trust) FROM spawns WHERE instance_id = ?`, id).Scan(&class); err != nil {
-		t.Fatalf("typeof(no_pre_trust) for %q: %v", id, err)
+	if err := db.QueryRow(`SELECT typeof(`+column+`) FROM spawns WHERE instance_id = ?`, id).Scan(&class); err != nil {
+		t.Fatalf("typeof(%s) for %q: %v", column, id, err)
 	}
 	return class
 }
@@ -95,13 +94,19 @@ func TestReuseRestoreApplied(t *testing.T) {
 		{name: "no token, socket or identity", spec: reuseSpec{opts: []apitest.SpawnOption{apitest.WithNoLaunchToken()}}},
 		{name: "pre-trust allowed, reset with the opt-out", spec: reuseSpec{preTrust: true}, freshNoPreTrust: true},
 		{name: "pre-reuse parent deleted", deleteParent: true},
+		{name: "same-agent claude", spec: reuseSpec{tracked: true, opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}},
+		{name: "malformed agent text", spec: reuseSpec{handAgent: true, rawAgent: " Claude\n"}},
+		{name: "NULL agent", spec: reuseSpec{handAgent: true}},
+		{name: "blob agent", spec: reuseSpec{handAgent: true, rawAgent: []byte("claude")}},
+		{name: "empty blob agent", spec: reuseSpec{handAgent: true, rawAgent: []byte{}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newV5Store(t)
 			seeded := seedReuseRow(t, f, tc.spec)
 			id := seeded.id
-			seededClass := rrNoPreTrustClass(t, f, id)
+			agentClass := rrStorageClass(t, f, id, "agent")
+			seededClass := rrStorageClass(t, f, id, "no_pre_trust")
 			if tc.seedClass != "" && seededClass != tc.seedClass {
 				t.Fatalf("seeded typeof(no_pre_trust) = %q; want %q", seededClass, tc.seedClass)
 			}
@@ -109,7 +114,15 @@ func TestReuseRestoreApplied(t *testing.T) {
 			fresh := reuseFresh(f.seed(store.StateWaiting, ""), tc.freshNoPreTrust)
 			r := rrDoReset(t, f, id, fresh)
 			reset := f.subagentRowsOf(id)
-			if _, rows, err := f.s.ListSubagentRecords(id); err != nil || len(rows) != 0 {
+			wantResetVisible := 0
+			if r.before.LifeNumber == r.reset.LifeNumber {
+				for _, e := range reset.Entries {
+					if e.Confirmed == int64(1) && e.LifeNumber == r.reset.LifeNumber {
+						wantResetVisible++
+					}
+				}
+			}
+			if _, rows, err := f.s.ListSubagentRecords(id); err != nil || len(rows) != wantResetVisible {
 				t.Fatalf("reset still reveals previous records: %+v, %v", rows, err)
 			}
 			if reflect.DeepEqual(reset, mix.rows) || !reflect.DeepEqual(reset, cmClosed(mix.rows, fresh.LaunchStartedAtMillis)) {
@@ -117,6 +130,9 @@ func TestReuseRestoreApplied(t *testing.T) {
 			}
 			for _, col := range []string{"State", "LifeNumber", "NoPreTrust", "SessionID", "LaunchToken", "StartedAt", "CWD", "Labels", "ParentID", "Agent", "EndReportedAt", "SubagentTracking"} {
 				b, a := reflect.ValueOf(r.before).FieldByName(col).Interface(), reflect.ValueOf(r.reset).FieldByName(col).Interface()
+				if (col == "LifeNumber" || col == "Agent" || col == "SubagentTracking") && r.before.Agent == store.AgentClaude {
+					continue
+				}
 				if reflect.DeepEqual(a, b) {
 					t.Fatalf("the reset left %s = %s; the restore check would be vacuous", col, rsShow(b))
 				}
@@ -137,7 +153,10 @@ func TestReuseRestoreApplied(t *testing.T) {
 				t.Fatalf("RestoreAfterFailedReuse = %v, %v; want CondApplied", res, err)
 			}
 			rsAssertRow(t, f.rawColumns(id), want)
-			if got := rrNoPreTrustClass(t, f, id); got != seededClass {
+			if got := rrStorageClass(t, f, id, "agent"); got != agentClass {
+				t.Errorf("agent storage class = %q; want %q", got, agentClass)
+			}
+			if got := rrStorageClass(t, f, id, "no_pre_trust"); got != seededClass {
 				t.Errorf("typeof(no_pre_trust) = %q; want the seeded %q", got, seededClass)
 			}
 			if got := f.historyAllLives(id); !reflect.DeepEqual(got, r.history) {

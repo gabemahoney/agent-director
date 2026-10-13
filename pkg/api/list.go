@@ -69,7 +69,7 @@ type ListRow struct {
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude" or "codex": set by the spawn
-	// that began the row's life (replaced by a reuse's spawn), followed by
+	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`
 	// TmuxSessionName is the tmux session name for the Spawn.

@@ -339,8 +339,7 @@ func advResumeRow(t *testing.T, e *killEnv, id string) (cols apitest.SpawnColumn
 }
 
 // advResumeRecourse resumes r, a row of agent, refused with want and writing nothing, then follows the Go
-// doc's recourse: spawn r's id again with the reuse opt-in and the row's agent. A claude row starts a new
-// life, as the row's agent.
+// doc's recourse: spawn r's id again with the reuse opt-in and the row's agent. A same-agent reuse retains its life.
 func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent string) {
 	t.Helper()
 	before := e.snapshotResume(t, r.resumeRow)
@@ -357,8 +356,8 @@ func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent s
 	if agent == "codex" {
 		assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate), e.dbPath, r.ID, codexProgram)
 	}
-	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife+1) || cols.Agent != agent {
-		t.Errorf("row after the reuse {state %v, life %#v, agent %v}; want pending in life %d, agent %s", cols.State, cols.LifeNumber, cols.Agent, reuseLife+1, agent)
+	if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != any(reuseLife) || cols.Agent != agent {
+		t.Errorf("row after the reuse {state %v, life %#v, agent %v}; want pending in life %d, agent %s", cols.State, cols.LifeNumber, cols.Agent, reuseLife, agent)
 	}
 }
 
@@ -366,7 +365,7 @@ func advResumeRecourse(t *testing.T, e *killEnv, r reuseRow, want error, agent s
 // B4 (Go doc of ErrNoSessionId): "the caller's recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	adviceAssertGoDoc(t, "errors.go", "ErrNoSessionId", "the caller's "+advResumeReuseRecourse)
+	adviceAssertGoDoc(t, "errors.go", "ErrNoSessionId", "To recover, spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent, which get shows) to start a fresh conversation in the retained life")
 	for _, agent := range advResumeRowAgents {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)
@@ -380,7 +379,7 @@ func TestAdviceFollow_B4_NoSessionIdSpawnWithReuse(t *testing.T) {
 // B5 (Go doc of ErrJsonlMissing): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	adviceAssertGoDoc(t, "errors.go", "ErrJsonlMissing", "the "+advResumeReuseRecourse)
+	adviceAssertGoDoc(t, "errors.go", "ErrJsonlMissing", "To recover, spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent, which get shows) for a fresh conversation in the retained life")
 	for _, agent := range advResumeRowAgents {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)
@@ -397,7 +396,7 @@ func TestAdviceFollow_B5_JsonlMissingSpawnWithReuse(t *testing.T) {
 // B6 (Go doc of ErrJsonlNeverWritten): "the recourse is to spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent (SpawnParams.Agent, --agent; get shows it)"
 func TestAdviceFollow_B6_JsonlNeverWrittenSpawnWithReuse(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	adviceAssertGoDoc(t, "errors.go", "ErrJsonlNeverWritten", "the "+advResumeReuseRecourse)
+	adviceAssertGoDoc(t, "errors.go", "ErrJsonlNeverWritten", "To recover, spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent, which get shows) for a fresh conversation in the retained life")
 	for _, agent := range advResumeRowAgents {
 		t.Run(agent+" row", func(t *testing.T) {
 			e := newKillEnv(t)

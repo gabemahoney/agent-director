@@ -68,11 +68,46 @@ To end a live row (`pending` included) and relaunch its id:
 6. Once `ended` or `missing`:
    - with a session id, to get the conversation back:
      `agent-director resume --instance-id <id>`
-   - otherwise, a reuse (the old conversation is unreachable for good), with
+   - otherwise, a reuse (a fresh conversation with no memory of the old one), with
      the row's agent, which `get` shows:
      `agent-director spawn --instance-id <id> --reuse-finished --agent <agent> --cwd <dir>`
 
    A caller whose ids agent-director mints spawns fresh instead.
+
+## Transcript recovery
+
+`resume` continues only the row's current session with its recorded agent.
+It never selects an older session from `prior_sessions`, even if its file
+exists. No current `session_id` gives `ErrNoSessionId` before transcript
+lookup. Otherwise, Claude tries the current `jsonl_path` and, after any stat
+failure or when no path is recorded, recomputes the current session's path
+from the row's cwd and config directory. Codex tries only its current recorded
+path. The refusals write and launch nothing.
+
+When the current candidates fail, `ErrJsonlNeverWritten` means the recorded
+path is empty and visible current-life history is empty. An archived entry
+for the current session itself does not count as visible history. Otherwise
+the refusal is `ErrJsonlMissing`: its tries contain only current-session paths
+with source `persisted` or `fallback`, never `history`. A Codex row with no
+current path and visible history gets `ErrJsonlMissing` with zero tries and
+an explanation that no transcript path is recorded for the current session.
+
+Same-agent reuse retains earlier sessions. If its new session records no
+transcript, `get` can report `transcript_status: rotated` and `resume` can
+return `ErrJsonlMissing`, even if an earlier transcript exists. `rotated`
+means visible history exists, not that resume will recover it. The
+never-written condition remains the empty-path and empty-history rule.
+
+For `ErrNoSessionId`, `ErrJsonlNeverWritten` or `ErrJsonlMissing`, spawn the
+same id again with `reuse_finished` (`--reuse-finished` on the CLI) and the
+row's agent (`get` shows it). This starts a fresh conversation with no memory
+of the old conversation, which cannot be resumed through agent-director
+afterwards. Same-agent reuse keeps inspectable history and records; a switch
+starts a new life, including when switching back.
+
+If a failed reuse restores the row, its previous agent and life become current
+again, with their history and records. Deleted permission requests stay
+deleted, and records closed by the attempt stay closed.
 
 ## When a Codex agent exits
 

@@ -59,7 +59,7 @@ type swKind struct {
 	resumed bool
 }
 
-// swKinds: a fresh spawn's row, a reuse's (a later life) and a resumed row's
+// swKinds: a fresh spawn's row, a reuse after an agent switch (a later life) and a resumed row's
 // (started_at hours old, its session id and transcript kept, recent launch start).
 var swKinds = []swKind{
 	{"fresh spawn", func(launch time.Time) []apitest.SpawnOption {

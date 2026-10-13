@@ -89,7 +89,7 @@ type SpawnParams struct {
 	// (= pre-trust IS performed) marks the cwd trusted so the agent skips
 	// its folder-trust prompt. True attempts no pre-trust, so the
 	// prompt must be answered for an unseen cwd. The choice is recorded on
-	// the row (no_pre_trust) for its life, and every resume of that life
+	// the row (no_pre_trust) until the next spawn or reuse, and every resume
 	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
 	NoPreTrust bool
 
@@ -100,10 +100,12 @@ type SpawnParams struct {
 	// this call only; templates and config never carry it. Default false
 	// keeps the collision behaviour: any existing row gives
 	// ErrInstanceIdCollision. A successful spawn does not say whether it
-	// created a fresh row or reset a finished one. A reused id starts a new
-	// life with no memory of its earlier lives: Resume and Get never use or
-	// show an earlier life's history, so the earlier conversation cannot be
-	// resumed through agent-director afterwards. Go callers link the
+	// created a fresh row or reset a finished one. Same-agent reuse starts a
+	// fresh conversation and retains session history and subagent records.
+	// Only an agent switch starts a new life; switching back also starts with
+	// no memory of its earlier lives: resume and get never use or show an
+	// earlier life's history. Resume continues only the latest session; older
+	// sessions are listed for inspection only. Go callers link the
 	// library, so the field exists at compile time; CLI, MCP and TypeScript
 	// callers detect it by the binary's version (the manifest's
 	// reuse_finished text gives each surface's source).

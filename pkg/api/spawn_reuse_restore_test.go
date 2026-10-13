@@ -60,6 +60,15 @@ func rrAssertRestored(t *testing.T, e *killEnv, r reuseRow, want apitest.SpawnCo
 	if perms, err := e.st.PermissionRequestsForSpawn(r.ID); err != nil || len(perms) != 0 {
 		t.Errorf("permission requests = %+v (%v); want the reset's deletion kept", perms, err)
 	}
+	got := rlfGet(t, e, r.ID)
+	var prior []getWantPrior
+	for _, h := range r.History {
+		if h.Life == reuseLife {
+			prior = append(prior, getWantPrior{id: h.SessionID, path: h.JSONLPath})
+		}
+	}
+	rlfAssertListed(t, got, got.TranscriptStatus, prior...)
+	assertReuseRequestsDeleted(t, e, r)
 	rutAssertRestored(t, 0, r.ID, true, launchErr, "")
 	rutAssertOrder(t, 0, r.ID, rutReused, rutRestored)
 }
@@ -142,8 +151,12 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					if _, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); err != nil {
 						t.Fatalf("second reuse: %v", err)
 					}
-					if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 {
-						t.Errorf("after the second reuse: state %v, life %v; want pending, %d", cols.State, cols.LifeNumber, reuseLife+1)
+					wantLife := reuseLife
+					if r.Spawn.Agent != "claude" {
+						wantLife++
+					}
+					if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != wantLife {
+						t.Errorf("after the second reuse: state %v, life %v; want pending, %d", cols.State, cols.LifeNumber, wantLife)
 					}
 				})
 			}
@@ -315,9 +328,9 @@ func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 					t.Error("row present after the reuse; want it to stay deleted")
 				}
 			case apitest.RestoreRowChanged:
-				if final.State != store.StatePending || final.ParentID != other || final.LifeNumber != reuseLife+1 {
+				if final.State != store.StatePending || final.ParentID != other || final.LifeNumber != reuseLife {
 					t.Errorf("row {state %v, parent %v, life %v}; want pending, %s, %d (the reset's life)",
-						final.State, final.ParentID, final.LifeNumber, other, reuseLife+1)
+						final.State, final.ParentID, final.LifeNumber, other, reuseLife)
 				}
 			case apitest.RestoreStoreError:
 				if written.State != store.StatePending {

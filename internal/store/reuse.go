@@ -17,6 +17,8 @@ import (
 // value of the SR-5.5 columns or the timestamp columns, so a row a hand edit
 // made malformed can still be reused and restored byte for byte (SR-5.5).
 type ReuseRow struct {
+	// Agent is the exact stored text, or empty for NULL/non-text values.
+	Agent string
 	// State is the row's state.
 	State string
 	// EndedAtText is ended_at exactly as stored, never parsed and
@@ -175,10 +177,13 @@ func rawLifeDest(l *RawLife) []any {
 	return dest
 }
 
-// readForReuseSQL is ReadForReuse's one statement: the state, ended_at as
-// the driver parses it and as stored text, the shared snapshot and identity
-// fragment, and the raw life, by primary key.
-var readForReuseSQL = `SELECT state, ended_at, CAST(ended_at AS TEXT),` + lifeColumns + `,
+// reuseAgentTextSQL is shared by the pre-check and both reset guards:
+// preserve exact text, mapping NULL and non-text values to empty.
+const reuseAgentTextSQL = `CASE WHEN typeof(agent) = 'text' THEN agent ELSE '' END`
+
+// readForReuseSQL reads the agent, state, ended_at, shared snapshot and
+// identity, and raw life in one statement by primary key.
+var readForReuseSQL = `SELECT ` + reuseAgentTextSQL + `, state, ended_at, CAST(ended_at AS TEXT),` + lifeColumns + `,
         ` + rawLifeSelect + `
    FROM spawns
   WHERE instance_id = ?`
@@ -199,7 +204,7 @@ func (s *Store) ReadForReuse(instanceID string) (row ReuseRow, found bool, err e
 		endedAtText sql.NullString
 		life        lifeScan
 	)
-	dest := append([]any{&row.State, &endedAt, &endedAtText}, life.dest()...)
+	dest := append([]any{&row.Agent, &row.State, &endedAt, &endedAtText}, life.dest()...)
 	dest = append(dest, rawLifeDest(&row.Life)...)
 	err = s.db.QueryRow(readForReuseSQL, instanceID).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -218,16 +223,16 @@ func (s *Store) ReadForReuse(instanceID string) (row ReuseRow, found bool, err e
 
 // resetForReuseReadSQL is ResetForReuse's read inside its transaction: the
 // session to archive, the pre-reset life, and whether the row is finished
-// with the examined snapshot, judged by the shared finished guard and
-// snapshot-match condition. Its placeholders take finishedStateGuardArgs,
-// snapshotMatchArgs and the id, in that order.
+// with the examined snapshot and agent, judged by the shared guards. Its placeholders take finishedStateGuardArgs,
+// snapshotMatchArgs, the examined text-or-empty agent and the id, in that order.
 const resetForReuseReadSQL = `SELECT COALESCE(session_id, ''), COALESCE(jsonl_path, ''), life_number,
-        CASE WHEN ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` THEN 1 ELSE 0 END
+        CASE WHEN ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND ` + reuseAgentTextSQL + ` = ? THEN 1 ELSE 0 END
    FROM spawns
   WHERE instance_id = ?`
 
 // resetForReuseSQL is ResetForReuse's reset: the finished row set to pending
-// in a new life, guarded by the finished state and the examined snapshot
+// in its retained life or a new life on an agent switch, guarded by the
+// finished state, examined snapshot and exact text-or-empty agent
 // (SR-10.3, SR-5.3). pending is an immediate write (immediateStateSet,
 // b.3ie): it reports at once.
 const resetForReuseSQL = `UPDATE spawns
@@ -264,15 +269,15 @@ const resetForReuseSQL = `UPDATE spawns
         agent                     = ?,
         end_reported_at           = NULL,
         subagent_tracking         = ` + subagentTrackedParamSQL + `,
-        life_number               = life_number + 1,
+        life_number               = life_number + CASE WHEN ` + reuseAgentTextSQL + ` = ? THEN 0 ELSE 1 END,
         ` + rowVersionAdvance + `
-  WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL
+  WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND ` + reuseAgentTextSQL + ` = ?`
 
 // resetForReuseDeleteRequestsSQL is ResetForReuse's deletion of every
 // permission request of the id, decided or not (SR-10.3).
 const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE instance_id = ?`
 
-// ResetForReuse is reuse's change of a finished row to a new life, the write
+// ResetForReuse is reuse's change of a finished row to a fresh launch, the write
 // that begins its launch (SR-10.3, SR-5.3, SR-5.6, SR-5.8, SR-5.9; Appendix
 // F.4). Its archive, reset and permission-request deletion commit as one
 // transaction or not at all. The transaction is begun with BEGIN IMMEDIATE on
@@ -284,8 +289,8 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 // Inside it, it reads the row's session id, transcript path and life_number
 // (never labels, agent_args or extra_env, so a malformed row can be reset).
 // No row: CondAbsent. A row that is not ended or missing, or whose snapshot
-// differs from examined (the shared finished guard and snapshot-match
-// condition, compared on the values exactly as stored): CondChanged. Both
+// differs from examined, or its text-or-empty agent differs from examinedAgent
+// (the shared guards, compared on the values exactly as stored): CondChanged. Both
 // write nothing and return archivedSessionID "" and resetVersion 0.
 //
 // Otherwise, in order:
@@ -314,15 +319,17 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     or codex (checked before anything is written: ErrRowAgentInvalid) and
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
-//     for codex, over whatever the row held; life_number and row_version each
-//     advanced by one. The store reads no clock: the caller supplies
+//     for codex, over whatever the row held; row_version advanced by one, and
+//     life_number advanced by one only if the exact stored agent differs
+//     from fresh.Agent. Same-agent reuse keeps the life. The store reads no
+//     clock: the caller supplies
 //     fresh.StartedAt and fresh.LaunchStartedAtMillis.
 //   - Permission requests: every request of the id, decided or not, is
 //     deleted. Children keep their parent_id; no other row changes.
 //   - Subagent close (closeSubagentsAgentGone, SR-8.1, SR-10.3): every running
 //     subagent entry of the id, of any launch, turns lost with close_reason
 //     agent_gone, and every claimable launch of the id is deleted, whatever
-//     the row's subagent_tracking flag, so no record of the earlier life reads
+//     the row's subagent_tracking flag, so no earlier launch's entry reads
 //     running in the launch the reset begins. The entries stay (SR-10.3): only
 //     running ones change; stopped and lost ones are untouched, and a
 //     SubagentStart reopens one in the new launch. Its instant is
@@ -344,7 +351,7 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 // parentID naming no row, the reset or deletion, a busy store past its
 // timeout, the commit) does not. Neither wraps a catalogued sentinel (SR-1.5).
 // It emits no trail event.
-func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spawn) (res CondResult, archivedSessionID string, resetVersion int64, err error) {
+func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedAgent string, fresh Spawn) (res CondResult, archivedSessionID string, resetVersion int64, err error) {
 	const errPrefix = "store: reset for reuse"
 	if err := validateRowAgent(fresh.Agent); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
@@ -390,7 +397,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		matches              int
 	)
 	readArgs := append(finishedStateGuardArgs(), snapshotMatchArgs(examined)...)
-	readArgs = append(readArgs, instanceID)
+	readArgs = append(readArgs, examinedAgent, instanceID)
 	err = conn.QueryRowContext(ctx, resetForReuseReadSQL, readArgs...).Scan(&sessionID, &jsonlPath, &life, &matches)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -419,10 +426,11 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, fresh Spa
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
 	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
-	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent)
+	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent, fresh.Agent)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)
+	resetArgs = append(resetArgs, examinedAgent)
 	r, err := q.Exec(resetForReuseSQL, resetArgs...)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("%s: reset: %w", errPrefix, err)

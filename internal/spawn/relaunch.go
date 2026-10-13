@@ -10,8 +10,8 @@ import (
 // store id.
 //
 // SessionID is the session_id the `claude --resume <session id>` (or `codex
-// resume <session id>`) argv element names: the row's own, or an earlier session of the visible history
-// whose transcript resume recovered. Socket is the launch's socket
+// resume <session id>`) argv element names: the row's current session only.
+// Socket is the launch's socket
 // (ResolveRowLaunchSocket), Token the new launch token (NewLaunchToken) and
 // StoreID this store's id ((*store.Store).StoreID(), read by the caller when
 // the store opened; internal/spawn neither opens the store nor reads it).

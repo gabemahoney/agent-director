@@ -154,7 +154,7 @@ func TestExpireConditionalDelete(t *testing.T) {
 }
 
 // TestExpireConditionalDeleteReuseReset (AC-EXP-04): a finished row that a real reuse resets as expire's lookup of it
-// returns is kept changed_since_examined, not deleted; it stays pending in its new life, and a later run skips it.
+// returns is kept changed_since_examined, not deleted; it stays pending in its new launch, and a later run skips it.
 func TestExpireConditionalDeleteReuseReset(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	for _, prior := range []string{store.StateEnded, store.StateMissing} {
@@ -187,8 +187,8 @@ func TestExpireConditionalDeleteReuseReset(t *testing.T) {
 			assertExpired(t, res, mark, map[string]string{unchanged.ID: "", r.ID: "changed_since_examined"})
 			assertRowGone(t, e, unchanged.ID)
 			written := e.columns(t, r.ID)
-			if written.State != store.StatePending || written.LifeNumber != reuseLife+1 {
-				t.Errorf("row %s {state %v, life %#v}; want pending in life %d", r.ID, written.State, written.LifeNumber, reuseLife+1)
+			if written.State != store.StatePending || written.LifeNumber != reuseLife {
+				t.Errorf("row %s {state %v, life %#v}; want pending in life %d", r.ID, written.State, written.LifeNumber, reuseLife)
 			}
 
 			mark = trailMark(t)

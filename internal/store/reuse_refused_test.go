@@ -6,6 +6,7 @@ package store_test
 // stale-snapshot cases are row_version_reuse_test.go's.
 
 import (
+	"database/sql"
 	"errors"
 	"reflect"
 	"sync"
@@ -51,6 +52,9 @@ func TestReuseResetNotApplied(t *testing.T) {
 				t.Fatalf("own agent's Notification = %+v; want applied", got)
 			}
 		}, store.CondChanged},
+		{"agent-only text change after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) { f.reuseAgentRaw(r.id, store.AgentClaude) }, store.CondChanged},
+		{"agent-only blob change after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) { f.reuseAgentRaw(r.id, []byte(store.AgentCodex)) }, store.CondChanged},
+		{"agent-only NULL change after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) { f.reuseAgentRaw(r.id, nil) }, store.CondChanged},
 		{"live row", reuseSpec{state: store.StateWaiting}, nil, store.CondChanged},
 		{"row deleted after examination", reuseSpec{}, func(t *testing.T, f *v5Store, r reuseRow) {
 			if err := f.s.DeleteSpawn(r.id); err != nil {
@@ -65,6 +69,11 @@ func TestReuseResetNotApplied(t *testing.T) {
 			mix := f.seedCloseMix(r.id)
 			if tc.write != nil {
 				tc.write(t, f, r)
+			}
+			if tc.want == store.CondChanged && tc.spec.state == "" && tc.name != "own agent's hook after examination" {
+				if row := f.readForReuse(t, r.id); row.Snapshot != r.read.Snapshot {
+					t.Fatal("agent edit changed snapshot; agent guard check is vacuous")
+				}
 			}
 			var before reuseState
 			if tc.want != store.CondAbsent {
@@ -159,7 +168,7 @@ func TestReuseResetConcurrent(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, reuseFresh("", false))
+				res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, reuseFresh("", false))
 			}()
 		}
 		close(start)
@@ -175,4 +184,29 @@ func TestReuseResetConcurrent(t *testing.T) {
 			t.Errorf("round %d: life %#v, row_version %#v; want one reset applied", round, after.LifeNumber, after.RowVersion)
 		}
 	}
+}
+
+// TestReuseResetAgentGuardAfterArchive models a trigger changing agent after the transactional read.
+func TestReuseResetAgentGuardAfterArchive(t *testing.T) {
+	f := newV5Store(t)
+	r := seedReuseRow(t, f, reuseSpec{})
+	mix := f.seedCloseMix(r.id)
+	db, err := sql.Open("sqlite", f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER change_agent_after_archive AFTER INSERT ON session_history
+ BEGIN UPDATE spawns SET agent = 'claude' WHERE instance_id = NEW.instance_id; END`); err != nil {
+		t.Fatal(err)
+	}
+	before := f.reuseStateOf(t, r)
+	res, archived, version, err := f.reuseReset(r, reuseFresh("", false))
+	if err == nil || res != 0 || archived != "" || version != 0 {
+		t.Fatalf("reset = %v, %q, %d, %v; want error and no outcome", res, archived, version, err)
+	}
+	if after := f.reuseStateOf(t, r); !reflect.DeepEqual(after, before) {
+		t.Errorf("reset after trigger edit wrote:\n before %+v\n after %+v", before, after)
+	}
+	f.assertBystanderKept(mix)
 }

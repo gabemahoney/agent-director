@@ -9,6 +9,17 @@ A `spawn` names its agent, `claude` or `codex`, with `--agent` on the call or
 through its [template](#templates); with neither it is refused. The rules
 for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
 
+A `spawn --reuse-finished` on a finished id starts a fresh conversation with
+the resolved agent. Keeping the same agent keeps its current life, including
+its session history and subagent records. Switching from Claude to Codex or
+from Codex to Claude starts a fresh life; switching back starts another new
+life. Earlier lives' history and records stay stored but are hidden. A switch
+neither hides nor stops child spawns: `list --parent <id>` still lists them.
+The record rules are in [Read an agent's subagent records](#read-an-agents-subagent-records).
+
+Failed-reuse recovery is in
+[Caller contract](caller-contract.md#transcript-recovery).
+
 A Codex spawn passes Codex's own arguments after `--`. This one starts the
 agent on a first prompt, one argument:
 
@@ -49,7 +60,8 @@ read `working` until the next prompt. The events and the limits are in
 
 `spawn` marks the folder as trusted so the agent does not stop at its
 folder-trust prompt, Claude Code's or Codex's. `--no-pre-trust` keeps the
-prompt, and holds for every `resume` of the id: none marks the folder, so the
+prompt, and holds until the next spawn or reuse of the id. Each `resume`
+follows the latest spawn's choice: with pre-trust off, none marks the folder, so the
 agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
@@ -547,7 +559,15 @@ The template names its agent, so that `spawn` needs no `--agent`.
 ## Pause and resume
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
-it under the same id with its transcript, so the conversation carries on.
+it under the same id with the last agent's latest reported session, so the
+conversation carries on if that agent can reopen it. `resume` accepts no
+agent or session choice. Older sessions of the current life remain inspectable
+in `get`'s `prior_sessions`, but agent-director never resumes them, even when
+their transcript files exist. A same-agent reuse starts a fresh conversation;
+its next `resume` continues that new session. Agent-director adds no in-session
+picker and does not control the agent's own picker; its resume guarantee applies
+to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)
+for refusals and recovery.
 A Codex agent carries on the same conversation, and `resume` replays the
 arguments the `spawn` stored, with today's settings winning over the ones
 stored. `resume` refuses none of them, even one a new `spawn` would refuse.

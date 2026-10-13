@@ -65,62 +65,42 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // `pending`, and nothing was written.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 
-// ErrNoSessionId is returned by the resume verb when the row's
-// session_id column is empty — typically because the Spawn
-// was killed before its first SessionStart hook fired, or because a spawn's
-// or reuse's launch never reported in and find-missing marked its pending
-// row missing (resume's launch-in-progress refusal of that pending row,
-// ErrSpawnNotResumable, names this recourse). With no
-// session id there is no JSONL to point `claude --resume` at; the
-// caller's recourse is to spawn again with the same id, opting in to reuse
-// (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's agent
-// (SpawnParams.Agent, --agent; get shows it), since a spawn names its agent.
-// The reused id starts a new life with no memory of the earlier one.
+// ErrNoSessionId is returned by resume when the row's current session_id
+// is empty, typically when a launch never reported SessionStart. It takes
+// precedence over transcript lookup even if older sessions are listed.
+// To recover, spawn again with the same id, opting in to reuse
+// (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+// which get shows) to start a fresh conversation in the retained life.
+// Older sessions remain listed for inspection only; resume never chooses them. An agent switch or
+// switch back starts a new life with no memory of the earlier one.
 var ErrNoSessionId = errors.New("ErrNoSessionId")
 
-// ErrJsonlMissing is returned by the resume verb when NO candidate
-// JSONL transcript path stats successfully on disk. Resume tries the
-// persisted jsonl_path first, then a CLAUDE_CONFIG_DIR-aware fallback
-// recomputed from the row's ExtraEnv (bug b.1ba), then each entry of the
-// row's visible history, newest first (its recorded path, then its
-// recomputed fallback); this sentinel fires only when every candidate
-// fails. It is decided on the current life's history: session history
-// belongs to a life, and the visible history is the current life's
-// history minus the entry for the row's current session id. The file may
-// have been hand-deleted, archived by the operator, or never written. The
-// error message names every path tried and its source (persisted,
-// fallback or history; all from the current life) with the stat error for
-// each, so callers can log which candidates failed —
-// the error NAME is stable, so name-based mapping is unaffected.
-// Resume cannot proceed; the recourse is to spawn again with the same id,
-// opting in to reuse (SpawnParams.ReuseFinished, --reuse-finished) and
-// passing the row's agent (SpawnParams.Agent, --agent; get shows it). The
-// reused id starts a new life with no memory of the earlier one, so the
-// earlier conversation cannot be resumed through agent-director afterwards.
+// ErrJsonlMissing is returned by resume when no current-session transcript
+// candidate stats successfully, unless ErrJsonlNeverWritten applies. Claude
+// tries the recorded jsonl_path and a path recomputed from cwd, session_id
+// and a usable absolute CLAUDE_CONFIG_DIR (otherwise ~/.claude). Codex tries
+// only its recorded path. The message lists only current-session attempts,
+// with sources persisted and fallback; a Codex row with an empty recorded
+// path and visible history has zero attempts and says that the current
+// session has no recorded path. Older sessions are never tried, even when
+// their transcripts exist. To recover, spawn again with the same id,
+// opting in to reuse
+// (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+// which get shows) for a fresh conversation in the retained life; older
+// sessions remain listed for inspection only. An agent switch or switch back starts
+// a new life with no memory of the earlier one.
 var ErrJsonlMissing = errors.New("ErrJsonlMissing")
 
-// ErrJsonlNeverWritten is returned by the resume verb when the row carries a
-// session_id but no transcript has EVER been written for it — the
-// persisted jsonl_path is NULL (the SessionStart hook found no file on disk),
-// the CLAUDE_CONFIG_DIR-aware fallback path also does not exist, and the
-// row's visible history is empty, so there is nothing to fall back on. It is
-// decided on the current life's history: session history belongs to a life,
-// and the visible history is the current life's history minus the entry for
-// the row's current session id, so that entry never counts as history. This
-// is the b.v2c case of a freshly restarted agent that has not been messaged:
-// a fresh Claude session writes no .jsonl until its first user turn, so there
-// is genuinely nothing to resume.
-//
-// It is deliberately distinct from ErrJsonlMissing, whose meaning is
-// "candidates were tried and none matched" — a path was once recorded (or
-// composed) and has since rotted or been removed: ErrJsonlNeverWritten means
-// the session never produced history, whereas ErrJsonlMissing means history
-// existed but the file is gone. Callers map by error NAME; both remain
-// stable. resume returns it only for a finished row, which send-keys
-// refuses, so the recourse is to spawn again with the same id, opting in to
-// reuse (SpawnParams.ReuseFinished, --reuse-finished) and passing the row's
-// agent (SpawnParams.Agent, --agent; get shows it); the reused id starts a
-// new life with no memory of the earlier one.
+// ErrJsonlNeverWritten is returned by resume when the row has a current
+// session_id, no current-session candidate exists, the recorded jsonl_path
+// is empty and the visible history is empty. Visible history is the current
+// life's entries minus the entry for the row's current session id. This
+// classification is unchanged: listed older history makes a missing current
+// transcript ErrJsonlMissing even if no older transcript exists on disk.
+// To recover, spawn again with the same id, opting in to reuse
+// (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+// which get shows) for a fresh conversation in the retained life. An agent
+// switch or switch back starts a new life with no memory of the earlier one.
 var ErrJsonlNeverWritten = errors.New("ErrJsonlNeverWritten")
 
 // ErrSendKeysWhileRelayed is returned by send-keys, plain or a pane answer

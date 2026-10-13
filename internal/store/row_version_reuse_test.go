@@ -20,7 +20,7 @@ const (
 	rvReuseSocket       = "/tmp/rv/reuse-sock"
 )
 
-// rvReuseFresh is the reset's new life with parentID: pre-trust allowed, unlike
+// rvReuseFresh is the reset's fresh launch with parentID: pre-trust allowed, unlike
 // the seed's opt-out, so the no_pre_trust write is observable.
 func rvReuseFresh(parentID string) store.Spawn {
 	return store.Spawn{Agent: store.AgentClaude, CWD: "/tmp/rv/reuse", TmuxSessionName: "ts-rv-reuse", RelayMode: "off",
@@ -40,13 +40,13 @@ func rvReuseRead(t *testing.T, f *v5Store, id string) store.ReuseRow {
 
 // rvReset resets target from examined, expecting want and, when applied, the
 // archived session id wantArchived and the examined version plus one.
-func rvReset(t *testing.T, f *v5Store, target string, examined store.RowSnapshot, want store.CondResult, wantArchived string) int64 {
+func rvReset(t *testing.T, f *v5Store, target string, examined store.ReuseRow, want store.CondResult, wantArchived string) int64 {
 	t.Helper()
 	var wantV int64
 	if want == store.CondApplied {
-		wantV = examined.RowVersion + 1
+		wantV = examined.Snapshot.RowVersion + 1
 	}
-	got, archived, v, err := f.s.ResetForReuse(target, examined, rvReuseFresh(""))
+	got, archived, v, err := f.s.ResetForReuse(target, examined.Snapshot, examined.Agent, rvReuseFresh(""))
 	if err != nil || got != want || archived != wantArchived || v != wantV {
 		t.Fatalf("ResetForReuse = %v, %q, %d, %v; want %v, %q, %d, nil", got, archived, v, err, want, wantArchived, wantV)
 	}
@@ -56,7 +56,7 @@ func rvReset(t *testing.T, f *v5Store, target string, examined store.RowSnapshot
 // rvResetNow returns the reset of id as read now, expecting want and wantArchived.
 func rvResetNow(want store.CondResult, wantArchived string) func(*testing.T, *v5Store, string) {
 	return func(t *testing.T, f *v5Store, id string) {
-		rvReset(t, f, id, rvReuseRead(t, f, id).Snapshot, want, wantArchived)
+		rvReset(t, f, id, rvReuseRead(t, f, id), want, wantArchived)
 	}
 }
 
@@ -71,7 +71,7 @@ type rvReuse struct {
 func (r *rvReuse) resetNow(t *testing.T, f *v5Store, id string) {
 	t.Helper()
 	row := rvReuseRead(t, f, id)
-	r.prior, r.reset = row.Life, rvReset(t, f, id, row.Snapshot, store.CondApplied, "")
+	r.prior, r.reset = row.Life, rvReset(t, f, id, row, store.CondApplied, "")
 }
 
 // restore returns the restore of target ("" = the seeded row) with r's prior
@@ -117,7 +117,7 @@ func rvLifeWritten(t *testing.T, before, after apitest.SpawnColumns, c rowVersio
 }
 
 // rvReuseWrites are the applied reset and restore for each finished state. The
-// reset sets life+1, the call's no_pre_trust, the launch start, token and
+// reset retains the same agent's life and sets the call's no_pre_trust, the launch start, token and
 // socket, and clears the identity; the restore writes life, no_pre_trust,
 // token, socket and identity back and clears the launch start (SR-5.2).
 func rvReuseWrites() []rowVersionCase {
@@ -127,11 +127,11 @@ func rvReuseWrites() []rowVersionCase {
 		cases = append(cases,
 			rowVersionCase{name: "ResetForReuse/applied, " + st + " row", state: st, wantState: "pending",
 				identity: &reused, writesToken: true, launchStart: rvReuseStart,
-				lifeWrite: map[string]any{"life_number": int64(8), "no_pre_trust": int64(0)},
+				lifeWrite: map[string]any{"no_pre_trust": int64(0)},
 				write:     rvResetNow(store.CondApplied, "")},
 			rowVersionCase{name: "RestoreAfterFailedReuse/applied, " + st + " row", state: st, wantState: st,
 				clears: true, identity: &full, writesToken: true,
-				lifeWrite: map[string]any{"life_number": int64(7), "no_pre_trust": int64(1)},
+				lifeWrite: map[string]any{"no_pre_trust": int64(1)},
 				setup:     r.resetNow, write: r.restore("", store.CondApplied)},
 		)
 	}
@@ -139,7 +139,7 @@ func rvReuseWrites() []rowVersionCase {
 	return append(cases, rowVersionCase{name: "ResetForReuse/applied, archives the session in the transaction, one bump",
 		state: "ended", session: "sess-rv", opts: []apitest.SpawnOption{apitest.WithJsonlPath("/tmp/rv/old.jsonl")},
 		wantState: "pending", identity: &reused, writesToken: true, launchStart: rvReuseStart,
-		lifeWrite: map[string]any{"life_number": int64(8), "no_pre_trust": int64(0)},
+		lifeWrite: map[string]any{"no_pre_trust": int64(0)},
 		write: func(t *testing.T, f *v5Store, id string) {
 			n := historyLen(t, f, id)
 			rvResetNow(store.CondApplied, "sess-rv")(t, f, id)
@@ -152,7 +152,7 @@ func rvReuseWrites() []rowVersionCase {
 // rvReuseNoOps are the read, a refused reset and a refused restore: each
 // writes nothing to the row.
 func rvReuseNoOps() []rowVersionCase {
-	var stale store.RowSnapshot
+	var stale store.ReuseRow
 	afterWrite, neverReset, absent, pendingPrior := &rvReuse{}, &rvReuse{}, &rvReuse{}, &rvReuse{}
 	return []rowVersionCase{
 		{name: "ReadForReuse/the read", state: "ended",
@@ -163,7 +163,7 @@ func rvReuseNoOps() []rowVersionCase {
 			}},
 		{name: "ResetForReuse/stale snapshot, own agent's hook first", state: "ended",
 			setup: func(t *testing.T, f *v5Store, id string) {
-				stale = rvReuseRead(t, f, id).Snapshot
+				stale = rvReuseRead(t, f, id)
 				rvSoftRefresh(t, f, id)
 			},
 			write: func(t *testing.T, f *v5Store, id string) { rvReset(t, f, id, stale, store.CondChanged, "") }},
@@ -171,13 +171,14 @@ func rvReuseNoOps() []rowVersionCase {
 		{name: "ResetForReuse/pending row", state: "pending", write: rvResetNow(store.CondChanged, "")},
 		{name: "ResetForReuse/absent row", state: "ended",
 			write: func(t *testing.T, f *v5Store, id string) {
-				rvReset(t, f, "rv-absent", rvReuseRead(t, f, id).Snapshot, store.CondAbsent, "")
+				rvReset(t, f, "rv-absent", rvReuseRead(t, f, id), store.CondAbsent, "")
 			}},
 		// The archive runs before the reset fails on the foreign key: both roll back.
 		{name: "ResetForReuse/parent id names no row, archive rolled back", state: "ended", session: "sess-rv",
 			write: func(t *testing.T, f *v5Store, id string) {
 				n := historyLen(t, f, id)
-				got, archived, v, err := f.s.ResetForReuse(id, rvReuseRead(t, f, id).Snapshot, rvReuseFresh("rv-no-such-parent"))
+				row := rvReuseRead(t, f, id)
+				got, archived, v, err := f.s.ResetForReuse(id, row.Snapshot, row.Agent, rvReuseFresh("rv-no-such-parent"))
 				if err == nil || errors.Is(err, store.ErrReuseArchive) || got != 0 || archived != "" || v != 0 {
 					t.Fatalf("ResetForReuse(bad parent) = %v, %q, %d, %v; want 0, \"\", 0, a non-archive error", got, archived, v, err)
 				}

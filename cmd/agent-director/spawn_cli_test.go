@@ -268,7 +268,7 @@ func TestMakeTemplateCLIAgent(t *testing.T) {
 }
 
 // TestSpawnCLIReuseFinishedFlag: --reuse-finished with an explicit id reuses
-// an ended row with no session left (get: pending, a launch start, no prior
+// an ended row with no session left (get: pending, a launch start, retained prior
 // sessions), while --reuse-finished=false leaves it colliding with
 // ErrInstanceIdCollision and no create (SR-10.1, SR-10.2; AC-REUSE-13).
 func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
@@ -278,8 +278,9 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 		reuse bool
 	}{{"--reuse-finished", true}, {"--reuse-finished=false", false}} {
 		t.Run(tc.flag, func(t *testing.T) {
+			historyID := uuid.NewString()
 			home, id, _ := seedRowOnSocket(t, store.StateEnded, apitest.WithLifeNumber(1),
-				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: uuid.NewString(), Life: 1}))
+				apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: historyID, Life: 1}))
 			before := rowColumns(t, home, id)
 
 			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", "--cwd", t.TempDir(), "--instance-id", id, tc.flag)...)
@@ -296,8 +297,8 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 				t.Fatalf("exit = %d; stderr=%s", code, stderr)
 			}
 			row := getRow(t, home, fakeDir, id)
-			if prior, _ := row["prior_sessions"].([]any); row["state"] != "pending" || row["launch_started_at"] == nil || len(prior) != 0 {
-				t.Errorf("get = %v; want pending, a launch start and no prior sessions", row)
+			if prior, _ := row["prior_sessions"].([]any); row["state"] != "pending" || row["launch_started_at"] == nil || len(prior) != 1 || prior[0].(map[string]any)["session_id"] != historyID {
+				t.Errorf("get = %v; want pending, a launch start and the retained prior session", row)
 			}
 			assertInvocationKinds(t, home, "list-sessions", "new-session")
 		})

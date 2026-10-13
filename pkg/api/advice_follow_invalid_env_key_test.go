@@ -21,8 +21,8 @@ import (
 // The advice A15 and B12 pin, exactly as the description or Go doc words it.
 const (
 	advEnvKeyOwnName       = "give each variable its own name as the key (not empty, with no '=' and no NUL byte) and its value as the value"
-	advResumeEnvKeyGoDoc   = "Recourse: spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent), with an ExtraEnv without that key"
-	advResumeEnvKeyNewLife = " (a reused id starts a new life with no memory of this conversation), and " + advEnvKeyOwnName
+	advResumeEnvKeyGoDoc   = "Spawn the same id with the reuse opt-in, the row's agent and extra env without that key"
+	advResumeEnvKeyNewLife = " (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and " + advEnvKeyOwnName
 )
 
 // advResumeEnvKeyReuse is B12's advice up to the key, for a row of agent: the spawn-again step with the reuse

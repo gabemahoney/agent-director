@@ -1,6 +1,6 @@
 package api_test
 
-// spawn_reuse_history_test.go: a reused id starts with no memory (SR-5.9,
+// spawn_reuse_history_test.go: same-agent reuse retains history (SR-6.8.9,
 // SR-8.7; AC-REUSE-20, 21, 22, 24, 26), end to end through the real store
 // (newReuseEnv, reuseLaunch), the new agent's report-in, rotation and end its
 // own pane's hooks (SR-22.9). The rlf helpers are shared with kill's opt-in
@@ -55,7 +55,7 @@ func rlfReportIn(t *testing.T, e *killEnv, id, sid string, messaged bool) string
 	return p
 }
 
-// rlfEndLife ends id's life: its agent's SessionEnd applies, then its
+// rlfEndLife ends id's launch: its agent's SessionEnd applies, then its
 // session goes and its agent process exits.
 func rlfEndLife(t *testing.T, e *killEnv, id string) {
 	t.Helper()
@@ -65,7 +65,7 @@ func rlfEndLife(t *testing.T, e *killEnv, id string) {
 	rlfAgentGone(t, e, rlfRow(t, e, id))
 }
 
-// rlfNeverReported ends id's pending life with no report-in: its session
+// rlfNeverReported ends id's pending launch with no report-in: its session
 // goes, its agent exits and a find-missing past the grace period marks it missing.
 func rlfNeverReported(t *testing.T, e *killEnv, id string) {
 	t.Helper()
@@ -181,12 +181,12 @@ func rlfAssertEarlierUnused(t *testing.T, e *killEnv, r0 reuseRow, text string) 
 	}
 	for _, s := range earlier {
 		if s != "" && strings.Contains(text, s) {
-			t.Errorf("%q names the earlier life's %q", text, s)
+			t.Errorf("%q names the earlier session's %q", text, s)
 		}
 	}
 	for _, c := range e.rec.SocketCallsOf(tmux.CallCreate) {
 		if i := slices.Index(c.Command, "--resume"); i >= 0 && i+1 < len(c.Command) && slices.Contains(earlier, c.Command[i+1]) {
-			t.Errorf("create %q resumes an earlier life's session", c.Command)
+			t.Errorf("create %q resumes an earlier session", c.Command)
 		}
 	}
 }
@@ -212,9 +212,8 @@ func rlfAssertStored(t *testing.T, e *killEnv, id, sid string, life int64) {
 // rlfNewSession is a new Claude session id.
 func rlfNewSession() string { return "sess-" + uuid.NewString()[:8] }
 
-// TestSpawnReuseHistoryNeverMessaged: a reused id whose new life is never
-// messaged resumes to ErrJsonlNeverWritten (ErrNoSessionId if it never
-// reported in) and get lists nothing, though the earlier life's transcripts are on disk.
+// TestSpawnReuseHistoryNeverMessaged retains older history and reports missing
+// for an unwritten current session, or no_session when it never reported in.
 func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
 	cases := []struct {
@@ -224,13 +223,13 @@ func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 		wantErr    error
 		wantStatus string
 	}{
-		{"AC-REUSE-20/26 same cwd, config dir and name", nil, false, api.ErrJsonlNeverWritten, "never_written"},
+		{"AC-REUSE-20/26 same cwd, config dir and name", nil, false, api.ErrJsonlMissing, "rotated"},
 		{"AC-REUSE-20/26 never reported in", nil, true, api.ErrNoSessionId, "no_session"},
 		{"AC-REUSE-22 moved cwd", func(t *testing.T) reuseRequest { return reuseRequest{CWD: t.TempDir()} },
-			false, api.ErrJsonlNeverWritten, "never_written"},
+			false, api.ErrJsonlMissing, "rotated"},
 		{"AC-REUSE-22 moved CLAUDE_CONFIG_DIR", func(t *testing.T) reuseRequest {
 			return reuseRequest{Env: seedTrustConfig(t, t.TempDir(), trustLacksEntry).extraEnv()}
-		}, false, api.ErrJsonlNeverWritten, "never_written"},
+		}, false, api.ErrJsonlMissing, "rotated"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -249,11 +248,11 @@ func TestSpawnReuseHistoryNeverMessaged(t *testing.T) {
 				rlfNeverReported(t, e, r.ID)
 			} else {
 				rlfReportIn(t, e, r.ID, rlfNewSession(), false)
-				rlfAssertListed(t, rlfGet(t, e, r.ID), "never_written") // live, before any message
+				rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", rlfRetained(r0)...) // live, before any message
 				rlfEndLife(t, e, r.ID)
 			}
 
-			rlfAssertListed(t, rlfGet(t, e, r.ID), tc.wantStatus)
+			rlfAssertListed(t, rlfGet(t, e, r.ID), tc.wantStatus, rlfRetained(r0)...)
 			msg := rlfResumeRefused(t, e, r.ID, tc.wantErr)
 			rlfAssertEarlierUnused(t, e, r0, msg)
 			rlfAssertStored(t, e, r.ID, r0.Spawn.SessionID, reuseLife)
@@ -277,27 +276,26 @@ func rlfMessagedLife(t *testing.T) (e *killEnv, r0, r reuseRow, sid, path string
 	return e, r0, r, sid, rlfReportIn(t, e, r.ID, sid, true)
 }
 
-// TestSpawnReuseHistoryMessagedNewLife (AC-REUSE-21): a messaged new life is
-// what resume reattaches and get lists; the earlier life's never is (its
-// rotations: TestSpawnReuseLivesRotationsAndTwoReuses).
+// TestSpawnReuseHistoryMessagedNewLife resumes only the latest session,
+// even when earlier transcripts in the retained life are still on disk.
 func TestSpawnReuseHistoryMessagedNewLife(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	t.Run("resume reattaches the new life's session", func(t *testing.T) {
+	t.Run("resume reattaches the latest session's session", func(t *testing.T) {
 		e, r0, r, sid, _ := rlfMessagedLife(t)
 		rlfEndLife(t, e, r.ID)
 		if got := rlfResumed(t, e, r.ID); got != sid {
-			t.Errorf("--resume %s; want the new life's %s", got, sid)
+			t.Errorf("--resume %s; want the latest session's %s", got, sid)
 		}
 		rlfAssertEarlierUnused(t, e, r0, "")
 	})
-	t.Run("its transcript removed: ErrJsonlMissing names only the new life's candidates", func(t *testing.T) {
+	t.Run("its transcript removed: ErrJsonlMissing names only the latest session's candidates", func(t *testing.T) {
 		e, r0, r, _, path := rlfMessagedLife(t)
 		rlfEndLife(t, e, r.ID)
 		if err := os.Remove(path); err != nil {
 			t.Fatalf("remove %s: %v", path, err)
 		}
 		if _, err := os.Stat(r0.JSONLPath); err != nil {
-			t.Fatalf("the earlier life's transcript: %v; want it on disk", err)
+			t.Fatalf("the earlier session's transcript: %v; want it on disk", err)
 		}
 		msg := rlfResumeRefused(t, e, r.ID, api.ErrJsonlMissing)
 		for _, want := range []string{"persisted " + path, "fallback " + path} {
@@ -306,55 +304,46 @@ func TestSpawnReuseHistoryMessagedNewLife(t *testing.T) {
 			}
 		}
 		if strings.Contains(msg, "history ") {
-			t.Errorf("%q names a history candidate; the new life has none", msg)
+			t.Errorf("%q names a history candidate; resume must never try older sessions", msg)
 		}
 		rlfAssertEarlierUnused(t, e, r0, msg)
 	})
 }
 
-// TestSpawnReuseLivesRotationsAndTwoReuses (AC-REUSE-24): a rotation is a
-// candidate and listed within its life; after a second reuse only the latest
-// life's entries are, and a session re-archived there moves to that life.
+// TestSpawnReuseLivesRotationsAndTwoReuses retains history through same-agent launches.
 func TestSpawnReuseLivesRotationsAndTwoReuses(t *testing.T) {
-	t.Parallel()
+	// Serial: refusal checks all trail records since its mark.
 	e := newReuseEnv(t)
 	r0 := e.seedReusable(t, agentGone, reuseRowSpec{})
-	rlfEarlierOnDisk(t, r0)
-
-	// First reuse: s1 messaged, rotated to s2, listed and resumed in that life.
 	r, _ := e.reuseLaunch(t, r0, agentAlive, reuseRequest{})
 	s1, s2 := rlfNewSession(), rlfNewSession()
 	p1 := rlfReportIn(t, e, r.ID, s1, true)
 	rlfReportIn(t, e, r.ID, s2, false)
-	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", getWantPrior{id: s1, path: p1})
+	want := append(rlfRetained(r0), getWantPrior{id: s1, path: p1})
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", want...)
 	rlfEndLife(t, e, r.ID)
-	if got := rlfResumed(t, e, r.ID); got != s1 {
-		t.Fatalf("--resume %s; want the rotation's %s", got, s1)
+	rlfResumeRefused(t, e, r.ID, api.ErrJsonlMissing)
+	rlvAssertLife(t, e, r.ID, reuseLife)
+	r, _ = e.reuseLaunch(t, r, agentAlive, reuseRequest{NoPreTrust: true})
+	if got := e.columns(t, r.ID).NoPreTrust; got != int64(1) {
+		t.Errorf("latest same-agent spawn pre-trust choice = %v; want opted out", got)
 	}
-	rlfReportIn(t, e, r.ID, s1, true)
-	rlfEndLife(t, e, r.ID)
-	rlvAssertLife(t, e, r.ID, reuseLife+1)
+	rlvAssertLife(t, e, r.ID, reuseLife)
+	rlfReportIn(t, e, r.ID, rlfNewSession(), false)
+	want = append(want, getWantPrior{id: s2})
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", want...)
+	rlfAssertStored(t, e, r.ID, s1, reuseLife)
+	rlfAssertStored(t, e, r.ID, s2, reuseLife)
+}
 
-	// Second reuse: a new life lists nothing until its own sessions archive.
-	r, _ = e.reuseLaunch(t, r, agentAlive, reuseRequest{})
-	rlvAssertLife(t, e, r.ID, reuseLife+2)
-	s3, s4 := rlfNewSession(), rlfNewSession()
-	rlfReportIn(t, e, r.ID, s3, false)
-	rlfAssertListed(t, rlfGet(t, e, r.ID), "never_written")
-
-	// s1 reported again, then rotated out: its entry moves to this life.
-	rlfReportIn(t, e, r.ID, s1, true)
-	rlfAssertListed(t, rlfGet(t, e, r.ID), "present", getWantPrior{id: s3})
-	rlfReportIn(t, e, r.ID, s4, false)
-	rlfAssertListed(t, rlfGet(t, e, r.ID), "rotated", getWantPrior{id: s1, path: p1}, getWantPrior{id: s3})
-	rlfAssertStored(t, e, r.ID, s1, reuseLife+2)
-	rlfAssertStored(t, e, r.ID, s2, reuseLife+1)
-
-	rlfEndLife(t, e, r.ID)
-	if got := rlfResumed(t, e, r.ID); got != s1 {
-		t.Errorf("--resume %s; want %s, re-archived in this life", got, s1)
+func rlfRetained(r reuseRow) []getWantPrior {
+	want := []getWantPrior{{id: r.Spawn.SessionID, path: r.JSONLPath}}
+	for _, h := range r.History {
+		if h.Life == reuseLife {
+			want = append(want, getWantPrior{id: h.SessionID, path: h.JSONLPath})
+		}
 	}
-	rlfAssertEarlierUnused(t, e, r0, "")
+	return want
 }
 
 // rlvAssertLife fails unless id's row is in life.

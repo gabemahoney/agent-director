@@ -37,13 +37,9 @@ type ResumeStore interface {
 	// ran while that life's id was current. The read does not apply the
 	// current-session rule; Resume does, keeping the visible history (that
 	// life's entries minus the entry for the row's current session id).
-	// Resume uses the visible history both to try earlier transcripts as
-	// resume candidates (b.v2c AC6 — a rotation must not strand history)
-	// and to distinguish ErrJsonlNeverWritten from ErrJsonlMissing (AC2).
-	// A reuse starts a new life, so after a reuse no earlier life's entry is
-	// read and the earlier conversation cannot be resumed; a failed reuse's
-	// restore returns the row to its pre-reuse life, whose history counts
-	// again.
+	// Resume uses visible history only to distinguish ErrJsonlNeverWritten
+	// from ErrJsonlMissing. Same-agent reuse retains it; a switch starts a
+	// new life, and an applied failed-reuse restore puts the prior life back.
 	ListSessionHistory(instanceID string, life int64) ([]SessionHistoryEntry, error)
 	// MoveToPending applies only if the row is ended or missing and its
 	// snapshot equals examined (SR-8.3). In one statement it sets state
@@ -131,7 +127,7 @@ type ResumeResult struct {
 	//     written to .claude.json; a codex agent: the launch carries the
 	//     folder trust and the hook-trust bypass).
 	//   - "skipped": pre-trust was off for this launch because the row
-	//     records that the spawn that began its life turned it off
+	//     records that the row's latest spawn turned it off
 	//     (SpawnParams.NoPreTrust); nothing was attempted.
 	//   - "failed": pre-trust was attempted and the entry was not written
 	//     (a claude agent: the .claude.json file is missing, or could not be
@@ -267,29 +263,18 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     SessionStart hook persisted jsonl_path, and rows whose recorded
 //     path has rotted. A successful fallback resume re-fires
 //     SessionStart, which re-persists the correct path.
-//     c. Then each entry of the row's visible history, newest first
-//     (b.v2c AC6): its recorded path, then its recomputed fallback.
-//     Session history belongs to a life, and the visible history is the
-//     current life's history minus the entry for the row's current
-//     session id, whose own candidates are a and b; a recorded path on
-//     that dropped entry is never tried. After a reuse, which starts a new
-//     life, no earlier life's transcript is a candidate.
-//     When every candidate fails, the verb distinguishes two cases, both
-//     decided on the visible history: ErrJsonlNeverWritten when the
-//     persisted jsonl_path was NULL and the visible history is empty
-//     (nothing was ever written — AC2); ErrJsonlMissing otherwise (a path
-//     was once recorded/composed and has rotted). Both messages report
-//     each path tried with its source (persisted / fallback / history)
-//     and its stat error; every one of them is from the current life.
-//     A codex row's candidates are only the persisted jsonl_path and each
-//     visible-history entry's recorded path, newest first: no path is ever
-//     built from the cwd and the session id, and neither CLAUDE_CONFIG_DIR
-//     nor ~/.claude is looked under (so step b and the recomputed half of c
-//     do not apply to it). The session id of the candidate that wins goes to
-//     the relaunch, as for a claude row.
+//     Only the current session is tried. Older sessions are listed by get,
+//     but never statted, recomputed or selected. When its paths fail,
+//     ErrJsonlNeverWritten means the recorded path is empty and the visible
+//     history (current life's entries minus the current session) is empty;
+//     ErrJsonlMissing covers every other case. Both messages report only
+//     current-session attempts, with sources persisted and fallback.
+//     A codex row tries only its current recorded path: no Claude path is
+//     built. With no recorded path and visible history, ErrJsonlMissing
+//     explains that the current session has no recorded transcript path.
 //
-// The winning candidate's session id is the one `claude --resume` names;
-// the launch itself (resumeAfterJsonl) always works from the row as read.
+// The relaunch always names the row's current session and works from the
+// row as read.
 // After these guards come resumeAfterJsonl's steps (SR-8.1 steps 2 to 7):
 // the unusable recorded-name refusal (SR-3.2), then the control-character id
 // refusal, the launch socket, the one pre-launch
@@ -351,8 +336,8 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 
 	// A Codex row never recomputes a path: Codex's transcript path is not
 	// derived from the cwd and the session id, and there is no Claude config
-	// dir to look under. Its candidates are the persisted jsonl_path and each
-	// visible-history entry's recorded path, newest first (SR-7.4).
+	// dir to look under. Its only candidate is the current session's
+	// persisted jsonl_path (SR-7.4).
 	codex := row.Agent == store.AgentCodex
 
 	// Fallback: recompute from the persisted CLAUDE_CONFIG_DIR (bug b.1ba)
@@ -390,85 +375,13 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		}
 	}
 
-	// b.v2c AC6: a session rotation (a new session id reported for the row)
-	// archives the prior session's (session id, jsonl_path) into
-	// session_history, as an entry of the row's life. If the current session
-	// has no live transcript, fall back to the most recent entry of the
-	// visible history whose transcript still exists on disk — this recovers
-	// history orphaned by a rotation rather than abandoning it. The visible
-	// history is the current life's entries (the read below takes the life of
-	// the row read above) minus the entry for the row's current session id,
-	// whose candidates were already tried above (SR-8.7). Resume does not persist
-	// a session-id change: it points the relaunch at the recovered archived
-	// session id (resumeAfterJsonl's sessionID, which spawn.ComposeRelaunch
-	// puts in the argv), so `claude --resume` reattaches to the recovered
-	// transcript. The row's session_id is not rewritten here (the move
-	// keeps it); it updates later, when the resumed process's SessionStart
-	// hook fires.
-	//
-	// Each archived candidate gets the same persisted→fallback two-step the
-	// current session gets (finding b.5jm/1): the recorded jsonl_path is tried
-	// first, and on ANY stat failure of a non-empty path — the b.1ba rot mode —
-	// the config-dir-aware path is recomputed and stat'd for that same session
-	// id before advancing to the next, older entry. Without this, a newer entry
-	// whose recorded path has rotted would be skipped outright and an older
-	// entry could win, silently reattaching resume to older history.
+	// History is read only to preserve the never-written classification.
+	// Older sessions are listed by get, but never tried or relaunched here.
 	lifeHistory, herr := s.ListSessionHistory(params.InstanceID, row.LifeNumber)
 	if herr != nil {
 		return ResumeResult{}, fmt.Errorf("resume: list session history: %w", herr)
 	}
 	history := visibleHistory(row, lifeHistory)
-	for _, h := range history {
-		// Step 1: try the archived recorded path, if any. It wins outright when
-		// it stats; on any stat failure fall through to the recomputed path.
-		if h.JSONLPath != "" {
-			if _, err := os.Stat(h.JSONLPath); err == nil {
-				return resumeAfterJsonl(d, row, h.SessionID)
-			} else {
-				attempts = append(attempts, jsonlAttempt{
-					source: "history", path: h.JSONLPath, statErr: err,
-				})
-			}
-		}
-
-		// A Codex entry has no recomputed path: its recorded path was the only
-		// candidate, so go on to the next, older entry.
-		if codex {
-			continue
-		}
-
-		// Step 2: recompute the config-dir-aware path for this session id and
-		// stat it — the same fallback the current session gets. This heals both
-		// a NULL/empty recorded path and a non-empty-but-rotted one.
-		var recomputed string
-		var cerr error
-		if dir := row.ExtraEnv["CLAUDE_CONFIG_DIR"]; spawn.ConfigDirUsable(dir) {
-			recomputed, cerr = spawn.JsonlPathIn(dir, row.CWD, h.SessionID)
-		} else {
-			recomputed, cerr = spawn.JsonlPath(row.CWD, h.SessionID)
-		}
-		if cerr != nil {
-			// Record the recomposition failure as an attempt so the
-			// ErrJsonlMissing message still names this history candidate
-			// rather than silently omitting it.
-			attempts = append(attempts, jsonlAttempt{
-				source: "history", path: recomputed, statErr: cerr,
-			})
-			continue
-		}
-		// Avoid a duplicate stat + attempt entry when the recomputed path is
-		// identical to a recorded path we already tried and recorded above.
-		if recomputed == h.JSONLPath {
-			continue
-		}
-		if _, err := os.Stat(recomputed); err == nil {
-			return resumeAfterJsonl(d, row, h.SessionID)
-		} else {
-			attempts = append(attempts, jsonlAttempt{
-				source: "history", path: recomputed, statErr: err,
-			})
-		}
-	}
 
 	// AC2: distinguish "no transcript has EVER been written for this session"
 	// from "candidates were tried and none matched". The never-written case is
@@ -496,9 +409,10 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 // way on: the row cannot be resumed with its extra env, so the agent runs
 // again only through a spawn of the id with the reuse opt-in, the row's agent
 // (agent, the row's recorded one; SR-4.4) and an extra env without HOME, which
-// starts a new life; the alternative names that agent's folder variable.
+// starts a fresh conversation in the retained life; older sessions remain
+// listed for inspection only. The alternative names that agent's folder variable.
 func homeInExtraEnvError(id, key, agent string) error {
-	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (a reused id starts a new life with no memory of this conversation), and %s",
+	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseSpawn(agent), spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative(agent))
 }
 
@@ -512,9 +426,9 @@ func homeInExtraEnvError(id, key, agent string) error {
 // on: the row cannot be resumed with its extra env, so the agent runs again
 // only through a spawn of the id with the reuse opt-in, the row's agent (agent,
 // the row's recorded one; SR-4.4) and an extra env without that key, which
-// starts a new life.
+// starts a fresh conversation in the retained life.
 func invalidEnvKeyError(id, key, agent string) error {
-	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (a reused id starts a new life with no memory of this conversation), and %s",
+	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseSpawn(agent), key, spawn.InvalidEnvKeyAlternative)
 }
 
@@ -523,7 +437,7 @@ func invalidEnvKeyError(id, key, agent string) error {
 // fallback), and the stat error that ruled it out. Collected so the
 // ErrJsonlMissing message can name every path tried (bug b.1ba scope 2).
 type jsonlAttempt struct {
-	source  string // "persisted" | "fallback" | "history"
+	source  string // "persisted" | "fallback"
 	path    string
 	statErr error
 }
@@ -534,7 +448,7 @@ type jsonlAttempt struct {
 // is the human/log detail that tells them which paths were tried.
 func formatJsonlAttempts(attempts []jsonlAttempt) string {
 	if len(attempts) == 0 {
-		return "no transcript path was ever recorded"
+		return "no transcript path is recorded for the current session"
 	}
 	parts := make([]string, 0, len(attempts))
 	for _, a := range attempts {
@@ -545,9 +459,7 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 
 // resumeAfterJsonl launches the resume once a transcript has been found:
 // row is the row exactly as resumeImpl read it, never re-read and never
-// altered, and sessionID the session `claude --resume` names (the row's own,
-// or an earlier session of the visible history whose transcript still
-// exists). In order (SR-8.1, SR-8.3, SR-8.5):
+// altered, and sessionID the row's current session that the relaunch names. In order (SR-8.1, SR-8.3, SR-8.5):
 //
 //  1. SR-8.1 step 2, the recorded name first, then the id: a recorded name
 //     that is unusable (SR-3.2) → unusableNameError's ErrInternal, wrapped
@@ -582,7 +494,7 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //  5. Pre-trust (spawn.RunPreTrust, SR-8.1 step 4, SR-22.6): after every check
 //     above that can refuse without a write and immediately before the move,
 //     for the row's cwd and extra env, off when the row records the opt-out of
-//     the spawn that began its life (row.NoPreTrust, which the move and the
+//     the row's latest spawn (row.NoPreTrust, which the move and the
 //     restore keep, so a retry after a restored failure follows it too). For a
 //     claude row it is spawn.PreTrust: CLAUDE_CONFIG_DIR resolves the file a
 //     spawn of the row used, waiting for a held lock on .claude.json for at
@@ -838,9 +750,9 @@ func launchInProgressError(row Spawn) error {
 // Before its launch, Resume pre-trusts the row's working directory (marks it
 // trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
 // ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
-// spawn does, unless the spawn that began the row's life turned pre-trust off
-// (SpawnParams.NoPreTrust); then nothing is pre-trusted, on every resume of
-// that life, and pre_trust is skipped. A pre-trust failure never fails the
+// spawn does, unless the row's latest spawn turned pre-trust off
+// (SpawnParams.NoPreTrust); then nothing is pre-trusted on every resume of
+// the id until the next spawn or reuse, and pre_trust is skipped. A pre-trust failure never fails the
 // launch. A resume refused before its move to pending writes no trust entry.
 //
 // A row whose stored extra env sets HOME, by the key HOME or by a key such as
@@ -894,53 +806,37 @@ func launchInProgressError(row Spawn) error {
 //     no session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
-//   - [ErrNoSessionId]: session_id is empty — the Spawn was killed
-//     before its first SessionStart hook, or a spawn's or reuse's launch
-//     never reported in and find-missing marked its pending row missing (the
-//     launch-in-progress refusal above names this recourse). Recourse: spawn
-//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished)
-//     and passing the row's agent (SpawnParams.Agent; get shows it); the
-//     reused id starts a new life with no memory of the earlier one.
-//   - ErrReservedEnvKey: the row's stored extra env sets HOME (any value),
-//     by the key HOME or a key such as "HOME=/x" (the message quotes the
-//     first such key in sorted order), which spawn now refuses: relaunched,
-//     the agent's hook would report to another agent-director store.
-//     Nothing was written and nothing was launched. Recourse: spawn again
-//     with the same id, opting in to reuse (SpawnParams.ReuseFinished) and
-//     passing the row's agent (SpawnParams.Agent), with an ExtraEnv without
-//     HOME (an absolute CLAUDE_CONFIG_DIR gives a Claude Code agent its own
-//     config, an absolute CODEX_HOME a Codex agent; the message names the
-//     row's agent's variable, both when the row's agent is unknown); the reused id starts a new life with no
-//     memory of the earlier one. Also returned, when no key sets HOME, for a
-//     row whose stored extra env has a key that is not a valid env-var name:
-//     empty, or holding '=' or a NUL byte (the message quotes the first such
-//     key in sorted order, says it is not a valid env-var name and says what
-//     is wrong with it), which spawn now refuses too: relaunched, tmux would
-//     set a different variable than the one pre-trust and the transcript
-//     lookup read. Nothing was written and nothing was launched. Recourse: spawn
-//     again with the same id, opting in to reuse (SpawnParams.ReuseFinished)
-//     and passing the row's agent (SpawnParams.Agent), with an ExtraEnv
-//     without that key; the reused id starts a new life with
-//     no memory of the earlier one.
-//   - [ErrJsonlMissing]: no candidate JSONL transcript exists on disk —
-//     neither the persisted jsonl_path, the CLAUDE_CONFIG_DIR-aware
-//     fallback, nor any transcript of the visible history (the message
-//     names every path tried and its source, all from the current life).
-//     Meaning: history existed but the file is gone. Session history
-//     belongs to a life; the visible history is the current life's
-//     history minus the entry for the row's current session id. Recourse:
-//     spawn again with the same id, opting in to reuse
-//     (SpawnParams.ReuseFinished) and passing the row's agent
-//     (SpawnParams.Agent; get shows it); the reused id starts a new life with
-//     no memory of the earlier one, so the earlier conversation cannot be
-//     resumed through agent-director afterwards.
-//   - [ErrJsonlNeverWritten]: the row has a session id but no transcript was
-//     ever written (persisted jsonl_path NULL and the visible history,
-//     the current life's, empty) — the b.v2c case of a freshly restarted
-//     agent that has not been messaged. Recourse: spawn again with the same
-//     id, opting in to reuse (SpawnParams.ReuseFinished) and passing the
-//     row's agent (SpawnParams.Agent; get shows it); the reused id starts a
-//     new life with no memory of the earlier one.
+//   - [ErrNoSessionId]: the current session_id is empty, as when a launch
+//     never reported its first SessionStart. To recover, spawn again with the
+//     same id, opting in to reuse
+//     (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+//     which get shows): a fresh conversation starts in the retained life.
+//     Older sessions remain listed for inspection only; resume never chooses
+//     them. An agent switch or switch back starts a new life with no memory
+//     of the earlier one.
+//   - ErrReservedEnvKey: the row's stored extra env sets HOME, or has an
+//     invalid env-var key. Nothing is written or launched. Spawn the same id
+//     with the reuse opt-in, the row's agent and extra env without that key.
+//     That starts a fresh conversation in the retained life. An absolute
+//     CLAUDE_CONFIG_DIR gives Claude its own config; CODEX_HOME gives Codex
+//     its own config (the error names the row's agent's variable).
+//   - [ErrJsonlMissing]: no current-session transcript path stats successfully.
+//     Claude tries the recorded path and its config-dir-aware recomputation;
+//     Codex tries only the recorded path. The error names each current-session
+//     attempt and its source. Older sessions remain listed for inspection
+//     only, even if their transcripts exist. To recover, spawn again with the
+//     same id, opting in to reuse
+//     (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+//     which get shows) to start a fresh conversation in the retained life;
+//     resume never chooses an older session. An agent switch or switch back
+//     starts a new life with no memory of the earlier one.
+//   - [ErrJsonlNeverWritten]: the recorded path and visible history are empty,
+//     and no current-session candidate exists. To recover, spawn again with
+//     the same id, opting in to reuse
+//     (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
+//     which get shows) for a fresh conversation in the retained life.
+//     Switching agents instead starts a new life with no memory of the
+//     earlier one; switching back also starts a new life.
 //   - ErrTmuxNotAvailable: ENVIRONMENT. At the pre-launch lookup, before
 //     anything is written, this is not the tmux server the agent was launched
 //     on, or the tmux binary cannot be run or the socket is not accessible to

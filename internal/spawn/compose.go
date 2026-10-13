@@ -7,7 +7,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
-// envInstanceID names the env var ParentIDFromEnv reads for the new life's
+// envInstanceID names the env var ParentIDFromEnv reads for the new launch's
 // parent_id (SRD §7.5). When set, the caller is itself a Spawn whose Claude
 // shell is invoking us; the value becomes the row's parent.
 const envInstanceID = "AGENT_DIRECTOR_INSTANCE_ID"

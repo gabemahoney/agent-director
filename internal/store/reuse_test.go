@@ -6,7 +6,10 @@ package store_test
 // through seedReuseRow and resets with reuseFresh.
 
 import (
+	"database/sql"
+	"fmt"
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
 
@@ -34,6 +37,8 @@ func reuseIdentity() store.LaunchIdentity {
 
 // reuseSpec overrides seedReuseRow's ended row that opted out of pre-trust.
 type reuseSpec struct {
+	rawAgent  any // hand-written agent when handAgent is set
+	handAgent bool
 	state     string                // "" = ended
 	noSession bool                  // NULL session_id
 	preTrust  bool                  // no_pre_trust 0 instead of the opt-out
@@ -96,10 +101,47 @@ func seedReuseRow(t *testing.T, f *v5Store, spec reuseSpec) reuseRow {
 	seedRequest(t, f, id)
 	ok, err := f.s.DecidePermissionRequest(id, decided, "allow", "", "reuse_test")
 	wantBool(t, "DecidePermissionRequest", ok, err, true)
+	if spec.handAgent {
+		f.reuseAgentRaw(id, spec.rawAgent)
+	}
 	r.read = f.readForReuse(t, id)
 	r.before, r.history, r.requests = f.rawColumns(id), f.historyAllLives(id), f.reuseRequests(t, id)
 	r.childBefore = f.rawColumns(r.child)
 	return r
+}
+
+// reuseAgentRaw models a hand edit; the NULL case relaxes only this temp store's agent constraint.
+func (f *v5Store) reuseAgentRaw(id string, agent any) {
+	f.t.Helper()
+	db, err := sql.Open("sqlite", f.path)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if agent == nil {
+		var schema string
+		var version int
+		if err := db.QueryRow(`SELECT sql FROM sqlite_schema WHERE name = 'spawns'`).Scan(&schema); err != nil {
+			f.t.Fatal(err)
+		}
+		if err := db.QueryRow(`PRAGMA schema_version`).Scan(&version); err != nil {
+			f.t.Fatal(err)
+		}
+		schema = regexp.MustCompile(`(\bagent\s+TEXT) NOT NULL`).ReplaceAllString(schema, "$1")
+		for _, q := range []string{`PRAGMA writable_schema = ON`, `UPDATE sqlite_schema SET sql = ? WHERE name = 'spawns'`, fmt.Sprintf("PRAGMA schema_version = %d", version+1), `PRAGMA writable_schema = RESET`} {
+			var args []any
+			if q == `UPDATE sqlite_schema SET sql = ? WHERE name = 'spawns'` {
+				args = []any{schema}
+			}
+			if _, err := db.Exec(q, args...); err != nil {
+				f.t.Fatal(err)
+			}
+		}
+	}
+	if _, err := db.Exec(`UPDATE spawns SET agent = ? WHERE instance_id = ?`, agent, id); err != nil {
+		f.t.Fatal(err)
+	}
 }
 
 // readForReuse runs ReadForReuse on id, failing unless the row is found.
@@ -141,7 +183,7 @@ func reuseFresh(parentID string, noPreTrust bool) store.Spawn {
 
 // reuseReset resets r from the snapshot its read examined with fresh.
 func (f *v5Store) reuseReset(r reuseRow, fresh store.Spawn) (store.CondResult, string, int64, error) {
-	return f.s.ResetForReuse(r.id, r.read.Snapshot, fresh)
+	return f.s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, fresh)
 }
 
 // TestReuseReadForReuse checks the read's state, ended_at text (byte for byte,
@@ -188,16 +230,8 @@ func TestReuseReadForReuse(t *testing.T) {
 	}
 }
 
-// TestReuseResetApplied checks the applied reset on ended and missing rows:
-// the archived session, cleared and fresh columns (the agent the fresh spawn
-// names, each way between claude and codex, no end report, and subagent_tracking
-// of that agent, claude 1 over the seeded 0 and codex 0 over the seeded 1), life and
-// version each +1, the pre-trust choice either way, an empty parent stored NULL; every request
-// of the id deleted (another id's kept), the child and older history kept; a
-// row with no session archives nothing. The reset closes the row's close mix at
-// the fresh launch start: every running entry lost (agent_gone), every claimable
-// launch deleted, the entries themselves, every closed one and another row's
-// records kept (SR-8.1, SR-10.3).
+// TestReuseResetApplied checks exact-agent life retention or advancement,
+// outgoing archives, fresh columns, request deletion, closes and unaffected children.
 func TestReuseResetApplied(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -215,6 +249,13 @@ func TestReuseResetApplied(t *testing.T) {
 		{"ended claude row reset as codex", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentCodex},
 		{"ended claude row reset as claude", reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}, true, false, 0, store.AgentClaude},
 		{"ended codex row reset as codex", reuseSpec{}, true, false, 0, store.AgentCodex},
+		{"empty stored agent", reuseSpec{handAgent: true, rawAgent: ""}, true, false, 0, store.AgentClaude},
+		{"unknown stored agent", reuseSpec{handAgent: true, rawAgent: "gemini"}, true, false, 0, store.AgentClaude},
+		{"case differs", reuseSpec{handAgent: true, rawAgent: "Claude"}, true, false, 0, store.AgentClaude},
+		{"whitespace differs", reuseSpec{handAgent: true, rawAgent: " claude\n"}, true, false, 0, store.AgentClaude},
+		{"NULL stored agent", reuseSpec{handAgent: true, rawAgent: nil}, true, false, 0, store.AgentClaude},
+		{"blob stored agent", reuseSpec{handAgent: true, rawAgent: []byte("claude")}, true, false, 0, store.AgentClaude},
+		{"empty blob stored agent", reuseSpec{handAgent: true, rawAgent: []byte{}}, true, false, 0, store.AgentCodex},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -226,6 +267,10 @@ func TestReuseResetApplied(t *testing.T) {
 			wantTracking := launchTracking(wantAgent)
 			tc.spec.tracked = wantTracking == 0 // seeded the other way, so the reset's write is not vacuous
 			r := seedReuseRow(t, f, tc.spec)
+			wantReadAgent, _ := r.before.Agent.(string)
+			if r.read.Agent != wantReadAgent {
+				t.Fatalf("ReadForReuse agent = %q; want exact text-or-empty %q", r.read.Agent, wantReadAgent)
+			}
 			mix := f.seedCloseMix(r.id)
 			seedRequest(t, f, r.parent)
 			otherRequests := f.reuseRequests(t, r.parent)
@@ -253,6 +298,10 @@ func TestReuseResetApplied(t *testing.T) {
 			if err != nil || res != store.CondApplied || archived != wantArchived {
 				t.Fatalf("ResetForReuse = %v, %q, %d, %v; want CondApplied, %q", res, archived, v, err, wantArchived)
 			}
+			wantLife := reuseLife
+			if r.read.Agent != fresh.Agent {
+				wantLife++
+			}
 			a := f.rawColumns(r.id)
 			got := map[string]any{"row_version": a.RowVersion, "state": a.State, "life_number": a.LifeNumber,
 				"no_pre_trust": a.NoPreTrust, "started_at": a.StartedAt, "last_seen_at": a.LastSeenAt,
@@ -266,7 +315,7 @@ func TestReuseResetApplied(t *testing.T) {
 				got[col] = g
 			}
 			want := map[string]any{"row_version": r.read.Snapshot.RowVersion + 1, "state": store.StatePending,
-				"life_number": reuseLife + 1, "no_pre_trust": tc.want, "started_at": "2026-10-01 12:34:56",
+				"life_number": wantLife, "no_pre_trust": tc.want, "started_at": "2026-10-01 12:34:56",
 				"last_seen_at": "2026-10-01 12:34:56", "launch_started_at": int64(1790000000456), "cwd": "/tmp/ad-reuse-test/new",
 				"tmux_session_name": "reuse-ts-new", "agent_args": `["--model","sonnet"]`, "relay_mode": "on",
 				"labels": `{"team":"z"}`, "extra_env": `{"NEW":"1"}`, "parent_id": parent, "launch_token": "a1b2c3d4e5f60718",
@@ -295,6 +344,16 @@ func TestReuseResetApplied(t *testing.T) {
 			cur, others := splitHistory(f.historyAllLives(r.id), reuseSessionID)
 			if _, before := splitHistory(r.history, reuseSessionID); !reflect.DeepEqual(others, before) || len(cur) != wantCur {
 				t.Errorf("history after the reset: %+v archived, others %+v; want %q archived once, the rest kept", cur, others, wantArchived)
+			}
+			if len(cur) == 1 && cur[0].LifeNumber != reuseLife {
+				t.Errorf("archived life = %d; want outgoing life %d", cur[0].LifeNumber, reuseLife)
+			}
+			wantVisible := []string{}
+			if wantLife == reuseLife && wantArchived != "" {
+				wantVisible = append(wantVisible, wantArchived)
+			}
+			if got := f.historyIDs(t, r.id, wantLife); !reflect.DeepEqual(got, wantVisible) {
+				t.Errorf("current life history = %q; want %q", got, wantVisible)
 			}
 			f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
 		})
@@ -348,4 +407,40 @@ func TestReuseResetNewLifeEntry(t *testing.T) {
 	if e.LifeNumber != reuseLife+1 || e.SubagentID != cmRecord || e.LaunchToken != fresh.Identity.Token || e.State != store.SubagentStateRunning {
 		t.Errorf("new entry: %+v", e)
 	}
+}
+
+// TestReuseResetRowComesBack keeps closed records visible and reopens the same record after same-agent reuse.
+func TestReuseResetRowComesBack(t *testing.T) {
+	f := newV5Store(t)
+	r := seedReuseRow(t, f, reuseSpec{tracked: true, opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}})
+	mix := f.seedCloseMix(r.id)
+	fresh := reuseFresh("", false)
+	res, _, v, err := f.reuseReset(r, fresh)
+	if err != nil || res != store.CondApplied {
+		t.Fatalf("reset = %v, %v", res, err)
+	}
+	if got := f.rawColumns(r.id).LifeNumber; got != reuseLife {
+		t.Fatalf("life = %v; want %d", got, reuseLife)
+	}
+	f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
+	tracked, rows, err := f.s.ListSubagentRecords(r.id)
+	wantVisible := 0
+	for _, e := range mix.rows.Entries {
+		if e.Confirmed == int64(1) && e.LifeNumber == reuseLife {
+			wantVisible++
+		}
+	}
+	if err != nil || !tracked || len(rows) != wantVisible || wantVisible == 0 {
+		t.Fatalf("same life records = %v, %+v, %v; want %d", tracked, rows, err, wantVisible)
+	}
+	for _, e := range rows {
+		if e.State == store.SubagentStateRunning {
+			t.Errorf("record still running: %+v", e)
+		}
+	}
+	if res, err := f.s.RecordLaunchIdentity(r.id, v, fresh.Identity.Token, fresh.Identity); err != nil || res != store.CondApplied {
+		t.Fatalf("identity = %v, %v", res, err)
+	}
+	f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
+	f.assertStartReopens(r.id, fresh.Identity.Token, fresh.LaunchStartedAtMillis+60_000)
 }

@@ -382,8 +382,8 @@ export interface SpawnParams {
    * folder-trust entry (into `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets
    * `CLAUDE_CONFIG_DIR`, otherwise `~/.claude.json`). For a codex agent, it is putting the
    * folder trust and the hook-trust bypass on the launch's command line (no file is
-   * written). The choice is recorded on the row for its life,
-   * and every `resume` of that life follows it. The result then reports
+   * written). The choice is recorded on the row until the next spawn or reuse,
+   * and every `resume` follows it. The result then reports
    * `pre_trust: "skipped"`. Default false.
    */
   no_pre_trust?: boolean;
@@ -395,6 +395,9 @@ export interface SpawnParams {
    * explicit `instance_id`; applies to this call only. The spawn names its
    * agent (`agent`, or the template's) and the reused row takes it; to reuse
    * a row for the agent it ran, pass the row's agent, which `get` shows.
+   * Same-agent reuse starts a fresh conversation and retains history and subagent records.
+   * An agent switch or switch back starts a new life, hiding earlier lives.
+   * Resume continues only the latest session; older sessions are for inspection only.
    * Default false: any existing row with the id collides with
    * `ErrInstanceIdCollision`.
    */
@@ -488,11 +491,11 @@ export interface GetResult {
   agent_args: string[];
   relay_mode: string;
   /**
-   * Last known transcript path, persisted by the SessionStart hook; legacy rows may be empty.
-   * When empty, `resume` of a claude row composes the path on demand from `cwd` + `session_id`
-   * (under `CLAUDE_CONFIG_DIR` when its environment sets one). A codex row's path is the one its
-   * hooks report; `resume` never builds one for it, so an empty one leaves only the recorded
-   * paths of the visible history to try.
+   * Current session's transcript path, persisted by its hooks; legacy rows may be empty.
+   * Resume tries it, then for Claude recomputes the current session's path from `cwd`
+   * and `session_id`, under a usable absolute `CLAUDE_CONFIG_DIR` from `extra_env`
+   * (otherwise `~/.claude`). Codex uses only its recorded path. Older sessions remain
+   * listed for inspection only and are never resume candidates.
    */
   jsonl_path: string;
   session_id: string;
@@ -842,12 +845,14 @@ export interface PaneChangedDetails {
 
 /** Mirrors pkg/api.ResumeParams (json tags). */
 export interface ResumeParams {
-  /** Id of the finished (ended or missing) row to resume. */
+  /** Id of the finished (ended or missing) row whose latest session is resumed. */
   instance_id: string;
 }
 
 /**
- * Mirrors pkg/api/resume.go::ResumeResult. Resume moved the row to `pending`, keeping
+ * Mirrors pkg/api/resume.go::ResumeResult. Resume relaunches only the latest session
+ * of the row's recorded agent. Older sessions remain listed for inspection only.
+ * Resume moved the row to `pending`, keeping
  * its session id and history, until the agent reports in (its SessionStart hook),
  * then `waiting`.
  */
@@ -858,7 +863,7 @@ export interface ResumeResult {
    * What the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
    * (claude: the entry was written to `.claude.json`; codex: the launch carries the folder
    * trust and the hook-trust bypass). `"skipped"`: pre-trust was off for this launch because the row records that
-   * the spawn that began its life turned it off (`no_pre_trust`); nothing was attempted.
+   * the row's latest spawn turned it off (`no_pre_trust`); nothing was attempted.
    * `"failed"`: pre-trust was attempted and the entry was not written (a claude agent: the
    * `.claude.json` file is missing, or could not be read, parsed or written, or the row's
    * `extra_env` sets `CLAUDE_CONFIG_DIR` to a path that is not absolute; a codex agent: the

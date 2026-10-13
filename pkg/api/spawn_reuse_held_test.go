@@ -175,9 +175,9 @@ func TestSpawnReuseHeldRowResult(t *testing.T) {
 			final, present := e.rrcColumns(t, s.r.ID)
 			switch tc.outcome {
 			case apitest.RestoreApplied:
-				if m.State != store.StatePending || m.LifeNumber != reuseLife+1 || m.ParentID != s.caller || m.LaunchToken == s.r.Token {
+				if m.State != store.StatePending || m.LifeNumber != reuseLife || m.ParentID != s.caller || m.LaunchToken == s.r.Token {
 					t.Errorf("row at the create {state %v, life %v, parent %v, token %v}; want pending, %d, %s, a new token",
-						m.State, m.LifeNumber, m.ParentID, m.LaunchToken, reuseLife+1, s.caller)
+						m.State, m.LifeNumber, m.ParentID, m.LaunchToken, reuseLife, s.caller)
 				}
 				if !reflect.DeepEqual(s.atRelookup, m) {
 					t.Errorf("row at the re-lookup =\n  %+v\nwant as at the create (no restore yet)\n  %+v", s.atRelookup, m)

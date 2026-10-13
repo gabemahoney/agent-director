@@ -33,7 +33,7 @@ var advHomeAgents = []advHomeAgent{
 const (
 	advSpawnHomeDoc    = "so set an absolute CLAUDE_CONFIG_DIR (a claude agent) or CODEX_HOME (a codex agent) instead to give the agent its own config"
 	advSpawnHomeParam  = "set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config"
-	advResumeHomeGoDoc = "Recourse: spawn again with the same id, opting in to reuse (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent), with an ExtraEnv without HOME (an absolute CLAUDE_CONFIG_DIR gives a Claude Code agent its own config, an absolute CODEX_HOME a Codex agent"
+	advResumeHomeGoDoc = "Spawn the same id with the reuse opt-in, the row's agent and extra env without that key. That starts a fresh conversation in the retained life. An absolute CLAUDE_CONFIG_DIR gives Claude its own config; CODEX_HOME gives Codex its own config"
 )
 
 // advSpawnHome is A14's advice for a spawn of a: remove HOME and set a's folder variable.
@@ -45,7 +45,7 @@ func advSpawnHome(a advHomeAgent) string {
 // an extra_env without HOME, and a's folder variable.
 func advResumeHome(a advHomeAgent) string {
 	return "nothing was written and nothing was launched; to run the agent again, spawn the id with the reuse opt-in reuse_finished (--reuse-finished on the CLI) and agent " +
-		a.agent + " (--agent " + a.agent + " on the CLI) and an extra_env without HOME (a reused id starts a new life with no memory of this conversation), and " + a.alternative
+		a.agent + " (--agent " + a.agent + " on the CLI) and an extra_env without HOME (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and " + a.alternative
 }
 
 // TestAdviceFollow_A14_ReservedHomeSetConfigDir: the same spawn with HOME removed and the agent's absolute

@@ -138,6 +138,15 @@ would override agent-director's hooks, typing setting or, while
 [docs/caller-contract.md](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 `Resume` never refuses the `AgentArgs` it replays.
 
+`SpawnParams.ReuseFinished` on a finished id starts a fresh conversation.
+Same-agent reuse retains current-life session history and subagent records;
+switching agents starts another life, including when switching back.
+`Resume` accepts only the id and continues its recorded agent's latest
+reported session. It never selects an archived session, even when its
+transcript exists. See [Transcript recovery](../../docs/caller-contract.md#transcript-recovery)
+for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
+for restoration and children.
+
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`). `.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
 either agent (a failed pre-trust never fails the spawn; see the

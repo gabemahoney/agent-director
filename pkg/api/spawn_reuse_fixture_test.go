@@ -359,11 +359,11 @@ func (w *hookedReuseStore) ReadForReuse(instanceID string) (store.ReuseRow, bool
 
 // ResetForReuse runs the beforeReset hook, delegates, then runs the
 // afterReset hook.
-func (w *hookedReuseStore) ResetForReuse(instanceID string, examined api.RowSnapshot, fresh api.Spawn) (api.CondResult, string, int64, error) {
+func (w *hookedReuseStore) ResetForReuse(instanceID string, examined api.RowSnapshot, examinedAgent string, fresh api.Spawn) (api.CondResult, string, int64, error) {
 	if fn := w.take(&w.beforeResetFn); fn != nil {
 		fn()
 	}
-	res, archived, version, err := w.st.ResetForReuse(instanceID, examined, fresh)
+	res, archived, version, err := w.st.ResetForReuse(instanceID, examined, examinedAgent, fresh)
 	if fn := w.take(&w.afterResetFn); fn != nil {
 		fn()
 	}
@@ -440,8 +440,11 @@ func (e *killEnv) assertReused(t *testing.T, r reuseRow, life any, calls int, er
 	}
 	cols := e.columns(t, r.ID)
 	prior, _ := life.(int64)
-	if cols.State != store.StatePending || cols.LifeNumber != any(prior+1) {
-		t.Errorf("state, life after the reuse = %v, %v; want pending, %d", cols.State, cols.LifeNumber, prior+1)
+	if r.Spawn.Agent != cols.Agent {
+		prior++
+	}
+	if cols.State != store.StatePending || cols.LifeNumber != any(prior) {
+		t.Errorf("state, life after the reuse = %v, %v; want pending, %d", cols.State, cols.LifeNumber, prior)
 	}
 	var kinds []tmux.Call
 	for _, c := range e.rec.SocketCalls()[calls:] {

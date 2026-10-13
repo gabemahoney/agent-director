@@ -9,9 +9,11 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -418,6 +420,7 @@ func TestSpawnReuseAsCodex(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reuse as codex: %v (log %q)", err, logs)
 			}
+			assertReuseLifeAndHistory(t, e, r, "codex")
 			l := assertCodexLaunch(t, e.rec.SocketCallsOf(tmux.CallCreate), e.dbPath, r.ID, codexProgram)
 			if !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) || !slices.Equal(l.AfterDashDashArgs(), []string{"go on"}) {
 				t.Errorf("launch %q; want --model gpt before the double dash and its prompt after", l.Argv)
@@ -450,6 +453,7 @@ func TestSpawnReuseTakesTheNewAgent(t *testing.T) {
 			}
 
 			e.reuseLaunch(t, r, agentAlive, reuseRequest{})
+			assertReuseLifeAndHistory(t, e, r, "claude")
 
 			if cols := e.columns(t, r.ID); cols.Agent != "claude" || cols.State != store.StatePending {
 				t.Errorf("row after the reuse: agent %q, state %v; want claude, pending", cols.Agent, cols.State)
@@ -499,4 +503,72 @@ func TestResumeCodexRowLaunches(t *testing.T) {
 			}
 		})
 	}
+}
+
+// assertReuseLifeAndHistory distinguishes retained history from an agent switch.
+func assertReuseLifeAndHistory(t *testing.T, e *killEnv, r reuseRow, agent string) {
+	t.Helper()
+	life := reuseLife
+	var prior []getWantPrior
+	if r.Spawn.Agent == agent {
+		prior = rlfRetained(r)
+	} else {
+		life++
+	}
+	rlvAssertLife(t, e, r.ID, life)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "no_session", prior...)
+	assertReuseRequestsDeleted(t, e, r)
+}
+
+func assertReuseRequestsDeleted(t *testing.T, e *killEnv, r reuseRow) {
+	t.Helper()
+	row := rlfGet(t, e, r.ID)
+	if len(row.UnprovenRequests) != 0 || len(row.PermissionRequests) != 0 {
+		t.Errorf("reuse retained permission requests: %+v", row)
+	}
+	for _, token := range []string{r.OpenRequest, r.DecidedRequest} {
+		_, err := api.GetPermission(e.st, api.RelayView{}, api.GetPermissionParams{RequestToken: token})
+		if !errors.Is(err, api.ErrPermissionRequestNotFound) {
+			t.Errorf("old token %s: %v; want ErrPermissionRequestNotFound", token, err)
+		}
+	}
+}
+
+// TestSpawnReuseSwitchBackForgets keeps the child spawned by the caller environment visible.
+func TestSpawnReuseSwitchBackForgets(t *testing.T) {
+	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID.
+	e := newReuseEnv(t)
+	r := e.seedReusable(t, agentGone, reuseRowSpec{})
+	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", r.ID)
+	c, _ := e.client(t)
+	child, err := c.Spawn(api.SpawnParams{Agent: "claude", CWD: r.CWD, NoPreTrust: true})
+	if err != nil {
+		t.Fatalf("child spawn: %v", err)
+	}
+	childBefore := e.columns(t, child.InstanceID)
+	assertChildUnchanged := func() {
+		t.Helper()
+		rows, err := c.List(api.ListParams{Parent: r.ID})
+		if err != nil || len(rows.Spawns) != 1 || rows.Spawns[0].InstanceID != child.InstanceID {
+			t.Fatalf("list parent: %+v, %v", rows, err)
+		}
+		if after := e.columns(t, child.InstanceID); !reflect.DeepEqual(after, childBefore) {
+			t.Errorf("child changed: %+v; want %+v", after, childBefore)
+		}
+	}
+	assertChildUnchanged()
+	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", "")
+	p := reuseParams(t, r, reuseRequest{})
+	p.Agent = "codex"
+	e.agentOnCreate(r.ID, agentAlive)
+	if _, _, err := e.reuse(t, p); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	assertReuseLifeAndHistory(t, e, r, "codex")
+	assertChildUnchanged()
+	rlfEndLife(t, e, r.ID)
+	r, _ = e.reuseLaunch(t, r, agentAlive, reuseRequest{})
+	rlvAssertLife(t, e, r.ID, reuseLife+2)
+	rlfAssertListed(t, rlfGet(t, e, r.ID), "no_session")
+	assertChildUnchanged()
 }

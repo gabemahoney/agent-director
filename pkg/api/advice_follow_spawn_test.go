@@ -73,10 +73,10 @@ func advSpawnLaunched(t *testing.T, dbPath, id string, wantLife any, res api.Spa
 	}
 }
 
-// advSpawnNextLife is the life a reuse of cols' row starts.
+// advSpawnNextLife is the life a same-agent reuse of cols' row retains.
 func advSpawnNextLife(cols apitest.SpawnColumns) any {
 	life, _ := cols.LifeNumber.(int64)
-	return life + 1
+	return life
 }
 
 // Plain spawn's opted-in retry for an explicit id whose row is, or will be,

@@ -650,7 +650,7 @@ func TestResumeRestoreSkippedOnUnresponsiveCreate(t *testing.T) {
 
 // TestResumeRestoreReuseAfterFailedResume (AC-RES-12's reuse half; SR-8.5,
 // SR-10.2, SR-10.4): after a restored resume failure, with the cause removed,
-// a reuse launches (Gone, life + 1); while a holder holds the name it is
+// a reuse launches (Gone, the retained life); while a holder holds the name it is
 // refused and writes nothing.
 func TestResumeRestoreReuseAfterFailedResume(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
@@ -702,8 +702,8 @@ func TestResumeRestoreReuseAfterFailedResume(t *testing.T) {
 				t.Fatalf("reuse with the cause removed: %v (log %q)", err, logs)
 			}
 
-			if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != reuseLife+1 {
-				t.Errorf("after the reuse: {state %v, life %#v}; want pending, life %d", cols.State, cols.LifeNumber, reuseLife+1)
+			if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != reuseLife {
+				t.Errorf("after the reuse: {state %v, life %#v}; want pending, life %d", cols.State, cols.LifeNumber, reuseLife)
 			}
 			if got := callKinds(e.rec)[before.calls:]; !slices.Equal(got, []tmux.Call{tmux.CallLookup, tmux.CallCreate}) {
 				t.Errorf("reuse tmux calls = %v; want its lookup, then the create", got)
