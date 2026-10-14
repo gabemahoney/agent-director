@@ -303,7 +303,8 @@ func TestMigrationRefusedWithoutSentinel(t *testing.T) {
 // TestGateRefusesBadSentinel: a malformed sentinel, or one with a wrong from or
 // to end, refuses like a missing one, is left in place unchanged (admin
 // evidence), and emits one authorization_mismatch line reporting both ends
-// (-1 when unknown).
+// (-1 when unknown). Oldest and latest released versions then retry with
+// corrected authorization, migrate and consume the sentinel.
 func TestGateRefusesBadSentinel(t *testing.T) {
 	cases := []struct {
 		name, reason       string
@@ -313,39 +314,58 @@ func TestGateRefusesBadSentinel(t *testing.T) {
 		{"wrong_from", "version_mismatch", 2, schemaVersion},
 		{"wrong_to", "version_mismatch", 1, schemaVersion + 1},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := makeVersionedDB(t, dir, 1)
-			if tc.foundFrom < 0 {
-				writeSentinelRaw(t, dir, []byte("{not valid json"))
-			} else {
-				writeSentinel(t, dir, tc.foundFrom, tc.foundTo)
-			}
-			sentinel := filepath.Join(dir, sentinelFilename)
-			sentinelBefore, _ := os.ReadFile(sentinel)
-			before, mark := snapshotDBBytes(t, path), TrailMark(t)
-			if _, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
-				t.Fatalf("Open err = %v; want ErrSchemaMigrationRequired", err)
-			}
-			assertDBBytesUnchanged(t, path, before)
-			if v := readUserVersion(t, path); v != 1 {
-				t.Errorf("user_version = %d; want 1", v)
-			}
-			if got, err := os.ReadFile(sentinel); err != nil || !bytes.Equal(got, sentinelBefore) {
-				t.Errorf("sentinel after the refusal = %q, %v; want %q left in place", got, err, sentinelBefore)
-			}
-			lines := trailEventsSince(t, mark, "ad.schema.authorization_mismatch")
-			if len(lines) != 1 {
-				t.Fatalf("authorization_mismatch lines = %d; want 1", len(lines))
-			}
-			assertTrailStr(t, lines[0], "source", "ad_store_schema")
-			assertTrailStr(t, lines[0], "reason", tc.reason)
-			for key, want := range map[string]int{"expected_from": 1, "expected_to": schemaVersion,
-				"found_from": tc.foundFrom, "found_to": tc.foundTo} {
-				assertTrailInt(t, lines[0], key, want)
-			}
-		})
+	for _, from := range []int{1, schemaVersion - 1} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("v%d/%s", from, tc.name), func(t *testing.T) {
+				dir := t.TempDir()
+				path := makeVersionedDB(t, dir, from)
+				foundFrom := tc.foundFrom
+				if tc.name == "wrong_to" {
+					foundFrom = from
+				}
+				if foundFrom < 0 {
+					writeSentinelRaw(t, dir, []byte("{not valid json"))
+				} else {
+					writeSentinel(t, dir, foundFrom, tc.foundTo)
+				}
+				sentinel := filepath.Join(dir, sentinelFilename)
+				sentinelBefore, _ := os.ReadFile(sentinel)
+				before, mark := snapshotDBBytes(t, path), TrailMark(t)
+				if _, err := Open(path); !errors.Is(err, ErrSchemaMigrationRequired) {
+					t.Fatalf("Open err = %v; want ErrSchemaMigrationRequired", err)
+				}
+				assertDBBytesUnchanged(t, path, before)
+				if v := readUserVersion(t, path); v != from {
+					t.Errorf("user_version = %d; want %d", v, from)
+				}
+				if got, err := os.ReadFile(sentinel); err != nil || !bytes.Equal(got, sentinelBefore) {
+					t.Errorf("sentinel after the refusal = %q, %v; want %q left in place", got, err, sentinelBefore)
+				}
+				lines := trailEventsSince(t, mark, "ad.schema.authorization_mismatch")
+				if len(lines) != 1 {
+					t.Fatalf("authorization_mismatch lines = %d; want 1", len(lines))
+				}
+				assertTrailStr(t, lines[0], "source", "ad_store_schema")
+				assertTrailStr(t, lines[0], "reason", tc.reason)
+				for key, want := range map[string]int{"expected_from": from, "expected_to": schemaVersion,
+					"found_from": foundFrom, "found_to": tc.foundTo} {
+					assertTrailInt(t, lines[0], key, want)
+				}
+				// Correct the administrator's evidence and retry the same opener.
+				writeSentinel(t, dir, from, schemaVersion)
+				s, err := Open(path)
+				if err != nil {
+					t.Fatalf("Open after corrected authorization: %v", err)
+				}
+				if v := userVersion(t, s.db); v != schemaVersion {
+					t.Errorf("authorized retry version = %d; want %d", v, schemaVersion)
+				}
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				assertSentinel(t, dir, false)
+			})
+		}
 	}
 }
 

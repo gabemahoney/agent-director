@@ -11,10 +11,14 @@ learned the hard way against the production database.
 
 ## 1. Architecture as it exists today
 
-All schema logic lives in `internal/store/schema.go`, with the version
-constant and typed errors in `internal/store/store.go`.
+Schema dispatch and fresh-store DDL live in `internal/store/schema.go`, with
+the version constant and typed errors in `internal/store/store.go`. The current
+v9→v10 hop and its shared table DDL live in `internal/store/cursor_runtime.go`.
+The current schema has seven tables: `spawns`, `permission_requests`,
+`session_history`, `store_meta`, `subagents`, `subagent_launches` and
+`cursor_runtimes`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `9`) is the
+**The version contract.** `schemaVersion` (`store.go`, currently `10`) is the
 version this binary writes and reads. Every opened DB carries its own version
 in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
 dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
@@ -35,7 +39,7 @@ sentinel next to the DB file; otherwise the open is refused with the typed
 (zero DB writes). See §1a for the sentinel gate and §1b for the refusal.
 
 The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
-`user_version=10` opened by a v9 binary) returns `ErrSchemaMismatch` (`store.go`)
+`user_version=11` opened by a v10 binary) returns `ErrSchemaMismatch` (`store.go`)
 rather than touching the file. Callers detect it with
 `errors.Is(err, ErrSchemaMismatch)`.
 
@@ -47,28 +51,24 @@ random bits from `crypto/rand`, written as 16 lowercase hex characters
 insert is guarded (`insertStoreIDOnceSQL`, `INSERT … SELECT … WHERE NOT
 EXISTS`), so it never replaces an id that is already there. No other statement
 writes `store_meta`, no verb changes the id, and later hops (`migrateV5toV6`,
-`migrateV6toV7`, `migrateV7toV8`, `migrateV8toV9`) keep it. After `ensureSchema` succeeds,
+`migrateV6toV7`, `migrateV7toV8`, `migrateV8toV9`, `migrateV9toV10`) keep it. After `ensureSchema` succeeds,
 `openDB` reads the id once (`readStoreID`), and `(*Store).StoreID()` returns
 it. A current-version store with no `store_meta` table, no `store_id` row, or a
 value that is not 16 lowercase hex characters fails the open with an error that
 wraps `ErrSchemaMismatch`. The error never contains the value, the DB is
 closed, and nothing is written. Only a hand edit leaves a store in that state;
-the v5 → v4 recipe (§5) stamps v4, which a v5, v6, v7, v8 or v9 binary refuses
+the v5 → v4 recipe (§5) stamps v4, which a v5, v6, v7, v8, v9 or v10 binary refuses
 with `ErrSchemaMigrationRequired`.
 
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
 migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds eight entries, `{from: 1, apply:
-migrateV1toV2}`, `{from: 2, apply: migrateV2toV3}`, `{from: 3, apply:
-migrateV3toV4}`, `{from: 4, apply: migrateV4toV5}`, `{from: 5, apply:
-migrateV5toV6}`, `{from: 6, apply: migrateV6toV7}`, `{from: 7, apply:
-migrateV7toV8}`, and `{from: 8, apply: migrateV8toV9}`. `migrateV1toV2`, `migrateV2toV3`, `migrateV3toV4`,
-`migrateV4toV5`, `migrateV5toV6`, `migrateV6toV7`, `migrateV7toV8`, and `migrateV8toV9`
-(`schema.go`) are the reference implementations of an `apply` func;
-`migrateV8toV9` is the most recent. To add the next version (v10) you write
-`migrateV9toV10` and append `{from: 9, apply: migrateV9toV10}` to
-`migrationSteps` — see §1a's "Adding a step" for the full checklist.
+(`schema.go`); today that registry holds nine entries, one for each hop from
+v1→v2 through v9→v10. The released `migrateV8toV9` remains unchanged;
+`migrateV9toV10` (`cursor_runtime.go`) is the current worked example. To add
+the next version (v11), write `migrateV10toV11` and append
+`{from: 10, apply: migrateV10toV11}` to `migrationSteps` — see §1a's
+"Adding a step" for the full checklist.
 
 **One transaction per step, stamp included.** Every `apply` func opens a single
 `db.Begin()` transaction and does *all* of its DDL/DML **and** the
@@ -91,8 +91,8 @@ the DDL is `IF NOT EXISTS` and the insert is guarded.
 `runMigrationChain(db, from)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v9 binary
-runs v1→v2→v3→v4→v5→v6→v7→v8→v9 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v10 binary
+runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -159,40 +159,61 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v10, generalizing to any vN→vN+1);
-`migrateV8toV9` (b.ssz) is the most recent worked example (its column list
-`v9Columns` also carries `spawns.subagent_tracking`, and the hop creates the
-`subagents` and `subagent_launches` tables from its own fixed copy of their
-CREATE text, `v9SubagentTablesSQL`, which repeats what `schemaDDL` holds for a
-fresh store):
+**Adding a step.** To add the next version (v11, generalizing to any vN→vN+1),
+use the v9→v10 worked example below and the validate-first pattern (§2):
 
-1. Bump `schemaVersion` to `10` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v10 (the two-places
-   rule — §1, §4). `schemaDDL` already includes `store_meta`, and
-   `createSchema` inserts a fresh store's `store_id` in the same transaction;
-   keep both. A v9 → v10 hop must keep `store_meta` and its row: the id is
-   created once and never changed (§1).
-3. Write `migrateV9toV10(db)` following the one-transaction/validate-first
-   pattern (§2).
-4. Append `{from: 9, apply: migrateV9toV10}` to `migrationSteps` (`schema.go`).
-5. Add the reverse recipe to §5's emergency downgrade recipes, newest first,
-   with a test copy of its statements that must match it (add the heading
-   and the copy to `TestDowngradeRecipe_MatchesGuide`'s table), and point
-   the next-older recipe at it ("on a v10 store, run the v10 → v9 recipe
-   first").
+1. Bump `schemaVersion` to `11` (`store.go`).
+2. Evolve `schemaDDL` so a fresh DB is created directly at v11 (the two-places
+   rule — §1, §4). Keep `store_meta` and `createSchema`'s guarded store-id
+   insert. A v10→v11 hop must preserve the existing id.
+3. Write `migrateV10toV11(db)` using one transaction, with validation before
+   mutation and the version stamp last (§2).
+4. Append `{from: 10, apply: migrateV10toV11}` to `migrationSteps` (`schema.go`).
+5. Document the recovery policy in §5. Where an in-place reverse recipe is
+   supported, add its matching test copy to `TestDowngradeRecipe_MatchesGuide`
+   and chain the applicable older recipe to it. Otherwise record the technical
+   exception and require a stopped-writer pre-upgrade backup and restore;
+   never imply that an older recipe can operate on the new schema.
 
-That is all — do **not** add any return-after-one-hop logic. The chain engine
-walks the registry from the DB's version up to `schemaVersion` automatically, so
-appending the step is what makes both a v9→v10 upgrade and a straight-through
-v1→v10 upgrade work.
+The chain engine walks the registry up to `schemaVersion` automatically;
+appending the step makes both a v10→v11 upgrade and a v1→v11 chain work.
+
+### Current worked example: v9 → v10
+
+Released 0.12.0 uses schema v9. Its `migrateV8toV9` hop is immutable; the
+unreleased Cursor work adds exactly one registered v9→v10 hop rather than
+changing that released hop. The existing exact-match authorization gate
+permits a v9 store only when the sentinel names `from: 9` and `to: 10`.
+
+`migrateV9toV10` (`cursor_runtime.go`) begins one transaction and validates
+any existing `cursor_runtimes` table before mutation: its name must have the
+expected case, and every required column must match the expected name, type,
+nullability, primary key and default. An incomplete or incompatible table is
+refused. It then executes `cursorRuntimeDDL`, stamps `user_version=10` and
+commits. Any error rolls the transaction back; the old version and data remain,
+and authorization is retained for a retry. A complete pre-existing table is
+accepted on reentry. This hop has no data backfill and changes no existing
+spawn, permission, history, subagent or store-id row.
+
+`cursor_runtimes` is the seventh table, storing the current Cursor launch's
+runtime ownership binding. The same `cursorRuntimeDDL` is included in
+`schemaDDL`, so fresh stores start directly at v10 with the identical shape.
+`TestV10MigrationReentryAndPreservation` (`schema_v10_test.go`) checks normal
+upgrade, complete-table reentry, repeated apply, existing agent/lifecycle data,
+store-id preservation, authorization consumption, fresh/migrated schema equality
+and reopen. `TestV10MigrationRefusalRollback` checks incomplete and case-conflicting
+tables, incompatible types, nullability and defaults; it asserts an unchanged
+DB dump, version 9 and retained authorization after refusal. These are test
+contracts, not evidence of external or authenticated Cursor acceptance.
 
 **Later columns of the same release.** A change that ships in the same
 release as a version not yet released adds its columns to that version's hop
 and `schemaDDL`, rather than a new version: schema v7 is the one migration of
 b.146 steps 2, 2b and 2c, which ship together, and a later step of that
 release appends its columns to `v7Columns` (`schema.go`) and the same text to
-`schemaDDL`, and extends the v7 → v6 recipe (§5) and its test copy. Once a
-version has shipped, its hop never changes.
+`schemaDDL`, and extended that release's supported v7 → v6 recipe (§5) and its
+test copy. For a restore-only version, retain the documented recovery exception
+instead. Once a version has shipped, its hop never changes.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -582,14 +603,13 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** When you add v10, update
-`schemaDDL` and `schemaVersion` so a brand-new DB is created directly at v10 by
-`createSchema`, *and* write `migrateV9toV10` so an existing v9 DB is upgraded to
-the identical shape (as v9 did with `schemaDDL` and `migrateV8toV9`, whose
-`v9Columns` list carries the same column text `schemaDDL` uses). The §3 step 4 `schemaShape` comparison is the
-guard that both paths land in the same place. If you only touch the hop, fresh
-installs are stuck on the old schema; if you only touch `schemaDDL`, upgrades
-never happen.
+goes wrong: **fresh databases never replay hops.** The current v10 fresh DDL
+includes `cursorRuntimeDDL`; `migrateV9toV10` uses the same table definition.
+When adding v11, update `schemaDDL` and `schemaVersion` for direct fresh-v11
+creation and write `migrateV10toV11` for existing stores. The §3 step 4
+`schemaShape` comparison guards that both paths land in the same place. If you
+only touch the hop, fresh installs are stuck on the old schema; if you only
+touch `schemaDDL`, upgrades never happen.
 
 ## 5. The b.8dr rule — schema-bumping branches run ONLY in the sandbox
 
@@ -645,10 +665,9 @@ the b.nh2 sandbox harness, and the **run-tests** skill for usage.
 
 ### Emergency downgrade recipe
 
-If a newer schema has already been written to a store that an older binary must
-read (the b.8dr recovery situation), reverse the last hop in place with a raw
-SQLite session against the affected file, then reset the version pragma. For a
-hop whose only forward change was an added column:
+Only use an in-place reverse procedure for a schema version with an explicitly
+supported and tested recipe below. The historical b.8dr recovery pattern for a
+hop whose only forward change was an added column was:
 
 ```sql
 -- against the over-migrated state.db, e.g. ~/.config/agent-director/state.db
@@ -656,10 +675,10 @@ ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```
 
-Adapt the DDL to whatever the hop actually did (dropped/renamed tables must be
-recreated, not just re-versioned). Confirm with `PRAGMA user_version;` and a
-schema inspection before letting the old binary open the file. This is a manual
-recovery step, not something the store does automatically.
+This illustrates the historical pattern, not a recipe for v9 or v10. Never
+merely reset the version pragma. Confirm the starting version and use only the
+matching tested recipe before letting an older binary open the file. The store
+does not downgrade automatically.
 
 The recipes below go back one version each, newest first. To go back more
 than one version, run them in order from the store's version down, each one
@@ -667,6 +686,18 @@ only once the one before it has stamped the store: a v8 store goes to v6 by
 the v8 → v7 recipe, then the v7 → v6 recipe, and to v5 by those two, then the
 v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
+
+**Current recovery policy (technical exception to an in-place reverse recipe).**
+There is no supported v10→v9 recipe. Before a v9→v10 upgrade, stop agents,
+servers and callers and copy the actual DB path with any `-wal` and `-shm`
+companions. To return to schema v9, stop writers again, restore that matching
+pre-upgrade copy, remove companions the copy lacks, and install the previous
+release with its own installer and the original flags. Writes since the copy
+are lost; the installer does not make the copy. A v9 binary refuses a v10 DB,
+and a binary swap does not restore compatibility. Without the copy, obtain
+human help. The current-layout and historical directory-move procedures are
+in `docs/operator-actions.md`, "Going back to the previous release". The older
+recipes below are inapplicable to both v9 and v10.
 
 There is no v9 → v8 recipe. The v8 → v9 hop (`migrateV8toV9`, b.ssz) renames
 six columns, adds three columns to `spawns` (`agent`, `end_reported_at` and
@@ -1016,6 +1047,12 @@ creates a new id, and agents are stopped and started around it the same way.
 installing.
 
 ## References
+
+- `internal/store/cursor_runtime.go` — `migrateV9toV10` and
+  `cursorRuntimeDDL`, shared by the hop and fresh-store DDL.
+- `internal/store/schema_v10_test.go` —
+  `TestV10MigrationReentryAndPreservation` and
+  `TestV10MigrationRefusalRollback` (§1a's current worked example).
 
 - `internal/store/schema.go` — `ensureSchema`, `runMigrationChain`,
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
