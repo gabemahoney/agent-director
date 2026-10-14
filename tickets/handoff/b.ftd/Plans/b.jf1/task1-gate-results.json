@@ -1,0 +1,37 @@
+{
+  "task_id": "t2.jf1.3e.tv",
+  "gate": "Task1 immediate integration",
+  "reported_by": "operator",
+  "reported_at": "2026-10-14",
+  "accepted": true,
+  "docker": {
+    "commit": "999e0c9a752d07aba9e0ce14f9029ae7b5568618",
+    "registered_groups": 14,
+    "passed": 14,
+    "failures": 0,
+    "explicit_cases": {
+      "mcp-2": "passed,18 tools",
+      "install-12": "passed"
+    }
+  },
+  "tla": {
+    "commit": "1e2d9ced5938d12d29cb017a7b4e9888ef14cd85",
+    "suites": [
+      "g6",
+      "launch",
+      "subagent"
+    ],
+    "exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "expected_verdicts": "every expected PASS/FAIL matched"
+  },
+  "scope_limits": [
+    "operator-attested results, not locally run",
+    "Task1 only; final E1 gate and genuine authenticated Cursor acceptance remain pending",
+    "repair commit changed no production source or TLA specifications"
+  ],
+  "next_task": "t2.jf1.3e.d6"
+}
