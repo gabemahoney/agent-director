@@ -31,6 +31,11 @@ func TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent(t *testing
 		{"no independent binding", func(g *store.HookGate) { g.Cursor = nil }},
 		{"controller", func(g *store.HookGate) { g.ParentPID++ }},
 		{"unreadable parent", func(g *store.HookGate) { g.ParentStart = "" }},
+		{"wrong instance", func(g *store.HookGate) { g.Cursor.InstanceID += "other" }},
+		{"wrong gateway", func(g *store.HookGate) { g.Cursor.GatewayPID++ }},
+		{"gateway reused", func(g *store.HookGate) { g.Cursor.GatewayStart += "old" }},
+		{"wrong output pipe", func(g *store.HookGate) { g.Cursor.OutputPipe = "pipe:[9999]" }},
+		{"wrong input FD", func(g *store.HookGate) { g.Cursor.InputFD++ }},
 		{"stale token", func(g *store.HookGate) { g.Cursor.Token += "old" }},
 		{"old life", func(g *store.HookGate) { g.Cursor.Life-- }},
 		{"runtime", func(g *store.HookGate) { g.Cursor.RuntimePID++ }},
@@ -39,34 +44,55 @@ func TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent(t *testing
 		{"wrong pipe", func(g *store.HookGate) { g.Cursor.InputPipe = "pipe:[9999]" }},
 		{"wrong FD", func(g *store.HookGate) { g.Cursor.OutputFD++ }},
 		{"wrong session", func(g *store.HookGate) { g.SessionID = "other" }},
-		{"false termination", func(g *store.HookGate) { g.Cursor.Terminated = true }},
+		{"false termination", func(g *store.HookGate) { g.Cursor.Terminated = !g.Cursor.Terminated }},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, row, b := cursorRowBinding(t)
-			if ok, err := f.s.SetCursorRuntimeSession(b, "synthetic-session"); err != nil || !ok {
-				t.Fatalf("session bind %v %v", ok, err)
-			}
-			b.SessionID = "synthetic-session"
-			g := store.HookGate{Event: "UserPromptSubmit", ParentPID: row.Identity.PanePID, ParentStart: row.Identity.PaneStarttime, SessionID: b.SessionID, Cursor: &b}
-			tc.change(&g)
-			before := hgColumns(t, f, row.InstanceID)
-			_, applied, err := f.s.ApplyHookTransitionResult(row.InstanceID, g, store.StateWorking, false, "UserPromptSubmit", "", false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.name == "current" {
-				if !applied.Applied {
-					t.Fatalf("current binding refused %+v", applied)
+		for _, event := range []string{"SessionStart", "UserPromptSubmit", "SessionEnd"} {
+			t.Run(tc.name+"/"+event, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				if ok, err := f.s.SetCursorRuntimeSession(b, "synthetic-session"); err != nil || !ok {
+					t.Fatalf("session bind %v %v", ok, err)
 				}
-				return
-			}
-			if applied.Applied {
-				t.Fatal("foreign/stale hook applied")
-			}
-			if after := hgColumns(t, f, row.InstanceID); !reflect.DeepEqual(before, after) {
-				t.Fatal("refused hook changed row")
-			}
-		})
+				b.SessionID = "synthetic-session"
+				if event == "SessionEnd" {
+					if ok, err := f.s.MarkCursorRuntimeGone(b); err != nil || !ok {
+						t.Fatalf("retire %v %v", ok, err)
+					}
+					b.Terminated = true
+				}
+				g := store.HookGate{Event: event, ParentPID: row.Identity.PanePID, ParentStart: row.Identity.PaneStarttime, SessionID: b.SessionID, Cursor: &b, SessionStart: event == "SessionStart", Examined: row.Snapshot}
+				tc.change(&g)
+				before := hgColumns(t, f, row.InstanceID)
+				target := store.StateWorking
+				if event == "SessionStart" {
+					target = store.StateWaiting
+				}
+				if event == "SessionEnd" {
+					target = store.StateEnded
+				}
+				var applied store.HookApplied
+				var err error
+				if event == "SessionStart" {
+					applied, _, err = f.s.RecordSessionStartIdentity(row.InstanceID, g, "synthetic-transcript", true)
+				} else {
+					_, applied, err = f.s.ApplyHookTransitionResult(row.InstanceID, g, target, false, event, "", false)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.name == "current" {
+					if !applied.Applied {
+						t.Fatalf("current binding refused %+v", applied)
+					}
+					return
+				}
+				if applied.Applied {
+					t.Fatal("foreign/stale hook applied")
+				}
+				if after := hgColumns(t, f, row.InstanceID); !reflect.DeepEqual(before, after) {
+					t.Fatal("refused hook changed row")
+				}
+			})
+		}
 	}
 }
 func TestCursorRuntimeStaleSessionAndReplacementRefused(t *testing.T) {
@@ -124,5 +150,61 @@ func TestCursorStaleReportCannotMutateReplacementLaunch(t *testing.T) {
 	}
 	if ok, err := f.s.MarkCursorRuntimeGone(b); err != nil || ok {
 		t.Fatalf("old retirement crossed replacement %v %v", ok, err)
+	}
+}
+
+// Seeded adversaries exercise fresh registration/session/retirement guards, not resume or rotation.
+func TestCursorRuntimeConditionalBindingWrites(t *testing.T) {
+	for _, field := range []string{"InstanceID", "Token", "Life", "GatewayPID", "GatewayStart", "RuntimePID", "RuntimeStart", "Connection", "InputPipe", "OutputPipe", "InputFD", "OutputFD"} {
+		for _, operation := range []string{"session", "retirement"} {
+			t.Run(field+"/"+operation, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				stale := b
+				v := reflect.ValueOf(&stale).Elem().FieldByName(field)
+				if v.Kind() == reflect.String {
+					v.SetString(v.String() + "other")
+				} else {
+					v.SetInt(v.Int() + 1)
+				}
+				var applied bool
+				var err error
+				if operation == "session" {
+					applied, err = f.s.SetCursorRuntimeSession(stale, "foreign-session")
+				} else {
+					applied, err = f.s.MarkCursorRuntimeGone(stale)
+				}
+				if err != nil || applied {
+					t.Fatalf("stale %s accepted %v %v", operation, applied, err)
+				}
+				got, err := f.s.ReadCursorRuntime(row.InstanceID)
+				if err != nil || !reflect.DeepEqual(got, b) {
+					t.Fatalf("refused operation mutated current binding %+v %v", got, err)
+				}
+			})
+		}
+	}
+}
+
+func TestCursorBindingDatabaseFailureIsObservable(t *testing.T) {
+	for _, operation := range []string{"registration", "session", "retirement"} {
+		t.Run(operation, func(t *testing.T) {
+			f, row, b := cursorRowBinding(t)
+			if err := f.s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var applied bool
+			var err error
+			switch operation {
+			case "registration":
+				applied, err = f.s.RegisterCursorRuntime(row, b)
+			case "session":
+				applied, err = f.s.SetCursorRuntimeSession(b, "session")
+			case "retirement":
+				applied, err = f.s.MarkCursorRuntimeGone(b)
+			}
+			if err == nil || applied {
+				t.Fatalf("database failure reported success: %v %v", applied, err)
+			}
+		})
 	}
 }

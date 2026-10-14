@@ -401,33 +401,39 @@ func TestPauseCodexWaitStoreError(t *testing.T) {
 // report column set: the pre-check leaves it to its state rules and the wait only reads it.
 func TestPauseClaudeRowNeverMoved(t *testing.T) {
 	t.Parallel()
-	withReport := apitest.WithEndReportedAt(codexEndReport)
-	cases := []struct {
-		name    string
-		state   string
-		want    string // "": the wait times out
-		session bool
-	}{
-		{name: "working", state: store.StateWorking, want: "ErrSpawnNotPausable"},
-		{name: "waiting, wait times out", state: store.StateWaiting, want: "ErrPauseTimeout"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, killRowSpec{State: tc.state, Agent: agentGone, Opts: []apitest.SpawnOption{withReport}})
-			mark := trailMark(t)
-
-			_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
-
-			assertOneName(t, err, tc.want)
-			if e.store.endedTries != 0 {
-				t.Errorf("moves to ended attempted = %d; want none for a Claude row", e.store.endedTries)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			withReport := apitest.WithEndReportedAt(codexEndReport)
+			cases := []struct {
+				name    string
+				state   string
+				want    string // "": the wait times out
+				session bool
+			}{
+				{name: "working", state: store.StateWorking, want: "ErrSpawnNotPausable"},
+				{name: "waiting, wait times out", state: store.StateWaiting, want: "ErrPauseTimeout"},
 			}
-			pauAssertState(t, e, r.ID, tc.state)
-			ptrAssertOnlyDisagrees(t, mark, r.ID, true)
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					r := e.seedRow(t, killRowSpec{State: tc.state, Agent: agentGone, Opts: []apitest.SpawnOption{withReport}})
+					mark := trailMark(t)
+
+					_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
+
+					assertOneName(t, err, tc.want)
+					if e.store.endedTries != 0 {
+						t.Errorf("moves to ended attempted = %d; want none for a Claude row", e.store.endedTries)
+					}
+					pauAssertState(t, e, r.ID, tc.state)
+					ptrAssertOnlyDisagrees(t, mark, r.ID, true)
+				})
+			}
 		})
 	}
+
 }
 
 // TestPauseLineClear (RN-19): pause clears the input line with C-u before typing /exit, one press on a

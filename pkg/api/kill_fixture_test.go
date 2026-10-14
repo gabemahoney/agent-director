@@ -95,6 +95,7 @@ func (w *killStore) AdoptIdentityIfUnchanged(id string, examined api.RowSnapshot
 // defaults Kill is given, sleep kill's pause (clock.Advance by default) and
 // defaultSocket the socket a row with none recorded resolves to.
 type killEnv struct {
+	rowAgent      string // explicit agent dimension for lifecycle matrices
 	dbPath        string
 	st            *store.Store
 	store         *killStore

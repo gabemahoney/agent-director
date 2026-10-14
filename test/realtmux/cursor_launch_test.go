@@ -12,9 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/cursorhost"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func newCursorPane(t *testing.T, disableQuestions bool) (*spawnFix, cursorfix.Runtime, spawned) {
@@ -24,7 +27,7 @@ func newCursorPane(t *testing.T, disableQuestions bool) (*spawnFix, cursorfix.Ru
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string) (*spawnFix, cursorfix.Runtime, spawned) {
 	t.Helper()
 	f := newSpawnFix(t)
-	r := cursorfix.New(t)
+	r := cursorfix.NewWithWorker(t, scenario == "independent-worker")
 	if scenario != "" {
 		if err := os.WriteFile(r.Scenario, []byte(scenario), 0600); err != nil {
 			t.Fatal(err)
@@ -56,6 +59,31 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string)
 		args = append(args, "--", strings.Repeat("\x01", 12*1024))
 	}
 	cmd := exec.Command(bin, args...)
+	if scenario == "ts-default-hold" {
+		clientSource, e := filepath.Abs("../../pkg/ts-bun-client/src/client.ts")
+		if e != nil {
+			t.Fatal(e)
+		}
+		js := fmt.Sprintf(`import {Client} from %q;
+const options = {storePath: %q, home: %q, _cliPath: %q};
+const c = await Client.create(options);
+const started = performance.now();
+const result = await c.spawn({agent:"cursor", instance_id:%q, cwd:%q, no_pre_trust:true, agent_args:["HOLD"]});
+const elapsed = performance.now()-started;
+if (!(elapsed < 30000)) throw new Error("default launch timeout exceeded");
+await c.close();
+const recreated = await Client.create(options);
+await recreated.get({instance_id:result.instance_id});
+await recreated.close();
+console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME"), bin, id, f.CWD)
+		path := filepath.Join(t.TempDir(), "caller.ts")
+		if e = os.WriteFile(path, []byte(js), 0600); e != nil {
+			t.Fatal(e)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		cmd = exec.CommandContext(ctx, "bun", path)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("production CLI spawn: %v %s", err, out)
@@ -351,6 +379,93 @@ func TestCursorRepeatedCancellationDoesNotExtendDeadline(t *testing.T) {
 			}
 			if cancels != 1 {
 				t.Fatalf("cancellation replayed: %d", cancels)
+			}
+		})
+	}
+}
+
+// Synthetic ACP: actual Bun default deadline, then fresh CLI/MCP callers on the same live conversation.
+func TestCursorDefaultTypeScriptLaunchAndCallerRecreation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real pane default TypeScript timing")
+	}
+	f, r, launch := newCursorPaneScenario(t, false, "ts-default-hold")
+	waitFor(t, "unfinished initial generation", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWorking }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+	before := readRow(t, f.DBPath, launch.ID)
+	decoyPath := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "state.db")
+	if _, err := apitest.SeedSpawn(decoyPath, launch.ID, store.StateWaiting, f.CWD, "off", "unrelated-session", false, apitest.WithAgent(store.AgentCursor)); err != nil {
+		t.Fatal(err)
+	}
+	decoy := readRow(t, decoyPath, launch.ID)
+	runtimePID := readFileTrim(t, r.PID)
+	bin := buildHookCLI(t, t.TempDir())
+	for i := 0; i < 2; i++ {
+		m := startStdioMCP(t, bin, []string{"serve", "--stdio", "--store-path", f.DBPath}, os.Environ(), f.CWD)
+		m.request("initialize", map[string]any{"protocolVersion": "2024-11-05", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "cursor-regression", "version": "1"}})
+		text := m.callTool("get", map[string]any{"instance_id": launch.ID})
+		if !strings.Contains(text, launch.ID) {
+			t.Fatalf("recreated MCP get: %s", text)
+		}
+		m.stop()
+	}
+	after := readRow(t, f.DBPath, launch.ID)
+	if before.SessionID != after.SessionID || before.PanePID != after.PanePID || before.PaneStarttime != after.PaneStarttime || before.LaunchToken != after.LaunchToken || runtimePID != readFileTrim(t, r.PID) {
+		t.Fatal("caller recreation replaced conversation identity")
+	}
+	if after.State != store.StateWorking {
+		t.Fatal("generation finished before release")
+	}
+	if err := os.WriteFile(r.Release, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "released generation", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+	if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: launch.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRow(t, decoyPath, launch.ID); !reflect.DeepEqual(got, decoy) {
+		t.Fatal("override gateway mutated unrelated same-id default-store row")
+	}
+}
+
+func TestCursorIndependentPaneVerifierRejectsChangedOwnership(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real pane ownership mutations")
+	}
+	for _, change := range []string{"moved", "respawned", "conflicting label", "server replaced"} {
+		t.Run(change, func(t *testing.T) {
+			f, _, launch := newCursorPane(t, false)
+			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+			st, err := store.Open(f.DBPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			row, err := st.GetSpawn(launch.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := config.Default()
+			if err = cursorhost.VerifyPane(st, row, cfg); err != nil {
+				t.Fatalf("original pane: %v", err)
+			}
+			switch change {
+			case "moved":
+				other := launch.rt.startSession(t, uniqueName())
+				launch.rt.must(t, "join-pane", "-s", row.Identity.PaneID, "-t", other.PaneID)
+			case "respawned":
+				launch.rt.must(t, "respawn-pane", "-k", "-t", row.Identity.PaneID, "sleep 30")
+			case "conflicting label":
+				launch.rt.must(t, "set-option", "-p", "-t", row.Identity.PaneID, "@ad_pane", "foreign-token")
+			case "server replaced":
+				launch.rt.must(t, "kill-server")
+				waitFor(t, "old server gone", func() bool { return pidGone(row.Identity.ServerPID) }, func() string { return procState(row.Identity.ServerPID) })
+				launch.rt.startSession(t, uniqueName())
+			}
+			if err = cursorhost.VerifyPane(st, row, cfg); err == nil {
+				t.Fatal("changed pane accepted by independent verifier")
+			}
+			if got, err := st.GetSpawn(launch.ID); err != nil || !reflect.DeepEqual(got, row) {
+				t.Fatal("verifier mutated row")
 			}
 		})
 	}

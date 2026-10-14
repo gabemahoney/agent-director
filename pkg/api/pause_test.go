@@ -62,45 +62,51 @@ func pauSleeps(t *testing.T, interval time.Duration, sleep bool, at func(n int))
 // answered before any tmux call though the row's own session is up; the row is unchanged.
 func TestPauseGuards(t *testing.T) {
 	t.Parallel()
-	seeded := func(state string) func(t *testing.T, e *killEnv) killRow {
-		return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
-	}
-	cases := []struct {
-		name    string
-		seed    func(t *testing.T, e *killEnv) killRow
-		unknown bool   // pause an id no row has
-		want    string // "": the no-op success
-	}{
-		{"unknown id", seeded(store.StateWaiting), true, "ErrSpawnNotFound"},
-		{"ended", seeded(store.StateEnded), false, ""},
-		{"missing", seeded(store.StateMissing), false, ""},
-		{"pending", seeded(store.StatePending), false, "ErrSpawnNotPausable"},
-		{"pending beside a leftover", func(t *testing.T, e *killEnv) killRow {
-			return e.seedPending(t, pendingFresh, pendingLeftover)
-		}, false, "ErrSpawnNotPausable"},
-		{"working", seeded(store.StateWorking), false, "ErrSpawnNotPausable"},
-		{"ask_user", seeded(store.StateAskUser), false, "ErrSpawnNotPausable"},
-		{"check_permission", seeded(store.StateCheckPermission), false, "ErrSpawnNotPausable"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			r := tc.seed(t, e)
-			id := r.ID
-			if tc.unknown {
-				id = "absent"
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			seeded := func(state string) func(t *testing.T, e *killEnv) killRow {
+				return func(t *testing.T, e *killEnv) killRow { return e.seedRow(t, killRowSpec{State: state}) }
 			}
-			before := e.columns(t, r.ID)
-			_, err := e.pause(api.PauseParams{InstanceID: id})
-			if tc.want == "" && err != nil {
-				t.Fatalf("err = %v; want the no-op success", err)
-			} else if tc.want != "" {
-				assertOneName(t, err, tc.want)
+			cases := []struct {
+				name    string
+				seed    func(t *testing.T, e *killEnv) killRow
+				unknown bool   // pause an id no row has
+				want    string // "": the no-op success
+			}{
+				{"unknown id", seeded(store.StateWaiting), true, "ErrSpawnNotFound"},
+				{"ended", seeded(store.StateEnded), false, ""},
+				{"missing", seeded(store.StateMissing), false, ""},
+				{"pending", seeded(store.StatePending), false, "ErrSpawnNotPausable"},
+				{"pending beside a leftover", func(t *testing.T, e *killEnv) killRow {
+					return e.seedPending(t, pendingFresh, pendingLeftover)
+				}, false, "ErrSpawnNotPausable"},
+				{"working", seeded(store.StateWorking), false, "ErrSpawnNotPausable"},
+				{"ask_user", seeded(store.StateAskUser), false, "ErrSpawnNotPausable"},
+				{"check_permission", seeded(store.StateCheckPermission), false, "ErrSpawnNotPausable"},
 			}
-			e.assertNoTmuxCall(t)
-			e.assertRowUnchanged(t, r.ID, before)
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					r := tc.seed(t, e)
+					id := r.ID
+					if tc.unknown {
+						id = "absent"
+					}
+					before := e.columns(t, r.ID)
+					_, err := e.pause(api.PauseParams{InstanceID: id})
+					if tc.want == "" && err != nil {
+						t.Fatalf("err = %v; want the no-op success", err)
+					} else if tc.want != "" {
+						assertOneName(t, err, tc.want)
+					}
+					e.assertNoTmuxCall(t)
+					e.assertRowUnchanged(t, r.ID, before)
+				})
+			}
 		})
 	}
+
 }
 
 // TestPauseClearsInputLineFirst (b.9o4): pause sends C-u to the agent's pane
@@ -189,32 +195,42 @@ func TestPauseWait(t *testing.T) {
 // real-clock deadline, the last sleep cut short so none passes it.
 func TestPauseTimeout(t *testing.T) {
 	// Serial: it changes the pause wait's process-wide poll knobs (api.SetPauseTestKnobs).
-	const interval = 600 * time.Millisecond
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{})
-	slept := pauSleeps(t, interval, true, nil)
-	start := time.Now()
-	_, err := e.pause(pauseParams(r))
-	elapsed := time.Since(start)
-	assertOneName(t, err, "ErrPauseTimeout")
-	if !strings.Contains(err.Error(), r.ID+" did not reach ended within 1s") {
-		t.Fatalf("err = %v; want ErrPauseTimeout for %s within 1s", err, r.ID)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			const interval = 600 * time.Millisecond
+			e := newKillEnv(t)
+			e.rowAgent = rowAgent
+			r := e.seedRow(t, killRowSpec{})
+			slept := pauSleeps(t, interval, true, nil)
+			start := time.Now()
+			_, err := e.pause(pauseParams(r))
+			elapsed := time.Since(start)
+			assertOneName(t, err, "ErrPauseTimeout")
+			if !strings.Contains(err.Error(), r.ID+" did not reach ended within 1s") {
+				t.Fatalf("err = %v; want ErrPauseTimeout for %s within 1s", err, r.ID)
+			}
+			if elapsed < pauseTimeoutSeconds*time.Second {
+				t.Errorf("returned after %v; want at least the %d s timeout", elapsed, pauseTimeoutSeconds)
+			}
+			var total time.Duration
+			for _, d := range *slept {
+				if d <= 0 || d > interval {
+					t.Errorf("slept %v; want within (0, %v]", d, interval)
+				}
+				total += d
+			}
+			if len(*slept) < 2 || (*slept)[0] != interval || total > pauseTimeoutSeconds*time.Second {
+				t.Errorf("sleeps = %v (total %v); want the interval first, then one cut at the deadline", *slept, total)
+			}
+			presses := 1
+			if rowAgent == "cursor" {
+				presses = codexClearPresses
+			}
+			e.assertExitDeliveredTimes(t, r.Socket, r.Spawn.Identity.PaneID, presses)
+			pauAssertState(t, e, r.ID, store.StateWaiting)
+		})
 	}
-	if elapsed < pauseTimeoutSeconds*time.Second {
-		t.Errorf("returned after %v; want at least the %d s timeout", elapsed, pauseTimeoutSeconds)
-	}
-	var total time.Duration
-	for _, d := range *slept {
-		if d <= 0 || d > interval {
-			t.Errorf("slept %v; want within (0, %v]", d, interval)
-		}
-		total += d
-	}
-	if len(*slept) < 2 || (*slept)[0] != interval || total > pauseTimeoutSeconds*time.Second {
-		t.Errorf("sleeps = %v (total %v); want the interval first, then one cut at the deadline", *slept, total)
-	}
-	e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
-	pauAssertState(t, e, r.ID, store.StateWaiting)
+
 }
 
 // ptrEntry is one pause entry point: api.Pause, or Client.Pause when client.

@@ -35,43 +35,61 @@ func awaitProcessGone(t *testing.T, pid int) {
 	t.Fatalf("process %d remains accepting", pid)
 }
 func TestOwnedRuntimeProtectedAndTerminated(t *testing.T) {
-	r := cursorfix.New(t)
-	p, err := startProcess(r.Program, []string{"acp"}, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	for _, chain := range []string{"direct", "two exec launchers"} {
+		t.Run(chain, func(t *testing.T) {
+			r := cursorfix.New(t)
+			program := r.Program
+			if chain == "two exec launchers" {
+				for i := 0; i < 2; i++ {
+					wrapper := fmt.Sprintf("%s/launcher-%d", t.TempDir(), i)
+					if err := os.WriteFile(wrapper, []byte(fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", program)), 0700); err != nil {
+						t.Fatal(err)
+					}
+					program = wrapper
+				}
+			}
+			p, err := startProcess(program, []string{"acp"}, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.input.Close()
+			defer p.output.Close()
+			defer p.terminate()
+			start, alive, known := probe.NewProcChecker().StartTime(p.pid)
+			if !known || !alive || start != p.start {
+				t.Fatal("runtime identity not established")
+			}
+			rpc := newProtocol(p.input, p.output)
+			t.Cleanup(rpc.close)
+			if _, err = rpc.request("initialize", map[string]any{"protocolVersion": 1}); err != nil {
+				t.Fatal(err)
+			}
+			f := nextFrame(t, rpc)
+			if f.err != nil {
+				t.Fatal(f.err)
+			}
+			if _, err = rpc.response(f.frame); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 3; i++ {
+				if err = p.terminate(); err != nil {
+					t.Fatalf("repeated successful termination %d: %v", i, err)
+				}
+			}
+			awaitProcessGone(t, p.pid)
+		})
 	}
-	defer p.input.Close()
-	defer p.output.Close()
-	defer p.terminate()
-	start, alive, known := probe.NewProcChecker().StartTime(p.pid)
-	if !known || !alive || start != p.start {
-		t.Fatal("runtime identity not established")
-	}
-	rpc := newProtocol(p.input, p.output)
-	t.Cleanup(rpc.close)
-	if _, err = rpc.request("initialize", map[string]any{"protocolVersion": 1}); err != nil {
-		t.Fatal(err)
-	}
-	f := nextFrame(t, rpc)
-	if f.err != nil {
-		t.Fatal(f.err)
-	}
-	if _, err = rpc.response(f.frame); err != nil {
-		t.Fatal(err)
-	}
-	if err = p.terminate(); err != nil {
-		t.Fatal(err)
-	}
-	awaitProcessGone(t, p.pid)
 }
 func TestOwnedRuntimeUnexpectedDeathAndTransportEOF(t *testing.T) {
-	for _, mode := range []string{"exit", "EOF live child"} {
+	for _, mode := range []string{"exit", "EOF live child", "child death with open pipe"} {
 		t.Run(mode, func(t *testing.T) {
 			script := "#!/bin/sh\n"
 			if mode == "exit" {
 				script += "exit 0\n"
-			} else {
+			} else if mode == "EOF live child" {
 				script += "exec 1>&-\nexec sleep 30\n"
+			} else {
+				script += "exec sleep 30\n"
 			}
 			path := t.TempDir() + "/agent"
 			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
@@ -84,7 +102,21 @@ func TestOwnedRuntimeUnexpectedDeathAndTransportEOF(t *testing.T) {
 			defer p.terminate()
 			defer p.input.Close()
 			defer p.output.Close()
-			if mode == "exit" {
+			if mode == "child death with open pipe" {
+				holder, e := os.OpenFile(fmt.Sprintf("/proc/%d/fd/1", p.pid), os.O_WRONLY, 0)
+				if e != nil {
+					t.Fatal(e)
+				}
+				defer holder.Close()
+				if e = syscall.Kill(p.pid, syscall.SIGKILL); e != nil {
+					t.Fatal(e)
+				}
+				select {
+				case <-p.done:
+				case <-time.After(3 * time.Second):
+					t.Fatal("open pipe concealed child death")
+				}
+			} else if mode == "exit" {
 				select {
 				case <-p.done:
 				case <-time.After(3 * time.Second):
@@ -186,6 +218,21 @@ func TestSecondACPOwnerRefusedAndSentinelSurvives(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("second ACP owner remained live")
+	}
+	terminalErr := err
+	// t2.jf1.3e.d6: Run consumes the notification before deferred cleanup.
+	select {
+	case _, open := <-p.done:
+		if open {
+			t.Fatal("supervisor published more than one terminal result")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor did not close terminal notification")
+	}
+	for i := 0; i < 3; i++ {
+		if got := p.terminate(); got != terminalErr {
+			t.Fatalf("cleanup %d lost real supervisor failure: got %v, want %v", i, got, terminalErr)
+		}
 	}
 	if err = sentinel.Process.Signal(syscall.Signal(0)); err != nil {
 		t.Fatalf("unrelated sentinel killed: %v", err)

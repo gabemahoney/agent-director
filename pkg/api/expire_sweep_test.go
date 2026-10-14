@@ -146,59 +146,71 @@ func TestExpireSweepBudget(t *testing.T) {
 // process_alive.
 func TestExpireSweepTmuxUnreachable(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	for _, tc := range []struct {
-		name    string
-		failure tmux.Failure
-		reason  string
-	}{
-		{"tmux not runnable", tmux.FailUnavailable, "tmux_unavailable"},
-		{"socket permission denied", tmux.FailSocketDenied, "tmux_unavailable"},
-		{"every socket hangs", tmux.FailTimeout, "cant_tell"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tc.failure}, tmux.CallLookup)
-			s1, s2, id := fmbSocket(1), fmbSocket(2), exsIDs(5)
-			exsSeed(t, e, id[0], s1, agentGone)
-			exsSeed(t, e, id[1], s2, agentNotRecorded)
-			exsSeed(t, e, id[2], s1, agentUnreadable)
-			exsSeed(t, e, id[3], s2, agentAlive)
-			exsSeed(t, e, id[4], s2, agentZombie)
-			mark := trailMark(t)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			for _, tc := range []struct {
+				name    string
+				failure tmux.Failure
+				reason  string
+			}{
+				{"tmux not runnable", tmux.FailUnavailable, "tmux_unavailable"},
+				{"socket permission denied", tmux.FailSocketDenied, "tmux_unavailable"},
+				{"every socket hangs", tmux.FailTimeout, "cant_tell"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tc.failure}, tmux.CallLookup)
+					s1, s2, id := fmbSocket(1), fmbSocket(2), exsIDs(5)
+					exsSeed(t, e, id[0], s1, agentGone)
+					exsSeed(t, e, id[1], s2, agentNotRecorded)
+					exsSeed(t, e, id[2], s1, agentUnreadable)
+					exsSeed(t, e, id[3], s2, agentAlive)
+					exsSeed(t, e, id[4], s2, agentZombie)
+					mark := trailMark(t)
 
-			res := mustExpire(t, e, olderThan(0))
-			assertExpired(t, res, mark, map[string]string{id[0]: tc.reason, id[1]: tc.reason,
-				id[2]: "tmux_skipped", id[3]: "process_alive", id[4]: "tmux_skipped"})
-			e.assertLookupsOn(t, s1, s2)
+					res := mustExpire(t, e, olderThan(0))
+					assertExpired(t, res, mark, map[string]string{id[0]: tc.reason, id[1]: tc.reason,
+						id[2]: "tmux_skipped", id[3]: "process_alive", id[4]: "tmux_skipped"})
+					e.assertLookupsOn(t, s1, s2)
+				})
+			}
 		})
 	}
+
 }
 
 // TestExpireSweepWrongServer (AC-EXP-10, TLA+ F-7): a sweep on another server marks a live row missing; expire
 // on the agents' server then keeps it as ours and does not delete it.
 func TestExpireSweepWrongServer(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	e := newKillEnv(t)
-	r := e.seedRow(t, killRowSpec{NoServerIdentity: true, Agent: agentUnreadable})
-	other := tmuxfix.NewRecorder()
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			e := newKillEnv(t)
+			e.rowAgent = rowAgent
+			r := e.seedRow(t, killRowSpec{NoServerIdentity: true, Agent: agentUnreadable})
+			other := tmuxfix.NewRecorder()
 
-	fm, err := api.FindMissing(context.Background(), e.st, other, e.pc, e.cfg.EffectivePendingGrace(),
-		e.cfg.EffectiveSweepBudget(), e.clock.Now, &recordingLogger{})
-	if err != nil {
-		t.Fatalf("FindMissing: %v", err)
-	}
-	assertLists(t, fm, []string{r.ID}, nil)
-	if got := e.columns(t, r.ID).State; got != store.StateMissing {
-		t.Fatalf("state after the other server's sweep = %v; want %s", got, store.StateMissing)
-	}
-	mark := trailMark(t)
+			fm, err := api.FindMissing(context.Background(), e.st, other, e.pc, e.cfg.EffectivePendingGrace(),
+				e.cfg.EffectiveSweepBudget(), e.clock.Now, &recordingLogger{})
+			if err != nil {
+				t.Fatalf("FindMissing: %v", err)
+			}
+			assertLists(t, fm, []string{r.ID}, nil)
+			if got := e.columns(t, r.ID).State; got != store.StateMissing {
+				t.Fatalf("state after the other server's sweep = %v; want %s", got, store.StateMissing)
+			}
+			mark := trailMark(t)
 
-	res := mustExpire(t, e, olderThan(0))
-	assertExpired(t, res, mark, map[string]string{r.ID: "ours"})
-	e.assertLookupsOn(t, r.Socket)
-	if got := e.columns(t, r.ID).State; got != store.StateMissing {
-		t.Errorf("state after expire = %v; want the row kept %s", got, store.StateMissing)
+			res := mustExpire(t, e, olderThan(0))
+			assertExpired(t, res, mark, map[string]string{r.ID: "ours"})
+			e.assertLookupsOn(t, r.Socket)
+			if got := e.columns(t, r.ID).State; got != store.StateMissing {
+				t.Errorf("state after expire = %v; want the row kept %s", got, store.StateMissing)
+			}
+		})
 	}
+
 }
 
 // TestExpireSweepNoSocketRule: recorded-socket rows are looked up there whatever the caller's environment; rows

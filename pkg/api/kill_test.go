@@ -28,59 +28,65 @@ var killOursCalls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallKi
 // unknown id, finished rows, and a live row whose recorded name is unusable.
 func TestKillNonLookupRows(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name string
-		spec killRowSpec
-		id   string // killed id; "" is the seeded row's
-		want string // error name; "" is success
-		desc *apitest.DescCase
-	}{
-		{name: "unknown id", id: "kill-absent", want: "ErrSpawnNotFound",
-			desc: &apitest.DescCase{Name: "ErrSpawnNotFound"}},
-		{name: "ended row", spec: killRowSpec{State: store.StateEnded}},
-		{name: "missing row", spec: killRowSpec{State: store.StateMissing}},
-		{name: "ended row with an unusable name", spec: killRowSpec{State: store.StateEnded, NoSession: true,
-			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("")}}},
-		// A waiting row's unusable names, one per fixture, are the call table's kill row.
-		{name: "colon on a pending row", spec: killRowSpec{State: store.StatePending, NoSession: true,
-			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a:b")}},
-			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a:b", apitest.RewrittenChars{Colon: true}))},
-		{name: "invalid UTF-8", spec: killRowSpec{State: store.StateWorking, NoSession: true,
-			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a\xffb")}},
-			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a\xffb", apitest.RewrittenChars{InvalidUTF8: true}))},
-		{name: "every rewritten character", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b:c\xff")}},
-			want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a.b:c\xff",
-				apitest.RewrittenChars{Dot: true, Colon: true, InvalidUTF8: true}))},
-		{name: "control character wins over a rewritten one", spec: killRowSpec{NoSession: true,
-			Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b\x01")}},
-			want: "ErrInternal", desc: killDescPtr(killControlOnly("a.b\x01"))},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			id := tc.id
-			var before apitest.SpawnColumns
-			if id == "" {
-				r := e.seedRow(t, tc.spec)
-				id, before = r.ID, e.columns(t, r.ID)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			cases := []struct {
+				name string
+				spec killRowSpec
+				id   string // killed id; "" is the seeded row's
+				want string // error name; "" is success
+				desc *apitest.DescCase
+			}{
+				{name: "unknown id", id: "kill-absent", want: "ErrSpawnNotFound",
+					desc: &apitest.DescCase{Name: "ErrSpawnNotFound"}},
+				{name: "ended row", spec: killRowSpec{State: store.StateEnded}},
+				{name: "missing row", spec: killRowSpec{State: store.StateMissing}},
+				{name: "ended row with an unusable name", spec: killRowSpec{State: store.StateEnded, NoSession: true,
+					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("")}}},
+				// A waiting row's unusable names, one per fixture, are the call table's kill row.
+				{name: "colon on a pending row", spec: killRowSpec{State: store.StatePending, NoSession: true,
+					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a:b")}},
+					want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a:b", apitest.RewrittenChars{Colon: true}))},
+				{name: "invalid UTF-8", spec: killRowSpec{State: store.StateWorking, NoSession: true,
+					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a\xffb")}},
+					want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a\xffb", apitest.RewrittenChars{InvalidUTF8: true}))},
+				{name: "every rewritten character", spec: killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b:c\xff")}},
+					want: "ErrInternal", desc: killDescPtr(apitest.DescUnusableNameRewritten("a.b:c\xff",
+						apitest.RewrittenChars{Dot: true, Colon: true, InvalidUTF8: true}))},
+				{name: "control character wins over a rewritten one", spec: killRowSpec{NoSession: true,
+					Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("a.b\x01")}},
+					want: "ErrInternal", desc: killDescPtr(killControlOnly("a.b\x01"))},
 			}
-			res, err := e.kill(id)
-			if tc.want == "" && err != nil {
-				t.Fatalf("Kill: %v; want success", err)
-			}
-			if tc.want != "" {
-				assertOneName(t, err, tc.want)
-				apitest.AssertDescription(t, err.Error(), *tc.desc)
-			}
-			if res.KillSent {
-				t.Error("kill_sent = true; want false")
-			}
-			e.assertKillCalls(t)
-			if tc.id == "" {
-				e.assertRowUnchanged(t, id, before)
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					id := tc.id
+					var before apitest.SpawnColumns
+					if id == "" {
+						r := e.seedRow(t, tc.spec)
+						id, before = r.ID, e.columns(t, r.ID)
+					}
+					res, err := e.kill(id)
+					if tc.want == "" && err != nil {
+						t.Fatalf("Kill: %v; want success", err)
+					}
+					if tc.want != "" {
+						assertOneName(t, err, tc.want)
+						apitest.AssertDescription(t, err.Error(), *tc.desc)
+					}
+					if res.KillSent {
+						t.Error("kill_sent = true; want false")
+					}
+					e.assertKillCalls(t)
+					if tc.id == "" {
+						e.assertRowUnchanged(t, id, before)
+					}
+				})
 			}
 		})
 	}
+
 }
 
 // killDescPtr returns a pointer to c, for a table's optional description case.

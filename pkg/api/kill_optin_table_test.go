@@ -388,32 +388,37 @@ func kolAssertRefused(t *testing.T, e *killEnv, r killRow, state string, res api
 // the live-row refusal.
 func TestKillIncludeFinishedRefusesLiveRow(t *testing.T) {
 	t.Parallel()
-	type liveCase struct {
-		name, state string
-		spec        killRowSpec
-		unusable    bool // the recorded name is unusable, no session seeded
-	}
-	var cases []liveCase
-	for _, s := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser,
-		store.StateCheckPermission} {
-		cases = append(cases, liveCase{s, s, killRowSpec{State: s}, false})
-	}
-	cases = append(cases, liveCase{"waiting, unusable recorded name", store.StateWaiting,
-		killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("kill.name")}}, true})
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, tc.spec)
-			before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
-			if before.State != tc.state {
-				t.Fatalf("seeded state %v; want %s", before.State, tc.state)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			type liveCase struct {
+				name, state string
+				spec        killRowSpec
+				unusable    bool // the recorded name is unusable, no session seeded
 			}
-			if !tc.unusable && len(sessions) == 0 {
-				t.Fatalf("no session seeded for %s", r.ID)
+			var cases []liveCase
+			for _, s := range []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateAskUser,
+				store.StateCheckPermission} {
+				cases = append(cases, liveCase{s, s, killRowSpec{State: s}, false})
 			}
-			res, err := e.killOptIn(r.ID)
-			kolAssertRefused(t, e, r, tc.state, res, err, before, sessions)
+			cases = append(cases, liveCase{"waiting, unusable recorded name", store.StateWaiting,
+				killRowSpec{NoSession: true, Opts: []apitest.SpawnOption{apitest.WithTmuxSessionName("kill.name")}}, true})
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					r := e.seedRow(t, tc.spec)
+					before, sessions := e.columns(t, r.ID), e.rec.Sessions(r.Socket)
+					if before.State != tc.state {
+						t.Fatalf("seeded state %v; want %s", before.State, tc.state)
+					}
+					if !tc.unusable && len(sessions) == 0 {
+						t.Fatalf("no session seeded for %s", r.ID)
+					}
+					res, err := e.killOptIn(r.ID)
+					kolAssertRefused(t, e, r, tc.state, res, err, before, sessions)
+				})
+			}
 		})
 	}
 }

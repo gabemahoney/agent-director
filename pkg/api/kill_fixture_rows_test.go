@@ -117,6 +117,9 @@ func (e *killEnv) seedRow(t *testing.T, spec killRowSpec) killRow {
 		li.PanePID, li.PaneStarttime = 0, ""
 	}
 	opts := []apitest.SpawnOption{apitest.WithLaunchIdentity(li)}
+	if e.rowAgent != "" {
+		opts = append(opts, apitest.WithAgent(e.rowAgent))
+	}
 	if li.PanePID > 0 {
 		opts = append(opts, apitest.WithPID(li.PanePID), apitest.WithProcStarttime(li.PaneStarttime))
 	}
@@ -172,6 +175,9 @@ func (e *killEnv) seedRawRow(t *testing.T, spec killRowSpec, ident func(*store.L
 		pid, li.PanePID, li.PaneStarttime = 0, 0, ""
 	}
 	opts := []apitest.SpawnOption{apitest.WithLaunchIdentity(li)}
+	if e.rowAgent != "" {
+		opts = append(opts, apitest.WithAgent(e.rowAgent))
+	}
 	if pid > 0 {
 		opts = append(opts, apitest.WithPID(pid), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
 	}

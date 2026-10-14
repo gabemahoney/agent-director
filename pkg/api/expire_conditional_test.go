@@ -89,67 +89,73 @@ func TestExpireConditionalDelete(t *testing.T) {
 				}
 			}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			spec := e.finishedSpec(time.Hour, agentGone)
-			spec.State = tc.state
-			r := e.seedRow(t, spec)
-			unchanged := e.seedFinished(t, time.Hour, agentGone)
-			w := e.expireStore()
-			var written apitest.SpawnColumns
-			ran := false
-			w.beforeDelete(r.ID, func() {
-				ran = true
-				tc.write(t, e, r)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		for _, tc := range cases {
+			if rowAgent == "cursor" && (tc.name == "relaunch: its own agent's SessionStart on a missing row" || tc.name == "its own agent's hook, row still ended") {
+				continue
+			}
+			t.Run(rowAgent+"/"+tc.name, func(t *testing.T) {
+				e := newKillEnv(t)
+				e.rowAgent = rowAgent
+				spec := e.finishedSpec(time.Hour, agentGone)
+				spec.State = tc.state
+				r := e.seedRow(t, spec)
+				unchanged := e.seedFinished(t, time.Hour, agentGone)
+				w := e.expireStore()
+				var written apitest.SpawnColumns
+				ran := false
+				w.beforeDelete(r.ID, func() {
+					ran = true
+					tc.write(t, e, r)
+					if tc.after != "" {
+						written = e.columns(t, r.ID)
+					}
+				})
+				mark := trailMark(t)
+				res, lg, err := e.expireWith(w, olderThan(0))
+				if err != nil {
+					t.Fatalf("Expire: %v", err)
+				}
+				if !ran {
+					t.Fatalf("row %s: no delete was attempted, so the write never ran", r.ID)
+				}
+				if len(lg.lines) != 0 {
+					t.Errorf("logged %q; want nothing", lg.lines)
+				}
+				want := map[string]string{unchanged.ID: ""}
 				if tc.after != "" {
-					written = e.columns(t, r.ID)
+					want[r.ID] = "changed_since_examined"
+				}
+				assertExpired(t, res, mark, want)
+				assertRowGone(t, e, unchanged.ID)
+				if tc.after == "" {
+					assertRowGone(t, e, r.ID)
+					assertNoTrailSince(t, mark, r.ID)
+					return
+				}
+				e.assertRowUnchanged(t, r.ID, written)
+				if written.State != tc.after {
+					t.Errorf("row %s state after the write = %v; want %s", r.ID, written.State, tc.after)
+				}
+				if tc.after == store.StatePending && written.LaunchStartedAt == nil {
+					t.Errorf("row %s: pending with no launch start", r.ID)
+				}
+
+				mark = trailMark(t)
+				again, _, err := e.expire(olderThan(0))
+				if err != nil {
+					t.Fatalf("second Expire: %v", err)
+				}
+				want = map[string]string{}
+				if tc.rerunDeletes {
+					want[r.ID] = ""
+				}
+				assertExpired(t, again, mark, want)
+				if !tc.rerunDeletes {
+					e.assertRowUnchanged(t, r.ID, written)
 				}
 			})
-			mark := trailMark(t)
-			res, lg, err := e.expireWith(w, olderThan(0))
-			if err != nil {
-				t.Fatalf("Expire: %v", err)
-			}
-			if !ran {
-				t.Fatalf("row %s: no delete was attempted, so the write never ran", r.ID)
-			}
-			if len(lg.lines) != 0 {
-				t.Errorf("logged %q; want nothing", lg.lines)
-			}
-			want := map[string]string{unchanged.ID: ""}
-			if tc.after != "" {
-				want[r.ID] = "changed_since_examined"
-			}
-			assertExpired(t, res, mark, want)
-			assertRowGone(t, e, unchanged.ID)
-			if tc.after == "" {
-				assertRowGone(t, e, r.ID)
-				assertNoTrailSince(t, mark, r.ID)
-				return
-			}
-			e.assertRowUnchanged(t, r.ID, written)
-			if written.State != tc.after {
-				t.Errorf("row %s state after the write = %v; want %s", r.ID, written.State, tc.after)
-			}
-			if tc.after == store.StatePending && written.LaunchStartedAt == nil {
-				t.Errorf("row %s: pending with no launch start", r.ID)
-			}
-
-			mark = trailMark(t)
-			again, _, err := e.expire(olderThan(0))
-			if err != nil {
-				t.Fatalf("second Expire: %v", err)
-			}
-			want = map[string]string{}
-			if tc.rerunDeletes {
-				want[r.ID] = ""
-			}
-			assertExpired(t, again, mark, want)
-			if !tc.rerunDeletes {
-				e.assertRowUnchanged(t, r.ID, written)
-			}
-		})
+		}
 	}
 }
 

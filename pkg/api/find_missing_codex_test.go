@@ -123,22 +123,24 @@ var cxProcs = []cxProc{
 }
 
 // TestFindMissingCodexOutcomeTable: on the recorded-identity path every live state x process x end report cell of
-// a Codex row gets its outcome: gone with an end report ends the row (in neither list), gone without one marks it
+// Codex or Cursor gets its outcome: only Codex gone with an end report ends the row; Cursor absence marks it
 // missing, alive leaves it (a pending row past grace is noted unreported) and unjudgeable is as for any row.
 func TestFindMissingCodexOutcomeTable(t *testing.T) {
 	t.Parallel()
-	states := []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateCheckPermission}
-	for _, state := range states {
-		for _, p := range cxProcs {
-			for _, report := range []bool{true, false} {
-				name := fmt.Sprintf("%s/%s/end report %v", state, p.name, report)
-				t.Run(name, func(t *testing.T) {
-					t.Parallel()
-					c := cxCell{row: cxRow(store.AgentCodex, state, report), pc: procfix.New()}
-					c.pc.Set(cxPID, p.proc)
-					p.want(&c, state, report)
-					runCxCell(t, c)
-				})
+	for _, agent := range []string{store.AgentCodex, store.AgentCursor} {
+		states := []string{store.StatePending, store.StateWaiting, store.StateWorking, store.StateCheckPermission}
+		for _, state := range states {
+			for _, p := range cxProcs {
+				for _, report := range []bool{true, false} {
+					name := fmt.Sprintf("%s/%s/%s/end report %v", agent, state, p.name, report)
+					t.Run(name, func(t *testing.T) {
+						t.Parallel()
+						c := cxCell{row: cxRow(agent, state, report), pc: procfix.New()}
+						c.pc.Set(cxPID, p.proc)
+						p.want(&c, state, report && agent == store.AgentCodex)
+						runCxCell(t, c)
+					})
+				}
 			}
 		}
 	}

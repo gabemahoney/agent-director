@@ -16,12 +16,19 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 		name                                                               string
 		parentMismatch, startMismatch, sessionMismatch, connectionMismatch bool
 		verifier                                                           string
+		origin                                                             string
+		child, retired                                                     bool
 		calls                                                              int
 		applies                                                            bool
 	}{
 		{name: "verified", verifier: "success", calls: 1, applies: true},
 		{name: "missing verifier"},
 		{name: "verification error", verifier: "error", calls: 1},
+		{name: "replacement during verifier", verifier: "replacement", calls: 1},
+		{name: "unknown origin", origin: "unknown", verifier: "success"},
+		{name: "child origin", origin: "child", verifier: "success"},
+		{name: "nested child", child: true, verifier: "success"},
+		{name: "surviving report after retirement", retired: true, verifier: "success"},
 		{name: "wrong immediate parent", parentMismatch: true, verifier: "success"},
 		{name: "reused parent PID", startMismatch: true, verifier: "success"},
 		{name: "wrong session", sessionMismatch: true, verifier: "success"},
@@ -29,7 +36,7 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "cursor-verifier"
-			st, _ := seedAgentRow(t, id, store.StatePending,
+			st, dbPath := seedAgentRow(t, id, store.StatePending,
 				apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(ssgFreshPane))
 			row := mustGetSpawn(t, st, id)
 			b := store.CursorRuntime{InstanceID: id, Token: row.Identity.Token, Life: row.LifeNumber,
@@ -43,6 +50,12 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 				t.Fatalf("bind session: %v, %v", ok, err)
 			}
 			b.SessionID = "synthetic-session"
+			if tc.retired {
+				if ok, err := st.MarkCursorRuntimeGone(b); err != nil || !ok {
+					t.Fatalf("retire %v %v", ok, err)
+				}
+				b.Terminated = true
+			}
 			p := agentParent(t, st, id)
 			p.Agent = store.AgentCursor
 			if tc.parentMismatch {
@@ -54,12 +67,24 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 			}
 			hc := hookConfig(envHook(id, ""), p)
 			calls := 0
+			mark := 0
+			var replacement *store.Spawn
 			path := writeTranscript(t, b.SessionID)
 			if tc.verifier != "" {
 				hc.VerifyCursor = func(actual *store.Store, got store.CursorRuntime, transcript string, ended bool) error {
 					calls++
 					if actual != st || !reflect.DeepEqual(got, b) || transcript != path || ended {
 						t.Fatalf("incorrect verifier evidence: %+v, %q, ended=%v", got, transcript, ended)
+					}
+					if tc.verifier == "replacement" {
+						if err := st.DeleteSpawn(id); err != nil {
+							t.Fatal(err)
+						}
+						seedGateRow(t, dbPath, id, store.StateWaiting, "replacement-session", apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(ssgNewPane))
+						fresh := mustGetSpawn(t, st, id)
+						replacement = &fresh
+						// The replacement seed emits its own legitimate transitions.
+						mark = len(readTrailLines(t, trailFile()))
 					}
 					if tc.verifier == "error" {
 						return errors.New("independent evidence unavailable")
@@ -69,6 +94,12 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 			}
 			payload := map[string]any{"hook_event_name": "UserPromptSubmit", "origin": "main",
 				"session_id": b.SessionID, "cursor_connection": b.Connection, "transcript_path": path}
+			if tc.origin != "" {
+				payload["origin"] = tc.origin
+			}
+			if tc.child {
+				payload["agent_id"] = "nested-agent"
+			}
 			if tc.sessionMismatch {
 				payload["session_id"] = "other-session"
 			}
@@ -80,6 +111,7 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := mustGetSpawn(t, st, id)
+			mark = len(readTrailLines(t, trailFile()))
 			if out := ssgHandleWith(t, st, hc, string(raw), nil); out != "" {
 				t.Fatalf("unexpected stdout: %q", out)
 			}
@@ -87,12 +119,25 @@ func TestCursorHandleRequiresIndependentVerifier(t *testing.T) {
 				t.Fatalf("verifier called %d times; want %d", calls, tc.calls)
 			}
 			after := mustGetSpawn(t, st, id)
+			if replacement != nil {
+				before = *replacement
+			}
 			if tc.applies {
 				if after.State != store.StateWorking || after.SessionID != b.SessionID {
 					t.Fatalf("verified prompt did not apply: %+v", after)
 				}
 			} else if !reflect.DeepEqual(before, after) {
 				t.Fatal("refused report changed row")
+			}
+			if !tc.applies {
+				for _, line := range readTrailLines(t, trailFile())[mark:] {
+					if line["event"] == "ad.spawn.state_transition" && line["instance_id"] == id {
+						t.Fatal("refused report emitted successful transition")
+					}
+				}
+			}
+			if replacement != nil {
+				return
 			}
 			if got, err := st.ReadCursorRuntime(id); err != nil || !reflect.DeepEqual(got, b) {
 				t.Fatalf("runtime binding changed: %+v, %v", got, err)

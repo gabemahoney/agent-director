@@ -160,147 +160,159 @@ func seqCharged(e *killEnv, calls []tmux.Call) time.Duration {
 // gone (a teammate exiting during the wait is TestKillCheckWait's).
 func TestKillSequenceEndsAgentPane(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name   string
-		spec   killRowSpec
-		setup  func(t *testing.T, e *killEnv, r *killRow)
-		calls  []tmux.Call
-		reason string // an ad.provenance.disagree reason the call writes
-	}{
-		// SR-20.6: formerly TestKillLiveRowInvokesTmux; the kills target the pane and session ids.
-		{name: "reported-in agent, SessionStart pid is the pane pid (AC-KILL-01)", calls: seqOurs},
-		{name: "a pending row's own session: the launch aborted, the row left pending (AC-KILL-17)",
-			spec: killRowSpec{State: store.StatePending}, calls: seqOurs},
-		{name: "renamed session, killed by id", spec: killRowSpec{NoSession: true}, calls: seqOurs,
-			reason: tmux.ReasonNameChanged, setup: func(t *testing.T, e *killEnv, r *killRow) {
-				e.seedSession(t, r, tmuxfix.WithRowSessionName("renamed-by-hand"))
-			}},
-		{name: "grouped session shares the window", calls: seqOurs,
-			setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedViewer(t, *r) }},
-		{name: "linked window in another session", calls: seqOurs, setup: func(t *testing.T, e *killEnv, r *killRow) {
-			e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "linker", Panes: []tmuxfix.SeedPane{
-				{}, {Window: 3, ID: r.Spawn.Identity.PaneID, Shared: true}}})
-		}},
-		{name: "Gone, the pane lives on only in a viewer session", spec: killRowSpec{NoSession: true},
-			calls: seqGonePane, setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedViewer(t, *r) }},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, c.spec)
-			if c.setup != nil {
-				c.setup(t, e, &r)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			cases := []struct {
+				name   string
+				spec   killRowSpec
+				setup  func(t *testing.T, e *killEnv, r *killRow)
+				calls  []tmux.Call
+				reason string // an ad.provenance.disagree reason the call writes
+			}{
+				// SR-20.6: formerly TestKillLiveRowInvokesTmux; the kills target the pane and session ids.
+				{name: "reported-in agent, SessionStart pid is the pane pid (AC-KILL-01)", calls: seqOurs},
+				{name: "a pending row's own session: the launch aborted, the row left pending (AC-KILL-17)",
+					spec: killRowSpec{State: store.StatePending}, calls: seqOurs},
+				{name: "renamed session, killed by id", spec: killRowSpec{NoSession: true}, calls: seqOurs,
+					reason: tmux.ReasonNameChanged, setup: func(t *testing.T, e *killEnv, r *killRow) {
+						e.seedSession(t, r, tmuxfix.WithRowSessionName("renamed-by-hand"))
+					}},
+				{name: "grouped session shares the window", calls: seqOurs,
+					setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedViewer(t, *r) }},
+				{name: "linked window in another session", calls: seqOurs, setup: func(t *testing.T, e *killEnv, r *killRow) {
+					e.seedOther(t, r.Socket, tmuxfix.SeedSession{Name: "linker", Panes: []tmuxfix.SeedPane{
+						{}, {Window: 3, ID: r.Spawn.Identity.PaneID, Shared: true}}})
+				}},
+				{name: "Gone, the pane lives on only in a viewer session", spec: killRowSpec{NoSession: true},
+					calls: seqGonePane, setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedViewer(t, *r) }},
 			}
-			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-			start := e.clock.Now()
-			seqKill(t, e, r, seqOutcome{calls: c.calls, sent: true})
-			if got, want := e.clock.Now().Sub(start), seqCharged(e, c.calls); got != want {
-				t.Errorf("virtual time = %v; want %v (the calls, no wait)", got, want)
-			}
-			if got := seqTarget(e, tmux.CallKillPane); got != r.Spawn.Identity.PaneID {
-				t.Errorf("pane kill targets %q; want the agent's pane %q", got, r.Spawn.Identity.PaneID)
-			}
-			if slices.Contains(c.calls, tmux.CallKillSession) {
-				if got := seqTarget(e, tmux.CallKillSession); got != r.Session.ID {
-					t.Errorf("session kill targets %q; want the labelled session %q", got, r.Session.ID)
-				}
-				if seqHas(e, r.Socket, r.Session.ID) {
-					t.Errorf("labelled session %s still listed", r.Session.ID)
-				}
-			}
-			if ids := seqListing(e, r.Socket, r.Spawn.Identity.PaneID); len(ids) > 0 {
-				t.Errorf("sessions %v still show the agent's pane", ids)
-			}
-			if c.reason != "" && !slices.ContainsFunc(killDisagrees(t, r.ID), func(m map[string]any) bool {
-				return m["reason"] == c.reason
-			}) {
-				t.Errorf("no ad.provenance.disagree %s record", c.reason)
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					r := e.seedRow(t, c.spec)
+					if c.setup != nil {
+						c.setup(t, e, &r)
+					}
+					e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+					start := e.clock.Now()
+					seqKill(t, e, r, seqOutcome{calls: c.calls, sent: true})
+					if got, want := e.clock.Now().Sub(start), seqCharged(e, c.calls); got != want {
+						t.Errorf("virtual time = %v; want %v (the calls, no wait)", got, want)
+					}
+					if got := seqTarget(e, tmux.CallKillPane); got != r.Spawn.Identity.PaneID {
+						t.Errorf("pane kill targets %q; want the agent's pane %q", got, r.Spawn.Identity.PaneID)
+					}
+					if slices.Contains(c.calls, tmux.CallKillSession) {
+						if got := seqTarget(e, tmux.CallKillSession); got != r.Session.ID {
+							t.Errorf("session kill targets %q; want the labelled session %q", got, r.Session.ID)
+						}
+						if seqHas(e, r.Socket, r.Session.ID) {
+							t.Errorf("labelled session %s still listed", r.Session.ID)
+						}
+					}
+					if ids := seqListing(e, r.Socket, r.Spawn.Identity.PaneID); len(ids) > 0 {
+						t.Errorf("sessions %v still show the agent's pane", ids)
+					}
+					if c.reason != "" && !slices.ContainsFunc(killDisagrees(t, r.ID), func(m map[string]any) bool {
+						return m["reason"] == c.reason
+					}) {
+						t.Errorf("no ad.provenance.disagree %s record", c.reason)
+					}
+				})
 			}
 		})
 	}
+
 }
 
 // TestKillSequenceCheckDecides: a survivor, a missing or respawned agent pane,
 // failed kills and a session replaced or removed mid-call leave it to the check.
 func TestKillSequenceCheckDecides(t *testing.T) {
 	t.Parallel()
-	both, session := apitest.KillSent{Pane: true, Session: true}, apitest.KillSent{Session: true}
-	agentGoneAfter := func(call tmux.Call) func(*testing.T, *killEnv, *killRow) {
-		return func(_ *testing.T, e *killEnv, r *killRow) { e.setAfterCall(call, procfix.Gone(), r.AgentPID) }
-	}
-	script := func(f tmux.Failure, call tmux.Call, then func(*testing.T, *killEnv, *killRow)) func(*testing.T, *killEnv, *killRow) {
-		return func(t *testing.T, e *killEnv, r *killRow) {
-			e.rec.Script(r.Socket, tmuxfix.Script{Failure: f, Times: 1}, call)
-			if then != nil {
-				then(t, e, r)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			both, session := apitest.KillSent{Pane: true, Session: true}, apitest.KillSent{Session: true}
+			agentGoneAfter := func(call tmux.Call) func(*testing.T, *killEnv, *killRow) {
+				return func(_ *testing.T, e *killEnv, r *killRow) { e.setAfterCall(call, procfix.Gone(), r.AgentPID) }
 			}
-		}
-	}
-	replace := func(then func(*testing.T, *killEnv, *killRow)) func(*testing.T, *killEnv, *killRow) {
-		return func(t *testing.T, e *killEnv, r *killRow) {
-			e.rec.ReplaceSessionAfter(tmux.CallListPanes, r.Socket, r.Session.ID, tmux.Label{})
-			if then != nil {
-				then(t, e, r)
-			}
-		}
-	}
-	ok := seqOutcome{calls: seqOurs, sent: true}
-	cases := []struct {
-		name      string
-		spec      killRowSpec
-		setup     func(t *testing.T, e *killEnv, r *killRow)
-		out       seqOutcome
-		replaced  bool
-		survivors bool
-	}{
-		{name: "a teammate ignoring the hangup survives (AC-KILL-19)", spec: killRowSpec{Teammates: 1},
-			setup: agentGoneAfter(tmux.CallKillPane), out: seqWaitExpired(seqOurs, both, false, true), survivors: true},
-		{name: "agent's pane respawned with another pid", spec: killRowSpec{NoSession: true},
-			setup: func(t *testing.T, e *killEnv, r *killRow) {
-				e.seedOurs(t, r, tmuxfix.SeedPane{ID: r.Spawn.Identity.PaneID,
-					PID: seqAlivePID(e, tmux.CallKillSession), AdPane: r.Token})
-			}, out: seqWaitExpired(seqNoPane, session, true, false)},
-		{name: "agent's pane moved out of the session", spec: killRowSpec{NoSession: true},
-			setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedOurs(t, r, tmuxfix.SeedPane{}) },
-			out:   seqWaitExpired(seqNoPane, session, true, false)},
-		{name: "pane kill refused, the session kill ends the agent", out: ok,
-			setup: script(tmux.FailSocketDenied, tmux.CallKillPane, agentGoneAfter(tmux.CallKillSession))},
-		{name: "pane kill times out, the session kill ends the agent", out: ok,
-			setup: script(tmux.FailTimeout, tmux.CallKillPane, agentGoneAfter(tmux.CallKillSession))},
-		{name: "session kill times out after the pane kill", out: ok,
-			setup: script(tmux.FailTimeout, tmux.CallKillSession, agentGoneAfter(tmux.CallKillPane))},
-		{name: "both kills fail, the agent runs on", out: seqWaitExpired(seqOurs, both, true, false),
-			setup: script(tmux.FailTimeout, tmux.CallKillPane, script(tmux.FailSocketDenied, tmux.CallKillSession, nil))},
-		{name: "session replaced after the listing", out: ok, replaced: true,
-			setup: replace(agentGoneAfter(tmux.CallListPanes))},
-		{name: "session replaced after the listing, the agent runs on", replaced: true,
-			setup: replace(nil), out: seqWaitExpired(seqOurs, both, true, false)},
-		{name: "session removed after the listing", out: ok, setup: func(t *testing.T, e *killEnv, r *killRow) {
-			e.rec.RemoveSessionAfter(tmux.CallListPanes, r.Socket, r.Session.ID)
-			agentGoneAfter(tmux.CallListPanes)(t, e, r)
-		}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedRow(t, c.spec)
-			c.setup(t, e, &r)
-			seqKill(t, e, r, c.out)
-			if c.replaced {
-				seqAssertReplacementUntouched(t, e, r)
-			}
-			if c.survivors {
-				rec := killCalled(t, r.ID)[0]
-				want := []any{float64(r.TeammatePIDs[0])}
-				if got, _ := rec["survivor_pids"].([]any); !slices.Equal(got, want) || rec["process_check"] != "gone" {
-					t.Errorf("ad.kill.called survivor_pids %v, process_check %v; want %v, gone",
-						rec["survivor_pids"], rec["process_check"], want)
+			script := func(f tmux.Failure, call tmux.Call, then func(*testing.T, *killEnv, *killRow)) func(*testing.T, *killEnv, *killRow) {
+				return func(t *testing.T, e *killEnv, r *killRow) {
+					e.rec.Script(r.Socket, tmuxfix.Script{Failure: f, Times: 1}, call)
+					if then != nil {
+						then(t, e, r)
+					}
 				}
+			}
+			replace := func(then func(*testing.T, *killEnv, *killRow)) func(*testing.T, *killEnv, *killRow) {
+				return func(t *testing.T, e *killEnv, r *killRow) {
+					e.rec.ReplaceSessionAfter(tmux.CallListPanes, r.Socket, r.Session.ID, tmux.Label{})
+					if then != nil {
+						then(t, e, r)
+					}
+				}
+			}
+			ok := seqOutcome{calls: seqOurs, sent: true}
+			cases := []struct {
+				name      string
+				spec      killRowSpec
+				setup     func(t *testing.T, e *killEnv, r *killRow)
+				out       seqOutcome
+				replaced  bool
+				survivors bool
+			}{
+				{name: "a teammate ignoring the hangup survives (AC-KILL-19)", spec: killRowSpec{Teammates: 1},
+					setup: agentGoneAfter(tmux.CallKillPane), out: seqWaitExpired(seqOurs, both, false, true), survivors: true},
+				{name: "agent's pane respawned with another pid", spec: killRowSpec{NoSession: true},
+					setup: func(t *testing.T, e *killEnv, r *killRow) {
+						e.seedOurs(t, r, tmuxfix.SeedPane{ID: r.Spawn.Identity.PaneID,
+							PID: seqAlivePID(e, tmux.CallKillSession), AdPane: r.Token})
+					}, out: seqWaitExpired(seqNoPane, session, true, false)},
+				{name: "agent's pane moved out of the session", spec: killRowSpec{NoSession: true},
+					setup: func(t *testing.T, e *killEnv, r *killRow) { e.seedOurs(t, r, tmuxfix.SeedPane{}) },
+					out:   seqWaitExpired(seqNoPane, session, true, false)},
+				{name: "pane kill refused, the session kill ends the agent", out: ok,
+					setup: script(tmux.FailSocketDenied, tmux.CallKillPane, agentGoneAfter(tmux.CallKillSession))},
+				{name: "pane kill times out, the session kill ends the agent", out: ok,
+					setup: script(tmux.FailTimeout, tmux.CallKillPane, agentGoneAfter(tmux.CallKillSession))},
+				{name: "session kill times out after the pane kill", out: ok,
+					setup: script(tmux.FailTimeout, tmux.CallKillSession, agentGoneAfter(tmux.CallKillPane))},
+				{name: "both kills fail, the agent runs on", out: seqWaitExpired(seqOurs, both, true, false),
+					setup: script(tmux.FailTimeout, tmux.CallKillPane, script(tmux.FailSocketDenied, tmux.CallKillSession, nil))},
+				{name: "session replaced after the listing", out: ok, replaced: true,
+					setup: replace(agentGoneAfter(tmux.CallListPanes))},
+				{name: "session replaced after the listing, the agent runs on", replaced: true,
+					setup: replace(nil), out: seqWaitExpired(seqOurs, both, true, false)},
+				{name: "session removed after the listing", out: ok, setup: func(t *testing.T, e *killEnv, r *killRow) {
+					e.rec.RemoveSessionAfter(tmux.CallListPanes, r.Socket, r.Session.ID)
+					agentGoneAfter(tmux.CallListPanes)(t, e, r)
+				}},
+			}
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					r := e.seedRow(t, c.spec)
+					c.setup(t, e, &r)
+					seqKill(t, e, r, c.out)
+					if c.replaced {
+						seqAssertReplacementUntouched(t, e, r)
+					}
+					if c.survivors {
+						rec := killCalled(t, r.ID)[0]
+						want := []any{float64(r.TeammatePIDs[0])}
+						if got, _ := rec["survivor_pids"].([]any); !slices.Equal(got, want) || rec["process_check"] != "gone" {
+							t.Errorf("ad.kill.called survivor_pids %v, process_check %v; want %v, gone",
+								rec["survivor_pids"], rec["process_check"], want)
+						}
+					}
+				})
 			}
 		})
 	}
+
 }
 
 // seqAssertReplacementUntouched fails unless a session under r's session's
@@ -332,63 +344,69 @@ func seqAssertReplacementUntouched(t *testing.T, e *killEnv, r killRow) {
 // index), written once; a refused or failed write leaves the kill unchanged.
 func TestKillSequenceAdoptsLostReply(t *testing.T) {
 	t.Parallel()
-	lost := killRowSpec{NoPane: true, NoServerIdentity: true}
-	cases := []struct {
-		name    string
-		spec    killRowSpec
-		panes   func(e *killEnv, r killRow) []tmuxfix.SeedPane // nil: the fixture's one-pane session
-		store   func(s *killStore)
-		calls   []tmux.Call
-		adopted bool
-	}{
-		{name: "the session's one pane carries @ad_pane", spec: lost, calls: seqOurs, adopted: true},
-		{name: "a teammate at 0.0, the agent's pane split after it (AC-LKP-21)", spec: killRowSpec{NoPane: true},
-			calls: seqOurs, adopted: true, panes: func(e *killEnv, r killRow) []tmuxfix.SeedPane {
-				return []tmuxfix.SeedPane{{PID: seqAlivePID(e, tmux.CallKillSession)}, {Index: 1, AdPane: r.Token}}
-			}},
-		{name: "the adoption write is not applied", spec: lost, calls: seqOurs,
-			store: func(s *killStore) { s.refuseAdopt(api.CondChanged) }},
-		{name: "the adoption write fails in the store", spec: lost, calls: seqOurs,
-			store: func(s *killStore) { s.failAdopt(nil) }},
-		{name: "no pane carries @ad_pane, the server identity adopted", spec: lost, calls: seqFollowUp, adopted: true,
-			panes: func(*killEnv, killRow) []tmuxfix.SeedPane { return []tmuxfix.SeedPane{{}} }},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			spec := c.spec
-			spec.NoSession = c.panes != nil
-			r := e.seedRow(t, spec)
-			if c.panes != nil {
-				e.seedOurs(t, &r, c.panes(e, r)...)
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			lost := killRowSpec{NoPane: true, NoServerIdentity: true}
+			cases := []struct {
+				name    string
+				spec    killRowSpec
+				panes   func(e *killEnv, r killRow) []tmuxfix.SeedPane // nil: the fixture's one-pane session
+				store   func(s *killStore)
+				calls   []tmux.Call
+				adopted bool
+			}{
+				{name: "the session's one pane carries @ad_pane", spec: lost, calls: seqOurs, adopted: true},
+				{name: "a teammate at 0.0, the agent's pane split after it (AC-LKP-21)", spec: killRowSpec{NoPane: true},
+					calls: seqOurs, adopted: true, panes: func(e *killEnv, r killRow) []tmuxfix.SeedPane {
+						return []tmuxfix.SeedPane{{PID: seqAlivePID(e, tmux.CallKillSession)}, {Index: 1, AdPane: r.Token}}
+					}},
+				{name: "the adoption write is not applied", spec: lost, calls: seqOurs,
+					store: func(s *killStore) { s.refuseAdopt(api.CondChanged) }},
+				{name: "the adoption write fails in the store", spec: lost, calls: seqOurs,
+					store: func(s *killStore) { s.failAdopt(nil) }},
+				{name: "no pane carries @ad_pane, the server identity adopted", spec: lost, calls: seqFollowUp, adopted: true,
+					panes: func(*killEnv, killRow) []tmuxfix.SeedPane { return []tmuxfix.SeedPane{{}} }},
 			}
-			if c.store != nil {
-				c.store(e.store)
-			}
-			e.seedBystander(t, r.Socket)
-			e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
-			seqKill(t, e, r, seqOutcome{calls: c.calls, sent: true, adopted: c.adopted})
-			agentPane := ""
-			for _, p := range r.Session.Panes {
-				if p.AdPane == r.Token {
-					agentPane = p.ID
-				}
-			}
-			if got := seqTarget(e, tmux.CallKillPane); got != agentPane {
-				t.Errorf("pane kill targets %q; want the @ad_pane pane %q", got, agentPane)
-			}
-			if got := seqTarget(e, tmux.CallKillSession); got != r.Session.ID {
-				t.Errorf("session kill targets %q; want %q", got, r.Session.ID)
-			}
-			if n := len(killDisagrees(t, r.ID)); c.adopted != (n == 1) {
-				t.Errorf("%d ad.provenance.disagree records; want adopted written %v", n, c.adopted)
-			}
-			if cols := e.columns(t, r.ID); c.adopted && c.spec.NoPane && agentPane != "" && cols.PaneID != agentPane {
-				t.Errorf("pane_id = %v; want the adopted %s", cols.PaneID, agentPane)
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					t.Parallel()
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					spec := c.spec
+					spec.NoSession = c.panes != nil
+					r := e.seedRow(t, spec)
+					if c.panes != nil {
+						e.seedOurs(t, &r, c.panes(e, r)...)
+					}
+					if c.store != nil {
+						c.store(e.store)
+					}
+					e.seedBystander(t, r.Socket)
+					e.setAfterCall(tmux.CallKillPane, procfix.Gone(), r.AgentPID)
+					seqKill(t, e, r, seqOutcome{calls: c.calls, sent: true, adopted: c.adopted})
+					agentPane := ""
+					for _, p := range r.Session.Panes {
+						if p.AdPane == r.Token {
+							agentPane = p.ID
+						}
+					}
+					if got := seqTarget(e, tmux.CallKillPane); got != agentPane {
+						t.Errorf("pane kill targets %q; want the @ad_pane pane %q", got, agentPane)
+					}
+					if got := seqTarget(e, tmux.CallKillSession); got != r.Session.ID {
+						t.Errorf("session kill targets %q; want %q", got, r.Session.ID)
+					}
+					if n := len(killDisagrees(t, r.ID)); c.adopted != (n == 1) {
+						t.Errorf("%d ad.provenance.disagree records; want adopted written %v", n, c.adopted)
+					}
+					if cols := e.columns(t, r.ID); c.adopted && c.spec.NoPane && agentPane != "" && cols.PaneID != agentPane {
+						t.Errorf("pane_id = %v; want the adopted %s", cols.PaneID, agentPane)
+					}
+				})
 			}
 		})
 	}
+
 }
 
 // TestKillSequenceUsesRowSocket: every call names the row's recorded socket

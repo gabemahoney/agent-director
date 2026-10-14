@@ -17,7 +17,7 @@ type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Sce
 
 func New(t testing.TB) Runtime { return NewWithWorker(t, false) }
 
-// NewWithWorker separates the accepting runtime from a same-runtime worker with neither ACP pipe.
+// NewWithWorker uses a separate terminal session for the independent worker with neither ACP pipe.
 func NewWithWorker(t testing.TB, worker bool) Runtime {
 	t.Helper()
 	dir := t.TempDir()

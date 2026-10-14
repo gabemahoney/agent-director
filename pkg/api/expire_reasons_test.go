@@ -103,54 +103,60 @@ const (
 // identity keeps process_alive with no tmux call; anything else is looked up.
 func TestExpireReasons_Process(t *testing.T) {
 	// Serial: it checks every record written to the shared trail since its mark.
-	cases := []struct {
-		name  string
-		ss    rsnSS
-		agent agentState // the selected identity's process
-		want  string
-	}{
-		{"session start alive", ssAgrees, agentAlive, "process_alive"},
-		{"only session start recorded, alive", ssOnly, agentAlive, "process_alive"},
-		{"only pane identity recorded, alive", ssPaneOnly, agentAlive, "process_alive"},
-		{"identities disagree, session start dead, pane alive", ssDisagreesDead, agentAlive, "process_alive"},
-		{"identities disagree, session start alive, pane dead", ssDisagreesLive, agentGone, ""},
-		{"dead", ssAgrees, agentGone, ""},
-		{"zombie", ssAgrees, agentZombie, ""},
-		{"unreadable", ssAgrees, agentUnreadable, ""},
-		{"pid-only identity alive", ssPIDOnly, agentAlive, ""},
-		{"no process recorded", ssAgrees, agentNotRecorded, ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			spec := e.finishedSpec(rsnAge, c.agent)
-			ssPID := e.newPID()
-			switch c.ss {
-			case ssPaneOnly:
-				spec.Opts = append(spec.Opts, apitest.WithPID(0), apitest.WithProcStarttime(""))
-			case ssOnly, ssPIDOnly:
-				spec.NoPane = true
-				spec.Opts = append(spec.Opts, apitest.WithPID(ssPID))
-				if c.ss == ssOnly {
-					spec.Opts = append(spec.Opts, apitest.WithProcStarttime(apitest.LinuxProcStarttime))
-				}
-			case ssDisagreesDead, ssDisagreesLive:
-				spec.Opts = append(spec.Opts, apitest.WithPID(ssPID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+	for _, rowAgent := range []string{"claude", "cursor"} {
+		t.Run(rowAgent, func(t *testing.T) {
+			cases := []struct {
+				name  string
+				ss    rsnSS
+				agent agentState // the selected identity's process
+				want  string
+			}{
+				{"session start alive", ssAgrees, agentAlive, "process_alive"},
+				{"only session start recorded, alive", ssOnly, agentAlive, "process_alive"},
+				{"only pane identity recorded, alive", ssPaneOnly, agentAlive, "process_alive"},
+				{"identities disagree, session start dead, pane alive", ssDisagreesDead, agentAlive, "process_alive"},
+				{"identities disagree, session start alive, pane dead", ssDisagreesLive, agentGone, ""},
+				{"dead", ssAgrees, agentGone, ""},
+				{"zombie", ssAgrees, agentZombie, ""},
+				{"unreadable", ssAgrees, agentUnreadable, ""},
+				{"pid-only identity alive", ssPIDOnly, agentAlive, ""},
+				{"no process recorded", ssAgrees, agentNotRecorded, ""},
 			}
-			r := e.seedRow(t, spec)
-			switch c.ss {
-			case ssDisagreesDead:
-				e.pc.Set(ssPID, procfix.Gone())
-			case ssDisagreesLive:
-				e.pc.Set(ssPID, procfix.Alive(apitest.LinuxProcStarttime))
+			for _, c := range cases {
+				t.Run(c.name, func(t *testing.T) {
+					e := newKillEnv(t)
+					e.rowAgent = rowAgent
+					spec := e.finishedSpec(rsnAge, c.agent)
+					ssPID := e.newPID()
+					switch c.ss {
+					case ssPaneOnly:
+						spec.Opts = append(spec.Opts, apitest.WithPID(0), apitest.WithProcStarttime(""))
+					case ssOnly, ssPIDOnly:
+						spec.NoPane = true
+						spec.Opts = append(spec.Opts, apitest.WithPID(ssPID))
+						if c.ss == ssOnly {
+							spec.Opts = append(spec.Opts, apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+						}
+					case ssDisagreesDead, ssDisagreesLive:
+						spec.Opts = append(spec.Opts, apitest.WithPID(ssPID), apitest.WithProcStarttime(apitest.LinuxProcStarttime))
+					}
+					r := e.seedRow(t, spec)
+					switch c.ss {
+					case ssDisagreesDead:
+						e.pc.Set(ssPID, procfix.Gone())
+					case ssDisagreesLive:
+						e.pc.Set(ssPID, procfix.Alive(apitest.LinuxProcStarttime))
+					}
+					var sockets []string
+					if c.want == "" {
+						sockets = []string{apitest.TestSocket}
+					}
+					e.rsnExpect(t, 0, map[string]string{r.ID: c.want}, sockets...)
+				})
 			}
-			var sockets []string
-			if c.want == "" {
-				sockets = []string{apitest.TestSocket}
-			}
-			e.rsnExpect(t, 0, map[string]string{r.ID: c.want}, sockets...)
 		})
 	}
+
 }
 
 // TestExpireReasons_Rows pins the outcomes beyond the call table's single

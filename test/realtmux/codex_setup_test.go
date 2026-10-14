@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -182,6 +183,7 @@ func installBinary(t testing.TB, built, home string) string {
 
 // stdioMCP is a running stdio MCP server and its JSON-RPC lines.
 type stdioMCP struct {
+	stop   func() // ends and waits for this caller; safe to repeat at cleanup
 	t      testing.TB
 	in     io.WriteCloser
 	lines  chan string
@@ -210,12 +212,16 @@ func startStdioMCP(t testing.TB, command string, args, env []string, dir string)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start %s: %v", command, err)
 	}
-	t.Cleanup(func() {
-		_ = m.in.Close()
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = errFile.Close()
-	})
+	var stopped sync.Once
+	m.stop = func() {
+		stopped.Do(func() {
+			_ = m.in.Close()
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			_ = errFile.Close()
+		})
+	}
+	t.Cleanup(m.stop)
 	go func() {
 		sc := bufio.NewScanner(out)
 		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)

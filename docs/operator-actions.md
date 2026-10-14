@@ -177,8 +177,9 @@ returns `ErrTmuxCaptureFailed`, while the agent process runs. A human decides:
    jq -c 'select(.event == "ad.kill.called" and .instance_id == "<id>") | {agent_pid, survivor_pids, outcome}' ~/.config/agent-director/ad-trail.jsonl | tail -n 1
    ```
 
-2. Confirm it is the agent, the Claude Code or Codex process started at
-   launch: `ps -o pid,lstart,args -p '<pid>'`.
+2. Confirm it is the recorded agent process started at launch: Claude Code,
+   Codex, or the Cursor gateway. Check its start time and command:
+   `ps -o pid,lstart,args -p '<pid>'`.
 3. Look for its pane, on any other tmux server you know of too (steps 4b and 3);
    end the pane by id if not wanted. In no pane: recheck its start time, then
    `kill '<pid>'`. Do the same for a survivor.

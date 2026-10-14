@@ -28,6 +28,9 @@ type ownedProcess struct {
 	output *os.File
 	done   chan error
 	stop   chan chan error
+	// Published before done is closed; later stop calls retain the same
+	// terminal failure after another observer consumed the channel value.
+	exitErr error
 }
 
 // protocolInput gives the transport a separately closeable, pollable writer.
@@ -234,6 +237,7 @@ func traceProcess(program string, args []string, cwd string, ready chan<- proces
 	if !rootGone && failure == nil {
 		failure = fmt.Errorf("Cursor exit was not confirmed")
 	}
+	p.exitErr = failure
 	p.done <- failure
 	close(p.done)
 	if stopReply != nil {
@@ -281,7 +285,10 @@ func (p *ownedProcess) terminate() error {
 	reply := make(chan error, 1)
 	select {
 	case p.stop <- reply:
-	case err := <-p.done:
+	case err, ok := <-p.done:
+		if !ok {
+			return p.exitErr
+		}
 		return err
 	case <-time.After(3 * time.Second):
 		return fmt.Errorf("Cursor termination could not be requested")

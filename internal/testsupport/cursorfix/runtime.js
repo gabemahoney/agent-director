@@ -6,7 +6,7 @@ if(process.argv[2]==='worker-server') {
  setInterval(()=>{if(fs.existsSync(SETTINGS.workerRelease)) process.exit(0);},10);
 } else {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
-if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore'}).unref();
+if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
 function send(frame) { console.log(JSON.stringify({jsonrpc:'2.0',...frame})); }
 const input = readline.createInterface({input:process.stdin});
 input.on('line', async line => {
