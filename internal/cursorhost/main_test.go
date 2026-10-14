@@ -6,4 +6,12 @@ import (
 	"testing"
 )
 
-func TestMain(m *testing.M) { sandboxguard.Require(); os.Exit(m.Run()) }
+var cursorReportHelper func() int
+
+func TestMain(m *testing.M) {
+	sandboxguard.Require()
+	if os.Getenv("AD_TEST_CURSOR_REPORT_HELPER") == "1" && cursorReportHelper != nil {
+		os.Exit(cursorReportHelper())
+	}
+	os.Exit(m.Run())
+}

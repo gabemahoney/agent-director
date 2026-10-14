@@ -643,9 +643,9 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 // hc's clock): a Claude PostToolUse or PostToolUseFailure carrying a
 // tool_use_id (ToolRan; never a Codex hook) proves the requests with that
 // tool_use_id gone, tool_ran; the main agent's Stop or idle-prompt
-// Notification, or a Codex Interrupt with no agent_id (TurnEnded; a marked
-// Interrupt is not one), proves every
-// request with no agent_id recorded before start, the hook's start (Handle's,
+// Notification, a Codex Interrupt with no agent_id, or a verified Cursor
+// main Stop/Interrupt (TurnEnded; child/unknown events prove nothing), proves every
+// durably eligible request recorded before start, the hook's start (Handle's,
 // from HandleConfig.Start), turn_end: one whose created_at is strictly before
 // start's whole second (store.RequestProof.RecordedBefore; b.omt). The cut is
 // the hook's start, not its read: an idle-prompt Notification whose read

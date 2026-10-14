@@ -338,9 +338,12 @@ migrated store. Stop the caller and whatever starts agents (step 1 of
 
 **Forward** (preferred; keeps every write since the upgrade):
 
-1. End the agent of each live pre-upgrade row (`get` shows no `tmux_socket` and
-   no `launch_started_at`) by hand, as "A `pending` row with no launch start or
-   token" says, then run `agent-director find-missing`.
+1. Identify the live pre-upgrade agents from the set the caller was running
+   and end each by hand, then run `agent-director find-missing`. Missing
+   `tmux_socket` and `launch_started_at` identify older rows without spawn
+   identity; handle those as "A `pending` row with no launch start or token"
+   says. Schema 9→10→11 preserves existing identity fields, so populated
+   fields do not exclude a pre-upgrade agent.
 2. Deploy the caller's version; it resumes or reuses those rows (never delete
    them: `resume` needs their current session and launch settings).
 
@@ -839,15 +842,17 @@ when it cannot write the crontab back.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, the old-layout steps below do not apply. Before
-upgrading, stop agents, servers and callers and keep a copy of the actual
-store (`[store] db_path` when set), including its `-wal` and `-shm` files.
+including schema v9→v10 and v10→v11, the old-layout steps below do not
+apply. Before upgrading, stop agents, servers and callers and keep a copy
+of the actual store (`[store] db_path` when set), including its `-wal` and
+`-shm` files.
 To roll back, stop them again, restore that pre-upgrade copy and install the
 previous release with its own `install.sh` and the original install flags.
 Restore the store with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. This loses all writes made since
 the backup. The installer does not make this backup; a binary swap cannot
-make a v10 store readable by a v9 release. Without a pre-upgrade copy, stop
+make a v11 store readable by a v9 or v10 binary. There is no supported
+in-place v11→v10 or v10→v9 downgrade. Without a pre-upgrade copy, stop
 and obtain human help.
 
 The numbered procedure below applies only to an upgrade that moved

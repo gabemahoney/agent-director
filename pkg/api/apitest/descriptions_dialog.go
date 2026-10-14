@@ -47,15 +47,19 @@ func DescDialogMaybeOpenCodex() DescCase {
 // DescProvenGoneHow is the manifest's text of the proven_gone_how field on a
 // permission request's delivery facts: tool_ran is a Claude hook's proof and
 // never applies on a Codex row, turn_end is the main agent's Stop or idle-prompt
-// Notification or a Codex main agent's Interrupt, and agent_gone is the end of
-// the spawn. Check it with AssertAgentTextCase.
+// Notification, Codex Interrupt or verified Cursor main Stop/Interrupt only
+// for durable eligible origin. Check it with AssertAgentTextCase.
 func DescProvenGoneHow() DescCase {
 	return DescCase{
 		Name: "proven_gone_how field",
 		Require: []string{
 			"tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id (never on a Codex row)",
 			"turn_end: the turn of the agent that asked ended after it was written",
-			"the main agent's Stop or idle-prompt Notification, or a Codex main agent's Interrupt (Esc), proves a request with no agent_id",
+			"the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt",
+			"proves only a durably main-turn-eligible request recorded before the hook began",
+			"Legacy non-Cursor main requests retain eligibility",
+			"Cursor unknown-origin and child requests are ineligible even without a child id",
+			"Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility",
 			"agent_gone: its spawn was marked missing, ended or resumed",
 		},
 	}

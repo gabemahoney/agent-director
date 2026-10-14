@@ -74,8 +74,33 @@ func (r *reporter) report(event string) error {
 	if terminated {
 		expected = store.StateEnded
 	}
-	if row.State != expected || row.JSONLPath != r.path {
+	if row.JSONLPath != r.path {
 		return fmt.Errorf("Cursor report was not applied")
 	}
-	return nil
+	if row.State != expected {
+		if terminated || row.State != store.StateCheckPermission {
+			return fmt.Errorf("Cursor report was not applied")
+		}
+		requests, e := r.store.PermissionRequestsForSpawn(row.InstanceID)
+		if e != nil {
+			return fmt.Errorf("Cursor held report could not be verified")
+		}
+		held := false
+		for _, request := range requests {
+			held = held || (request.AwaitsAnswer() && !request.ProvenGone())
+		}
+		if !held {
+			return fmt.Errorf("Cursor report was not applied")
+		}
+	}
+	// Report acceptance retains the same runtime/connection/pane authority;
+	// another launch or an unrelated version increment cannot confirm it.
+	bound, err := r.store.ReadCursorRuntime(row.InstanceID)
+	if err != nil || bound != r.binding || row.Identity.PanePID != r.binding.GatewayPID || row.Identity.PaneStarttime != r.binding.GatewayStart {
+		return fmt.Errorf("Cursor report binding changed")
+	}
+	if err = VerifyRuntime(r.binding, terminated); err != nil {
+		return err
+	}
+	return VerifyPane(r.store, row, r.cfg)
 }

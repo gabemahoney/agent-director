@@ -223,8 +223,9 @@ func TestMigrationGate(t *testing.T) {
 		store migStoreKind
 		files []migFile
 	}{
-		{"store-at-the-hop-leaves-a-template-made-after-the-upgrade", migStoreAt, []migFile{later}},
-		{"store-at-the-hop-reads-no-template", migStoreAt, []migFile{later, old}},
+		{"v9-reads-no-template", migStoreV9, []migFile{later, old}},
+		{"v10-reads-no-template", migStoreV10, []migFile{later, old}},
+		{"current-reads-no-template", migStoreAt, []migFile{later, old}},
 		{"no-store-reads-and-changes-nothing", migNoStore, []migFile{later, old}},
 	}
 	for _, row := range rows {
@@ -236,6 +237,9 @@ func TestMigrationGate(t *testing.T) {
 			migUnchanged(t, before, h.Snapshot(), moveNewRel+"/config.toml", moveNewRel+"/templates")
 			if got := h.migBackupsUnder(h.New); len(got) != 0 {
 				t.Errorf("backups = %v, want none", got)
+			}
+			if v := h.migStoreVersion(filepath.Join(h.New, "state.db")); v != "11" {
+				t.Errorf("installed store version %s; want current 11", v)
 			}
 			if strings.Contains(res.Stdout, "migrate :") {
 				t.Errorf("stdout reports a migration:\n%s", res.Stdout)

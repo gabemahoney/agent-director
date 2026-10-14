@@ -242,3 +242,80 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 		}
 	})
 }
+
+// Unknown origin uses a NULL child ID and explicit false; closed records never upgrade it.
+func TestUnknownOriginHoldAfterReopen(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"claude", "cursor"} {
+		for _, closure := range holdClosures {
+			t.Run(agent+"/"+closure.name, func(t *testing.T) {
+				t.Parallel()
+				no := false
+				p := newPAEnvAgent(t, agent, "", &no)
+
+				if closure.pane == "outside" {
+					p.paGoneLongAgo(t, storefix.TestRequestTokenA)
+					stale := p.outside(storefix.TestRequestTokenA, "allow")
+					p.setPane("changed before claim\n")
+					_, err := p.recordPaneAnswer(stale)
+					assertOneSentinel(t, err, api.ErrPaneChanged)
+					if request := p.request(t, storefix.TestRequestTokenA); request.Decision != "" || request.MainTurnEndEligible || request.ProvenGone() {
+						t.Fatal("stale pane claim changed request")
+					}
+				}
+				closure.close(t, p)
+				// Close the seed connection so every API/proof/reader uses restart facts.
+				if err := p.st.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := store.Open(p.dbPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reopened.Close()
+				p.st, p.store.st, p.sks = reopened, reopened, reopened
+				tok := storefix.TestRequestTokenA
+				before := p.request(t, tok)
+				if before.AgentID != "" || before.MainTurnEndEligible || before.ProvenGone() {
+					t.Fatalf("unknown request %+v", before)
+				}
+				if n := p.prove(t, turnEnd); n != 0 {
+					t.Fatalf("main turn proved unknown: %d", n)
+				}
+				run := p.sendKeysRun(p.plain("hi"))
+				assertDialogMaybeOpen(t, run.err, tok, store.StateCheckPermission)
+				if len(run.calls) != 0 {
+					t.Fatal("held plain send typed")
+				}
+				pause := p.pauseRun(t, false)
+				if pause.err == nil || len(pause.calls) != 0 {
+					t.Fatalf("held pause %v %v", pause.err, pause.calls)
+				}
+
+				hashed := p.plain("hi")
+				hashed.ExpectPaneSHA256 = p.hash()
+				p.setPane("changed after capture\n")
+				hashedRun := p.sendKeysRun(hashed)
+				assertOneSentinel(t, hashedRun.err, api.ErrPaneChanged)
+				if !slices.Equal(paKinds(hashedRun.calls), paneReadCalls) {
+					t.Fatal("stale hash sent keys")
+				}
+				hashed.ExpectPaneSHA256 = p.hash()
+				hashedRun = p.sendKeysRun(hashed)
+				if hashedRun.err != nil {
+					t.Fatalf("matching hash %v", hashedRun.err)
+				}
+				if after := p.request(t, tok); after.MainTurnEndEligible || after.ProvenGone() {
+					t.Fatal("pane/decision inferred proof")
+				}
+				if n := p.prove(t, toolRan(paToolUseID)); n != 1 {
+					t.Fatalf("matching execution %d", n)
+				}
+				run = p.sendKeysRun(p.plain("hi"))
+				if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+					t.Fatalf("valid proof did not release %v %v", run.err, run.calls)
+				}
+			})
+		}
+	}
+}

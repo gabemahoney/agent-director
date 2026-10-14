@@ -1,0 +1,59 @@
+E2 Task1 Engineer source handoff — 2026-10-14
+Workspace: /home/horde/ad-codex/project/agent-director-ftd
+Branch: feature/b.ftd; base HEAD d6858a96908a38e29d8055f564c5eb505a7e80a6
+Task: t2.jf1.c1.xi. Own source subtasks: t3.jf1.c1.xi.rq, .mx, .j9.
+Only these subtasks were activated/completed. No parent, sibling, test, or documentation ticket status changed.
+PRD t1.ftd.y5 approved:yes read and verified. Task and all 15 children, Epic E2, Plan b.jf1, relevant SR4/5/9 and latest technical decisions read. Planning proposals/final PM approval applied. No product blockers or questions.
+
+IMPLEMENTATION AND TECHNICAL DECISIONS (root may append to SRD)
+1. Schema v11 adds permission_requests.main_turn_end_eligible INTEGER NOT NULL DEFAULT 0, appended after proven_gone_how. False is a real durable value, independent of nullable child agent_id. The separate flag is internal proof metadata; no CLI/MCP/TS permission parameters, public proof API or approval knobs were added. Existing API response JSON shapes are unchanged.
+2. migrateV10toV11 is the sole added hop. All prior hop bodies and the immutable agent-rename threshold9 remain unchanged. Fresh DDL and ADD COLUMN use identical type/null/default/order. The existing exact-match authorization gate still executes before migration; missing/wrong sentinel and newer-schema refusal stay on the existing no-mutation paths. Hop DDL, conditional backfill, validation, user_version11 and commit share one transaction. Any failure rolls back this hop and preserves its v10 version and authorization for corrected retry.
+3. Only a newly introduced eligibility column is backfilled. Historical requests with agent_id IS NULL on an existing non-Cursor owning spawn become eligible; historical child IDs remain false. ALL historical Cursor requests default false, including NULL child IDs: no old stored Cursor origin is invented. Orphan requests default false. Preexisting compatible columns keep every explicit value, including false on a non-Cursor main request; no backfill is rerun when the column exists. The guard rejects case-mismatched names, wrong INTEGER type, nullability, primary-key or default shape and non-integer/out-of-range stored values. Shape/value refusals wrap ErrSchemaMismatch. Successful reentry stamps only; no stored eligibility is recomputed.
+4. RelayRequest.MainTurnEndEligible is an internal *bool. Nil preserves old non-Cursor main/child construction semantics and defaults false for Cursor; explicit false stays false, explicit true represents independently proven main origin supplied by a future audited Cursor admission path. A nonempty child AgentID forces false even if explicit true is supplied. Compatibility resolution happens once under InsertRelayRequest's immediate transaction/write lock, using the actual owning spawn's agent, with the existing gated check_permission write, collision rollback, cap eviction and bounds unchanged. The existing Claude/Codex hook writer explicitly supplies its established main/child eligibility. Cursor admission remains denied by current gateway/handler policy.
+5. The legacy UpsertOpenPermissionRequest[Result] insert selects its owning spawn and writes non-Cursor legacy eligibility / Cursor false in the same gated insert; it cannot infer proven Cursor main origin from NULL child identity. Its signatures and legacy atomic/collision behavior are unchanged.
+6. PermissionRow.MainTurnEndEligible and the shared permissionColumns/scanPermissionRow carry the durable bit through every full/token/bounded/open/spawn/tool-ran/pane reader. Decisions, acknowledgement, timeout, refused-decide bookkeeping, pane intent/sent/outside/tool-ran claims, eviction, resume/reuse and find-missing/owning-spawn-close paths were audited; none computes or updates the bit. Existing close/proof rules stay in place. Restart readers reconstruct from SQLite, never gateway memory or NULL identity.
+7. RequestProof.match main-turn selection now requires pr.main_turn_end_eligible = 1, retaining the strict whole-second created_at cut, pre-lock MAX(request_id) cut repeated in the write, and unchanged hook ownership/runtime gate. Correlated tool-use proof and owning-spawn closure remain separate valid release paths, not generic child/session/completion proof. Cursor unknown/child lifecycle classification remains rejected/ignored. Verified Cursor main Interrupt joins its existing main Stop as a turn-end proof, but neither can release false-eligibility requests.
+8. Cursor waiting (Stop/Interrupt) and working transitions share the existing noRequestHoldsRowSQL predicate in the UPDATE itself, so a concurrent insertion/check_permission cannot be overwritten. For Cursor the attempted guarded UPDATE runs first; when blocked, the existing gated soft-refresh helper records activity/session/path/liveness and advances row_version while preserving state and settle columns. The complete existing Cursor binding predicates are repeated in that refresh. Other agents preserve their previous working retention path, and deliberate Claude/Codex Stop/Interrupt to waiting is unchanged, even with a child hold.
+9. reporter.report accepts check_permission instead of nominal waiting/working only while a genuine request still awaits an answer and is not proven gone. It still requires own token/life/session/path and a newer row version, and additionally rereads the exact runtime binding (including connection/pipes/session/termination), checks pane identity and re-verifies actual runtime and pane evidence before success. Intentional termination still requires ended. An unrelated/stale/mismatched binding or a check_permission row without a genuine hold fails.
+10. Canonical manifest and TS proven_gone_how descriptions now distinguish durable eligibility from child identity and acknowledge Cursor main Stop/Interrupt. Normal sandbox go generate ./pkg/api/manifest/... regenerated surface.json and generated CLI/MCP references. No public field/control was added. Generated references are the authorized exception to the prose lane boundary; no prose documentation was hand-edited.
+
+FILES (16 total)
+internal/store/request_eligibility.go (new)
+internal/store/store.go
+internal/store/schema.go
+internal/store/permission.go
+internal/store/relay_writes.go
+internal/store/request_proof.go
+internal/store/hook_writes.go
+internal/hook/classify.go
+internal/hook/permission.go
+internal/hook/handler.go (source comments)
+internal/cursorhost/report.go
+pkg/api/manifest/manifest.go
+pkg/api/manifest/surface.json (normal generator)
+pkg/ts-bun-client/src/types.ts (canonical type comments)
+docs/cli-reference.md (normal generator)
+docs/mcp-reference.md (normal generator)
+
+VERIFICATION (all repository artifact execution via make sandbox CMD=...)
+- gofmt changed Go sources.
+- go build ./internal/store ./internal/hook ./internal/cursorhost — passed.
+- go vet ./internal/store ./internal/hook ./internal/cursorhost — passed.
+- Normal manifest generators — passed.
+- Existing focused request/store/hook checks: 12 named top-level tests passed, including proof ordering cuts, legacy child Stop compatibility, relay insertion/ack/timeout/read materialization and Cursor classification/verifier. Receipt /tmp/ftd-e2-task1-targeted.log.
+- Existing focused concurrency/runtime/hook/API checks: 12 named top-level tests passed, including TestStateWriteRacingARequestRecordedAfterItsRead; all current Cursor runtime connection/parent/stale/replacement/binding write/error gates; Claude/Codex request proof and escape; plain send-keys and pane-answer claim paths. Receipt /tmp/ftd-e2-task1-guards.log.
+- Existing migration chain/reentry/refusal/rollback checks: TestAuthorizedMigrationFromEveryVersion, TestMigrationRefusedWithoutSentinel, TestGateRefusesBadSentinel, TestNewerThanBinaryIsSchemaMismatch, TestMigrationRollback, TestMigrationStepReentry — all six passed. Receipt /tmp/ftd-e2-task1-migration.log.
+- Total 30 named existing top-level targeted tests passed, with their existing table/subtests. No failed targeted checks. git diff --check passed.
+- No full Go/Bun suite, integration, heavy Docker groups, TLC, authenticated live cases or scheduler submission run; these remain root/TestWriter/operator gates. No unit tests/shared fixtures/formal specs/install scripts/bundled install skill/.claude/prose docs changed; no host artifact/test execution, real AD stores, credential operations, commit or push.
+
+TESTWRITER / DOCWRITER FOLLOW-UP (assigned lanes, not source incompleteness)
+- Add v11-specific matrix for Cursor NULL identity false, historical non-Cursor main/child, explicit false compatible reentry/reopen, bad shape/data rejection, mutation-failure rollback/corrected retry and fresh convergence; update versioned/schema/installer fixture inventories and newer-than-current cases to 11 while preserving rename9.
+- Extend shared request factories with explicit *bool controls and accurate materialized bool assertions. Nil keeps historical non-Cursor behavior. Seed unknown Cursor with nil/false plus AgentID empty; proven-main Cursor may use explicit true only in synthetic proof fixtures. Plans must remain false even if later admission proves main origin: accepting a plan is not execution/turn-end proof.
+- Add seeded Cursor Stop/Interrupt/UserPromptSubmit hold tests including existing hookBeforeUpdate seam concurrent insertion; held soft-refresh advances version and preserves check_permission, while stale/unrelated runtime/session/parent gates cannot mutate or prove requests.
+- Add reporter genuine-held success and no-genuine-hold/stale binding/session/runtime rejection using existing synthetic gateway/runtime/pane seams, with actual independently checked runtime/pane evidence. New behavior has only existing regression coverage so far; the assigned TestWriter owns comprehensive additions.
+- Add eligible/false NULL-ID reopening + strict age/max-ID/gate matrices and API prompt/pause/pane safeguards. Existing unchanged tests passed, but no claim of completed new edge coverage.
+- Keep questions/authorization denied until Task2; no ACP acceptance/parity is claimed by Task1.
+- Reconcile permissions/caller/usage/architecture/migration/current-layout recovery and the three-way canonical wayback text. Exact schema/default/backfill/reentry details above are authoritative for prose settlement. Installer literal pins follow settled docs before the sole final full suite.
+
+STATUS / DEVIATIONS
+Own source subtasks rq/mx/j9 completed. No source work left outstanding in this dispatch, no failures or product questions. Technical representation was selected within authorization; no scope expansion. Earlier schema hops, other-agent behavior, actual runtime/pane authority and immediate-parent hook contract preserved. Task1/Task2 interface integration still pending externally at root's eventual exact local commit.

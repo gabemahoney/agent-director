@@ -1,0 +1,60 @@
+E2 Task1 INITIAL execution Product Manager review — 2026-10-14
+Task t2.jf1.c1.xi; Epic t1.jf1.c1; Plan b.jf1; Idea b.ftd.
+Workspace /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd, base HEAD d6858a96908a38e29d8055f564c5eb505a7e80a6 plus settled 54-file working tree.
+
+VERDICT: READY FOR LOCAL TASK COMMIT. No mandatory source or Task1 documentation correction found. This is not Task1 done, E2 complete, or external acceptance. Keep Task1 active and Task2 unstarted until the required exact-commit external interface gate passes.
+
+1. Mandatory findings: none from this static review.
+2. Required completion dependency: root must commit the reviewed tree locally, then hand the actual integration/formal commands to the operator for external scheduling at that exact commit. Current Docker/TLC/live E2 acceptance is unrun. Historical TLC receipts do not validate the modified Hold36hCx overlay. Actual Cursor request admission and per-request delivery remain Task2; this foundation does not satisfy the whole Epic's relay/plan/pane/question acceptance.
+
+REQUIREMENTS AND SOURCE ASSESSMENT
+Read current Task and all 15 Subtasks, parent Epic, Plan, Idea, approved PRD and SRD/current technical dispositions via bees. Read the linked route findings, live evidence and superseding R3 decision, historical terminal/ACP research reports, and E2 preparation file from the actual hive under /home/horde/ad-codex/project/tickets. Older proposals for question answering, force-based gating, a noninteractive renderer or generic ACP framework are superseded; none entered this patch. No new product question or technical design conflict found.
+
+Applied code-review and doc-review skills by reading their SKILL.md files plus CODEX-SHIM.md and following their Codex translation. No separate Skill tool exists in this runtime; direct file-based skill use is the supported mechanism. Read CLAUDE.md, engineering and documentation guides. Reused the explicitly authorized aggregate complete-file documentation review; no claim to personally reread all 1.5 MB of architecture.
+
+- Schema11 adds one internal durable main_turn_end_eligible bit, separate from nullable child identity. Fresh DDL and the distinct 10→11 hop agree. Earlier hop implementations and rename threshold9 are unchanged. Authorization still precedes migration; DDL/backfill/validation/stamp/commit are one transaction per hop. Compatible reentry retains explicit false; new-column-only backfill preserves historical non-Cursor main semantics, including NULL stored agent, while Cursor, children and orphans remain false. Incompatible shape/type/range and known-child=true refuse transactionally.
+- Both insertion routes persist eligibility under their existing ownership/transaction gates. Relay nil compatibility resolves once against sql.NullString; known child overrides explicit true. Materialization reads the stored bit. Existing decisions, ack, timeout, pane claims and cleanup do not confer eligibility. No public approval/origin knob or public parameter change was added.
+- Main-turn proof requires the explicit bit AND no child identity, retaining strict hook-start age and pre-lock maximum-request-ID cuts in read and write. A current-schema contradictory child=true cannot obtain main proof. Matching tool proof and owning-spawn termination remain separate paths; child/unknown lifecycle is not proof.
+- Cursor working/waiting transitions carry the hold predicate in the conditional UPDATE, including concurrent insertion. Held refresh repeats the existing binding gate and preserves state/settle data while refreshing activity/version. Claude/Codex waiting transitions remain unchanged. Reporter accepts a genuine held check_permission only with its launch/life/session/path/version and current runtime/pane evidence; terminal reporting still requires ended. Handler/classifier continue to reject unknown/child origin for lifecycle authority.
+- Protocol authorization still denies permissions/plans/questions; no request admission, E3 queues/rotation, E4 load/reuse, screen interpretation, credential handling or new control API was added.
+- New test bodies and changed behavioral matrices exercise actual SQLite persistence/reopen, refusal and rollback, NULL historical compatibility, corrupted child defense, writer collisions and readers, proof correlation and isolation, state-update insertion races, hook authority, protected reporter process/pane evidence, and public prompt/pause/pane holds. Shared fixtures are reused. Reporter subprocess seam is synthetic and labelled; no real ACP claim follows from it. Installer cases distinguish physical9/10/11 and retain actual prior-release rollback/literal advice coverage.
+
+VALIDATION AND EVIDENCE
+Independently checked every one of the 54 final-tree manifest hashes against current files: zero mismatches. The final raw unit log SHA256 is 650e063419d2af31e2b8a831082936c5c773737800a88149b9bba2c118bd66ac, matching the writer receipt. It contains 68 passing Go packages and Bun 429 pass, 0 fail across 57 files. The writer reports 62 cached/6 executed Go packages; these are package totals, not individual test or skip totals. The earlier failed full run and the three repaired text/golden expectations remain disclosed in its report. I inspected the changed assertions: they retain the intended safety contracts, and the TS change is the proof comment.
+
+Source build/vet/gofmt and focused repair checks were reported green by source owners; this read-only lane did not rerun repository artifacts, linters, full units, Docker groups or TLC. git diff --check independently passes. No commit, push, ticket mutation, real AD store access, credential operation or agent message was performed. Only this /tmp report was written.
+
+DOCUMENTATION DISPOSITION
+The four cold reviewers covered architecture base lines1–21996 at SHA25672070f26d31fdeba5dd5942ef190907dc3877c33692d87bd273f32201b8236aa in contiguous partitions, plus complete touched smaller docs. Their reports explicitly repair initial read truncations. Correction writer reconstructed that base hash and reviewed all17 changed architecture ranges against source, with complete changed small-doc rereads. Current architecture SHA2565e61f7d91e7b1c89f124a6434176ecb90b38f14101f199be7bb649f522483c4c matches the checked final manifest. I inspected current source, Task1 doc changes and correction evidence, accepting this aggregate coverage as explicitly authorized.
+
+Mandatory A1–4/B1–2/C1/D2 and additional factual A5–7/C5 are resolved: Cursor UPDATE-first refresh/version, schema-aware rollback, eligibility refusal causes, per-hop partial-chain retry authorization, other-agent state distinctions, current hook gate/store behavior, same-agent life semantics, pre-upgrade row identification, and descriptor-routing correction. D1 provenance now distinguishes the historical snapshot from the authored-only overlay. New progress/test-count prose was removed from architecture. Canonical current-layout recovery remains the settled 96-line/4920-byte section, SHA2561cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc, with exact three-way equality and literal-follow verification reported by the final writer.
+
+IGNORED / DEFERRED FEEDBACK (ALL REMAINS REAL; NO WHOLE-DOC CLEAN CLAIM)
+Root explicitly deferred the following inherited broad normalization beyond Task1. I accept that scope disposition; none is concealed as fixed, and none requires reopening this Task's source or approved product decision. Detailed locations and complete findings remain in doc-review-a/b/c/d.txt under the handoff directory.
+- A8: operator-actions hook-hash implementation explanation.
+- A9: architecture1–5500 implementation/code walkthroughs beyond component cheat-sheet scope.
+- A10: same partition's testing, measurement and probe narratives.
+- A11: same partition's history, rationale and superseded-design narratives.
+- B3: generated MCP hyphen headings differ from advertised underscore names; fix canonical generator in separate work, not hand-edit generated docs. This is inherited naming debt, not a new Task1 tool surface.
+- B4: generated references retain release/rename/fix history.
+- B5: generated references duplicate recovery procedures outside designated owners.
+- B6: generated references retain implementation language and duplicate canonical state/delivery prose.
+- B7: architecture5501–11000 test inventories/strategy.
+- B8: same partition's rationale, history and performance detail.
+- B9: same partition's implementation recipes/signatures/code.
+- B10: same partition's duplicated installer/interaction/operator procedures.
+- C2: permissions implementation explanations and internal research references.
+- C3: permissions failure/recovery material outside designated owners and repeated hold/error facts.
+- C4: permissions upgrade/old-binary/history narration.
+- C6: usage error handling, parser details and duplicated hook/subagent material.
+- C7: caller-contract filesystem/parser implementation detail and duplication.
+- C8: architecture11001–16500 history/design rationale.
+- C9: same partition's method/algorithm/code walkthroughs.
+- C10: same partition's performance detail and testing strategy/evidence.
+- C11: same partition's duplicated user/operator procedure.
+- D3: architecture16501–21996 detailed code/helper/test catalogs and instructions.
+- D4: same partition's history/rationale/performance and copied helper-list self-rule violations.
+Preserve reusable-component ownership and MUST-use requirements when future normalization is done. Resolved A5–7/C5 are not deferred; formal D1 is resolved. No additional feedback was silently ignored by this review.
+
+LIMITS / FAILURES
+Initial bees show syntax was invalid and corrected to show-ticket --ids. Referenced tickets live in a sibling hive rather than checkout-relative tickets/Ideas; list-hives located them. Some large outputs truncated; substantive code/new tests, current safety/recovery changes and relevant requirements were reread in smaller scopes. Full architecture prose coverage rests on the explicitly verified aggregate reviewers and correction delta, not on a clipped diff or an automated scan. No unresolved source failure or product question identified. External gate evidence remains outstanding and must not be inferred from unit success.

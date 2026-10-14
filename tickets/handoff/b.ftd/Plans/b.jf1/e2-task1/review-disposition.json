@@ -1,0 +1,50 @@
+{
+  "architecture_base_sha256": "72070f26d31fdeba5dd5942ef190907dc3877c33692d87bd273f32201b8236aa",
+  "architecture_base_lines": 21996,
+  "coverage": [
+    {
+      "reviewer": "a",
+      "start": 1,
+      "end": 5500
+    },
+    {
+      "reviewer": "b",
+      "start": 5501,
+      "end": 11000
+    },
+    {
+      "reviewer": "c",
+      "start": 11001,
+      "end": 16500
+    },
+    {
+      "reviewer": "d",
+      "start": 16501,
+      "end": 21996
+    }
+  ],
+  "mandatory_doc_corrections": [
+    "A1-A4",
+    "B1-B2",
+    "C1",
+    "D2"
+  ],
+  "additional_factual_corrections": [
+    "A5-A7",
+    "C5"
+  ],
+  "formal_metadata_correction_for_testwriter": "D1",
+  "deferred": [
+    "A8-A11",
+    "B3-B10",
+    "C2-C4",
+    "C6-C11",
+    "D3-D4"
+  ],
+  "deferral_reason": "Inherited broad guide/history/implementation/test-catalog normalization exceeds Task1 proof/schema interface scope; preserve machine contracts and reusable-component mandates. Specific current recovery, Cursor, safety contradictions corrected. No waiver of whole-file review; all lines reviewed on the same actual base hash.",
+  "preliminary_dispatch_hash_note": "Initial3bcdb9e7 taken before final DocWriter qualification; all reviewers actually reviewed stable72070f26.",
+  "architecture_final_sha256": "5e61f7d91e7b1c89f124a6434176ecb90b38f14101f199be7bb649f522483c4c",
+  "architecture_final_lines": 22024,
+  "mandatory_doc_corrections_resolved": true,
+  "architecture_delta_review": "DocWriter exact base hash reconstructed;17 changed ranges model-reviewed with source and unchanged ranges covered by full base review."
+}

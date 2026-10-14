@@ -247,7 +247,8 @@ const EventNameStop = "Stop"
 // an in-process teammate) is not one: a background subagent can outlive the
 // main turn, and an Interrupt that carries an agent_id (Codex never sends one,
 // Q3) proves nothing. A Claude result is never an Interrupt turn end:
-// Claude's table does not know the event.
+// Claude's table does not know the event. Verified main Cursor Stop and
+// Interrupt also supply turn-end proof; unknown/child origin supplies none.
 func (r ClassifyResult) TurnEnded() bool {
 	if r.Agent == store.AgentCursor && r.UnknownEvent {
 		return false
@@ -255,7 +256,7 @@ func (r ClassifyResult) TurnEnded() bool {
 	if r.AgentID != "" {
 		return false
 	}
-	return r.EventName == EventNameStop || r.WaitingIfWorking || (r.Agent == store.AgentCodex && r.EventName == EventNameInterrupt)
+	return r.EventName == EventNameStop || r.WaitingIfWorking || ((r.Agent == store.AgentCodex || r.Agent == store.AgentCursor) && r.EventName == EventNameInterrupt)
 }
 
 // SubagentLifecycle reports whether the result is a SessionStart or

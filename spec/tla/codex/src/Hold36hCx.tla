@@ -128,6 +128,9 @@ CxIntNoTurnEnd     == FALSE
 CxTurnEndProvesSub == FALSE
 CxSubIntUnmarked   == FALSE
 CxReview           == FALSE
+(* b.jf1 E2: source-derived unknown origin, NULL child identity, false eligibility. *)
+CxUnknownOrigin    == FALSE
+CxIdentityProof    == FALSE   \* negative control: infer eligibility from NULL identity
 
 SR == MaxTurns + 1                          \* the subagent's request
 R == IF Subagent THEN 1 .. SR ELSE 1 .. MaxTurns
@@ -213,7 +216,9 @@ ReadHit(extra) == hit' = (hit \/ extra \/ (Probe = "readintx" /\ ~Free))
 
 (* Turn-end proof: main-agent requests in S. *)
 ProveMain(S) == [r \in R |-> prov[r] \/ (r \in S /\ rec[r])]
-MainRec == {r \in Main : rec[r]}
+ChildID(r) == IF r \in Main \/ (CxUnknownOrigin /\ r = SR) THEN "" ELSE "child"
+Eligible(r) == r \in Main
+MainRec == {r \in R : rec[r] /\ (IF CxIdentityProof THEN ChildID(r) = "" ELSE Eligible(r))}
 
 (* b.ssz: what a main-agent turn end proves (CxTurnEndProvesSub: every    *)
 (* recorded request, the control).                                        *)

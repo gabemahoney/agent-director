@@ -109,8 +109,8 @@ func SeedDecideFixture(t *testing.T, relayMode string) (*store.Store, string) {
 }
 
 // SeedDecideFixtureAgent is SeedDecideFixture for a row of agent
-// (store.AgentClaude or store.AgentCodex), as that agent's launch stores it.
-func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string) (*store.Store, string) {
+// (Claude/Codex, or synthetic Cursor), with optional seeded requests.
+func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string, requests ...store.RelayRequest) (*store.Store, string) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	s, err := store.OpenOrInit(dbPath)
@@ -120,7 +120,12 @@ func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string) (*store.Store
 	t.Cleanup(func() { _ = s.Close() })
 	storefix.RegisterStorePath(t, s, dbPath)
 
+	identity := store.LaunchIdentity{}
+	if agent == store.AgentCursor {
+		identity.Token = "1111111111111111"
+	}
 	if err := s.InsertPending(store.Spawn{
+		Identity:        identity,
 		InstanceID:      "id-d-1",
 		Agent:           agent,
 		CWD:             "/tmp",
@@ -131,6 +136,9 @@ func SeedDecideFixtureAgent(t *testing.T, relayMode, agent string) (*store.Store
 	}
 	// Transition into check_permission so it looks realistic.
 	seedAgentState(t, s, "id-d-1", store.StateCheckPermission, "SeedDecideFixture")
+	for _, request := range requests {
+		storefix.SeedRelayRequest(t, s, "id-d-1", request)
+	}
 	return s, dbPath
 }
 

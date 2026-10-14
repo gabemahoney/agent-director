@@ -70,9 +70,10 @@ const (
 // parent's start time or NULL (then the pid alone decides and the write
 // records the start time through hookPaneStartSet). An unreadable parent start
 // time ("") never matches, whatever the row holds; a row with no pane_pid
-// matches nothing.
+// matches nothing. Historical NULL agents retain the parent gate; actual Cursor
+// rows additionally require the complete current runtime binding.
 const hookGateSQL = `pane_pid = ? AND ? <> '' AND (pane_starttime = ? OR pane_starttime IS NULL)
- AND (agent <> 'cursor' OR (? = 1 AND EXISTS (SELECT 1 FROM cursor_runtimes cr WHERE
+ AND (agent IS NOT 'cursor' OR (? = 1 AND EXISTS (SELECT 1 FROM cursor_runtimes cr WHERE
  cr.bound_instance_id = instance_id AND cr.bound_launch_token = launch_token AND cr.bound_life_number = life_number
  AND cr.bound_gateway_pid = pane_pid AND cr.bound_gateway_start = pane_starttime
  AND cr.bound_instance_id=? AND cr.bound_launch_token=? AND cr.bound_life_number=? AND cr.bound_gateway_pid=? AND cr.bound_gateway_start=?

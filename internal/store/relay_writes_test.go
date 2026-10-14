@@ -173,6 +173,7 @@ func TestInsertRelayRequestOneTransaction(t *testing.T) {
 				tc.arrange(t, path)
 			}
 			req := relayReq(tokenA)
+			req.MainTurnEndEligible = eligibility(true) // known child always wins
 			mark := TrailMark(t)
 
 			start := time.Now()
@@ -220,7 +221,7 @@ func TestInsertRelayRequestOneTransaction(t *testing.T) {
 				t.Fatalf("requests = %d; want 1", len(reqs))
 			}
 			got := reqs[0]
-			if got.RequestToken != tokenA || got.Hook != req.Hook || got.ToolUseID != req.ToolUseID || got.AgentID != req.AgentID ||
+			if got.RequestToken != tokenA || got.Hook != req.Hook || got.ToolUseID != req.ToolUseID || got.AgentID != req.AgentID || got.MainTurnEndEligible ||
 				!got.SettledAt.Equal(req.SettledAt) || got.Decision != "" || !got.DeliveredAt.IsZero() || got.PaneAnswer != PaneAnswerNone || got.PreV7() {
 				t.Errorf("request = %+v; want the hook's identity, tool_use_id, agent_id and settle instant, undecided, unacked", got)
 			}

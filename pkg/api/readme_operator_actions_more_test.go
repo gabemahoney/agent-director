@@ -96,8 +96,9 @@ func acDoc19Items() []acDocItem {
 			refs: []string{stoppingItemTitle, pendingItemTitle},
 			procs: []itemProcedure{
 				{name: "Forward", lead: "**Forward**", steps: []stepSpec{
-					{"end the agent of each live pre-upgrade row", []string{"`get`", "no `tmux_socket`", "no `launch_started_at`",
-						quoted(pendingItemTitle), "`agent-director find-missing`"}, nil},
+					{"end the agent of each live pre-upgrade row", []string{"Identify the live pre-upgrade agents from the set the caller was running",
+						"end each by hand", "`agent-director find-missing`", "Missing `tmux_socket` and `launch_started_at` identify older rows without spawn identity",
+						quoted(pendingItemTitle), "Schema 9→10→11 preserves existing identity fields", "populated fields do not exclude a pre-upgrade agent"}, nil},
 					{"deploy the caller's version", []string{"Deploy the caller's version", "never delete them"}, nil},
 				}},
 			},

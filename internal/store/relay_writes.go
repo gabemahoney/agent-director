@@ -34,6 +34,10 @@ type RelayRequest struct {
 	// "" stores NULL.
 	ToolUseID string
 	AgentID   string
+	// MainTurnEndEligible is an internal origin assertion. Nil preserves the
+	// non-Cursor main/child interpretation; Cursor defaults to false. False
+	// is explicit and survives restart. A child ID always makes it false.
+	MainTurnEndEligible *bool
 	// Hook is the relay hook process as it read itself at its start: its pid,
 	// start time and pid namespace (as probe.SelfPIDNamespace read it; "" on
 	// darwin, which has none). It is the zero identity when the hook could not
@@ -53,6 +57,19 @@ type RelayRequest struct {
 	TranscriptPresent bool
 }
 
+// mainTurnEndEligible resolves compatibility once, at insertion under the write
+// lock. A NULL historical agent is compatibility data, not a selected agent.
+// Readers and later writes consume the persisted value unchanged.
+func (r RelayRequest) mainTurnEndEligible(agent sql.NullString) bool {
+	if r.AgentID != "" {
+		return false
+	}
+	if r.MainTurnEndEligible != nil {
+		return *r.MainTurnEndEligible
+	}
+	return !agent.Valid || agent.String != AgentCursor
+}
+
 // errRelayNotApplied rolls InsertRelayRequest's transaction back when its
 // gated spawns write matched no row; the caller then reads why.
 var errRelayNotApplied = errors.New("store: relay request not applied")
@@ -60,8 +77,8 @@ var errRelayNotApplied = errors.New("store: relay request not applied")
 // relayInsertSQL is the request insert of InsertRelayRequest.
 const relayInsertSQL = `INSERT INTO permission_requests
 	  (instance_id, request_token, tool_name, tool_input,
-	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at, main_turn_end_eligible)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // InsertRelayRequest is the relay hook's first write (b.146 rule 1): in ONE
 // transaction it moves instanceID's row to check_permission, as the
@@ -93,6 +110,7 @@ const relayInsertSQL = `INSERT INTO permission_requests
 func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRequest, cap int, maxWait time.Duration) (UpsertOutcome, HookApplied, error) {
 	var (
 		prior     string
+		agent     sql.NullString
 		requestID int64
 	)
 	// check_permission with its settle columns (b.146's request rows are
@@ -102,7 +120,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 		stateSet+`, last_seen_at = CURRENT_TIMESTAMP, ended_at = NULL, `+launchStartClear+`, `+idleClear,
 		stateArgs, req.TranscriptPath, req.TranscriptPresent)
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
-		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
+		err := conn.QueryRowContext(ctx, `SELECT state, agent FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior, &agent)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errRelayNotApplied
 		}
@@ -119,7 +137,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 			return errRelayNotApplied
 		}
 		insArgs := append([]any{instanceID, req.RequestToken, req.ToolName, req.ToolInput}, processIdentityArgs(req.Hook)...)
-		insArgs = append(insArgs, nullableStringArg(req.ToolUseID), nullableStringArg(req.AgentID), millisArg(req.SettledAt))
+		insArgs = append(insArgs, nullableStringArg(req.ToolUseID), nullableStringArg(req.AgentID), millisArg(req.SettledAt), req.mainTurnEndEligible(agent))
 		ins, err := conn.ExecContext(ctx, relayInsertSQL, insArgs...)
 		if err != nil {
 			var serr *sqlite.Error

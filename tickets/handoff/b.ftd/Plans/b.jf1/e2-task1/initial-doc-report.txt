@@ -1,0 +1,54 @@
+E2 Task1 initial canonical DocWriter report — 2026-10-14
+Workspace /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd; HEAD d6858a96 unchanged.
+Only documentation edits; no production/test/fixture/generated/.claude edits, commits, pushes, installer invocation, login/account operations or repository runtime/tests.
+
+OWN SUBTASK STATUSES
+- t3.jf1.c1.xi.ff active then done: proof/held-state prose settled; entire permissions/caller/usage read in consecutive complete chunks (below).
+- t3.jf1.c1.xi.r8 active: substantive architecture edits settled, but required literal entire-file model reread remains INCOMPLETE.
+- t3.jf1.c1.xi.vt active: canonical two-copy recovery/migration/release handoff settled; complete installer-skill and migration-guide model rereads remain INCOMPLETE. Full operator owner and release handoff rereads completed.
+No parent/sibling status changes. .86 and .i6 remain deferred and unclaimed. Do not mark Task1/E2 complete or commit before remaining review and three-way installer synchronization/full units.
+
+AUTHORITATIVE INPUTS
+Read CLAUDE.md, Codex shim, do-bee role/DocWriter instructions and all three CLAUDE doc guides. PRD approval verified approved:yes; Plan/Epic/Task and all fifteen current Subtasks read, including .vt/.86 ownership clarifications. SRD relevant SR0/4/5/9/11 and latest E2 source/NULL-repair dispositions read; earlier SRD context was retrieved but not every unrelated historical decision re-read in full.
+Read mandatory Engineer, original behavioral TestWriter, NULL-repair reports and complete substantive repaired-behavior report before its case appendix; appendix not required for settled facts. Source inspected request_eligibility.go, request_proof.go, reporter.report, classifyCursor and conditional lifecycle writer; follow-up facts checked against shared fixture signatures.
+69 distinct targeted top-level behavioral tests pass on latest receipts, original five failing source cases repaired with assertions intact; fresh schema pin strengthened/pass. Build/vet green per Engineer report. No full-unit/installer-sync/external TLC/Docker/live Task1 gate passed or executed by this role.
+
+FILES CHANGED / ALL MATERIAL FACTUAL CHANGES
+1. docs/permissions.md: canonical eligibility independent of null child identity; persistence/restart; historical non-Cursor main/child including NULL/malformed agent compatibility; old/new unknown Cursor conservative false; explicit false preserved; known-child defensive exclusion; matching execution/owning-spawn release; decision/ack/pane/outside claims confer neither eligibility nor proof. Corrected proof field/table and repeated main-turn statements through eligibility qualification. Cursor Stop/Interrupt/working keep genuine unanswered/unproven check_permission, including insertion races, with current ownership/session/runtime checks; Claude/Codex Stop behavior unchanged. Authorization/question-denial-only scope retained.
+2. docs/caller-contract.md: proof/hold retry summary links permission owner; child/unknown null-ID cannot release on main completion; held Cursor reports cannot declare readiness; existing errors/hash/manual caller safeguards retained.
+3. docs/usage.md: Cursor completion/readiness subject to request holds; proof summary links canonical owner. Fresh-only/busy/rotation/resume/Linux limits retained.
+4. docs/architecture.md: schema11/current inventories/chained ten-step registry/newer12 example/target11 examples; distinct runtime and proof hops with immutable rename9. New v11 metadata owner describes exact INTEGER NOT NULL DEFAULT0 column/order, nullable child identity, optional internal *bool/nil legacy/Cursorfalse, child overrides true, atomic gated insertion, legacy NULL-safe construction, shared materialization/restart and no public JSON/control change. Backfill only introduced column, NULL-safe IS NOT cursor, orphan/Cursor/child false, valid explicit false reentry, shape/type/value/childtrue transactional refusal and authorization preservation. Joint eligible1/childNULL proof with original whole-second/MAX-ID/runtime guards; correlated execution/owning end separate. Accurate Cursor UPDATE-first hold/refresh/version and reporter token/life/session/path/version/current-binding/runtime/pipes/pane checks; other-agent read-first/Stop behavior intact. Current fixture signatures/seams updated; current-schema corrupt-child and targeted evidence limits explained. Historical formal suite distinguished from changed E2 authored-only overlays/config controls; changed model never backed by historical TLC receipts. Recovery limits updated to v11. Relevant normative stale null-id/schema/hold claims corrected without broad unrelated history rewrite.
+5. docs/migration-guide.md: schema11, next12 checklist, distinct registered9→10 and10→11, exact current worked example DDL/backfill/reentry/refusal/rollback/retry/fresh convergence; per-hop rollback does not reverse already-committed earlier hops. Settled-hop exception documented without editing old migration bodies/history; reverseSQL unsupported for11→10/10→9; recovery links owner. Existing historical reverse recipes untouched.
+6. docs/operator-actions.md and skills/install-agent-director/SKILL.md: complete canonical wayback copies identical; current layout9→10/10→11, stopped-writer actual configured DB path including external location, DB/WAL/SHM restore and removal of absent companions, matching prior release's installer/original flags, all post-backup writes lost, no auto installer backup, no binary-swap/schema downgrade. Historical old-directory numbered procedure unchanged.
+7. tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md: unreleased schema11/distinct hops/proof compatibility; E1 f4f41fd3 accepted Docker15/TLCg6/launch/subagent/both live cases; E2 installer/fullunits/external/live remain pending. No release version or parity claim; existing editorial/git-history generator convention and b.jf1 scope retained.
+
+CANONICAL WAYBACK / FINAL TESTWRITER HANDOFF
+Exact section marker: ## Going back to the previous release\n
+Exact boundary: marker through EOF in both canonical files (operator start line839; bundled skill start2327). Entire section is 96 lines/4920 UTF-8 bytes, SHA256 1cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc.
+Exact settled text artifact: /tmp/ftd-e2-task1-settled-wayback.md; two complete prose sections compared byte-for-byte via Python assertion, PASS.
+TestWriter .86 MUST repin the complete expected section in tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md and verify all THREE full sections identical, then current-schema installer/version/refusal/migration/literal-follow tests. Do not alter canonical prose during repin. Immutable rename8→9/threshold9 stays unchanged; version9 is released0.12, version10 E1 branch, current11. Final .i6 sole full sandbox units only after settled prose/pins and review; no host repository execution.
+The testplan fixture/executable assertions were NOT edited here.
+
+WHOLE-DOCUMENT REVIEW EVIDENCE AND HONEST LIMIT
+- docs/permissions.md: 1413 lines, 82061 bytes
+- docs/caller-contract.md: 399 lines, 24328 bytes
+- docs/usage.md: 675 lines, 33428 bytes
+- docs/architecture.md: 21996 lines, 1518335 bytes
+- docs/migration-guide.md: 1180 lines, 70912 bytes
+- docs/operator-actions.md: 934 lines, 48780 bytes
+- skills/install-agent-director/SKILL.md: 2422 lines, 149390 bytes
+- tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md: 58 lines, 3549 bytes
+Complete model rereads after substantive edits:
+- permissions: consecutive1–350,351–700,701–1050,1051–1413; final small qualifiers reread/reviewed via subsequent excerpts/diff.
+- caller-contract:1–398 and399; complete.
+- usage:1–340,341–675 (final completion qualifier reread96–103); complete.
+- operator-actions:1–315,316–630,631–934; final canonical wrapping reread839–855; complete.
+- release handoff:complete file, repeated after edit.
+Architecture: substantial schema/gateway/request/lifecycle/proof/recovery/formal/fixture sections and all changed paragraphs reviewed, with repeated targeted global searches. NOT a literal model reread of all~22k lines/1.5MB. Migration guide: current first270 lines plus affected phase/recovery/ref sections reviewed; NOT all1180 lines. Bundled skill: migration/recovery/current-layout/entire wayback sections reviewed; NOT all2422 lines. These unmet literal review requirements keep .r8/.vt active; no silent completion claim.
+An additional automated complete-file pass covers all eight files in61 consecutive500-line chunks with individual SHA256/byte receipts at /tmp/ftd-e2-task1-whole-file-scan.json. It is explicitly automated and NOT substituted for model reading. Whole-file scans found no stale current schema10 or known unqualified current null-id predicate after edits; historical migration descriptions retained.
+
+VERIFICATION
+Canonical two-copy complete-section equality PASS; git diff --check PASS. No repository runtime or tests needed/run by this role. Generated refs already settled by Engineer's normal generator; unchanged here. No extra guides/manuals/README/account/personal config changes. No product question or source/test failure discovered.
+
+DEVIATIONS / INCOMPLETE WORK / ROOT FOLLOW-UP
+The mandatory literal whole architecture/migration/install-skill model reread cannot fit this context; root was informed during work. Remaining requirement needs review continuation or an explicit authorized review disposition; do not misreport this as a full reread. Substantive canonical prose and exact TestWriter handoff are settled; all necessary technical facts have concrete owners. Preserve one initial DocWriter pass: any continuation should be review closure, not another source/test/doc synchronization pass. No product questions; process follow-up is the disclosed incomplete review. Full task still awaits .86/.i6, read-only PM, root local commit and exact-revision external gate.

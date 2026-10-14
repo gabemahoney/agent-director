@@ -95,6 +95,34 @@ func WithSeedPane(dbPath, id string, writes func(gate store.HookGate) error) err
 		return fmt.Errorf("WithSeedPane: record seed pane on %q: %w", id, err)
 	}
 
+	// Cursor seeders use a synthetic binding only while the seed write runs.
+	var agent string
+	if err := raw.QueryRow("SELECT COALESCE(agent,'') FROM spawns WHERE instance_id=?", id).Scan(&agent); err != nil {
+		return err
+	}
+	if agent == store.AgentCursor {
+		s, err := store.Open(dbPath)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		bound, err := s.ReadCursorRuntime(id)
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err = raw.Exec(`INSERT INTO cursor_runtimes(bound_instance_id,bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id)
+    SELECT instance_id,COALESCE(launch_token,''),life_number,pane_pid,pane_starttime,12345,'synthetic-seed','synthetic-seed','pipe:[1001]','pipe:[1002]',11,12,COALESCE(session_id,'') FROM spawns WHERE instance_id=?`, id)
+			if err != nil {
+				return err
+			}
+			defer raw.Exec("DELETE FROM cursor_runtimes WHERE bound_instance_id=?", id)
+			bound, err = s.ReadCursorRuntime(id)
+		}
+		if err != nil {
+			return err
+		}
+		gate.Cursor = &bound
+		gate.SessionID = bound.SessionID
+	}
+
 	werr := writes(gate)
 
 	args := append(append([]any{}, prior...), id)

@@ -168,8 +168,8 @@ func TestTurnEndCoversOnlyRequestsWrittenBeforeIt(t *testing.T) {
 		}
 		landed = true
 		withRaw(t, path, func(db *sql.DB) {
-			mustExec(t, db, `INSERT INTO permission_requests (instance_id, request_token, tool_name, tool_input)
-				VALUES (?, ?, 'Bash', '{}')`, relayID, tokenB)
+			mustExec(t, db, `INSERT INTO permission_requests (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible)
+				VALUES (?, ?, 'Bash', '{}', 1)`, relayID, tokenB)
 		})
 	})
 
@@ -331,25 +331,28 @@ func TestUnprovenRequestDoesNotHoldAskUserOrStop(t *testing.T) {
 		{"PreToolUse", StateAskUser, StateAskUser},
 		{"Stop", StateWaiting, StateWaiting},
 	}
-	for _, tc := range cases {
-		t.Run(tc.event+" to "+tc.target, func(t *testing.T) {
-			s, _ := newRelayRow(t, "on", StateWorking)
-			insertRelay(t, s, relayReq(tokenA))
+	for _, agent := range []string{AgentClaude, AgentCodex} {
+		for _, tc := range cases {
+			t.Run(agent+"/"+tc.event+" to "+tc.target, func(t *testing.T) {
+				s, path := newRelayRow(t, "on", StateWorking)
+				withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "UPDATE spawns SET agent=? WHERE instance_id=?", agent, relayID) })
+				insertRelay(t, s, relayReq(tokenA))
 
-			if err := agentHook(s, relayID, tc.target, false, tc.event); err != nil {
-				t.Fatalf("%s: %v", tc.event, err)
-			}
+				if err := agentHook(s, relayID, tc.target, false, tc.event); err != nil {
+					t.Fatalf("%s: %v", tc.event, err)
+				}
 
-			if got := mustGetSpawn(t, s, relayID).State; got != tc.want {
-				t.Errorf("state = %q; want %q", got, tc.want)
-			}
-			if got := openTokens(t, s, relayID); !slices.Equal(got, []string{tokenA}) {
-				t.Errorf("open requests = %v; want A listed (it still awaits an answer)", got)
-			}
-			if got := proven(t, s, tokenA)[tokenA]; got != "" {
-				t.Errorf("A proven_gone_how = %q; want unproven", got)
-			}
-		})
+				if got := mustGetSpawn(t, s, relayID).State; got != tc.want {
+					t.Errorf("state = %q; want %q", got, tc.want)
+				}
+				if got := openTokens(t, s, relayID); !slices.Equal(got, []string{tokenA}) {
+					t.Errorf("open requests = %v; want A listed (it still awaits an answer)", got)
+				}
+				if got := proven(t, s, tokenA)[tokenA]; got != "" {
+					t.Errorf("A proven_gone_how = %q; want unproven", got)
+				}
+			})
+		}
 	}
 }
 

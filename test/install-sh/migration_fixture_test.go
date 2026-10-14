@@ -20,6 +20,8 @@ const (
 	migNoStore    migStoreKind = iota // none made: the directory's own, or none
 	migStoreBelow                     // a v0.11.1 store, below the rename's schema version
 	migStoreAt                        // a store the built binary made, at the current version
+	migStoreV9                        // renamed schema, before Cursor runtime binding
+	migStoreV10                       // E1 schema, before durable request eligibility
 )
 
 // migFile is a file under a migLay directory; Mode 0 means 0644.
@@ -43,8 +45,17 @@ func (h *moveHome) migLay(dir string, store migStoreKind, config string, files .
 	}
 	db := filepath.Join(dir, "state.db")
 	switch store {
-	case migStoreAt:
+	case migStoreAt, migStoreV9, migStoreV10:
 		h.migMakeStore(db)
+		if store == migStoreV9 || store == migStoreV10 {
+			// Remove later-hop DDL as well as the version stamp.
+			h.Sqlite(db, "ALTER TABLE permission_requests DROP COLUMN main_turn_end_eligible;")
+			if store == migStoreV9 {
+				h.Sqlite(db, "DROP TABLE cursor_runtimes; PRAGMA user_version=9;")
+			} else {
+				h.Sqlite(db, "PRAGMA user_version=10;")
+			}
+		}
 	case migStoreBelow:
 		h.WriteStore(db)
 	}

@@ -1,0 +1,284 @@
+--- reviewed-base/docs/architecture.md
++++ corrected/docs/architecture.md
+@@ -1007,12 +1007,13 @@
+ with `ErrStoreOpen` (`clisetup.NewOpenError`; cause
+ `store.ErrStoreNotInitialized`, `database not initialized`) before the verb
+ runs, and nothing is created: no parent directory, file or schema.
+ `--create-if-missing true`, or no flag, keeps the default. Verbs that open no
+ store (`help`, `version`, the no-verb run, `trail-emit`) are unaffected, and
+-`hook`, which takes no global flags, still opens its store with
+-`OpenOrInitWithBusyTimeout`. The TS client's `createIfMissing: false`
++`hook`, which takes no global flags, opens Claude/Codex stores with
++`OpenOrInitWithBusyTimeout`. Cursor hooks use `OpenWithBusyTimeout` and
++require an existing store and authenticated runtime binding. The TS client's `createIfMissing: false`
+ forwards the flag (see [Client lifecycle](#client-lifecycle)).
+ 
+ **`Close`.** Releases store and tmux resources. Idempotent: a second call
+ returns `nil` without double-closing the underlying `*store.Store`. After
+ `Close` returns, any subsequent verb method call on the client returns the
+@@ -1456,19 +1457,21 @@
+   `PaneAnswered()` a completed pane answer, and `CloseDenied()` a deny a
+   close wrote (`decision_reason` `find_missing` or `ended`, no verdict a
+   caller or relay hook chose).
+ - **Must use:** `holdsRowSQL` (`internal/store/permission.go`) is the one
+   statement of "a request holds its Spawn's row" (b.omt):
+-  `awaitingAnswerSQL` and `proven_gone_at IS NULL`. Exactly three writes
+-  read it: the working hold, the idle-prompt Notification's move from
+-  `check_permission` to `waiting` (`ApplyHookWaitingIfWorking`) and
+-  `find-missing`'s repair (`repairCheckPermissionSQL`). The working hold
+-  reads it twice: its read `holdingRequestSQL` (`holdWorkingTransition`)
+-  picks the held branch, and the move to `working`'s own UPDATE
+-  (`applyWorkingWrite`) carries it in a `NOT EXISTS`, so a request recorded
+-  between the read and the UPDATE still holds the row (b.36h). The other
+-  two carry it in a `NOT EXISTS` of their own statement. The move to
++  `awaitingAnswerSQL` and `proven_gone_at IS NULL`. The non-Cursor working hold, Cursor working/waiting transitions,
++  the idle-prompt Notification's move from `check_permission` to `waiting`
++  (`ApplyHookWaitingIfWorking`) and `find-missing`'s repair
++  (`repairCheckPermissionSQL`) use it. Non-Cursor working transitions first
++  read `holdingRequestSQL` (`holdWorkingTransition`), then guard the UPDATE
++  (`applyWorkingWrite`) with `NOT EXISTS` so a concurrently inserted request
++  still holds the row. Cursor skips that preliminary hold read and attempts
++  the guarded UPDATE for working and waiting (Stop/Interrupt). If rejected,
++  it performs a gated soft refresh, retaining state and settle columns while
++  refreshing activity and advancing row version even when `idle_since` was NULL.
++  The Notification and repair carry the hold guard in their own statement. The move to
+   `working` and the idle-prompt Notification's move share that `NOT
+   EXISTS` as one fragment, `noRequestHoldsRowSQL`
+   (`internal/store/hook_writes.go`); `repairCheckPermissionSQL` spells out
+   its own. A request proven gone holds none of
+   them, whatever agent-director's records say of it: one a person answered
+@@ -1744,13 +1747,16 @@
+   writes, `record-pane-answer`'s record and the PostToolUse close) touch no
+   `spawns` row and advance nothing; nor does the close of a Spawn's
+   requests, whose `spawns` change (the mark, the ended transition, resume's
+   move) advances the version once.
+ - `InsertPending` starts a row at 0 (the column default). A path that writes
+-  nothing advances nothing. Examples are the `working`-transition hold path
++  nothing advances nothing. Examples are the non-Cursor `working`-transition hold path
+   (a permission request holding the row, `holdsRowSQL`, at the hold's read
+-  or at the move's own UPDATE; a row with no `idle_since` set), a write
++  or at the move's own UPDATE; a row with no `idle_since` set). Cursor
++  instead performs a gated soft refresh after a rejected guarded working
++  or waiting UPDATE; an applied refresh advances the version even with
++  `idle_since` already NULL. Other examples are a write
+   whose `WHERE` matches no row (a
+   hook the gate did not apply included), and `HealJsonlPath` or any
+   guarded write (`find-missing`'s seven, resume's, the end write, the
+   adoption, the release of a launch's hold) when its guard misses. `DeleteSpawn` removes the row, and so
+   does `expire`'s `DeleteFinishedIfSameLife` when it applies; when its
+@@ -3984,19 +3990,20 @@
+ from the result's outputs: `NewState`, `SoftRefresh`, `WaitingIfWorking`,
+ `SubagentCapture`, `EndReport`, `HealsTranscript`, and `ToolRan()`. The
+ result's `EventName` and `ToolName` are still read where an event needs its
+ own handling (`Handle` for `SessionStart` and `PermissionRequest`,
+ `subagent.go` for the subagent events and the `Agent` tool). The result's
+-`Agent` is read only by `ToolRan()` and `TurnEnded()`; no code outside the classifier branches
+-on the agent to decide a write, and the grandparent advice is chosen by the
+-row's agent, not the result's (see "Hooks move a row only for its own
+-agent"). `SubagentCapture` is the classifier's output that gates subagent capture:
++`Agent` is read by `ToolRan()` and `TurnEnded()`, and the handler branches
++on Cursor to authenticate its runtime binding and populate `gate.Cursor`
++before a lifecycle write. This gate does not admit authorization requests.
++The grandparent advice is chosen by the row's agent (see "Hooks move a row
++only for its own agent"). `SubagentCapture` is the classifier's output that gates subagent capture:
+ `isSubagentLifecycle`, `isAgentToolHook` and `isMainAgentStop` in
+ `subagent.go` each require it, so Codex rows get no subagent entry write and
+ no `Stop` turn-end entry transaction, and Claude's behaviour is unchanged. A
+-new agent adds a table beside these two and sets the flags its hooks need;
+-code outside the classifier does not branch on the agent to decide a write.
++new agent adds its classifier table and flags; any agent-specific authority
++gate must also be enforced before its writes.
+ 
+ **The Codex table (`classifyCodex`).**
+ 
+ | Event | `agent_id` | Result |
+ | --- | --- | --- |
+@@ -4504,14 +4511,14 @@
+ `find-missing` finds the launcher (the pane process) running; each refused SessionStart writes
+ `ad.hook.pane_is_grandparent` (see above; the README states the
+ prerequisite). Subagents' and in-process teammates'
+ tool and permission events move the row's state and use its relay, so a
+ row can read `working` while only they work: the row reflects the
+-process. Claude Code
+-and Codex are the supported agent CLIs (a Codex agent's hooks follow the
+-same gate, see [The agent-aware hook classifier](#the-agent-aware-hook-classifier));
+-an agent CLI of another kind is not supported. `respawn-pane` of the agent's pane changes the pane pid, so
++process. Claude Code and Codex hooks follow this process gate (see
++[The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Cursor
++is also supported through its authenticated ACP runtime and lifecycle gate;
++its authorization requests remain denied. `respawn-pane` of the agent's pane changes the pane pid, so
+ the agent's hooks are then ignored, visibly.
+ 
+ ### Subagent capture
+ 
+ Registering `SubagentStart` and `SubagentStop` and reading the Agent tool's
+@@ -7884,11 +7891,11 @@
+ | `<Name>` | Sites | Remedy |
+ |---|---|---|
+ | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: the migration gate's read (pre-flight, before anything on disk changes; "reading state.db's schema version FAILED"), step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
+ | `ErrConfigMalformed` | pre-flight `ad_store_db_path` (including its `[launch]` reader), `ad_store_busy_timeout_ms`, the migration's checks of `config.toml` (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, all but the apply's before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
+ | `ErrTemplateMalformed` | the migration's checks of a stored template (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) | fix the template the message names (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
+-| `ErrSchemaMismatch` | step 4's open, relayed | install a newer agent-director; the name also covers a store with no valid store id, which a newer binary does not fix (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery); one name for two remedies is open as b.o9t) |
++| `ErrSchemaMismatch` | step 4's open, relayed: newer store, invalid store id, or authorized migration refusing incompatible eligibility metadata | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
+ | `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
+ | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
+ | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
+ | `ErrSchemaVerifyFailed` | step 3's sentinel `mktemp` failure; step 5: `state.db` missing after an open that succeeded (see "No store after the open" below), or a readable `user_version` that is not the target | a human, following the advice (fix or check what it names, then re-run) |
+ | any other name | step 4's open, relayed from its envelope (`ad_err_name`); `ErrStoreOpen` when there is no envelope or its name does not match `^Err[A-Za-z0-9]+$` | the advice is one re-run (an authorized migration not consumed is retried); the same name again needs a human |
+@@ -8845,13 +8852,17 @@
+ docs/migration-guide.md §1a.
+ 
+ **Sentinel semantics (in brief; canonical in migration-guide.md §1a).**
+ The sentinel co-locates with `state.db`, names exactly one `from → to`
+ transition, and is honored only when *both* ends match. It is consumed
+-on the successful open and only then; a refused open runs zero DDL and
+-leaves both `state.db` and the sentinel byte-identical, never partially
+-honored.
++on the successful open and only then. An authorization refusal runs zero
++DDL and leaves the DB and sentinel unchanged. Once authorized, each hop
++commits separately: a failed hop rolls back its own work, while earlier
++committed hops remain. The sentinel remains on chain failure. After a
++partial 9→11 chain commits 9→10, `{from:9,to:11}` is stale for the v10 DB;
++retry requires refreshed 10→11 authorization. The installer rerun reads
++the resulting version and reauthorizes (see migration-guide.md §1a).
+ 
+ **Who writes it.** The sentinel is written *only* by a human operator or
+ by this install skill — never by any agent. It is deliberately **absent
+ from every agent-facing surface** (help text, MCP tool descriptions, the
+ npm/customer README, the migration error message); those route the
+@@ -9544,13 +9555,13 @@
+ 
+ ### ErrSchemaMismatch recovery
+ 
+ `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
+ this binary — typically meaning the store was written by a newer binary
+-(`user_version > 11`). Note: an older-than-binary store (v1, v2, v3, v4, v5, v6, v7, v8 or v9) does
+-**not** trigger `ErrSchemaMismatch` — it surfaces the distinct
+-`ErrSchemaMigrationRequired` instead. The store does not silently upgrade an
++(`user_version > 11`). An unauthorized older store (v1 through v10)
++surfaces `ErrSchemaMigrationRequired`. An authorized migration can instead
++return `ErrSchemaMismatch` when it refuses incompatible metadata. The store does not silently upgrade an
+ older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
+ unless an administrator has placed a valid `migrate-authorized` sentinel next
+ to the DB file, in which case the gated migration chain runs (v1→v2, DROP+CREATE
+ `permission_requests` with v1 rows discarded; v2→v3, five `spawns` ADD COLUMN
+ preserving every row; v3→v4, CREATE `session_history` preserving every row;
+@@ -9564,21 +9575,31 @@
+ three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
+ every row backfilled as a Claude row, preserving every row and the store id;
+ v9→v10, CREATE `cursor_runtimes`, preserving existing rows and the store id;
+ v10→v11, add and validate durable main-turn proof eligibility).
+ Rolling the binary back after such a migration to v11 needs the copy of
+-`state.db` taken before the install: no downgrade recipe reaches a v9, v10 or v11 store.
++`state.db` taken before the install, restored with matched WAL/SHM companions
++and all writers stopped as in
++[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release):
++no downgrade recipe reaches a v9, v10 or v11 store.
+ Rolling it back over a migration that ended at v8 or older can also use the
+ emergency downgrade recipes in docs/migration-guide.md §5.
+ 
+ `ErrSchemaMismatch` also fires for a store at the current version that has no
+ valid store id: no `store_meta` table, no `store_id` row, or a value that is
+ not 16 lowercase hex (see `internal/store`, `store_meta`). The store and the
+ migration never produce that state; only a hand edit of `state.db` does (the
+ downgrade recipes leave the store at an older version, which this binary
+ refuses with `ErrSchemaMigrationRequired` instead). The error never
+ contains the stored value.
++
++The authorized v10→v11 hop also returns `ErrSchemaMismatch` for an
++incompatible existing `main_turn_end_eligible` column, non-integer or
++out-of-range values, or an eligible known-child request. This applies
++when a chain starting at an earlier version reaches that hop too. The
++failed hop rolls back; earlier committed hops remain. Installing a newer
++binary or rewriting eligibility values is not a supported bypass.
+ 
+ If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
+ the recovery depends on the cause, and it is never to delete `state.db`:
+ 
+ - **Store newer than the binary.** Install the agent-director release that
+@@ -9588,15 +9609,22 @@
+   store.** Restore the copy of `state.db` (with its `-wal` and `-shm` files)
+   taken before the install. That copy is at the older version, so re-run
+   the install afterwards; this release's install migrates it again. Writes
+   made since the install are lost.
+ 
+-An install that meets either cause stops at step 4's open with exit 5 and
++- **Eligibility shape/value refusal.** Stop all writers and use the
++  supported backup/restore procedure or human recovery in
++  [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
++  using the actual DB path and matched WAL/SHM companions. Retry through
++  the installer only after the incompatible state is resolved; it reads
++  the resulting version and refreshes authorization as needed.
++
++An install that meets any of these causes stops at step 4's open with exit 5 and
+ the same cause line, `install.sh: err_name=ErrSchemaMismatch` (see "Exit
+ codes, and exit 5's cause line" under
+ [Pattern B](#pattern-b--installsh-the-install-skill)); only the relayed
+-envelope's description above it tells the two apart (open as b.o9t).
++envelope's description above it identifies the cause.
+ 
+ Deleting the store loses every row and the store id. JSONL transcripts under
+ `~/.claude/projects/` survive independently either way.
+ 
+ ## Stdio MCP server
+@@ -15960,12 +15988,15 @@
+ names](#store-upgrade-to-agent-generic-names)), then the separate v9→v10
+ Cursor binding-table hop and v10→v11 eligibility hop, walking
+ from the DB's `user_version` up to `schemaVersion` in one pass.
+ `ErrSchemaMismatch` fires when `user_version > 11` — meaning the store was
+ written by a binary newer than the current one — or when a current store
+-has no valid store id, which only a hand edit causes (see
+-"ErrSchemaMismatch recovery"). Rolling a release back after its install
++has no valid store id, which only a hand edit causes, or an authorized
++migration refuses incompatible eligibility column shape/values, including
++eligible known-child requests (see "ErrSchemaMismatch recovery"). The failed
++hop rolls back while earlier committed hops remain; retry authorization
++must match the resulting version. Rolling a release back after its install
+ migrated the store to v11 has one way back: restoring the copy of `state.db`
+ taken before the install. No downgrade recipe reaches a v9, v10 or v11 store, and none is
+ written for it. The emergency downgrade recipes in docs/migration-guide.md §5
+ cover older stores only, newest first (v8 → v7: the two settle columns,
+ keeping the store id; v7 → v6: the twenty v7 columns, keeping the store
+@@ -16902,12 +16933,12 @@
+ 
+ E2 Task1 adds an authored-only overlay to `Hold36hCx.tla`: independent
+ `ChildID`/`Eligible`, default-off `CxUnknownOrigin` and an identity-inference
+ control. `rx_U_null_safe.cfg` expects `KeysSafe` PASS; `rx_U_null_control.cfg`
+ expects its violation. `PROVENANCE.txt` marks these changed artifacts UNCHECKED.
+-Targeted provenance/no-jar checks passed, but no new external TLC result exists;
+-historical scheduler receipts above do not validate the changed model text.
++No new external TLC result exists; historical scheduler receipts above
++do not validate the changed model text.
+ 
+ The runs back the Codex rules of this file. Six findings came out of them,
+ and the README states each:
+ 
+ - **F1** (design flaw): pause's wait did not observe a gone agent process, so
+@@ -17432,20 +17463,17 @@
+ `internal/testsupport/storefix/` is the canonical home for store-layer
+ test fixtures. Future test authors MUST reuse these `Seed*` helpers
+ rather than reinvent raw-connection row setup or backdating; each helper
+ uses `t.TempDir()` and never touches `~/.config/agent-director`.
+ 
+-Task1 behavioral coverage uses the existing versioned migration fixture plus
+-`seedV10EligibilityFixture`, request factories, `SeedDecideFixtureAgent` optional
+-RelayRequest seeds and `newPAEnvAgent` optional origin control. `schema_v11_test.go`
+-and `request_eligibility_test.go` cover preservation/reentry/refusal/retry and
+-reader/writer/restart/proof defense, including already-current child=true corruption.
+-Cursor lifecycle tests cover insertion races and independent runtime gates;
+-Linux reporter tests use protected kernel/runtime/pane evidence with an exec-command
+-seam and separately tested `hook.Handle`. They do not establish live ACP admission.
+-69 distinct targeted behavioral top-level tests passed after source repair; full
+-Go/Bun units, installer synchronization and external interface gates remain pending.
++The versioned migration fixture and `seedV10EligibilityFixture` provide
++migration preservation, reentry and refusal setup. Request factories,
++`SeedDecideFixtureAgent` optional RelayRequest seeds and `newPAEnvAgent`
++optional origin control provide reusable request-origin setup. Cursor reporter
++fixtures provide synthetic kernel/runtime/pane evidence and an exec-command
++seam; they do not establish actual ACP authorization admission. Future authors
++MUST reuse these fixtures for their respective responsibilities.
+ 
+ **Agent of a seeded row (current schema v11).** The store refuses to insert a
+ row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
+ "v9 columns" under [`internal/store`](#internalstore)), so every storefix
+ insert sets `Agent: store.AgentClaude` (`defaultSpawn`); a test that needs a

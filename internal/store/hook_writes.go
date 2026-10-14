@@ -57,7 +57,11 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // carries the same condition in its own WHERE (noRequestHoldsRowSQL), so a
 // request recorded between the two (InsertRelayRequest, which moves the row
 // to check_permission in its own transaction) is never overwritten with
-// working (b.36h); a move to working that loses that race is held too. A
+// working (b.36h); a move to working that loses that race is held too.
+// Verified Cursor waiting transitions use the same write-time hold guard,
+// including Stop/Interrupt. A held Cursor report applies a gated soft refresh
+// (session/path, liveness, activity and row version) with state/settle kept;
+// Claude/Codex Stop and Interrupt retain their ordinary waiting transitions. A
 // held transition checks the gate first (reportWorkingHeld): a hook whose
 // gate holds is applied (HookApplied.Applied) with UpsertNoChange and a no-op
 // ad.spawn.state_transition (prior == new, SR-A-2.2), and its only write is
@@ -89,7 +93,10 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // does not fail the store call (SR-A-3.2).
 func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	working := !softRefresh && newState == StateWorking
-	if working {
+	// Verified Cursor lifecycle reports cannot supersede a genuine dialog hold.
+	// Other agents retain their deliberate Stop/Interrupt move to waiting.
+	guarded := working || (!softRefresh && newState == StateWaiting && gate.Cursor != nil)
+	if working && gate.Cursor == nil {
 		held, outcome, applied, err := s.holdWorkingTransition(instanceID, gate, triggeringEventName)
 		if held || err != nil {
 			return outcome, applied, err
@@ -151,8 +158,8 @@ func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newS
 	}
 	// A move to working keeps the settle columns in its SET (b.3ie) and adds
 	// the hold condition to its WHERE (applyWorkingWrite, b.36h).
-	if working {
-		return s.applyWorkingWrite(instanceID, gate, set, setArgs, priorState, triggeringEventName,
+	if guarded {
+		return s.applyWorkingWrite(instanceID, gate, set, setArgs, priorState, newState, triggeringEventName,
 			jsonlPath, jsonlPresent, errPrefix)
 	}
 	return s.applyGatedHookWrite(instanceID, gate, set, setArgs, priorState, trailNew, softRefresh,
@@ -256,31 +263,48 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 	return UpsertUpdated, HookApplied{Applied: true}, nil
 }
 
-// applyWorkingWrite is applyGatedHookWrite for a move to working that
+// applyWorkingWrite is applyGatedHookWrite for a move to working, or a
+// verified Cursor move to waiting, that
 // holdWorkingTransition's read did not hold: gatedHookUpdate's statement for
 // set, with noRequestHoldsRowSQL joined to its WHERE, so a request recorded
 // after that read (InsertRelayRequest's transaction, which moves the row to
 // check_permission) still holds the row and is never overwritten with working
 // (b.36h). Applied: UpsertUpdated and one ad.spawn.state_transition from
-// priorState to working. Matched no row: reportWorkingHeld, whose gate read
+// priorState to newState. Matched no row: a gated soft refresh on Cursor;
+// otherwise reportWorkingHeld, whose gate read
 // tells a write that did not apply (no row, or a gate that does not hold:
 // notAppliedReason, nothing emitted) from one reported held (the gate holds:
 // usually a request held the row at the UPDATE, rarely the gate came to hold
 // only after it, e.g. the pane recorded in between). A failure: UpsertError
 // with an error wrapped by errPrefix.
-func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
+func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, newState, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
 	moved, err := s.execGuarded(q+` AND `+noRequestHoldsRowSQL, args, errPrefix)
 	if err != nil {
 		return UpsertError, HookApplied{}, err
 	}
 	if !moved {
+		if gate.Cursor != nil {
+			// A held report still records verified activity and advances the
+			// version, so the gateway can distinguish acceptance from an
+			// ignored hook. State and settle columns remain unchanged.
+			prior, found, err := s.selectPriorState(instanceID)
+			if err != nil {
+				return UpsertError, HookApplied{}, err
+			}
+			if !found {
+				return UpsertNoChange, HookApplied{}, nil
+			}
+			return s.applyGatedHookWrite(instanceID, gate,
+				`last_seen_at = CURRENT_TIMESTAMP, `+idleClear, nil,
+				prior, prior, true, triggeringEventName, jsonlPath, jsonlPresent, errPrefix)
+		}
 		return s.reportWorkingHeld(instanceID, gate, triggeringEventName)
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{
 		"instance_id":           instanceID,
 		"prior_state":           priorState,
-		"new_state":             StateWorking,
+		"new_state":             newState,
 		"triggering_event_name": triggeringEventName,
 		"soft_refresh":          false,
 		"source":                "ad_spawn_store",

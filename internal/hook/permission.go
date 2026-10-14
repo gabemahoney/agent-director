@@ -255,16 +255,18 @@ func runRelay(ctx context.Context, stdout io.Writer, hs HookStore, hc HandleConf
 	// recorded this late is never acked, so it falls back to the agent's
 	// dialog when the hook exits.
 	wait := max(clock.waitLeft(), 0)
+	mainTurnEndEligible := in.agentID == ""
 	req := store.RelayRequest{
-		RequestToken:      requestToken,
-		ToolName:          pp.ToolName,
-		ToolInput:         toolInput,
-		ToolUseID:         pp.ToolUseID,
-		AgentID:           in.agentID,
-		Hook:              hc.self(),
-		SettledAt:         clock.settledAt(),
-		TranscriptPath:    in.transcriptPath,
-		TranscriptPresent: in.transcriptPresent,
+		MainTurnEndEligible: &mainTurnEndEligible,
+		RequestToken:        requestToken,
+		ToolName:            pp.ToolName,
+		ToolInput:           toolInput,
+		ToolUseID:           pp.ToolUseID,
+		AgentID:             in.agentID,
+		Hook:                hc.self(),
+		SettledAt:           clock.settledAt(),
+		TranscriptPath:      in.transcriptPath,
+		TranscriptPresent:   in.transcriptPresent,
 	}
 	outcome, applied, err := st.InsertRelayRequest(instanceID, in.gate, req, cap, wait)
 	fields["upsert_outcome"] = string(outcome)

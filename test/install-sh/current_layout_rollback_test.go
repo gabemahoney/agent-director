@@ -22,9 +22,30 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	if !ok {
 		t.Fatal("rollback advice heading missing")
 	}
+	for _, copy := range []struct{ path, end string }{
+		{"../../skills/install-agent-director/SKILL.md", ""},
+		{"../../tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md", "\nEOF\n"},
+	} {
+		b, err := os.ReadFile(copy.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
+		if copy.end != "" {
+			var complete bool
+			got, _, complete = strings.Cut(got, copy.end)
+			if !complete {
+				t.Fatalf("%s: incomplete expected recovery text", copy.path)
+			}
+			got += "\n"
+		}
+		if !found || got != section {
+			t.Fatalf("%s: complete recovery text differs from operator advice", copy.path)
+		}
+	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, the old-layout steps below do not apply",
+		"including schema v9→v10 and v10→v11, the old-layout steps below do not apply",
 		"stop agents, servers and callers and keep a copy of the actual",
 		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
 		"restore that pre-upgrade copy and install the previous release with its own",
@@ -32,6 +53,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"removing a `-wal` or `-shm` that the copy lacks",
 		"and the original install flags",
 		"This loses all writes made since the backup",
+		"The installer does not make this backup",
+		"make a v11 store readable by a v9 or v10 binary",
+		"There is no supported in-place v11→v10 or v10→v9 downgrade",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -89,11 +113,11 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			}
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
 			moveMustInstall(t, h)
-			if v := h.migStoreVersion(db); v != "10" {
-				t.Fatalf("upgrade schema = %s; want 10", v)
+			if v := h.migStoreVersion(db); v != "11" {
+				t.Fatalf("upgrade schema = %s; want 11", v)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
-				t.Fatalf("binary swap alone accepted v10: %+v", got)
+				t.Fatalf("binary swap alone accepted v11: %+v", got)
 			}
 			// Stop the post-upgrade writer too; its WAL must not survive restore.
 			h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0; UPDATE spawns SET cwd='/after', labels='{}' WHERE instance_id='before'; INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('after','ended','/after','ad-after','off','claude');").Kill()

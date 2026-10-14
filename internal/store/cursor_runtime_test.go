@@ -5,6 +5,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func cursorRowBinding(t *testing.T) (*v5Store, store.Spawn, store.CursorRuntime) {
@@ -206,5 +207,54 @@ func TestCursorBindingDatabaseFailureIsObservable(t *testing.T) {
 				t.Fatalf("database failure reported success: %v %v", applied, err)
 			}
 		})
+	}
+}
+
+// Source-derived synthetic runtime bindings exercise the persisted hold, not ACP admission.
+func TestCursorLifecycleHoldsConcurrentRequests(t *testing.T) {
+	for _, event := range []string{"Stop", "Interrupt", "UserPromptSubmit"} {
+		for _, timing := range []string{"before read", "between read and update"} {
+			t.Run(event+"/"+timing, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				if ok, err := f.s.SetCursorRuntimeSession(b, "held-session"); err != nil || !ok {
+					t.Fatalf("session %v %v", ok, err)
+				}
+				b.SessionID = "held-session"
+				gate := store.HookGate{Event: event, ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+				seed := func() {
+					req := store.RelayRequest{RequestToken: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", ToolName: "Bash", ToolInput: "{}", SettledAt: time.Now().Add(time.Hour)}
+					if _, a, err := f.s.InsertRelayRequest(row.InstanceID, gate, req, 0, store.DefaultLockWait); err != nil || !a.Applied {
+						t.Fatalf("insert %+v %v", a, err)
+					}
+				}
+				if timing == "before read" {
+					seed()
+				} else {
+					store.SetHookBeforeUpdateForTest(f.s, func() { store.SetHookBeforeUpdateForTest(f.s, nil); seed() })
+					t.Cleanup(func() { store.SetHookBeforeUpdateForTest(f.s, nil) })
+				}
+				before, err := f.s.GetSpawn(row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				target := store.StateWaiting
+				if event == "UserPromptSubmit" {
+					target = store.StateWorking
+				}
+				_, a, err := f.s.ApplyHookTransitionResult(row.InstanceID, gate, target, false, event, "synthetic-path", true)
+				if err != nil || !a.Applied {
+					t.Fatalf("held refresh %+v %v", a, err)
+				}
+				after, err := f.s.GetSpawn(row.InstanceID)
+				if err != nil || after.State != store.StateCheckPermission || after.RowVersion <= before.RowVersion || after.SessionID != b.SessionID {
+					t.Fatalf("held row %+v %v", after, err)
+				}
+				pr, err := f.s.GetPermissionRequest(row.InstanceID, "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
+				if err != nil || pr.MainTurnEndEligible || pr.ProvenGone() || !pr.AwaitsAnswer() {
+					t.Fatalf("unknown request %+v %v", pr, err)
+				}
+
+			})
+		}
 	}
 }

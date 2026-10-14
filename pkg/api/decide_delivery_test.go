@@ -407,3 +407,30 @@ func TestAdviceFollow_F9_DecideStoreBusyRetry(t *testing.T) {
 		t.Errorf("request decision = %q; want allow", pr.Decision)
 	}
 }
+
+// Store-backed synthetic Cursor cases do not claim ACP admission or receipt.
+func TestDecideKeepsDurableOrigin(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
+		t.Run(agent, func(t *testing.T) {
+			t.Parallel()
+			no := false
+			now := time.Now()
+			s, path := apitest.SeedDecideFixtureAgent(t, "on", agent, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash", ToolInput: "{}", MainTurnEndEligible: &no, SettledAt: now.Add(time.Hour)})
+			zero := int64(0)
+			res, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(time.Duration) { t.Fatal("zero wait slept") }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &zero})
+			if err != nil || res.Delivery != api.DeliveryNotConfirmed {
+				t.Fatalf("decide %+v %v", res, err)
+			}
+			reopened, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			request := rowA(t, reopened)
+			if request.MainTurnEndEligible || request.AgentID != "" || request.Decision != "deny" || request.ProvenGone() {
+				t.Fatalf("decision upgraded origin/proof %+v", request)
+			}
+		})
+	}
+}

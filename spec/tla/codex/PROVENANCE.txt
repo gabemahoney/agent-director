@@ -16,7 +16,18 @@ What this is
   product code of tasks E4-T3 (find-missing and pause on Codex rows) and
   E4-T4 (permission relay on Codex rows).
 
-Results
+E2 authoring overlay (b.jf1, 2026-10-14; NOT MODEL CHECKED)
+  src/Hold36hCx.tla now separates Eligible(r) from ChildID(r).
+  CxUnknownOrigin represents an ineligible request whose child identity is
+  NULL. CxIdentityProof is a negative control that infers proof from NULL.
+  src/cfg/rx_U_null_safe.cfg expects KeysSafe PASS; rx_U_null_control.cfg
+  expects a KeysSafe violation. Both are authored selections only, outside
+  the historical suite.tsv and job receipts. Actual TLC requires external
+  scheduler execution of the changed source at the final commit.
+  All 41 historical job directories and verdicts below remain unchanged;
+  their results apply to their pinned model copies, never this E2 overlay.
+
+Historical results
   All 41 jobs match the expected verdict in suite.tsv (verdicts.txt). Every
   PASS run is a complete PASS; every control, limit and probe fails on its
   target. The 21 fast runs (2026-10-11) and the Q2 gate's 15 runs
@@ -50,8 +61,9 @@ Source
   Every job directory holds exactly six files: tlcjob.sh equal to
   spec/tla/jobs/lib/tlcjob.sh (checked at copy time and by TestCodexHasNoJar),
   one model, its cfg (equal to src/cfg/<run>.cfg), a Dockerfile, its runs file
-  and the jar. A job directory's model equals src/ except for 14 early jobs
-  (below).
+  and the jar. At the 2026-10-12 import, a job directory's model equalled
+  that Q2 src/ snapshot except for 14 early jobs (below). Every historical
+  Hold36hCx job copy predates the E2 live-src overlay; none validates it.
   Base models (the bees that own them):
     Phase5HookCx.tla  from spec/tla/Phase5Hook.tla at dev/v0.12.0
                       (SHA-256 e34dc715...). The repo's Phase5Hook.tla has
@@ -66,18 +78,21 @@ Source
   rx_V_intproof, rx_claude_keys: Hold36hCx.tla SHA-256 e4381571...; r5x_eq,
   r5x_time, r5x_t: B146R5Cx.tla SHA-256 a80b0221...) hold the models as
   submitted before the Q2 gate, which added the /review thread's unmarked
-  hooks (CxReview, CxRv) behind knobs that are off in those cfgs. src/ holds
-  the final models (Hold36hCx.tla 440fc185..., B146R5Cx.tla fc490df9...);
+  hooks (CxReview, CxRv) behind knobs that are off in those cfgs. At the
+  2026-10-12 import, src/ held the Q2 final models (Hold36hCx.tla
+  440fc185..., B146R5Cx.tla fc490df9...);
   Phase5HookCx.tla (87d081da...) is the same in every job. That the early
-  results stand for the final models is shown by the level-1 and level-2
+  results stand for that Q2 snapshot is shown by the level-1 and level-2
   equivalence runs above: rx_eq_live_g and r5x_eq_g (final models, gate cfgs
   off) reach the same counts as rx_eq_live and r5x_eq, and the *_k0 runs
   reach the same counts as rx_safe, rx_keys, rx_live, r5x_time and r5x_t.
 
 Layout (the bee folder's relative layout)
   README.md               the design, the knobs, the run table, findings F1-F6
-  src/*.tla               the three final models
-  src/cfg/*.cfg           one cfg per scheduler job (41)
+  src/*.tla               three Q2 models at the 2026-10-12 import; live
+                          Hold36hCx now carries the unchecked E2 overlay
+  src/cfg/*.cfg           41 historical job cfgs at import; live directory
+                          has 43 selections (41 historical + 2 authored-only)
   src/gencfg.sh           wrote src/cfg/
   suite.tsv               run, model, expected verdict, budgets, what it shows
   mkjobs.sh               wrote the job directories (its paths name the
@@ -298,7 +313,7 @@ f3501f3d6a9041e29c777a4e3cec5f820ae9797263c036880ba1c71bf658fc4f  job-rx_safe_rv
 00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  job-rx_safe_rv/tlcjob.sh
 611887e66babc963387047145d64b1e11098cd00c32d30e92ff3804f0ecd8156  mkjobs.sh
 fc490df928514a845530928bad79a1eb2c203001beec268d8e983566eb1daa7c  src/B146R5Cx.tla
-440fc185d063a18c04fb225c5ffb7d464864fef304ff1831552480cfec38d997  src/Hold36hCx.tla
+1e7e9eb804db872fe3f0c97b9f4626d15e70f3bee624cc0c3e8fa801d85e6109  src/Hold36hCx.tla
 87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  src/Phase5HookCx.tla
 4a45419b04df889e2011b7b348603dd6fe7a1244975b4342137f9a19c2afec91  src/cfg/hx_C_endnow.cfg
 34304dbf03f91751afe6e54fc9b18b07608a29d4e08be0618fc03f504bb09c90  src/cfg/hx_C_pause.cfg
@@ -349,3 +364,7 @@ b91a33786b01a55438351aad3ede05425880e868d787e85c031cc44d2960954e  submit-fast.sh
 f59ce6ea7dedd7ac926bfafc647aa316ebd4e7876b3025da8e3ee1b3b4e0b593  verdicts.txt
 36f0e41328afae28abbc6556f3d2005c58be877ff89dc5f81a3466c226ad6e93  watch-gate.sh
 67f56856cca6103134f1a402ddb2b30418e7ccce74be6ead3b37d51c203e1b3d  watch-jobs.sh
+
+49c1933d735137ed510da062e5915cdedb002766035da9c005f5ca66fc30a37f  src/cfg/rx_U_null_safe.cfg
+
+504f93805cd07cd7b38e23208a437173a98829fcca3b7c633e7b2d151f019e2a  src/cfg/rx_U_null_control.cfg

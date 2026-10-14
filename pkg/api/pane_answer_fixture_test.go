@@ -42,14 +42,15 @@ const paToolUseID = "toolu_01PANE"
 // ("" the main agent's).
 type paEnv struct {
 	*killEnv
-	r       killRow
-	text    string
-	now     time.Time
-	self    api.ProcessIdentity
-	hold    time.Duration
-	sks     api.SendKeysStore
-	agentID string
-	agent   string // "claude" (the default) or "codex": the row's agent
+	r        killRow
+	text     string
+	now      time.Time
+	self     api.ProcessIdentity
+	hold     time.Duration
+	sks      api.SendKeysStore
+	agentID  string
+	eligible *bool
+	agent    string // "claude" (the default) or "codex": the row's agent
 }
 
 // paSubagentID is the agent_id of a background subagent's requests (newSubagentPAEnv).
@@ -72,9 +73,9 @@ func newCodexPAEnv(t *testing.T) *paEnv { return newPAEnvAgent(t, "codex", "") }
 // newCodexSubagentPAEnv is newSubagentPAEnv on a Codex row.
 func newCodexSubagentPAEnv(t *testing.T) *paEnv { return newPAEnvAgent(t, "codex", paSubagentID) }
 
-// newPAEnvAgent seeds a paEnv whose row is agent's ("claude" or "codex") and
-// whose requests record agentID.
-func newPAEnvAgent(t *testing.T, agent, agentID string) *paEnv {
+// newPAEnvAgent seeds Claude/Codex or synthetic Cursor rows and requests
+// with optional explicit eligibility independent of agentID.
+func newPAEnvAgent(t *testing.T, agent, agentID string, eligible ...*bool) *paEnv {
 	t.Helper()
 	e := newKillEnv(t)
 	var r killRow
@@ -84,6 +85,9 @@ func newPAEnvAgent(t *testing.T, agent, agentID string) *paEnv {
 		r = e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true, Opts: agentRowOpts(agent)})
 	}
 	p := &paEnv{killEnv: e, r: r, now: e.clock.Now(), self: paSender, sks: e.store, agentID: agentID, agent: agent}
+	if len(eligible) > 0 {
+		p.eligible = eligible[0]
+	}
 	e.pc.Set(paSender.PID, procfix.Alive(paSender.Starttime))
 	p.seedRequest(t, storefix.TestRequestTokenA, paToolUseID, relayEnvHook)
 	p.setPane("pane of request A\n")
@@ -136,7 +140,7 @@ func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.Proc
 		toolUseID, input = "", `{"command":"ls","description":"List the files"}`
 	}
 	storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: token, ToolName: "Bash",
-		ToolInput: input, ToolUseID: toolUseID, AgentID: p.agentID, Hook: hook, SettledAt: p.now.Add(time.Hour)})
+		ToolInput: input, ToolUseID: toolUseID, AgentID: p.agentID, MainTurnEndEligible: p.eligible, Hook: hook, SettledAt: p.now.Add(time.Hour)})
 }
 
 // mainAgentStop applies the main agent's Stop (a Codex row's Interrupt) to p's

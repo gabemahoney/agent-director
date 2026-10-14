@@ -377,11 +377,12 @@ every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
 
 After a permission request, a plain `send-keys` without
 `--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's
-hooks show the request's dialog gone: after an allow, once its tool has
-run (on a Codex agent, once the turn ends); after a deny, once the agent's
-turn ends. On a Codex agent a subagent's request, allowed or denied, holds
-until the agent ends (see
-[how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows)).
+hooks show the request's dialog gone. Follow the request's proof and delivery
+fields; completing or interrupting the main turn does not release a child or
+unknown-origin request, even when its child id is null. See
+[The dialog hold](permissions.md#the-dialog-hold). A Cursor row can stay
+`check_permission` across working, Stop and Interrupt reports while a genuine
+unanswered, unproven request holds it. Readiness requires the hold to resolve.
 Nothing is sent. Its
 `err_details` name the oldest such request, how agent-director's records
 say it closed and since when, and the agent's other such requests. Keep

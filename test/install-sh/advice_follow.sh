@@ -1015,17 +1015,20 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: make the v9→v10 guarded runtime-table
-# validation fail without deleting rows. Repair restores the required name.
+# j6_break_hop <state.db>: fail the v10→v11 eligibility backfill after DDL.
+# Preserve the historical request so the literal retry can backfill it.
 j6_break_hop() {
-    [[ "$SCHEMA" == 10 ]] || { bad "j6_break_hop breaks the v9→v10 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE cursor_runtimes RENAME COLUMN bound_output_fd TO broken_bound_output_fd;"
+    [[ "$SCHEMA" == 11 ]] || { bad "j6_break_hop breaks the v10→v11 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE permission_requests DROP COLUMN main_turn_end_eligible;
+        INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('j6','ended','/tmp','ad-j6','off','claude');
+        INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}');
+        CREATE TRIGGER j6_fail_backfill BEFORE UPDATE ON permission_requests BEGIN SELECT RAISE(ABORT,'injected eligibility backfill failure'); END;"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE cursor_runtimes RENAME COLUMN broken_bound_output_fd TO bound_output_fd;"; }
+j6_repair_hop() { "$SQLITE" "$1" "DROP TRIGGER j6_fail_backfill;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with an incompatible runtime table
+# make the store one version older with a failing eligibility backfill
 # (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
 # failure; leaves HOME in J6H.
 j6_failing_migration() {
@@ -1060,6 +1063,8 @@ test_J6_MigrationFailedRerunRetries() {
     expect_rc 0 "re-run once the cause is gone" || return
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
     [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel not consumed by the successful migration"
+    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT main_turn_end_eligible FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
+        || bad "corrected retry did not preserve and backfill the historical main request"
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"

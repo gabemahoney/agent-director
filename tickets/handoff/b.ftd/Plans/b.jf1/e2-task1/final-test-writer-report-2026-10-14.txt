@@ -1,0 +1,61 @@
+E2 Task1 FINAL TestWriter report — 2026-10-14
+Workspace /home/horde/ad-codex/project/agent-director-ftd; branch feature/b.ftd; base HEAD d6858a96908a38e29d8055f564c5eb505a7e80a6.
+Dispatch owns .86 and .i6 only; no parent/sibling statuses or commits.
+
+COMPLETED CHANGES
+1. test/install-sh/current_layout_rollback_test.go: repins literal current-layout advice to distinct v9→v10→v11; asserts complete operator/skill/install-12 copies byte-for-byte identical before following recovery. The existing four-cell default/external × checkpointed/WAL matrix still builds the actual released v9 pair from ccb41e075695609b084292f52c36512f3665d210, uses its own installer and original flags, backs up stopped-writer DB/WAL/SHM, rejects a binary-only swap against v11, restores matched files/removes companions absent from backup, and proves old rows/settings return while later writes disappear. No counterfeit released binary.
+2. tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md: WHOLE install-12 expected recovery section synchronized; no canonical-doc edits. All THREE copies exactly 96 lines / 4920 bytes, SHA256 1cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc.
+3. test/install-sh/migration_fixture_test.go and migration_test.go: reuse migLay/newMoveHome/migUnchanged/moveMustInstall and existing gate table for physical v9, physical v10 and current11; earlier versions omit their later-hop DDL, not merely stamped headers. All already-renamed cases preserve config/templates and create no agent-rename backups; existing below-rename EndToEnd and no-store/old-key refusal cases retained. Current and post-install version assertions pin11.
+4. internal/store/install_sh_hop_version_test.go: explicitly protects immutable rename threshold9 in addition to existing installer/store agreement.
+5. test/install-sh/advice_follow.sh: J6 now injects a post-DDL v10→v11 backfill failure via a real historical main request and abort trigger. Existing rerun/retained-authorization/keep-prior/prior-admin advice cases retain their exact expected machine errors. Corrected retry additionally proves the historical request survives and becomes eligible. Existing newer-schema case uses SCHEMA+1, genuinely12, and follows install-newer advice.
+6. spec/tla/codex/PROVENANCE.txt: narrow D1 clarification qualifies Source claims as 2026-10-12 import/Q2 snapshot. Every historical Hold36hCx job copy predates E2 live-src overlay. Layout distinguishes 41 historical cfgs from live43 (plus2 authored-only). Opening NOT MODEL CHECKED overlay disclaimer, every historical pin/receipt and current overlay hash remain unchanged. All262 pins match. No TLC parse/run, no new equivalence/PASS evidence.
+7. internal/hook/cursor_verify_test.go: closes the quality-review duplication by merging held-refresh row-version assertion into existing parameterized verifier matrix; removes redundant TestCursorHeldLifecycleProof. Existing 3event ×2held ×12authority/origin cases retain all row/session/proof/runtime assertions, now with monotonic held refresh. No assertion weakened. This reduces top-level test count by1 from prior report69; its9 duplicate cases are covered by existing matrix.
+8. pkg/api/apitest/fixtures.go and pkg/api/pane_answer_fixture_test.go: fixture comments now accurately identify synthetic Cursor and optional eligibility; no behavioral fixture change.
+
+QUALITY REVIEW
+Read CLAUDE.md, actual complete test-writing/review guide and sandbox skill, current Task/all15 Subtasks (including every testing Subtask), original Engineer/NULL-repair/repaired-behavior substantive reports, initial DocWriter/corrections/D1 review. Reviewed all changed test/fixture diffs and complete new eligibility/migration/report test bodies against guide/checklist. Existing factories/shared seeds reused, no mirrored source algorithm or fixture meta-test added, tables used for repeated cases, actual temp SQLite/files/process evidence preferred, mocks remain external verifier/tmux boundaries, pkg/api tests declare parallel. Distinct store/hook/reporter/API seams remain separate contract coverage. Redundant hook test consolidated; no other genuine acceptance gap found. No broad unrelated test refactor.
+
+TARGETED CHECKS (all through make sandbox; every command exited0)
+- /tmp/ftd-e2-final-installer-targeted.log: go test ./test/install-sh -run "^(TestAdviceFollow_CurrentLayoutRollback|TestMigrationEndToEnd|TestMigrationGate|TestMigrationWhileTheMoveIsDue)$" -count=1 -v; 4 top-level tests and11 leaf table cells PASS.
+- /tmp/ftd-e2-final-advice-provenance.log: go test ./internal/store -run "^TestInstallShHopVersionMatchesStore$" -count=1 -v; go test ./test/tla -run "^TestCodex(Provenance|HasNoJar)$" -count=1 -v; ADVICE_FOLLOW_ONLY="^test_J6_" bash test/install-sh/advice_follow.sh; 3 top-level Go tests and4 J6 literal-follow cases PASS,0skips.
+- /tmp/ftd-e2-final-quality-targeted.log: go test ./internal/hook -run "^TestCursorHandleRequiresIndependentVerifier$" -count=1 -v;1top/72leaf table cells PASS (3×2×12=72).
+- /tmp/ftd-e2-final-advice-retry.log: after stronger retry data assertion, ADVICE_FOLLOW_ONLY="^test_J6_MigrationFailedRerunRetries$" bash test/install-sh/advice_follow.sh;1PASS,0fail/skip.
+- gofmt through sandbox; git diff --check PASS.
+
+FULL UNITS
+Command: make test-sandbox. One initial full run, then one justified final full rerun after the three stale expectation repairs below.
+Full raw receipt: tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/final-unit-suite-2026-10-14.log
+Tree identity: tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/final-unit-tree-2026-10-14.json (baseHEAD plus all51 changed/untracked source/doc/test hashes).
+Initial result: exit2, Go66 package passes (39cached,27executed),2failed packages,13packages without test files; Bun428pass/1fail,429tests across57files,1658expect calls. Not hidden/superseded without recording.
+Three failures were test text/golden pins, not source behavior:
+- pkg/api TestReadmeOperatorActionsACDOC19Items expected `get`/missing identity on every pre-upgrade row. Updated existing stepSpec in pkg/api/readme_operator_actions_more_test.go to REQUIRE caller-set identification, manual ending/find-missing, older-row-only absent identity and explicit preservation of populated identity through9→10→11. No reduced procedure coverage.
+- pkg/api/manifest TestProvenGoneHowTextNamesTheCodexProofs expected NULL child ID to establish proof. Updated shared pkg/api/apitest/descriptions_dialog.go DescProvenGoneHow to REQUIRE durable eligibility/hook age, verified Cursor lifecycle, conservative unknown/child, legacy non-Cursor compatibility and no eligibility from decisions/delivery/pane claims. Retained old tool/spawn proof checks.
+- Bun public-surface types.d.ts golden retained old comment. Regenerated by established sandbox bun run build && bun run scripts/update-surface-golden.ts. ONLY pkg/ts-bun-client/test/fixtures/public-surface/types.d.ts.golden changed, just the intended proof comment. Independent old/new declarations with comments/whitespace removed compare identically; no API signature change accepted.
+Affected Go tests both PASS -count=1 -v, /tmp/ftd-e2-final-text-pins-repair.log. Focused Bun public-surface22pass/0fail,46expects,1file, /tmp/ftd-e2-final-surface-golden-repair.log. These changes justify the final full rerun; no unrelated repeat.
+Final full rerun: EXIT0,68Go package passes/0failed (62cached,6executed),13packages with no test files. Bun429pass/0fail,429tests across57files,1658expect calls. Every54changed/untracked tree hash still matches after the run; git diff --check PASS. No unresolved failure. Default Go output provides package totals, not individual test/skip totals; no invented Go test count or skip-free claim.
+Final raw receipt SHA256650e063419d2af31e2b8a831082936c5c773737800a88149b9bba2c118bd66ac.
+Final full receipt: tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/final-unit-suite-repair-2026-10-14.log
+Final tree identity: tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/final-unit-repair-tree-2026-10-14.json (54changed/untracked files).
+
+BOUNDARIES
+No integration dispatch; no heavy Docker testplan groups, actual TLC, scheduler submission, authenticated/live Cursor admission or Task2 work. Normal Docker-backed sandbox is the required unit boundary. No host repo artifacts/tests, real AD stores, credentials/login/logout/token copying/.claude, production source/canonical-doc edits, commits or pushes. No product questions. Final exact-commit external integration/formal gates remain root/operator-owned.
+Ticket t3.jf1.c1.xi.86 active→done; t3.jf1.c1.xi.i6 active→done after final full green. Only own statuses changed. No source failure occurred; no source edit or weakened assertion.
+READY FOR root PM review and local Task commit. External exact-commit integration/TLC/live gates still pending at root/operator; this dispatch does not complete the parent Task/Epic.
+Receipt/tree files are under tickets/*, ignored by .gitignore; root may retain in Bee handoff storage or explicitly force-add if desired. The install-12 fixture is already tracked and appears in normal diff.
+
+FINAL OWN FILE LIST (13 existing test/fixture/metadata files)
+- internal/store/install_sh_hop_version_test.go
+- internal/hook/cursor_verify_test.go
+- pkg/api/apitest/fixtures.go
+- pkg/api/apitest/descriptions_dialog.go
+- pkg/api/pane_answer_fixture_test.go
+- pkg/api/readme_operator_actions_more_test.go
+- pkg/ts-bun-client/test/fixtures/public-surface/types.d.ts.golden
+- test/install-sh/advice_follow.sh
+- test/install-sh/current_layout_rollback_test.go
+- test/install-sh/migration_fixture_test.go
+- test/install-sh/migration_test.go
+- spec/tla/codex/PROVENANCE.txt
+- tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md
+Additional handoff artifacts only: first/final full logs, first/final tree JSON manifests, final report copy under tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/.
+Deviations: expanded .i6 scope to repair three genuine stale expectation failures discovered by the full suite and consolidate redundant hook coverage; permitted final-owner test scope, no source/docs expansion. Full rerun justified solely by these failures/repairs. No incomplete assigned work or questions.

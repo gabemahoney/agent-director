@@ -1,0 +1,58 @@
+E2 Task1 source NULL-agent repair report — 2026-10-14
+Workspace /home/horde/ad-codex/project/agent-director-ftd; branch feature/b.ftd; HEAD d6858a96 unchanged.
+Mandatory handoffs read: /tmp/ftd-e2-task1-engineer-report.txt and /tmp/ftd-e2-task1-test-behavior-report.txt.
+Read own rq/mx/j9, Task xi, E2, Plan b.jf1, approved PRD t1.ftd.y5 (approved:yes), SRD t1.ftd.hj including latest source-repair dispositions, CLAUDE engineering/architecture/migration guidance and relevant canonical architecture seams.
+
+OWN SUBTASKS
+t3.jf1.c1.xi.rq, t3.jf1.c1.xi.mx, t3.jf1.c1.xi.j9 reopened active for this repair and marked done after focused verification. No parent/sibling ticket status changed.
+
+EXACT REPAIR FILES (five production Go files only)
+1. internal/store/request_eligibility.go:
+   Historical backfill uses agent IS NOT 'cursor', retaining supported NULL/malformed historical non-Cursor main eligibility. Existing agent_id IS NULL and correlated owning-spawn EXISTS remain, so children, actual Cursor unknown origin and orphans stay false. Existing compatible-column values are never recomputed, including explicit false.
+   Same-transaction eligibility validation now also refuses main_turn_end_eligible=1 with agent_id IS NOT NULL. This returns ErrSchemaMismatch before version stamping/commit; rollback preserves schema/data/version and caller retains authorization. It does not convert a contradictory child row into main metadata. Existing wrong shape/type/value rejection remains.
+2. internal/store/hook_gate.go:
+   SQL non-Cursor exclusion is NULL-safe agent IS NOT 'cursor'. Only the classification of supported historical NULL agent changes. All pane_pid/parent/start predicates and every actual Cursor launch/life/gateway/runtime/start/connection/pipe/fd/session/termination predicate are unchanged. NULL is compatibility data, never a selected public agent or arbitrary actor adoption.
+3. internal/store/permission.go:
+   Legacy gated INSERT SELECT computes eligibility with agent IS NOT 'cursor'. This produces durable 0/1 for NULL-agent rows instead of NULL, with the same owning-spawn/gate/collision/transaction/cap behavior.
+4. internal/store/relay_writes.go:
+   Prior-state owning-agent read now scans agent into sql.NullString. Internal compatibility resolver accepts that nullable representation and returns legacy eligibility for NULL/non-Cursor main records only. Nonempty child AgentID still overrides explicit true to false; explicit false stays false; actual Cursor nil assertion defaults false. No COALESCE to Claude/Codex, agent selection, public default or new admission path.
+5. internal/store/request_proof.go:
+   Main-turn selector requires BOTH pr.main_turn_end_eligible=1 AND pr.agent_id IS NULL, defensively protecting known-child rows even if their persisted bit is inconsistent. Independent eligible prerequisite remains, so unknown NULL-child false cannot acquire proof. Shared match fragment applies both conditions in pre-lock MAX-ID read AND guarded write, retaining created_at strict whole-second cut, MAX(request_id) cut and owning hook/runtime gate. Correlated tool execution and owning-spawn-end proof are unchanged.
+
+RED → GREEN RECEIPTS (all repository artifact execution through make sandbox)
+Baseline exact selection failed 3 top-level tests / 5 subtests:
+  TestV11MigrationEligibilityPreservation/legacy_null_agent_main;
+  TestV11MigrationExistingColumn/child_true;
+  TestLegacyNullAgentGatedWritesAndProof/{relay,legacy,proof}.
+Receipt /tmp/ftd-e2-null-repair-baseline.log; make exited 2 after test failure.
+Command: make sandbox CMD='go test ./internal/store -run "^TestV11MigrationEligibilityPreservation$|^TestV11MigrationExistingColumn$|^TestLegacyNullAgentGatedWritesAndProof$" -count=1'
+
+After source repair the same selection passed all three top-level tests and all subcases (8 preservation + 11 existing-column + 3 NULL-agent writer/proof cases). -v added for receipt details; assertions/tests/fixtures unchanged.
+Receipt /tmp/ftd-e2-null-repair-green.log; make exited 0.
+
+26 additional named focused top-level tests passed with existing subcases across store/hook/cursorhost:
+  TestRequestEligibilityWritersReadersAndProof; TestExplicitFalseUnknownClosePreservesOtherHolds;
+  TestV11MigrationBackfillRollbackAndRetry; TestV11MigrationOrphanDoesNotAcquireMainProof;
+  TestV10MigrationReentryAndPreservation; TestV10MigrationRefusalRollback;
+  TestAuthorizedMigrationFromEveryVersion; TestMigrationRefusedWithoutSentinel;
+  TestGateRefusesBadSentinel; TestNewerThanBinaryIsSchemaMismatch; TestMigrationRollback; TestMigrationStepReentry;
+  TestProveRequestsGone; TestTurnEndCoversOnlyRequestsWrittenBeforeIt; TestTurnEndCutsAtTheHookStart;
+  TestUnprovenRequestDoesNotHoldAskUserOrStop (Claude AND Codex compatibility); TestInsertRelayRequestOneTransaction;
+  TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent;
+  TestCursorRuntimeStaleSessionAndReplacementRefused; TestCursorStaleReportCannotMutateReplacementLaunch;
+  TestCursorRuntimeConditionalBindingWrites; TestCursorBindingDatabaseFailureIsObservable;
+  TestCursorLifecycleHoldsConcurrentRequests; TestCursorHandleRequiresIndependentVerifier;
+  TestCursorHeldLifecycleProof; TestReporterHeldLifecycleRequiresIndependentEvidence (27-case protected runtime/pane matrix).
+Receipt /tmp/ftd-e2-null-repair-regression.log; make exited 0.
+
+Sandbox gofmt on all five source files passed: /tmp/ftd-e2-null-repair-format.log.
+Sandbox go build ./internal/store ./internal/hook ./internal/cursorhost followed by go vet same packages passed: /tmp/ftd-e2-null-repair-build-vet.log; make exited 0.
+git diff --check passed. Total 29 named focused top-level tests green; five actual failed subcases reduced to zero.
+
+CONCRETE SRD / DOC HANDOFF
+Keep schema11/newhop10→11/fresh DDL unchanged. NULL-safe SQLite IS NOT actual Cursor and nullable Go sql.NullString preserve historical compatibility without picking a supported agent. Explicit eligibility and absence of stored child identity are jointly required for main-turn proof; no origin inference from NULL alone. Compatible reentry keeps valid explicit values; contradictory child=true is a schema mismatch, never a backfill or reinterpretation. Failed migration retains authorization for corrected retry. All earlier hops/rename9 remain untouched.
+
+LIMITS / NEXT OWNER
+No known source failure or product question remains in this repair. Fresh TestWriter should independently revalidate all repaired acceptance before canonical DocWriter. Existing migration child=true case covers refusal; writer/proof matrices cover correct persisted child=false. A deliberately corrupted already-current schema11 child=true row is now defensively excluded by source selector, but no new dedicated behavioral fixture was authored in this source lane. Fresh TestWriter may add that direct defense regression (and NULL-agent child/explicit-false construction rows if useful), without weakening existing assertions.
+Only production source/comments edited. No tests, shared fixtures, formal/prose/generated/installer/bundled skill edits. No full units/integration/heavy Docker group/TLC/scheduler/live/authenticated probes, real stores, credentials/personal config operations, commits or push. Installer synchronization/full-unit/external gates remain assigned/deferred as root instructed.
+Ledger safe checkpoint was queued locally (unconfigured delivery); no remote Ledger search/delivery claim. Local report is authoritative handoff.

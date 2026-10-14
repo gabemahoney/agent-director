@@ -1,0 +1,288 @@
+{
+  "epic": "t1.jf1.c1",
+  "tasks": [
+    {
+      "number": 1,
+      "id": "t2.jf1.c1.xi",
+      "subtasks": [
+        {
+          "id": "t3.jf1.c1.xi.rq",
+          "role": "engineer",
+          "title": "Establish durable proof eligibility and its migration"
+        },
+        {
+          "id": "t3.jf1.c1.xi.mx",
+          "role": "engineer",
+          "title": "Carry eligibility through every request writer and reader"
+        },
+        {
+          "id": "t3.jf1.c1.xi.j9",
+          "role": "engineer",
+          "title": "Enforce eligible proof and retain Cursor lifecycle holds"
+        },
+        {
+          "id": "t3.jf1.c1.xi.qp",
+          "role": "test",
+          "title": "Test migration preservation and durable eligibility backfill"
+        },
+        {
+          "id": "t3.jf1.c1.xi.5z",
+          "role": "test",
+          "title": "Test next-hop refusal rollback and retry"
+        },
+        {
+          "id": "t3.jf1.c1.xi.86",
+          "role": "test",
+          "title": "Test installer upgrade boundaries and literal recovery advice"
+        },
+        {
+          "id": "t3.jf1.c1.xi.jg",
+          "role": "test",
+          "title": "Test request eligibility persistence through writers and readers"
+        },
+        {
+          "id": "t3.jf1.c1.xi.2n",
+          "role": "test",
+          "title": "Test proof selection and owning-spawn cleanup"
+        },
+        {
+          "id": "t3.jf1.c1.xi.co",
+          "role": "test",
+          "title": "Test hook attribution and Cursor held report outcomes"
+        },
+        {
+          "id": "t3.jf1.c1.xi.f8",
+          "role": "test",
+          "title": "Test public holds consume persisted eligibility"
+        },
+        {
+          "id": "t3.jf1.c1.xi.fn",
+          "role": "test",
+          "title": "Author formal proof-eligibility regression coverage"
+        },
+        {
+          "id": "t3.jf1.c1.xi.i6",
+          "role": "test",
+          "title": "Review test quality and run full sandbox unit suite and fix failures"
+        },
+        {
+          "id": "t3.jf1.c1.xi.ff",
+          "role": "doc",
+          "title": "Correct existing permission-proof and held-state prose"
+        },
+        {
+          "id": "t3.jf1.c1.xi.r8",
+          "role": "doc",
+          "title": "Update architecture for durable proof eligibility and Cursor lifecycle holds"
+        },
+        {
+          "id": "t3.jf1.c1.xi.vt",
+          "role": "doc",
+          "title": "Synchronize migration recovery and breaking release handoff"
+        }
+      ],
+      "roles": {
+        "engineer": [
+          "t3.jf1.c1.xi.rq",
+          "t3.jf1.c1.xi.mx",
+          "t3.jf1.c1.xi.j9"
+        ],
+        "test": [
+          "t3.jf1.c1.xi.qp",
+          "t3.jf1.c1.xi.5z",
+          "t3.jf1.c1.xi.86",
+          "t3.jf1.c1.xi.jg",
+          "t3.jf1.c1.xi.2n",
+          "t3.jf1.c1.xi.co",
+          "t3.jf1.c1.xi.f8",
+          "t3.jf1.c1.xi.fn",
+          "t3.jf1.c1.xi.i6"
+        ],
+        "doc": [
+          "t3.jf1.c1.xi.ff",
+          "t3.jf1.c1.xi.r8",
+          "t3.jf1.c1.xi.vt"
+        ]
+      }
+    },
+    {
+      "number": 2,
+      "id": "t2.jf1.c1.cz",
+      "subtasks": [
+        {
+          "id": "t3.jf1.c1.cz.4f",
+          "role": "engineer",
+          "title": "Validate and preserve real Cursor permission and plan requests"
+        },
+        {
+          "id": "t3.jf1.c1.cz.j2",
+          "role": "engineer",
+          "title": "Enforce question denial before authorization admission"
+        },
+        {
+          "id": "t3.jf1.c1.cz.nt",
+          "role": "engineer",
+          "title": "Connect decisions to a bounded durably acknowledged request relay"
+        },
+        {
+          "id": "t3.jf1.c1.cz.ip",
+          "role": "engineer",
+          "title": "Route actual connected pane choices through request arbitration"
+        },
+        {
+          "id": "t3.jf1.c1.cz.v6",
+          "role": "engineer",
+          "title": "Bridge validated execution evidence to existing request proofs"
+        },
+        {
+          "id": "t3.jf1.c1.cz.gk",
+          "role": "engineer",
+          "title": "Align canonical API descriptions and generated surface parity"
+        },
+        {
+          "id": "t3.jf1.c1.cz.ha",
+          "role": "test",
+          "title": "Test validated Cursor permission and blocking-plan admission"
+        },
+        {
+          "id": "t3.jf1.c1.cz.6k",
+          "role": "test",
+          "title": "Test durable acknowledgement before first relay response byte"
+        },
+        {
+          "id": "t3.jf1.c1.cz.bj",
+          "role": "test",
+          "title": "Test finite per-request delivery evidence and caller restart"
+        },
+        {
+          "id": "t3.jf1.c1.cz.12",
+          "role": "test",
+          "title": "Test independent requests stale identities and decision races"
+        },
+        {
+          "id": "t3.jf1.c1.cz.v7",
+          "role": "test",
+          "title": "Test connected pane decisions and guarded fallback"
+        },
+        {
+          "id": "t3.jf1.c1.cz.yw",
+          "role": "test",
+          "title": "Test automatic question denial before permission or pane admission"
+        },
+        {
+          "id": "t3.jf1.c1.cz.7p",
+          "role": "test",
+          "title": "Review focused compatibility and behavioral test quality"
+        },
+        {
+          "id": "t3.jf1.c1.cz.kd",
+          "role": "test",
+          "title": "Review test quality and run full sandbox unit suite and resolve failures"
+        },
+        {
+          "id": "t3.jf1.c1.cz.iw",
+          "role": "doc",
+          "title": "Document Cursor permission blocking-plan and question policy"
+        },
+        {
+          "id": "t3.jf1.c1.cz.yo",
+          "role": "doc",
+          "title": "Integrate Cursor into request inspection and pane-answer usage"
+        },
+        {
+          "id": "t3.jf1.c1.cz.ch",
+          "role": "doc",
+          "title": "Document Cursor relay failures and existing recovery"
+        },
+        {
+          "id": "t3.jf1.c1.cz.er",
+          "role": "doc",
+          "title": "Update architecture for request controller and durable relay boundary"
+        }
+      ],
+      "roles": {
+        "engineer": [
+          "t3.jf1.c1.cz.4f",
+          "t3.jf1.c1.cz.j2",
+          "t3.jf1.c1.cz.nt",
+          "t3.jf1.c1.cz.ip",
+          "t3.jf1.c1.cz.v6",
+          "t3.jf1.c1.cz.gk"
+        ],
+        "test": [
+          "t3.jf1.c1.cz.ha",
+          "t3.jf1.c1.cz.6k",
+          "t3.jf1.c1.cz.bj",
+          "t3.jf1.c1.cz.12",
+          "t3.jf1.c1.cz.v7",
+          "t3.jf1.c1.cz.yw",
+          "t3.jf1.c1.cz.7p",
+          "t3.jf1.c1.cz.kd"
+        ],
+        "doc": [
+          "t3.jf1.c1.cz.iw",
+          "t3.jf1.c1.cz.yo",
+          "t3.jf1.c1.cz.ch",
+          "t3.jf1.c1.cz.er"
+        ]
+      }
+    },
+    {
+      "number": 3,
+      "id": "t2.jf1.c1.3p",
+      "subtasks": [
+        {
+          "id": "t3.jf1.c1.3p.j4",
+          "role": "test",
+          "title": "Exercise Cursor relay through shipped public processes"
+        },
+        {
+          "id": "t3.jf1.c1.3p.nb",
+          "role": "test",
+          "title": "Author registered cursor-relay collector and external acceptance handoff"
+        },
+        {
+          "id": "t3.jf1.c1.3p.1h",
+          "role": "test",
+          "title": "Assess completed controller against existing relay models and author demonstrated gaps"
+        },
+        {
+          "id": "t3.jf1.c1.3p.nz",
+          "role": "test",
+          "title": "Review focused E2 tests and acceptance quality"
+        },
+        {
+          "id": "t3.jf1.c1.3p.56",
+          "role": "test",
+          "title": "Review test quality and run final full sandbox units and resolve failures"
+        },
+        {
+          "id": "t3.jf1.c1.3p.a7",
+          "role": "doc",
+          "title": "Review client workflow parity and correct demonstrated contract gaps"
+        },
+        {
+          "id": "t3.jf1.c1.3p.dc",
+          "role": "doc",
+          "title": "Review architecture against final acceptance fixtures and formal coverage"
+        }
+      ],
+      "roles": {
+        "test": [
+          "t3.jf1.c1.3p.j4",
+          "t3.jf1.c1.3p.nb",
+          "t3.jf1.c1.3p.1h",
+          "t3.jf1.c1.3p.nz",
+          "t3.jf1.c1.3p.56"
+        ],
+        "doc": [
+          "t3.jf1.c1.3p.a7",
+          "t3.jf1.c1.3p.dc"
+        ]
+      }
+    }
+  ],
+  "approval": "Fresh per-Task planner PM reviews and final E2 planner PM review approved; user authorizes scoped Epic2 hatch/build despite later draft siblings.",
+  "baseline": "d6858a96908a38e29d8055f564c5eb505a7e80a6",
+  "execution": "One sequential TestWriter coverage lane per Task; canonical docs before final full units; Task1 installer literal recovery pins after migration prose; Tasks1/2 exact-commit externally scheduled interface gates."
+}

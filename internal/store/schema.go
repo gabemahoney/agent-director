@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v9 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v11 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -91,6 +91,10 @@ import (
 // migrateV8toV9's own fixed copy (the two-places rule), so a fresh store and a
 // migrated store have the same objects. Only internal/store reads or writes
 // them.
+//
+// v11 adds permission_requests.main_turn_end_eligible (INTEGER NOT NULL
+// DEFAULT 0), appended after proven_gone_how, matching migrateV10toV11.
+// Main-turn proof authority is durable and independent of nullable child ID.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
 // (unconfirmed): created_seq grows with each insert and is never reused, so it
@@ -187,6 +191,7 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     closed_at           INTEGER,
     proven_gone_at      INTEGER,
     proven_gone_how     TEXT,
+    main_turn_end_eligible INTEGER NOT NULL DEFAULT 0,
     UNIQUE(instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);
@@ -277,6 +282,7 @@ var migrationSteps = []migrationStep{
 	{from: 7, apply: migrateV7toV8},
 	{from: 8, apply: migrateV8toV9},
 	{from: 9, apply: migrateV9toV10},
+	{from: 10, apply: migrateV10toV11},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

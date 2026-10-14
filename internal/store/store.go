@@ -84,7 +84,7 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 10
+const schemaVersion = 11
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
 // migrateV8toV9, b.ssz) produces. install.sh holds the same number as

@@ -145,17 +145,19 @@ func TestFreshStoreSchema(t *testing.T) {
 	}
 	assertV9SubagentSchema(t, db)
 	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs, v9ColumnSpecs))
+	assertColumnSpecs(t, db, []columnSpec{{"permission_requests", "main_turn_end_eligible", "INTEGER", true, "0"}})
 	// spawns ends with the v6 columns, v7's idle_since, the v8 columns, then
 	// agent, end_reported_at and subagent_tracking; permission_requests with the v7 columns after
-	// created_at (the two-places rule's order).
+	// created_at, then v11's durable eligibility (the two-places rule's order).
 	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames())
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
+	wantRequestsTail = append(wantRequestsTail, "main_turn_end_eligible")
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
 		!slices.Equal(cols[len(cols)-len(wantRequestsTail):], wantRequestsTail) {
-		t.Errorf("permission_requests columns = %v; want created_at then the v7 columns last, in order %v", cols, wantRequestsTail)
+		t.Errorf("permission_requests columns = %v; want created_at then the v7 and v11 columns last, in order %v", cols, wantRequestsTail)
 	}
 	assertSentinel(t, dir, false)
 }

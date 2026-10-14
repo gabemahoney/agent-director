@@ -1692,3 +1692,32 @@ func assertV8ValuesKept(t *testing.T, path string, f v8Fixture, held map[string]
 		}
 	}
 }
+
+// Source-derived v10 fixture; it retains historical NULL/malformed agent values.
+func seedV10EligibilityFixture(t *testing.T, path string, agent any, child any) {
+	t.Helper()
+	seedPreMigrationRow(t, path, 10)
+	if agent == nil {
+		withRaw(t, path, func(db *sql.DB) {
+			db.SetMaxOpenConns(1)
+			var ddl string
+			var version int
+			if err := db.QueryRow("SELECT sql FROM sqlite_schema WHERE name='spawns'").Scan(&ddl); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.QueryRow("PRAGMA schema_version").Scan(&version); err != nil {
+				t.Fatal(err)
+			}
+			mustExec(t, db, "PRAGMA writable_schema=ON")
+			mustExec(t, db, "UPDATE sqlite_schema SET sql=? WHERE name='spawns'", strings.Replace(ddl, "agent TEXT NOT NULL", "agent TEXT", 1))
+			mustExec(t, db, fmt.Sprintf("PRAGMA schema_version=%d", version+1))
+			mustExec(t, db, "PRAGMA writable_schema=RESET")
+		})
+	}
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `UPDATE spawns SET agent=?, life_number=3, session_id='kept-session', end_reported_at=123456 WHERE instance_id='pre'`, agent)
+		mustExec(t, db, `INSERT INTO permission_requests(instance_id, request_token, tool_name, tool_input, agent_id, decision, pane_answer, proven_gone_at, proven_gone_how) VALUES('pre', ?, 'Bash', '{}', ?, 'deny', 'outside', 1790812800000, 'tool_ran')`, tokenA, child)
+		mustExec(t, db, `INSERT INTO session_history(instance_id, session_id, life_number) VALUES('pre', 'kept-session', 3)`)
+		mustExec(t, db, `INSERT INTO cursor_runtimes(bound_instance_id,bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated) VALUES('pre','1111111111111111',3,4101,'start',12345,'synthetic','kept','pipe:[1]','pipe:[2]',11,12,'kept-session',0)`)
+	})
+}

@@ -30,6 +30,9 @@ func TestInstallShHopVersionMatchesStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AGENT_RENAME_HOP_VERSION %q: %v", found[0][1], err)
 	}
+	if got != 9 {
+		t.Errorf("agent-rename threshold = %d; immutable v8→v9 hop must remain 9", got)
+	}
 	if got != agentRenameHopVersion {
 		t.Errorf("install.sh AGENT_RENAME_HOP_VERSION = %d; internal/store's agentRenameHopVersion = %d", got, agentRenameHopVersion)
 	}

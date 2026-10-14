@@ -136,8 +136,11 @@ The previous binaries are *not* retained by default. Pass `--keep-prior`
 on upgrade to have install.sh snapshot both existing binaries before
 either new one is staged, to `~/.config/agent-director/bin/agent-director.prior` and
 `~/.config/agent-director/admin/agent-director-admin.prior`. That gives you a
-one-step rollback of the matching pair (`mv .prior canonical` for
-each), for an upgrade that does not move the directory. A re-install of
+binary-only rollback of the matching pair (`mv .prior canonical` for
+each) only when both directory and schema are unchanged. If the schema
+changed, follow "Going back to the previous release" before any binary swap;
+restore the backed-up DB and matched companions with all writers stopped.
+A re-install of
 the same pair (agent-director already
 byte-identical to the one being installed, and agent-director-admin
 byte-identical too or not installed) is not snapshotted, so re-running
@@ -152,11 +155,10 @@ The upgrade that moves the old directory makes no snapshot at all, with
 or without `--keep-prior`: the new `bin/` and `admin/` hold no earlier
 binary, so `.prior` is not a way back across the move (the way back is
 "Going back to the previous release" below).
-Without `--keep-prior`, re-install the previous tag via
-`install.sh --from-release v<old>` (this install.sh refuses a tag before
-0.11.0, which has no agent-director-admin). A release from before the
-move is installed only with its own install.sh fetched from its tag:
-this install.sh refuses its binaries with exit 3.
+Without `--keep-prior`, reinstall using the prior release's own installer
+and original flags. This is a binary-only fallback only when the schema
+and directory are unchanged; otherwise first follow "Going back to the
+previous release". The current installer refuses pre-move binaries with exit 3.
 
 ### The five questions
 
@@ -471,12 +473,11 @@ this install.sh refuses its binaries with exit 3.
    - Ask "ready to run?" with `AskUserQuestion`. Only on an explicit
      "yes" execute the script. A "no" or any modification answer means
      loop back to the relevant question, not silently re-pick.
-   - If this is an upgrade within the new layout and the operator
-     wants a single-step rollback path, add `--keep-prior` (it
-     snapshots both binaries, so the rollback restores a matching
-     pair). Otherwise leave it off; a re-install with
-     `--from-release v<old>` is the fallback, for a release of this
-     layout or later.
+   - For an upgrade with unchanged directory and schema, `--keep-prior`
+     provides a binary-only rollback of the matching pair. Without it,
+     use the prior release's own installer and original flags. If the
+     schema changes, follow "Going back to the previous release" before
+     any binary swap; `.prior` alone cannot restore the migrated DB.
    - On the upgrade that moves the old directory, `--keep-prior`
      makes no snapshot, so do not offer it as the rollback: the way
      back is "Going back to the previous release" below, which sets
@@ -507,7 +508,7 @@ this install.sh refuses its binaries with exit 3.
 
 Do NOT skip this dialog because flags "look obvious from context".
 The operator may want a non-default path, MCP off, or a `--keep-prior`
-rollback snapshot (an upgrade within the new layout only). Inferring
+binary rollback snapshot (only with unchanged directory and schema). Inferring
 intent is the failure mode this section exists to prevent.
 
 ## What this skill does
@@ -841,7 +842,10 @@ This skill runs `install.sh` from the same directory. The script:
    in-flight exec is unaffected by the swap. With `--keep-prior` both
    prior binaries are snapshotted (`agent-director.prior`,
    `agent-director-admin.prior`) before either new binary is staged,
-   for a one-step rollback of the pair. The decision covers the pair:
+   for binary-only rollback of the pair only when the schema is unchanged.
+   A schema-changing rollback must first follow "Going back to the previous
+   release", restoring the backed-up DB and companions before a binary swap.
+   The decision covers the pair:
    a re-install of the same pair (agent-director byte-identical to its
    new binary, and agent-director-admin byte-identical too or not
    installed) snapshots neither and keeps the `.prior` files, and any
@@ -1362,7 +1366,7 @@ no other exit status has a cause line.
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
 | `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
-| `ErrSchemaMismatch` | Step 4's store open: state.db is newer than this binary. | Install a newer agent-director (`--from-release`, or a newer `--binary`). The same name also covers a state.db with no valid store id, which a newer binary does not fix; only the error envelope above the cause line says which (open as b.o9t). See "ErrSchemaMismatch recovery". |
+| `ErrSchemaMismatch` | Step 4's store open: newer store, invalid store id, or authorized migration refusing eligibility column shape/values (including eligible known-child requests). | Identify the cause from the actual error envelope. Use a matching binary for a newer store; invalid metadata requires stopped-writer backup/restore or human recovery, never DB edits to bypass eligibility validation. See "ErrSchemaMismatch recovery". |
 | `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
 | `ErrMoveConflict` | Pre-flight, before anything was installed or changed: AD's old and new directories cannot be moved as they are. The first line names the one cause: the new directory is a dangling link or not a directory; the old directory is a dangling link; both directories exist (the message gives each one's store time); the old directory is a link or not a directory, or its `config.toml`, `templates`, one template or its store is a link while the move is due; a `[store] db_path` or `[log] error_log_path` whose place cannot be resolved against the old directory; or a store that is itself a link. On a host that has only the old directory, the Go client's `MakeTemplate` and the CLI's `make-template` run with `--store-path` create `~/.config/agent-director/templates/` themselves, so running either before the install makes both directories exist (the CLI's `make-template` without `--store-path` refuses with `ErrOldLayout` and creates nothing). | Change nothing else: the message names the cause and its remedy (docs/operator-actions.md, "`install.sh` refuses with `ErrMoveConflict`"). Apply that remedy, then re-run with the same flags. Where both directories exist, ask the operator which one holds the install in use before setting the other aside by renaming it (never delete either); a new directory holding only `templates` that `make-template` made is the one to set aside, then copy any template wanted from it into the moved directory's `templates`. |
 | `ErrAgentsLive` | Pre-flight (and again at the move's first step), before anything was installed or changed, while the move is due: a row in a live state (`pending`, `waiting`, `working`, `check_permission`, `ask_user`) in the old store, a process running the old binary (a Claude Code session's own `agent-director serve --stdio` counts), live rows that could not be read (the store stayed busy past its timeout, or is unreadable), or a process check that did not run (no `/proc`, no usable `ps` or `lsof`: check by hand). | Stop whatever starts agents, then every agent, every `serve` and every caller (ask the operator; do not end agents yourself), run `find-missing` with the old binary's path the message prints for a row whose agent is already gone, and re-run from a shell agent-director did not start. A re-run reads the rows again. See "Upgrading an install from the old directory" and "`install.sh` refuses with `ErrAgentsLive`" in docs/operator-actions.md. |
@@ -1373,8 +1377,9 @@ Remedy classes: re-run as is (`ErrVersionUnreadable`; `ErrMoveFailed`
 once its cause is fixed; `ErrAgentsLive` once the agents are stopped);
 fix the file or directory the message names, then re-run
 (`ErrConfigMalformed`, `ErrTemplateMalformed`, `ErrMoveConflict`);
-install a newer agent-director (`ErrSchemaMismatch`); stop for a human
-(`ErrSchemaVerifyFailed`, a repeated unknown name).
+read the envelope for `ErrSchemaMismatch` (a matching binary for a newer
+store; stopped-writer restore or human recovery for invalid metadata);
+stop for a human (`ErrSchemaVerifyFailed`, a repeated unknown name).
 
 `ErrVersionUnreadable`, `ErrSchemaVerifyFailed`, `ErrMoveConflict`,
 `ErrAgentsLive` and `ErrMoveFailed` are install.sh's own names: no
@@ -1723,7 +1728,12 @@ administrator action, so the install writes the sentinel for you.
   really wants `to`), runs the migration, and then **deletes the
   sentinel** once the migration commits. A refused open (missing,
   malformed, or mismatched sentinel) executes zero DDL and leaves both
-  state.db and the sentinel byte-identical, as admin evidence.
+  state.db and the sentinel byte-identical, as admin evidence. An admitted
+  chain commits each hop separately: a failed hop rolls back, earlier
+  committed hops remain, and the sentinel is retained. If 9→10 committed
+  before 10→11 failed, the retained `{from:9,to:11}` is stale for v10;
+  rerun the supported installer to read v10 and refresh authorization to
+  `{from:10,to:11}` after resolving the failure.
 
 ### Which database install.sh checks
 
@@ -2200,60 +2210,39 @@ state.db is refused with `ErrSchemaMigrationRequired`.
 
 ## Upgrade rollback
 
-If you used `install.sh --keep-prior` on the previous install, the
-previous binaries are at `~/.config/agent-director/bin/agent-director.prior`
-and `~/.config/agent-director/admin/agent-director-admin.prior`. To roll back
-the *binaries*, roll back both, so the pair still matches:
+Binary-only rollback is supported only when the directory and schema are
+unchanged. If an upgrade migrated the schema, follow
+[Going back to the previous release](#going-back-to-the-previous-release)
+before swapping any binaries: stop all writers, restore the backup at the
+actual configured DB path with its matched WAL/SHM companions, and restore
+the matching prior release. The same procedure covers old-directory rollback.
+
+For an unchanged schema and directory, `install.sh --keep-prior` saves the
+matching binaries at `~/.config/agent-director/bin/agent-director.prior`
+and `~/.config/agent-director/admin/agent-director-admin.prior`. Restore both:
 
     mv ~/.config/agent-director/bin/agent-director.prior \
        ~/.config/agent-director/bin/agent-director
     mv ~/.config/agent-director/admin/agent-director-admin.prior \
        ~/.config/agent-director/admin/agent-director-admin
 
-This is a way back only for an upgrade that did not move the old
-directory. The upgrade that moves it makes no `.prior` file, with or
-without `--keep-prior` (the new `bin/` and `admin/` hold no earlier
-binary, and install.sh says so on its `prior   :` line), and the
-previous release cannot read the migrated store, so a binary swap does
-not work there: take "Going back to the previous release" below.
-
-If the previous install was a release before 0.11.0, there is no
-`agent-director-admin.prior` (install.sh said `admin prior: none`):
-roll back by removing `~/.config/agent-director/admin/agent-director-admin`.
-
-Re-running the same install (for example after an exit 5) does not
-snapshot again, because the installed pair is already the one being
-installed: its `prior` and `admin prior` lines say `kept <path>` or
-`none`, then `(not snapshotted: ...)`, and the `.prior` files are
-still the binaries from before the upgrade. On a re-run of an upgrade
-from a release before 0.11.0, the `admin prior: none` line still ends
-`to roll back, remove <path>`: roll back as above. `none` on the
-`prior` line means the earlier run kept no rollback copy of
-`agent-director`: re-install the previous version as below.
-
-If you didn't pass `--keep-prior`, re-install the previous version via
-`install.sh --from-release v<old-tag>` (0.11.0 or later: this install.sh
-refuses an older tag, which has no agent-director-admin). A release from
-before the move of the old directory is installed only with its own
-install.sh, fetched from its tag: this install.sh refuses its binaries
-(exit 3).
-
-Note a caveat that did not exist before schema migrations: once an
-upgrade has migrated state.db forward (newer `user_version`), rolling
-the *binary* back to an older version makes that older binary NEWER-
-than-DB in reverse — it will report `ErrSchemaMismatch` (see below),
-because migrations are forward-only. Roll the binary back only if you
-have not yet let the new binary migrate the DB, or be prepared to
-restore an older state.db from your own backup.
+A reinstall of the same binary pair does not snapshot again, so `.prior`
+files still belong to the earlier upgrade. If no prior copy exists, use
+the prior release's own installer, fetched from its tag, with the original
+flags; do not use the current installer to reconstruct the previous release.
+A previous release without an admin binary requires removing the new admin
+binary, subject to the same unchanged-schema condition. Across a directory
+move no `.prior` pair exists; use the complete wayback procedure.
 
 ## ErrSchemaMismatch recovery
 
-`ErrSchemaMismatch` is not the migration case, and the sentinel cannot
-fix it. It has two causes you can meet; the error message says which.
+`ErrSchemaMismatch` can mean a newer store, an invalid store id, or
+an authorized migration refusing incompatible metadata. The actual error
+envelope identifies the cause; the sentinel alone cannot fix it.
 Never delete state.db to clear it: that loses every Spawn row and the
 store id. An install that meets it stops at step 4's store open
 (exit 5) with the cause line `install.sh: err_name=ErrSchemaMismatch`
-for either cause; the error envelope printed above that line says
+for any of these causes; the error envelope printed above that line says
 which.
 
 **state.db is NEWER than the binary** (the error says "found
@@ -2278,6 +2267,18 @@ hand edit of state.db leaves it that way. Restore the copy of
 state.db (with its `-wal` and `-shm` files) taken before the install
 (install.sh does not make one), then re-run the install so it
 migrates that copy. Writes made since the install are lost.
+
+**Authorized migration refuses eligibility metadata** (the error names
+"v10→v11 incompatible main-turn eligibility column" or "invalid main-turn
+eligibility value"): the existing column shape, value type/range, or an
+eligible known-child request violates the migration contract. The failed
+hop rolls back; earlier committed hops remain. A newer binary is not an
+established remedy, and editing DB values to bypass validation is unsupported.
+Stop all writers and use the supported backup/restore or human-recovery
+procedure in "Going back to the previous release", with the actual DB path
+and matched WAL/SHM companions. After the incompatible state is resolved,
+rerun the supported installer: it reads the resulting version and refreshes
+authorization when an earlier hop has committed.
 
 The JSONL transcripts under `~/.claude/projects/` persist
 independently of state.db in every case.
@@ -2327,15 +2328,17 @@ checked. Delete the kept directory once the upgrade is confirmed.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, the old-layout steps below do not apply. Before
-upgrading, stop agents, servers and callers and keep a copy of the actual
-store (`[store] db_path` when set), including its `-wal` and `-shm` files.
+including schema v9→v10 and v10→v11, the old-layout steps below do not
+apply. Before upgrading, stop agents, servers and callers and keep a copy
+of the actual store (`[store] db_path` when set), including its `-wal` and
+`-shm` files.
 To roll back, stop them again, restore that pre-upgrade copy and install the
 previous release with its own `install.sh` and the original install flags.
 Restore the store with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. This loses all writes made since
 the backup. The installer does not make this backup; a binary swap cannot
-make a v10 store readable by a v9 release. Without a pre-upgrade copy, stop
+make a v11 store readable by a v9 or v10 binary. There is no supported
+in-place v11→v10 or v10→v9 downgrade. Without a pre-upgrade copy, stop
 and obtain human help.
 
 The numbered procedure below applies only to an upgrade that moved

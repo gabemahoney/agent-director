@@ -1,0 +1,63 @@
+Apiary DocWriter — E2 Task1 single batched doc-review correction round
+2026-10-14; workspace /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd.
+Documentation lane only. No source/tests/testplan/formal-metadata/generated docs/.claude changes, repository runtime execution, tests, real stores, credentials, login, commits or pushes by this role.
+
+OWN SUBTASKS
+- t3.jf1.c1.xi.ff: reactivated for corrections, then done.
+- t3.jf1.c1.xi.r8: active → done after mandatory corrections and reviewed delta against the aggregate complete-file base.
+- t3.jf1.c1.xi.vt: active → done after complete touched-small-doc reading, recovery corrections and unchanged canonical handoff.
+No parent or sibling statuses changed. Final TestWriter .86 and full-unit .i6 remain root-owned coordination boundaries; neither is claimed complete here.
+
+INPUTS AND DISPOSITION
+Read all four complete reports /tmp/ftd-e2-doc-review-{a,b,c,d}.txt (initial combined output truncated; B and C reread individually; complete A and D sections visible). Read current ff/r8/vt tickets, CLAUDE.md and all three actual doc-writing guides, plus initial DocWriter report.
+All mandatory documentation findings resolved in ONE batched correction round:
+- A1: architecture hold and row-version sections now distinguish non-Cursor read-first behavior from Cursor guarded UPDATE-first working/waiting behavior. Rejected Cursor transitions perform a gated activity/idle soft refresh and advance version even when idle_since was already NULL. Reporter authority and request hold acceptance remain required.
+- A2: every installer binary-only rollback shortcut now requires unchanged schema/directory; schema-changing rollback routes to canonical stopped-writer DB/WAL/SHM restore BEFORE binary swap. Fallback uses the prior release's own installer and original flags. Canonical backup location, matched companions/removal of absent companions, lost post-backup writes, no automatic backup and old-layout recovery remain intact.
+- A3/B1: installer cause table, remedy-class summary and ErrSchemaMismatch recovery; architecture cause table, recovery and upgrade summary now include authorized v10→v11 eligibility column-shape/type/range/known-child refusal. Actual envelope identifies cause. Unauthorized older versions including v10 still receive ErrSchemaMigrationRequired. No newer-binary-only remedy or DB-edit bypass is offered for eligibility refusal; failed-hop rollback and stopped-writer restore/human recovery are explicit.
+- A4/B2: migration guide, architecture sentinel summary and installer sentinel contract now state per-hop commit/rollback. An admitted chain can retain a completed earlier hop. Retained {from:9,to:11} is stale after 9→10 commits and 10→11 fails; ordinary reopen refuses until 10→11 authorization is refreshed. Supported installer rerun reads resulting version and reauthorizes after failure resolution. Zero-DDL/unchanged-store language is limited to authorization refusal.
+- C1: permissions now distinguish Claude AskUserQuestion→ask_user from Claude/Codex Stop→waiting with child requests open. Codex tools target working subject to holds; repeated known-limitations sentence corrected too. Cursor hold paragraph retained.
+- D2: removed the NEW targeted-pass assertion and the NEW source-repair/count/pending-gate progress paragraph from architecture. Retained compact migration/request-origin/reporter reusable fixture responsibilities, MUST-use instruction, synthetic-vs-actual-ACP boundary, and authored-only/UNCHECKED model status. Evidence remains in reports below.
+Root-selected small inherited factual fixes also resolved:
+- A5: architecture identifies Cursor OpenWithBusyTimeout and existing-store/runtime authority gate; classifier paragraph explicitly permits the actual authenticated Cursor handler branch; two-agent-only support claim qualified. Authorization admission remains denied.
+- A6: migration guide says only an exact stored-agent change increments life; same-agent reuse retains life/history. Re-migration recovery history remains visible until agent-changing reuse.
+- A7: switch-over procedure identifies actual pre-upgrade agents from caller's set. Missing socket/start fields are scoped to older rows without identity, not all schema9→10→11 pre-upgrade rows.
+- C5: removed the non-permission-envelope harmlessness assertion; no deny is emitted there, and incorrect descriptor routing can affect a pending permission tool.
+
+DEFERRED / OTHER OWNER
+- D1 is handed to FINAL TESTWRITER/formal metadata owner: spec/tla/codex/PROVENANCE.txt Source/Layout needs historical 2026-10-12 import/Q2 scope; all historical Hold36hCx job copies predate the E2 live-src overlay, and live 43 CFG selections comprise 41 historical plus 2 authored-only. Do not change historical pins/receipts or claim new TLC validation. NO edit of this file by DocWriter.
+- Root explicitly defers broad inherited normalization: A8–11, B3–10, C2–4/C6–11, D3–4. These concern implementation/history/testing catalogs, duplicated user procedures, generated reference ownership/naming and broad architecture guide debt. They remain real findings; this report does NOT claim whole-doc guide cleanliness. No unrelated million-byte rewrite was attempted.
+
+FILES CHANGED THIS ROUND / FINAL IDENTITIES
+- docs/architecture.md: 22024 lines, 1520361 bytes, SHA256 5e61f7d91e7b1c89f124a6434176ecb90b38f14101f199be7bb649f522483c4c.
+- docs/migration-guide.md: 1187 lines, 71438 bytes, SHA256 b2f5508b46259e1588648108b064cfe6430865044c4ba6dda0580fb4cc1f51ff.
+- docs/operator-actions.md: 937 lines, 48988 bytes, SHA256 f0a9b4df47c926548f6aa33218613292dde98b7f1c5a27e6b41e21501eadd123.
+- docs/permissions.md: 1414 lines, 82163 bytes, SHA256 224f93fc8ac311942ce5e968e7661e86d53ab083e7e35de67c1eaf2fa7bde9a9.
+- skills/install-agent-director/SKILL.md: 2423 lines, 149983 bytes, SHA256 ece31a5b5620b2680d722dd01e8b92985e2b8b44d8f298e0314c1d0bdcd90bdb.
+Caller-contract, usage, generated CLI/MCP refs, release handoff, tests/install-12 and formal metadata were not changed by this correction lane.
+
+MODEL READ COVERAGE / TRACKED ARCHITECTURE DELTA
+Complete cold-review BASE is architecture SHA256 72070f26d31fdeba5dd5942ef190907dc3877c33692d87bd273f32201b8236aa, 21996 lines. Reports explicitly cover A1–5500, B5501–11000, C11001–16500, D16501–21996 with truncation repairs. Root owns aggregate review closure. This role did NOT reread all 1.5 MB.
+Reconstructed the exact BASE from this lane's reversed replacements and asserted its SHA256 equals that reviewed base. Wrote exact full context correction diff /tmp/ftd-e2-doc-corrections-architecture.diff, reconstructed base /tmp/ftd-e2-doc-corrections-architecture-base.md and 17-range base/final map /tmp/ftd-e2-doc-corrections-architecture-delta.json. Personally read all corrected architecture paragraphs/context and the complete 5202-token correction diff; every changed range is reviewed against source. Unchanged base ranges remain covered by the four cold reports.
+Whole touched SMALL docs personally read after substantive edits in contiguous modest chunks:
+- migration guide: 1–300,301–600,601–900,901–EOF1187, complete.
+- operator actions: 1–320,321–640,641–EOF937, complete.
+- permissions: 1–350,351–700,701–1050,1051–EOF; the combined 351–1050 output truncated within the delivery table, so 660–760 was reread untruncated, restoring full coverage. Final same-round C1 refinement/repeated sentence read in context after edit. Complete 1414 lines covered with final delta review.
+- installer: 1–300,301–600,601–900,901–1200,1201–1500,1501–1800,1801–2100,2101–EOF. Combined 1201–1800 output truncated near the cause-table/remedy/uninstall boundary; 1365–1500 reread fully to restore that gap. Final same-round remedy/partial-chain/format qualifiers reread in context. Complete 2423 lines covered with final delta review.
+No automated scan substitutes for this prose reading. Post-reread minor refinements are part of the same correction batch, not a new review round.
+Source verification: internal/store/hook_writes.go guarded writes/soft refresh; request_eligibility.go exact shape/value refusal; schema.go per-hop transactions and authorization consumption; migrate_auth.go exact ends; reuse.go exact-agent life increment; cmd/agent-director/main.go Cursor open; internal/hook/handler.go Cursor runtime gate; classify.go Codex table; internal/cursorhost/report.go strict version/token/life/session/path/current runtime acceptance. Installer skill read strictly as documentation target, never invoked.
+
+CANONICAL WAYBACK — EXACT FINAL TESTWRITER HANDOFF
+Marker: ## Going back to the previous release followed by newline.
+Boundary: marker through EOF in EACH canonical file.
+- docs/operator-actions.md: lines 842–937 inclusive.
+- skills/install-agent-director/SKILL.md: lines 2328–2423 inclusive.
+Exactly 96 lines / 4920 UTF-8 bytes each. SHA256 1cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc.
+Complete exact canonical text: /tmp/ftd-e2-doc-corrections-wayback.md; identical to original /tmp/ftd-e2-task1-settled-wayback.md. Python byte equality of both prose copies AND original settled artifact PASS. The canonical section did not change; only its start offsets moved.
+Final TestWriter .86 owns third install-12 testplan pin/executable/literal-follow assertions, must verify all THREE complete copies identical and relevant installer refusal/migration tests; do NOT change canonical prose while repinning. Released0.12/schema9, separate9→10 and10→11, immutable renamehop/threshold9 remain unchanged.
+
+EVIDENCE / LIMITS / FAILURES
+- git diff --check PASS after edits.
+- Canonical byte equality PASS; metadata/hash reads only.
+- Historical supplied repaired-behavior evidence: 69 distinct targeted top-level tests green after source repair with assertions intact. This role did not run them. Full Go/Bun units, final installer synchronization and external TLC/Docker/live gates are not claimed passed or run here; latest state belongs to root/final TestWriter.
+- Whole architecture guide debt remains explicitly deferred, not concealed. D1 remains another owner's action.
+- In-band read truncations above were repaired completely. No unresolved doc correction or read failure remains. No product questions. No midflight agent messages sent.

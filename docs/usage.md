@@ -96,7 +96,8 @@ agent-director send-keys --instance-id "$id" --text "Describe this project's ent
 Wait for `waiting` before sending. Fresh startup reports when Cursor confirms
 its new conversation, without a first prompt. Login or a runtime that has not
 reported remains `pending`, and can be noted `unreported`. A submitted prompt
-reads `working`; a correlated turn completion returns it to `waiting`.
+reads `working`; a correlated turn completion returns it to `waiting`
+subject to [request holds](permissions.md#the-dialog-hold).
 
 To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
 then attach on that socket:
@@ -108,7 +109,9 @@ tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
 
 The pane accepts editable Unicode text and bracketed multiline paste. Enter
 submits one prompt; successive idle submissions stay distinct. Ctrl-C requests
-cancellation of the current turn; readiness follows Cursor's completion.
+cancellation of the current turn; readiness follows Cursor's completion
+when no genuine unanswered request holds the row. See
+[The dialog hold](permissions.md#the-dialog-hold).
 Busy follow-ups are visibly refused, with nothing sent. `/clear` and `/new`
 are also visibly refused; `/exit` is a local exit command. `pause` on an
 eligible waiting row clears the draft and requests exit. Session termination
@@ -542,8 +545,9 @@ still awaits an answer, so follow each request you track with
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
 showed the request's dialog gone: `tool_ran` (its tool ran; a Claude agent
-only), `turn_end` (the turn of the agent that asked ended after it was
-written) or `agent_gone` (the agent ended). A Codex agent's request carries
+only), `turn_end` (an eligible main request was written before the main
+turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
+`agent_gone` (the agent ended). A Codex agent's request carries
 no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
 [how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
 agent-director's own records, not proof. `get` lists every request not yet

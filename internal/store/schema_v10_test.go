@@ -22,7 +22,18 @@ func TestV10MigrationReentryAndPreservation(t *testing.T) {
 				}
 			})
 			id := assertOneStoreID(t, path)
-			writeSentinel(t, dir, 9, schemaVersion)
+			from := 9
+			if pre == "complete table twice" {
+				withRaw(t, path, func(db *sql.DB) {
+					for run := 0; run < 2; run++ {
+						if err := migrateV9toV10(db); err != nil {
+							t.Fatal(err)
+						}
+					}
+				})
+				from = 10
+			}
+			writeSentinel(t, dir, from, schemaVersion)
 			s, err := Open(path)
 			if err != nil {
 				t.Fatal(err)
@@ -40,11 +51,7 @@ func TestV10MigrationReentryAndPreservation(t *testing.T) {
 			if !reflect.DeepEqual(schemaShape(t, s.db), schemaShape(t, fresh.db)) {
 				t.Fatal("fresh/migrated schemas differ")
 			}
-			if pre == "complete table twice" {
-				if err := migrateV9toV10(s.db); err != nil {
-					t.Fatal(err)
-				}
-			}
+
 			if err = s.Close(); err != nil {
 				t.Fatal(err)
 			}

@@ -137,8 +137,10 @@ const (
 // request's tool_use_id, so its tool ran (a Claude row only). ProvenGoneTurnEnd:
 // the turn of the agent that asked ended after the request was written; the
 // main agent's Stop or idle-prompt Notification, or a Codex main agent's
-// Interrupt (Esc), proves a request with no agent_id (a request recorded
-// before v7 included). ProvenGoneAgentGone: a close of its Spawn's
+// Interrupt (Esc), or a verified Cursor main Stop/Interrupt, proves only a
+// durably main-turn-eligible request. Legacy non-Cursor main requests retain
+// eligibility; Cursor unknown origin never acquires it from NULL agent_id.
+// ProvenGoneAgentGone: a close of its Spawn's
 // requests (closeOrphanedRequests: find-missing's mark, the terminal
 // SessionEnd, resume's backstop) ran while the request was not yet proven, or
 // the v6 → v7 migration found its row already ended or missing
@@ -178,6 +180,9 @@ type PermissionRow struct {
 	// ("" = none given).
 	ToolUseID string
 	AgentID   string
+	// MainTurnEndEligible is durable proof authority, independent of AgentID.
+	// Missing child identity alone never grants it to a Cursor request.
+	MainTurnEndEligible bool
 	// DeliveredAt is the hook's ack (rule 3): it is committed before the hook
 	// writes the request's answer to Claude Code.
 	DeliveredAt time.Time
@@ -313,7 +318,7 @@ const permissionColumns = `pr.request_id, pr.instance_id, pr.tool_name, pr.tool_
        pr.pane_answer, COALESCE(pr.pane_as, ''),
        COALESCE(pr.pane_sender_pid, 0), COALESCE(pr.pane_sender_starttime, ''), COALESCE(pr.pane_sender_pidns, ''),
        pr.pane_intent_at, pr.closed_at,
-       pr.proven_gone_at, COALESCE(pr.proven_gone_how, '')`
+       pr.proven_gone_at, COALESCE(pr.proven_gone_how, ''), pr.main_turn_end_eligible`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
@@ -333,7 +338,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.PaneAnswer, &r.PaneAs,
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
 		&intentAt, &closedAt,
-		&provenAt, &r.ProvenGoneHow)
+		&provenAt, &r.ProvenGoneHow, &r.MainTurnEndEligible)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -383,7 +388,9 @@ func queryPermissionRows(query func(string, ...any) (*sql.Rows, error), q, errPr
 //
 // The new row has decision=NULL and records no relay hook identity and no
 // settled_at, so readers judge it as a request recorded before schema v7, by
-// its created_at and the relay window. The relay hook records its requests
+// its created_at and the relay window. Main-turn eligibility preserves the
+// non-Cursor legacy default and is false on Cursor rows. The relay hook
+// records its requests
 // with InsertRelayRequest instead; this insert is the seeding primitive of
 // test support and fixtures.
 //
@@ -425,10 +432,9 @@ func (s *Store) UpsertOpenPermissionRequestResult(instanceID string, gate HookGa
 	insArgs := append([]any{instanceID, requestToken, toolName, toolInputJSON, instanceID}, hookGateArgs(gate)...)
 	insRes, err := tx.Exec(`
 		INSERT INTO permission_requests
-		  (instance_id, request_token, tool_name, tool_input)
-		SELECT ?, ?, ?, ?
-		 WHERE EXISTS (SELECT 1 FROM spawns
-		                WHERE instance_id = ? AND `+hookGateSQL+`)
+		  (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible)
+		SELECT ?, ?, ?, ?, agent IS NOT 'cursor' FROM spawns
+		 WHERE instance_id = ? AND `+hookGateSQL+`
 	`, insArgs...)
 	if err != nil {
 		_ = tx.Rollback()

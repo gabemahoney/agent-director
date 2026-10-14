@@ -25,7 +25,7 @@ type RequestProof struct {
 	// the requests carrying ToolUseID; never written for a Codex row, whose
 	// requests carry no tool_use_id) or ProvenGoneTurnEnd (the main agent's
 	// Stop or idle-prompt Notification, or a Codex main-agent Interrupt:
-	// every request with no agent_id recorded before RecordedBefore).
+	// every durably eligible request recorded before RecordedBefore).
 	How string
 	// ToolUseID is, for ProvenGoneToolRan, the hook's tool_use_id.
 	ToolUseID string
@@ -73,7 +73,7 @@ func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 		if p.RecordedBefore.IsZero() {
 			return "", nil, false, errTurnEndNoStart
 		}
-		return `pr.agent_id IS NULL AND pr.created_at < ?`, []any{storeTimestamp(p.RecordedBefore)}, true, nil
+		return `pr.main_turn_end_eligible = 1 AND pr.agent_id IS NULL AND pr.created_at < ?`, []any{storeTimestamp(p.RecordedBefore)}, true, nil
 	}
 	return "", nil, false, fmt.Errorf("%w %q", errUnknownProof, p.How)
 }
@@ -86,11 +86,11 @@ func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 //     (the tool ran, so its dialog was answered and is gone), whether or not
 //     agent-director's records say they were answered, and whatever their
 //     agent_id. An empty ToolUseID proves nothing.
-//   - ProvenGoneTurnEnd: the requests with no agent_id (the main agent's, and
-//     every request recorded before schema v7), written before this hook
-//     started: the main agent's turn ended after them, so none of their
-//     dialogs is left. A request of a subagent (agent_id set) is never proven
-//     by it: a background subagent can outlive the main agent's turn.
+//   - ProvenGoneTurnEnd: requests with MainTurnEndEligible set and no child
+//     identity, written before this hook started. Legacy non-Cursor main
+//     requests preserve their eligibility. Cursor unknown origin and child
+//     requests remain ineligible even without an AgentID: missing identity is
+//     no proof of main origin, and background work can outlive the main turn.
 //
 // "Written before this hook started" is two cuts, both in the read and in
 // the write. The first is the hook's start (proof.RecordedBefore): only a
