@@ -38,6 +38,11 @@ passed after these corrections; the first failed full-suite receipt and
 the final pass are both retained in `unit-evidence.json`.
 The green runs used uncommitted changes on the red checkpoint: their source
 hashes, rather than the unchanged HEAD alone, identify the repair tested.
+The tested runtime is now committed at
+`9d025f8f2caf176f3a60421f52ba94b293021bdb`; its hashes match the
+[final full-suite receipt](../../dist/b.w21/unit-green-final/summary.json).
+The integration context remains pinned to this source revision even if
+handoff documentation receives a later commit.
 
 ## Recovery contract and limit
 
@@ -67,9 +72,39 @@ The nine [phase-1 model receipts](../../spec/tla/codex/b.w21/README.md)
 remain frozen. The [fixed-model handoff](../../spec/tla/codex/b.w21/fixed/README.md)
 has fourteen prepared jobs, all **NOT_RUN**. Return their complete logs,
 job IDs, verdict lines and counterexamples for review.
+Its [exact commands](../../spec/tla/codex/b.w21/fixed/scheduler-commands.txt)
+predict eleven PASS results, one reachability-probe failure and two
+repair-mutant failures; no fixed-model pass is established yet.
 
 Docker integration needs **15 executions**: one `make test-docker EPIC=<slug>`
 for each of the 14 active entries in [docker-epics.txt](../docker-epics.txt),
 plus `make test-docker-install-mode`, additional to `epic-12-install`.
-The integration lane is preparing those scheduler contexts; no readiness
-or execution result is claimed here. The user submits all scheduler jobs.
+The [integration handoff](integration/README.md) is **READY for user submission**.
+Run its [15 exact scheduler commands](integration/scheduler-commands.txt)
+from the worktree root. All integration observations remain **NOT_RUN**,
+with PASS predicted for every job: 152 EPIC cases plus 22 install-mode
+assertions covering five scenarios. The shared context at
+`dist/b.w21/integration/context-9d025f8f` contains 10 regular files,
+4,806,313 bytes, with payload SHA-256
+`ee259f45e8ae667ae8f083b03128ebeb2d46526903aa9d72fa2b1165822a49fe`.
+Keep every context file immutable until all jobs finish. Image build and
+runtime capability remain unverified; the scheduler needs Linux amd64
+and the canonical network dependencies. The user submits all model and
+integration jobs and returns the full receipts specified in each handoff.
+
+## Review status and remaining work
+
+Runtime code and unit tests passed review. The integration handoff's static
+code and test reviews found no issues; static checks establish preparation,
+not an image build or execution result. Relevant documentation contract
+findings are resolved and focused review confirmed them. The nine observed
+phase-1 outcomes, local red proof and final unit PASS are established; the
+fourteen fixed-model and fifteen integration observations remain **NOT_RUN**.
+The bug stays active pending review of those scheduler receipts.
+
+Broad pre-existing documentation style work is deferred: internal/PRD
+references, the old unsupported-configuration note, duplicate recovery
+procedures and API examples against the generic documentation guide.
+An exhaustive style audit of the roughly 21,000-line architecture document
+was not completed. These limits do not reopen the resolved repair-contract
+findings.

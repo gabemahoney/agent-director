@@ -138,9 +138,12 @@ make exit 0. Both full-suite receipts are retained in the
 
 The [fixed-model handoff](fixed/README.md) has fourteen separately prepared
 contexts, all **NOT_RUN**. Its relaunch probe retains an expected failure;
-its obsolete pane-write probe now expects PASS. Docker integration remains
-scheduler-only and unrun; fifteen executions are required, with contexts
-being prepared separately. Local sandbox units are explicitly authorized;
+its obsolete pane-write probe now expects PASS. The separate
+[integration handoff](../../../../test/b.w21/integration/README.md) is
+**READY for user submission**: [15 exact commands](../../../../test/b.w21/integration/scheduler-commands.txt)
+use immutable source commit `9d025f8f2caf176f3a60421f52ba94b293021bdb`.
+All integration observations remain **NOT_RUN**; keep its shared context
+immutable until every job finishes. Local sandbox units are explicitly authorized;
 the earlier separate-host requirement has been superseded.
 
 The implemented repair releases decided pre-v7 `agent_gone` rows in already

@@ -80,5 +80,12 @@ for the modified source until those results arrive.
 [Local unit receipts](../../../../../test/b.w21/README.md) show red proof
 and targeted green, followed by a full sandbox unit PASS: 67 Go packages
 (37 cached), 420 Bun tests, zero failures and make exit 0. Docker
-integration requires fifteen user-submitted executions; its separate
-handoff is being prepared and has no results yet.
+integration is **READY for user submission** through its separate
+[handoff](../../../../../test/b.w21/integration/README.md) and
+[15 exact commands](../../../../../test/b.w21/integration/scheduler-commands.txt),
+run from the worktree root. Those jobs use immutable source commit
+`9d025f8f2caf176f3a60421f52ba94b293021bdb`; all observations remain
+**NOT_RUN**. Preserve the shared integration context until all jobs finish.
+The [overall handoff](../../../../../test/b.w21/README.md#review-status-and-remaining-work)
+records review status and deferred documentation style work. Fixed-model
+and integration receipts still require review before the bug can close.

@@ -24,4 +24,7 @@ env PATH="/usr/local/go/bin:$PATH" make test-sandbox
 # dist/b.w21/unit-red-local/summary.json
 # dist/b.w21/unit-green-local/summary.json
 # Full logs are kept under those two dist directories.
-# Final aggregate green remains pending; no command here submits a job.
+# Final aggregate green: PASS, Make exit 0; 67 Go packages (37 cached),
+# 420 Bun tests, zero failures. dist/b.w21/unit-green-final/summary.json
+# Only fixed-model and integration scheduler results remain pending;
+# no command here submits a job.

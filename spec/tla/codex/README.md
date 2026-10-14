@@ -12,8 +12,12 @@ suite passed after expectation and artifact/provenance corrections: 67 Go
 packages (37 cached), 420 Bun tests, zero failures and make exit 0.
 The [fixed-model handoff](b.w21/fixed/README.md) prepares fourteen separate
 self-contained jobs, all **NOT_RUN**: eleven expected PASS, an independent
-relaunch reachability failure and two repair-mutant failures. Docker integration
-is also pending. See the [unit receipts](../../../test/b.w21/README.md).
+relaunch reachability failure and two repair-mutant failures. The
+[integration handoff](../../../test/b.w21/integration/README.md) is **READY
+for user submission**, with [15 exact commands](../../../test/b.w21/integration/scheduler-commands.txt)
+pinned to source commit `9d025f8f2caf176f3a60421f52ba94b293021bdb`;
+all integration observations remain **NOT_RUN**. See the
+[unit receipts and review limits](../../../test/b.w21/README.md).
 
 The b.ssz verdicts below are historical runs and have not been rerun with
 these extensions. The nine current-rule contexts remain the immutable

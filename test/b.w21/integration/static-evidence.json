@@ -1,0 +1,33 @@
+{
+  "deterministic_in_memory_regeneration": "PASS",
+  "existing_context_overwrite_refusal": "PASS",
+  "image_build": "NOT_RUN",
+  "integration_execution": "NOT_RUN",
+  "limitations": [
+    "No image build, harness execution or scheduler submission has been performed.",
+    "Debian repositories, Node 20 setup, GitHub CLI and base-image tag retain canonical mutable network dependencies.",
+    "Scheduler must provide Linux amd64; the preflight case explicitly expects Linux/x86_64.",
+    "An archive has no source-tree Git HEAD; selected scripts need no Git history. Binary stamps and source checksums are enforced independently."
+  ],
+  "scheduler_submissions": 0,
+  "synthetic_receipt_checks_only": {
+    "accepted_complete_shapes": 15,
+    "rejected_empty_successes": 15,
+    "rejected_missing_first_cases_or_assertions": 15,
+    "rejected_nonzero_harness_exit": 15
+  },
+  "verification": {
+    "context_payload_sha256": "ee259f45e8ae667ae8f083b03128ebeb2d46526903aa9d72fa2b1165822a49fe",
+    "context_total_bytes": 4806313,
+    "epic_case_count": 152,
+    "epic_count": 14,
+    "install_mode_assertion_count": 22,
+    "job_count": 15,
+    "no_execution_performed": true,
+    "observed": "NOT_RUN",
+    "source_commit": "9d025f8f2caf176f3a60421f52ba94b293021bdb",
+    "source_file_count": 1662,
+    "static_verification": "PASS"
+  },
+  "verification_command": "python3 test/b.w21/integration/verify.py"
+}

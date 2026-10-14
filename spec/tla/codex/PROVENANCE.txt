@@ -118,8 +118,8 @@ b.w21 additions (separate from the historical b.ssz layout)
                           submitted artifacts are never overwritten
 
 Pins (sha256sum format, paths relative to spec/tla/codex/)
-7b4972e0d9dd00a177feb096f66222ebc5d775abe394da5b1597963d30e1c6fe  README.md
-9b0bb31abf80e0091a48abfdc85cc0cd0c892e194800448ef0c3797deee4087e  b.w21/README.md
+1577cdcbc45d7eb1f312e20dbed4bbdc5a5863867a39063656e777647b3f92d5  README.md
+bf429963b6c4b8a904b313b7d87b9b8614c8505c991c1bd276436ce4a516b567  b.w21/README.md
 4a32aa242f83aebb73fae8687775f7482b74e147e90c42a414b8c383e93eb8b7  b.w21/cfg/w21_current_launch_control.cfg
 79ff72074bcf256f73767b4e73202f7afeb2644b59c522d129454daca9b09912  b.w21/cfg/w21_expired_deny_live_red.cfg
 4c53c668af09c2b0929a0105f38b90547f372864670630e599dd99cb9e368462  b.w21/cfg/w21_expired_deny_red.cfg
@@ -129,7 +129,7 @@ d888a897dba6088418746c3f15e69250aa52bcc58553892b3335515409a82591  b.w21/cfg/w21_
 0662bf35a4803cb7b277fe7cc90c542de54f857cdbfd3a5e076bc113a536aa50  b.w21/cfg/w21_pane_write_probe.cfg
 e88015ef3ff408c9f0e7d5fd4fd28966c9a91a02739126982afb64ee9559e6ef  b.w21/cfg/w21_relaunch_probe.cfg
 d89beb1ae4a5e8a73b13f0d53ef8f60edd05700dfdf85808ead2d34b3fd195b3  b.w21/cfg/w21_relaunch_red.cfg
-c27b072bff1c832851953df35b140393041bedf098b7b004b715a5dac91ba82d  b.w21/fixed/README.md
+8bcd45eaddb20c172027858d55ed4dfe72529236e072f00dd8ba6e06f4be82d3  b.w21/fixed/README.md
 2752bb2de719bc577be6b77d18c9d31d7deb6bf87e18c77e8fa242e3037f841a  b.w21/fixed/cfg/w21_fixed_current_launch_control.cfg
 5e25933a518c9c8945808499d4401fc6d1fa80e7c8c75fd28312f5de73fbf24f  b.w21/fixed/cfg/w21_fixed_expired_deny.cfg
 edf54841d68f6b3dbca905eddd4b42bfb133b1055e4a16c5a09c916597122b77  b.w21/fixed/cfg/w21_fixed_expired_deny_live.cfg
