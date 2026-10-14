@@ -1,5 +1,14 @@
 # b.ssz: TLA+ check of the Codex design changes
 
+Follow-up: [b.w21 current-rule model checkpoint](b.w21/README.md) extends
+`B146R5Cx` with default-off legacy-request scenarios and nine scheduler
+contexts. All b.w21 observations are `NOT_RUN`; the b.ssz verdicts below
+are historical runs and have not been rerun with this extension.
+The checkpoint includes an independent probe of relaunch reaching pending
+before SessionStart, which must retain its expected failure after repair.
+Its initial-state case requires legacy hold release through `B21RecordsSettle`,
+permitting a future read-time repair while retaining nonlegacy closure checks.
+
 The design under check is `../srd-design-brief.md`, sections "Codex session-end rule" and
 "Codex state mapping and relay" (PRD t1.ssz.qi: States; Permission relay and typing; the
 differences table). Nothing here edits any repo's `spec/`. No TLC was run on the dev host: every
@@ -74,7 +83,7 @@ never has an ack without LastGasp); the ghost `lw` is written only under CxRelay
 fairness conjunct `WF_vars(IntHook \/ IntDie)` is on an action that is never enabled. Run
 `rx_eq_live` checks it: b.36h's cond_live must give 109,518 distinct states.
 
-**B146R5Cx**: two knobs. `CxRv` (the Q2 gate) is described in "The Q2 gate" below. `CxR5` (Codex's events: PostToolUse neither closes, through ToolUseClose,
+**B146R5Cx**: two Codex knobs. `CxRv` (the Q2 gate) is described in "The Q2 gate" below. `CxR5` (Codex's events: PostToolUse neither closes, through ToolUseClose,
 nor proves; Stop goes straight to rest with no idle Notification; a lost Stop needs `BothEndsDie`).
 Knob off: every changed expression reduces to the original (`~CxR5` TRUE, the IFs take the
 original branch). Codex's Interrupt after an Escape at the dialog writes what Stop writes under the
