@@ -1,0 +1,42 @@
+{
+  "epic": "t1.jf1.3e",
+  "task": "t2.jf1.3e.d6",
+  "revision": "f4f41fd3d332076126388f3812746bc27ffeb08a",
+  "result": "passed",
+  "accepted_by": "user",
+  "docker": {
+    "groups_passed": 15,
+    "failures": 0,
+    "cursor_owned_launch_passed": 5,
+    "cursor_owned_launch_total": 5,
+    "job_ids_reference": "gmahoney-dev:tickets/Ideas/b.ftd/e1final-docker-jobs.txt",
+    "job_ids_locally_retrieved": false,
+    "retrieval_note": "Existing SSH trust has no ED25519 key for gmahoney-dev; strict host verification refused connection. No trust or credential changes made."
+  },
+  "tla_full_tier": {
+    "g6": {
+      "ci_verdict": "PASS",
+      "passed": 22,
+      "total": 22
+    },
+    "launch": {
+      "verdict": "PASS",
+      "passed": 9,
+      "total": 9
+    },
+    "subagent": {
+      "verdict": "PASS",
+      "passed": 11,
+      "total": 11,
+      "sx_eq_Sns_distinct": 11387737,
+      "distinct_matches_exactly": true
+    }
+  },
+  "live": {
+    "both_cases_accepted": true,
+    "report_reference": "tickets/Ideas/b.ftd/live-acceptance-f4f41fd3-2026-10-14/REPORT.md on gmahoney-test",
+    "spawn_pending_interpretation": "User accepted spawn returning pending before generation: same as Claude/Codex, never waits for the turn.",
+    "ts_spawn_ms": 24.577254999999997
+  },
+  "execution_evidence": "Docker/TLA results operator-attested; live cases executed here under isolated mount/PID namespace; no real AD stores accessed."
+}
