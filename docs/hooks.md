@@ -988,7 +988,9 @@ A request still awaiting an answer when its agent ends can never be
 answered by that agent. The terminal `SessionEnd` (cause `logout`,
 `prompt_input_exit` or `exit`) moves the row to `ended` and, in the same
 update, closes every request of the row that still awaits an
-answer: both are written or neither is. Each gets `closed_at`; an
+answer, plus decided requests without a relay confirmation or completed
+pane answer, including those recorded by an older binary: both the row
+and request changes are written or neither is. Each gets `closed_at`; an
 undecided one is also denied with `decision_reason` `ended` (so a relay
 hook still polling for it reads a deny), and a decided one whose relay
 hook had not confirmed the verdict keeps it. Each deny is written to the
@@ -1061,9 +1063,11 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
   requests" above). A retained request of a finished row is proven by the same rule.
 - **What a proof releases.** A request proven gone holds no move of the
   row, even while it still awaits an answer (see "A relay row left in
-  `check_permission`" above). Nothing else changes for it:
-  `get-permission` reads it, `decide` uses its recorded state, and a plain
-  `send-keys` is still refused on its account until it is closed.
+  `check_permission`" above). Proof also releases its dialog hold, but
+  relay and fallback checks can still refuse plain `send-keys` or `pause`.
+  `get-permission` keeps its delivery facts; decided requests recorded
+  before v7 with `agent_gone` proof are treated as closed by those guards
+  (see the [caller contract](caller-contract.md#permission-relay)).
 - **Subagents.** A request with an `agent_id` is proven only by its
   tool's `PostToolUse` or the agent's end. A denied subagent request runs
   no tool, so it holds a plain `send-keys` without a pane hash, and

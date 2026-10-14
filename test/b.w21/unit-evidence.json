@@ -1,0 +1,282 @@
+{
+  "bug": "b.w21",
+  "status": "TARGETED_GREEN; AGGREGATE_GREEN",
+  "execution_method": "User-approved local make sandbox / make test-sandbox on gmahoney-dev; no separate host required.",
+  "revision_note": "Red is the unfixed eafd10f5 checkpoint (plus documented fixture correction). Green used uncommitted repair on that HEAD; do not attribute green to the commit alone.",
+  "red": {
+    "revision": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+    "runtime_baseline": "8c6998d4",
+    "runtime_baseline_diff_exit": 0,
+    "fixture_diff_sha256": "c8076e9d0fcbbd9cb683d15e8b3841eadc1a3f3dcc9abbfc9a646fd7b1e4c474",
+    "fixture_change": "One SetCapture line aligns stale-token pane with expected hash; rerun reaches token refusal instead of ErrPaneChanged.",
+    "summary_path": "dist/b.w21/unit-red-local/summary.json",
+    "summary_sha256": "30075317aa4236db34e8d3968b0f3b30c4a50e21842409199a11618c39615d22",
+    "runs": [
+      {
+        "log": "unit-red.log",
+        "sha256": "dbf180fdc644d2dc3db30433f0e0eeeca5806e2216c711fca611dbf8c033e6fa",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD='go test -count=1 -timeout 30m -v ./pkg/api ./internal/store -run \"TestLegacyRecovery|TestLegacyDecidedIntentClosesWithSpawn|TestCloseClosesRelayRequests\"' > dist/b.w21/unit-red-local/unit-red.log 2>&1",
+        "make_exit": 2,
+        "inner_go_exit": 1,
+        "top_level_counts": {
+          "PASS": 1,
+          "FAIL": 8,
+          "SKIP": 0
+        },
+        "leaf_case_counts": {
+          "PASS": 10,
+          "FAIL": 31,
+          "SKIP": 0
+        }
+      },
+      {
+        "log": "unit-red-token-fixture.log",
+        "sha256": "44c696b852ed537ee31654fca27fef4f50418c700cc95d40b51f11c000a3950c",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD='go test -count=1 -timeout 30m -v ./pkg/api -run \"^TestLegacyRecoveryTokenCannotAnswerGoneAgent$\"' > dist/b.w21/unit-red-local/unit-red-token-fixture.log 2>&1",
+        "make_exit": 2,
+        "inner_go_exit": 1,
+        "top_level_counts": {
+          "PASS": 0,
+          "FAIL": 1,
+          "SKIP": 0
+        },
+        "leaf_case_counts": {
+          "PASS": 0,
+          "FAIL": 3,
+          "SKIP": 0
+        }
+      }
+    ],
+    "proof": "Actual v6 migration and all eight already-stuck pending/waiting rows fail ErrSendKeysWhileRelayed. All four close-deny exact/beyond 86400s+2s cases fail ErrRelayFallenBack. Eight current-request controls and two ordinary expired allow controls pass.",
+    "token_followup": "allow returns ErrAlreadyDecided rather than ErrNoOpenPermissionRequest with zero calls; find_missing returns ErrNoOpenPermissionRequest rather than ErrAlreadyDecided after pane reads; ended returns expected ErrNoOpenPermissionRequest but after pane reads instead of early zero-call refusal."
+  },
+  "green": {
+    "head": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+    "branch": "fix/b.w21",
+    "summary_path": "dist/b.w21/unit-green-local/summary.json",
+    "summary_sha256": "2e3234a671e783b3006fd84b1177d7ebd508b52836d7b0275c7e097ded5b28cb",
+    "source_before": {
+      "bug": "b.w21",
+      "revision": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+      "branch": "fix/b.w21",
+      "captured_at": "2026-10-14T22:10:31.485766+00:00",
+      "source_diff_sha256": "f98e210030884076bbf92ffca18426a4343b255ced8fa0df0380fc91630a4487",
+      "files_sha256": {
+        "pkg/api/sendkeys_relay.go": "25ca6cc04a2b16b35feb6c837f17f2957c54f49eaa59ecb814693cdedf79f484",
+        "internal/store/request_close.go": "fcbe992c668f695cc7d67afe4d612e1d6dabb848a73c40dbea0f5a80bd1403b9",
+        "internal/store/schema.go": "102628d30d738a88a8251359840c54120e3ee2d4c1a591b64142c6ffb2eece43",
+        "pkg/api/sendkeys_legacy_recovery_test.go": "5d0c0b173132072e1679f9b85847285f5a0c341c94462a58485e61cf2fa178f3",
+        "pkg/api/sendkeys_legacy_migration_test.go": "4f50166077e6ab254dcde1bdb6c2235e8414adc260fd560a25b64bccec19d94e",
+        "internal/store/relay_close_legacy_test.go": "b6f3115f58308b296a12f03d1036c6d95a73c0eddbb3e77b013929ddda203bf4",
+        "internal/store/relay_close_test.go": "2f2794f4c388daac6c37276f5711dbb298928f403081c417dc09c543aae144b8",
+        "Makefile": "eb541e34a045766f2acfffd66db11c7e42797c853e851330783ad67ed219ab42",
+        "internal/store/permission_test.go": "b026d8c880e37abe79f81804a6913077fbe73c0a84cfae227e3489e074043b4e",
+        "pkg/api/advice_follow_pane_test.go": "1f004321b152249613a33d0bf19f7f5cb7b1e5b54319f2e67d345111c7d14b87"
+      }
+    },
+    "source_after": {
+      "bug": "b.w21",
+      "captured_at": "2026-10-14T22:16:32.008706+00:00",
+      "source_diff_sha256": "059f6ed5b83106f1f37304bfbf460031546361dfeaf527361dd98037767dc769",
+      "files_sha256": {
+        "pkg/api/sendkeys_relay.go": "25ca6cc04a2b16b35feb6c837f17f2957c54f49eaa59ecb814693cdedf79f484",
+        "internal/store/request_close.go": "fcbe992c668f695cc7d67afe4d612e1d6dabb848a73c40dbea0f5a80bd1403b9",
+        "internal/store/schema.go": "102628d30d738a88a8251359840c54120e3ee2d4c1a591b64142c6ffb2eece43",
+        "pkg/api/sendkeys_legacy_recovery_test.go": "5d0c0b173132072e1679f9b85847285f5a0c341c94462a58485e61cf2fa178f3",
+        "pkg/api/sendkeys_legacy_migration_test.go": "4f50166077e6ab254dcde1bdb6c2235e8414adc260fd560a25b64bccec19d94e",
+        "internal/store/relay_close_legacy_test.go": "b6f3115f58308b296a12f03d1036c6d95a73c0eddbb3e77b013929ddda203bf4",
+        "internal/store/relay_close_test.go": "2f2794f4c388daac6c37276f5711dbb298928f403081c417dc09c543aae144b8",
+        "Makefile": "eb541e34a045766f2acfffd66db11c7e42797c853e851330783ad67ed219ab42",
+        "internal/store/permission_test.go": "c60b9593394a4d5661cc379bbce908e1835830938d9d4f18d1e21b0355b1e522",
+        "pkg/api/advice_follow_pane_test.go": "aa5e9e77f932581bbd6a8a9477194e7eca8068da7a484ae56b3869a07948e6f2"
+      }
+    },
+    "runs": [
+      {
+        "log": "unit-green-targeted.log",
+        "sha256": "840e727d0d1c51042544b126ef4571bba4cce6fb6eff4b55618481668e4b80a4",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD='go test -count=1 -timeout 30m -v ./pkg/api ./internal/store -run \"TestLegacyRecovery|TestLegacyDecidedIntentClosesWithSpawn|TestCloseClosesRelayRequests\"' > dist/b.w21/unit-green-local/unit-green-targeted.log 2>&1",
+        "make_exit": 0,
+        "inner_go_exit": 0,
+        "top_level_counts": {
+          "PASS": 9,
+          "FAIL": 0,
+          "SKIP": 0
+        },
+        "leaf_case_counts": {
+          "PASS": 41,
+          "FAIL": 0,
+          "SKIP": 0
+        }
+      },
+      {
+        "log": "unit-green-full.log",
+        "sha256": "87c587006797fa3569fbd70fb845a951431f0f4fe74f4dff961935cd44cdf298",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make test-sandbox > dist/b.w21/unit-green-local/unit-green-full.log 2>&1",
+        "make_exit": 2,
+        "inner_go_exit": 1,
+        "inner_bun_exit": 0,
+        "go_package_counts": {
+          "PASS": 64,
+          "FAIL": 3,
+          "NO_TEST_FILES": 12,
+          "CACHED_PASS": 5
+        },
+        "go_case_counts": "Not available: make test-sandbox uses non-verbose go test output; passing and skipped test counts are not emitted.",
+        "go_failures": [
+          {
+            "status": "FAIL",
+            "name": "TestMarkMissingClosesOpenRequests"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestMarkMissingClosesOpenRequests/0_open"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestMarkMissingClosesOpenRequests/1_open"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestMarkMissingClosesOpenRequests/3_open"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded/ended,_request_decided_before_schema_v7"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestCodexProvenance"
+          },
+          {
+            "status": "FAIL",
+            "name": "TestCodexHasNoJar"
+          }
+        ],
+        "bun_counts": {
+          "PASS": 420,
+          "FAIL": 0,
+          "files": 57,
+          "expect_calls": 1626,
+          "skip_lines_observed": 0
+        },
+        "failure_categories": {
+          "internal/store": "Old test expects no tick for decided legacy row; fixed in permission_test.go and verified by follow-up.",
+          "pkg/api": "Old advice test expects ErrAlreadyDecided for legacy SessionEnd closure; fixed expectation to ErrNoOpenPermissionRequest and F7 advice.",
+          "test/tla": "Static TestCodexProvenance pins are stale/missing for edited/new model artifacts; TestCodexHasNoJar finds ten copied fixed-job JARs. Artifacts require owner correction; tests correctly enforce provenance."
+        }
+      },
+      {
+        "log": "unit-green-closeout-followup.log",
+        "sha256": "30f829ef008059eb92c34bcd585a58026d1b2a2046c7de062a36146772588f57",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD='go test -count=1 -timeout 30m -v ./internal/store -run \"^TestMarkMissingClosesOpenRequests$\"' > dist/b.w21/unit-green-local/unit-green-closeout-followup.log 2>&1",
+        "make_exit": 0,
+        "inner_go_exit": 0,
+        "top_level_counts": {
+          "PASS": 1,
+          "FAIL": 0,
+          "SKIP": 0
+        },
+        "leaf_case_counts": {
+          "PASS": 3,
+          "FAIL": 0,
+          "SKIP": 0
+        }
+      },
+      {
+        "log": "unit-green-advice-followup.log",
+        "sha256": "ae2f5632dc93eb697ada8d7aed3784ee038891906e6e63164a85438dcc7daf9e",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD='go test -count=1 -timeout 30m -v ./pkg/api -run \"^TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded$\"' > dist/b.w21/unit-green-local/unit-green-advice-followup.log 2>&1",
+        "make_exit": 0,
+        "inner_go_exit": 0,
+        "top_level_counts": {
+          "PASS": 1,
+          "FAIL": 0,
+          "SKIP": 0
+        },
+        "leaf_case_counts": {
+          "PASS": 9,
+          "FAIL": 0,
+          "SKIP": 0
+        }
+      },
+      {
+        "log": "dist/b.w21/unit-green-final/unit-green-full.log",
+        "sha256": "62cfe196ed77fec0d98a727d80df07405118cea2deaa888976caaad4c310d493",
+        "bytes": 48108,
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make test-sandbox > dist/b.w21/unit-green-final/unit-green-full.log 2>&1",
+        "make_exit": 0,
+        "inner_go_exit": 0,
+        "inner_bun_exit": 0,
+        "go_package_counts": {
+          "PASS": 67,
+          "FAIL": 0,
+          "NO_TEST_FILES": 12,
+          "CACHED_PASS": 37
+        },
+        "go_case_and_skip_counts": "Unavailable: make test-sandbox uses non-verbose go test output; passing and skipped individual test counts are not emitted. Cached passing package results are included honestly above.",
+        "bun_counts": {
+          "PASS": 420,
+          "FAIL": 0,
+          "expect_calls": 1626,
+          "tests": 420,
+          "files": 57,
+          "skip_lines_observed": 0
+        },
+        "bun_skip_count_limitation": "No skip lines or skip count were reported; absence of a skip count is not an independent count of every possible skipped case.",
+        "started_at_utc": "2026-10-14T22:27:31.723623+00:00",
+        "finished_at_utc": "2026-10-14T22:31:44.174310+00:00",
+        "source_identity_receipt": "green.final_full_suite"
+      }
+    ],
+    "aggregate_status": "PASS: final full make test-sandbox exited 0 with 67 passing Go packages (37 cached), 12 without tests and 420 passing Bun tests; zero failures. Initial failed full run remains historical evidence.",
+    "artifact_followup": "TestCodexHasNoJar replaced by TestCodexJobArtifacts after the initial failed full run; manifest-restricted canonical jar copies and refreshed provenance passed the final full suite. Subsequent documentation-only edits refresh current-file pins without attributing those new bytes to the earlier run.",
+    "final_full_suite": {
+      "result": "PASS",
+      "summary_path": "dist/b.w21/unit-green-final/summary.json",
+      "summary_sha256": "4a9e9e52d69bdba9c029257d7cb4c94ab49d23ff7b4fb16a634808a36da7e003",
+      "revision": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+      "branch": "fix/b.w21",
+      "source_note": "Run used the uncommitted repair on this HEAD; hashes identify the tested source. Later documentation-only edits do not change this recorded source identity.",
+      "source_before": {
+        "state_path": "dist/b.w21/unit-green-final/source-before.json",
+        "state_sha256": "e43ad4e1e35193c554887f08f08e51fff3fe27633344a65fced72e72150165f1",
+        "diff_path": "dist/b.w21/unit-green-final/source-before.diff",
+        "diff_sha256": "30cb22fdb719b7374be332ac5fedfc5f35faee0ee8864b5a37dcc05f90b63d90",
+        "captured_at_utc": "2026-10-14T22:27:31.723623+00:00",
+        "revision": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+        "branch": "fix/b.w21",
+        "hashed_file_count": 2397,
+        "runtime_file_count": 269
+      },
+      "source_after": {
+        "state_path": "dist/b.w21/unit-green-final/source-after.json",
+        "state_sha256": "f0163e81e42f518328cde8eae9a03bc4800b73aeb531ec918ce85d66786db501",
+        "diff_path": "dist/b.w21/unit-green-final/source-after.diff",
+        "diff_sha256": "30cb22fdb719b7374be332ac5fedfc5f35faee0ee8864b5a37dcc05f90b63d90",
+        "captured_at_utc": "2026-10-14T22:31:44.174310+00:00",
+        "revision": "eafd10f5851e5ca39db83feda3f1bc6f8aa0ecc3",
+        "branch": "fix/b.w21",
+        "hashed_file_count": 2397,
+        "runtime_file_count": 269
+      },
+      "all_hashed_files_unchanged_during_run": true,
+      "runtime_hashes_unchanged_during_run": true,
+      "runtime_repair_sha256": {
+        "internal/store/request_close.go": "fcbe992c668f695cc7d67afe4d612e1d6dabb848a73c40dbea0f5a80bd1403b9",
+        "internal/store/schema.go": "102628d30d738a88a8251359840c54120e3ee2d4c1a591b64142c6ffb2eece43",
+        "pkg/api/sendkeys_relay.go": "25ca6cc04a2b16b35feb6c837f17f2957c54f49eaa59ecb814693cdedf79f484"
+      }
+    }
+  },
+  "scheduler_validation": {
+    "phase1_model": "ALL_EXPECTED: original nine receipts remain frozen in spec/tla/codex/b.w21/model-red-receipts.json",
+    "fixed_model": "NOT_RUN: fourteen prepared contexts",
+    "docker_integration": "NOT_RUN: fourteen canonical groups plus standalone install-mode; scheduler context preparation is the next phase, with no readiness claim."
+  },
+  "receipt_update_required": "Unit receipts are complete through final aggregate PASS. Preserve the earlier red and failed full-suite evidence. Fixed-model and integration observations require actual user-submitted scheduler receipts."
+}

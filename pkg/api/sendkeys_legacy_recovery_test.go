@@ -164,6 +164,7 @@ func TestLegacyRecoveryTokenCannotAnswerGoneAgent(t *testing.T) {
 			r := e.seedRow(t, killRowSpec{State: store.StateWaiting, RelayOn: true})
 			token := legacyRecoveryRequest(t, e, r.ID, v.decision, v.reason, store.ProvenGoneAgentGone)
 			before := legacyRecoveryRead(t, e.st, r.ID, token)
+			e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, "startup dialog\n")
 			run := legacyRecoverySend(e, r, before.CreatedAt.Add(legacyRecoveryWindow+3*time.Second), token)
 			if !errors.Is(run.err, v.want) || len(run.calls) != 0 {
 				t.Fatalf("gone-agent token send = %v, calls %v; want %v, zero keys", run.err, paKinds(run.calls), v.want)

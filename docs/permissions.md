@@ -601,8 +601,9 @@ The same close proves every request of the spawn gone, closed now or
 before (`proven_gone_how` `agent_gone`; see "The dialog hold" below): its
 agent is gone, so no dialog of it is left on the pane.
 
-Every request that still awaits an answer is closed (`closed_at` is set),
-decided or not:
+Every request that still awaits an answer is closed (`closed_at` is set).
+The close also includes a decided request without a relay confirmation or
+completed pane answer, even when recorded by an older binary:
 
 - an undecided request gets `decision` `deny` with `decision_reason`
   `find_missing` (the mark) or `ended` (the other three), so a relay hook
@@ -643,9 +644,13 @@ nothing but `hook_gone_at` is written for them. `proven_gone_at` and
 its spawn's requests and, for a spawn already finished, by the upgrade to
 this release, never by a reader (see "The dialog hold" below):
 
+The `delivery` and `confirm_by` descriptions below apply to requests
+with a settle instant. Requests recorded by an older binary retain the
+[legacy delivery rules](#requests-recorded-by-an-older-binary), even when closed.
+
 | Field | Meaning |
 |---|---|
-| `delivery` | `delivered`: the relay hook confirmed a verdict in the store before handing it to the agent. `not_confirmed`: no confirmation yet, and the hook may still run. `fallen_back`: no confirmation, and the hook is gone, or cannot be checked and `confirm_by` has passed: no answer from the relay reached the agent. While `pane_answer` is `none` or `intent` the request is open, and only an answer at the pane, or `record-pane-answer`, closes it; with `sent`, `outside` or `tool_ran` it is closed and stays `fallen_back`. |
+| `delivery` | `delivered`: the relay hook confirmed a verdict in the store before handing it to the agent. `not_confirmed`: no confirmation yet, and the hook may still run. `fallen_back`: no confirmation, and the hook is gone, or cannot be checked and `confirm_by` has passed: no answer from the relay reached the agent. Unless closed with its spawn, a request with `pane_answer` `none` or `intent` remains open until an answer at the pane or `record-pane-answer` closes it; with `sent`, `outside` or `tool_ran` it is closed and stays `fallen_back`. |
 | `confirm_by` | The request's settle instant: the moment the agent ends its relay hook plus 2 s. `not_confirmed` never lasts past it. |
 | `hook_alive` | `true` or `false` by the check below; `null` when it cannot tell. |
 | `hook_gone_at` | When a reader first found the request fallen back; `null` until then. |
@@ -773,6 +778,11 @@ end.
 
 ### Requests recorded by an older binary
 
+Automatic recovery of decided requests carrying `agent_gone` proof and
+retained holds before SessionStart are described in the
+[caller contract](caller-contract.md#permission-relay). Their reported
+delivery still follows the rules below.
+
 A request recorded by the relay hook of an older binary has no hook
 identity, no confirmation and no settle instant. It is judged by time, as
 that binary judged it:
@@ -796,7 +806,7 @@ that binary judged it:
   below), while plain `send-keys` is still refused with
   `ErrRelayFallenBack` on its account. Its PostToolUse does not close it
   (no `tool_use_id` is recorded for it).
-- Every such request of a live spawn, decided or not, has no proof that
+- At upgrade, every such request of a live spawn starts with no proof that
   its dialog is gone (`proven_gone_at` `null`), so it holds a plain
   `send-keys` without a pane hash, and `pause`, to its spawn
   (`ErrDialogMaybeOpen`; see "The dialog hold" below) until the main
@@ -835,7 +845,7 @@ refuses in this order, sending nothing:
 | Call | Refused while | Error |
 |---|---|---|
 | any | a relay hook of the spawn may still answer its request: its process runs, or it cannot be checked and the request is open before its `confirm_by` | `ErrSendKeysWhileRelayed` |
-| plain (no `request_token`) | a request of the spawn is fallen back with `pane_answer` `none` or `intent` | `ErrRelayFallenBack`, with `err_details`, naming the oldest such request |
+| plain (no `request_token`) | an open request of the spawn is fallen back with `pane_answer` `none` or `intent` | `ErrRelayFallenBack`, with `err_details`, naming the oldest such request |
 | plain, without `expect_pane_sha256` | a request of the spawn is not proven gone (`proven_gone_at` `null`), however agent-director's records say it closed | `ErrDialogMaybeOpen`, with `err_details`, naming the oldest such request (see "The dialog hold" below) |
 | pane answer (`request_token` T) | the spawn has no request T | `ErrNoOpenPermissionRequest` |
 | pane answer | T is not fallen back: confirmed by its relay hook, closed with its spawn, or already closed at the pane | `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest` |
@@ -844,7 +854,10 @@ refuses in this order, sending nothing:
 
 All but the last are decided from the store and process checks, before
 any tmux call; the last needs a capture of the pane. A request closed with
-its spawn is proven gone with it and refuses nothing. A request closed at
+its spawn is proven gone with it and refuses nothing. A decided request
+recorded by an older binary with `agent_gone` proof is treated as closed
+for these guards (see the [caller contract](caller-contract.md#permission-relay)).
+A request closed at
 the pane (`pane_answer` `sent`, `outside` or `tool_ran`) refuses nothing
 but, until it is proven gone, a plain call without a pane hash
 (`ErrDialogMaybeOpen`). A request its relay hook confirmed is held by the
@@ -924,8 +937,11 @@ same `err_details`, typing nothing (no `C-u` either) and starting no wait:
 - `ErrDialogMaybeOpen`: a request of the spawn is not proven gone (see
   "The dialog hold" below).
 
-A spawn with the relay off, a spawn with no permission request and one
-whose every request is proven gone pause as before. A finished spawn is
+A spawn with the relay off or no permission request pauses as before.
+Otherwise, `pause` proceeds only after all relay, fallback and dialog
+checks pass. Proof that every request is gone clears the dialog hold;
+`turn_end` proof alone can still leave a relay or fallback hold. A finished
+spawn is
 still a no-op success, and a spawn in any other live state still gets
 `ErrSpawnNotPausable`, except a Codex spawn whose agent already exited with an
 end report (above).
@@ -1020,12 +1036,15 @@ spawn. `ErrSendKeysWhileRelayed` and `ErrRelayFallenBack` are checked
 first. In practice the hold lasts, after an allow, until the request's
 tool has run (on a Codex row, until the turn ends), and after a deny, until
 the main agent's turn ends. A spawn
-with no unproven permission request is never held (one that never asked
-for a permission included), and a spawn with the relay off never is.
+with no unproven permission request has no dialog hold (one that never
+asked for a permission included), but can still have a relay or fallback
+hold. A spawn with the relay off has none of these holds.
 `pause` is held the same way, with no way past the hold (see "`pause`"
 under "Send-keys interaction" above). A request not proven gone that still
 awaits an answer also holds the spawn's moves to `working`; once proven
-gone it holds neither (see "The row after the last answer" above).
+gone it holds neither the dialog check nor those moves (see "The row
+after the last answer" above). Proof alone does not release the earlier
+relay or fallback checks.
 
 `ErrDialogMaybeOpen` carries `err_details`, an object with:
 

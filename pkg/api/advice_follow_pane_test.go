@@ -766,11 +766,7 @@ func (d decideSpawnEnds) GetSpawn(id string) (store.Spawn, error) {
 }
 
 // TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded: F7 "nothing was recorded; do not answer it at the pane"
-// (b.146 rule 12; b.59i). A request of an ended or missing Spawn is closed: decide records nothing (request A stays
-// as its Spawn's close left it) under an existing error name, ErrAlreadyDecided for a decided request (find-missing's
-// deny when it marked the Spawn missing, or a verdict recorded before schema v7), else ErrNoOpenPermissionRequest
-// carrying F7 when the request is open, when the SessionEnd's close denied it, or when a close closed it before its
-// relay hook acked the verdict recorded on it; also when the Spawn ends after decide read it.
+// A finished Spawn refuses decide without changing its verdict, including legacy rows closed before delivery (b.w21).
 func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 	t.Parallel()
 	var end decideStep = func(t *testing.T, s *store.Store, dbPath string) {
@@ -816,7 +812,8 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 			phrase: closedBeforeDelivery, decision: "deny"},
 		{name: "ended, decided before the SessionEnd, not acked", steps: []decideStep{relayAllowA, end}, want: store.ErrNoOpenPermissionRequest,
 			phrase: closedBeforeDelivery, decision: "allow"},
-		{name: "ended, request decided before schema v7", steps: []decideStep{openA, allowA, end}, want: store.ErrAlreadyDecided, decision: "allow"},
+		{name: "ended, request decided before schema v7", steps: []decideStep{openA, allowA, end}, want: store.ErrNoOpenPermissionRequest,
+			phrase: closedBeforeDelivery, decision: "allow"},
 		{name: "ended, request recorded after the SessionEnd", steps: []decideStep{end, openA}, want: store.ErrNoOpenPermissionRequest,
 			phrase: "the spawn is ended"},
 		{name: "ended, no such request", steps: []decideStep{end}, want: store.ErrNoOpenPermissionRequest, noRequestRow: true},

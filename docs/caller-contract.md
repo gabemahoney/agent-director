@@ -301,7 +301,9 @@ filtering applies and the agent's parser rejects incomplete input.
 - `ErrNoOpenPermissionRequest`: no open request by that token, or it is
   closed. Do not answer it at the pane. A request still awaiting an answer
   when its agent ended, or when `find-missing` marked it `missing`, is
-  closed, and stays closed after `resume`.
+  closed, and stays closed after `resume`. A decided request without a
+  relay acknowledgement or completed pane answer is also closed when its
+  agent ends or is marked missing; its recorded verdict is preserved.
 
 A pane answer (`send-keys --request-token`) sends nothing when it refuses
 with:
@@ -326,6 +328,24 @@ plain `send-keys` (no `--request-token`) is refused with
 other open requests: close it with a pane answer or with
 `record-pane-answer`. While a relay hook of the agent may still answer,
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
+
+A decided request recorded before schema v7 with `proven_gone_how`
+`agent_gone` no longer holds plain `send-keys`, even when its reported
+`delivery` still reads `not_confirmed` or `fallen_back`. Recovery is
+automatic in an already-upgraded store and preserves the recorded verdict
+and delivery facts. A pane answer by that obsolete token is refused with
+`ErrAlreadyDecided` for a `find_missing` deny, otherwise
+`ErrNoOpenPermissionRequest`; a completed pane answer keeps its own refusal.
+Other requests of the agent can still hold keys.
+
+With `--allow-pending`, `ErrSendKeysWhileRelayed` can still hold a row
+before SessionStart for minutes: an undecided request recorded before v7,
+a legacy request without `agent_gone` proof (including an earlier-launch
+request carrying only `turn_end` proof and no recorded close), or a current
+relay hook that is live or whose status cannot be checked. Legacy holds
+can last until `created_at` plus the configured relay window plus 2 s
+(24 h + 2 s at the default). A decided legacy request with `agent_gone`
+proof contributes no hold.
 
 After a permission request, a plain `send-keys` without
 `--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's

@@ -263,6 +263,9 @@ PreV7Current   == FALSE  \* the seed belongs to this launch until Relaunch
 PreV7Relaunch  == FALSE  \* allow one kill/find-missing/resume sequence
 PreV7Expired   == FALSE  \* seed past created_at + relay window + 2 seconds
 PreV7CloseDeny == FALSE  \* decision_reason find_missing or ended (CloseDenied)
+PreV7TurnEnd   == FALSE  \* seed has turn_end proof, not agent_gone
+PreV7ReadRepair  == FALSE  \* runtime's logical close of decided agent_gone legacy rows
+PreV7CloseRepair == FALSE  \* lifecycle close stamps decided, unacked legacy rows
 
 Unproven == "Unproven" \in R5
 IdleGate == "IdleGate" \in R5 \/ "IdleSnap" \in R5
@@ -349,7 +352,8 @@ VARIABLES
     nz,       \* Noise has happened
     rvd,      \* b.ssz (CxRv): the /review thread's output drawn, flipped by each of its writes
     rvw,      \* b.ssz ghost (CxRv): working was written by a review hook after the turn ended
-    nl        \* b.w21 ghost: the legacy request belongs to an earlier launch
+    nl,       \* b.w21 ghost: the legacy request belongs to an earlier launch
+    legacyProof \* durable proven_gone_how of the single legacy seed; never a launch timestamp
 
 ccV == <<proc, aph, dl, got, scr, inq, ptu, idl>>
 hookV == <<h, ph>>
@@ -360,7 +364,7 @@ gpV == <<gpc, gr, gsk>>
 paneV == <<oc, snap, sk, skt, skq, skd, st>>
 ghostV == <<typed, silent, wrong, misfire, race, late, busylie, falsefb, hit>>
 r5V == <<unp, quiet, snapOK, sOK, nz, rvd, rvw>>
-vars == <<ccV, hookV, storeV, decV, callV, gpV, paneV, ghostV, r5V, nl>>
+vars == <<ccV, hookV, storeV, decV, callV, gpV, paneV, ghostV, r5V, nl, legacyProof>>
 
 Hit(tag) == hit' = (hit \/ Probe = tag)
 
@@ -384,13 +388,19 @@ JudgedAlive(r) ==
 AnyJudgedAlive == \E r \in R : rec[r] /\ JudgedAlive(r)
 
 Answered(r) == pane[r] \in {"sent", "outside", "ran"}
+\* sendkeys_relay.go: a read-time close, not a fabricated delivery ack.
+\* Neither nl (launch ghost) nor ~unp (which Stop also clears) is proof
+\* that the asking agent's launch ended. Modern requests never match.
+LegacyReleased(r) ==
+    PreV7ReadRepair /\ r \in Legacy /\ dec[r] # "none"
+    /\ legacyProof = "agent_gone"
 (* The record is closed: delivered, answered at the pane, or closed with  *)
 (* its agent (rule 12: written by find-missing's mark, and read as closed *)
 (* on a missing row, which also covers a record an orphan hook wrote      *)
 (* after the mark).                                                        *)
 Closed(r) ==
     \/ IF r \in Legacy THEN ack[r] ELSE IF AckFirst THEN ack[r] ELSE dec[r] # "none"
-    \/ Answered(r) \/ cls[r]
+    \/ Answered(r) \/ cls[r] \/ LegacyReleased(r)
     \/ CloseOnMissing /\ rs = "missing"
 
 (* AD reports r fallen back: ErrRelayFallenBack from decide and send-keys,  *)
@@ -408,7 +418,8 @@ LegacyDelivery(r) ==
 \* hookMayAnswer reads closed_at, completed pane answers and row state, not
 \* delivered_at: an acked v7 hook can still be writing its answer. Keep the
 \* original v7 abstraction unless the b.w21 scenario is explicitly enabled.
-GuardClosed(r) == Answered(r) \/ cls[r] \/ (CloseOnMissing /\ rs = "missing")
+GuardClosed(r) == Answered(r) \/ cls[r] \/ LegacyReleased(r)
+                  \/ (CloseOnMissing /\ rs = "missing")
 RelayHolds(r) ==
     rec[r] /\ ~GuardClosed(r)
     /\ IF r \in Legacy THEN LegacyDelivery(r) = "not_confirmed"
@@ -422,10 +433,17 @@ Reported(r) ==
 
 \* The statement's awaitingAnswerSQL predicate. Row state alone is not a
 \* permanent close; a decided pre-v7 record does not match any pane write
-\* or either close statement (request_close.go, pane_writes.go).
+\* or the old close statements. The repaired lifecycle close deliberately
+\* uses a different predicate; pane writes retain awaitingAnswerSQL.
 StoreAwaits(r) ==
     rec[r] /\ ~cls[r] /\ pane[r] \in {"none", "intent"}
     /\ IF r \in Legacy THEN dec[r] = "none" ELSE ~ack[r]
+\* request_close.go: union of undecided awaiting and decided unacked close.
+\* A prior turn_end proof must not prevent this persistent close.
+StoreCloseable(r) ==
+    StoreAwaits(r)
+    \/ (PreV7CloseRepair /\ rec[r] /\ ~cls[r]
+        /\ dec[r] # "none" /\ ~ack[r] /\ pane[r] \in {"none", "intent"})
 Open == {r \in R : Reported(r)}
 Oldest == CHOOSE r \in Open : \A q \in Open : r <= q
 
@@ -530,9 +548,12 @@ Init ==
     /\ typed = [r \in R |-> FALSE]
     /\ silent = FALSE /\ wrong = FALSE /\ misfire = FALSE /\ race = FALSE
     /\ late = FALSE /\ busylie = FALSE /\ falsefb = FALSE /\ hit = FALSE
-    /\ unp = [r \in R |-> r \in Legacy /\ PreV7Current]
+    /\ unp = [r \in R |-> r \in Legacy /\ PreV7Current /\ ~PreV7TurnEnd]
     /\ quiet = FALSE /\ snapOK = FALSE /\ sOK = FALSE /\ nz = FALSE
     /\ nl = (PreV7Old /\ ~PreV7Current)
+    /\ legacyProof = IF ~PreV7Old THEN "none"
+                      ELSE IF PreV7TurnEnd THEN "turn_end"
+                      ELSE IF PreV7Current THEN "none" ELSE "agent_gone"
     /\ rvd = FALSE /\ rvw = FALSE
 
 -----------------------------------------------------------------------------
@@ -1254,7 +1275,9 @@ FMMissing ==
     /\ Sweep /\ proc = "gone" /\ rs \in Live /\ lk = "free"
     /\ rs' = "missing"
     /\ IF CloseOnMissing
-       THEN /\ cls' = [q \in R |-> cls[q] \/ (rec[q] /\ ~Closed(q) /\ (q \in Legacy => StoreAwaits(q)))]
+       THEN /\ cls' = [q \in R |-> cls[q] \/
+                         (IF q \in Legacy THEN StoreCloseable(q)
+                          ELSE rec[q] /\ ~Closed(q))]
             /\ dec' = [q \in R |-> IF rec[q] /\ ~Closed(q) /\ dec[q] = "none" THEN "deny" ELSE dec[q]]
        ELSE UNCHANGED <<cls, dec>>
     /\ unp' = IF PreV7Old /\ CloseOnMissing THEN [q \in R |-> FALSE] ELSE unp
@@ -1266,14 +1289,14 @@ FMMissing ==
 -----------------------------------------------------------------------------
 \* b.w21's one resume: find-missing's row-state-only close is undone by
 \* MoveToPending. Its backstop runs the SAME close statements and proves
-\* requests gone; decided pre-v7 rows again match neither close statement.
+\* requests gone; the close repair now includes decided pre-v7 rows.
 \* Fresh slots are untouched: this slice ends before the next turn's Ask.
 Relaunch ==
     /\ PreV7Old /\ PreV7Relaunch /\ ~nl
     /\ rs = "missing" /\ proc = "gone" /\ lk = "free"
     /\ \A q \in R \ Legacy : ~rec[q] /\ dl[q] = "none"
     /\ proc' = "alive" /\ aph' = "ss" /\ rs' = "pending" /\ idl' = FALSE
-    /\ cls' = [q \in R |-> cls[q] \/ StoreAwaits(q)]
+    /\ cls' = [q \in R |-> cls[q] \/ StoreCloseable(q)]
     /\ dec' = [q \in R |-> IF StoreAwaits(q) /\ dec[q] = "none" THEN "deny" ELSE dec[q]]
     /\ unp' = [q \in R |-> FALSE] /\ nl' = TRUE
     /\ QuietTo(FALSE) /\ UNCHANGED <<nz, rvd, rvw>>
@@ -1304,6 +1327,17 @@ Plain ==
 Track(cap, sread) ==
     /\ snapOK' = IF IdleSnap THEN cap \/ (snapOK /\ ~Changed) ELSE snapOK
     /\ sOK' = IF SameScreen THEN sread \/ (sOK /\ ~Changed) ELSE sOK
+    \* Track the single legacy record's durable proof at the actual writes.
+    \* proveAgentGoneSQL only fills NULL: an existing turn_end stays turn_end.
+    \* Stop/idle also fill NULL; SessionStart and AgentCrash alone prove nothing.
+    \* Keeping this out of unp is essential: Stop clears unp without ending a launch.
+    /\ legacyProof' = IF ~PreV7Old \/ legacyProof # "none" THEN legacyProof
+                       ELSE IF (CloseOnMissing /\ proc = "gone"
+                                /\ rs \in Live /\ rs' = "missing")
+                               \/ (rs = "missing" /\ rs' = "pending")
+                            THEN "agent_gone"
+                       ELSE IF cap /\ aph \in {"stop", "notif", "notifL"}
+                            THEN "turn_end" ELSE legacyProof
 
 (* Whole steps (TLC needs every primed variable, also for fairness):     *)
 (* P, a round-4 action that keeps round 5's state; E, a round-5-aware     *)
@@ -1366,6 +1400,7 @@ TypeOK ==
     /\ gpc \in {"idle", "g1", "g2", "gw"}
     /\ \A r \in R : pane[r] \in {"none", "intent", "sent", "outside", "ran"}
     /\ rvd \in BOOLEAN /\ rvw \in BOOLEAN /\ nl \in BOOLEAN
+    /\ legacyProof \in {"none", "turn_end", "agent_gone"}
 
 (* No dialog is allowed by a key that nobody sent as its answer. *)
 NoSilentAllow == ~silent
@@ -1471,7 +1506,7 @@ NeverHeldNoRequest == ~(StrayHeld /\ proc = "alive" /\ \A r \in R : ~rec[r])
 NeverHeldInTurnNoRequest ==
     ~(StrayHeld /\ proc = "alive" /\ aph = "turn" /\ \A r \in R : ~rec[r])
 -----------------------------------------------------------------------------
-\* b.w21 checks CURRENT buggy rules, never a hypothetical repair. nl is
+\* b.w21 checks the selected rules (repairs default off). nl is
 \* TRUE in the seeded cutover (already stuck store rows) and after resume.
 RelayHoldOnlyCurrentLaunch == nl => \A r \in Legacy : ~RelayHolds(r)
 OldRequestsDoNotHoldPlainKeys ==
@@ -1513,6 +1548,15 @@ B21SeedFidelity ==
     /\ (nl => \A r \in Legacy : ~unp[r])
 B21CurrentHoldExists ==
     \A r \in Legacy : (PreV7Current /\ ~nl /\ rs \in Live /\ ph[r] < 2) => RelayHolds(r)
+B21TurnEndHoldExists ==
+    \A r \in Legacy : (legacyProof = "turn_end" /\ ~cls[r]
+                        /\ rs \in Live /\ ph[r] < 2) => RelayHolds(r)
+B21ClosePersists ==
+    (PreV7Current /\ PreV7Relaunch /\ nl) => \A r \in Legacy : cls[r]
+B21ProofFidelity ==
+    /\ (legacyProof = "agent_gone" => \A r \in Legacy : ~unp[r])
+    /\ (PreV7TurnEnd => legacyProof = "turn_end")
+    /\ \A r \in Legacy : LegacyReleased(r) => dec[r] # "none" /\ ~ack[r]
 B21ExpiredOrdinaryDelivered ==
     \A r \in Legacy : (ph[r] = 2 /\ ~PreV7CloseDeny) =>
                         LegacyDelivery(r) = "delivered" /\ ~Reported(r)

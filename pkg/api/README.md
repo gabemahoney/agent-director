@@ -487,9 +487,14 @@ an answer when its Spawn ended (its agent's terminal SessionEnd, or the move
 of a Codex Spawn to `ended` by `FindMissing` or by `Pause` once its agent is
 gone with an end report) or when `find-missing` marked it `missing` is closed in the same write, an
 undecided one denied with `DecisionReason` `ended` or `find_missing`, and
-stays closed after `Resume`; `Get` and `List` no longer show it.
-`GetPermission` still reads its delivery, which is `delivered` only if its
-relay hook confirmed a verdict.
+stays closed after `Resume`; `Get` and `List` no longer show it. The same
+close includes decided requests without a confirmation or completed pane
+answer, including requests recorded by an older binary.
+`GetPermission` still reads its delivery. For a request with a settle
+instant, `delivered` requires its relay hook's confirmation. Requests
+recorded by an older binary retain the
+[legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary),
+including derived delivery after expiry even when closed.
 
 `ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`: the
 request, spawn state and other open requests. `SendKeys` can answer a pane

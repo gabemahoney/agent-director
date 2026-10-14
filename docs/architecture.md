@@ -1230,7 +1230,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_as` | TEXT | a pane answer's intent, `record-pane-answer` | The verdict the pane answer claims (`allow`, `deny`; `unknown` from `record-pane-answer`): stored, never checked. |
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
-| `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed, every request recorded before v7 included. |
+| `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
 | `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude only: a `PostToolUse` or `PostToolUseFailure` with its `tool_use_id`; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
@@ -1247,8 +1247,8 @@ columns to this same list. None has a CHECK constraint or an index.
   from v7 on, is not acked, decided or not, or, recorded before v7, is
   undecided. `OpenPermissionRequestsForSpawn` (`list`'s
   requests), the cap
-  eviction, the close of a Spawn's requests (`closeOrphanedRequests`),
-  the pane writes (a pane answer's intent,
+  eviction, the undecided branch of the close of a Spawn's requests
+  (`denyOrphanedRequestsSQL`), the pane writes (a pane answer's intent,
   `record-pane-answer`'s record) and the PostToolUse close all use it,
   and so does `holdsRowSQL` (below);
   never restate it. In Go, `PermissionRow.AwaitsAnswer()` states the same
@@ -1256,7 +1256,12 @@ columns to this same list. None has a CHECK constraint or an index.
   of its one read of every request with it), `Closed()` reports a closed request,
   `PaneAnswered()` a completed pane answer, and `CloseDenied()` a deny a
   close wrote (`decision_reason` `find_missing` or `ended`, no verdict a
-  caller or relay hook chose).
+  caller or relay hook chose). The decided branch of the lifecycle close
+  (`closeDecidedRequestsSQL`) deliberately uses a separate predicate:
+  decision present, `closed_at` and `delivered_at` NULL, `pane_answer`
+  `none` or `intent`. Decided pre-v7 rows do not await an answer under
+  `awaitingAnswerSQL`, but need durable closure before resume; do not
+  broaden the shared awaiting-answer predicate to close them.
 - **Must use:** `holdsRowSQL` (`internal/store/permission.go`) is the one
   statement of "a request holds its Spawn's row" (b.omt):
   `awaitingAnswerSQL` and `proven_gone_at IS NULL`. Exactly three writes
@@ -1278,7 +1283,7 @@ columns to this same list. None has a CHECK constraint or an index.
   (`tool_ran`) proves it gone it no longer keeps the row in
   `check_permission`. Every other reader of a request that awaits an answer
   (`get` and `list`, `decide`, `send-keys` and its pane answers, the
-  closes, the cap eviction) reads `awaitingAnswerSQL` alone, so such a
+  cap eviction) reads `awaitingAnswerSQL` alone, so such a
   request is still listed, decided, refused and closed as before. A new
   write that a request should hold off reads `holdsRowSQL`, never
   `awaitingAnswerSQL` with a proof test of its own, and carries it in the
@@ -1766,11 +1771,13 @@ still the one it read, so it knows the row has not changed since. As built:
   - **Must use: the close of a Spawn's requests (b.146 rule 12).**
     `closeOrphanedRequests(ctx, conn, instanceID, reason, at)`
     (`internal/store/request_close.go`) closes every request of a row that
-    still awaits an answer, on the caller's connection, inside the
+    still awaits an answer, plus decided unacked pre-v7 requests without
+    a completed pane answer, on the caller's connection, inside the
     transaction the caller holds: first `denyOrphanedRequestsSQL` denies
     each undecided one (`decision` `deny`, `decision_reason` `reason`,
     `decided_at`, `closed_at`), then `closeDecidedRequestsSQL` sets only
-    `closed_at` on each decided one its relay hook has not acked, then
+    `closed_at` on each decided, unacked request with `pane_answer` `none`
+    or `intent` and no prior close (including pre-v7), then
     `proveAgentGoneSQL` proves every request of the row not yet proven
     gone, closed now or before (`proven_gone_at`, `proven_gone_how`
     `agent_gone`; b.146 step 2c), one instant `at` for all three, in
@@ -1900,9 +1907,9 @@ still the one it read, so it knows the row has not changed since. As built:
     `denyOrphanedRequestsSQL` gives each undecided one `decision` `deny`,
     `decision_reason` `find_missing` and `decided_at` `CURRENT_TIMESTAMP`
     besides `closed_at` (a relay still polling reads a fail-closed deny);
-    then `closeDecidedRequestsSQL` sets only `closed_at` on each that is
-    still awaiting one, a decided request whose relay hook has not acked
-    its verdict, which keeps its `decision`, `decision_reason` and
+    then `closeDecidedRequestsSQL` sets only `closed_at` on each
+    decided, unacked request without a prior close or completed pane
+    answer, including pre-v7; it keeps its `decision`, `decision_reason` and
     `decided_at`; a third statement, `proveAgentGoneSQL`, proves every
     request of the row not yet proven gone (`agent_gone`, b.146 step 2c).
     Last, when the mark applied, the subagent close
@@ -10194,10 +10201,12 @@ exited between a read and its check is never reported fallen back.
 
 A request a close of its Spawn's requests closed (`closed_at`, rule 12:
 `find-missing`'s mark, the ended transition or resume's move) is derived by
-the same rules, so each value keeps its meaning and never goes back:
-`delivered` only when its hook acked (a hook whose parent lives may still
-ack the verdict on it, or the close's deny), `not_confirmed` while that
-hook may still run, `fallen_back` once it is gone or past `confirm_by`. A
+the same rules, so each value keeps its meaning and never goes back. For
+a request with a settle instant, `delivered` requires its hook's ack
+(a hook whose parent lives may still ack its verdict or the close's deny),
+`not_confirmed` lasts while that hook may still run, and `fallen_back`
+starts once it is gone or past `confirm_by`. Pre-v7 rows retain the
+[time-derived delivery rules](#requests-recorded-before-v7), even when closed. A
 closed request no longer awaits an answer, so `get` and `list` do not
 show it; `get-permission` reads it by its token.
 
@@ -10826,7 +10835,8 @@ docs/engineering-guide.md).
   its hash check (`paneMatches`, before any key) decides, `ErrPaneChanged`
   on a mismatch. The guard applies only to a row with `relay_mode=on`
   (`evaluateRelayGuard`), in any live state, so a row with no request, or
-  whose requests are all proven, is never held (`NeverHeldNoRequest`). On
+  whose requests are all proven, has no rule 3 dialog hold
+  (`NeverHeldNoRequest`); rules 1 and 2 can still hold a proven request. On
   `ad.send_keys.called` the refusal reads `guard_evaluation` `held` with
   outcome `ErrDialogMaybeOpen` (`errorName`). `pause`, which types
   `/exit` and Enter as a plain call without a hash would, runs the same
@@ -10953,8 +10963,9 @@ before the upgrade (rule 5's compatibility clause), through
   `delivered` when a decision other than a close's deny (`find_missing` or
   `ended`) is recorded, else `fallen_back`. It awaits an answer while it is
   undecided and not closed.
-- `send-keys` judges it through the same delivery: while it is
-  `not_confirmed` its relay hook may still answer
+- `send-keys` judges it through the same delivery unless it is logically
+  closed by the read-time repair below: while it is `not_confirmed` its
+  relay hook may still answer
   (`ErrSendKeysWhileRelayed`), and once it is `fallen_back` and undecided a
   plain call is refused with `ErrRelayFallenBack` in any live state of the
   row, until a pane answer, `record-pane-answer` or a close of its Spawn
@@ -10979,6 +10990,30 @@ before the upgrade (rule 5's compatibility clause), through
   `ErrNoOpenPermissionRequest` once the Spawn has moved on from it
   (`fallenBackUnshown`). `record-pane-answer` closes it: such a hook is
   judged by time, so its claim may be recorded from `confirm_by` + 2 s.
+
+**Automatic recovery (b.w21).** `spawnRequests.closed` shares logical
+closure between relay and fallen-back holds through
+`legacyRequestAgentGone`: `PreV7()`, decision present, `ProvenGone()` and
+`ProvenGoneHow == agent_gone`. This releases already-upgraded stores even
+when an older close or migration left `closed_at` NULL. It makes no write
+and changes no decision, reason, timestamp, ack or derived delivery fact.
+`notFallenBackRefusal` applies the same predicate before pane reads or
+claims: a `find_missing` denial is `ErrAlreadyDecided`, another verdict
+is `ErrNoOpenPermissionRequest`. Finished-row and completed-pane refusals
+retain precedence. **Must use:** guard consumers use `spawnRequests.closed`
+and obsolete-token refusals use `legacyRequestAgentGone`; do not replace
+them with a general proven-gone exemption for modern live hooks.
+
+Future lifecycle closes independently set `closed_at` on decided unacked
+requests with `pane_answer` `none` or `intent`, including pre-v7, preserving
+the verdict and prior proof. Thus a prior `turn_end` proof stays intact and
+stored closure releases the request after resume. An already-stuck
+older-launch legacy request with only `turn_end` proof and no `closed_at`
+remains guarded: legacy rows carry no reliable launch identity for a read
+to infer `agent_gone`. Undecided legacy requests and current live/unknown
+modern hooks also retain their holds, including before SessionStart with
+`allow_pending`. A legacy relay window defaults to 86400 s plus the 2 s
+reserve; this repair imposes no shorter bound on those retained holds.
 
 ### Components
 
@@ -11045,7 +11080,8 @@ before the upgrade (rule 5's compatibility clause), through
 
 - **`internal/store/request_close.go`** — `closeOrphanedRequests` and its
   three statements, the close of a Spawn's requests that still await an
-  answer and the proof of every request of the Spawn (`agent_gone`),
+  answer plus decided unacked requests without a completed pane answer
+  (including pre-v7), and the proof of every request of the Spawn (`agent_gone`),
   shared by `find-missing`'s mark, the ended transition and resume's move
   (see "The ended transition closes the row's requests" above, and its
   "Must use" under [`internal/store`](#internalstore)).
@@ -11594,7 +11630,8 @@ reads every request of the row by the check-before-read rule
    seen running, an acked request's included, since it is writing its
    verdict to Claude Code; or the request is `not_confirmed`: no ack, and
    its hook cannot be checked and its `confirm_by` has not passed, a
-   request recorded before v7 by its relay window) →
+   request recorded before v7 by its relay window; `closed` includes the
+   decided pre-v7 `agent_gone` logical closure above) →
    `ErrSendKeysWhileRelayed`, plain or pane answer, naming that request
    (`liveHolder`: one still awaiting an answer before an acked one, then
    the oldest).
@@ -11622,7 +11659,9 @@ close and never holds or refuses anything; one closed at the pane
 it is proven gone. There is no time window of the guard's own, no
 zero-rows rule (the relay hook records its request and the row's move to
 `check_permission` in one transaction, rule 1) and no exception for
-decided requests: under rule 1 a request holds exactly while its relay
+decided modern requests; the decided pre-v7 `agent_gone` repair above is
+logical closure under both rules 1 and 2. Under rule 1 a request holds
+exactly while its relay
 hook may still answer it, and under rule 3 exactly until a hook proves it
 gone. Before a refusal with `ErrRelayFallenBack` is
 returned, `hook_gone_at` is recorded on every fallen-back request with none
@@ -13416,7 +13455,9 @@ plus the adoption write before it.
    liveness clear and the launch-start clear (`launch_started_at` NULL)
    folded into the mark's statement, `row_version` advanced by one; and in
    the same transaction the close, which sets `closed_at` on every
-   permission request of the row that still awaits an answer, denies each
+   permission request of the row that still awaits an answer plus every
+   decided unacked request without a completed pane answer (pre-v7
+   included), denies each
    undecided one (`decision_reason` `find_missing`), so fail-closing any
    relay polling loop for it, and keeps the verdict of a decided one whose
    hook has not acked it; and, last, the close of the row's running subagent
@@ -15349,8 +15390,11 @@ for process exit and `decide` for relay delivery or legacy settlement:
    `hook_gone_at`), then `ErrDialogMaybeOpen` (a request not proven
    gone). A refusal makes no tmux call (no `C-u` either) and starts no
    wait; a failed read of the requests is the store's error, nothing
-   sent. A row with no request, or whose every request is proven gone,
-   goes on as before.
+   sent. A row with no request goes on as before. Otherwise, all relay,
+   fallback and dialog checks must pass before the tmux phase. Proof
+   alone clears only the dialog check; a current `turn_end`-proven request
+   can still hold through `hookMayAnswer` or `fallenBack`. The decided
+   pre-v7 `agent_gone` logical closure above releases both earlier checks.
 5. **`waiting` row: unusable recorded name.** A recorded session name that
    is empty, holds a control character, or holds a character tmux stores
    differently (`.`, `:`, invalid UTF-8) → `ErrInternal`
@@ -16641,7 +16685,7 @@ of an earlier model: `Phase5HookCx.tla` (the hook gate and the row's life;
 from the `Phase5Hook.tla` before b.xjn's change), `Hold36hCx.tla` (the
 working hold and the relay's proofs; from `hold36h/`) and `B146R5Cx.tla` (the
 integrated relay model; from b.146's round 5). Every knob defaults to off,
-and an equivalence run per model reproduces its source's distinct-state
+and a historical equivalence run per model reproduced its source's distinct-state
 count exactly (11,387,737, 109,518 and 833,740). The directory also holds
 41 cfgs, their 41 scheduler job directories as submitted (without
 `tla2tools.jar`, which the repo keeps once at `spec/tla/tla2tools.jar`),
@@ -16651,8 +16695,19 @@ and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
 or `ci/suite.tsv`, and `ci/run_ci.sh` never reads it.
 
-The runs back the Codex rules of this file. Six findings came out of them,
-and the README states each:
+The b.w21 extension in [`codex/b.w21/`](../spec/tla/codex/b.w21/README.md)
+preserves nine frozen current-rule contexts at `8c6998d4` with all expected
+scheduler outcomes observed. The evolving `src/B146R5Cx.tla` adds default-off
+legacy seeds and repair knobs; the old equivalence results do not validate
+that modified source. Fourteen self-contained fixed contexts (with canonical
+jar copies) are prepared in [`fixed/`](../spec/tla/codex/b.w21/fixed/README.md),
+all `NOT_RUN`: eleven expected PASS, one reachability failure and two repair
+mutant failures. `TestCodexJobArtifacts` restricts jar copies to safe,
+unique manifest-declared b.w21 contexts with exact canonical bytes and hashes;
+it also keeps every job runner equal to `jobs/lib/tlcjob.sh`.
+
+The historical b.ssz runs back the Codex rules of this file. Six findings
+came out of them, and the README states each:
 
 - **F1** (design flaw): pause's wait did not observe a gone agent process, so
   on a Codex row (where the exit SessionEnd writes only an end report) it

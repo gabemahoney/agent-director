@@ -73,9 +73,19 @@ func (r spawnRequests) delivery(pr PermissionRow) RequestDelivery {
 // closed reports whether pr is closed: its Spawn is ended or missing (b.146
 // rule 12), a close of the Spawn's requests closed it (closed_at:
 // find-missing's mark, the ended transition or resume's move), or a completed
-// pane answer did.
+// pane answer did. A decided pre-v7 request with durable agent_gone proof
+// is also closed logically: older releases left closed_at unset on these
+// rows. Reading that proof releases already-upgraded stores without changing
+// their historical delivery facts or needing another lifecycle write.
 func (r spawnRequests) closed(pr PermissionRow) bool {
-	return finishedState(r.sp.State) || pr.Closed() || pr.PaneAnswered()
+	return finishedState(r.sp.State) || pr.Closed() || pr.PaneAnswered() || legacyRequestAgentGone(pr)
+}
+
+// legacyRequestAgentGone excludes only decided pre-v7 requests whose asking
+// agent's launch ended. A turn_end or tool_ran proof does not show that a
+// relay hook of the current launch can no longer deliver its verdict.
+func legacyRequestAgentGone(pr PermissionRow) bool {
+	return pr.PreV7() && pr.Decision != "" && pr.ProvenGone() && pr.ProvenGoneHow == store.ProvenGoneAgentGone
 }
 
 // awaits reports whether pr still awaits an answer (b.146 rule 9) on a live
@@ -215,6 +225,8 @@ func (r spawnRequests) sendKeysRefusal(params SendKeysParams, hold time.Duration
 //     since): recordedRefusal's (ErrAlreadyDecided for find-missing's deny,
 //     otherwise ErrNoOpenPermissionRequest).
 //   - Answered at the pane (sent, outside or tool_ran): ErrAlreadyDecided.
+//   - Decided before v7 with agent_gone proof: the same refusal as a stored
+//     close, without changing the request's delivery facts.
 //   - Acked (delivered): ErrAlreadyDecided.
 //   - Its relay hook may still answer it (not_confirmed):
 //     ErrSendKeysWhileRelayed.
@@ -231,6 +243,12 @@ func (r spawnRequests) notFallenBackRefusal(pr PermissionRow, what string) error
 		return fmt.Errorf("%w; %s", recordedRefusal(params, pr), what)
 	case pr.PaneAnswered():
 		return paneAnsweredError(id, pr, what)
+	case legacyRequestAgentGone(pr):
+		if pr.DecisionReason == store.DecisionReasonFindMissing {
+			return fmt.Errorf("%w; %s", alreadyDecidedError(id, pr), what)
+		}
+		return fmt.Errorf("%w: %s request %s is closed: its asking agent is gone; %s",
+			store.ErrNoOpenPermissionRequest, id, pr.RequestToken, what)
 	case r.delivery(pr).Delivery == DeliveryDelivered:
 		return fmt.Errorf("%w; its relay hook delivered it; %s", alreadyDecidedError(id, pr), what)
 	}

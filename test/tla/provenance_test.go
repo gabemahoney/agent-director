@@ -1,7 +1,9 @@
 package tla_test
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -111,23 +113,77 @@ func TestCodexProvenance(t *testing.T) {
 	checkOwnPins(t, "codex")
 }
 
-// TestCodexHasNoJar: the vendored Codex job directories carry no
-// tla2tools.jar (the repo keeps the one at spec/tla/tla2tools.jar), and each
-// job's tlcjob.sh is byte-identical to spec/tla/jobs/lib/tlcjob.sh, which
-// codex/PROVENANCE.txt states.
-func TestCodexHasNoJar(t *testing.T) {
+// TestCodexJobArtifacts: only manifest-declared b.w21 scheduler contexts carry
+// a canonical jar copy; every Codex job retains the canonical runner bytes.
+func TestCodexJobArtifacts(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
+	codex := filepath.Join(tree, "codex")
+	jar, err := os.ReadFile(filepath.Join(tree, "tla2tools.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jarHash := fmt.Sprintf("%x", sha256.Sum256(jar))
+	declaredJars := map[string]bool{}
+	caseName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	for _, dir := range []string{"b.w21", "b.w21/fixed"} {
+		var manifest struct {
+			Bug   string `json:"bug"`
+			Cases []struct {
+				Name    string            `json:"name"`
+				Context string            `json:"context"`
+				SHA256  map[string]string `json:"sha256"`
+			} `json:"cases"`
+		}
+		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(codex, dir, "manifest.json"))), &manifest); err != nil {
+			t.Fatalf("%s/manifest.json: %v", dir, err)
+		}
+		if manifest.Bug != "b.w21" || len(manifest.Cases) == 0 {
+			t.Fatalf("%s/manifest.json: want b.w21 with declared cases", dir)
+		}
+		for _, c := range manifest.Cases {
+			if !caseName.MatchString(c.Name) || !fs.ValidPath(c.Context) || c.Context != "jobs/"+c.Name {
+				t.Fatalf("%s/manifest.json: unsafe or unexpected context %q for case %q", dir, c.Context, c.Name)
+			}
+			rel := filepath.Join(dir, c.Context, "tla2tools.jar")
+			if declaredJars[rel] {
+				t.Fatalf("%s/manifest.json: duplicate context %q", dir, c.Context)
+			}
+			if c.SHA256["tla2tools.jar"] != jarHash {
+				t.Errorf("%s/manifest.json: %s jar hash %q differs from canonical %s", dir, c.Name, c.SHA256["tla2tools.jar"], jarHash)
+			}
+			declaredJars[rel] = true
+		}
+	}
 	lib, err := os.ReadFile(filepath.Join(tree, "jobs", "lib", "tlcjob.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	jobs := 0
-	err = filepath.WalkDir(filepath.Join(tree, "codex"), func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(codex, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 		if strings.HasSuffix(d.Name(), ".jar") {
-			t.Errorf("%s: a jar under codex/", p)
+			rel, err := filepath.Rel(codex, p)
+			if err != nil {
+				return err
+			}
+			if !declaredJars[rel] {
+				t.Errorf("%s: jar outside declared b.w21 scheduler contexts", p)
+			} else {
+				delete(declaredJars, rel)
+				if !d.Type().IsRegular() {
+					t.Errorf("%s: scheduler jar must be a regular file", p)
+				} else {
+					b, err := os.ReadFile(p)
+					if err != nil {
+						return err
+					}
+					if !bytes.Equal(b, jar) {
+						t.Errorf("%s differs from spec/tla/tla2tools.jar", p)
+					}
+				}
+			}
 		}
 		if d.Name() == "tlcjob.sh" {
 			jobs++
@@ -135,7 +191,7 @@ func TestCodexHasNoJar(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if string(b) != string(lib) {
+			if !bytes.Equal(b, lib) {
 				t.Errorf("%s differs from spec/tla/jobs/lib/tlcjob.sh", p)
 			}
 		}
@@ -143,6 +199,9 @@ func TestCodexHasNoJar(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for rel := range declaredJars {
+		t.Errorf("%s: declared scheduler context is missing its jar", rel)
 	}
 	if jobs == 0 {
 		t.Error("no job directory under codex/")

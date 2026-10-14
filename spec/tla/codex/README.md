@@ -6,15 +6,23 @@ contexts. At commit `8c6998d4`, all nine b.w21 scheduler observations match
 the predictions: four bug-check failures, two reachability-probe failures
 and three passing controls. Its [manifest](b.w21/manifest.json) and
 [receipt archive](b.w21/model-red-receipts.json) preserve job IDs, counts,
-full logs and hashes. The model-failure gate is met; Go regression red/green,
-product repair, fixed-model and full-suite validation remain pending.
+full logs and hashes. The model-failure gate is met; local sandbox regressions were then proven
+red and the repair passed all 41 targeted cases. The final full sandbox unit
+suite passed after expectation and artifact/provenance corrections: 67 Go
+packages (37 cached), 420 Bun tests, zero failures and make exit 0.
+The [fixed-model handoff](b.w21/fixed/README.md) prepares fourteen separate
+self-contained jobs, all **NOT_RUN**: eleven expected PASS, an independent
+relaunch reachability failure and two repair-mutant failures. Docker integration
+is also pending. See the [unit receipts](../../../test/b.w21/README.md).
+
 The b.ssz verdicts below are historical runs and have not been rerun with
-this extension. Future fixed-model runs use separate contexts; the nine
-current-rule contexts remain the immutable `8c6998d4` baseline.
-The checkpoint includes an independent probe of relaunch reaching pending
-before SessionStart, which must retain its expected failure after repair.
-Its initial-state case requires legacy hold release through `B21RecordsSettle`,
-permitting a future read-time repair while retaining nonlegacy closure checks.
+these extensions. The nine current-rule contexts remain the immutable
+`8c6998d4` baseline, including its independent relaunch probe and
+`B21RecordsSettle`. `src/B146R5Cx.tla` is now the evolving model; the older
+final-model equivalence claims below describe the submitted b.ssz snapshots,
+not the modified current source. Original b.ssz job directories omit their
+jar; the manifest-declared b.w21 red/fixed contexts include canonical jar
+copies for self-contained scheduler submission.
 
 The design under check is `../srd-design-brief.md`, sections "Codex session-end rule" and
 "Codex state mapping and relay" (PRD t1.ssz.qi: States; Permission relay and typing; the

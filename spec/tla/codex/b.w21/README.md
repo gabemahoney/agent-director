@@ -6,8 +6,10 @@ failures, two reachability-probe failures and three passing controls.
 [manifest.json](manifest.json) records `ALL_EXPECTED`; the original predictions,
 scheduler receipt and full logs with SHA-256 hashes are archived in
 [model-red-receipts.json](model-red-receipts.json).
-The model-failure gate is met. Go regressions are being written on unfixed code;
-no regression execution or product repair has occurred at this checkpoint.
+The model-failure gate is met. This page preserves the phase-1 historical
+record. Follow the [fixed-model handoff](fixed/README.md) and
+[local unit evidence](../../../../test/b.w21/README.md) for the repair and
+current validation gates.
 
 ## Model fidelity and limits
 
@@ -123,22 +125,30 @@ python3 /home/horde/projects/agent-director-project/agent-director-w21-tla/spec/
 It invokes no TLC, JVM, scheduler, container or product binary. It verifies
 the archived execution evidence without parsing or rerunning the model.
 
-## Remaining code and validation gates
+## Follow-up validation
 
-The current-rule failures and controls are confirmed. Upgraded-store and
-post-24-hour regressions must still be proven red on unfixed code before
-product repair. Follow the [unit-red handoff](../../../../test/b.w21/README.md)
-on a separate disposable test host with a container engine; the scheduler's
-job containers cannot run `make test-sandbox` unchanged. Regression
-red/green results, fixed-model results, the `make test-sandbox` unit suite
-and every Docker test group remain pending. This phase-1 evidence does not
-claim a product fix or a passing Go suite.
+The original nine observed results above remain the unfixed phase-1 evidence.
+Local sandbox runs subsequently proved the upgraded-store and post-cutoff
+regressions red before runtime repair, then passed all 41 targeted repaired
+cases. The initial full suite failed on two obsolete expectations and artifact
+checks; focused expectation corrections passed. The final aggregate full-suite
+rerun passed: 67 Go packages (37 cached), 420 Bun tests, zero failures and
+make exit 0. Both full-suite receipts are retained in the
+[unit receipt](../../../../test/b.w21/unit-evidence.json).
 
-The final fix must automatically release rows **already stuck in existing
-stores**, through read-time handling or a one-time close, without a manual
-repair. The final report must answer whether `ErrSendKeysWhileRelayed` can
-still hold pending rows before SessionStart for minutes, and in which cases.
-That answer is **pending code-fix verification**; the compressed model
-phases and current-launch control do not establish the post-fix timing or
-contract. Update affected customer and architecture docs after that
-behavior is implemented and verified.
+The [fixed-model handoff](fixed/README.md) has fourteen separately prepared
+contexts, all **NOT_RUN**. Its relaunch probe retains an expected failure;
+its obsolete pane-write probe now expects PASS. Docker integration remains
+scheduler-only and unrun; fifteen executions are required, with contexts
+being prepared separately. Local sandbox units are explicitly authorized;
+the earlier separate-host requirement has been superseded.
+
+The implemented repair releases decided pre-v7 `agent_gone` rows in already
+upgraded stores without a write or manual step and persists future lifecycle
+closure. Pending-before-SessionStart holds remain possible for undecided
+legacy requests, legacy requests without `agent_gone` (including already-stuck
+`turn_end`-only rows without `closed_at`), and modern live/unknown hooks.
+The legacy default window is 24 h + 2 s. Another current request can still
+hold keys after the obsolete row releases. The [caller contract](../../../../docs/caller-contract.md#permission-relay)
+and [architecture](../../../../docs/architecture.md#requests-recorded-before-v7)
+describe that scope; fixed-model and integration results remain pending.

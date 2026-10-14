@@ -31,13 +31,17 @@ var denyOrphanedRequestsSQL = `UPDATE permission_requests AS pr
   RETURNING request_id, request_token, tool_name`
 
 // closeDecidedRequestsSQL is the close's second statement: every request of
-// the row that still awaits an answer after the first, a decided one whose
+// the row that is decided, not closed or answered at the pane, and whose
 // relay hook has not acked its verdict, is marked closed, its decision,
-// decision_reason and decided_at kept. It returns what it closed for the
-// trail.
+// decision_reason and decided_at kept. This deliberately does not use
+// awaitingAnswerSQL: decided pre-v7 rows do not match that predicate but
+// still need a durable close before the Spawn is resumed.
+// It returns what it closed for the trail.
 var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
     SET closed_at = ?
-  WHERE pr.instance_id = ? AND ` + awaitingAnswerSQL + `
+  WHERE pr.instance_id = ? AND pr.decision IS NOT NULL
+    AND pr.closed_at IS NULL AND pr.pane_answer IN ('none', 'intent')
+    AND pr.delivered_at IS NULL
   RETURNING request_id, request_token, tool_name`
 
 // proveAgentGoneSQL is the close's third statement (b.146 step 2c): every
@@ -57,7 +61,8 @@ type closedRequest struct {
 }
 
 // closeOrphanedRequests closes every request of instanceID that still awaits
-// an answer, on conn, inside the transaction its caller holds: the undecided
+// an answer, including decided pre-v7 requests without an ack, on conn,
+// inside the transaction its caller holds: the undecided
 // ones denied with decision_reason reason (denyOrphanedRequestsSQL), then the
 // decided ones marked closed (closeDecidedRequestsSQL), both with one
 // closed_at. Then it proves every request of instanceID not yet proven gone,
