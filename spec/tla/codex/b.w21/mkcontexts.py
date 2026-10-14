@@ -110,6 +110,19 @@ def sha256(path):
 def main():
     cfg_dir = HERE / "cfg"
     jobs_dir = HERE / "jobs"
+    # Submitted contexts and their predictions are historical evidence. Check
+    # every destination before writing anything, including the observations.
+    outputs = [HERE / "manifest.json", HERE / "scheduler-commands.txt",
+               HERE / "model-red-receipts.json"]
+    outputs.extend(cfg_dir / f"{case[0]}.cfg" for case in CASES)
+    outputs.extend(jobs_dir / case[0] for case in CASES)
+    existing = [path for path in outputs if path.exists() or path.is_symlink()]
+    if existing:
+        raise SystemExit(
+            "Refusing to overwrite existing b.w21 artifacts or observations; "
+            "use separate contexts for the fixed model. First existing path: "
+            + str(existing[0])
+        )
     cfg_dir.mkdir(exist_ok=True)
     jobs_dir.mkdir(exist_ok=True)
     sources = {

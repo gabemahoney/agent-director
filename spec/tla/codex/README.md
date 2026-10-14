@@ -2,8 +2,15 @@
 
 Follow-up: [b.w21 current-rule model checkpoint](b.w21/README.md) extends
 `B146R5Cx` with default-off legacy-request scenarios and nine scheduler
-contexts. All b.w21 observations are `NOT_RUN`; the b.ssz verdicts below
-are historical runs and have not been rerun with this extension.
+contexts. At commit `8c6998d4`, all nine b.w21 scheduler observations match
+the predictions: four bug-check failures, two reachability-probe failures
+and three passing controls. Its [manifest](b.w21/manifest.json) and
+[receipt archive](b.w21/model-red-receipts.json) preserve job IDs, counts,
+full logs and hashes. The model-failure gate is met; Go regression red/green,
+product repair, fixed-model and full-suite validation remain pending.
+The b.ssz verdicts below are historical runs and have not been rerun with
+this extension. Future fixed-model runs use separate contexts; the nine
+current-rule contexts remain the immutable `8c6998d4` baseline.
 The checkpoint includes an independent probe of relaunch reaching pending
 before SessionStart, which must retain its expected failure after repair.
 Its initial-state case requires legacy hold release through `B21RecordsSettle`,
