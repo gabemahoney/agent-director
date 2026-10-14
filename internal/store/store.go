@@ -84,7 +84,7 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 9
+const schemaVersion = 10
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
 // migrateV8toV9, b.ssz) produces. install.sh holds the same number as
@@ -104,7 +104,8 @@ const parentDirMode os.FileMode = 0o700
 // Store is the opaque handle callers hold for the lifetime of a process.
 // The underlying *sql.DB is unexported on purpose — see package doc.
 type Store struct {
-	db *sql.DB
+	filePath string // actual opened database, retained for owned Cursor launch plumbing
+	db       *sql.DB
 	// storeID is store_meta's store_id, read once at open (SR-5.1); see
 	// StoreID.
 	storeID string
@@ -295,7 +296,12 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db, storeID: storeID, busyTimeoutMs: busyTimeoutMs}, nil
+	absolutePath, err := filepath.Abs(resolved)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: resolve opened database path: %w", err)
+	}
+	return &Store{db: db, filePath: absolutePath, storeID: storeID, busyTimeoutMs: busyTimeoutMs}, nil
 }
 
 // Close releases the underlying database handle. Safe to call once.
@@ -445,3 +451,6 @@ func verifyPragmas(db *sql.DB) error {
 	}
 	return nil
 }
+
+// Path is the absolute database this Store opened, never a caller-supplied protocol claim.
+func (s *Store) Path() string { return s.filePath }

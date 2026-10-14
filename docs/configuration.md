@@ -34,6 +34,7 @@ settle_ms = 0   # 0 = off
 [launch]   # optional; absolute or "~/" paths; empty or omitted = unset
 # claude_path = "/opt/claude/bin/claude"
 # codex_path = "/opt/codex/bin/codex"
+# cursor_path = "/opt/cursor/bin/agent"
 
 [log]
 error_log_path = "~/.config/agent-director/errors.log"
@@ -58,8 +59,8 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 |---|---|---|---|
 | `[defaults] relay_mode` | `on`, `off` | `off` | Whether a spawn relays the agent's permission prompts to `decide`; `--relay-mode` overrides it per call. |
 | `[defaults] expire_retention_days` | 1 to 106751 | 31 | Days a finished row must have ended before `expire` (without `--older-than`) may delete it. |
-| `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool: Claude Code's `AskUserQuestion`, and for Codex its question tool, turned off for the launch. See [permissions](permissions.md#disable_ask_user-config). |
-| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether every spawn, of either agent, adds a help SessionStart hook; `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
+| `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool: Claude Code's `AskUserQuestion`, and for Codex its question tool, turned off for the launch. Cursor denies questions with either value. See [permissions](permissions.md#disable_ask_user-config). |
+| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether every Claude or Codex spawn adds a help SessionStart hook; `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
 | `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: the agent ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |
@@ -71,6 +72,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new state must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
+| `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a fresh `cursor` launch. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing or `PATH` lookup, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current setting takes effect at the next fresh launch. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
 | `[log] error_log_path` | path | `~/.config/agent-director/errors.log` | Where hooks and the CLI append errors (stderr if it cannot be opened); a relative path is joined onto `~/.config/agent-director`. |
 
 ## Refused values

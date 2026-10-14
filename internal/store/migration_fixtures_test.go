@@ -1514,6 +1514,9 @@ func seedPreMigrationRow(t *testing.T, path string, from int) {
 		if slices.Contains(tableColumnNames(t, db, "spawns"), "settled_state") { // a store with the settle time has the row settled
 			mustExec(t, db, `UPDATE spawns SET settled_state = state WHERE `+id+` = 'pre'`)
 		}
+		if from >= 9 {
+			mustExec(t, db, `UPDATE spawns SET agent = 'claude' WHERE `+id+` = 'pre'`)
+		}
 		if from == 1 {
 			mustExec(t, db, "INSERT INTO permission_requests ("+idColumn(t, db, "permission_requests")+
 				", tool_name, tool_input) VALUES ('pre', 'Bash', '{}')")

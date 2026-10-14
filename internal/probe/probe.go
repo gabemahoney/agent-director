@@ -13,8 +13,8 @@
 //     `ad.hook.pane_is_grandparent`'s `pane_command` trail fields only, never
 //     evidence.
 //   - The parent-pid reader (ParentPIDReader / NewParentPIDReader, ppid.go):
-//     feeds the hook's `ad.hook.pane_is_grandparent` check only, never
-//     evidence.
+//     feeds the hook's `ad.hook.pane_is_grandparent` diagnostic and Cursor
+//     runtime's independent direct-child binding check.
 //
 // Beside them, SelfPIDNamespace (pidns.go) reads the calling process's own
 // pid namespace, which a recorded pid is judged in (b.146 rule 14).

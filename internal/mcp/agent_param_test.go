@@ -34,25 +34,27 @@ func agentSpawnArgs(t *testing.T, cwd string, c ptConfig, extra map[string]any) 
 // the get and list tools show it; an agent that is not claude or codex is
 // ErrAgentInvalid naming it, with nothing created.
 func TestMCPSpawnAgentReachesRow(t *testing.T) {
-	t.Run("claude", func(t *testing.T) {
-		e, c := newReuseParamEnv(t)
-		id := "agent-" + uuid.NewString()[:8]
+	for _, agent := range []string{"claude", "codex", "cursor"} {
+		t.Run(agent, func(t *testing.T) {
+			e, c := newReuseParamEnv(t)
+			id := "agent-" + uuid.NewString()[:8]
 
-		callToolText(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"instance_id": id}))
+			callToolText(t, e.d, "spawn", agentSpawnArgs(t, t.TempDir(), c, map[string]any{"instance_id": id, "agent": agent, "no_pre_trust": true}))
 
-		if got := readColumns(t, e.storePath, id).Agent; got != "claude" {
-			t.Errorf("row agent = %v; want claude", got)
-		}
-		if got := string(callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))["agent"]); got != `"claude"` {
-			t.Errorf("get agent = %s; want \"claude\"", got)
-		}
-		var rows []struct {
-			Agent string `json:"agent"`
-		}
-		if err := json.Unmarshal(callToolText(t, e.d, "list", `{}`)["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].Agent != "claude" {
-			t.Errorf("list spawns = %+v (%v); want one row of agent claude", rows, err)
-		}
-	})
+			if got := readColumns(t, e.storePath, id).Agent; got != agent {
+				t.Errorf("row agent = %v; want claude", got)
+			}
+			if got := string(callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))["agent"]); got != `"`+agent+`"` {
+				t.Errorf("get agent = %s; want \"claude\"", got)
+			}
+			var rows []struct {
+				Agent string `json:"agent"`
+			}
+			if err := json.Unmarshal(callToolText(t, e.d, "list", `{}`)["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].Agent != agent {
+				t.Errorf("list spawns = %+v (%v); want one row of agent claude", rows, err)
+			}
+		})
+	}
 	t.Run("invalid", func(t *testing.T) {
 		e, c := newReuseParamEnv(t)
 

@@ -1,0 +1,12 @@
+{
+  "classification": "synthetic",
+  "runtime": "cursorfix Node.js scripted stand-in",
+  "runtime_version": "not a Cursor version",
+  "protocol_version": 1,
+  "platform": "Linux Debian bookworm sandbox, tmux 3.3a",
+  "captured_at": null,
+  "authenticated_cursor": false,
+  "source": "Task1 t3.jf1.3e.tv.6g; generated protocol fixtures, not captured Cursor evidence",
+  "fixture_version": "1",
+  "interpreter_version": "Node.js v20.19.5 (sandbox pinned)"
+}

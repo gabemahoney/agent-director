@@ -33,7 +33,7 @@ func claudeProgram(cfg config.Config) string {
 // launchable agents.
 func launchAgentError(agent string) error {
 	switch agent {
-	case store.AgentClaude, store.AgentCodex:
+	case store.AgentClaude, store.AgentCodex, store.AgentCursor:
 		return nil
 	}
 	return fmt.Errorf("%w: %q", store.ErrRowAgentInvalid, agent)
@@ -141,6 +141,9 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	}
 
 	req := c.Create
+	if r.Agent == store.AgentCursor {
+		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = s.Path()
+	}
 	req.Socket = socket
 	req.Token = token
 	req.StoreID = s.StoreID()

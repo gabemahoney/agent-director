@@ -77,7 +77,17 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	}
 	var command []string
 	var carried PreTrustOutcome
-	if r.Agent == store.AgentCodex {
+	if r.Agent == store.AgentCursor {
+		carried = PreTrustFailed
+		if r.NoPreTrust {
+			carried = PreTrustSkipped
+		}
+		var err error
+		command, err = composeCursorCommand(r, cfg)
+		if err != nil {
+			return ComposedLaunch{}, err
+		}
+	} else if r.Agent == store.AgentCodex {
 		carried = CodexPreTrust(r.ExtraEnv, r.NoPreTrust)
 		var err error
 		command, err = composeCodexCommand(r, carried, cfg)

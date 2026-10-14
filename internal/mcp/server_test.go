@@ -71,7 +71,7 @@ func TestToolsListMatchesManifest(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("tools = %v; want the manifest's exposed verbs %v", got, want)
 	}
-	for _, name := range []string{"hook", "serve", "trail-emit", "delete"} {
+	for _, name := range []string{"cursor-host", "hook", "serve", "trail-emit", "delete"} {
 		if listed[mcp.ToolName(name)] {
 			t.Errorf("tools/list exposes %s", name)
 		}

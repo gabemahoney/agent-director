@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -100,6 +101,11 @@ type HandleConfig struct {
 	// double. A nil ParentProc leaves the start time unreadable, so the hook
 	// matches no row.
 	ParentProc ParentProc
+	// VerifyCursor independently verifies the registered runtime, protected
+	// transcript and current pane ownership. The CLI wires the OS/process and
+	// tmux readers, keeping hook free of those dependencies. Nil denies every
+	// Cursor report; a payload's connection claim never grants authority.
+	VerifyCursor func(*store.Store, store.CursorRuntime, string, bool) error
 	// Now reads the injected clock that bounds SessionStart's wait for its
 	// launch's identity write (SR-22.9, SR-20.2): the grace bound is compared
 	// with it on the wall clock, and the wait's elapsed time, which
@@ -426,6 +432,33 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		ParentPID:   parent.pid,
 		ParentStart: parent.start,
 		SessionID:   sessionID,
+	}
+	if res.Agent == store.AgentCursor {
+		reader, ok := st.(interface {
+			ReadCursorRuntime(string) (store.CursorRuntime, error)
+		})
+		if !ok || res.AgentID != "" || res.UnknownEvent {
+			return nil
+		}
+		b, e := reader.ReadCursorRuntime(instanceID)
+		var claim struct {
+			Connection string `json:"cursor_connection"`
+		}
+		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.SessionID != res.SessionID || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
+			return nil
+		}
+		ended := res.EventName == "SessionEnd"
+		if b.Terminated != ended || hc.VerifyCursor == nil {
+			return nil
+		}
+		actual, ok := st.(*store.Store)
+		if !ok {
+			return nil
+		}
+		if hc.VerifyCursor(actual, b, transcriptPath, ended) != nil {
+			return nil
+		}
+		gate.Cursor = &b
 	}
 	jsonlPresent := transcriptPresent(transcriptPath)
 	onIgnored := func(reason string) {

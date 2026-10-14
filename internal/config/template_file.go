@@ -51,10 +51,11 @@ type TemplatePermissions struct {
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
+	AgentCursor = "cursor"
 )
 
 // ValidAgent reports whether a is exactly claude or codex. The match is
 // case-sensitive and the empty string is not an agent (it means none given).
 func ValidAgent(a string) bool {
-	return a == AgentClaude || a == AgentCodex
+	return a == AgentClaude || a == AgentCodex || a == AgentCursor
 }

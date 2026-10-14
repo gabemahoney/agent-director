@@ -186,7 +186,7 @@ func TestNoMigrationTriggerInSurfaceJSON(t *testing.T) {
 // it on the reference-doc side). Order matters: the generator walks Verbs
 // in slice order, so a reorder produces a diff in docs/cli-reference.md.
 func TestVerbsContainsExpectedSurface(t *testing.T) {
-	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "hook"}
+	want := []string{"help", "spawn", "status", "get", "send-keys", "read-pane", "kill", "decide", "get-permission", "record-pane-answer", "resume", "find-missing", "expire", "make-template", "list", "list-subagents", "pause", "serve", "version", "trail-emit", "cursor-host", "hook"}
 	if got := len(manifest.Verbs); got != len(want) {
 		t.Fatalf("len(manifest.Verbs) = %d, want %d (names %v)", got, len(want), want)
 	}
@@ -728,14 +728,14 @@ func TestNoVerbListsErrOldLayout(t *testing.T) {
 
 // TestHookVerbListsAgentParam pins SR-6.1's flag in the manifest: the hook verb
 // has an optional string param agent, not nullable or empty, whose values are
-// claude and codex (TestSurfaceJSONMirrorsManifest carries it to surface.json).
+// claude, codex and cursor (TestSurfaceJSONMirrorsManifest carries it to surface.json).
 func TestHookVerbListsAgentParam(t *testing.T) {
 	for _, p := range verbOf(t, "hook").Params {
 		if p.Name != "agent" {
 			continue
 		}
-		if p.Type != "string" || p.Required || p.Nullable || p.AllowEmpty || !reflect.DeepEqual(p.AllowedValues, []string{"claude", "codex"}) {
-			t.Errorf("hook agent param = %+v; want an optional string, not nullable or empty, with values claude and codex", p)
+		if p.Type != "string" || p.Required || p.Nullable || p.AllowEmpty || !reflect.DeepEqual(p.AllowedValues, []string{"claude", "codex", "cursor"}) {
+			t.Errorf("hook agent param = %+v; want an optional string, not nullable or empty, with values claude, codex and cursor", p)
 		}
 		return
 	}

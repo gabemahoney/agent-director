@@ -97,6 +97,7 @@ var verbAliases = map[string]string{
 func handlers(client *pkgapi.Client, cfg config.Config, o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
 		"help":               func(args []string) error { return helpHandler(client, args) },
+		"cursor-host":        cursorHostHandler,
 		"version":            func(args []string) error { return versionHandler(client, args) },
 		"spawn":              func(args []string) error { return spawnHandlerWith(client, args) },
 		"status":             func(args []string) error { return statusHandlerWith(client, args) },
@@ -216,8 +217,21 @@ func runHook() int {
 		earlyFailClosed(fmt.Sprintf("resolve store path: %v", err))
 		return hookExitCode
 	}
+	// Cursor's owned pane carries the actual opened store path, including a
+	// per-client override. This is only routing; the direct-parent, launch
+	// and runtime gates still prove authority independently.
+	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor {
+		if path := os.Getenv("AGENT_DIRECTOR_CURSOR_STORE_PATH"); path != "" {
+			dbPath = path
+		}
+	}
 	// With the busy timeout every verb's open uses too (b.c7f).
-	st, err := store.OpenOrInitWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
+	var st *store.Store
+	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor {
+		st, err = store.OpenWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
+	} else {
+		st, err = store.OpenOrInitWithBusyTimeout(dbPath, cfg.Store.EffectiveBusyTimeoutMs())
+	}
 	if err != nil {
 		earlyFailClosed(fmt.Sprintf("open store: %v", err))
 		return hookExitCode
@@ -254,6 +268,7 @@ func runHook() int {
 		Clock:         hook.DefaultPollClock(),
 		ParentPID:     os.Getppid,
 		ParentProc:    hookParentProc(),
+		VerifyCursor:  hookCursorVerifier(cfg),
 		Now:           time.Now,
 		PendingGrace:  cfg.Tmux.EffectivePendingGrace(),
 		Start:         start,
@@ -334,7 +349,7 @@ func parseHookArgs(args []string) hookArgs {
 	// the only parse errors are an unknown flag, a flag with no value left to
 	// take and a malformed flag.
 	fs.Var(lenientValue{newDecimalInt(&seconds, 0)}, "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
-	fs.Var(&agent, "agent", "the agent whose hook this is, claude or codex (absent: claude)")
+	fs.Var(&agent, "agent", "the agent whose hook this is, claude, codex or cursor (absent: claude)")
 	rest := args
 	for len(rest) > 0 {
 		err := fs.Parse(rest)
@@ -418,6 +433,9 @@ func hookParentProc() hook.ParentProc {
 // is present, nil otherwise. A config that fails to load is not judged here:
 // the hook's own load reports it. It creates nothing.
 func hookOldLayout() error {
+	if parseHookArgs(os.Args[2:]).agent == store.AgentCursor && os.Getenv("AGENT_DIRECTOR_CURSOR_STORE_PATH") != "" {
+		return nil
+	}
 	cfg, err := config.Load(configPath)
 	if err != nil || cfg.Store.DbPathSet {
 		return nil
@@ -684,6 +702,12 @@ func setupClient(o clisetup.Overrides) (*pkgapi.Client, config.Config, error) {
 // the CLI binary is short-lived and single-threaded at startup, so
 // process-wide env mutation is safe.
 func run() int {
+	if len(os.Args) > 1 && os.Args[1] == "cursor-host" {
+		if err := cursorHostHandler(os.Args[2:]); err != nil {
+			return 1
+		}
+		return 0
+	}
 	if len(os.Args) > 1 && os.Args[1] == "hook" {
 		return runHook()
 	}

@@ -25,7 +25,7 @@ func agentInsert(agent string) store.Spawn {
 // agent is refused by an insert, which leaves no row, and by a reuse reset,
 // which leaves the row, its history, its requests and its child as they were.
 func TestAgentWriteRefused(t *testing.T) {
-	for _, agent := range []string{"", "gemini", "Claude", "CODEX", " claude", "codex ", "claude\n"} {
+	for _, agent := range []string{"", "gemini", "Claude", "CODEX", "Cursor", " cursor", "cursor ", " claude", "codex ", "claude\n"} {
 		t.Run(strconv.Quote(agent), func(t *testing.T) {
 			f := newV5Store(t)
 			err := f.s.InsertPending(agentInsert(agent))
@@ -63,7 +63,7 @@ func TestAgentWriteRefused(t *testing.T) {
 // the row's end-report field.
 func TestAgentAcceptedAndRead(t *testing.T) {
 	const endReported int64 = 1790000123456
-	for _, agent := range []string{store.AgentClaude, store.AgentCodex} {
+	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
 		t.Run(agent, func(t *testing.T) {
 			f := newV5Store(t)
 			if err := f.s.InsertPending(agentInsert(agent)); err != nil {

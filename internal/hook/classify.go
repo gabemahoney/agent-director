@@ -56,6 +56,7 @@ var terminalSessionEndReasons = map[string]bool{
 // Claude Code versions (`reason`, `matcher`, `endReason`). We accept all
 // three so the classifier remains stable across upstream payload renames.
 type payload struct {
+	Origin string `json:"origin"` // Cursor gateway protocol attribution only
 	// Claude Code's standard field name. The SRD's test examples use
 	// `event_name`; we accept both so the surface is forgiving.
 	HookEventName  string `json:"hook_event_name"`
@@ -116,6 +117,8 @@ func ResolveAgent(raw string) (string, error) {
 		return store.AgentClaude, nil
 	case store.AgentCodex:
 		return store.AgentCodex, nil
+	case store.AgentCursor:
+		return store.AgentCursor, nil
 	}
 	return "", fmt.Errorf("%w: %q (want claude or codex)", ErrInvalidAgent, raw)
 }
@@ -222,7 +225,7 @@ type ClassifyResult struct {
 // none, so a Codex hook never proves a request's dialog gone this way: it is
 // never true for a Codex result.
 func (r ClassifyResult) ToolRan() bool {
-	return r.Agent != store.AgentCodex && r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
+	return r.Agent == store.AgentClaude && r.ToolUseID != "" && (r.EventName == EventNamePostToolUse || r.EventName == EventNamePostToolUseFailure)
 }
 
 // The tool events whose hook means the tool ran (b.146 rule 13).
@@ -246,6 +249,9 @@ const EventNameStop = "Stop"
 // Q3) proves nothing. A Claude result is never an Interrupt turn end:
 // Claude's table does not know the event.
 func (r ClassifyResult) TurnEnded() bool {
+	if r.Agent == store.AgentCursor && r.UnknownEvent {
+		return false
+	}
 	if r.AgentID != "" {
 		return false
 	}
@@ -299,6 +305,9 @@ func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
 	}
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return ClassifyResult{}, err
+	}
+	if agent == store.AgentCursor {
+		return classifyCursor(p), nil
 	}
 	if agent == store.AgentCodex {
 		return classifyCodex(p), nil
@@ -461,4 +470,33 @@ func extractSessionID(transcriptPath string) string {
 		return ""
 	}
 	return base
+}
+
+// Cursor reports are a closed lifecycle subset. Child/unknown-origin updates
+// never become main-session or main-turn proof.
+func classifyCursor(p payload) ClassifyResult {
+	r := ClassifyResult{Agent: store.AgentCursor, EventName: p.eventName(), SessionID: p.SessionID, TranscriptPath: p.TranscriptPath, AgentID: p.AgentID}
+	if p.AgentID != "" || p.Origin != "main" {
+		r.UnknownEvent = true
+		r.SessionID = ""
+		r.TranscriptPath = ""
+		r.SoftRefresh = true
+		return r
+	}
+	switch r.EventName {
+	case "SessionStart", "Stop", "Interrupt":
+		r.NewState = store.StateWaiting
+	case "UserPromptSubmit":
+		r.NewState = store.StateWorking
+	case "SessionEnd":
+		if p.Reason == "prompt_input_exit" {
+			r.NewState = store.StateEnded
+		} else {
+			r.SoftRefresh = true
+		}
+	default:
+		r.SoftRefresh = true
+		r.UnknownEvent = true
+	}
+	return r
 }

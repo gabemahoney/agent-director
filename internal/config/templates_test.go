@@ -219,6 +219,8 @@ func TestLoadTemplateLoadsAgent(t *testing.T) {
 	}{
 		{"claude", apitest.TemplateFields{Agent: "claude"}, config.TemplateFile{Agent: "claude"}},
 		{"codex", apitest.TemplateFields{Agent: "codex"}, config.TemplateFile{Agent: "codex"}},
+		{"cursor", apitest.TemplateFields{Agent: "cursor"}, config.TemplateFile{Agent: "cursor"}},
+		{"cursor_with_args", apitest.TemplateFields{Agent: "cursor", AgentArgs: []string{"--model", "x"}}, config.TemplateFile{Agent: "cursor", AgentArgs: []string{"--model", "x"}}},
 		{"upper_case_key", apitest.TemplateFields{RawKeys: []string{`AGENT = "codex"`}}, config.TemplateFile{Agent: "codex"}},
 		{"no_agent_supplies_none", apitest.TemplateFields{CWD: "/tmp"}, config.TemplateFile{CWD: "/tmp"}},
 		{"empty_agent_is_none", apitest.TemplateFields{RawKeys: []string{`agent = ""`}}, config.TemplateFile{}},
@@ -261,6 +263,7 @@ func TestLoadTemplateRefusesAgent(t *testing.T) {
 		want   error
 		text   string // what follows "<name>: "
 	}{
+		{"cursor_wrong_case", apitest.TemplateFields{Agent: "Cursor"}, config.ErrTemplateMalformed, `agent="Cursor" (want claude or codex)`},
 		{"wrong_case", apitest.TemplateFields{Agent: "Claude"}, config.ErrTemplateMalformed, `agent="Claude" (want claude or codex)`},
 		{"upper_case_value", apitest.TemplateFields{Agent: "CODEX"}, config.ErrTemplateMalformed, `agent="CODEX" (want claude or codex)`},
 		{"padded_before", apitest.TemplateFields{Agent: " claude"}, config.ErrTemplateMalformed, `agent=" claude" (want claude or codex)`},

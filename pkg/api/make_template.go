@@ -227,6 +227,14 @@ func validateTemplateAgent(params MakeTemplateParams) error {
 		return fmt.Errorf("%w: agent_args are set but no agent is given; pass agent %s or %s, or remove agent_args",
 			config.ErrTemplateAgentMissing, config.AgentClaude, config.AgentCodex)
 	}
+	if params.Agent == config.AgentCursor {
+		if _, _, err := spawn.CursorArgs(params.AgentArgs); err != nil {
+			return err
+		}
+		if params.Permissions != nil {
+			return spawn.RefuseCursorPermissions(params.Permissions.Allow, params.Permissions.Deny, params.Permissions.Ask)
+		}
+	}
 	if params.Agent == config.AgentCodex && params.Permissions != nil {
 		return spawn.RefuseCodexPermissions(params.Permissions.Allow, params.Permissions.Deny, params.Permissions.Ask)
 	}

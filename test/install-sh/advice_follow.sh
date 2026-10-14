@@ -1015,23 +1015,18 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: make the newest migration step, v8→v9
-# (migrateV8toV9, b.ssz), fail on a store stamped v8 that already holds its v9
-# column names: session_history also gets claude_session_id, the old name of
-# session_id, so the step's validation finds both names in one table and fails
-# the open naming it, before it changes anything. j6_repair_hop removes that
-# cause. Both name the v8→v9 step: give them the next step's failure when the
-# schema moves on.
+# j6_break_hop <state.db>: make the v9→v10 guarded runtime-table
+# validation fail without deleting rows. Repair restores the required name.
 j6_break_hop() {
-    [[ "$SCHEMA" == 9 ]] || { bad "j6_break_hop breaks the v8→v9 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE session_history ADD COLUMN claude_session_id TEXT;"
+    [[ "$SCHEMA" == 10 ]] || { bad "j6_break_hop breaks the v9→v10 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE cursor_runtimes RENAME COLUMN bound_output_fd TO broken_bound_output_fd;"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE session_history DROP COLUMN claude_session_id;"; }
+j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE cursor_runtimes RENAME COLUMN broken_bound_output_fd TO bound_output_fd;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with a column the migration step cannot
-# add (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
+# make the store one version older with an incompatible runtime table
+# (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
 # failure; leaves HOME in J6H.
 j6_failing_migration() {
     J6H="$(new_home)"
@@ -1168,6 +1163,16 @@ j7_installed() {
 j7_older_store() {
     j7_installed || return 1
     "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $((SCHEMA - 1));"
+}
+
+# Rename advice needs a store preceding the immutable v8→v9 naming hop.
+j7_pre_rename_store() {
+    j7_installed || return 1
+    local hop
+    hop="$(sed -n 's/^AGENT_RENAME_HOP_VERSION=\([0-9][0-9]*\)$/\1/p' "$INSTALL_SRC")"
+    [[ "$hop" == 9 ]] || { bad "unexpected agent-rename hop: $hop"; return 1; }
+    PRE_RENAME_SCHEMA=$((hop - 1))
+    "$SQLITE" "$J7H/.config/agent-director/state.db" "PRAGMA user_version = $PRE_RENAME_SCHEMA;"
 }
 
 # j7_run <call> [<answer> [<stderr> [<status>]]]: run J7ARGV in J7H with
@@ -1564,7 +1569,7 @@ test_J7_UnreadableAfterProbeRerun() {
 test_J7_GateReadFailedRerun() {
     local h cfg tpl before
     local could="tell whether config.toml and the templates need the agent-rename migration. Nothing was installed or changed."
-    j7_older_store || return
+    j7_pre_rename_store || return
     h="$J7H" cfg="$J7H/.config/agent-director/config.toml" tpl="$J7H/.config/agent-director/templates/t1.toml"
     mkdir -p "${tpl%/*}"
     printf '[defaults]\ndisable_askuserquestion = true\n' >"$cfg"
@@ -1578,7 +1583,7 @@ test_J7_GateReadFailedRerun() {
     grep -qxF "  state.db: $h/.config/agent-director/state.db" "$ERR" || bad "the failure does not name state.db: $(flat "$ERR")"
     j7_unreadable "Reading state.db's user_version (sqlite3 PRAGMA user_version) failed, so the install could not $could Re-running this install retries the read."
     [[ "$(j14_snap "$h")" == "$before" ]] || bad "the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
-    [[ "$(db_version "$h")" == $((SCHEMA - 1)) ]] || bad "store moved off v$((SCHEMA - 1)): v$(db_version "$h")"
+    [[ "$(db_version "$h")" == $PRE_RENAME_SCHEMA ]] || bad "store moved off v$PRE_RENAME_SCHEMA: v$(db_version "$h")"
     j7_rerun_verified "re-run once the read works" || return
     grep -qxF "disable_ask_user = true" "$cfg" || bad "the re-run did not migrate config.toml: $(paste -sd'|' "$cfg")"
     [[ "$(<"$tpl")" == "$(printf 'agent_args = ["--a"]\nagent = "claude"')" ]] || bad "the re-run did not migrate the template: $(paste -sd'|' "$tpl")"
@@ -2494,7 +2499,7 @@ j17_config_refused() {
 # j17_template_refused: an older store under a template the agent-rename
 # migration refuses (two claude_args lines). The headline's @J7H@ is J7H.
 j17_template_refused() {
-    j7_older_store || return 1
+    j7_pre_rename_store || return 1
     mkdir -p "$J7H/.config/agent-director/templates" || return 1
     printf 'claude_args = ["--a"]\nclaude_args = ["--b"]\n' >"$J7H/.config/agent-director/templates/t.toml" || return 1
     run "$J7H" "${J7ARGV[@]}"
@@ -3714,7 +3719,7 @@ j28_keep_first() {
 test_J28_QuestionToolKeyTwiceKeepOneAndRerun() {
     local config want before cfg i text
     while IFS='|' read -r config want <&3; do
-        j7_older_store || return
+        j7_pre_rename_store || return
         cfg="$J7H/.config/agent-director/config.toml"
         printf '%b\n' "$config" >"$cfg"
         before="$(j14_snap "$J7H")"
@@ -3728,7 +3733,7 @@ test_J28_QuestionToolKeyTwiceKeepOneAndRerun() {
         done < <(grep -n 'disable_ask' "$cfg")
         expect_advice "This release renamed the key disable_askuserquestion to disable_ask_user and reads it once, under the new name. Keep one of these lines, named disable_ask_user, and delete the others. See \"\`install.sh\` refuses config.toml or a template\" in docs/operator-actions.md. Nothing was installed or changed. Re-run this install after the change."
         [[ "$(j14_snap "$J7H")" == "$before" ]] || bad "\"$config\": the refusal changed $J7H: $(diff <(echo "$before") <(j14_snap "$J7H"))"
-        [[ "$(db_version "$J7H")" == "$((SCHEMA - 1))" ]] || bad "\"$config\": the store is at v$(db_version "$J7H") after the refusal"
+        [[ "$(db_version "$J7H")" == "$PRE_RENAME_SCHEMA" ]] || bad "\"$config\": the store is at v$(db_version "$J7H") after the refusal"
         j28_keep_first "$cfg" || continue
         [[ "$(<"$cfg")" == "$(printf '%b' "$want")" ]] || bad "\"$config\": after the advice config.toml is: $(paste -sd'|' "$cfg"); want $(printf '%b' "$want" | paste -sd'|')"
         run "$J7H" "${J7ARGV[@]}"
@@ -3763,7 +3768,7 @@ test_J28_InlineDefaultsNamingOldKeyMoveUnderHeader() {
     local head="install.sh: config.toml sets defaults as a key and names disable_askuserquestion in it; refusing to install."
     local advice="This release renames disable_askuserquestion only on its own line under a [defaults] header, and rewrites no table set as a key (an inline table, say), so the file would be refused after the upgrade. Remove this line, and set disable_ask_user on its own line under the file's [defaults] header instead, adding that header at the end of the file if the file has none, together with each other key this line sets. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too. See \"\`install.sh\` refuses config.toml or a template\" in docs/operator-actions.md. Nothing was installed or changed. Re-run this install after the change."
     while IFS='|' read -r hooks config want <&3; do
-        j7_older_store || return
+        j7_pre_rename_store || return
         cfg="$J7H/.config/agent-director/config.toml"
         argv=("${J7ARGV[@]}")
         [[ "$hooks" == off ]] || argv=(bash "$LOOSE" --binary "$BIN" --admin-binary "$ADMIN" --no-symlink)
@@ -3824,7 +3829,7 @@ EOF
 test_J29_TemplateRefusedFollowAdviceAndRerun() {
     local template tail advice want file before
     while IFS='|' read -r template tail advice want <&3; do
-        j7_older_store || return
+        j7_pre_rename_store || return
         file="$J7H/.config/agent-director/templates/t.toml"
         mkdir -p "${file%/*}" && printf '%b\n' "$template" >"$file" || { bad "write the template"; continue; }
         before="$(j14_snap "$J7H")"
@@ -3835,7 +3840,7 @@ test_J29_TemplateRefusedFollowAdviceAndRerun() {
         grep -qxF "  template: $file" "$ERR" || bad "\"$template\": no \"  template: $file\" line: $(flat "$ERR")"
         expect_advice "$advice See \"\`install.sh\` refuses config.toml or a template\" in docs/operator-actions.md. Nothing was installed or changed. Re-run this install after the change."
         [[ "$(j14_snap "$J7H")" == "$before" ]] || bad "\"$template\": the refusal changed $J7H: $(diff <(echo "$before") <(j14_snap "$J7H"))"
-        [[ "$(db_version "$J7H")" == "$((SCHEMA - 1))" ]] || bad "\"$template\": the store is at v$(db_version "$J7H") after the refusal"
+        [[ "$(db_version "$J7H")" == "$PRE_RENAME_SCHEMA" ]] || bad "\"$template\": the store is at v$(db_version "$J7H") after the refusal"
         printf '%b\n' "$want" >"$file"
         run "$J7H" "${J7ARGV[@]}"
         expect_rc 0 "\"$template\": re-run after the advice" || continue
@@ -3858,7 +3863,7 @@ EOF
 # u+r) and re-run, the install migrates it.
 test_J29_TemplateUnreadableMakeReadableAndRerun() {
     local file before
-    j7_older_store || return
+    j7_pre_rename_store || return
     file="$J7H/.config/agent-director/templates/t.toml"
     mkdir -p "${file%/*}" && printf 'claude_args = ["--a"]\n' >"$file" && chmod 000 "$file" || { bad "write the template"; return; }
     if [[ -r "$file" ]]; then
@@ -3895,7 +3900,7 @@ test_J29_TemplateUnreadableMakeReadableAndRerun() {
 # store is migrated after either.
 j30_case() {
     local kind="$1" way="$2" root file target dotfiles err before sum
-    j7_older_store || return 1
+    j7_pre_rename_store || return 1
     root="$J7H/.config/agent-director" dotfiles="$J7H/dotfiles"
     mkdir -p "$dotfiles" "$root/templates" || { bad "make the directories"; return 1; }
     if [[ "$kind" == config ]]; then
@@ -3974,12 +3979,12 @@ test_J30_MigrationLinkUnwritableRenameYourself() {
 # manual procedure). The first way is followed: config.toml and the first
 # template were migrated before the failure and keep their one copy; the file
 # that failed is as it was, with the copy made of it, and no .new left; the
-# store was not opened (still one version back). The re-run, the cause gone,
+# store was not opened (still before the rename hop). The re-run, the cause gone,
 # migrates the rest, adds no copy of the files already migrated, and migrates
 # the store.
 test_J31_MigrationWriteFailsFixCauseAndRerun() {
     local root cfg t1 t2 cfg_baks t1_baks
-    j7_older_store || return
+    j7_pre_rename_store || return
     root="$J7H/.config/agent-director" cfg="$root/config.toml" t1="$root/templates/t1.toml" t2="$root/templates/t2.toml"
     mkdir -p "$root/templates" "$ROOT/mv-fails" || { bad "make the directories"; return; }
     cat >"$ROOT/mv-fails/mv" <<EOF
@@ -4007,7 +4012,7 @@ EOF
     grep -qxF "  error   : mv: cannot move '$t2.new' to '$t2': No space left on device" "$ERR" || bad "no error line: $(flat "$ERR")"
     expect_advice "$t2 is as it was, and every copy this install made is kept. The new binaries are already installed, and the store is not opened. Either: - fix the cause, then run this release's install.sh again. It completes the migration: it changes nothing in a file already migrated and makes no new backup of one, and then it migrates the store. Or - take the way back to the previous release: see \"Going back to the previous release\" and \"A migration write failed after the binary swap\" in docs/operator-actions.md."
     expect_installed "$J7H" "$BIN" "$ADMIN"
-    [[ "$(db_version "$J7H")" == "$((SCHEMA - 1))" ]] || bad "the store was opened: v$(db_version "$J7H")"
+    [[ "$(db_version "$J7H")" == "$PRE_RENAME_SCHEMA" ]] || bad "the store was opened: v$(db_version "$J7H")"
     [[ "$(<"$t2")" == 'claude_args = ["--b"]' ]] || bad "$t2 is not as it was: $(paste -sd'|' "$t2")"
     [[ ! -e "$t2.new" ]] || bad "$t2.new is left"
     [[ "$(cat "$t2".pre-agent-rename.* 2>&1)" == 'claude_args = ["--b"]' ]] || bad "no copy of $t2 as it was: $(cat "$t2".pre-agent-rename.* 2>&1)"

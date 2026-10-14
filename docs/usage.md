@@ -5,11 +5,13 @@ flag list is in `cli-reference.md`.
 
 ## Naming the agent
 
-A `spawn` names its agent, `claude` or `codex`, with `--agent` on the call or
+A `spawn` names its agent, `claude`, `codex` or `cursor` (case-sensitive), with `--agent` on the call or
 through its [template](#templates); with neither it is refused. The rules
 for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
 
-A `spawn --reuse-finished` on a finished id starts a fresh conversation with
+Cursor currently supports fresh launches only; see [Fresh Cursor use](#fresh-cursor-use).
+
+For Claude and Codex, a `spawn --reuse-finished` on a finished id starts a fresh conversation with
 the resolved agent. Keeping the same agent keeps its current life, including
 its session history and subagent records. Switching from Claude to Codex or
 from Codex to Claude starts a fresh life; switching back starts another new
@@ -37,7 +39,7 @@ agent on a first prompt, one argument:
 agent-director spawn --cwd "$PWD" --agent codex -- "Fix the failing test in pkg/widget"
 ```
 
-A few arguments are refused, for either agent, because the supervisor must own
+A few arguments are refused, for Claude and Codex, because the supervisor must own
 them. For Codex they include a subcommand as the first word that is neither
 an option nor an option's value, `--remote`, and `-c` keys that touch its
 hooks or typing setting; an option is refused even after the `--`. The full list is in
@@ -76,6 +78,64 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
+## Fresh Cursor use
+
+Cursor runs through an interactive gateway in its own tmux pane. Fresh
+launches currently require Linux; macOS support and a supported Cursor
+version range are not established. agent-director does not set up Cursor
+login or group accounts. Use an already configured Cursor runtime. The
+optional program path is in [Configuration](configuration.md#keys).
+
+```sh
+id=$(agent-director spawn --cwd "$PWD" --agent cursor | jq -r .instance_id)
+agent-director status --instance-id "$id"
+agent-director read-pane --instance-id "$id"
+agent-director send-keys --instance-id "$id" --text "Describe this project's entry points"
+```
+
+Wait for `waiting` before sending. Fresh startup reports when Cursor confirms
+its new conversation, without a first prompt. Login or a runtime that has not
+reported remains `pending`, and can be noted `unreported`. A submitted prompt
+reads `working`; a correlated turn completion returns it to `waiting`.
+
+To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
+then attach on that socket:
+
+```sh
+agent-director get --instance-id "$id"
+tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
+```
+
+The pane accepts editable Unicode text and bracketed multiline paste. Enter
+submits one prompt; successive idle submissions stay distinct. Ctrl-C requests
+cancellation of the current turn; readiness follows Cursor's completion.
+Busy follow-ups are visibly refused, with nothing sent. `/clear` and `/new`
+are also visibly refused; `/exit` is a local exit command. `pause` on an
+eligible waiting row clears the draft and requests exit. Session termination
+is reported only after the owned runtime is gone.
+
+Model selection (`--model` or `-m`) and one initial prompt are supported:
+
+```sh
+agent-director spawn --cwd "$PWD" --agent cursor -- "Describe this project's entry points"
+```
+
+Other arguments and lifecycle limitations are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries). Permission
+and question behavior is in [Permissions](permissions.md#cursor-spawns).
+
+### Cursor transcripts
+
+`get` exposes the confirmed conversation's gateway transcript in `jsonl_path`.
+It is an ordered JSONL file beneath
+`~/.config/agent-director/cursor-transcripts/`, with private access. It records
+launch/conversation identity, accepted input, updates, authorization denials
+and confirmed outcomes. It is separate from Cursor's native session storage.
+A path appears only after it is recorded by an accepted startup report;
+`transcript_status` describes the recorded reference, not a fresh file check.
+Availability and persistence failures are covered by the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
+
 ## Naming the tmux session
 
 `spawn --tmux-session-name <name>` replaces the default session name
@@ -106,7 +166,7 @@ it is a Claude Code or a Codex agent:
 
 - **A Claude Code caller:** install with `--register-mcp`. The verbs then appear
   as `mcp__agent-director__spawn`, `mcp__agent-director__send_keys`, etc.; `hook`,
-  `serve` and `trail-emit` are CLI-only. Tool arguments use underscores
+  `serve`, `trail-emit` and the internal `cursor-host` gateway are CLI-only. Tool arguments use underscores
   (`--instance-id` is `instance_id`); the list is in
   `mcp-reference.md`.
 - **A Codex caller:** follow [Set up agent-director in a Codex
@@ -208,6 +268,7 @@ start and stop events, so its subagents are recorded. It is `false`, with
 `subagents` `[]`, for an agent that predates subagent tracking; it becomes
 `true` when that agent is next resumed or its id is reused. The hooks that
 write the records are in [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
+A Cursor row always reads `tracked: false` with `subagents: []`.
 A Codex agent's hooks write no records, so its row reads `tracked: false` and
 its `subagents` stays `[]`, from its spawn and after every resume or reuse of
 its id.
@@ -553,6 +614,11 @@ The template names its agent, so that `spawn` needs no `--agent`.
 `--overwrite` replaces an existing template atomically.
 
 ## Pause and resume
+
+Cursor supports the eligible pause described in [Fresh Cursor use](#fresh-cursor-use);
+its resume and reuse limitations are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries). The resume
+and reuse rules below apply to Claude and Codex.
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
 it under the same id with the last agent's latest reported session, so the

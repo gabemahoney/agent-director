@@ -456,7 +456,8 @@ type Launch struct {
 	ClaudePath string `toml:"claude_path"`
 	// CodexPath is the program Codex launches run, as Load resolved it ("" when
 	// unset). A Codex launch runs it in place of codex.
-	CodexPath string `toml:"codex_path"`
+	CodexPath  string `toml:"codex_path"`
+	CursorPath string `toml:"cursor_path"`
 }
 
 // launchRefusals returns the description of each refused [launch] value, in
@@ -468,6 +469,7 @@ func (l Launch) launchRefusals(home string) []string {
 	for _, k := range []struct{ name, value string }{
 		{"claude_path", l.ClaudePath},
 		{"codex_path", l.CodexPath},
+		{"cursor_path", l.CursorPath},
 	} {
 		switch {
 		case k.value == "", filepath.IsAbs(k.value):
@@ -878,6 +880,7 @@ func resolvePaths(cfg Config, home string) Config {
 	// field, a launch path is never joined onto the agent-director directory.
 	cfg.Launch.ClaudePath = expandTilde(cfg.Launch.ClaudePath, home)
 	cfg.Launch.CodexPath = expandTilde(cfg.Launch.CodexPath, home)
+	cfg.Launch.CursorPath = expandTilde(cfg.Launch.CursorPath, home)
 	return cfg
 }
 

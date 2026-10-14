@@ -78,6 +78,12 @@ const envCodexHome = "CODEX_HOME"
 // CODEX_HOME and its value and saying the agent may stop at Codex's folder-trust
 // prompt. It never returns an error and never fails a launch.
 func RunPreTrust(agent string, carried PreTrustOutcome, cwd string, extraEnv map[string]string, off bool, cfg config.PreTrust) PreTrustOutcome {
+	if agent == config.AgentCursor {
+		if carried == PreTrustFailed {
+			fmt.Fprintln(preTrustWarn, "agent-director: Cursor ACP pre-trust is unsupported; no trust grant was made")
+		}
+		return carried
+	}
 	if agent != config.AgentCodex {
 		return PreTrust(cwd, extraEnv, off, cfg)
 	}

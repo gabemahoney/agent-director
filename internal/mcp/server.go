@@ -324,7 +324,7 @@ func buildToolList() []map[string]any {
 // dispatch handler.
 func ExposedVerb(name string) bool {
 	switch name {
-	case "hook", "serve", "trail-emit":
+	case "hook", "serve", "trail-emit", "cursor-host":
 		return false
 	}
 	return true

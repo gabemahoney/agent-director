@@ -424,6 +424,9 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t
+	if row.Agent == store.AgentCursor {
+		r.clearPresses = codexLineClearPresses
+	}
 	if row.Agent == store.AgentCodex {
 		r.clearPresses = codexLineClearPresses
 		r.codex, r.launch = true, launchOf(row)

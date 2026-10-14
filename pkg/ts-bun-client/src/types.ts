@@ -250,7 +250,7 @@ export interface ListRow {
   state: string;
   /** Canonicalized working directory. */
   cwd: string;
-  /** The agent the row runs: `"claude"` (Claude Code) or `"codex"` (Codex). Set at spawn; resume follows it. */
+  /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
   agent: string;
   /** tmux session name. */
   tmux_session_name: string;
@@ -328,7 +328,7 @@ export interface SpawnParams {
   /** Named template under ~/.config/agent-director/templates/. */
   template?: string;
   /**
-   * The agent to launch: `"claude"` (Claude Code) or `"codex"` (Codex); case-sensitive,
+   * The agent to launch: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor); case-sensitive,
    * empty or absent means not given. Spawn resolves it per call, else from `template`'s
    * `agent`; with neither, the spawn is refused with `ErrAgentMissing`. Any other value is
    * refused with `ErrAgentInvalid`. A template's `agent_args` belong to the template's agent
@@ -484,7 +484,7 @@ export interface GetResult {
    */
   state: string;
   cwd: string;
-  /** The agent the row runs: `"claude"` (Claude Code) or `"codex"` (Codex). Set at spawn; resume follows it. */
+  /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
   agent: string;
   tmux_session_name: string;
   /** The tmux socket the row's launch uses; omitted when the row has no recorded socket. */
@@ -985,7 +985,7 @@ export interface MakeTemplateParams {
   /** Default working directory to bake in. */
   cwd?: string;
   /**
-   * The agent the template belongs to: `"claude"` (Claude Code) or `"codex"` (Codex);
+   * The agent the template belongs to: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
    * case-sensitive, empty or absent means not given. Required when the template bakes in
    * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex template cannot bake in
    * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). Any other value is refused

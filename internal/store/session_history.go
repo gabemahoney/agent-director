@@ -183,7 +183,7 @@ func (s *Store) ListProvisionalTranscripts() ([]ProvisionalTranscript, error) {
 	       WHERE jsonl_path IS NULL
 	         AND session_id IS NOT NULL
 	         AND session_id != ''
-	         AND agent <> '` + AgentCodex + `'
+	         AND agent <> '` + AgentCodex + `' AND agent <> '` + AgentCursor + `'
 	         AND state IN (` + joinPlaceholders(placeholders) + `)`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {

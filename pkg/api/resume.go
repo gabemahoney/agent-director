@@ -213,6 +213,8 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // tmux call):
 //
 //  1. GetSpawn → ErrSpawnNotFound when the id is unknown.
+//     A Cursor row then returns ErrSpawnNotResumable with fresh-instance
+//     advice, regardless of its state or session id.
 //  2. State must be `ended` or `missing` → otherwise
 //     ErrSpawnNotResumable. The verb does NOT touch a live Spawn. A
 //     `pending` row is a launch in progress whose agent has not reported in
@@ -302,6 +304,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		return ResumeResult{}, err
 	}
 
+	if row.Agent == store.AgentCursor {
+		return ResumeResult{}, fmt.Errorf("%w: Cursor resume is unsupported; create a fresh instance", ErrSpawnNotResumable)
+	}
 	if row.State == store.StatePending {
 		return ResumeResult{}, launchInProgressError(row)
 	}

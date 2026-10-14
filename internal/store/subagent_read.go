@@ -53,14 +53,14 @@ type SubagentRow struct {
 // once with NULL entry columns when it has no confirmed entry, and returns no row when the
 // row does not exist. Observations (confirmed = 0) are never selected. Order:
 // first_started_at ascending with NULL last, then subagent_id.
-const listSubagentRecordsSQL = `SELECT sp.subagent_tracking,
+const listSubagentRecordsSQL = `SELECT CASE WHEN sp.agent='cursor' THEN 0 ELSE sp.subagent_tracking END,
         sa.subagent_id, sa.session_id, sa.subagent_type, sa.description,
         sa.model, sa.parent_type, sa.parent_id, sa.tool_use_id, sa.run_mode,
         sa.first_started_at, sa.started_at, sa.stopped_at, sa.lost_at,
         sa.state, sa.close_reason
    FROM spawns sp
    LEFT JOIN subagents sa
-          ON sa.instance_id = sp.instance_id AND sa.life_number = sp.life_number AND sa.confirmed = 1
+          ON sp.agent IS NOT 'cursor' AND sa.instance_id = sp.instance_id AND sa.life_number = sp.life_number AND sa.confirmed = 1
   WHERE sp.instance_id = ?
   ORDER BY sa.first_started_at IS NULL, sa.first_started_at, sa.subagent_id`
 

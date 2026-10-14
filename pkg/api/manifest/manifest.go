@@ -196,7 +196,7 @@ const olderServeUndecoded = "Over MCP, a serve process from before the fix (" + 
 // (reuse_finished) texts are short forms of it. Its older-serve sentence
 // (b.c4u) covers the serve processes from before the param's rename to
 // reuse_finished, which the version check cannot always tell apart.
-const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whose row is finished (ended or missing): the id starts again on that row. " +
+const reuseFinishedDescription = "Opt in to reusing an explicit instance_id whose row is finished (ended or missing): the id starts again on that row. Cursor reuse and switches to/from Cursor refuse with ErrSpawnDeniedFlag before changes; create a fresh instance. " +
 	"A live row (pending included) still collides with ErrInstanceIdCollision, as does a row that changed or was removed after this spawn examined it; nothing is changed then. " +
 	"No effect without an explicit instance_id (a minted id cannot collide). " +
 	"Applies to this call only; no template or config setting carries it. The default (off) is unchanged: any existing row with the id collides. " +
@@ -222,7 +222,7 @@ const killDescription = "End the agent of a live row's current launch (pending i
 	"Errors (for kill, GONE is success): ErrTmuxKillFailed (UNAVAILABLE): after a kill the agent process or another process of the session's panes ran past the kill exit wait, or the process cannot be checked and its labelled session remains, or no session or pane of this launch was found while the agent process runs; retry later. ErrTmuxUnresponsive (UNAVAILABLE): tmux did not answer usably, before or after a kill was sent; retry later with backoff. ErrTmuxSessionConflict (CONFLICT, permanent until a human looks): the session found is not this launch's, or tmux holds conflicting labels; no kill was sent (see docs/operator-actions.md). ErrTmuxNotAvailable (ENVIRONMENT): tmux could not be run, its socket is not accessible to this user, or this is not the agent's tmux server; an operator must fix it. A repeated kill right after the last session on its tmux server ends can get ErrTmuxUnresponsive or ErrTmuxNotAvailable while the server exits; the caller waits and checks again. ErrSpawnNotFound: no row has this id. None of these errors means that the agent is dead. " +
 	"kill must run as the same user and in the same tmux environment as the agents. " + sameEnvConsequences + " " + expireCleanupPointer + " " +
 	"A live row whose recorded tmux session name cannot be used (empty, or containing a control character or a character tmux stores differently) gets ErrInternal with no tmux call; removing the row is a human's decision (see docs/operator-actions.md). " +
-	liveRowSequence
+	"Step 6: Claude/Codex only; Cursor spawns fresh. " + liveRowSequence
 
 // settledStateText is the settle-time text (b.3ie, [state] settle_ms) that
 // ends the state result texts of status and get and list's spawns text: the
@@ -298,7 +298,7 @@ var paneLinesParam = ParamDef{
 var Verbs = []VerbDef{
 	{
 		Name:        "help",
-		Description: "Print the verb list as JSON (for SessionStart and SessionEnd reason=compact hooks). CLI aliases: --help, -h.",
+		Description: "JSON verbs for SessionStart and SessionEnd reason=compact hooks. CLI aliases: --help, -h.",
 		Callable:    false,
 		HandleFree:  false,
 		Params:      []ParamDef{},
@@ -318,7 +318,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "spawn",
-		Description: "Launch a tracked agent in a new tmux session. Returns the instance_id and pre_trust (ok, skipped or failed) without waiting for the agent; the row is pending from its insert until the agent reports in, then waiting. Creating its labelled session is bounded by the create timeout; on a timeout it returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in and " + RowAgentPointer + ". A session of this store labelled with an explicit id that has no row, left over from an earlier life, refuses the spawn with ErrTmuxSessionConflict; nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate (LAUNCH FAILURE) if the holder vanished first, ErrTmuxNotAvailable (ENVIRONMENT) or ErrTmuxUnresponsive if tmux could not be run or read. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life or a session with no valid instance id is a human's to end (see docs/operator-actions.md); then, if refused for a held name, spawn the id again with " + ReuseOptInSpelling + " and the row's agent. ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). " + liveRowSequencePointer,
+		Description: "Launch a tracked agent in tmux. Reuse/switches to/from Cursor: ErrSpawnDeniedFlag; fresh ids only. Returns the instance_id and pre_trust (ok, skipped or failed) without waiting; the row is pending from its insert until the agent reports in, then waiting. Session creation is bounded by the create timeout; on a timeout it returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the new row stays pending; do not retry until get shows the row ended or missing, since a retry without an explicit id would start a second agent; then retry an explicit id with the reuse opt-in and " + RowAgentPointer + ". A session of this store labelled with an explicit id but no row (left over from an earlier life) refuses spawn with ErrTmuxSessionConflict; nothing is written. If the session name is already held, spawn ends its new row at once (unless the error says otherwise) and returns ErrTmuxSessionConflict naming the holder's tmux id and whether its label names this id; ErrTmuxSessionCreate (LAUNCH FAILURE) if the holder vanished first, ErrTmuxNotAvailable (ENVIRONMENT) or ErrTmuxUnresponsive if tmux could not be run or read. ErrTmuxSessionConflict is CONFLICT (permanent until a human looks): another row's or another agent-director store's session is another agent and must not be ended; a leftover of an earlier life or a session with no valid instance id is a human's to end (see docs/operator-actions.md); then, if refused for a held name, spawn the id again with " + ReuseOptInSpelling + " and the row's agent. ErrInternal, nothing created or changed: the collision pre-check could not read the store (which says nothing about whether the id is in use), or a reuse's archive of the previous session or its change failed (a busy store included), or a reused row's recorded name is unusable (see kill). " + liveRowSequencePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -343,11 +343,11 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent",
 				Type:          "string",
-				Description:   "The agent to launch: claude (Claude Code) or codex (Codex), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's own non-empty agent_args replace them). A codex spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
+				Description:   "The agent to launch: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's own non-empty agent_args replace them). A codex or cursor spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
-				AllowedValues: []string{"claude", "codex", ""},
+				AllowedValues: []string{"claude", "codex", "cursor", ""},
 			},
 			{
 				Name:          "instance_id",
@@ -424,7 +424,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "no_pre_trust",
 				Type:          "bool",
-				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (pre-trust IS performed so the agent skips its workspace-trust dialog and the Spawn becomes interactive immediately). The choice is recorded on the row until the next spawn or reuse, and every resume follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
+				Description:   "Skip the folder pre-trust. For a claude agent, pre-trust pre-writes projects.<cwd>.hasTrustDialogAccepted=true into the spawn's .claude.json (resolves to <CLAUDE_CONFIG_DIR>/.claude.json if CLAUDE_CONFIG_DIR is set in extra_env, otherwise ~/.claude.json). For a codex agent, it puts the cwd's trust and the hook-trust bypass on the launch's command line and writes no file, so Codex does not stop at its folder-trust prompt. Default off (best-effort pre-trust for Claude/Codex). Cursor grants no trust: failed by default, skipped with no_pre_trust; readiness is not guaranteed. For Claude/Codex, the choice is recorded on the row until the next spawn or reuse, and every resume follows it: no pre-trust is attempted over an opt-out. " + olderServeUndecoded + ".",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -461,7 +461,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
+				Description:   "What the launch's folder-trust pre-trust did. Cursor: no trust grant, failed by default or skipped with no_pre_trust; never ok. For Claude/Codex: ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the caller passed no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -554,7 +554,7 @@ var Verbs = []VerbDef{
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
-			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code) or codex (Codex). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex"}},
+			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code), codex (Codex) or cursor (Cursor). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex", "cursor"}},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "tmux_socket", Type: "string?", Description: "The tmux socket the row's launch uses; omitted when the row has no recorded socket.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{Name: "agent_args", Type: "[]string", Description: "Verbatim argv passed through to the agent program.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
@@ -939,7 +939,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "resume",
-		Description: "Relaunch a finished (ended/missing) row's latest agent session. " + missingNotProofShort + " Same id and JSONL transcript, fresh tmux session. Before its launch, resume runs spawn's best-effort pre-trust for the row's cwd, unless the row's latest spawn turned it off with no_pre_trust; a pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Resume moves the row to pending, keeping its session id and history; parent_id becomes the caller's AGENT_DIRECTOR_INSTANCE_ID. The row stays pending until the agent reports in, then waiting. If the launch fails without timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row's prior ended or missing state; if it cannot, the error says so. Creating the session is bounded by the create timeout; on a timeout resume returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. A refusal before the move writes nothing; resume can be re-issued. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see docs/operator-actions.md), or ErrTmuxUnresponsive while it appears to still be stopping or starting. A name held at the create is refused likewise, after the restore. A pending row (a launch in progress, a resumed one included) is refused with ErrSpawnNotResumable. A row whose instance id contains a control character (its session cannot be labelled) or whose recorded name is unusable (see kill) is refused with ErrInternal and no tmux call. If the store cannot record the launch, resume returns ErrInternal and launches nothing.",
+		Description: "Relaunch a finished (ended/missing) Claude/Codex row's latest session. Cursor: ErrSpawnNotResumable, no changes; spawn fresh. " + missingNotProofShort + " Same id/JSONL transcript, new tmux session. Before launch, best-effort pre-trust for the row's cwd runs unless the row's latest spawn set no_pre_trust; a pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Resume moves the row to pending, keeping its session id and history; parent_id becomes the caller's AGENT_DIRECTOR_INSTANCE_ID. The row stays pending until the agent reports in, then waiting. If the launch fails without timing out (ErrTmuxNotAvailable is ENVIRONMENT and ErrTmuxSessionCreate a LAUNCH FAILURE), resume restores the row's prior ended or missing state; restore failure is reported. Session creation is bounded by the create timeout; a timeout returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move refusals write nothing; retry allowed. A session in the way (holding the name, left over, or this row's own) is never touched: ErrTmuxSessionConflict (CONFLICT, until a human looks; see docs/operator-actions.md), or ErrTmuxUnresponsive while it appears to be starting/stopping. A name held at create is refused likewise after restore. A pending row (a launch in progress, resume included) gets ErrSpawnNotResumable. An instance id with a control character (unlabelable session) or unusable recorded name (see kill): ErrInternal, no tmux call. If recording the launch fails: ErrInternal, nothing launched.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -958,7 +958,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "pre_trust",
 				Type:          "string",
-				Description:   "What the launch's folder-trust pre-trust did. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the row's latest spawn turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
+				Description:   "What the launch's folder-trust pre-trust did for supported Claude/Codex resumes. ok = the folder trust took effect (claude: the entry was written to .claude.json; codex: the launch carries the folder trust and the hook-trust bypass); skipped = pre-trust was off for this launch because the row's latest spawn turned it off with no_pre_trust, so nothing was attempted; failed = pre-trust was attempted and the entry was not written (for a claude agent, the .claude.json file is missing, or could not be read, parsed or written, or the row's extra_env sets CLAUDE_CONFIG_DIR to a path that is not absolute; for a codex agent, the row's extra_env sets CODEX_HOME to a path that is not absolute, and the launch carries neither the folder trust nor the hook-trust bypass); the launch still proceeds and the agent may stop at its folder-trust prompt (Claude Code's or Codex's).",
 				Nullable:      false,
 				AllowEmpty:    false,
 				AllowedValues: []string{"ok", "skipped", "failed"},
@@ -1019,7 +1019,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "make-template",
-		Description: "Save a spawn preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
+		Description: "Save a preset as ~/.config/agent-director/templates/NAME.toml. Per-invocation params (template, instance_id, tmux_session_name, reuse_finished) are refused.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1044,11 +1044,11 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent",
 				Type:          "string",
-				Description:   "Bake the template's agent: claude (Claude Code) or codex (Codex), case-sensitive; empty or absent means none, and no agent key is stored. Another value is refused with ErrTemplateMalformed. A non-empty agent_args needs an agent (ErrTemplateAgentMissing): the arguments belong to it. A codex template with any allow, deny or ask entry is refused with ErrPermissionsUnsupported. A spawn that names no agent takes the template's.",
+				Description:   "Bake the template's agent: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means none, and no agent key is stored. Another value is refused with ErrTemplateMalformed. A non-empty agent_args needs an agent (ErrTemplateAgentMissing): the arguments belong to it. A codex or cursor template with any allow, deny or ask entry is refused with ErrPermissionsUnsupported. A spawn that names no agent takes the template's.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
-				AllowedValues: []string{"claude", "codex", ""},
+				AllowedValues: []string{"claude", "codex", "cursor", ""},
 			},
 			{
 				Name:          "relay_mode",
@@ -1137,7 +1137,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "list",
-		Description: "Enumerate rows. All filters AND together. Order is unspecified; callers sort.",
+		Description: "Enumerate rows. All filters AND together. Unordered; callers sort.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1197,7 +1197,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries agent (string: claude or codex, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",
@@ -1260,7 +1260,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the long-lived MCP server: the CLI verbs except `hook`, `serve` and `trail-emit` as MCP tools, JSON-RPC on stdio.",
+		Description: "Start the long-lived MCP server: the CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as MCP tools, JSON-RPC on stdio.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1385,6 +1385,17 @@ var Verbs = []VerbDef{
 		ErrorNames:   []string{"ErrInvalidFlags", "ErrTrailWrite"},
 	},
 	{
+		Name:        "cursor-host",
+		Description: "Internal CLI-only Cursor ACP pane gateway.",
+		Callable:    false,
+		HandleFree:  false,
+		Params: []ParamDef{
+			{Name: "runtime", Type: "string", Description: "Selected Cursor executable (internal).", Required: true},
+			{Name: "runtime_args", Type: "string", Description: "Validated Cursor model argv as JSON (internal)."},
+			{Name: "initial_prompt", Type: "string", Description: "Fresh initial prompt (internal)."},
+		}, ResultFields: []FieldDef{}, ErrorNames: []string{},
+	},
+	{
 		Name:        "hook",
 		Description: "Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).",
 		Callable:    false,
@@ -1406,7 +1417,7 @@ var Verbs = []VerbDef{
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
-				AllowedValues: []string{"claude", "codex"},
+				AllowedValues: []string{"claude", "codex", "cursor"},
 			},
 			{
 				Name:          "timeout",

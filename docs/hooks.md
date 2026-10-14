@@ -136,11 +136,28 @@ environment (`spawn`'s `extra_env`) turns off Claude Code's prompt
 suggestions, so the prompt-suggestion fork's stray `PreToolUse` does not
 fire.
 
+## Cursor reporting
+
+Cursor's gateway reports authoritative fresh session startup, submitted
+prompts, correlated turn completion and confirmed intentional termination.
+It directly invokes `agent-director hook --agent cursor` as the row's own
+pane process. Reports also require independently verified runtime,
+connection, transcript and current pane evidence for that launch. Optional
+Cursor tool hooks cannot report lifecycle from a runtime child or another
+process. Pane text is never classified to produce state.
+
+Cursor startup confirms a conversation before the row becomes `waiting`;
+accepted input yields `working`, a confirmed completion yields `waiting`,
+and intentional termination yields `ended` only after the runtime is gone.
+Unexpected child loss is distinct from transport failure and follows the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
+[Permissions](permissions.md#cursor-spawns) owns authorization handling.
+
 ## Hooks from a Codex agent
 
 A Codex agent's hook entries run the same verb, `agent-director hook
---agent codex`. The hook takes its agent from that argument alone: `claude`
-or `codex`, and no `--agent` means `claude`. Neither the payload nor the
+--agent codex`. The hook takes its agent from that argument alone: `claude`,
+`codex` or `cursor`, and no `--agent` means `claude`. Neither the payload nor the
 row's recorded agent can change it. An empty `--agent` or any other value
 is a hook failure: it exits 0 with empty stdout and logs the entry, and a
 relayed `PermissionRequest` gets its deny envelope (see "Fail-open
@@ -374,9 +391,11 @@ Such a hook:
 come from the same process, so they apply, and SessionStart records the
 new session id. The same holds for a Codex agent's `/clear`, `/new`,
 `/fork` and `/resume`, whose new session a SessionStart names at the next
-prompt (see "Hooks from a Codex agent"). The payload's session id is
-recorded, never used to decide whether a hook applies. The hook makes no
-tmux call.
+prompt (see "Hooks from a Codex agent"). For Claude/Codex, the payload's session id is
+recorded, never used to decide whether a hook applies, and their hooks make
+no tmux call. Cursor reports instead require the registered current session
+and connection plus independent runtime, transcript and pane verification;
+pane verification can call tmux. See [Cursor reporting](#cursor-reporting).
 
 ### A `claude` that does not exec
 
@@ -678,7 +697,7 @@ it does not apply:
   run given a hook payload on stdin) → exit 0, nothing on stdout or
   stderr, no store opened, one `ad.hook.ignored` record with reason
   `no_exec_form`.
-- Hook with an `--agent` that is empty or neither `claude` nor `codex` →
+- Hook with an `--agent` that is empty or none of `claude`, `codex` or `cursor` →
   exit 0, nothing written, log entry (a relayed PermissionRequest gets its
   deny envelope, see below).
 - Hook for an id with no row → exit 0, nothing written.

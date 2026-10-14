@@ -16,14 +16,35 @@ A `permissions` block has up to three string arrays:
 - `allow` — patterns Claude is unconditionally allowed to execute.
 - `deny` — patterns Claude is unconditionally not allowed to execute.
   Denies override allows.
-- `ask` — patterns that prompt the operator for confirmation. Not
-  used by orchestrator-driven Spawns in practice (set
-  `disable_ask_user = true` to silence the asks; see below).
+- `ask` — patterns that prompt the operator for permission confirmation.
+  `disable_ask_user` controls the agent's question tool; it does not silence
+  permission confirmations caused by these entries.
 
 The pattern grammar is Claude Code's; bare tool names match every
 invocation of that tool (`AskUserQuestion` denies every AUQ — see the
 empirical confirmation in
 `reference/permissions-deny-tool-name-research.md`).
+
+## Cursor spawns
+
+A `cursor` call or template with any `allow`, `deny` or `ask` entry is refused
+with `ErrPermissionsUnsupported`. This applies at template creation and at
+launch after merging call/template input, including saved or hand-edited
+templates. Empty arrays and `disable_ask_user` alone are accepted. The lists
+are never silently ignored or translated; use Cursor's own permission rules.
+
+Cursor's policy is **question tool off, enforced by denial**. The gateway does not
+advertise question support and automatically denies direct questions and
+questions arriving as permission requests before any caller or pane answer
+path, with `disable_ask_user` either true or false. Malformed or ambiguous
+authorization cannot enable a question. Cursor never waits in `ask_user` for
+an answer through agent-director.
+
+Cursor currently denies all requests for authorization, including permission
+and blocking plan requests, regardless of `relay_mode`. It selects a valid
+one-time rejection where available, otherwise cancels; unknown authorization
+fails closed. No Cursor request is offered to `decide` or to the pane for
+approval. The permission relay sections below apply to Claude and Codex.
 
 ## Codex spawns
 
@@ -86,7 +107,8 @@ A Spawn launched with `deny` `["Bash(npm publish)"]`
 disable_ask_user = true
 ```
 
-The setting covers both agents.
+The setting controls Claude and Codex. For Cursor, either value retains
+[question denial](#cursor-spawns).
 
 **Claude agent.** When true, every `spawn` of a Claude agent adds
 `"AskUserQuestion"` to the
@@ -102,9 +124,9 @@ additive — caller-supplied `deny` entries still concatenate, and the
 user / project tiers still apply.
 
 To re-enable AUQ for a specific Spawn while keeping the global config
-off, either flip the config (affects every Spawn) or use a separate
-config file via `AGENT_DIRECTOR_CONFIG` (not yet wired; tracked for a
-future Epic), or run that Spawn on a tmux server of its own, as below.
+off, either change the setting in the config (affects subsequent launches
+that use it), or run that Spawn under the separate home and tmux server
+described [below](#one-spawn-under-another-home-or-store).
 
 **Codex agent.** Every launch of a Codex agent (`spawn`, a reuse and
 `resume`) is affected as follows.

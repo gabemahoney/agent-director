@@ -48,6 +48,13 @@ tmux -u -S '<socket>' kill-pane -t '<pane id>'
 # 5. List again (step 1): the id is gone (`no such session` or `no server running` also mean gone).
 ```
 
+Cursor failure reasons and the fresh-instance recovery boundary are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries). Use the
+same inspection and ownership procedures above for a Cursor launch. A
+transport failure alone does not authorize deleting a row or adopting an
+unrelated process. The resume/reuse retry procedures below apply to Claude
+and Codex; Cursor refuses those operations before mutation.
+
 ## A finished row's own old session
 
 `resume` or `spawn --reuse-finished` refuses with `ErrTmuxSessionConflict`
@@ -830,11 +837,23 @@ when it cannot write the crontab back.
 
 ## Going back to the previous release
 
-Use this when the upgrade to this release must be undone. Whatever was written
-since the upgrade is lost: the previous release reads the directory as it was
-before the upgrade. The previous release's schema cannot read this release's
-store, so there is no other way back; a binary swap or a downgrade of the store
-does not work.
+For an upgrade within the current `~/.config/agent-director` layout,
+including schema v9→v10, the old-layout steps below do not apply. Before
+upgrading, stop agents, servers and callers and keep a copy of the actual
+store (`[store] db_path` when set), including its `-wal` and `-shm` files.
+To roll back, stop them again, restore that pre-upgrade copy and install the
+previous release with its own `install.sh` and the original install flags.
+Restore the store with its companion files, removing a `-wal` or `-shm`
+that the copy lacks, as in step 4 below. This loses all writes made since
+the backup. The installer does not make this backup; a binary swap cannot
+make a v10 store readable by a v9 release. Without a pre-upgrade copy, stop
+and obtain human help.
+
+The numbered procedure below applies only to an upgrade that moved
+`~/.agent-director` to `~/.config/agent-director` and retained a
+`~/.agent-director.pre-move-*` directory. Whatever was written since that
+upgrade is lost: the previous release reads the directory as it was before
+the move.
 
 1. Stop whatever starts agents, then every agent, every `serve` and every
    caller. Remove the schedule `install.sh --schedule` added, if any, because

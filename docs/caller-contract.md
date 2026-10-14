@@ -25,13 +25,14 @@ error:
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
-- `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
+- For Claude and Codex, `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
   session to a human; never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
   until `get` shows `ended` or `missing`, then `spawn --instance-id`
-  with `--reuse-finished` and the row's agent (`get` shows it). A row noted `unreported` has a running agent: use it
+  with `--reuse-finished` and the row's agent (`get` shows it), for Claude or
+  Codex. Cursor instead uses the [fresh-instance boundary](#cursor-operation-boundaries). A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
   `serve` does not start, hooks record nothing and relayed permission requests
@@ -61,7 +62,8 @@ exit proof. Follow the sequence below before relaunching an id.
 A pending row noted `unreported` has an alive agent with no applied hook
 since launch. Read its pane, then type with `allow_pending` only after a
 person or an LLM judged that screen. A caller that cannot judge it uses the
-live-row sequence or hands it to a human. Hook configuration diagnosis is
+live-row sequence or hands it to a human. Cursor admits no prompt until its conversation is confirmed; `allow_pending`
+does not override that admission rule. Hook configuration diagnosis is
 in [Operator actions](operator-actions.md#a-row-stays-pending-and-the-trail-shows-pid_mismatch).
 
 To end a live row (`pending` included) and relaunch its id:
@@ -76,7 +78,8 @@ To end a live row (`pending` included) and relaunch its id:
    `ended` or `missing`; if not, wait about 5 s and repeat, up to three runs.
 4. Still live: `kill` once more, wait about 5 s, run `find-missing`, check.
 5. Still live: stop and escalate to a human.
-6. Once `ended` or `missing`:
+6. Once `ended` or `missing`, Cursor uses the
+   [fresh-instance boundary](#cursor-operation-boundaries). For Claude or Codex:
    - with a session id, to get the conversation back:
      `agent-director resume --instance-id <id>`
    - otherwise, a reuse (a fresh conversation with no memory of the old one), with
@@ -87,7 +90,8 @@ To end a live row (`pending` included) and relaunch its id:
 
 ## Transcript recovery
 
-`resume` continues only the row's current session with its recorded agent.
+For Claude and Codex, `resume` continues only the row's current session with its recorded agent.
+Cursor is covered by [Cursor operation boundaries](#cursor-operation-boundaries).
 It never selects an older session from `prior_sessions`, even if its file
 exists. No current `session_id` gives `ErrNoSessionId` before transcript
 lookup. Otherwise, Claude tries the current `jsonl_path` and, after any stat
@@ -109,7 +113,7 @@ return `ErrJsonlMissing`, even if an earlier transcript exists. `rotated`
 means visible history exists, not that resume will recover it. The
 never-written condition remains the empty-path and empty-history rule.
 
-For `ErrNoSessionId`, `ErrJsonlNeverWritten` or `ErrJsonlMissing`, spawn the
+For a Claude or Codex row with `ErrNoSessionId`, `ErrJsonlNeverWritten` or `ErrJsonlMissing`, spawn the
 same id again with `reuse_finished` (`--reuse-finished` on the CLI) and the
 row's agent (`get` shows it). This starts a fresh conversation with no memory
 of the old conversation, which cannot be resumed through agent-director
@@ -119,6 +123,49 @@ starts a new life, including when switching back.
 If a failed reuse restores the row, its previous agent and life become current
 again, with their history and records. Deleted permission requests stay
 deleted, and records closed by the attempt stay closed.
+
+## Cursor operation boundaries
+
+Cursor supports fresh instances only. `resume` returns
+`ErrSpawnNotResumable`; `spawn --reuse-finished` involving Cursor, including
+switching to or from it, returns `ErrSpawnDeniedFlag`. These refusals precede
+row or launch changes. Start a fresh unique instance instead; there is no AD
+resume or reuse recovery for the Cursor conversation.
+
+Only model selection (`--model`, `-m`, with a separate or `=` value) and a
+single initial prompt are accepted in Cursor `agent_args`. Unsupported
+arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
+permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
+Busy follow-ups and `/clear` or `/new` are refused visibly in the pane,
+without forwarding. A successful `send-keys` means keys were sent, not that
+the gateway admitted a prompt; inspect the pane when admission is uncertain.
+
+`spawn` returns before the runtime confirms startup. Missing programs,
+unsupported platforms, failed lifetime protection or unavailable ownership
+evidence cannot produce a ready report; a launch may remain `pending` until
+`find-missing` observes its absence. Runtime/protocol/reporting failures emit
+`ad.cursor.failed` with a reason when the gateway has identified its row.
+Examples include an ACP operation timeout, unsupported ACP protocol,
+changed runtime/session binding, a refused report or transport failure.
+These are asynchronous launch failures, not new typed spawn errors.
+
+Pipe EOF is a transport failure, not proof of child death. Unexpected runtime
+loss stops the gateway and follows the existing `missing` sweep outcome.
+Local `/exit` and eligible `pause` can report termination only after the
+owned runtime is confirmed gone; a stop failure cannot report success.
+Unknown process evidence authorizes neither adoption nor a kill. Existing
+ownership errors and survivor limits still apply. Human inspection follows
+[Operator actions](operator-actions.md#inspect-and-end-a-session-by-hand).
+
+A recorded Cursor `jsonl_path` names the
+[gateway transcript](usage.md#cursor-transcripts), not a native session
+resume artifact. `transcript_status: present` means a path was recorded;
+it does not prove the file is still readable. Before a confirmed startup,
+there may be no session or reference. Failed creation, an insecure or
+replaced path, failed writes or failed sync stop further prompt admission
+and produce a visible failure; AD does not invent a saved reference or
+claim unrecorded history. A partial transcript does not establish successful
+input execution or termination.
 
 ## When a Codex agent exits
 
@@ -156,19 +203,20 @@ template's `agent_args` combine is in
 [Settings](settings.md#templates-and-per-call-merge).
 
 - `ErrAgentMissing`: the call gives no `agent` and its template names none.
-  Name `claude` or `codex` per call (`--agent` on the CLI), or put `agent` in
+  Name `claude`, `codex` or `cursor` per call (`--agent` on the CLI), or put `agent` in
   the template.
-- `ErrAgentInvalid`: the agent is not exactly `claude` or `codex`; the value is
-  case-sensitive. Pass one of the two.
+- `ErrAgentInvalid`: the agent is not exactly `claude`, `codex` or `cursor`; the value is
+  case-sensitive. Pass one of the three.
 - `ErrAgentArgsMismatch`: the template's `agent_args` are for another agent
   than the one this spawn resolves to, so they are not inherited. Pass this
   call's own non-empty `agent_args`, or spawn through a template for that agent.
 - `ErrTemplateAgentMissing`: a template holds `agent_args` but names no agent,
   at `make-template` or when a `spawn` loads it. Give the template an `agent`,
   or remove its `agent_args`.
-- `ErrPermissionsUnsupported`: a `codex` spawn or template carries an `allow`,
+- `ErrPermissionsUnsupported`: a `codex` or `cursor` spawn or template carries an `allow`,
   `deny` or `ask` entry. Drop the lists; see
-  [Permissions](permissions.md#codex-spawns).
+  [Permissions](permissions.md#codex-spawns) or
+  [Cursor permissions](permissions.md#cursor-spawns).
 - `ErrSpawnDeniedFlag`: the `agent_args` hold an argument the supervisor must
   own. Remove it and re-issue; the error names the argument.
   - A `claude` spawn always refuses `--settings`, `--output-format` and

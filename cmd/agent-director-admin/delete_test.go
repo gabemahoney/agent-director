@@ -29,14 +29,20 @@ func TestDeletePerRowResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed ended row: %v", err)
 	}
-	endedCodex, err := apitest.SeedSpawn(stateDB(home), "", store.StateEnded, "", "", "", false,
-		apitest.WithAgent(store.AgentCodex), apitest.WithNoSubagentTracking(), apitest.WithEndReportedAt(1790000123456))
-	if err != nil {
-		t.Fatalf("seed ended Codex row: %v", err)
+	ids := []string{live, ended}
+	want := map[string]string{live: "ok", "absent": "ErrSpawnNotFound", ended: "ok"}
+	args := []string{"delete", "--instance-id", live, "--instance-id", "absent", "--instance-id", ended}
+	for _, agent := range []string{store.AgentCodex, store.AgentCursor} {
+		id, err := apitest.SeedSpawn(stateDB(home), "", store.StateEnded, "", "", "", false,
+			apitest.WithAgent(agent), apitest.WithNoSubagentTracking(), apitest.WithEndReportedAt(1790000123456))
+		if err != nil {
+			t.Fatalf("seed ended %s row: %v", agent, err)
+		}
+		ids = append(ids, id)
+		want[id] = "ok"
+		args = append(args, "--instance-id", id)
 	}
-
-	stdout, stderr, code := runAdmin(t, home, "delete",
-		"--instance-id", live, "--instance-id", "absent", "--instance-id", ended, "--instance-id", endedCodex)
+	stdout, stderr, code := runAdmin(t, home, args...)
 
 	if code != 0 || stderr != "" {
 		t.Fatalf("delete exit = %d, stderr = %q; want 0 and empty", code, stderr)
@@ -47,10 +53,10 @@ func TestDeletePerRowResults(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
 		t.Fatalf("parse stdout %q: %v", stdout, err)
 	}
-	if want := map[string]string{live: "ok", "absent": "ErrSpawnNotFound", ended: "ok", endedCodex: "ok"}; !maps.Equal(res.Results, want) {
+	if !maps.Equal(res.Results, want) {
 		t.Errorf("results = %v; want %v", res.Results, want)
 	}
-	for _, id := range []string{live, ended, endedCodex} {
+	for _, id := range ids {
 		assertRowGone(t, home, id)
 		stdout, stderr, code := runMain(t, home, "get", "--instance-id", id)
 		assertOnlyEnvelope(t, stdout, stderr, code, "ErrSpawnNotFound")

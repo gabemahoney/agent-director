@@ -33,6 +33,7 @@ var ErrReuseArchive = errors.New("store: reuse archive failed")
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
+	AgentCursor = "cursor"
 )
 
 // ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
@@ -41,13 +42,13 @@ const (
 // the store's own marker, not a catalogued sentinel, and is never aliased in
 // pkg/api (the public agent errors come with the agent input). Callers use
 // errors.Is to detect it.
-var ErrRowAgentInvalid = errors.New("store: row agent must be claude or codex")
+var ErrRowAgentInvalid = errors.New("store: row agent must be claude, codex or cursor")
 
 // validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
 // is exactly AgentClaude or AgentCodex. The empty string, which is the column
 // default and no agent, and any other spelling are refused.
 func validateRowAgent(agent string) error {
-	if agent != AgentClaude && agent != AgentCodex {
+	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor {
 		return fmt.Errorf("%w: %q", ErrRowAgentInvalid, agent)
 	}
 	return nil

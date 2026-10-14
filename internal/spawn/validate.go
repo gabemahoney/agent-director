@@ -121,6 +121,11 @@ func Validate(r *Resolved) error {
 	if err := validateSpawnArgs(r); err != nil {
 		return err
 	}
+	if r.Agent == config.AgentCursor && r.Permissions != nil {
+		if err := RefuseCursorPermissions(r.Permissions.Allow, r.Permissions.Deny, r.Permissions.Ask); err != nil {
+			return err
+		}
+	}
 	if r.Agent == config.AgentCodex && r.Permissions != nil {
 		if err := RefuseCodexPermissions(r.Permissions.Allow, r.Permissions.Deny, r.Permissions.Ask); err != nil {
 			return err
@@ -282,6 +287,10 @@ func validateRelayMode(m string) error {
 // the option's value. Claude print is checked before any selector is removed.
 func validateSpawnArgs(r *Resolved) error {
 	original := r.AgentArgs
+	if r.Agent == config.AgentCursor {
+		_, _, err := CursorArgs(original)
+		return err
+	}
 	if r.Agent == config.AgentClaude {
 		if err := refuseClaudePrint(original); err != nil {
 			return err

@@ -33,7 +33,9 @@ func storeOpeningVerbs(t *testing.T) [][]string {
 	t.Helper()
 	var argvs [][]string
 	for _, v := range manifest.Verbs {
-		if slices.Contains(dbFreeVerbs, v.Name) {
+		// Internal gateway plumbing parses and opens an existing store itself,
+		// before public setupClient and its ErrOldLayout envelope.
+		if slices.Contains(dbFreeVerbs, v.Name) || v.Name == "cursor-host" {
 			continue
 		}
 		argv := []string{v.Name}
@@ -47,6 +49,19 @@ func storeOpeningVerbs(t *testing.T) [][]string {
 		t.Fatalf("store-opening verbs = %v; want the manifest's, list and serve among them", argvs)
 	}
 	return argvs
+}
+
+func TestOldLayoutCursorHostRefusesWithoutCreatingFiles(t *testing.T) {
+	for _, args := range [][]string{{"cursor-host"}, {"cursor-host", "--runtime", "must-not-run"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			o := newOldLayout(t)
+			stdout, _, code := runCLIWithHome(t, o.home, args...)
+			if code != 1 || stdout != "" {
+				t.Fatalf("internal gateway exit=%d stdout=%q; want refusal", code, stdout)
+			}
+			o.assertUntouched(t)
+		})
+	}
 }
 
 // assertOldLayoutRefusal checks one refusal: exit 1 with only the ErrOldLayout

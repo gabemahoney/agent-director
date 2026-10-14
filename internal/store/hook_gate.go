@@ -12,6 +12,8 @@ import (
 // records ParentStart. The store makes the gate part of each write's own
 // statement, so no write can land between a check and the write.
 type HookGate struct {
+	Cursor *CursorRuntime // independently revalidated current connection; nil never authorizes Cursor
+
 	Event        string      // the Claude Code hook event name
 	ParentPID    int         // os.Getppid() of the exec-form hook: the agent process
 	ParentStart  string      // its start time from ProcChecker.StartTime; "" when unreadable (never matches then)
@@ -69,13 +71,28 @@ const (
 // records the start time through hookPaneStartSet). An unreadable parent start
 // time ("") never matches, whatever the row holds; a row with no pane_pid
 // matches nothing.
-const hookGateSQL = `pane_pid = ? AND ? <> '' AND (pane_starttime = ? OR pane_starttime IS NULL)`
+const hookGateSQL = `pane_pid = ? AND ? <> '' AND (pane_starttime = ? OR pane_starttime IS NULL)
+ AND (agent <> 'cursor' OR (? = 1 AND EXISTS (SELECT 1 FROM cursor_runtimes cr WHERE
+ cr.bound_instance_id = instance_id AND cr.bound_launch_token = launch_token AND cr.bound_life_number = life_number
+ AND cr.bound_gateway_pid = pane_pid AND cr.bound_gateway_start = pane_starttime
+ AND cr.bound_instance_id=? AND cr.bound_launch_token=? AND cr.bound_life_number=? AND cr.bound_gateway_pid=? AND cr.bound_gateway_start=?
+ AND cr.bound_runtime_pid=? AND cr.bound_runtime_start=? AND cr.bound_connection_id=? AND cr.bound_input_pipe=? AND cr.bound_output_pipe=? AND cr.bound_input_fd=? AND cr.bound_output_fd=?
+ AND cr.bound_session_id=? AND cr.bound_terminated=?)))`
 
 // hookGateArgs returns the bound arguments for hookGateSQL, in its
 // placeholder order. A non-positive parent pid is bound as NULL, which no
 // pane_pid equals.
 func hookGateArgs(g HookGate) []any {
-	return []any{positiveIntArg(g.ParentPID), g.ParentStart, g.ParentStart}
+	args := []any{positiveIntArg(g.ParentPID), g.ParentStart, g.ParentStart}
+	b := CursorRuntime{}
+	valid := 0
+	if g.Cursor != nil {
+		b = *g.Cursor
+		valid = 1
+	}
+	args = append(args, valid)
+	args = append(args, cursorBindingArgs(b)...)
+	return append(args, g.SessionID, b.Terminated)
 }
 
 // hookPaneStartSet is the SET fragment every gated hook write carries: when

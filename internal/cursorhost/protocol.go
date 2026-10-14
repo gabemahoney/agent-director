@@ -1,0 +1,277 @@
+package cursorhost
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const maxFrameBytes = 2 * 1024 * 1024
+const protocolWait = 45 * time.Second
+const cancelWait = 3 * time.Second
+const transportWriteWait = 3 * time.Second
+
+type frame struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
+}
+type incoming struct {
+	frame frame
+	err   error
+}
+type outgoingFrame struct {
+	raw      []byte
+	deadline time.Time
+}
+
+type protocol struct {
+	input         io.Writer
+	outgoing      chan outgoingFrame
+	writes        chan error
+	closed        chan struct{}
+	closeOnce     sync.Once
+	writeFailed   atomic.Bool
+	frames        chan incoming
+	next          uint64
+	pendingID     string
+	pendingMethod string
+}
+
+func newProtocol(in io.Writer, out io.Reader) *protocol {
+	p := &protocol{input: in, outgoing: make(chan outgoingFrame, 32), writes: make(chan error, 32), closed: make(chan struct{}), frames: make(chan incoming, 32)}
+	go p.writeLoop()
+	go func() {
+		r := bufio.NewReaderSize(out, 64*1024)
+		for {
+			var raw []byte
+			for {
+				part, e := r.ReadSlice('\n')
+				if len(raw)+len(part) > maxFrameBytes {
+					p.deliver(incoming{err: fmt.Errorf("ACP frame exceeds limit")})
+					return
+				}
+				raw = append(raw, part...)
+				if e == bufio.ErrBufferFull {
+					continue
+				}
+				if e != nil {
+					if len(raw) > 0 {
+						e = fmt.Errorf("ACP partial frame")
+					}
+					p.deliver(incoming{err: e})
+					return
+				}
+				break
+			}
+			var f frame
+			if e := json.Unmarshal(raw, &f); e != nil || f.JSONRPC != "2.0" {
+				p.deliver(incoming{err: fmt.Errorf("invalid ACP frame")})
+				return
+			}
+			if len(f.ID) > 0 {
+				var id any
+				decoder := json.NewDecoder(bytes.NewReader(f.ID))
+				decoder.UseNumber()
+				if e := decoder.Decode(&id); e != nil {
+					p.deliver(incoming{err: fmt.Errorf("invalid ACP id")})
+					return
+				}
+				switch id.(type) {
+				case string, json.Number:
+				default:
+					p.deliver(incoming{err: fmt.Errorf("invalid ACP id")})
+					return
+				}
+			}
+			if f.Method == "" && (len(f.ID) == 0 || ((len(f.Result) == 0) == (len(f.Error) == 0))) {
+				p.deliver(incoming{err: fmt.Errorf("invalid ACP response")})
+				return
+			}
+			p.deliver(incoming{frame: f})
+		}
+	}()
+	return p
+}
+func (p *protocol) send(value any) error {
+	raw, e := json.Marshal(value)
+	if e != nil {
+		return e
+	}
+	if len(raw) > maxFrameBytes {
+		return fmt.Errorf("ACP output exceeds limit")
+	}
+	if p.writeFailed.Load() {
+		return fmt.Errorf("ACP transport write failed")
+	}
+	select {
+	case <-p.closed:
+		return fmt.Errorf("ACP transport closed")
+	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: time.Now().Add(transportWriteWait)}:
+	default:
+		return fmt.Errorf("ACP output queue exceeds limit")
+	}
+	return nil
+}
+
+// close releases pipe I/O without treating transport closure as process death.
+func (p *protocol) close() {
+	p.closeOnce.Do(func() {
+		close(p.closed)
+		if closer, ok := p.input.(io.Closer); ok {
+			_ = closer.Close()
+		}
+	})
+}
+
+func (p *protocol) deliver(next incoming) {
+	select {
+	case p.frames <- next:
+	case <-p.closed:
+	}
+}
+
+// One worker serializes writes. A timeout makes delivery uncertain and fatal;
+// no pending frame is replayed, and the main loop remains free to stop the child.
+func (p *protocol) writeLoop() {
+	for {
+		var next outgoingFrame
+		select {
+		case <-p.closed:
+			return
+		case next = <-p.outgoing:
+		}
+		result := make(chan error, 1)
+		go func() {
+			// Frames which expired in the queue must never reach the pipe.
+			if !time.Now().Before(next.deadline) {
+				result <- fmt.Errorf("ACP transport write timed out")
+				return
+			}
+			n, err := p.input.Write(next.raw)
+			if err == nil && n != len(next.raw) {
+				err = io.ErrShortWrite
+			}
+			result <- err
+		}()
+		timer := time.NewTimer(time.Until(next.deadline))
+		var err error
+		select {
+		case err = <-result:
+		case <-timer.C:
+			err = fmt.Errorf("ACP transport write timed out")
+		case <-p.closed:
+			timer.Stop()
+			return
+		}
+		timer.Stop()
+		if err != nil {
+			p.writeFailed.Store(true)
+			// Closing an owned pipe releases a stalled writer. The supervisor,
+			// not this transport worker, must still confirm process termination.
+			if closer, ok := p.input.(io.Closer); ok {
+				_ = closer.Close()
+			}
+			err = fmt.Errorf("ACP transport write failed; delivery is uncertain")
+		}
+		select {
+		case p.writes <- err:
+		case <-p.closed:
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (p *protocol) request(method string, params any) (string, error) {
+	if p.pendingID != "" {
+		return "", fmt.Errorf("ACP request already pending")
+	}
+	p.next++
+	id := fmt.Sprint(p.next)
+	if err := p.send(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}); err != nil {
+		return "", err
+	}
+	p.pendingID = id
+	p.pendingMethod = method
+	return id, nil
+}
+func (p *protocol) notify(method string, params any) error {
+	return p.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
+}
+func (p *protocol) response(f frame) (json.RawMessage, error) {
+	if f.Method != "" || string(bytes.TrimSpace(f.ID)) != p.pendingID || p.pendingID == "" {
+		return nil, fmt.Errorf("uncorrelated ACP response")
+	}
+	p.pendingID = ""
+	p.pendingMethod = ""
+	if len(f.Error) > 0 {
+		return nil, fmt.Errorf("Cursor ACP request failed; check the selected runtime and existing login")
+	}
+	return f.Result, nil
+}
+func (p *protocol) deny(f frame) (bool, error) {
+	if len(f.ID) == 0 {
+		return false, nil
+	}
+	var outcome any
+	cancel := false
+	switch f.Method {
+	case "cursor/ask_question":
+		outcome = map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
+		cancel = true
+	case "cursor/create_plan":
+		outcome = map[string]any{"outcome": map[string]any{"outcome": "rejected"}}
+	case "session/request_permission":
+		var params struct {
+			Options []struct {
+				ID   string `json:"optionId"`
+				Kind string `json:"kind"`
+			} `json:"options"`
+		}
+		valid := json.Unmarshal(f.Params, &params) == nil
+		// All authorization is unsupported in E1, including fallback questions:
+		// only a genuine reject option may be selected. Otherwise cancel the turn.
+		seen := make(map[string]bool, len(params.Options))
+		rejectID := ""
+		for _, o := range params.Options {
+			if o.ID == "" || seen[o.ID] {
+				valid = false
+				break
+			}
+			seen[o.ID] = true
+			switch o.Kind {
+			case "allow_once", "allow_always", "reject_always":
+			case "reject_once":
+				if rejectID == "" {
+					rejectID = o.ID
+				}
+			default:
+				valid = false
+			}
+		}
+		if valid && rejectID != "" {
+			outcome = map[string]any{"outcome": map[string]any{"outcome": "selected", "optionId": rejectID}}
+		}
+		if outcome == nil {
+			outcome = map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
+			cancel = true
+		}
+	default:
+		if err := p.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(f.ID), "error": map[string]any{"code": -32601, "message": "Unsupported client request; turn cancelled"}}); err != nil {
+			return true, err
+		}
+		return true, nil
+	}
+	return cancel, p.send(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(f.ID), "result": outcome})
+}

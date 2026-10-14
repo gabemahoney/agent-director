@@ -48,6 +48,10 @@ func TestMakeTemplateAgentCheckOrder(t *testing.T) {
 			api.MakeTemplateParams{Name: "n", AgentArgs: args, ExtraEnv: homeEnv}},
 		{"codex permissions over a reserved env key", "ErrPermissionsUnsupported", permissionsText,
 			api.MakeTemplateParams{Name: "n", Agent: "codex", Permissions: codexAllow, ExtraEnv: homeEnv}},
+
+		{"cursor allow", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Allow: []string{"Bash"}}}},
+		{"cursor deny", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Deny: []string{"Bash"}}}},
+		{"cursor ask", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Ask: []string{"Bash"}}}},
 		{"a reserved env key with a valid agent", "ErrReservedEnvKey", mtReservedHome, api.MakeTemplateParams{Name: "n", Agent: "claude", ExtraEnv: homeEnv}},
 		{"an upper-case agent", "ErrTemplateMalformed", `ErrTemplateMalformed: agent "Claude" (want claude or codex)`, api.MakeTemplateParams{Name: "n", Agent: "Claude"}},
 	}
@@ -89,6 +93,7 @@ func TestMakeTemplateStoresTheAgent(t *testing.T) {
 			config.TemplateFile{Agent: "codex", CWD: "/w"}, true, `agent = "codex"`},
 		{"codex with an empty permissions struct", api.MakeTemplateParams{Agent: "codex", CWD: "/w", Permissions: &api.MakeTemplatePermissions{}},
 			config.TemplateFile{Agent: "codex", CWD: "/w", Permissions: &config.TemplatePermissions{}}, true, `agent = "codex"`},
+		{"cursor", api.MakeTemplateParams{Agent: "cursor", CWD: "/w", AgentArgs: args}, config.TemplateFile{Agent: "cursor", CWD: "/w", AgentArgs: args}, true, `agent = "cursor"`},
 		{"no agent", api.MakeTemplateParams{CWD: "/w"}, config.TemplateFile{CWD: "/w"}, false, ""},
 	}
 	for _, tc := range cases {

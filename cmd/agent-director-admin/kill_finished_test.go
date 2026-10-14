@@ -52,6 +52,8 @@ func TestKillFinishedReportedInSession(t *testing.T) {
 		{"claude", nil},
 		{"codex", []apitest.SpawnOption{apitest.WithAgent(store.AgentCodex), apitest.WithNoSubagentTracking(),
 			apitest.WithEndReportedAt(1790000123456)}},
+		{"cursor", []apitest.SpawnOption{apitest.WithAgent(store.AgentCursor), apitest.WithNoSubagentTracking(),
+			apitest.WithEndReportedAt(1790000123456)}},
 	} {
 		t.Run(agent.name, func(t *testing.T) {
 			r := seedFinishedWithSession(t, agent.opts...)
@@ -81,8 +83,9 @@ func TestKillFinishedReportedInSession(t *testing.T) {
 			stdout, stderr, code = runMain(t, r.home, "get", "--instance-id", r.id)
 			var got struct {
 				State string `json:"state"`
+				Agent string `json:"agent"`
 			}
-			if code != 0 || json.Unmarshal([]byte(stdout), &got) != nil || got.State != store.StateEnded {
+			if code != 0 || json.Unmarshal([]byte(stdout), &got) != nil || got.State != store.StateEnded || got.Agent != agent.name {
 				t.Errorf("agent-director get exit = %d, stdout = %q (stderr %q); want state %s", code, stdout, stderr, store.StateEnded)
 			}
 		})

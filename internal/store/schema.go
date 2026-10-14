@@ -111,7 +111,7 @@ import (
 //
 // Both cascade from spawns, so expire's guarded delete and the admin delete
 // remove a row's entries and claimable launches with the row.
-const schemaDDL = `
+const schemaDDL = cursorRuntimeDDL + `
 CREATE TABLE IF NOT EXISTS spawns (
     instance_id                TEXT PRIMARY KEY,
     parent_id                  TEXT REFERENCES spawns(instance_id) ON DELETE SET NULL,
@@ -276,6 +276,7 @@ var migrationSteps = []migrationStep{
 	{from: 6, apply: migrateV6toV7},
 	{from: 7, apply: migrateV7toV8},
 	{from: 8, apply: migrateV8toV9},
+	{from: 9, apply: migrateV9toV10},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

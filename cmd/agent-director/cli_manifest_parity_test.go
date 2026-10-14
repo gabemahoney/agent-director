@@ -176,7 +176,7 @@ func TestMCPExposedVerbExceptions(t *testing.T) {
 		}
 	}
 	sort.Strings(hidden)
-	if want := []string{"hook", "serve", "trail-emit"}; !slices.Equal(hidden, want) {
+	if want := []string{"cursor-host", "hook", "serve", "trail-emit"}; !slices.Equal(hidden, want) {
 		t.Errorf("verbs MCP does not expose = %v; want exactly %v", hidden, want)
 	}
 }

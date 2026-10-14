@@ -141,6 +141,9 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 		return SpawnResult{}, err
 	}
 	if reuse && idCheck == spawn.IDFinishedRow {
+		if r.Agent == store.AgentCursor || reused.row.Agent == store.AgentCursor {
+			return SpawnResult{}, fmt.Errorf("%w: Cursor reuse and switches to or from Cursor are unsupported; create a fresh instance", spawn.ErrSpawnDeniedFlag)
+		}
 		return spawnReuse(reuseDeps{rs: rs, t: t, pc: pc, cfg: cfg, storeID: s.StoreID(), now: now, lg: lg, who: callerIdentity()}, r, reused.row)
 	}
 	if idCheck == spawn.IDNoRow {

@@ -11,6 +11,7 @@
 import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { SpawnParams, MakeTemplateParams, GetResult, ListRow } from "../src/index.js";
 import { homeStore, openClient, seedOuterParent, spawnClaude, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
@@ -23,6 +24,44 @@ test("5 parallel version() calls on one Client never overlap: the CLI log altern
     await withProcessEnv({ LOG_FILE: logFile }, () => Promise.all(Array.from({ length: 5 }, () => client.version({}))));
     const kinds = fs.readFileSync(logFile, "utf-8").trim().split("\n").map((line) => line.split(" ")[1]);
     expect(kinds).toEqual(Array.from({ length: 10 }, (_, i) => (i % 2 === 0 ? "START" : "END")));
+  });
+}, 30_000);
+
+// Fake tmux does not execute Cursor: this covers generic client transport and results.
+test.each([
+  ["direct, empty args", false, []],
+  ["direct, model args", false, ["--model", "auto"]],
+  ["template, absent args", true, undefined],
+  ["template, empty args", true, []],
+] as [string, boolean, string[] | undefined][])("Cursor %s uses existing spawn/get/list/status/subagent methods", async (_label, template, agentArgs) => {
+  await withTempHome(async (homeDir) => {
+    const storePath = homeStore(homeDir);
+    seedOuterParent(storePath);
+    using client = await openClient(storePath);
+    const params: SpawnParams = {
+      cwd: homeDir,
+      instance_id: `cursor-${crypto.randomUUID()}`,
+      agent_args: agentArgs,
+      ...(template ? { template: "cursor" } : { agent: "cursor" }),
+    };
+    if (template) {
+      const templateParams: MakeTemplateParams = { name: "cursor", agent: "cursor", agent_args: ["--model", "auto"] };
+      const result = await client.makeTemplate(templateParams);
+      expect(fs.existsSync(result.path)).toBe(true);
+    }
+    const spawned = await client.spawn(params);
+    expect(spawned.instance_id).toBe(params.instance_id!);
+    const row: GetResult = await client.get({ instance_id: spawned.instance_id });
+    expect(row).toMatchObject({
+      instance_id: spawned.instance_id, agent: "cursor", state: "pending",
+      agent_args: template ? ["--model", "auto"] : agentArgs,
+    });
+    const listed: ListRow | undefined = (await client.list({})).spawns.find((r) => r.instance_id === spawned.instance_id);
+    expect(listed).toMatchObject({ instance_id: spawned.instance_id, agent: "cursor", state: "pending" });
+    const status = await client.status({ instance_id: spawned.instance_id });
+    expect(status.state).toBe("pending");
+    expect(Object.keys(status).sort()).toEqual(["launch_started_at", "state"]);
+    expect(await client.listSubagents({ instance_id: spawned.instance_id })).toEqual({ tracked: false, subagents: [] });
   });
 }, 30_000);
 

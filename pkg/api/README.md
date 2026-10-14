@@ -103,7 +103,14 @@ if err != nil {
 fmt.Println(result.InstanceID)
 ```
 
-A spawn names its agent: `SpawnParams.Agent`, `"claude"` or `"codex"`
+Cursor uses the existing `SpawnResult` and row fields; `Status` keeps its
+existing shape. Its fresh workflow is in [Usage](../../docs/usage.md#fresh-cursor-use).
+`Resume` returns `ErrSpawnNotResumable` for Cursor; reuse and switches to or
+from Cursor return `ErrSpawnDeniedFlag` before mutation. Argument and
+asynchronous failure handling are in the
+[caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
+
+A spawn names its agent: `SpawnParams.Agent`, `"claude"`, `"codex"` or `"cursor"`
 (case-sensitive), or the `Agent` its template names. `MakeTemplateParams.Agent`
 bakes one into a template; a template with `AgentArgs` needs it. How a call's
 `AgentArgs` combine with a template's is in
@@ -112,11 +119,11 @@ bakes one into a template; a template with `AgentArgs` needs it. How a call's
 Five sentinels refuse the agent input, each before anything is written;
 `pkg/api` re-exports them and callers match them with `errors.Is`:
 `ErrAgentMissing` (no `Agent`, and the template names none), `ErrAgentInvalid`
-(not `"claude"` or `"codex"`), `ErrAgentArgsMismatch` (the template's
+(not `"claude"`, `"codex"` or `"cursor"`), `ErrAgentArgsMismatch` (the template's
 `AgentArgs` are for another agent: spawn that agent, or pass this call's own
 non-empty `AgentArgs`), `ErrTemplateAgentMissing` (the template has `AgentArgs`
 and no agent: give it one; `MakeTemplate` returns it too) and
-`ErrPermissionsUnsupported` (a `"codex"` spawn or template carrying an allow,
+`ErrPermissionsUnsupported` (a `"codex"` or `"cursor"` spawn or template carrying an allow,
 deny or ask entry; `MakeTemplate` returns it too).
 
 `ErrSpawnDeniedFlag` refuses an `AgentArgs` entry the supervisor must own,
@@ -136,8 +143,8 @@ see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules an
 [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals)
 for argument recognition limits.
 
-`SpawnParams.ReuseFinished` on a finished id starts a fresh conversation.
-Same-agent reuse retains current-life session history and subagent records;
+For Claude and Codex, `SpawnParams.ReuseFinished` on a finished id starts a
+fresh conversation. Same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
 `Resume` accepts only the id and continues its recorded agent's latest
 reported session. It never selects an archived session, even when its
@@ -152,7 +159,7 @@ switching reuse, which starts fresh and resumes nothing. JSON omits
 [caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 `.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
-either agent (a failed pre-trust never fails the spawn; see the
+the selected agent (a failed pre-trust never fails the spawn; see the
 `SpawnResult.PreTrust` godoc and
 [docs/settings.md](../../docs/settings.md#pre-trust-for-codex)). Most-likely sentinel errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
 `ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
@@ -216,8 +223,8 @@ for _, row := range res.Spawns {
 }
 ```
 
-Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`
-or `"codex"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
+Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
+`"codex"` or `"cursor"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
 encodes as `[]` when empty. With `[state] settle_ms` set, `State` filters
 on the settled state each row reports (see Status). `Limit` caps the rows
 returned; 0 means no cap. Sentinel errors, each returned before the store is
@@ -248,7 +255,7 @@ Returns `ListSubagentsResult` (`.Tracked`, and `.Subagents []SubagentRecord`,
 never nil: `[]` when the agent has none). A `SubagentRecord` field with no
 known value is a nil pointer and encodes as JSON `null`; its times are UTC
 `*time.Time`, encoded like `launch_started_at`. `Tracked` is false, with no
-records, for a `"codex"` agent (from its spawn, and after every `Resume` or
+records, for a `"cursor"` agent, and for a `"codex"` agent (from its spawn, and after every `Resume` or
 reuse of its id) and for a `"claude"` agent that predates subagent tracking
 (it turns true when that agent is next resumed or its id is reused). Sentinel error:
 `ErrSpawnNotFound`; every error returns `Tracked` false and an empty slice.

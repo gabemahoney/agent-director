@@ -91,7 +91,7 @@ the new key.
 
 ### spawn
 
-Launch a tracked agent in a new tmux session. A spawn names its agent, `"claude"` or `"codex"` (case-sensitive), in `agent` or through its template; with neither it throws `ErrAgentMissing`. An empty `agent` counts as not given.
+Launch a tracked agent in a new tmux session. A spawn names its agent, `"claude"`, `"codex"` or `"cursor"` (case-sensitive), in `agent` or through its template; with neither it throws `ErrAgentMissing`. An empty `agent` counts as not given.
 
 ```ts
 const result = await client.spawn({ cwd: "~/my-project", agent: "claude" });
@@ -105,11 +105,19 @@ The switch starts fresh and resumes nothing. Selector lists and reporting
 rules are in the
 [caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
 
-Same-agent reuse retains current-life session history and subagent records;
+For Claude and Codex, same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
 `resume` continues only the recorded agent's latest reported session and
 never selects an archived one. See [Usage](../../docs/usage.md#naming-the-agent)
 and [Transcript recovery](../../docs/caller-contract.md#transcript-recovery).
+
+Cursor uses the existing result and row fields; `status` keeps its existing
+shape. `resume` throws `ErrSpawnNotResumable` for Cursor; reuse and switches
+to or from Cursor throw `ErrSpawnDeniedFlag` before mutation. `makeTemplate`
+and `spawn` refuse nonempty Cursor permission lists with
+`ErrPermissionsUnsupported`. The fresh workflow is in
+[Usage](../../docs/usage.md#fresh-cursor-use); argument and asynchronous failure
+handling are in the [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
 
 ### status
 
@@ -139,7 +147,7 @@ for (const spawn of result.spawns) {
 }
 ```
 
-Each row, like `get`'s result, carries `agent` (`"claude"` or `"codex"`), the agent the row runs.
+Each row, like `get`'s result, carries `agent` (`"claude"`, `"codex"` or `"cursor"`), the agent the row runs.
 
 ### listSubagents
 
@@ -156,7 +164,7 @@ for (const sub of result.subagents) {
 }
 ```
 
-`tracked` is `false`, with `subagents` `[]`, for a `"codex"` agent (from its spawn, and after every `resume` or reuse of its id) and for a `"claude"` agent that predates subagent tracking (it becomes `true` when that agent is next resumed or its id is reused). `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
+`tracked` is `false`, with `subagents` `[]`, for a `"cursor"` agent, and for a `"codex"` agent (from its spawn, and after every `resume` or reuse of its id) and for a `"claude"` agent that predates subagent tracking (it becomes `true` when that agent is next resumed or its id is reused). `subagents` is never null; a field with no known value is `null`, and times are RFC 3339 UTC strings. The fields and values are described in [Read an agent's subagent records](../../docs/usage.md#read-an-agents-subagent-records).
 
 ### sendKeys
 
@@ -515,12 +523,12 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | Error | When it fires |
 |---|---|
 | `ErrRelayModeInvalid` | `relay_mode` was something other than `on` / `off` / empty. |
-| `ErrSpawnDeniedFlag` | The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn always refuses `--settings`, `--output-format` and print (`--print`, `-p`, parsed clusters included). Session selectors and owned values are refused except on a verified finished-agent switch, where they are removed and the remainder is checked as for a plain spawn. Exact denied long names owned as option values always refuse. A `"codex"` spawn also refuses other Codex subcommands as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst` or `features.hooks`, `--disable hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` filters stored arguments without applying spawn's argument refusals; see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules. The refused forms and argument recognition limits are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
-| `ErrAgentMissing` | `spawn` got no `agent` and its template names none; nothing is written. Pass `agent` (`"claude"` or `"codex"`), or put one in the template. |
-| `ErrAgentInvalid` | `agent` is neither `"claude"` nor `"codex"` (the value is case-sensitive); nothing is written. |
+| `ErrSpawnDeniedFlag` | Cursor argument/reuse/switch refusals are in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). The `agent_args` of a `spawn` contain an argument the supervisor must own; nothing is written, and the description names it. A `"claude"` spawn always refuses `--settings`, `--output-format` and print (`--print`, `-p`, parsed clusters included). Session selectors and owned values are refused except on a verified finished-agent switch, where they are removed and the remainder is checked as for a plain spawn. Exact denied long names owned as option values always refuse. A `"codex"` spawn also refuses other Codex subcommands as the first word that is neither an option nor an option's value, `--remote`, `--remote-auth-token-env`, a `-c` / `--config` key at, above or under `hooks`, `tui.disable_paste_burst` or `features.hooks`, `--disable hooks`, and, while `disable_ask_user` is on, `--enable default_mode_request_user_input` and the question-tool keys. `resume` filters stored arguments without applying spawn's argument refusals; see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules. The refused forms and argument recognition limits are in [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals). |
+| `ErrAgentMissing` | `spawn` got no `agent` and its template names none; nothing is written. Pass `agent` (`"claude"`, `"codex"` or `"cursor"`), or put one in the template. |
+| `ErrAgentInvalid` | `agent` is none of `"claude"`, `"codex"` or `"cursor"` (the value is case-sensitive); nothing is written. |
 | `ErrAgentArgsMismatch` | The template's `agent_args` are for another agent than the one this spawn resolves to, so they are not inherited; nothing is written. Spawn that agent, or pass this call's own non-empty `agent_args`, which replace the template's. |
 | `ErrTemplateAgentMissing` | A template has `agent_args` and names no agent. From `makeTemplate` (`agent_args` without `agent`) and from a `spawn` that loads such a template; nothing is written. Give the template an `agent`, or remove its `agent_args`. |
-| `ErrPermissionsUnsupported` | A `"codex"` spawn, or a `makeTemplate` with `agent: "codex"`, carries an `allow`, `deny` or `ask` entry; nothing is written. Drop the lists and set permission rules in the group's Codex folder, with Codex's own permission controls. |
+| `ErrPermissionsUnsupported` | A `"codex"` or `"cursor"` spawn/template carries an `allow`, `deny` or `ask` entry; nothing is written. Handling is in [Permissions](../../docs/permissions.md#codex-spawns) and [Cursor permissions](../../docs/permissions.md#cursor-spawns). |
 | `ErrReservedEnvKey` | From `spawn`: an `extra_env` key (a template's included) is reserved or is not a valid env-var name; nothing is written or launched, and the description says which. Reserved: an `AGENT_DIRECTOR_*` key, or a key that sets `HOME` (`HOME` itself, or one such as `HOME=/x`), with any value, an empty one included. An `extra_env` `HOME` would send the agent's hook events to another agent-director store; set an absolute `CLAUDE_CONFIG_DIR` (a Claude Code agent) or `CODEX_HOME` (a Codex agent) to give the agent its own config. Not a valid name: the key is empty, or contains `=` or a NUL character; give each variable its own name as the key and its value as the value (`{ CLAUDE_CONFIG_DIR: "/cfg" }`, not `{ "CLAUDE_CONFIG_DIR=/cfg": "" }`). This client refuses an invalid key in the call's `extra_env` itself, before it runs the CLI. From `makeTemplate`: the template's `extra_env` has such a key, reserved or not a valid name, refused by spawn's own check; no template is written or replaced, so none is saved that `spawn` would refuse (this client refuses an invalid key itself, as for `spawn`). From `resume`: the row's stored `extra_env` has a key that sets `HOME` or is not a valid name (a row spawned before spawn refused it); nothing is written or launched. Shared repair and reuse handling is in [Spawn and template input refusals](../../docs/caller-contract.md#spawn-and-template-input-refusals); a fresh conversation has no memory of the old conversation. |
 | `ErrInstanceIdCollision` | Without `reuse_finished`, a row already exists for the supplied `instance_id`, in any state. With `reuse_finished: true`, the row is live (`pending` included), or it changed or was removed after this spawn examined it (a lost race); nothing was changed. |
 
@@ -540,7 +548,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
-| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
+| `ErrSpawnNotResumable` | Cursor resume is unsupported (see [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries)). For Claude and Codex, `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
 | `ErrNoSessionId` | The spawn has no `session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume; recourse contract: spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. See [Caller contract](../../docs/caller-contract.md) for the recovery procedure. |
 | `ErrJsonlMissing` | The current session's resume JSONL could not be located at any candidate path (for a Codex agent, only its current recorded path; older sessions are never tried); recourse contract: spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. See [Caller contract](../../docs/caller-contract.md) for the recovery procedure. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
@@ -585,7 +593,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrTemplateNameUnsafe` | A template name fails the safety check (path traversal, absolute path, hidden name, or trivial garbage). |
 | `ErrTemplateNotFound` | The named template `.toml` does not exist on disk. |
-| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, an `agent` other than `claude` or `codex`, the old name of the `agent_args` key, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). `makeTemplate` also throws it, before writing anything, for an `agent` that is not exactly `claude` or `codex`. |
+| `ErrTemplateMalformed` | A template file exists but fails schema validation (unknown keys, an `agent` other than `claude`, `codex` or `cursor`, the old name of the `agent_args` key, wrong types, bad enums, or one key set under names that differ only in letter case, such as `RELAY_MODE` and `relay_mode`). `makeTemplate` also throws it, before writing anything, for an `agent` that is not exactly `claude`, `codex` or `cursor`. |
 | `ErrTemplateExists` | `make-template` target already exists and `overwrite` is not `true`. |
 
 **misc**:

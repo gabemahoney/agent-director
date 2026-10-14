@@ -134,6 +134,7 @@ func TestListSubagentsTracked(t *testing.T) {
 		{"a row launched since", nil, `{"tracked":true,"subagents":[]}`},
 		{"a row from before subagent tracking", []apitest.SpawnOption{apitest.WithNoSubagentTracking()}, emptySubagentsJSON},
 		{"a codex row, launched with no subagent events registered", codexRowOpts(), emptySubagentsJSON},
+		{"a cursor row never tracks subagents", []apitest.SpawnOption{apitest.WithAgent("cursor")}, emptySubagentsJSON},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

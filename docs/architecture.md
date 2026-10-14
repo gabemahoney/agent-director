@@ -4,8 +4,8 @@
 
 A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
-- Spawns agent instances (Claude Code or Codex, chosen per Spawn) inside tmux sessions.
-- Hooks into those agent sessions (via the agent's hooks mechanism) to track state, capture transcripts, and relay events.
+- Spawns agent instances (Claude Code, Codex or fresh Cursor, chosen per Spawn) inside tmux sessions.
+- Tracks agent state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. Claude/Codex retain their permission relay; Cursor authorization is currently denied.
 - Exposes a CLI for humans and a stdio MCP server for LLM callers — both implemented by the same binary in different modes.
 
 ## Surfaces
@@ -13,6 +13,7 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 - **CLI** — `agent-director <verb> ...` for every verb in
   `pkg/api/manifest`. See `docs/cli-reference.md` for the canonical
   list.
+- **Internal Cursor gateway** — `agent-director cursor-host`, the direct pane process for a fresh Cursor row; CLI-only launch plumbing, excluded from MCP discovery and dispatch.
 - **Hook entrypoint** — the same binary invoked by the agent on hook events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification, SessionEnd, PermissionRequest, SubagentStart, SubagentStop).
 - **Stdio MCP server** — same binary invoked as `agent-director serve --stdio`. Stdio transport, lifetime scoped to a single agent session.
 - **Operator tool** — a second binary, `agent-director-admin`, for the two
@@ -58,6 +59,11 @@ Each target gets two binaries, `agent-director` and `agent-director-admin`
 SQLite via `modernc.org/sqlite`). There is no FFI / shared-library
 build path. The TS Client spawns the CLI binary per verb call.
 
+Cursor's protected gateway currently runs on Linux only and refuses other
+platforms before starting a runtime. The generic build/install targets above
+do not establish Cursor support. Darwin cross-compilation and synthetic
+Linux fixture passes are not authenticated runtime/platform acceptance.
+
 ## What a new agent reuses
 
 The agent-specific parts of agent-director are small, named seams. A future
@@ -74,7 +80,7 @@ branches on the agent anywhere else. Each seam's own section states its rule
   checks](#the-agent-resolution-ownership-and-checks).
 - **Hooks.** The event-to-write decision comes from the classifier: [The
   agent-aware hook classifier](#the-agent-aware-hook-classifier). Its output
-  gates subagent capture: Claude's table enables it, Codex's never does. A
+  gates subagent capture: Claude's table enables it, Codex's and Cursor's never do. A
   Codex launch stores `subagent_tracking` 0, an independent store guard. The
   close of a row's subagent entries when its agent is gone is [The liveness
   close of subagent entries](#the-liveness-close-of-subagent-entries).
@@ -82,6 +88,9 @@ branches on the agent anywhere else. Each seam's own section states its rule
   relay on Codex rows](#the-relay-on-codex-rows-bssz), checked by the models in
   [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
   tla`)](#model-check-make-tla)).
+- **Cursor gateway.** Fresh protocol, input, transcript and runtime proof use
+  [the shared gateway components](#cursor-gateway-and-current-launch-binding);
+  tests use [cursorfix](#cursorfix-synthetic-acp-runtime-reusable-test-fixture).
 - **Test components.** A test of a launch's argv or an agent's own files uses
   [codexfix](#codexfix-codexs-own-files-and-launch-command-reusable-test-fixture)
   and, in `pkg/api`, the [Codex-folder
@@ -93,6 +102,140 @@ branches on the agent anywhere else. Each seam's own section states its rule
   stand-in `codex`](#testrealtmux-real-tmux-proof-of-the-client-reusable-test-fixtures).
   Hook-trust data comes from [Hook-trust golden
   data](#hook-trust-golden-data-reusable-test-data).
+
+## Cursor gateway and current-launch binding
+
+`internal/cursorhost` implements the current fresh-only Cursor route. Pure
+`internal/spawn.ComposeLaunch` calls `composeCursorCommand` to select the
+current whole-path `cursor_path` (default `agent`) and compose the actual AD
+executable plus `cursor-host`. `CursorArgs` extracts one initial prompt for
+ACP and supports model selection; other arguments fail before row writes.
+`pkg/api` retains all public control operations. Cursor resume, reuse and
+switches to/from Cursor refuse before mutation. No generic ACP framework,
+public control plane or arbitrary wrapper adoption is introduced.
+
+The gateway is the recorded pane/main process, starts one selected runtime
+with `acp`, and owns both protocol pipes. The runtime never reads terminal
+input. `protocol.go` bounds frames, correlates one outstanding initialize,
+session/new or session/prompt request, validates protocol 1 and completions,
+and rejects stale/mismatched responses. Its bounded FIFO and single outbound
+writer serialize frames without blocking the controller. Enqueueing is not
+delivery: each frame has a fixed write deadline from enqueue, independent of
+startup, prompt and cancellation deadlines. Expired frames are never written;
+short writes, transport errors and write timeouts make delivery uncertain and
+fatal, with no retry or replay. The controller continues observing child
+death, input and signals while writes stall. Cancellation retains the first
+request's fixed deadline; repeated interrupts or denials cannot extend it.
+`session.go` admits ordinary input only after confirmed startup or turn
+completion. `terminal_linux.go` handles Unicode editing, literal tabs,
+bracketed multiline paste and line clearing; Enter reserves
+idle admission atomically so input received busy cannot run in a later turn.
+Busy follow-ups and clear/new commands are visibly refused. Local exit and
+eligible pause terminate the owned child before an intentional end report.
+Cancellation requests wait for correlated completion; the outbound frame
+queue never queues follow-up turns or rotates conversations.
+
+`process_linux.go` installs ptrace EXITKILL and parent-death protection at the
+initial exec stop before ACP input. Fork/clone/exec descendants stay guarded
+across launcher chains. Runtime/pipes are independently identified; a second
+ACP owner is refused. Only an explicitly identified same-runtime executable
+or script worker-server possessing neither ACP pipe may detach. Unknown
+process evidence grants no ownership. Stop reconciles inherited tracees
+through kernel `TracerPid` matching the locked supervisor OS-thread id,
+including an announcement overtaken by SIGKILL, then signals/drains those
+exact tracees. Success requires confirmed leader exit and owned tracees gone.
+The transport writes through a separately closeable, pollable duplicate of
+the owned input pipe. Closing it releases stalled I/O while the registered
+ownership descriptor remains open through verified intentional end reporting.
+Transport closure supplies no process-death evidence.
+No process-group cleanup or arbitrary-child wait is allowed. Independent or
+shared surviving work retains the existing kill limits. EOF is transport
+failure, never child-death evidence; child loss stops the gateway rather than
+leaving a renderer classified live. Non-Linux lifetime/terminal operations
+fail closed.
+
+Schema v10 adds only `cursor_runtimes`, the current launch/life gateway and
+runtime pid/start-time, connection, private pipe/fd, session and retirement
+binding. Registration, session assignment, retirement and report writes are
+conditional on the existing store/row/token/life/server/pane identity. The
+v9-to-v10 hop is guarded and transactional; fresh and migrated stores share
+the schema. Existing Claude/Codex and legacy NULL data retain their identity
+and visibility. The agent-rename migration remains the immutable v8-to-v9
+hop. Runtime binding never becomes authority based solely on a stored claim.
+
+`reporter.report` directly execs the AD hook with the gateway as its immediate
+parent. The unchanged gate must accept that parent; Cursor additionally checks
+current launch, life, registered runtime/connection/session and termination.
+The CLI's `hookCursorVerifier` independently composes `VerifyRuntime`,
+`VerifyTranscriptPath` and `VerifyPane`. An absent/error verifier rejects the
+report. `internal/hook.HandleConfig.VerifyCursor` injects this evidence seam
+without adding probe/tmux/cursorhost dependencies to `internal/hook`.
+Conditional store writes repeat the binding predicates after verification.
+The actual opened store path is forwarded for routing, including client
+store overrides; that path supplies no authority. Optional Cursor tool hooks
+from a child, unrelated controllers, nested agents and stale launches cannot
+report lifecycle. Unknown/child update provenance is retained without
+inventing main-agent lifecycle or subagent records. Cursor subagent listing
+always returns untracked and empty; existing status response shapes remain.
+
+`transcript_linux.go` creates random private JSONL artifacts beneath the AD
+config directory, walks paths with no-follow protections, validates file
+identity/access and syncs each sequence-numbered record. Records bind launch,
+life, connection and confirmed conversation to input, updates, denials and
+outcomes. Replacement/symlink/insecure-path and persistence failures halt
+admission. Reports expose the actual recorded path through `jsonl_path`;
+`transcript_status` remains a reference summary, not a new reader-time file
+verification. Native Cursor storage is separate; no Claude JSONL substitute,
+load/replay/history recovery or successful unrecorded outcome is claimed.
+
+Authorization is staged fail-closed: all permission/plan requests are denied
+or cancelled. Permission rejection validates the complete options schema:
+every option ID must be nonempty and unique, and every kind must be a known
+ACP allow/reject kind, including options after a usable rejection. Only then
+may the first `reject_once` be selected. Missing rejection, malformed or
+ambiguous options receive a correlated cancelled outcome and request bounded
+turn cancellation. IDs remain opaque exact strings. Questions are never
+advertised and are denied before a
+caller/pane path for either `disable_ask_user` value, including permission
+fallback. There is no answerable Cursor request, relay acknowledgement or
+question state. Full relay, queuing/rotation, resume/reuse, expanded runtime
+setup, group profiles and session help remain outside the current route.
+No group isolation, trust grant, runtime-version or authenticated platform
+acceptance follows from the fixture evidence.
+
+**Must use:** Cursor launch composition and argument checks use the existing
+`internal/spawn` seams and `CursorArgs`; no surface builds another launch.
+Runtime/report checks use `VerifyRuntime`, `VerifyTranscriptPath`, `VerifyPane`
+and `HandleConfig.VerifyCursor`, keeping immediate-parent and conditional
+store guards mandatory. New Cursor record writes use the existing
+`RegisterCursorRuntime`, `SetCursorRuntimeSession`, `MarkCursorRuntimeGone`
+and conditional hook store paths. Outbound protocol changes use the bounded,
+serialized writer and independently closeable transport; preserve the
+registered ownership descriptor until end verification. Protocol, input and
+persistence changes extend the single `internal/cursorhost`
+controller/recorder; do not create parallel pipes, a second input owner,
+screen classification or another transcript format.
+
+### cursorfix: synthetic ACP runtime (reusable test fixture)
+
+`internal/testsupport/cursorfix` owns `runtime.js` at its package root, embedded
+by `cursorfix.go`. `New` and `NewWithWorker` produce a private executable
+Node stand-in, trace and independently observable accepting runtime/worker
+pid and release files. `Runtime.Frames` decodes the received-request trace.
+The fixture covers protocol interaction and controlled runtime/worker loss
+without Cursor authentication. `testdata/provenance.json` explicitly labels
+protocol 1, the pinned Node interpreter, synthetic origin and absence of
+an authenticated Cursor capture. A fixture pass proves the exercised AD
+behavior; it does not prove native Cursor/version/platform support.
+
+**Must use:** tests requiring a Cursor protocol/runtime stand-in extend
+`cursorfix` and its one embedded `runtime.js`, read traffic with `Frames` and
+preserve the provenance record. Do not duplicate the executable or label
+scripted frames as captured Cursor evidence. Go tests reuse `apitest`,
+`storefix`, `procfix`, `procstarttimefix`, `launchfix`, `tmuxfix` and real-tmux
+fixtures for their existing concerns. TypeScript tests reuse the existing
+`openClient`, `withTempHome`, fake-client and ts-helper fixtures; no second
+selection/client serialization harness is needed.
 
 ## Package Layout & Layer Boundaries
 
@@ -115,22 +258,23 @@ in `init`. The verb registry
 
 | Path | Responsibility | Allowed imports | Prohibited imports |
 | --- | --- | --- | --- |
-| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. It still opens the verbs' store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). It opens that store with `store.OpenOrInitWithBusyTimeout` and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude` or `codex`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
+| `internal/cursorhost` | Fresh owned Cursor ACP gateway, protected Linux lifetime, single pane input controller and synced protected transcripts; see [Cursor gateway](#cursor-gateway-and-current-launch-binding). | stdlib; `internal/config`, `internal/layout`, `internal/store`, `internal/trail`, `internal/version`, `internal/tmux`, `internal/probe`; `golang.org/x/sys/unix`. | `pkg/api`; `internal/mcp`; lifecycle screen classification. |
+| `cmd/agent-director` | Thin CLI shim: argv parser and JSON envelope marshaller. Constructs one `pkg/api.Client` at startup via `setupClient()`, a thin wrapper over `internal/clisetup.Open`, which `cmd/agent-director-admin` shares; every store-backed verb calls a method on that Client (`client.Spawn(params)`, `client.Status(id)`, etc.) — no business logic lives in `cmd/`. Internal `cursor-host` is parsed/dispatched before public client setup and delegates to `internal/cursorhost`; `hookCursorVerifier` wires independent runtime/transcript/pane verification into the hook without changing its dependency boundary. `serve` opens a second Client for its MCP tools, from the same global-flag overrides (`clisetup.APIOptions`) with no logger, and names a failed open of it with `clisetup.NewOpenError`, as `Open` names its own (b.uii; see [Per-Client logger (Pin H4)](#per-client-logger-pin-h4)). **DB-free exceptions:** `help`, `version` (and their aliases, below), the no-verb run (no verb after the global flags, so a run with only global flags counts), and `trail-emit` are dispatched BEFORE `setupClient` so they never open or create a store (SR-4.1/4.2, b.8dr); help/version run against a zero-value `Client` and consult no store. **Verb aliases (b.fv2):** `--help` and `-h` run `help`; `--version` and `-v` run `version`. `run()` replaces an alias with its verb (the `verbAliases` map in `main.go`) when it is the first argument after the global flags, before the `trail-emit` check, the DB-free short-circuit and dispatch, so an alias gives its verb's stdout byte for byte and its exit code, opens no store, and hands its trailing arguments to the verb (`--version --json` is `version --json`). Anywhere else it is no alias: `list --version` is `ErrInvalidFlags`. Aliases are not verbs: no manifest entry and no `handlers()` key names them, and `help`'s and `version`'s manifest descriptions list them. **Must:** a new verb alias goes in `verbAliases`, never in `handlers()`; `TestCLIFlagsAreManifestParams` fails on a `handlers()` key that is not a manifest verb. The no-verb run prints help, except that when stdin is not a terminal and carries a hook payload (a Claude Code that does not run exec-form hooks, SR-22.9) it prints nothing, exits 0 and writes one `ad.hook.ignored` `no_exec_form`, still with no store and no config load; the trail file is the only thing it may create (`noVerbHookIgnored` in `noverb.go`, which reads stdin with a 1 MiB cap and a 1 s deadline and hands the bytes to `hook.HandleNoExecForm`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `version` and its aliases never read stdin; `help` and its aliases read it only when `AGENT_DIRECTOR_AGENT` is `codex`, through the same bounded reader (see [Opt-in dynamic help-hook injection](#opt-in-dynamic-help-hook-injection)). **`runHook` exception:** retains independent `config.Load` + `store.Open` calls per SRD §3.2 fail-open; hook fires must never be blocked by Client-startup failures. For Claude/Codex it opens the verbs' configured store: it takes the path from `config.Store.EffectiveDbPath`, which is `pkg/api.New`'s store-path tiers 2 and 3 (the hook takes no `--store-path`), so an empty `db_path` gives the default store, never a file in Claude's cwd (b.8up). For Cursor, `runHook` instead uses the actual opened store path propagated by the launch in `AGENT_DIRECTOR_CURSOR_STORE_PATH`; the hook still has no `--store-path` flag. It opens that store with `store.OpenOrInitWithBusyTimeout` for Claude/Codex or non-initializing `store.OpenWithBusyTimeout` for Cursor, and `config.Store.EffectiveBusyTimeoutMs`, the busy timeout `pkg/api.New` uses too (b.c7f), and right after the open hands it `config.State.EffectiveSettleMs` through `Store.SetSettleMs`, the settle time with which the hook's state write judges whether the state it replaces had settled (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)). `runHook` builds the `hook.HandleConfig`, wiring `Now: time.Now` and `PendingGrace: cfg.Tmux.EffectivePendingGrace()` (the grace bound of SessionStart's wait for its launch's identity write, SR-22.9, SR-13.4) beside the parent-process readers and the production `PollClock`. `parseHookArgs` reads `--agent` and `--timeout` in one pass, in either order; an unknown flag or a positional is skipped without losing a valid one, `--agent` with no value or an empty one reaches `Handle` as the invalid value `(no value)` (a hook failure, below), and an absent `--agent` stays empty, which `ResolveAgent` reads as `claude`. `runHook` hands the raw value to `HandleConfig.Agent`; the manifest's `hook` verb lists it as the optional `agent` param (`claude`, `codex` or `cursor`), so the generated references carry it (see [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). | stdlib; `pkg/api`; `pkg/api/errnames`; `internal/hook`; `internal/probe` (the hook's parent-process readers, `hookParentProc`, shared by `runHook` and the no-verb run); `golang.org/x/sys/unix` (the no-verb run's terminal check, `isTerminal`, with the per-OS `ioctlReadTermios` in `noverb_linux.go` / `noverb_darwin.go`); `internal/clisetup` (`setupClient`'s `Open`, `serve`'s `APIOptions` and `NewOpenError`, and the global-flag parser `ParseGlobalFlags` / `GlobalFlags.Apply`, which `run()` calls directly; `cmd/agent-director` has no global-flag code of its own); `internal/config` in `runHook`, `newHookLogger` and `setupClient` (the `config.Config` it returns); `internal/store` in `runHook`; `internal/cursorhost` for the internal gateway and injected Cursor verifier. | Direct `database/sql` use; raw SQL strings; ad-hoc subprocess management; `store.Open` / `config.Load` / `tmux.New` outside `runHook` and `newHookLogger` (the Client's config load and logger bootstrap are `internal/clisetup.Open`'s). |
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, `--create-if-missing`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
 | `pkg/api` | **Canonical verb-handler home and public surface.** Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v9; see "Schema v9" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
-| `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path` and `codex_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `Load` refuses a blank value, a relative one, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a value that is neither `claude` nor `codex` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude` and `config.AgentCodex` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v10; see "Schema v10" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and Claude/Codex `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path`, `codex_path` and `cursor_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `Load` refuses a blank value, a relative one, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Fresh Cursor composition selects `Launch.CursorPath` (else `agent` on `PATH`) in `composeCursorCommand` (`cursorlaunch.go`); all future Cursor argv construction must reuse that function. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a value outside `claude`, `codex` and `cursor` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude`, `config.AgentCodex` and `config.AgentCursor` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `internal/layout` | The one definition of where agent-director keeps its files: `DirRel` (`.config/agent-director`), `Display` (`~/.config/agent-director`), the file and directory names in it (`ConfigFile`, `StoreFile`, `ErrorLogFile`, `TrailFile`, `TemplatesDir`, `BinDir`, `BinaryName`), the `~/` forms of the defaults (`DisplayConfigPath`, `DisplayStorePath`, `DisplayErrorLogPath`, `DisplayTemplatesDir`), `Dir(home)` and `Join(home, ...)`; and, in `old.go`, the presence rules `OldPresent`, `NewPresent`, `OnlyOldPresent` and `StoreExists`, the only code that names the old directory. See [`internal/layout`](#internallayout). **Must use:** every default path in the Go code derives from this package, never a literal `.config/agent-director`; a presence question about the two directories is asked only through `old.go`. | stdlib only. | Every other `internal/` and `pkg/` package (it is a leaf, so each can import it without a cycle). |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture` (with `SeedDecideFixtureAgent`), `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
 | `pkg/api/errnames` | **Single source of truth for err_name strings.** Declares `Catalog []Entry` (each Entry pairs a sentinel `error` with its canonical name string), `Classify(err) (name, description)` with `ErrInternal` fallback, and `TrimNamePrefix` for envelope-text normalisation. Besides the verb-surface names, `Catalog` holds every name the command binaries give outside a verb handler, so it lists every err_name the CLI writes in an error envelope (b.cm7): the CLI-setup names `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired`, which `internal/clisetup.Open` gives before any verb runs (b.vma, b.cm7), and the last three of which `serve` gives through `clisetup.NewOpenError` when it cannot open its MCP Client (b.uii); the CLI-internal names `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which the binaries write themselves; and `ErrInternal`, `Classify`'s fallback, paired with the unexported sentinel `errInternal`, which no error wraps (see [err_name catalog](#err_name-catalog)). The `Catalog` is consumed by `cmd/agent-director`'s envelope writer and `internal/mcp`'s `classifyDispatchError`. `catalog.json` is generated deterministically from `Catalog`; the doc-drift CI gate enforces coherence. | stdlib; `pkg/api`; `internal/clisetup` (its seven sentinels only); `internal/config`; `internal/probe`; `internal/spawn`; `internal/store`; `internal/tmux` (sentinel types only). | `cmd/*`; `internal/mcp`. |
 | `internal/mcp` | Stdio MCP server. `server.go` handles JSON-RPC framing (initialize, tools/list, tools/call). `dispatch.go::LiveDispatcher` holds a single `*pkg/api.Client` and routes each tool call to the corresponding `Client` method — no business logic of its own. Before routing, `checkParamNames` refuses an argument that is not one of the verb's manifest params with `ErrInvalidFlags` (naming the new key when the argument is an old name, see [Refusal of old names](#refusal-of-old-names)); every manifest param of every exposed verb is decoded through `decodeParams`, which refuses a wrongly typed value with `ErrInvalidFlags` too (see [Parameter names and unknown arguments](#parameter-names-and-unknown-arguments)). `expire`'s `older_than` is parsed with `pkg/api.ParseOlderThan`, the parser the CLI shares, and a value it rejects is `ErrInvalidFlags`. `classifyDispatchError` delegates to `errnames.Classify`. | stdlib; `pkg/api`; `pkg/api/manifest`; `pkg/api/errnames`. | `internal/store`; `internal/config`; `internal/tmux`; `internal/spawn`; `cmd/*`. |
 | `internal/oldnames` | The one table of the old, Claude-named public names (`Table`, one `Entry{Surface, Old, New}` per name and surface: the CLI, MCP, config and template surfaces), `Find` (exact for CLI and MCP names, letter-case-blind for config and template names, as the TOML decoder matches them), the refusal texts (`Entry.FlagText`, `KeyText`, `ConfigText`) and `RefuseFlag`, which turns the flag package's unknown-flag error into the refusal. **Must use:** every surface that refuses an old name builds its refusal from this table (see [Refusal of old names](#refusal-of-old-names)). | stdlib only (`errors`, `flag`, `strings`): a leaf package. | Every other package of the module. |
 | `pkg/api/manifest` | Defines and exposes the canonical CLI/MCP verb manifest used to keep the CLI surface, MCP tool surface, and docs in lock-step. Also holds `ReuseOptInSpelling`, the reuse opt-in's one spelling in shared advice, which `internal/spawn` builds its retry sentences on, and `TmuxSessionNameSpelling`, the session-name param's, which `pkg/api`'s list hint and `internal/spawn`'s `ErrTmuxSessionNameEmpty` description build on (see [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)). | stdlib only — leaf package. | `internal/store`, `internal/config`, `cmd/*`, raw `database/sql`, SQL strings. The manifest is the source of truth; consumers depend on *it*, never the other way around. |
-| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps, synthesizes a Claude launch's `--settings` JSON and composes a Codex launch's per-launch settings (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the agent's program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`); a row whose agent is neither fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
+| `internal/spawn` | Owns the parameter-resolution → validation → defaults → launch pipeline (SRD §7). On ordinary spawns, `ApplyDefaults` makes the collision pre-check's one `SpawnState` read and returns an `IDCheck`. Opted-in explicit-id reuse makes one early `ReadForReuse` before `Validate`; `ApplyDefaults` consumes its saved answer through `reusePreCheck`, preserving collision and read-error precedence (see [Collision pre-check](#collision-pre-check)). Builds env maps, synthesizes a Claude launch's `--settings` JSON and composes a Codex launch's per-launch settings and the fresh Cursor gateway argv (see [Per-agent launch composition](#per-agent-launch-composition)). Plain spawn's `Launch` resolves the launch socket and mints the launch token (`launchid.go`: `ResolveLaunchSocket`, `ResolveScanSocket`, `NewLaunchToken`, and `ResolveQuerySocket` for a query on a row that records no socket), inserts the `pending` row with launch start, token and socket, creates and labels the session through the shared create-and-label step (`createlabel.go`: `LaunchTmux`, `CreateRequest`, `CreateAndLabel`, `CreateOutcome` / `CreateKind`), maps its failures in one place (`launch_errors.go`: `plainSpawnCreateError`, built from the exported description builders shared by every launch verb, `TmuxUnavailableError` (also the label scan's), `LaunchTimeoutError`, `UnlabelledSessionError`, `CreateFailedError` (with `InstanceCreateFailedError`, its form led by the instance id, for plain spawn's held name whose holder vanished) and the row sentence `RowStaysPending`, with the retry sentences `LaunchRetryRule`, `ReuseRetry` and `PlainSpawnCollides` and `ReuseOptIn`, the reuse opt-in in its one spelling, built on `manifest.ReuseOptInSpelling`; "duplicate session" is no verb error there but a `*HeldNameError` handed to `pkg/api`'s held-name path) and makes the conditional identity write (`RecordLaunchIdentity`, shared with resume and reuse). Every launch records its own process as the row's launch owner and ends that hold when it ends (`launch_owner.go`: `CurrentLaunchOwner`, `LaunchOwnerAlive`, `ReleaseLaunchOwner`, b.kdf; see "v6 columns" under [`internal/store`](#internalstore)). The one composition step for a resolved request is `ComposeLaunch` (`compose.go`): the `CreateRequest`, the row's request fields and, for a Codex launch, the pre-trust outcome its argv was built for (`ComposedLaunch{Create, Row, PreTrust}`), with no write, tmux call or I/O, shared by plain spawn's insert and reuse's reset; the parent id comes from `ParentIDFromEnv()` (the caller's `AGENT_DIRECTOR_INSTANCE_ID`), the one derivation used by the insert, the reset and resume's move. Every launch pre-trusts its folder through the one shared step `RunPreTrust` (`pretrust.go`), which plain spawn runs before its insert, reuse before its reset and resume before its move to `pending`; for a Claude agent it is `PreTrust`, whose read-modify-write of `.claude.json` runs under Claude Code's own lock on that file, taken by `lockConfig` (`configlock.go`), which waits for a held lock for at most the `[pre_trust] lock_wait_seconds` that `PreTrust` passes it; for a Codex agent it is the outcome `CodexPreTrust` decided during composition, which touches no file and takes no lock; Cursor grants no trust and reports `failed` by default or `skipped` for `no_pre_trust`; see [Workspace-trust pre-write](#workspace-trust-pre-write). The agent is part of this stage: `Resolve` merges it and the inherited-arguments owner, `Validate` runs the agent checks in a fixed order, `ComposeLaunch` sets the row's agent and starts the pane command with the Claude/Codex program (`claudeProgram(cfg)` in `launch.go`, `codexProgram(cfg)` in `codexlaunch.go`) or the fresh Cursor gateway (`composeCursorCommand` in `cursorlaunch.go`); a row whose agent is outside the three valid values fails composition with `store.ErrRowAgentInvalid` (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks) and [Per-agent launch composition](#per-agent-launch-composition)). The advice helpers that name an agent are `AgentSpelling`, `ReuseSpawn`, `ReuseRetry` and `ReservedHomeAlternative`. Supported Claude/Codex resume's launch uses the same pieces: `ResolveRowLaunchSocket` (the row's recorded socket), `ComposeRelaunch` (the `ComposedRelaunch{Create, PreTrust}`, with no tmux call or write) and `Relaunch` (`CreateAndLabel` on that request). Supported Claude/Codex reuse's launch uses `ResolveRowLaunchSocket`, `ComposeLaunch` and `CreateAndLabel`. Cursor resume returns `ErrSpawnNotResumable`; reuse and switches to/from Cursor return `ErrSpawnDeniedFlag`, requiring a fresh id. The clock and the start-time reader are passed in. See [Launch identity](#launch-identity) and [Reuse of a finished id](#reuse-of-a-finished-id). | stdlib; `internal/config`; `internal/store`; `internal/tmux`; `internal/probe` (`SelfPIDNamespace` only, for the launch owner); `pkg/api/manifest` (`ReuseOptInSpelling` and `TmuxSessionNameSpelling` only); `github.com/google/uuid` for UUID4 minting. | Raw `database/sql`; hook-handling code; MCP framing; ad-hoc subprocess management outside `internal/tmux`. |
 | `internal/tmux` | Thin client over the tmux binary, built only by `New(binary, Timeouts)` (`""` = tmux on `PATH`). **Phase 1 call set (SR-2.1, Appendix F.1)**, every call taking the socket: `Lookup` (the one-invocation lookup: the server identity read `display-message -p 'ad-server<TAB>#{pid}<TAB>#{start_time}'`, then the session listing with labels, then the three `@ad_owner` scope reads; LFR H5; b.47f. The identity read answers on a server with no sessions too (tmux's `exit-empty` off), so every answer names the server that gave it. `parseLookup` takes the first line as the identity line, exactly `ad-server`, the decimal pid and the decimal start time, tab separated; then the session lines, whose pid and start time must equal the identity line's; then the scope section (LFR H6). A first line that is not an identity line, empty output included, or a session line that disagrees with it makes the answer malformed, `FailUnrecognized`), `ListPanes` (`list-panes -a`), `KillPane` (by pane id), `KillSessionID` (by session id), `SendKeysPane` (by pane id: the text call `send-keys -t <pane id> -l -- <text>`, then an optional separate `send-keys -t <pane id> Enter`; the `--` makes a text starting with `-` literal, never read as a send-keys flag; a text ending in `;` is typed whole, by the argv escape below), `CapturePaneID` (by pane id), `SetLabel` (label by id: the session label by session id and the pane label by pane id) and `NewSession` (the create with its chained `@ad_owner` and `@ad_pane` labels). **Key send (b.9o4)**, an addition beside the SR-2.1 calls, not one of them, also taking the socket: `SendKeyPane` (by pane id: `send-keys -t <pane id> <key>`, one key by its tmux key name, never typed literally, call kind `CallSendKey`, "key send"; `pause`'s `C-u`, and `send-keys`' named keys, b.146 rule 8; the key is always a fixed name from the calling code, `pause`'s constant or `pkg/api`'s `paneKeyNames` table, never caller text passed through) and `SendKeyPaneRepeat` (the same send with `-N <count>`, one call however many presses, the same call kind and the action timeout; a Codex row's `pause` sends `C-u` 127 times this way, and a count below 1 is sent as 1). **Label form (SR-3.4, SR-3.5):** `ad1 <token> <$N> <instance id> <store id>`, five fields. The store id is the writing store's `store_meta.store_id`, which callers pass from `(*store.Store).StoreID()`; it is the last field, so the instance id is everything between the third and the last space and may contain spaces. `NewSession` and `SetLabel` both take the token, the instance id and the store id; the chain passes only the instance id through the format escape below. **Pane label (SR-2.1, SR-3.5):** every created pane carries the per-pane user option `@ad_pane` = `<token> <pane id>`, so a launch whose create reply was lost can later find its own pane by token, whatever the base-index or window layout. The create sets it with a second chained step, `; set-option -p -F -t =<name>: @ad_pane '<token> #{pane_id}'`, after the `@ad_owner` step; each `;` is its own argv element, and a name for which `NeedsLabelByID` holds gets neither chained step. A failure of either chained step is the create's `FailLabel` (tmux stops the chain at the first failing step). `SetLabel(socket, sessionID, paneID, token, instanceID, storeID)` sets both labels in one invocation, `set-option -t <$N> @ad_owner '<label>' ; set-option -p -t <%N> @ad_pane '<token> <%N>'`, with the session and pane ids from the create reply; a failure may leave the session labelled and its pane not. Only the new session's one pane is labelled: a pane split from it later has no value. **Pane listing:** `ListPanes` reads `#{@ad_pane}` as the sixth and last field, the value being everything after the fifth tab, so a tab inside it cannot shift the other fields. `Pane.AdPane` is the token only when the value is exactly `<16 lowercase hex token> <pane id>` and that pane id equals the line's own `%N` (`classifyPaneLabel`); anything else gives `""`, so a window, session, global or server value borrowed through the format, which names another pane or none, never counts (the scope guard of SR-3.6). Caveat: on tmux 3.3a a server-scope `@ad_pane` (`set-option -s`) is listed on every pane in place of its own value, so while one exists only the pane that value names can report a token and every other pane reads `""`; no other pane is matched, but a pane reading `""` then does not show that its label is gone. The raw value never leaves the client, and a malformed listing's `CallError.FirstLine` is its first line cut before the pane label field (`paneListingFirstLine`). The lookup does not read `@ad_pane`. `kill`'s adoption of a lost create reply (SR-3.6) is its first reader; it also exists for the leftover-pane check (SR-3.7) and the no-pane row check (SR-11.3). A value in any other form, a four-field one included, parses as no label (`LabelNone`), except that a four-field value whose instance id ends in a space and 16 lowercase hex reads as a shorter id plus that word as its store id; and `Label.StoreID` is set only on a valid label. Typed results and failures: `Call`, `Failure`, `CallError`, `LookupAnswer`, `Session`, `Label` / `LabelKind`, `CreateReply`, `Pane`, `Timeouts`. **Argv escape (`invoke.go`):** tmux splits its argv into commands at every element ending in `;`, before any option parsing and so even after `--`: the `;` is dropped and the element ends its command, so a caller value ending in `;` followed by more elements would run those as a tmux command of the caller's choosing (`kill-server`, `run-shell <shell command>`). An element ending in `\;` is instead one argument with that backslash removed. `commandArgv(cmds ...[]string)` builds every call's argv after `-u -S <socket>` from a list of commands: a standalone `;` only between commands, and every element of every command passed through `escapeFinalSemicolon` (one backslash before a final `;`). So every value (session name, cwd, `-e` entry, the agent's command with its claude arguments at spawn and at resume, send-keys text, label values, targets) reaches its tmux command as one argument, a final `;` included, and never ends that command. The escape covers only this split: what the command then does with the argument is unchanged (format expansion is the format escape's job, below). The chain target `=<name>:` ends in `:`, so it is never escaped, and tmux matches it against the stored, unescaped name. The socket is not escaped: tmux's own option parsing consumes `-S <socket>` before the split. `HasSession` builds its argv the same way. **Must use:** every tmux call composes its argv through `commandArgv`, socket-taking calls by passing one `[]string` per command to `invoke` (`runAction`, `runData`); never put a `;` separator or a value into a tmux argv by hand. **Format escape (`create.go`):** tmux expands formats in some arguments before using them: `new-session`'s `-c` cwd (twice, by the command and again at the pane spawn, both times from the raw argument), its `-s` name, and every `set-option -F` value. In a format, `#(<cmd>)` runs `<cmd>` through the shell on the tmux server, and `#{…}` and aliases such as `#S` are replaced, so a raw cwd holding them would run a command, or start the agent in another directory, at spawn and on every resume. `escapeFormat(text)` returns text that expands back to exactly itself: each run of `#` is doubled (`##` expands to `#`), except a run directly before `[`, which tmux copies through unchanged as a style, so doubling it would add `#`. `createCommands` sends `-c` as `escapeFormat(cwd)` and the `@ad_owner` value's instance id through it, so spawn and resume start the agent in the cwd exactly as given and run nothing in it; the cwd stored on the row and reported by agent-director is the unescaped one. The two escapes compose: `escapeFormat` adds or removes no `;`, and tmux drops the argv escape's backslash before it expands the format, so a cwd `/a#;` is sent as `/a##\;` and expands to `/a#;`. Not escaped: the `-s` name, which never holds `#` (spawn refuses one, and a default name keeps only `[A-Za-z0-9_-]`); the `-e` entries and the agent's command, which tmux does not expand; and the client's own fixed formats (`#{session_id}`, `#{pane_id}`, the identity read's, the reply and listing formats). **Must use:** every caller-controlled value in a tmux argument that tmux format-expands goes through `escapeFormat`; never double `#` by hand. Mechanics: every call runs `-u -S <socket>` first; targets are ids only (never a name or pattern); each call class (query, action, create) has its own timeout, plus the pipe-close wait (`Timeouts.WaitDelay`); data is parsed only from standard output of an exit-0 call; replies are recognised only from the first line of standard error; the client's environment has every `AGENT_DIRECTOR_*` variable removed. Socket-taking calls fail only with `*CallError`. Labels reach callers only classified (the raw value never leaves the client) and recognised replies only as a `Failure`; the one exception is an unrecognised reply, whose first line (trimmed, at most 200 bytes) is carried in `CallError.FirstLine`. **Socket resolution (RN-5):** `ResolveSocket(create)` resolves the socket as tmux does (`TMUX`, then `TMUX_TMPDIR`, then `/tmp`, with tmux's per-user directory checks) and `EnsureSocketDir(socket)` creates only a missing per-user directory; refusals are `*SocketDirError` (with `SocketDirReason`), matching `ErrTmuxNotAvailable`. **Must use** `tmux.NeedsLabelByID(name)` to decide whether a session name (one containing `$` or `\`) must be labelled by id rather than by the chain; never re-implement that test. The client receives its timeouts and pipe-close wait from `pkg/api` at construction, never from `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); the package defines no defaults. The runner seam types (`Invocation`, `RunStatus`, `RunResult`, `Runner`) are exported for replay tests; tests install a runner only through the test-only `NewWithRunner` in `export_test.go`. The one name-based method left is `HasSession`; the name-based kill, send and capture are removed (every verb targets ids only). `HasSession` is kept on the client and on `api.TmuxClient` and matches by prefix; no verb uses it, and none may (`resume` judges its row with the lookup). `StripANSI` post-processes captures. **Shared lookup (SR-3.3, SR-3.4, SR-3.10, Appendix F.2):** `Lookup` / `Classify` in `lookup.go`, `lookup_class.go`, `lookup_holder.go` and `lookup_server.go` turn one lookup answer and a row's `Launch` into a verdict; see [Shared tmux lookup](#shared-tmux-lookup). Beside it: `unusable.go` (the unusable-name guard `Unusable`, and `RewrittenIn`), `agent_process.go` (agent-process selection `SelectAgentProcess`, judgement `JudgeProcess` and `KnownStartTime`), `pane_token.go` (`PaneByToken`, a pane found by its `@ad_pane` token), `sweep.go` (the multi-socket sweep `Sweep`, built by `NewSweep`, under one tmux budget) and `starting_session.go` (the session-age helper `SessionAge` and the starting-session rule `StartingSession`; see [Starting-session rule](#starting-session-rule-starting_sessiongo)). | stdlib (`bytes`, `context`, `errors`, `fmt`, `io/fs`, `os`, `os/exec`, `path/filepath`, `regexp`, `slices`, `sort`, `strconv`, `strings`, `syscall`, `time`, `unicode`, `unicode/utf8`). | `internal/config` (see [`[tmux]` timing settings](#tmux-timing-settings)); `internal/probe` (the lookup's `ProcChecker` is satisfied structurally); template and store packages; shell processes (`/bin/sh`); anything other than direct `exec.Command`. |
-| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only those recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, proves every request of the row gone and closes its running subagent entries, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. The classifier is agent-aware: `ClassifyEvent(agent, raw)` picks a Claude or a Codex table, the agent coming only from the hook's own `--agent` argument (`ResolveAgent`; an invalid value is a hook failure through `failClosed`), and its result carries the flags the handler follows, among them `SubagentCapture` (Claude only), `EndReport` and `HealsTranscript`; a Codex `SessionEnd` without `agent_id` is an end report (`applyEndReport`, through the store's `ApplyHookEndReport`) and an applied Codex hook without `agent_id` may heal the row's transcript path (`healCodexTranscript`, through `HealJsonlPath`); the grandparent advice follows the row's agent (`paneIsGrandparentAdviceFor`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (no tmux call and no ancestry walk on the hook path; its only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`). |
+| `internal/hook` | Reads payload JSON from stdin, classifies per SRD §5.2, and writes the row only through the gated store writes: a hook applies only when its parent process (`getppid()` and that pid's start time, captured once at entry) is the row's recorded pane process; otherwise it changes nothing and writes one `ad.hook.ignored` (SR-22.9; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). A subagent's or in-process teammate's SessionStart or SessionEnd (non-empty `agent_id`) is decided from the payload before any write and ignored as `subagent_event`. The main agent's idle-prompt Notification (`notification_type` `idle_prompt`, no `agent_id`) is written through `ApplyHookWaitingIfWorking`, which returns a `working` row, or a relayed `check_permission` row none of whose requests holds it (still awaits an answer and is not proven gone, `holdsRowSQL`; b.omt), to `waiting`, soft-refreshes any other, and records `idle_since` (b.svb, b.146 problem 3; see "The idle-prompt Notification" in [Event → state mapping](#event--state-mapping-srd-52)). A relayed PermissionRequest is `runRelay`'s alone: its first write records the request and the move to `check_permission` in one transaction, and it writes an answer only once confirmed in the store (b.146 step 2; see [Permission relay](#permission-relay)). On a relay-on agent a `PostToolUse` or `PostToolUseFailure` carrying a `tool_use_id`, and the main agent's `Stop` or idle-prompt Notification, first prove permission requests' dialogs gone (`proveRequestsGone`, through `ProveRequestsGone`; the `Stop` or idle prompt only those recorded before the hook started, b.omt; b.146 step 2c, see "The dialog hold" under [Permission relay](#permission-relay)); then such a `PostToolUse` or `PostToolUseFailure` closes the fallen-back request with that id (`closeToolRan`, through `CloseToolRanRequests`, each relay hook judged by `HandleConfig.RelayHookGone`; b.146 rule 13), and a terminal SessionEnd's move to `ended` closes the row's open requests, proves every request of the row gone and closes its running subagent entries, in the same transaction (the store's `applyEndedTransition`; b.146 rule 12). A SessionStart that arrives before its launch's identity write waits for it until the launch start plus the pending grace period or 540 s after it began waiting (`sessionStartWaitCap`), whichever comes first, re-reading the row every 250 ms on the injected clock, before its final gated write (`recordSessionStart`, `waitForLaunchIdentity` in `handler.go`; see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). `HandleNoExecForm` (`noexec.go`) is the no-verb run's side: it takes the raw stdin bytes, writes `ad.hook.ignored` `no_exec_form` when they are a hook payload, and opens no store. For a `pending` row's SessionStart refused with `pid_mismatch`, and only then, `emitIgnored` reads the parent's own parent pid once (`ParentProc.PPID`) and, when it is the pane process, writes `ad.hook.pane_is_grandparent`; no read feeds the gate's decision (see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)). Subagent capture (`subagent.go`; see [Subagent capture](#subagent-capture)): `SubagentStart` and `SubagentStop` are known soft refreshes that `Handle` routes to the store's one-transaction subagent write, and an `Agent`-tool `PreToolUse`, `PostToolUse` or `PostToolUseFailure` and a main-agent `Stop` (with its `background_tasks` snapshot) follow their applied row write with a gated entry transaction; the receipt time of every such write is the hook's start instant (`HandleConfig.Start`), and the store reads no clock. The classifier is agent-aware: `ClassifyEvent(agent, raw)` picks the Claude, Codex or Cursor table, the agent coming only from the hook's own `--agent` argument (`ResolveAgent`; an invalid value is a hook failure through `failClosed`), and its Cursor result requires the registered current-launch binding plus CLI-injected `HandleConfig.VerifyCursor` (nil/error rejects), and its result carries the flags the handler follows, among them `SubagentCapture` (Claude only), `EndReport` and `HealsTranscript`; a Codex `SessionEnd` without `agent_id` is an end report (`applyEndReport`, through the store's `ApplyHookEndReport`) and an applied Codex hook without `agent_id` may heal the row's transcript path (`healCodexTranscript`, through `HealJsonlPath`); the grandparent advice follows the row's agent (`paneIsGrandparentAdviceFor`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). Exits 0 (state-tracking fail-open). | stdlib; `internal/store`; `internal/trail`; `internal/config` (the `config.Relay` settings type only; the cmd-side wrapper loads config); `github.com/google/uuid`. The parent-process readers arrive as `HandleConfig.ParentPID` / `ParentProc`, the wait's clock and grace period as `HandleConfig.Now` and `HandleConfig.PendingGrace` (a `time.Duration`, so the package reads no `[tmux]` setting), and the relay hook's start, per-hook timeout (its `--timeout` argument) and own process identity as `HandleConfig.Start`, `RelayTimeout` and `Self` (`Start`, the hook process's first clock reading, is also a `Stop`'s or idle prompt's `turn_end` cut, b.omt, and the receipt time of every subagent write), and the PostToolUse close's judge of a relay hook as `HandleConfig.RelayHookGone` (`pkg/api.RelayHookGone` with the per-OS readers, the hook's own pid namespace, `time.Now` and the effective relay window: `hookRelayHookGone`; nil closes nothing), all wired by `cmd/agent-director`; the wait sleeps on `HandleConfig.Clock` (the relay poll's `PollClock`). | `internal/tmux`; `internal/spawn`; `internal/probe` (Claude and Codex hook paths make no tmux call and no ancestry walk; their only reads past the parent are `ad.hook.pane_is_grandparent`'s, through `ParentProc`. Cursor's CLI-injected `HandleConfig.VerifyCursor` calls `cursorhost.VerifyPane` for tmux and process ownership evidence; `internal/hook` still imports none of these forbidden packages). |
 
 ### `[tmux]` timing settings
 
@@ -916,12 +1060,12 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v9** lives in `internal/store/schema.go`. Six tables, none with a
+**Schema v10** lives in `internal/store/schema.go`. Seven tables, none with a
 column whose name starts with `claude_` (the v9 hop renamed those; see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
 
-- `spawns` — one row per agent instance under direction (Claude Code, or
-  Codex), keyed by `instance_id`, with parent/child link (`parent_id`),
+- `spawns` — one row per agent instance under direction (Claude Code,
+  Codex or Cursor), keyed by `instance_id`, with parent/child link (`parent_id`),
   lifecycle (`state`, the raw state, `started_at`, `last_seen_at`,
   `ended_at`), the settle columns `settled_state` and `state_changed_ms`
   (see "v8 columns" below), the agent columns `agent` and
@@ -930,6 +1074,9 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   (`agent_args`) and session id (`session_id`), tmux + relay metadata, and a
   JSON-encoded `labels` blob. Indexed on `state`, `last_seen_at`, and
   `parent_id`.
+- `cursor_runtimes` — the independently verified current Cursor launch
+  binding, including gateway/runtime identities, private pipes, connection,
+  session and termination marker; see [Cursor gateway](#cursor-gateway-and-current-launch-binding).
 - `permission_requests` — one row per `(instance_id, request_token)`
   pair, FK-cascaded on spawn delete; `request_token TEXT NOT NULL`, composite
   `UNIQUE(instance_id, request_token)`, with `tool_name`, `tool_input`,
@@ -1381,12 +1528,12 @@ names](#store-upgrade-to-agent-generic-names)).
 
 | Column | Type | Written by | Meaning |
 | --- | --- | --- | --- |
-| `agent` | TEXT NOT NULL DEFAULT `''` | `InsertPending` and `ResetForReuse`, from `Spawn.Agent`; the hop's backfill | Which agent the row runs: exactly `claude` or `codex` (`store.AgentClaude`, `store.AgentCodex`). The empty default is only what SQLite needs to add a not-null column; it is no agent, and no write relies on it: the hop sets every existing row to `claude`, and the two writes that begin a row name the agent. Spawn and reuse write the agent the call resolved (`Resolved.Agent`), and `ComposeLaunch` composes that agent's launch (see [Per-agent launch composition](#per-agent-launch-composition)). |
-| `end_reported_at` | INTEGER (epoch ms), nullable | the Codex end report | When a Codex row's verified agent process reported its session's end. NULL on every row until then, and always on a Claude row. `ApplyHookEndReport` sets it (a Codex `SessionEnd` without `agent_id`, any reason); `RecordSessionStartIdentity` clears it (a `SessionStart` from the same verified process); the life rules below keep or reset it. Read by `find-missing` and `pause`, which move a Codex row to `ended` only while it is set (`MarkEndedIfSameLife`, which leaves it set), and by the live-identity read (`LiveSpawnIdentity.EndReportedAtMillis`, with `Agent`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). |
-| `subagent_tracking` | INTEGER NOT NULL DEFAULT 0 | `InsertPending`, `MoveToPending` and `ResetForReuse`, each by the launch's agent (see "The tracking flag's rules"); `RestoreAfterFailedResume` and `RestoreAfterFailedReuse`, the earlier value | Whether the settings the row's current launch was given register the agent's subagent start and stop events: 1 yes, 0 no. A Claude launch's settings register them and store 1; a Codex launch's register none and store 0. So a row launched, resumed or reused by this build reads 1 if its agent is `claude` and 0 if it is `codex`. A row from before the v9 migration reads 0 (untracked) until its next launch write, because the hop does no backfill. Nothing else writes it. `get`, `list` and `status` do not show it. |
+| `agent` | TEXT NOT NULL DEFAULT `''` | `InsertPending` and `ResetForReuse`, from `Spawn.Agent`; the hop's backfill | Which agent the row runs: exactly `claude`, `codex` or `cursor` (`store.AgentClaude`, `store.AgentCodex`, `store.AgentCursor`). The empty default is only what SQLite needs to add a not-null column; it is no agent, and no write relies on it: the hop sets every existing row to `claude`, and the two writes that begin a row name the agent. Spawn and reuse write the agent the call resolved (`Resolved.Agent`), and `ComposeLaunch` composes that agent's launch (see [Per-agent launch composition](#per-agent-launch-composition)). |
+| `end_reported_at` | INTEGER (epoch ms), nullable | the Codex end report | When a Codex row's verified agent process reported its session's end. NULL on every row until then, and always on a Claude or Cursor row. `ApplyHookEndReport` sets it (a Codex `SessionEnd` without `agent_id`, any reason); `RecordSessionStartIdentity` clears it (a `SessionStart` from the same verified process); the life rules below keep or reset it. Read by `find-missing` and `pause`, which move a Codex row to `ended` only while it is set (`MarkEndedIfSameLife`, which leaves it set), and by the live-identity read (`LiveSpawnIdentity.EndReportedAtMillis`, with `Agent`). See [The agent-aware hook classifier](#the-agent-aware-hook-classifier). |
+| `subagent_tracking` | INTEGER NOT NULL DEFAULT 0 | `InsertPending`, `MoveToPending` and `ResetForReuse`, each by the launch's agent (see "The tracking flag's rules"); `RestoreAfterFailedResume` and `RestoreAfterFailedReuse`, the earlier value | Whether the settings the row's current launch was given register the agent's subagent start and stop events: 1 yes, 0 no. A Claude launch's settings register them and store 1; Codex and Cursor launches register none and store 0. So a row launched, resumed or reused by this build reads 1 if its agent is `claude` and 0 if it is `codex` or `cursor`. A row from before the v9 migration reads 0 (untracked) until its next launch write, because the hop does no backfill. Nothing else writes it. `get`, `list` and `status` do not show it. |
 
 - **Agent write refusal.** `InsertPending` and `ResetForReuse` refuse a
-  `Spawn` whose `Agent` is anything but exactly `claude` or `codex` (the empty
+  `Spawn` whose `Agent` is anything but exactly `claude`, `codex` or `cursor` (the empty
   string, another case or a padded value included) with an error wrapping
   `store.ErrRowAgentInvalid`, before any write: no row is inserted and a
   reset changes no row, archives no session and deletes no request. No other
@@ -1406,7 +1553,7 @@ names](#store-upgrade-to-agent-generic-names)).
   stored integer 1, false for 0 and any other stored value, so no stored value
   fails a read (`decodeSubagentTracking` in `internal/store/rowsnapshot.go`). It
   is on no `SpawnRow` or `ListRow`. The three launch writes write one rule: 1 for a `claude`
-  launch, 0 for a `codex` launch, with nothing taken from a `Spawn` but its
+  launch, 0 for a `codex` or `cursor` launch, with nothing taken from a `Spawn` but its
   agent, including over a row that held the other value. The rule is two
   SQL expressions in `internal/store/spawns.go`, the same `CASE` over two
   sources of the agent: `subagentTrackedParamSQL` takes the agent as the
@@ -1422,7 +1569,7 @@ names](#store-upgrade-to-agent-generic-names)).
   `subagent_tracking` through `subagentTrackedParamSQL` (a statement that
   states the agent) or `subagentTrackedColumnSQL` (one that keeps it), never
   a literal, and every new restore of a failed launch writes the saved flag
-  back. A third agent is a new `WHEN` in both expressions.
+  back. A future tracked agent requires a new `WHEN` in both expressions; untracked agents use the existing `ELSE 0`.
 - **Reads decode it without failing.** A stored `end_reported_at` that is not
   a positive integer reads as absent (0), as `decodeEndReportedAt` in
   `internal/store/rowsnapshot.go` decides.
@@ -1440,7 +1587,7 @@ which is no column: see "v8 columns" above.) Two writes
 take a `Spawn`: `InsertPending` and `ResetForReuse` (its `fresh` row), each
 taking `LaunchStartedAtMillis`, `NoPreTrust`, `Identity.Token`,
 `Identity.Socket`, `LaunchOwner` and `Agent` from it (both also write the
-tracking flag by the `Spawn`'s agent, 1 for `claude` and 0 for `codex`, and nothing else); no write takes the other
+tracking flag by the `Spawn`'s agent, 1 for `claude` and 0 for `codex` or `cursor`, and nothing else); no write takes the other
 v5 fields from one.
 Reuse reads a finished row through its own narrow read, `ReadForReuse`
 (`store.ReuseRow`, with the raw `store.RawLife`; see "Versioned writes"). A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
@@ -1632,7 +1779,7 @@ still the one it read, so it knows the row has not changed since. As built:
 - Resume's writes (SR-8.3, SR-8.5; `internal/store/resume_writes.go`;
   called only by `resume`, see [Resume](#resume)). `MoveToPending` moves
   an `ended` or `missing` row whose `RowSnapshot` still equals the
-  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id`, `subagent_tracking` (by the row's agent: 1 for `claude`, 0 for `codex`, `subagentTrackedColumnSQL`) and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
+  examined one to `pending`: it sets the launch start, `launch_token`, `tmux_socket`, `parent_id`, `subagent_tracking` (by the row's agent: 1 for `claude`, 0 for `codex` or `cursor`, `subagentTrackedColumnSQL`) and the launch owner (its `owner` parameter, the resuming process), and clears `pid`,
   `proc_starttime`, `ended_at`, the liveness columns, `end_reported_at` and the
   six identity columns. In the same `BEGIN IMMEDIATE` transaction (`inImmediateTx`),
   when the move applied, it closes every request of the row that still
@@ -1698,8 +1845,8 @@ still the one it read, so it knows the row has not changed since. As built:
     call; `launch_token` and `tmux_socket` from `fresh.Identity`; the three
     launch-owner columns from `fresh.LaunchOwner` (the reusing process);
     `agent` from `fresh.Agent`, refused before anything is written, with an
-    error holding `ErrRowAgentInvalid`, when it is not exactly `claude` or
-    `codex`; `subagent_tracking` by that agent (1 for `claude`, 0 for `codex`, `subagentTrackedParamSQL`); `life_number` advances by one only when
+    error holding `ErrRowAgentInvalid`, when it is not exactly `claude`,
+    `codex` or `cursor`; `subagent_tracking` by that agent (1 for `claude`, 0 for `codex` or `cursor`, `subagentTrackedParamSQL`); `life_number` advances by one only when
     `reuseAgentTextSQL` differs exactly from `fresh.Agent` in this UPDATE;
     `row_version` + 1; then the deletion of every
     permission request of the id, decided or not; then the subagent close
@@ -2067,20 +2214,20 @@ still the one it read, so it knows the row has not changed since. As built:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v9 tables and indexes and insert
+- `user_version == 0` → fresh DB: create the v10 tables and indexes and insert
   the store id inside a single transaction, then stamp `PRAGMA user_version =
-  9`.
-- `0 < user_version < 9` (older-than-binary, i.e. v1, v2, v3, v4, v5, v6, v7 or v8) → **gated**: the
+  10`.
+- `0 < user_version < 10` (older-than-binary, i.e. v1, v2, v3, v4, v5, v6, v7, v8 or v9) → **gated**: the
   store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
   use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
   valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
   sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (e.g. `{"from": 8, "to": 9}`) and authorizes the migration only
+  transition (e.g. `{"from": 9, "to": 10}`) and authorizes the migration only
   when its `from` exact-matches the DB's actual `user_version` and its `to`
   exact-matches this binary's `schemaVersion`. When authorized, the upgrade
   runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds eight
+  `schema.go`), each step individually transactional; today the chain holds nine
   steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
   V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
   `spawns`), `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`),
@@ -2093,15 +2240,16 @@ source of truth for which schema this binary expects. On `Open`:
   (two ADD COLUMN on `spawns`, the settle columns, then their backfill) and
   `{from: 8, apply: migrateV8toV9}` (six column renames, three ADD COLUMN on
   `spawns`, CREATE `subagents` and `subagent_launches`, then the `agent`
-  backfill) —
+  backfill), then `{from: 9, apply: migrateV9toV10}` (CREATE
+  `cursor_runtimes`, validating a pre-existing table before stamping) —
   see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", "Schema v3 →
   v4 Migration", "Schema v4 → v5 Migration", "Schema v5 → v6 Migration",
   "Schema v6 → v7 Migration", "Schema v7 → v8 Migration" and [Store upgrade
   to agent-generic names](#store-upgrade-to-agent-generic-names) below.
-  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9 in one
+  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10 in one
   pass. The sentinel is consumed after the chain commits.
-- `user_version == 9` → nothing to do; the schema already matches.
-- `user_version > 9` (newer-than-binary) → return the sentinel
+- `user_version == 10` → nothing to do; the schema already matches.
+- `user_version > 10` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
 - After any of the successful arms, `openDB` reads the store id; a store
@@ -2180,14 +2328,14 @@ the `store_meta` table (`migrateV4toV5`, b.fmk):
    of the new columns, and no `store_id`.
 4. **Install-only**: like every hop, it runs only when the install flow's
    `migrate-authorized` sentinel authorizes the transition from the store's
-   version to this binary's (`{"from": 4, "to": 9}` for a v4 store, which
+   version to this binary's (`{"from": 4, "to": 10}` for a v4 store, which
    chains through this hop); a v4 store opened without it is refused with
    `ErrSchemaMigrationRequired`. `install.sh` learns the target version from
    that refusal, so it needed no change.
 5. **Downgrade**: to return a migrated store to v4, use the v5 → v4 emergency
    downgrade recipe in docs/migration-guide.md §5 (drop the thirteen columns
    and the `store_meta` table, then `PRAGMA user_version = 4`; on a v6, v7
-   or v8 store run the newer recipes first, newest first; a v9 store has no
+   or v8 store run the newer recipes first, newest first; a v9 or v10 store has no
    recipe, see [Store upgrade to agent-generic
    names](#store-upgrade-to-agent-generic-names)), or restore a copy of
    `state.db` taken
@@ -2215,7 +2363,7 @@ columns (`migrateV5toV6`, b.kdf; see "v6 columns" above):
    a column) leaves `user_version = 5` and none of the three columns.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 5, "to": 9}` for a v5 store); a v5 store opened without it is
+   (`{"from": 5, "to": 10}` for a v5 store); a v5 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v5, use the v6 → v5
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the three
@@ -2274,12 +2422,12 @@ see "v7 columns" above):
    columns and no request proven.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 6, "to": 9}` for a v6 store); a v6 store opened without it is
+   (`{"from": 6, "to": 10}` for a v6 store); a v6 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v6, use the v7 → v6
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the
    twenty columns, then `PRAGMA user_version = 6`; on a v8 store run the
-   v8 → v7 recipe first; a v9 store has no recipe), or restore a copy of
+   v8 → v7 recipe first; a v9 or v10 store has no recipe), or restore a copy of
    `state.db` taken before the install. The recipe keeps the store id and
    every row; it loses each request's relay hook identity, confirmation,
    settle instant, reader and `decide` facts, pane answer, close instant
@@ -2315,12 +2463,12 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    column or the backfill) leaves `user_version = 7` and neither column.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 7, "to": 9}` for a v7 store); a v7 store opened without it is
+   (`{"from": 7, "to": 10}` for a v7 store); a v7 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v7, use the v8 → v7
    emergency downgrade recipe in docs/migration-guide.md §5 (drop
    `settled_state` and `state_changed_ms`, then `PRAGMA user_version = 7`;
-   it applies to a v8 store, so a v9 store has no way to it but a restore),
+   it applies to a v8 store, so a v9 or v10 store has no way to it but a restore),
    or restore a copy of `state.db` taken before the install. The recipe
    keeps the store id and every row; it loses each row's settled state and
    the time of its last change, which a v7 binary, having no settle time,
@@ -2328,7 +2476,7 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    Every agent is stopped before the rollback and started again after it.
 6. **Distinct migration hops**: the v6 → v7 permission-relay hop and the
    v7 → v8 settle-state hop remain separate steps in the authorized chain
-   to v9; their columns are not folded together.
+   to v10; their columns are not folded together.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
 and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
@@ -2453,13 +2601,13 @@ Cross-reference: SRD §4.2 (canonical DDL), §4.5 (layer boundaries), §13.3
 
 #### Store upgrade to agent-generic names
 
-The current migration (`migrateV8toV9`, b.ssz; the one `migrationSteps`
+The immutable agent-rename migration (`migrateV8toV9`, b.ssz; the one `migrationSteps`
 entry `{from: 8, apply: migrateV8toV9}`) takes the store from schema v8 to
 v9. It drops the Claude names from the store's columns, gives every row a
 record of its agent and of whether its launch registers the subagent events,
 and adds the tables that hold a row's subagent records (these are folded into
-this hop: there is no later schema version for them). A fresh store is created at v9 by `schemaDDL`, with the
-same column text as the hop, so a fresh and a migrated store have the same
+this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh store is created at v10 by `schemaDDL`, retaining the
+same v9 column text and adding `cursor_runtimes`, so a fresh and a migrated store have the same
 shape (names, positions, index columns and foreign keys).
 
 1. **Six renames**, each an `ALTER TABLE … RENAME COLUMN`, in `v9Renames`'
@@ -2522,9 +2670,9 @@ shape (names, positions, index columns and foreign keys).
    exists is left as it is (`IF NOT EXISTS`).
 6. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it, `{"from": 8,
-   "to": 9}` for a v8 store (the sentinel's `to` is this binary's
-   `schemaVersion`, 9); a v8 store opened without it is refused with
-   `ErrSchemaMigrationRequired`, and `user_version > 9` surfaces
+   "to": 10}` for a v8 store (the sentinel's `to` is this binary's
+   `schemaVersion`, 10; the separate v9→v10 hop follows); a v8 store opened without it is refused with
+   `ErrSchemaMigrationRequired`, and `user_version > 10` surfaces
    `ErrSchemaMismatch`.
 7. **No reverse recipe.** docs/migration-guide.md §5 has no v9 → v8 recipe,
    and none is to be written (the hop renames columns and adds a column and
@@ -2803,7 +2951,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v9 / SRD §4.2)|
+                |    schema v10 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -3008,8 +3156,8 @@ hidden or CLI-only flag, and none of them can run either action.
   base 10 through `newDecimalInt` (b.c4n; see "Prohibitions" under
   [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
   `TestMCPExposedVerbExceptions` pins `mcp.ExposedVerb`'s exception list:
-  the only manifest verbs MCP does not expose are exactly `hook`, `serve`
-  and `trail-emit`.
+  the only manifest verbs MCP does not expose are exactly `hook`, `serve`,
+  `trail-emit` and `cursor-host`.
 - **How it reaches `pkg/api`.** `pkg/api` keeps both implementations
   unexported (`Client.killFinished`, `Client.deleteRows`).
   `internal/adminapi` declares the hooks `KillFinished` and `Delete` as
@@ -3061,7 +3209,7 @@ and spawns the host's installed CLI binary as a subprocess per verb call.
 The public `Client` (`src/client.ts`) extends `SubprocessClient`
 (`src/internal/subprocessClient.ts`) with the async factory
 `Client.create()`. For every verb call the Client spawns the
-installed `agent-director` CLI binary with a JSON params envelope on
+installed `agent-director` CLI binary with per-verb CLI flags on
 argv, reads the stdout JSON envelope back, and returns it (or throws
 the matching `Err*` subclass for stderr error envelopes).
 
@@ -3370,8 +3518,11 @@ Every verb call from `Client` follows this four-step recipe inside
    string counts as set and is forwarded as given (e.g.
    `--store-path ""`); the pre-scan rejects it, so every verb call
    rejects with `ErrInvalidFlags` (`<flag> requires a value`) and the
-   CLI never falls back to its default (b.pu2). JSON-only
-   fields go through `--params-json` for verbs that accept it.
+   CLI never falls back to its default (b.pu2). Structured values use the
+   verb's flags: `label` entries and the `extra_env` map become repeated
+   `--label` and `--extra-env` entries, permission lists become repeated
+   `--allow`, `--deny` and `--ask`; `spawn`'s `agent_args` follow `--`,
+   while `make-template`'s become repeated `--agent-args` entries.
    An integer param goes as `String(n)`, which the CLI's int flags read in
    base 10 (see "Prohibitions" under
    [`pkg/api/manifest` — Verb Registry](#pkgapimanifest--verb-registry)).
@@ -3758,10 +3909,11 @@ whichever comes first; the hook still exits 0 with empty stdout.
 ### The agent-aware hook classifier
 
 `ClassifyEvent(agent, raw)` (`classify.go`) is the one pure function that maps
-a hook payload to a `ClassifyResult`. It holds two tables: `classifyClaude`,
-the table above, and `classifyCodex`, below. `ResolveAgent` turns the hook's
+a hook payload to a `ClassifyResult`. It holds three agent classifiers: `classifyClaude`,
+the table above, `classifyCodex`, below, and `classifyCursor` for gateway
+reports and optional tool hooks (see [Cursor gateway](#cursor-gateway-and-current-launch-binding)). `ResolveAgent` turns the hook's
 raw `--agent` text into the agent whose table applies: empty (an entry with
-no `--agent`) and `claude` are Claude, `codex` is Codex, anything else is
+no `--agent`) and `claude` are Claude, `codex` is Codex, `cursor` is Cursor, anything else is
 `ErrInvalidAgent`.
 
 **The agent comes from the hook's own argument and nowhere else.**
@@ -4012,10 +4164,13 @@ The rules:
   row inside its pending grace period does not give up at once: it
   waits for the identity write (see "SessionStart waits for its launch's
   identity write" below).
-- **The session id is recorded, not gated.** SessionStart records the
+- **Claude/Codex session ids are recorded, not gated.** SessionStart records the
   payload's session id; an applied ordinary hook records it only when the
-  row has none. A payload's session id never decides whether a hook
-  applies.
+  row has none. For Claude/Codex, a payload's session id never decides whether a hook
+  applies. Cursor instead requires the registered current connection and
+  session, immediate gateway parent identity, and the CLI-supplied runtime,
+  protected-transcript and pane verifier; claims in the payload cannot
+  grant admission.
 
 **Not applied.** When the statement matches no row, one read after it
 (`readHookGateRow`) decides the result (`store.HookApplied`):
@@ -4228,11 +4383,14 @@ non-empty `agent_id`) follows the Claude rules: a `SessionStart` or
 applies its table row, records no session id or path, and writes no subagent
 entry (subagent capture is Claude only).
 
-**No resolver, no tmux.** The hook path makes no tmux call and walks no
-process ancestry: `internal/hook` imports neither `internal/tmux` nor
-`internal/probe`. Its only reads past the parent are
+**No resolver, no tmux for Claude/Codex.** `internal/hook` imports neither
+`internal/tmux` nor `internal/probe`. Claude/Codex hooks make no tmux
+call and walk no process ancestry. Its only reads past the parent are
 `ad.hook.pane_is_grandparent`'s, above; they report and never decide. A
-slow or wedged tmux never delays a hook. Adopting the
+slow or wedged tmux never delays a Claude/Codex hook. Cursor admission
+uses the CLI-injected `VerifyCursor` callback (`hookCursorVerifier`), which
+checks the runtime, protected transcript and pane through `VerifyPane`;
+that pane verification can call tmux within its configured bounds. Adopting the
 pane of a row whose create reply was lost is never a hook's job (SR-3.6
 gives it to `kill`, `send-keys`, `pause` and `find-missing`).
 
@@ -4707,7 +4865,7 @@ record and changes no `row_version`.
 (`internal/store/subagent_read.go`) is the one read behind the verb; `pkg/api`
 names it as `ListSubagentsStore`. It returns the row's `subagent_tracking` flag
 and its records from one statement, so the two are one consistent read. The
-flag reads `true` only when the column is the integer 1, as the hook gate and
+flag for a non-Cursor row reads `true` only when the column is the integer 1, as the hook gate and
 `GetSpawn` read it; any other stored value, a text or `NULL` one included, reads
 `false` and is never an error. The statement is a
 `LEFT JOIN` of the row to its `confirmed = 1` entries whose `life_number`
@@ -4716,12 +4874,15 @@ Earlier-life entries remain stored and count toward the all-life cap, but
 are hidden. The same subagent id can have a separate entry in another life;
 it is unique among the records returned. It orders by `first_started_at`
 ascending with `NULL`
-last, then `subagent_id`. A row with no record gives the flag as stored and an
+last, then `subagent_id`. A non-Cursor row with no record gives the flag as stored and an
 empty non-nil slice, so a row from before the upgrade is `false` with none. A
 row that does not exist is an error matching `ErrSpawnNotFound`. It never
 selects an observation (an unconfirmed entry) or a claimable launch, and it
 waits for another process's write lock at most the store's busy timeout, as
-`GetSpawn` does. A `SubagentRow` carries the table's record fields (times as
+`GetSpawn` does. A Cursor row always returns tracking `false` and an empty non-nil slice,
+even if its stored flag is 1 or stored records exist: the SQL forces its
+flag to 0 and excludes its joined records. Other agents retain the decoding
+and current-life filtering above. A `SubagentRow` carries the table's record fields (times as
 integer milliseconds, a nil pointer for `NULL`) and no internal column.
 
 **Must use:**
@@ -4764,7 +4925,7 @@ to the `state` that `status`, `get` and `list` report on every surface
   `ResetForReuse` and `RestoreAfterFailedReuse` (spawn with the reuse
   opt-in). Such a value becomes the last settled value at once: a caller
   that has just run `resume` reads `pending`, never `ended` for another T.
-- **Hooks out of a terminal state settle.** The hook gate checks only the
+- **Hooks out of a terminal state settle.** For Claude/Codex the hook gate checks only the
   hook's parent process, and a row keeps its pane through `find-missing`'s
   mark and the ended transition, and gets it back from resume's restore, so
   the row's own agent can move a row out of `missing` or `ended` (its
@@ -4897,7 +5058,7 @@ so each stage can be tested in isolation against synthesized input.
         ▼
    ┌──────────┐   SRD §7.2: cwd shape/existence/type; relay_mode;
    │ Validate │   agent (invalid, missing); inherited agent_args vs
-   └────┬─────┘   the agent; denied flags (claude's list, codex's
+   └────┬─────┘   the agent; denied flags (Claude's list, CursorArgs, Codex's
         │         argument check); allow/deny/ask
         │         (codex refused); reserved env keys (AGENT_DIRECTOR_*,
         │         HOME), then malformed env keys (empty, '=', NUL; see
@@ -4929,7 +5090,8 @@ so each stage can be tested in isolation against synthesized input.
    │ Launch │   ErrTmuxNotAvailable, nothing written); mint launch token;
    └────┬───┘   env compose; settings (claude: --settings synthesis;
         │       codex: the per-launch block); the pane command
-        │       (claude_path or `claude`; codex_path or `codex`);
+        │       (claude_path or `claude`; codex_path or `codex`;
+        │       fresh Cursor gateway selecting cursor_path or `agent`);
         │       pre-trust (codex: the outcome composed in); pending
         │       insert with launch start, token, socket and launch owner;
         │       one bounded create that labels the session (@ad_owner,
@@ -4977,7 +5139,7 @@ second byte loop.
 
 ### The agent: resolution, ownership and checks
 
-Every spawn names an agent, `claude` or `codex` (SRD SR-1, SR-2.1, SR-5).
+Every spawn names an agent, `claude`, `codex` or `cursor` (SRD SR-1, SR-2.1, SR-5).
 `SpawnParams.Agent` is the per-call value (`--agent` on the CLI, `agent`
 on MCP, `agent?` in the TypeScript client); a template file names its
 own with the key `agent`. Values compare case-sensitively; an empty one
@@ -5002,7 +5164,7 @@ side effect:
 
 1. `cwd` (shape, existence, type);
 2. `relay_mode`;
-3. `validateAgent`: a value other than `claude` or `codex` is
+3. `validateAgent`: a value other than `claude`, `codex` or `cursor` is
    `ErrAgentInvalid`, none at all is `ErrAgentMissing`;
 4. `validateArgsOwnership`: inherited template `agent_args` whose agent
    differs from the resolved agent are `ErrAgentArgsMismatch`; it names
@@ -5015,7 +5177,8 @@ side effect:
    remainder; other paths refuse them. Ordinary Codex paths retain
    `CheckCodexArgs`' first-argument refusal order (see
    [Shared agent argument readers and resume extraction](#shared-agent-argument-readers-and-resume-extraction));
-6. `RefuseCodexPermissions`, for a codex agent only: any `allow`, `deny`
+6. `RefuseCursorPermissions` for Cursor, or `RefuseCodexPermissions` for
+   Codex: any `allow`, `deny`
    or `ask` entry, from the call or the template, is
    `ErrPermissionsUnsupported`. The question-tool deny entry that
    `disable_ask_user` adds is never a permission-list entry, so it does
@@ -5025,8 +5188,8 @@ side effect:
 8. the explicit tmux session name.
 
 A template that loads has already passed its own checks in
-`config.LoadTemplate`, after `relay_mode`: an `agent` that is neither
-value is `ErrTemplateMalformed`, and non-empty `agent_args` with no
+`config.LoadTemplate`, after `relay_mode`: an `agent` outside those three
+values is `ErrTemplateMalformed`, and non-empty `agent_args` with no
 `agent` is `ErrTemplateAgentMissing`. The path from the launch verbs'
 caller to the error is the same on every surface, because all of them
 reach `runSpawn`.
@@ -5042,10 +5205,13 @@ the contract; the description is advice and names the way out.
 
 **The row's agent.** `ComposeLaunch` sets `Row.Agent` from the resolved
 agent, so plain spawn's insert and reuse's reset record it; `get` and
-`list` show it as `agent` and `status` does not. A reuse takes the new
+`list` show it as `agent` and `status` does not. A supported Claude/Codex reuse takes the new
 spawn's agent, and a failed reuse restores the previous one with the rest
 of the row. `resume` takes no agent input: `ComposeRelaunch` uses the
-row's agent.
+row's agent for supported Claude/Codex resumes. Cursor resume returns
+`ErrSpawnNotResumable`; Cursor reuse and switches to/from Cursor return
+`ErrSpawnDeniedFlag` before changes. Use a fresh instance id instead (see
+[Cursor caller boundary](caller-contract.md#cursor-operation-boundaries)).
 
 **Advice that names an agent.** Advice for a known row or call names the
 agent it applies to: `spawn.AgentSpelling(agent)` ("agent claude
@@ -5067,15 +5233,18 @@ A launch's pane command starts with the agent's program:
 `claudeProgram(cfg)` (`internal/spawn/launch.go`), `[launch] claude_path`
 when set, else `claude` on `PATH`, or `codexProgram(cfg)`
 (`internal/spawn/codexlaunch.go`), `[launch] codex_path` when set, else
-`codex` on `PATH`. Spawn, reuse and resume all read them at each launch
-and the row stores nothing of either; see `internal/config` for the keys'
+`codex` on `PATH`. A fresh Cursor launch uses `composeCursorCommand`
+(`cursorlaunch.go`) to select `[launch] cursor_path` when set, else `agent` on
+`PATH`, and composes the internal pane gateway rather than a direct CLI.
+Supported spawn, reuse and resume paths read their program at each launch
+and the row stores none of these paths; see `internal/config` for the keys'
 rules. `ComposeLaunch` and `ComposeRelaunch` call `launchAgentError`
 first: a row whose agent is empty or unknown fails composition with a
 wrapped `store.ErrRowAgentInvalid`, before anything is written,
 pre-trusted, created in tmux, reset or moved to `pending` (the socket
 directory, resolved before composition, may exist). **Must use:** program
-selection for a launch goes through `claudeProgram` or `codexProgram`,
-never a literal `claude` or `codex`.
+selection for a launch goes through `claudeProgram` or `codexProgram`; fresh Cursor argv goes through
+`composeCursorCommand`, never a second copy of executable selection.
 
 Pinned by `TestValidateOrder` (`internal/spawn/validate_test.go`),
 `TestResolveMergesTemplate` (`internal/spawn/resolve_test.go`) and the
@@ -5086,14 +5255,16 @@ stand-in `claude`.
 
 ### Per-agent launch composition
 
-Each agent has one composition in `internal/spawn`, and spawn, reuse and
-resume all launch through it: `ComposeLaunch` for a plain spawn and a
+Each agent has one composition in `internal/spawn`. Claude/Codex spawn,
+reuse and resume launch through it: `ComposeLaunch` for a plain spawn and a
 reuse, `ComposeRelaunch` for a resume. A Claude launch composes
 `<claude> --settings <inline json> [args]` (`synthesizeSettings`,
 `settings.go`; resume puts `--resume <id>` before the settings). A Codex
 launch composes the program, the caller's own pass-through arguments and
 agent-director's per-launch settings, all on the command line, from
-`codexlaunch.go`, `codexsettings.go` and `codexargs.go`. A future agent
+`codexlaunch.go`, `codexsettings.go` and `codexargs.go`. Cursor
+`ComposeLaunch` uses `composeCursorCommand` for fresh launches only;
+`ComposeRelaunch` refuses it (see [Cursor gateway](#cursor-gateway-and-current-launch-binding)). A future agent
 adds its composition at these two entry points (its program, its
 argument check, its settings, its environment and its pre-trust) and
 never assembles an argv elsewhere.
@@ -5462,7 +5633,7 @@ env the caller did not ask for. An absolute `CLAUDE_CONFIG_DIR` is the
 supported way to give an agent its own Claude Code config; it leaves the
 agent-director store alone.
 
-**The spawner's own `HOME` and store are not checked (b.3en).** The same
+**Claude/Codex spawner `HOME` and store are not checked (b.3en).** For Claude/Codex the same
 split happens, unrefused, when the spawner's store is not the one the
 pane's `HOME` names: a spawn run with another `HOME`, `--home`
 (`GlobalFlags.Apply` sets the process `HOME`), `--store-path` or the
@@ -5480,6 +5651,10 @@ see the server's `HOME`. The contract is the caller's: `HOME`, `--home`,
 store of the server the spawn reaches, and an alternate `HOME` is safe only with no
 `TMUX` and its own existing `TMUX_TMPDIR`, which starts a separate server
 ([docs/permissions.md](permissions.md#one-spawn-under-another-home-or-store)).
+Cursor instead propagates the actual opened `Store.Path()` to its gateway
+and hook routing via the reserved launch environment; it does not rediscover
+the store from the server's `HOME`. The hook still accepts no `--store-path`
+flag.
 
 `resume` refuses a row whose stored extra env has a key that sets `HOME`
 (only a row spawned before this refusal can) with `ErrReservedEnvKey`,
@@ -5640,11 +5815,11 @@ the rule or its texts also changes `invalidExtraEnvKey` and
 `extra_env` to `spawn.ValidateExtraEnv`, so it never saves a template
 that every spawn using it would refuse. Its checks run in this order:
 the name (`config.ValidateTemplateName`), `relay_mode`, the agent
-(`validateTemplateAgent`: a value that is neither `claude` nor `codex`
+(`validateTemplateAgent`: a value outside `claude`, `codex` and `cursor`
 is `ErrTemplateMalformed`; `agent_args` with no agent is
-`ErrTemplateAgentMissing`; a codex template with `allow`, `deny` or
+`ErrTemplateAgentMissing`; a Codex or Cursor template with `allow`, `deny` or
 `ask` entries is `ErrPermissionsUnsupported`, through
-`spawn.RefuseCodexPermissions`), then `ValidateExtraEnv(env, agent)`
+`spawn.RefuseCodexPermissions` or `spawn.RefuseCursorPermissions`), then `ValidateExtraEnv(env, agent)`
 (`HOME`, then the `AGENT_DIRECTOR_` prefix, then a malformed key, each
 `ErrReservedEnvKey` with its own description). The template's `agent`
 is written only when given, so a template that names none stays valid
@@ -6136,10 +6311,11 @@ a sweep never builds the record or the holder facts another way.
 failed kill leaves an unlabelled session of agent-director's that may
 run; the error says so. A plain spawn's recorded socket comes from the
 caller's tmux environment (`TMUX`, `TMUX_TMPDIR`), so a caller with a
-different environment launches on a different server. A caller whose
+different environment launches on a different server. For Claude/Codex, a caller whose
 store is not the one the server's `HOME` names launches an agent whose
 hooks write to that other store, so its row stays `pending` (see
 [Reserved `HOME` in `extra_env`](#reserved-home-in-extra_env-bnas), b.3en).
+Cursor routes its gateway and hooks to the actual opened store path.
 
 **A launch onto an existing row** (`resume`, see [Resume](#resume); reuse,
 see [Reuse of a finished id](#reuse-of-a-finished-id)). Its socket comes from `spawn.ResolveRowLaunchSocket(recorded)`
@@ -6407,7 +6583,7 @@ exact raw-agent reading (`ReuseRow.Agent`, passed as `examinedAgent`):
   (the `agent`, `agent_args` and `extra_env` of the new call among them)
   and `parent_id` from the new request; `no_pre_trust` from this call;
   `end_reported_at` NULL, so the new launch has no end report;
-  `subagent_tracking` by the new agent (1 for `claude`, 0 for `codex`);
+  `subagent_tracking` by the new agent (1 for `claude`, 0 for `codex` or `cursor`);
   `launch_started_at` set; version advanced. The raw stored `labels`,
   `agent_args` and `extra_env` are never decoded;
 - the deletion of every permission request of the id. Children keep
@@ -8761,16 +8937,20 @@ migrated forward makes the older binary newer-than-DB in reverse and
 surfaces `ErrSchemaMismatch`. Roll back only before letting the new
 binary migrate the DB. After it has migrated, first return the store to
 the older version with the emergency downgrade recipes in
-docs/migration-guide.md §5, newest first. A store at v9 has no recipe: the
+docs/migration-guide.md §5, newest first. A store at v9 or v10 has no recipe: the
 v8 → v9 hop renamed columns, added the three `spawns` columns `agent`,
 `end_reported_at` and `subagent_tracking`, and created two tables (see the
 canonical [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)).
-No recipe reverses it, so the way back from v9
-is the old directory the move kept, which holds the store as it was before
-the install (see [Moving agent-director's
+No recipe reverses it. For an upgrade that moved the old layout, the way
+back is the directory the move kept, holding the store as it was before the
+install (see [Moving agent-director's
 directory](#moving-agent-directors-directory) and [Store upgrade to
 agent-generic names](#store-upgrade-to-agent-generic-names)); a store kept
-outside the directory is put back from the copy the operator made first. For a store
+outside that directory is put back from the operator's pre-upgrade copy.
+An upgrade within the current layout, including v9→v10, retains no old
+layout directory: restore the operator's pre-upgrade store copy, with its
+companion files and all writers stopped, as described in
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release). For a store
 at v8 or older the recipes are (for v8 → v7: drop the two
 settle columns, then stamp `user_version = 7`; then, for an older
 release, v7 → v6: drop the twenty v7 columns, then stamp
@@ -9312,7 +9492,7 @@ line from stdin. Each reply, and what a caller sees:
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 9`). Note: an older-than-binary store (v1, v2, v3, v4, v5, v6, v7 or v8) does
+(`user_version > 10`). Note: an older-than-binary store (v1, v2, v3, v4, v5, v6, v7, v8 or v9) does
 **not** trigger `ErrSchemaMismatch` — it surfaces the distinct
 `ErrSchemaMigrationRequired` instead. The store does not silently upgrade an
 older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
@@ -9328,9 +9508,10 @@ the relay's delivery facts, preserving every row and the store id; v7→v8,
 two `spawns` ADD COLUMN, the settle columns, with every row backfilled as
 settled, preserving every row and the store id; v8→v9, six column renames,
 three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
-every row backfilled as a Claude row, preserving every row and the store id).
-Rolling the binary back after such a migration to v9 needs the copy of
-`state.db` taken before the install: no downgrade recipe reaches a v9 store.
+every row backfilled as a Claude row, preserving every row and the store id;
+v9→v10, CREATE `cursor_runtimes`, preserving existing rows and the store id).
+Rolling the binary back after such a migration to v10 needs the copy of
+`state.db` taken before the install: no downgrade recipe reaches a v9 or v10 store.
 Rolling it back over a migration that ended at v8 or older can also use the
 emergency downgrade recipes in docs/migration-guide.md §5.
 
@@ -9367,7 +9548,7 @@ Deleting the store loses every row and the store id. JSONL transcripts under
 
 The MCP server is the JSON-RPC-over-stdio surface
 (`internal/mcp`). It exposes every CLI verb as an MCP tool — except
-the three filtered by `ExposedVerb` (see [Filtered verbs](#filtered-verbs))
+the four filtered by `ExposedVerb` (see [Filtered verbs](#filtered-verbs))
 — so an MCP-capable LLM client can drive Spawns without going through the
 shell. The server is **long-lived** per SRD §3.3: config is loaded
 once at startup; in-flight edits to `~/.config/agent-director/config.toml`
@@ -9467,9 +9648,10 @@ when the store's schema refuses the open, `ErrStoreOpen` for anything else.
 
 ### Filtered verbs
 
-`tools/list` omits three verbs:
+`tools/list` omits four verbs:
 
-- `hook` — internal entrypoint invoked by Claude or Codex hook machinery.
+- `hook` — internal entrypoint invoked by agent hook machinery.
+- `cursor-host` — internal Cursor pane gateway; never a public MCP tool.
 - `serve` — the MCP server itself.
 - `trail-emit` — a CLI-only write verb that runs without opening
   `state.db` and has no MCP dispatch handler.
@@ -9478,7 +9660,7 @@ The filter lives in `internal/mcp/server.go::ExposedVerb`. The same
 filter now also gates `docs/mcp-reference.md`: `tools/gen-docs`'s
 `renderMCP` calls `internal/mcp.ExposedVerb` so the generated MCP
 reference documents exactly the tools the live server registers —
-these three verbs appear in `docs/cli-reference.md` but not
+these four verbs appear in `docs/cli-reference.md` but not
 `docs/mcp-reference.md`.
 
 The operator tool's verbs (`kill-finished`, `delete`) are not filtered
@@ -9864,7 +10046,7 @@ mutually consistent whenever a sentinel is added, renamed, or removed.
 | (d) | Exported `var Err*` declarations in `pkg/api` | `pkg/api/errors.go` |
 | (e) | Committed JSON snapshots regenerated from Go source | `pkg/api/errnames/catalog.json`, `pkg/api/manifest/surface.json` |
 
-Non-callable verbs (`help`, `serve`, `trail-emit`, `hook`) are **intentionally excluded** from source (c):
+Non-callable verbs (`help`, `serve`, `trail-emit`, `hook`, `cursor-host`) are **intentionally excluded** from source (c):
 they have no handler code in `pkg/api/*.go`, so including their `ErrorNames` would produce
 false-positive coherence failures.
 
@@ -9954,7 +10136,7 @@ or catalog Go source requires regenerating the corresponding JSON file.
   `ErrTmuxCaptureFailed`) and several `store` sentinels (e.g.
   `store.ErrSpawnNotFound`) are declared in `internal/*` but re-exported from `pkg/api`
   (`aliases.go`), so they do appear in `exportedSentinels`. The Catalog is the authoritative inventory; do not duplicate its count here.
-- Non-callable verbs (`help`, `serve`, `trail-emit`, `hook`) are excluded from the
+- Non-callable verbs (`help`, `serve`, `trail-emit`, `hook`, `cursor-host`) are excluded from the
   manifest-side coherence checks (source (c)).
 
 **CI enforcement**
@@ -10662,7 +10844,7 @@ so that life's retained records become visible again through
 by the reset. A failed resume restores the launch within the same life.
 
 **A row that comes back.** A hook moves an `ended` or `missing` row back to a
-live state (the gate checks only the hook's parent process and the ended and
+live state (the Claude/Codex gate checks only the hook's parent process and the ended and
 mark writes leave `subagent_tracking` and `launch_token` as they were), and
 its closed entries stay closed. Only a `SubagentStart` for a current-life entry
 reopens it,
@@ -12300,7 +12482,10 @@ still write. A refusal before pre-trust (step 10) also writes no trust
 entry; a move that loses its race after pre-trust leaves the entry
 written, harmlessly:
 
-1. `GetSpawn` → `ErrSpawnNotFound` on unknown id.
+1. `GetSpawn` → `ErrSpawnNotFound` on unknown id. A Cursor row is then
+   refused with `ErrSpawnNotResumable` before any change, regardless of
+   state or session id; create a fresh Cursor instance with a new id.
+   Steps below apply to Claude/Codex only.
 2. State must be `ended` or `missing` → otherwise
    `ErrSpawnNotResumable`. The verb refuses to touch a live Spawn. A
    `pending` row (a launch in progress whose agent has not reported in,
@@ -13266,8 +13451,9 @@ tag, and the cores are build-tag-free like the start-time reader's. Its
 uses are `ad.hook.ignored`'s `parent_command` and
 `ad.hook.pane_is_grandparent`'s `pane_command`, each read only when its
 record is written. It is **never evidence**: no ownership, liveness,
-launch or hook-gate decision reads it. The hook gate compares only the
-parent's pid and start time.
+launch or hook-gate decision reads it. The Claude/Codex hook gate compares only the
+parent's pid and start time; Cursor also requires its registered connection
+and session and independently verified runtime/transcript/pane evidence.
 
 #### Parent-pid reader (`ParentPIDReader`, `ppid.go`)
 
@@ -14131,12 +14317,15 @@ reaches the agents' tmux server and config directory.
 
 After a machine reboot, every Spawn's process and tmux server are gone,
 but the rows persist in `state.db` frozen at their pre-reboot
-live state (`waiting`/`working`). Recovering a Spawn's conversation is a
-**two-verb contract, in order**:
+live state (`waiting`/`working`). Recovering a Claude/Codex conversation is a
+**two-verb contract, in order**. Cursor supports fresh launches only: after
+reconciliation create a fresh instance with a new id; resume returns
+`ErrSpawnNotResumable`, while reuse and switches to/from Cursor return
+`ErrSpawnDeniedFlag` (see [Cursor caller boundary](caller-contract.md#cursor-operation-boundaries)).
 
 1. **`find-missing`** — reconciles the frozen rows against reality. After
    a reboot every recorded agent process is gone, so the sweep marks those
-   Claude rows `missing`, and Codex rows `ended` when an end report is
+   Claude and Cursor rows `missing`, and Codex rows `ended` when an end report is
    retained, otherwise `missing`, on process evidence (`proc_absent`);
    a row with no process evidence is marked when its socket's lookup finds
    no session of its current launch (`tmux_absent`, or `tmux_name_held`
@@ -14146,7 +14335,7 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
    **required first**: `resume` refuses any non-terminal row with
    `ErrSpawnNotResumable`, so a row still frozen at `waiting`/`working`
    cannot be resumed until `find-missing` moves it to `ended` or `missing`.
-2. **`resume`** — relaunches each finished row with its recorded agent: Claude via `claude --resume` in a
+2. **`resume`** — relaunches each finished Claude/Codex row with its recorded agent: Claude via `claude --resume` in a
    fresh tmux session under the same `instance_id` (Codex uses its own
    relaunch command with its current session id), restoring the
    persisted `ExtraEnv` (auth/config, incl. `CLAUDE_CONFIG_DIR`) and
@@ -14160,7 +14349,7 @@ live state (`waiting`/`working`). Recovering a Spawn's conversation is a
 
 ```
 agent-director find-missing        # reconcile frozen rows → ended or missing
-agent-director resume --instance-id <id>   # relaunch each
+agent-director resume --instance-id <id>   # relaunch a Claude/Codex row
 ```
 
 **`ErrJsonlNeverWritten` vs `ErrJsonlMissing` (b.v2c).** A resume can fail two
@@ -14201,7 +14390,7 @@ a row was never reused: same-agent reuse retains that number. A human
 may inspect an older transcript independently in the agent's own tools;
 agent-director offers no historical-session recovery verb.
 
-**Recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
+**Claude/Codex recovery is `find-missing` → `resume`, or a reuse.** `find-missing`
 then `resume` brings the conversation back. When `resume` cannot
 (`ErrNoSessionId`, `ErrJsonlNeverWritten`, `ErrJsonlMissing`, or
 `ErrReservedEnvKey` for a row whose stored `extra_env` sets `HOME` or
@@ -14221,8 +14410,8 @@ so the operator can diagnose *why* before deciding anything.)
 
 **Autostart is the CALLER's responsibility.** agent-director does not
 watch for reboots and does not schedule anything itself. Its recovery
-contract **starts at** "the caller invokes `find-missing` then
-`resume`". Whatever triggers that sequence after a boot — a systemd
+contract for Claude/Codex **starts at** "the caller invokes `find-missing` then
+`resume`"; Cursor callers reconcile then create a fresh instance with a new id. Whatever triggers that sequence after a boot — a systemd
 unit, a startup script, a `find-missing` cron loop — is owned and
 operated by the caller, not by agent-director. Before giving up on a
 conversation after a failed resume, check `get`'s `transcript_status` and
@@ -14718,7 +14907,9 @@ back unnoticed.
 4. If still live, `kill` once more, wait about 5 s, run `find-missing` once
    more and check.
 5. If still live, stop and escalate to a human.
-6. Once the row is `ended` or `missing`, `resume` it if it has a session id
+6. For Cursor, create a fresh instance with a new id: resume/reuse and
+   switches to/from Cursor are refused before changes. For Claude/Codex,
+   once the row is `ended` or `missing`, `resume` it if it has a session id
    and the caller wants the conversation back; otherwise spawn with
    `reuse_finished` (`--reuse-finished` on the CLI; the short form names
    it through `ReuseOptInSpelling`) and the row's agent, which `get`
@@ -14996,8 +15187,10 @@ the section that describes it in detail.
   - tmux replies on macOS are not verified.
 - **The hook gate's residuals** (SR-22.9; see the residuals under
   [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)).
-  A hook applies only when its parent process is the row's recorded pane
-  process. So:
+  For Claude/Codex a hook applies only when its parent process is the row's
+  recorded pane process. Cursor additionally requires the current registered
+  connection/session and independent runtime/transcript/pane verification.
+  The following residuals describe Claude/Codex:
   - a nested `claude`'s and a teammate pane's hooks are ignored, and their
     work is not reflected in the row;
   - a row whose create reply was lost takes no hook, and stays `pending`,
@@ -15035,7 +15228,7 @@ the section that describes it in detail.
     events move the row's state and use its relay, so a row can read
     `working` while only teammates work; their SessionStart and SessionEnd
     are ignored (`subagent_event`);
-  - Claude Code and Codex are supported; another agent CLI is not;
+  - Claude Code, Codex and fresh Cursor launches are supported; another agent CLI is not;
   - `kill` does not wait for a pane process whose start time it could not
     read;
   - a `kill` retried after `ErrTmuxKillFailed` named a non-agent survivor
@@ -15695,7 +15888,7 @@ detects this case via the presence of `pkg/api/go.mod`.
 ### ErrSchemaMismatch on upgrade
 
 Schema upgrades are **gated**, not automatic: an older-than-binary database
-(v1, v2, v3, v4, v5, v6, v7 or v8) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+(v1, v2, v3, v4, v5, v6, v7, v8 or v9) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
 administrator has placed a valid `migrate-authorized` sentinel next to the DB
 file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
 `permission_requests`, no row preservation), the v2→v3 hop (five
@@ -15709,14 +15902,15 @@ proof of finished rows' requests), the v7→v8 hop (two `spawns` ADD
 COLUMN, the settle columns, then every row backfilled as settled) and/or the
 v8→v9 hop (six column renames, three `spawns` ADD COLUMN, CREATE `subagents`
 and `subagent_launches`, then every row backfilled as a Claude row; see [Store upgrade to agent-generic
-names](#store-upgrade-to-agent-generic-names)), walking
+names](#store-upgrade-to-agent-generic-names)), then the separate v9→v10
+Cursor binding-table hop, walking
 from the DB's `user_version` up to `schemaVersion` in one pass.
-`ErrSchemaMismatch` fires when `user_version > 9` — meaning the store was
+`ErrSchemaMismatch` fires when `user_version > 10` — meaning the store was
 written by a binary newer than the current one — or when a current store
 has no valid store id, which only a hand edit causes (see
 "ErrSchemaMismatch recovery"). Rolling a release back after its install
-migrated the store to v9 has one way back: restoring the copy of `state.db`
-taken before the install. No downgrade recipe reaches a v9 store, and none is
+migrated the store to v10 has one way back: restoring the copy of `state.db`
+taken before the install. No downgrade recipe reaches a v9 or v10 store, and none is
 written for it. The emergency downgrade recipes in docs/migration-guide.md §5
 cover older stores only, newest first (v8 → v7: the two settle columns,
 keeping the store id; v7 → v6: the twenty v7 columns, keeping the store
@@ -15724,7 +15918,7 @@ id; v6 → v5: the three launch-owner columns, keeping the store id; v5 →
 v4: the thirteen columns and `store_meta`), for a store at v8 or older; a
 re-migration after a rollback to v4 creates a new store id.
 
-Bumping `schemaVersion` beyond 9 requires:
+Bumping `schemaVersion` beyond 10 requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
@@ -16116,7 +16310,7 @@ except to assert that such a hook is ignored. Instead:
   prefixes the typed command (for example
   `AGENT_DIRECTOR_RELAY_MODE=on`), and `--pane <target>` types into
   another pane on the row's socket (a split pane, for the teammate case).
-  `--agent claude|codex` (default `claude`) names the agent the hook is
+  `--agent claude|codex|cursor` (default `claude`) names the agent the hook is
   for: `codex` types `agent-director hook --agent codex`, for a Codex row
   whose pane process is the Codex stand-in. **Must use:** a case that fires
   a Codex hook from a pane passes `--agent codex` to `pane-hook.sh`, and
@@ -16719,7 +16913,7 @@ The model has three specs:
   2026-09-29 HOOK, which decision-0929c replaced.
 - `Phase5Hook.tla` (22 runs), decision-0929c's hook identity for one
   instance id. It models:
-  - the built gate (SR-22.9, `internal/store/hook_gate.go`), where a hook
+  - the Claude/Codex gate (SR-22.9, `internal/store/hook_gate.go`), where a hook
     applies only when its parent process (pid and start time) is the row's
     recorded pane process;
   - adoption by `@ad_pane`;
@@ -17134,7 +17328,7 @@ For each verb in `manifest.CallableVerbs()`, the harness copies a fixture store 
 
 `test/smoke/go/` is the canonical home for the Go-side smoke test. Its purpose is to exercise every callable verb through `pkg/api.Client` exactly as an external consumer would — no subprocess invocations, no access to `internal/` implementation details.
 
-**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (17 verbs). `help`, `serve`, `trail-emit` and `hook` have `Callable=false` and are excluded.
+**Verb coverage.** `manifest.CallableVerbs()` drives the verb list (17 verbs). `help`, `serve`, `trail-emit`, `hook` and `cursor-host` have `Callable=false` and are excluded.
 
 **Import constraint.** The smoke target imports only `pkg/api`, `pkg/api/manifest`, `pkg/api/apitest` (for `SeedSpawn`), and `internal/testsupport/*`. Imports of `internal/api`, `internal/store`, or any other `internal/` package are prohibited and enforced at test time by `test/smoke/go/import_graph_test.go` (Task c8). This keeps the smoke test honest as a consumer: if `pkg/api` does not expose something, the smoke test cannot reach around it.
 
@@ -17178,11 +17372,11 @@ test fixtures. Future test authors MUST reuse these `Seed*` helpers
 rather than reinvent raw-connection row setup or backdating; each helper
 uses `t.TempDir()` and never touches `~/.config/agent-director`.
 
-**Agent of a seeded row (schema v9, b.ssz).** The store refuses to insert a
-row whose `Agent` is not `claude` or `codex` (`store.ErrRowAgentInvalid`, see
+**Agent of a seeded row (current schema v10).** The store refuses to insert a
+row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
 "v9 columns" under [`internal/store`](#internalstore)), so every storefix
 insert sets `Agent: store.AgentClaude` (`defaultSpawn`); a test that needs a
-`codex` row, or an end report, sets `Spawn.Agent` itself or seeds through
+`codex` or `cursor` row, or an end report, sets `Spawn.Agent` itself or seeds through
 `apitest.SeedSpawn` with `WithAgent` / `WithEndReportedAt` (see [apitest Seed*
 factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)). A
 test builds a `store.Spawn` for `InsertPending` or `ResetForReuse` with an
@@ -18769,10 +18963,10 @@ unchanged. When two options set the same column, the later one wins.
   reports `settled` until `stampMs` plus that time. Without it the row is
   settled (below). **Must use** it to seed a row whose change has not
   settled; never write the columns with raw SQL.
-- Agent (schema v9, b.ssz): `WithAgent(agent string)` stores `agent` as the
+- Agent (current schema v10): `WithAgent(agent string)` stores `agent` as the
   row's `agent` column, exactly as given and in place of `SeedSpawn`'s
-  default `claude` (any text, so a row whose agent is neither `claude` nor
-  `codex` can be seeded; the store's own writes refuse one, see "v9
+  default `claude` (any text, so a row whose agent is outside `claude`,
+  `codex` and `cursor` can be seeded; the store's own writes refuse one, see "v9
   columns"). `WithEndReportedAt(ms int64)` stores `ms` (Unix milliseconds) as
   the row's `end_reported_at`, in place of the default NULL (no end report).
   **Must use** them to seed the two columns; never write them with raw SQL.
@@ -18780,7 +18974,7 @@ unchanged. When two options set the same column, the later one wins.
   otherwise.
 - Subagent tracking and records (schema v9, b.xjn). A seeded row is tracked
   (`subagent_tracking` 1), as the store's launch writes leave it for a Claude row;
-  `WithNoSubagentTracking()` stores 0 instead, as a Codex launch leaves it (a
+  `WithNoSubagentTracking()` stores 0 instead, as Codex and Cursor launches leave it (a
   test seeds a Codex row with both `WithAgent("codex")` and
   `WithNoSubagentTracking()`: see `codexRowOpts` in the [pkg/api Codex-folder
   fixture](#pkgapi-codex-folder-fixture-package-internal-test-fixture)) and as a
@@ -18902,8 +19096,8 @@ values, except for a row the test inserted itself.
 **Read helpers:**
 
 - `ReadSpawnColumns(dbPath, instanceID) (SpawnColumns, error)`
-  - Returns the `spawns` columns of one row raw through schema v9 (under
-    their v9 names), the
+  - Returns the `spawns` columns of one row raw through current schema v10 (under
+    the names introduced by v9), the
     three v6 launch-owner columns (`LaunchOwnerPID`,
     `LaunchOwnerStarttime`, `LaunchOwnerPIDNS`), v7's `idle_since`
     (`SpawnColumns.IdleSince`, as stored text) and v9's `agent`,
@@ -21021,7 +21215,7 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 
 | Subcommand | Key flags | Result shape |
 | --- | --- | --- |
-| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude` or `codex`, via `apitest.WithAgent`; default `claude`), `--no-subagent-tracking` (stores tracking 0 via `apitest.WithNoSubagentTracking`; default tracking 1, including with `--agent codex`), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
+| `seed-spawn` | `--store`, `--state`, `--id`, `--cwd`, `--relay-mode`, `--agent` (the row's agent, `claude`, `codex` or `cursor`, via `apitest.WithAgent`; default `claude`), `--no-subagent-tracking` (stores tracking 0 via `apitest.WithNoSubagentTracking`; default tracking 1, including with `--agent codex` or `--agent cursor`; Cursor listings still force false/empty), `--session-id`, `--create-store`, `--socket` (recorded tmux socket via `apitest.WithTmuxSocket`; default `apitest.TestSocket`), `--no-pre-trust` (records the pre-trust opt-out via `apitest.WithNoPreTrust`; default pre-trust allowed), `--no-launch-identity` (a row from before the release: no launch token, socket or identity, via `apitest.WithNoLaunchToken`; not with `--socket`) | `{"instance_id": "..."}` |
 | `seed-parent-child` | `--store`, `--parent-id`, `--child-id` | `{"parent_id": "...", "child_id": "..."}` |
 | `seed-permission-request` | `--store`, `--spawn-id`, `--tool`, `--created-ago-seconds` (backdates `created_at`; past the relay window the request has fallen back), `--hook-gone-ago-seconds` (records `hook_gone_at` that long ago), both through `apitest.AgePermissionRequest` | `{"request_id": <number>, "request_token": "..."}` |
 | `seed-template` | `--templates-dir`, `--name`, `--body` | `{"path": "..."}` |
@@ -21050,7 +21244,7 @@ combined with `--socket`: that call exits 1 with "--socket and
 --no-launch-identity cannot be combined" and creates no store.
 
 **Must use:** a TypeScript test that needs a row of one agent seeds it with
-`seed-spawn --agent <claude|codex>`; without the flag the row is a Claude
+`seed-spawn --agent <claude|codex|cursor>`; without the flag the row is a Claude
 row.
 
 **Must use:** a TypeScript test that needs subagent records seeds the row with

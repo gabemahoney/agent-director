@@ -38,6 +38,9 @@ func composeEnv(r Resolved) map[string]string {
 	for k, v := range r.AgentDirectorLabels {
 		out["AGENT_DIRECTOR_LABEL_"+normalizeLabelKey(k)] = v
 	}
+	if r.Agent == config.AgentCursor {
+		out[EnvAgent] = config.AgentCursor
+	}
 	if r.Agent == config.AgentCodex {
 		// A Codex launch only (a Claude launch's environment is unchanged).
 		// The variable tells `agent-director help` the caller is a Codex

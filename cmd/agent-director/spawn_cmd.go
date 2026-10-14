@@ -50,7 +50,7 @@ func parseSpawnFlags(args []string) (pkgapi.SpawnParams, error) {
 	fs.SetOutput(io.Discard) // we surface errors via the JSON envelope
 	fs.StringVar(&p.CWD, "cwd", "", "absolute / ~-prefixed cwd for the Spawn")
 	fs.StringVar(&p.Template, "template", "", "named template stored under ~/.config/agent-director/templates/<name>.toml")
-	fs.StringVar(&p.Agent, "agent", "", "claude or codex (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
+	fs.StringVar(&p.Agent, "agent", "", "claude, codex or cursor (case-sensitive; default: the template's agent; neither gives ErrAgentMissing)")
 	fs.StringVar(&p.InstanceID, "instance-id", "", "explicit instance id (default: minted UUID4)")
 	fs.StringVar(&p.TmuxSessionName, "tmux-session-name", "", "explicit tmux session name (default: <basename(cwd)>-<id[:8]>); rejects ':' '.' '#' '$' '\\' (backslash), control chars, and >64 bytes; no DB uniqueness check, name reuse across ended spawns supported")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "on / off (default: config defaults.relay_mode)")
@@ -227,7 +227,7 @@ func makeTemplateHandlerWith(client *pkgapi.Client, args []string) error {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&p.Name, "name", "", "template name (filename-safe; required)")
 	fs.StringVar(&p.CWD, "cwd", "", "bake a default cwd")
-	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude or codex (case-sensitive; default: none, no agent key stored)")
+	fs.StringVar(&p.Agent, "agent", "", "bake the template's agent: claude, codex or cursor (case-sensitive; default: none, no agent key stored)")
 	fs.StringVar(&p.RelayMode, "relay-mode", "", "bake a default relay_mode (on/off)")
 	fs.Var(newKVSlice(&labelKVs, "--label"), "label", "k=v (repeatable)")
 	fs.Var(newKVSlice(&extraEnvKVs, "--extra-env"), "extra-env", "K=V (repeatable, split at the first '='); AGENT_DIRECTOR_* keys and HOME (any value) are refused with ErrReservedEnvKey, as spawn refuses them, and no template is written; set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) to give the agent its own config")

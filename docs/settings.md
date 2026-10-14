@@ -12,7 +12,8 @@ For Claude Code's own description of settings, see the upstream docs:
 <https://docs.claude.com/en/docs/claude-code/settings>.
 
 The Claude Code merge sections below describe `claude` Spawns; the
-template and `inject_help_hook` sections cover both agents, and
+template sections cover all three agents; `inject_help_hook` covers Claude
+and Codex, and
 [Set up agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)
 covers the entries a Codex folder needs by hand.
 
@@ -39,6 +40,18 @@ The synthesized payload contains:
 agent-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux
 session, and no cleanup is needed.
+
+## Cursor launch settings
+
+`disable_ask_user` accepts either value for Cursor; neither enables questions.
+The enforced behavior and permission-list handling are owned by
+[Permissions](permissions.md#cursor-spawns). `inject_help_hook` currently adds
+no Cursor session guidance.
+
+Cursor pre-trust never reports `ok`: `no_pre_trust` yields `skipped`, otherwise
+it yields `failed` with a warning and launch continues. No Cursor trust grant
+is made. Fresh launch and account limits are in
+[Usage](usage.md#fresh-cursor-use).
 
 ## What a Codex launch carries
 
@@ -138,7 +151,7 @@ which also covers a hand-made entry that names the old directory.
 The flag exists to cover the dynamic case the operator's static
 `~/.claude/settings.json` injection cannot reach: a Spawn that inherits
 (or is given) a fresh `CLAUDE_CONFIG_DIR` whose `settings.json` does not
-yet carry the help hook. With this flag set, every Spawn this binary
+yet carry the help hook. With this flag set, every Claude or Codex Spawn this binary
 creates is self-describing to its first turn regardless of the config
 dir, Codex Spawns included.
 
@@ -335,7 +348,7 @@ absolute `CLAUDE_CONFIG_DIR` (Claude Code) or `CODEX_HOME` (Codex) under
 
 ### The agent and its arguments
 
-A spawn needs an agent, `claude` or `codex`: the per-call `agent` (`--agent`
+A spawn needs an agent, `claude`, `codex` or `cursor`: the per-call `agent` (`--agent`
 on the CLI), else the template's. With neither, `spawn` is refused with
 `ErrAgentMissing`; any other value, with `ErrAgentInvalid` (the value is
 case-sensitive). A template names its agent with `agent`.
@@ -414,9 +427,9 @@ Resulting per-spawn merge:
 
 ## Where to go next
 
-- `hooks.md` — per-event state-tracking + fail-open invariant, for either agent.
+- `hooks.md` — per-event state tracking and reporting boundaries for each agent.
 - `permissions.md` — how the `permissions` block accumulates, and the
-  question-tool setting for either agent.
+  question-tool behavior for each agent.
 - `multi-account.md` — running Spawns against a different Claude or Codex
   account.
 - `architecture.md` — package layout, state machine, parameter pipeline.

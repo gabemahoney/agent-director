@@ -1,6 +1,7 @@
 package spawn
 
 import (
+	"fmt"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
@@ -75,6 +76,9 @@ type ComposedRelaunch struct {
 // ExtraEnv. AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
+	if in.Row.Agent == store.AgentCursor {
+		return ComposedRelaunch{}, fmt.Errorf("%w: Cursor resume is unsupported", ErrSpawnDeniedFlag)
+	}
 	if err := launchAgentError(in.Row.Agent); err != nil {
 		return ComposedRelaunch{}, err
 	}

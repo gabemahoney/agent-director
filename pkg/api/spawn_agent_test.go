@@ -111,6 +111,7 @@ func TestSpawnAgentRefusals(t *testing.T) {
 			want: "ErrAgentMissing", text: agentMissingText},
 		{name: "per-call agent not claude or codex", p: api.SpawnParams{Agent: "gemini"}, want: "ErrAgentInvalid",
 			text: strings.Replace(agentInvalidTextFmt, "%q", `"gemini"`, 1)},
+		{name: "cursor agent in another case", p: api.SpawnParams{Agent: "Cursor"}, want: "ErrAgentInvalid", text: strings.Replace(agentInvalidTextFmt, "%q", `"Cursor"`, 1)},
 		{name: "per-call agent in another case", p: api.SpawnParams{Agent: "Claude"}, want: "ErrAgentInvalid",
 			text: strings.Replace(agentInvalidTextFmt, "%q", `"Claude"`, 1)},
 		{name: "invalid per-call agent over a valid template agent", tmpl: &apitest.TemplateFields{Agent: "claude"},
@@ -139,6 +140,11 @@ func TestSpawnAgentRefusals(t *testing.T) {
 			tmpl: &apitest.TemplateFields{Agent: "claude", Permissions: &config.TemplatePermissions{Deny: allowOne}},
 			p:    api.SpawnParams{Agent: "codex"}, want: "ErrPermissionsUnsupported", text: permissionsText},
 
+		{name: "cursor allow entries", p: api.SpawnParams{Agent: "cursor", Permissions: perms(allowOne, nil, nil)}, want: "ErrPermissionsUnsupported", text: "ErrPermissionsUnsupported:"},
+		{name: "cursor deny entries", p: api.SpawnParams{Agent: "cursor", Permissions: perms(nil, allowOne, nil)}, want: "ErrPermissionsUnsupported", text: "ErrPermissionsUnsupported:"},
+		{name: "cursor ask template", tmpl: &apitest.TemplateFields{Agent: "cursor", Permissions: &config.TemplatePermissions{Ask: allowOne}}, want: "ErrPermissionsUnsupported", text: "ErrPermissionsUnsupported:"},
+		{name: "cursor ownership", tmpl: &apitest.TemplateFields{Agent: "claude", AgentArgs: args}, p: api.SpawnParams{Agent: "cursor"}, want: "ErrAgentArgsMismatch", text: fmt.Sprintf(agentArgsMismatchStart, "claude", "cursor", "claude")},
+		{name: "cursor denied arg before permission", p: api.SpawnParams{Agent: "cursor", AgentArgs: []string{"--resume=x"}, Permissions: perms(allowOne, nil, nil)}, want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag:"},
 		// A refused Codex argument: the Codex half of the denied-argument check, with the same nothing-written result.
 		{name: "a refused argument on a codex spawn", p: api.SpawnParams{Agent: "codex", AgentArgs: []string{"--remote", "ws://x"}},
 			want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag: --remote: it attaches the agent to a remote or shared service"},
@@ -221,6 +227,10 @@ func TestSpawnRecordsResolvedAgent(t *testing.T) {
 		{"the call's claude over a codex template holding no lists", &apitest.TemplateFields{Agent: "codex", Permissions: &config.TemplatePermissions{}},
 			"claude", "claude"},
 		{"the call names codex", nil, "codex", "codex"},
+		{"the call names cursor", nil, "cursor", "cursor"},
+		{"cursor template", &apitest.TemplateFields{Agent: "cursor"}, "", "cursor"},
+		{"cursor over claude template", &apitest.TemplateFields{Agent: "claude"}, "cursor", "cursor"},
+		{"claude over cursor template", &apitest.TemplateFields{Agent: "cursor"}, "claude", "claude"},
 		{"the call names none, the template codex", &apitest.TemplateFields{Agent: "codex"}, "", "codex"},
 		{"the call and the template name codex", &apitest.TemplateFields{Agent: "codex"}, "codex", "codex"},
 		{"the call's codex over a claude template", &apitest.TemplateFields{Agent: "claude"}, "codex", "codex"},
@@ -248,6 +258,11 @@ func TestSpawnRecordsResolvedAgent(t *testing.T) {
 			}
 			if tc.want == "codex" {
 				assertCodexLaunch(t, env.rec.SocketCallsOf(tmux.CallCreate), env.dbPath, res.InstanceID, codexProgram)
+			} else if tc.want == "cursor" {
+				creates := env.rec.SocketCallsOf(tmux.CallCreate)
+				if len(creates) != 1 || len(creates[0].Command) < 2 || creates[0].Command[1] != "cursor-host" || creates[0].Envs["AGENT_DIRECTOR_CURSOR_STORE_PATH"] != env.dbPath {
+					t.Fatalf("Cursor create missing gateway/store route: %+v", creates)
+				}
 			} else if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Command[0] != "claude" {
 				t.Errorf("creates = %+v; want one, launching claude", creates)
 			}

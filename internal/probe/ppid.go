@@ -3,13 +3,14 @@ package probe
 // ParentPIDReader reads a process's parent pid (b.9n6, b.zde: the hook's
 // `ad.hook.pane_is_grandparent` check).
 //
-// It is used ONLY by that check: after the SR-22.9 gate refuses a pending
+// The existing hook gate uses it only for that diagnostic check: after the SR-22.9 gate refuses a pending
 // row's SessionStart with pid_mismatch, the hook reads its parent's parent pid
 // once, to tell whether the row's recorded pane process started the hook's
 // parent as a child (a `claude` launcher that does not exec, or a hook run
 // through a shell instead of in exec form; the two are not told apart). No
-// other hook reads it. It is NEVER evidence: no ownership, launch,
-// liveness or hook-gate decision reads it — the hook gate compares only the
+// other Claude/Codex hook reads it. Cursor independently uses it to verify
+// its registered runtime is a direct child of the gateway; that additional
+// binding never replaces the immediate-parent hook gate, which compares the
 // parent's pid and start time (SR-22.9, via ProcChecker.StartTime).
 //
 // Contract of PPID(pid):
