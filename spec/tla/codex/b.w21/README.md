@@ -136,15 +136,25 @@ rerun passed: 67 Go packages (37 cached), 420 Bun tests, zero failures and
 make exit 0. Both full-suite receipts are retained in the
 [unit receipt](../../../../test/b.w21/unit-evidence.json).
 
-The [fixed-model handoff](fixed/README.md) has fourteen separately prepared
-contexts, all **NOT_RUN**. Its relaunch probe retains an expected failure;
-its obsolete pane-write probe now expects PASS. The separate
-[integration handoff](../../../../test/b.w21/integration/README.md) is
-**READY for user submission**: [15 exact commands](../../../../test/b.w21/integration/scheduler-commands.txt)
-use immutable source commit `9d025f8f2caf176f3a60421f52ba94b293021bdb`.
-All integration observations remain **NOT_RUN**; keep its shared context
-immutable until every job finishes. Local sandbox units are explicitly authorized;
-the earlier separate-host requirement has been superseded.
+The [submitted fixed-model results](fixed/README.md) now record thirteen
+prediction matches out of fourteen: ten PASS, three expected failures and an
+unexpected `NoRace` failure at 3,835 distinct states/depth 11. The seeded
+modern ACK hold was a model error; production remains identical to `9d025f8f`.
+The [round-2 handoff](fixed-r2/README.md) has six separate ready contexts,
+all **NOT_RUN**. Eleven omitted cases use focused `B21Spec` with no modern
+Ask/HX transitions. The twelfth, `w21_mutant_close_only`, uses full `Spec`
+but fails `RelayHoldOnlyCurrentLaunch` in `Init`, before any transition
+exercises the changed modern `RelayHolds` branch. Their receipts remain tied
+to frozen submitted bytes; none is claimed as a run of the corrected source.
+
+The separate [integration evidence](../../../../test/b.w21/integration/README.md)
+records all fifteen user jobs PASS at immutable source `9d025f8f`, with 152
+EPIC cases and 22 install-mode assertions across five scenarios. Full run logs
+preserve source/context identity. New mixed-store API tests pass targeted
+sandbox checks; the fresh full sandbox suite passed with 67 Go packages
+(39 cached), 420 Bun tests, zero failures and make exit 0. The earlier
+full-suite PASS remains historical. Local sandbox units are
+explicitly authorized; the earlier separate-host requirement is superseded.
 
 The implemented repair releases decided pre-v7 `agent_gone` rows in already
 upgraded stores without a write or manual step and persists future lifecycle
@@ -154,4 +164,4 @@ legacy requests, legacy requests without `agent_gone` (including already-stuck
 The legacy default window is 24 h + 2 s. Another current request can still
 hold keys after the obsolete row releases. The [caller contract](../../../../docs/caller-contract.md#permission-relay)
 and [architecture](../../../../docs/architecture.md#requests-recorded-before-v7)
-describe that scope; fixed-model and integration results remain pending.
+describe that scope; corrected round-2 model results remain pending.

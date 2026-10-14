@@ -1,0 +1,199 @@
+{
+  "bug": "b.w21",
+  "round": "fixed-r2",
+  "observed": "NOT_RUN",
+  "rules": "model-modern-liveness-correction-with-ack-shortcut-mutant",
+  "source_path": "spec/tla/codex/src/B146R5Cx.tla",
+  "source_sha256": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+  "submitted_source": {
+    "commit": "9d025f8f2caf176f3a60421f52ba94b293021bdb",
+    "model_sha256": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
+    "manifest_sha256": "dac59bfb5e7d03a3f6a8881981526fca22a3c260af76cb58007caa5b10bc555f"
+  },
+  "runtime_identity": {
+    "commit": "9d025f8f2caf176f3a60421f52ba94b293021bdb",
+    "production_go_files": 269,
+    "production_go_sha256": "2550ab71219eb05813efd2741a99696926af97f05398a077e8d6777e936a9f79",
+    "hash_encoding": "sorted git paths in cmd/internal/pkg ending .go excluding _test.go; path + NUL + bytes",
+    "guard_sha256": "25ca6cc04a2b16b35feb6c837f17f2957c54f49eaa59ecb814693cdedf79f484",
+    "delivery_sha256": "56a8a556442ce1dea65cd256f7bdda1606a08965ab108e6ed1031bbe8a647719"
+  },
+  "diagnosis": {
+    "layer": "model",
+    "runtime_changed": false,
+    "failed_job": "j20261014225806-d7dc0c",
+    "failed_case": "w21_fixed_initial",
+    "expected": "PASS",
+    "observed": "FAIL(Invariant_NoRace_is_violated)",
+    "distinct_states": 3835,
+    "depth": 11,
+    "receipt_source": "/home/horde/projects/agent-director-project/tickets/Bugs/b.w21/fixed-model-results.txt",
+    "receipt_sha256": "7aa2cfb6456d26e45df3ab85b47f88e28d794723452f6e6fe7ff3c5358e8cc5e",
+    "trace_source": "/home/horde/.job-scheduler/jobs/j20261014225806-d7dc0c/run.log",
+    "trace_sha256": "03163d3ce191129ba172edb10af5577a9cc5c592951acb714794280a81df5b25",
+    "cause": "Mixed-store modern RelayHolds time branch gated liveness on ~ack, unlike original JudgedAlive and runtime known-alive OR not_confirmed.",
+    "correction": "Use JudgedAlive for modern rows; preserve legacy delivery/logical closure and original time abstraction.",
+    "abstraction_limit": "Historical time branch conservatively holds recorded modern hooks until phase 2 even after ack; it does not separately represent runtime acked/cannot-check release. Exact checks and public API controls cover concrete identity outcomes.",
+    "protected": [
+      "NoRace",
+      "race assignments",
+      "KnownHookAlive",
+      "HookAlive",
+      "original actions",
+      "LiveCheck time in submitted full Spec"
+    ]
+  },
+  "affected_case_selection": {
+    "rerun": [
+      "w21_fixed_initial",
+      "w21_fixed_modern_full_control"
+    ],
+    "not_rerun": "Eleven submitted B21Spec cases have no modern Ask/HX transitions. The twelfth omitted case, w21_mutant_close_only, uses full Spec but fails RelayHoldOnlyCurrentLaunch in Init, before any transition exercises the changed modern RelayHolds branch. Their prior frozen-source receipts remain historical evidence; r2 does not claim they ran against new bytes.",
+    "new_checks": "time/exact focused mixed-store safety, time reachability probe, old-predicate mutant"
+  },
+  "cases": [
+    {
+      "name": "w21_r2_initial",
+      "context": "jobs/w21_r2_initial",
+      "variant": "corrected",
+      "spec": "Spec",
+      "origin_case": "w21_fixed_initial",
+      "livecheck": "time",
+      "expected": "PASS",
+      "observed": "NOT_RUN",
+      "purpose": "Full Spec rerun of the failed mixed-store job, retaining all submitted safety/liveness checks.",
+      "enabled_knobs": [
+        "PreV7Old",
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+        "Dockerfile": "a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8",
+        "runs": "452e2c0973514ec3e0aabebc7045cb2fd15d32bd7c0c3ca0cd5f7a4901def8e3",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_initial.cfg": "e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d"
+      }
+    },
+    {
+      "name": "w21_r2_modern_full_control",
+      "context": "jobs/w21_r2_modern_full_control",
+      "variant": "corrected",
+      "spec": "Spec",
+      "origin_case": "w21_fixed_modern_full_control",
+      "livecheck": "time",
+      "expected": "PASS",
+      "observed": "NOT_RUN",
+      "purpose": "Full original modern-only Spec with historical time liveness abstraction; no legacy seed.",
+      "enabled_knobs": [
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+        "Dockerfile": "a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8",
+        "runs": "876b7c6447bca00781852d53359b7c2962e720180a5fa9b193556740ea0648ca",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_modern_full_control.cfg": "d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6"
+      }
+    },
+    {
+      "name": "w21_r2_mixed_acked_live_time",
+      "context": "jobs/w21_r2_mixed_acked_live_time",
+      "variant": "corrected",
+      "spec": "B21MixedSpec",
+      "origin_case": null,
+      "livecheck": "time",
+      "expected": "PASS",
+      "observed": "NOT_RUN",
+      "purpose": "Real lifecycle/timeout-ack/bypass actions retain NoRace and the current acknowledged live hook hold.",
+      "enabled_knobs": [
+        "PreV7Old",
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+        "Dockerfile": "a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8",
+        "runs": "910d86190afebe26ce17d700fb53645afddf126d19f9ac22c37ee783d7ae8fb9",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_mixed_acked_live_time.cfg": "006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643"
+      }
+    },
+    {
+      "name": "w21_r2_mixed_acked_live_exact",
+      "context": "jobs/w21_r2_mixed_acked_live_exact",
+      "variant": "corrected",
+      "spec": "B21MixedSpec",
+      "origin_case": null,
+      "livecheck": "exact",
+      "expected": "PASS",
+      "observed": "NOT_RUN",
+      "purpose": "The same focused mixed-store safety check with exact process liveness.",
+      "enabled_knobs": [
+        "PreV7Old",
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+        "Dockerfile": "a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8",
+        "runs": "1d7a3266c2194e47a34c766f3ccfea3703e3a2c81036f54ed43b8cc0c48bbca6",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_mixed_acked_live_exact.cfg": "35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924"
+      }
+    },
+    {
+      "name": "w21_r2_mixed_acked_live_probe",
+      "context": "jobs/w21_r2_mixed_acked_live_probe",
+      "variant": "corrected",
+      "spec": "B21MixedSpec",
+      "origin_case": null,
+      "livecheck": "time",
+      "expected": "FAIL(Invariant_B21MixedAckedLiveUnreachable_is_violated)",
+      "observed": "NOT_RUN",
+      "purpose": "Required nonvacuity counterexample reaches released legacy plus current denied/acked/live hook at phase 1.",
+      "enabled_knobs": [
+        "PreV7Old",
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+        "Dockerfile": "da1241f3397cf72e86fb49e7d8a3bb4988c803070c3c772436a75e5b56f0e340",
+        "runs": "780268c41b83383638c0c8582797b38321e419d24ec537043bb2d56213f781c4",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_mixed_acked_live_probe.cfg": "420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d"
+      }
+    },
+    {
+      "name": "w21_r2_mutant_ack_shortcut",
+      "context": "jobs/w21_r2_mutant_ack_shortcut",
+      "variant": "ack-shortcut-mutant",
+      "spec": "B21MixedSpec",
+      "origin_case": null,
+      "livecheck": "time",
+      "expected": "FAIL(Invariant_NoRace_is_violated)",
+      "observed": "NOT_RUN",
+      "purpose": "Only the old modern RelayHolds predicate is restored; the original race detector must reject the bypass send.",
+      "enabled_knobs": [
+        "PreV7Old",
+        "PreV7ReadRepair",
+        "PreV7CloseRepair"
+      ],
+      "sha256": {
+        "B146R5Cx.tla": "15d24efa20e9d922180d048194bd571a4530c244315ca81fcaf3f1ea67f85cdf",
+        "Dockerfile": "75ec4deb029ae8396197429e8ec6f920f383a1b167d44d9fff359221a8035b24",
+        "runs": "91eb2fe8b88440efc604de80bfafe4c3f6076314e07eca2abe72562cccaa49e2",
+        "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+        "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+        "w21_r2_mutant_ack_shortcut.cfg": "be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3"
+      }
+    }
+  ]
+}

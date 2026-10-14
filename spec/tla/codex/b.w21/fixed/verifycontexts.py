@@ -7,6 +7,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 
@@ -15,10 +16,99 @@ HERE = Path(__file__).resolve().parent
 RED = HERE.parent
 CODEX = RED.parent
 ROOT = CODEX.parents[2]
+SOURCE_COMMIT = "9d025f8f2caf176f3a60421f52ba94b293021bdb"
+SUBMITTED_MANIFEST_SHA256 = "dac59bfb5e7d03a3f6a8881981526fca22a3c260af76cb58007caa5b10bc555f"
+FIXED_RECEIPT_SHA256 = "7aa2cfb6456d26e45df3ab85b47f88e28d794723452f6e6fe7ff3c5358e8cc5e"
+FAILED_INITIAL_LOG_SHA256 = "03163d3ce191129ba172edb10af5577a9cc5c592951acb714794280a81df5b25"
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def frozen_bytes(path):
+    return subprocess.check_output(["git", "show", f"{SOURCE_COMMIT}:{path}"], cwd=ROOT)
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_receipts(manifest, submitted):
+    """Optional observational overlay; predictions and submitted bytes are immutable.
+
+    model-fixed-receipts.json has bug, source_commit, baseline_manifest_text,
+    baseline_manifest_sha256, receipt {text, sha256}, and logs keyed by job ID
+    with {source, text, sha256}. Each manifest case gains evidence with job_id,
+    log_sha256, verdict_line, job_verdict_line, expected_matches. The top-level
+    receipts points to {file, sha256}. A real mismatch is valid evidence.
+    """
+    if manifest["observed"] == "NOT_RUN":
+        assert manifest == submitted, "NOT_RUN manifest differs from submitted predictions"
+        assert not (HERE / "model-fixed-receipts.json").exists(), "Unbound fixed receipts"
+        return
+    assert manifest["observed"] in {"ALL_EXPECTED", "MISMATCH"}
+    assert set(manifest) == set(submitted) | {"receipts"}
+    assert {key: value for key, value in manifest.items() if key not in {"observed", "cases", "receipts"}} == {
+        key: value for key, value in submitted.items() if key not in {"observed", "cases"}}
+    assert manifest["receipts"]["file"] == "model-fixed-receipts.json"
+    archive_path = HERE / manifest["receipts"]["file"]
+    assert archive_path.is_file() and not archive_path.is_symlink()
+    assert digest(archive_path) == manifest["receipts"]["sha256"]
+    archive = json.loads(archive_path.read_text())
+    assert archive["bug"] == "b.w21" and archive["source_commit"] == SOURCE_COMMIT
+    assert sha(archive["baseline_manifest_text"].encode()) == archive["baseline_manifest_sha256"] == SUBMITTED_MANIFEST_SHA256
+    assert json.loads(archive["baseline_manifest_text"]) == submitted
+    receipt = archive["receipt"]
+    assert sha(receipt["text"].encode()) == receipt["sha256"] == FIXED_RECEIPT_SHA256
+    rows = re.findall(r"^b-w21-\S+ (j\d{14}-[a-f0-9]+) \| (JOB-VERDICT (\w+)=(\S+)/(\?|\d+))$",
+                      receipt["text"], re.M)
+    assert len(rows) == 14 and len({row[2] for row in rows}) == 14
+    assert len({row[0] for row in rows}) == 14
+    assert set(archive["logs"]) == {row[0] for row in rows}
+    by_name = {row[2]: row for row in rows}
+    assert set(by_name) == {case["name"] for case in submitted["cases"]}
+    matches = []
+    assert len(manifest["cases"]) == len(submitted["cases"])
+    for case, original in zip(manifest["cases"], submitted["cases"]):
+        assert set(case) == set(original) | {"evidence"}
+        assert {key: case[key] for key in original if key != "observed"} == {
+            key: value for key, value in original.items() if key != "observed"}
+        name = case["name"]
+        job, job_line, logged_name, result, distinct = by_name[name]
+        assert logged_name == name and case["observed"] == result
+        evidence = case["evidence"]
+        assert evidence["job_id"] == job and evidence["job_verdict_line"] == job_line
+        log = archive["logs"][job]
+        assert log["source"] == f"/home/horde/.job-scheduler/jobs/{job}/run.log"
+        assert sha(log["text"].encode()) == log["sha256"] == evidence["log_sha256"]
+        if name == "w21_fixed_initial":
+            assert log["sha256"] == FAILED_INITIAL_LOG_SHA256
+        verdicts = re.findall(r"^VERDICT (\w+) checks=(\S+) result=(\S+) distinct=(\?|\d+) depth=(\?|\d+) secs=(\d+)$",
+                              log["text"], re.M)
+        assert len(verdicts) == 1
+        logname, checks, logresult, logdistinct, depth, seconds = verdicts[0]
+        assert (logname, logresult, logdistinct) == (name, result, distinct)
+        cfg = (HERE / "cfg" / f"{name}.cfg").read_text()
+        assert checks.split(",") == re.findall(r"^(?:INVARIANT|PROPERTY)\s+(\w+)", cfg, re.M)
+        assert re.findall(r"^VERDICT .*", log["text"], re.M) == [evidence["verdict_line"]]
+        assert re.findall(r"^JOB-VERDICT .*", log["text"], re.M) == [job_line]
+        counts = re.findall(r"\d+ states generated, (\d+) distinct states found", log["text"])
+        assert (not counts if distinct == "?" else counts and set(counts) == {distinct}), name
+        depths = re.findall(r"The depth of the complete state graph search is (\d+)\.", log["text"])
+        assert depths == ([] if depth == "?" else [depth]), name
+        if result == "PASS":
+            assert "Model checking completed. No error has been found." in log["text"]
+            assert not re.search(r"^Error:", log["text"], re.M)
+        else:
+            invariant = re.fullmatch(r"FAIL\(Invariant_(\w+)_is_violated\)", result)
+            assert invariant and invariant[1] in checks.split(",")
+            message = f"Error: Invariant {invariant[1]} is violated"
+            assert message + "." in log["text"] or message + " by the initial state:" in log["text"]
+        match = result == original["expected"]
+        assert evidence["expected_matches"] is match
+        matches.append(match)
+    assert manifest["observed"] == ("ALL_EXPECTED" if all(matches) else "MISMATCH")
 
 
 def load_module(name, path):
@@ -73,14 +163,20 @@ def main():
     for path in (HERE / "mkcontexts.py", HERE / "verifycontexts.py"):
         ast.parse(path.read_text(), filename=str(path))
     manifest = json.loads((HERE / "manifest.json").read_text())
-    assert manifest["bug"] == "b.w21" and manifest["observed"] == "NOT_RUN"
+    submitted_bytes = frozen_bytes("spec/tla/codex/b.w21/fixed/manifest.json")
+    assert sha(submitted_bytes) == SUBMITTED_MANIFEST_SHA256
+    submitted = json.loads(submitted_bytes)
+    verify_receipts(manifest, submitted)
+    assert manifest["bug"] == "b.w21"
     assert manifest["rules"] == "fixed-runtime-with-explicit-mutants"
     assert manifest["red_manifest_sha256"] == digest(RED / "manifest.json")
-    source_path = CODEX / "src/B146R5Cx.tla"
-    assert manifest["source_sha256"] == digest(source_path)
-    source = source_path.read_text()
+    # Submitted source is 9d025f8f, never the evolving canonical model.
+    source_bytes = frozen_bytes("spec/tla/codex/src/B146R5Cx.tla")
+    assert manifest["source_sha256"] == sha(source_bytes)
+    source = source_bytes.decode()
     check_fidelity(source)
     for name, expected in manifest["runtime_sha256"].items():
+        assert sha(frozen_bytes(name)) == expected, name
         assert digest(ROOT / name) == expected, name
     definitions = set(re.findall(r"^([A-Za-z][A-Za-z0-9_]*)\s*(?:\([^\n]*?\))?\s*==", source, re.M))
     assert len(manifest["cases"]) == len(generator.CASES) == 14
@@ -89,7 +185,7 @@ def main():
     total = 0
     for row, case, command in zip(generator.CASES, manifest["cases"], commands):
         assert case["name"] == row["name"] and case["expected"] == row["expected"]
-        assert case["observed"] == "NOT_RUN" and case["purpose"] == row["purpose"]
+        assert case["purpose"] == row["purpose"]
         context = HERE / case["context"]
         assert context.parent == HERE / "jobs" and context.name == case["name"]
         assert {p.name for p in context.iterdir()} == set(case["sha256"])
@@ -97,7 +193,7 @@ def main():
             path = context / name
             assert path.is_file() and not path.is_symlink() and digest(path) == expected, path
             total += path.stat().st_size
-        assert (context / "B146R5Cx.tla").read_bytes() == source_path.read_bytes()
+        assert (context / "B146R5Cx.tla").read_bytes() == source_bytes
         for name, path in (("tla2tools.jar", CODEX.parent / "tla2tools.jar"),
                            ("tlcjob.sh", CODEX.parent / "jobs/lib/tlcjob.sh")):
             assert digest(context / name) == digest(path), name
@@ -117,7 +213,7 @@ def main():
         assert f"--context '{context.resolve()}'" in command
         assert "--channel C0B3X876XSB --network off --memory 4g --cpus 4 --timeout 15m" in command
         assert "observed NOT_RUN" in (context / "Dockerfile").read_text()
-        print(f"STATIC-OK {case['name']} expected={case['expected']} observed=NOT_RUN")
+        print(f"STATIC-OK {case['name']} expected={case['expected']} observed={case['observed']}")
     expected = {case["name"]: case["expected"] for case in manifest["cases"]}
     assert sum(result == "PASS" for result in expected.values()) == 11
     assert expected["w21_fixed_relaunch_probe"] == "FAIL(Invariant_B21RelaunchPendingUnreachable_is_violated)"

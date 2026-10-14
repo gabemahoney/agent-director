@@ -1,7 +1,7 @@
 {
   "bug": "b.w21",
   "rules": "fixed-runtime-with-explicit-mutants",
-  "observed": "NOT_RUN",
+  "observed": "MISMATCH",
   "source_sha256": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
   "red_manifest_sha256": "820e45048c8a790a02bea7c4bb44f4b19e7a8679a780790653f11bc7fc0d6d0c",
   "runtime_sha256": {
@@ -20,7 +20,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_NoRace_is_violated)",
       "purpose": "Full Spec: runtime read-time release of an already-stuck migrated row; original safety and liveness obligations including B21RecordsSettle.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -29,6 +29,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_initial.cfg": "951ae7ab95f78cc3e29ff0b92360dbb372496b44adeab49a765de697e6a867ef"
+      },
+      "evidence": {
+        "job_id": "j20261014225806-d7dc0c",
+        "log_sha256": "03163d3ce191129ba172edb10af5577a9cc5c592951acb714794280a81df5b25",
+        "verdict_line": "VERDICT w21_fixed_initial checks=TypeOK,NoSilentAllow,AnswersLand,NoRace,FallenTrue,ClaimV3,RecordTrue,AckTrue,DecideTruthful,NoContradiction,BusyClean,FieldsTrue,DecideInTime,ReadNeverWaits,NeverHeldNoRequest,DialogsClose,B21RecordsSettle,RowSettles,StraySettles,CallerSettles,RelayHoldOnlyCurrentLaunch,B21ProofFidelity result=FAIL(Invariant_NoRace_is_violated) distinct=3835 depth=11 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_initial=FAIL(Invariant_NoRace_is_violated)/3835",
+        "expected_matches": false
       }
     },
     {
@@ -43,7 +50,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Crash, find-missing close, resume: durable closure survives pending before SessionStart.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -52,6 +59,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_relaunch.cfg": "43317e34538a3b0397f7b773b196a484c46db8c399e3342c002dc26cc499d19a"
+      },
+      "evidence": {
+        "job_id": "j20261014225806-86ae84",
+        "log_sha256": "383a5cfb644141f805517bb616d03f168f71a564878da514806dd2c181e61be3",
+        "verdict_line": "VERDICT w21_fixed_relaunch checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,B21ClosePersists result=PASS distinct=54 depth=10 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_relaunch=PASS/54",
+        "expected_matches": true
       }
     },
     {
@@ -66,7 +80,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "FAIL(Invariant_B21RelaunchPendingUnreachable_is_violated)",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_B21RelaunchPendingUnreachable_is_violated)",
       "purpose": "Independent reachability probe still reaches resumed pending after repair; failure is required.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -75,6 +89,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_relaunch_probe.cfg": "3c7b940fb2093b754e891ee1310229c42f6f7556bc05bb842435cada15761db3"
+      },
+      "evidence": {
+        "job_id": "j20261014225806-a10f05",
+        "log_sha256": "4e9b9e7ee6113b4973aadfbba04a224299a503725fc502af9eab4625357500ee",
+        "verdict_line": "VERDICT w21_fixed_relaunch_probe checks=TypeOK,B21SeedFidelity,B21RelaunchPendingUnreachable result=FAIL(Invariant_B21RelaunchPendingUnreachable_is_violated) distinct=21 depth=6 secs=8",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_relaunch_probe=FAIL(Invariant_B21RelaunchPendingUnreachable_is_violated)/21",
+        "expected_matches": true
       }
     },
     {
@@ -89,7 +110,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Already-stuck expired close-deny seed is logically closed, retaining historical fallen_back delivery.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -98,6 +119,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_expired_deny.cfg": "5e25933a518c9c8945808499d4401fc6d1fa80e7c8c75fd28312f5de73fbf24f"
+      },
+      "evidence": {
+        "job_id": "j20261014225806-8a1739",
+        "log_sha256": "c7d047c2b2ca0281a4ebbe895445a042dd00e552207746cf68a16758bd9e3cf3",
+        "verdict_line": "VERDICT w21_fixed_expired_deny checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,OldRequestsDoNotHoldPlainKeys result=PASS distinct=2 depth=2 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_expired_deny=PASS/2",
+        "expected_matches": true
       }
     },
     {
@@ -112,7 +140,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Fair plain keys eventually succeed without a manual pane answer or lifecycle write.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -121,6 +149,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_expired_deny_live.cfg": "edf54841d68f6b3dbca905eddd4b42bfb133b1055e4a16c5a09c916597122b77"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-8b13c1",
+        "log_sha256": "252999fb5f76aff602774c595723d99048308b4fcdbff1fe61a3f987c6399749",
+        "verdict_line": "VERDICT w21_fixed_expired_deny_live checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,B21KeysEventuallyAccepted result=PASS distinct=2 depth=2 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_expired_deny_live=PASS/2",
+        "expected_matches": true
       }
     },
     {
@@ -135,7 +170,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "NeverHit now passes: logical closure makes the obsolete request's blocked pane-write path unreachable.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -144,6 +179,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_pane_write_probe.cfg": "fcc1afdfd52ea870969c0a54768eb7ddea5e95e64c912c36b512bbb2b72a72b1"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-be5750",
+        "log_sha256": "bc845ba12eabc809e82cea997687ee28666432c5f41fd02336ca01d5fa5a64b9",
+        "verdict_line": "VERDICT w21_fixed_pane_write_probe checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,NeverHit result=PASS distinct=2 depth=2 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_pane_write_probe=PASS/2",
+        "expected_matches": true
       }
     },
     {
@@ -157,7 +199,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Historical ordinary legacy delivery still derives delivered after expiry; no ack is fabricated.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -166,6 +208,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_expired_ordinary_control.cfg": "244225eeefa7fdc349ce2bb3f28599999a7f78603620ca8e47cb576750d26e84"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-67dc2b",
+        "log_sha256": "6e03fab67b9e638b5e12291e775db95b99e8654590c29bc9c0f124ae7c6ac20f",
+        "verdict_line": "VERDICT w21_fixed_expired_ordinary_control checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,OldRequestsDoNotHoldPlainKeys,B21ExpiredOrdinaryDelivered,B21KeysEventuallyAccepted result=PASS distinct=2 depth=2 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_expired_ordinary_control=PASS/2",
+        "expected_matches": true
       }
     },
     {
@@ -179,7 +228,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Current unproven legacy request remains held within its relay window.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -188,6 +237,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_current_launch_control.cfg": "2752bb2de719bc577be6b77d18c9d31d7deb6bf87e18c77e8fa242e3037f841a"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-6c7112",
+        "log_sha256": "77417e247a3df0871a6fa703a4b210bd6b62bb1a81275523268f2c606cef5652",
+        "verdict_line": "VERDICT w21_fixed_current_launch_control checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,B21CurrentHoldExists,B21ExpiredOrdinaryDelivered result=PASS distinct=4 depth=4 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_current_launch_control=PASS/4",
+        "expected_matches": true
       }
     },
     {
@@ -199,7 +255,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Focused no-request pending startup continues to accept keys.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -208,6 +264,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_no_legacy_control.cfg": "22c2353bca5aae40c2e53cb96e6d64be35b647911cd5d9a12d9e19f0eb569a25"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-ba158d",
+        "log_sha256": "caf2123c64751a70a96f866f72c2da6e10cdbb7a1d179eda917d6588bd134392",
+        "verdict_line": "VERDICT w21_fixed_no_legacy_control checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,OldRequestsDoNotHoldPlainKeys,B21KeysEventuallyAccepted result=PASS distinct=2 depth=2 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_no_legacy_control=PASS/2",
+        "expected_matches": true
       }
     },
     {
@@ -222,7 +285,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Current legacy request with turn_end proof remains relay-held: clearing unp alone is insufficient.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -231,6 +294,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_turn_end_control.cfg": "c013c6821f7245afa63d46c64a66576da424c4ed33b70303306aa4aa189b2a46"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-5e8dad",
+        "log_sha256": "7db530a99a87abed87f97183e0b821a70dde272c2470e1a0d8372fa84c28322e",
+        "verdict_line": "VERDICT w21_fixed_turn_end_control checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,B21CurrentHoldExists,B21ExpiredOrdinaryDelivered,B21TurnEndHoldExists,B21ProofFidelity result=PASS distinct=4 depth=4 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_turn_end_control=PASS/4",
+        "expected_matches": true
       }
     },
     {
@@ -246,7 +316,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Prior turn_end proof is preserved by close; closed_at independently releases the resumed row.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -255,6 +325,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_turn_end_relaunch.cfg": "ea0b42d480b95c51fbd04495ba9c54d0046f8fbc4c9c2c80d10ac8746cd10bb3"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-85fe00",
+        "log_sha256": "0800bee9a726585ed396d018836825978fb8b053a227cc139597ca032bd85dfa",
+        "verdict_line": "VERDICT w21_fixed_turn_end_relaunch checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch,B21ClosePersists,B21ProofFidelity result=PASS distinct=31 depth=9 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_turn_end_relaunch=PASS/31",
+        "expected_matches": true
       }
     },
     {
@@ -266,7 +343,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)",
       "purpose": "Close-only mutant still fails at the already-stuck initial state: read-time recovery is necessary.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -275,6 +352,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_mutant_close_only.cfg": "1b326a5d48cdea3e84a90badcbc49a5a5047b04aea60f8aff9ba4a115e0d5263"
+      },
+      "evidence": {
+        "job_id": "j20261014225807-3b2e06",
+        "log_sha256": "4cfc4b0c2382934fa135b822c41f13a016f081ca227bb35d88dd70e850809f7f",
+        "verdict_line": "VERDICT w21_mutant_close_only checks=TypeOK,NoSilentAllow,AnswersLand,NoRace,FallenTrue,ClaimV3,RecordTrue,AckTrue,DecideTruthful,NoContradiction,BusyClean,FieldsTrue,DecideInTime,ReadNeverWaits,NeverHeldNoRequest,DialogsClose,B21RecordsSettle,RowSettles,StraySettles,CallerSettles,RelayHoldOnlyCurrentLaunch result=FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated) distinct=? depth=? secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_mutant_close_only=FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)/?",
+        "expected_matches": true
       }
     },
     {
@@ -289,7 +373,7 @@
         "PreV7ReadRepair"
       ],
       "expected": "FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)",
       "purpose": "Read-only mutant fails after relaunch when preserved prior turn_end prevents agent_gone proof: durable closure is necessary.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -298,6 +382,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_mutant_read_only.cfg": "5e8fc0b37270e56918a687173a049d650927dc27ae17549691a7ec8448b4fd2b"
+      },
+      "evidence": {
+        "job_id": "j20261014225808-078ef6",
+        "log_sha256": "d267432e43ab0dc437642b60541d1cd77b495220884880c8d9690ad42d03f7b3",
+        "verdict_line": "VERDICT w21_mutant_read_only checks=TypeOK,B21SeedFidelity,RelayHoldOnlyCurrentLaunch result=FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated) distinct=21 depth=9 secs=7",
+        "job_verdict_line": "JOB-VERDICT w21_mutant_read_only=FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated)/21",
+        "expected_matches": true
       }
     },
     {
@@ -309,7 +400,7 @@
         "PreV7CloseRepair"
       ],
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Full original Spec and all original r5x_time properties with no legacy seed; modern live relay protection remains unchanged.",
       "sha256": {
         "B146R5Cx.tla": "1070fb45a7bdd196904c680f7927d49a9e8b0895e5db47655c4fcc973485d4b1",
@@ -318,7 +409,18 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_fixed_modern_full_control.cfg": "552b433826a64a76bfe1db274b5be08f8907641845f1e93d6c0a0915faefbb5b"
+      },
+      "evidence": {
+        "job_id": "j20261014225808-d196d2",
+        "log_sha256": "7cfeef1d3293b8467566eb10043bb34a9380f9449ee3ca7c8e35d1dc6e7bce73",
+        "verdict_line": "VERDICT w21_fixed_modern_full_control checks=TypeOK,NoSilentAllow,AnswersLand,NoRace,FallenTrue,ClaimV3,RecordTrue,AckTrue,DecideTruthful,NoContradiction,BusyClean,FieldsTrue,DecideInTime,ReadNeverWaits,NeverHeldNoRequest,DialogsClose,RecordsClose,RowSettles,StraySettles,CallerSettles result=PASS distinct=296382 depth=35 secs=57",
+        "job_verdict_line": "JOB-VERDICT w21_fixed_modern_full_control=PASS/296382",
+        "expected_matches": true
       }
     }
-  ]
+  ],
+  "receipts": {
+    "file": "model-fixed-receipts.json",
+    "sha256": "7ff902d9c633389019e6f60719f0c4c3283d14941410c1989b856e9a6e0bd4c3"
+  }
 }

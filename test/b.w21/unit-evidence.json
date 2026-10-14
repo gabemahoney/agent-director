@@ -1,6 +1,6 @@
 {
   "bug": "b.w21",
-  "status": "TARGETED_GREEN; AGGREGATE_GREEN",
+  "status": "ROUND2_TARGETED_GREEN; ROUND2_FULL_SUITE_PASS; INTEGRATION_PASS; FIXED_MODEL_MISMATCH; R2_NOT_RUN",
   "execution_method": "User-approved local make sandbox / make test-sandbox on gmahoney-dev; no separate host required.",
   "revision_note": "Red is the unfixed eafd10f5 checkpoint (plus documented fixture correction). Green used uncommitted repair on that HEAD; do not attribute green to the commit alone.",
   "red": {
@@ -275,8 +275,159 @@
   },
   "scheduler_validation": {
     "phase1_model": "ALL_EXPECTED: original nine receipts remain frozen in spec/tla/codex/b.w21/model-red-receipts.json",
-    "fixed_model": "NOT_RUN: fourteen prepared contexts",
-    "docker_integration": "NOT_RUN: fourteen canonical groups plus standalone install-mode; scheduler context preparation is the next phase, with no readiness claim."
+    "fixed_model": "MISMATCH: ten PASS, three expected FAIL, one unexpected NoRace FAIL; thirteen of fourteen predictions match at 9d025f8f.",
+    "docker_integration": "PASS: all fifteen user jobs; raw logs verify 152 ordered EPIC cases plus 22 install-mode assertions; five scenarios in frozen suite inventory; same runtime/context identity.",
+    "fixed_model_archive": {
+      "path": "spec/tla/codex/b.w21/fixed/model-fixed-receipts.json",
+      "sha256": "7ff902d9c633389019e6f60719f0c4c3283d14941410c1989b856e9a6e0bd4c3"
+    },
+    "fixed_model_round2": "NOT_RUN: six ready contexts; four predicted PASS, one reachability FAIL, one NoRace mutant FAIL.",
+    "integration_archive": {
+      "path": "test/b.w21/integration/integration-observed-receipts.json",
+      "sha256": "49ffecbc73de67731808f2aa807f2c8b9b99a8aae731e6286ac69fbe3f5f4403",
+      "actual_network": "off per User statement; not independently attested by run logs",
+      "limits": "Build logs and scheduler final-state/exit-code metadata are not included."
+    }
   },
-  "receipt_update_required": "Unit receipts are complete through final aggregate PASS. Preserve the earlier red and failed full-suite evidence. Fixed-model and integration observations require actual user-submitted scheduler receipts."
+  "receipt_update_required": "Preserve all historical receipts. All six round-2 scheduler model receipts remain pending.",
+  "current_round": {
+    "name": "mixed-store model correction",
+    "runtime_changed": false,
+    "runtime_commit": "9d025f8f2caf176f3a60421f52ba94b293021bdb",
+    "production_go_files": 269,
+    "production_go_sha256": "2550ab71219eb05813efd2741a99696926af97f05398a077e8d6777e936a9f79",
+    "summary_path": "dist/b.w21/model-r2-unit/summary.json",
+    "summary_sha256": "606a16e7a65e15c39b1efddd43fee0ddf1991f3fcc850ddddb33ba4b96ee48bc",
+    "targeted_runs": [
+      {
+        "name": "api-store",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD=\"go test -json -count=1 -timeout 30m ./pkg/api ./internal/store -run 'TestLegacyRecovery|TestLegacyDecidedIntentClosesWithSpawn|TestCloseClosesRelayRequests|TestSendKeysRule7|TestPlainSendKeysHashPassesTheHold|TestEveryTestDeclaresParallelOrSerial'\"",
+        "exit_code": 0,
+        "log": "dist/b.w21/model-r2-unit/api-store.log",
+        "log_sha256": "7cb5619d6861bbc95f21035a6ecb01f8e6d268add569e45a7b26e6fcda250e5f",
+        "leaf_case_counts": {
+          "pass": 118,
+          "fail": 0,
+          "skip": 0
+        }
+      },
+      {
+        "name": "artifact",
+        "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make sandbox CMD=\"go test -json -count=1 -timeout 30m ./test/tla -run '^Test(ProvenancePinsEveryVendoredFile|SettleProvenance|Hold36hProvenance|CodexJobArtifacts|RunSets|RunnerNeverStartsChecker|MakeTlaTargets)$'\"",
+        "exit_code": 0,
+        "log": "dist/b.w21/model-r2-unit/artifact.log",
+        "log_sha256": "b05e79f99affd8a3d022a6a17ccbaf368608e0890369fecd8cda24c0eca51b55",
+        "leaf_case_counts": {
+          "pass": 8,
+          "fail": 0,
+          "skip": 0
+        }
+      }
+    ],
+    "new_mixed_api_cases": 32,
+    "all_new_cases_pass": true,
+    "test_sha256": {
+      "pkg/api/sendkeys_legacy_mixed_test.go": "50424f802d11462b6851b71068a01975cff7248cb88d6f573cd5e77280eec234",
+      "test/tla/provenance_test.go": "da50cb426d5550576769130f9c95f905a1d36d735b7f05c5867877b265a5e39c"
+    },
+    "initial_attempts": [
+      {
+        "directory": "dist/b.w21/model-r2-unit/attempt1",
+        "result": "FAIL",
+        "api_store_leaf_case_counts": {
+          "pass": 112,
+          "fail": 6,
+          "skip": 0
+        },
+        "reason": "Fixture relay inserts move pending to check_permission; assertDelivered rejects the required capture call on hashed sends.",
+        "runtime_unchanged": true,
+        "summary_sha256": "1d0fca0630d679bc8ad2db28b7c5b3731038c6536f4e58a0e0c44e159a327039"
+      },
+      {
+        "directory": "dist/b.w21/model-r2-unit/attempt2",
+        "result": "FAIL",
+        "api_store_leaf_case_counts": {
+          "pass": 102,
+          "fail": 16,
+          "skip": 0
+        },
+        "reason": "Restoring pending must also restore launch_started_at cleared by the relay seed transition; without it send-keys correctly refuses the malformed pending fixture.",
+        "runtime_unchanged": true,
+        "summary_sha256": "a354de42c901d73d4649d590a8a8b8f55cf07f342afd3d873b82c0f3c13a70c4"
+      }
+    ],
+    "full_suite": {
+      "summary_path": "dist/b.w21/model-r2-unit-full/summary.json",
+      "summary_sha256": "f08b2931a4dcf238dac59d190bc7aa911a2fc6a165374af888a8d475528d4050",
+      "result": "PASS",
+      "head": "8ae349f3bbf7a26cb01437202dd1247ddfb422f5",
+      "baseline_runtime": "9d025f8f2caf176f3a60421f52ba94b293021bdb",
+      "started_at_utc": "2026-10-14T23:25:35.753310+00:00",
+      "finished_at_utc": "2026-10-14T23:29:12.225810+00:00",
+      "exact_command": "env PATH=\"/usr/local/go/bin:$PATH\" make test-sandbox",
+      "make_exit": 0,
+      "go_package_counts": {
+        "PASS": 67,
+        "CACHED_PASS": 39,
+        "FAIL_LINES": 0,
+        "NO_TEST_FILES": 12
+      },
+      "go_case_and_skip_counts": "Unavailable: default nonverbose go test reports package results only; no individual passing/skipped counts are emitted.",
+      "bun_counts": {
+        "PASS": 420,
+        "FAIL": 0,
+        "tests": 420,
+        "files": 57,
+        "expect_calls": 1626,
+        "skip_lines_observed": 0
+      },
+      "bun_skip_count_limitation": "Skip lines observed are not an independent count of every possible skipped case.",
+      "runtime_matches_9d025f8f_before_and_after": true,
+      "runtime_production_go_files": 269,
+      "runtime_production_go_sha256": "2550ab71219eb05813efd2741a99696926af97f05398a077e8d6777e936a9f79",
+      "all_test_hashes_unchanged": true,
+      "test_files_hashed": 713,
+      "new_test_sha256_before": {
+        "pkg/api/sendkeys_legacy_mixed_test.go": "50424f802d11462b6851b71068a01975cff7248cb88d6f573cd5e77280eec234",
+        "test/tla/provenance_test.go": "da50cb426d5550576769130f9c95f905a1d36d735b7f05c5867877b265a5e39c"
+      },
+      "new_test_sha256_after": {
+        "pkg/api/sendkeys_legacy_mixed_test.go": "50424f802d11462b6851b71068a01975cff7248cb88d6f573cd5e77280eec234",
+        "test/tla/provenance_test.go": "da50cb426d5550576769130f9c95f905a1d36d735b7f05c5867877b265a5e39c"
+      },
+      "changed_files_during_run": [],
+      "receipts": {
+        "unit-full.log": {
+          "sha256": "ab4c0d17d916a98b7e16547a508098f2a38066080b4f42b69df092373f6f7973",
+          "bytes": 47990
+        },
+        "stdout.log": {
+          "sha256": "937ef5f18fa281283bb424e8a216171cc8e517d8b7aec361845bafc0029d9670",
+          "bytes": 9882
+        },
+        "stderr.log": {
+          "sha256": "5148d9b71cb313739ad41c02ed5a142d944e80a2514bfd35e0d12dba035e44ff",
+          "bytes": 38108
+        },
+        "runtime-before.json": {
+          "sha256": "781f6b545c09ad1c301366b5e6fb536ecee0b0cda8c429ad669525350367ee37",
+          "bytes": 28685
+        },
+        "runtime-after.json": {
+          "sha256": "781f6b545c09ad1c301366b5e6fb536ecee0b0cda8c429ad669525350367ee37",
+          "bytes": 28685
+        },
+        "tests-before.json": {
+          "sha256": "d3aacaff12647996064e8ec86d6aacd43bc77a786cc848b04052b6d2ca3dd3a6",
+          "bytes": 81810
+        },
+        "tests-after.json": {
+          "sha256": "d3aacaff12647996064e8ec86d6aacd43bc77a786cc848b04052b6d2ca3dd3a6",
+          "bytes": 81810
+        }
+      },
+      "documentation_limit": "This receipt precedes the documentation-only final receipt and provenance pin refresh. Current pins identify current file bytes; they are not attributed to this run."
+    },
+    "artifact_limit": "Eight targeted artifact cases passed before final documentation/provenance refresh; not a final-pin or full-suite result."
+  }
 }

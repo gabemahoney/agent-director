@@ -1,22 +1,33 @@
-# b.w21 Docker integration scheduler handoff
+# b.w21 Docker integration results and preserved handoff
 
-Execution is reserved to the User. No image build, integration run or scheduler
-submission has occurred here. Every job in `manifest.json` is expected to PASS
-and currently has observed result `NOT_RUN`. This is 14 canonical EPICs from
-`test/docker-epics.txt` plus the separate `make test-docker-install-mode` suite:
-15 executions, not a fifteenth EPIC.
+All **15 user-submitted jobs PASS** at source `9d025f8f`: 14 canonical EPICs
+with 152 ordered cases, plus standalone install-mode with 22 assertions across
+five scenarios. [integration-observed-receipts.json](integration-observed-receipts.json)
+preserves the user receipt, all complete run logs and hashes, source identity,
+`HANDOFF-RECEIPT`, `VERDICT` and `JOB-VERDICT` lines. Each run log confirms both
+binary stamps, the pinned commit and context payload hash; all harness exit
+codes are zero. Build logs and independent scheduler final-state/exit-code
+receipts are not included in this archive.
+
+The User reports actual submission with **`--network off`**, using network
+only for image builds. Run logs do not independently attest that scheduler
+setting. The original manifest and command file still say `--network on`;
+they are preserved historical preparation artifacts, with observed `NOT_RUN`
+unchanged there. Observations live in the separate archive. Do not resubmit
+these integrations for the model-only round-2 correction: runtime is unchanged.
 
 The runtime source is pinned to commit
 `9d025f8f2caf176f3a60421f52ba94b293021bdb`. The generator uses `git archive` at
 that commit; ignored/untracked files cannot enter it. Its explicit source
 selection includes all product, test, skill, tool and documentation directories
 and `tickets/testplans`, excluding `.claude`, `.git`, unrelated ticket hives and
-the large TLA contexts. Frozen model contexts and receipts are untouched.
+the large TLA contexts. Original submitted model contexts remain untouched.
 `source-files.json` records every archived file's SHA256, size and mode.
 
-## Submit the prepared jobs
+## Preserved submission handoff
 
-Run these commands from the worktree root:
+The following describes the original handoff. All fifteen jobs have now returned;
+no further submission is pending. Its static verification command remains usable:
 
 ```sh
 cd /home/horde/projects/agent-director-project/agent-director-w21-tla
@@ -86,11 +97,13 @@ Every submitted EPIC sets `DRIVER_MODE=shell`, matching canonical CI, and the
 wrapper calls the actual `/opt/driver/run-testplan.sh`. The final job calls
 the original `/opt/install-mode/run.sh` entrypoint. None requires an API/model
 credential. The wrapper refuses credentialed driver environment variables.
-Jobs use network on to preserve canonical build/runtime behavior, 8 GiB memory,
-4 CPUs and a 1-hour runtime limit; the scheduler's separate build limit is
-30 minutes. The scheduler host must be Linux amd64: the existing preflight
-case explicitly asserts `Linux/x86_64`. Image building and runtime capability
-remain unverified until the User returns scheduler results.
+The prepared commands requested network on, 8 GiB memory, 4 CPUs and a
+1-hour runtime limit; the scheduler's separate build limit is 30 minutes.
+The User actually submitted with network off, as recorded above. The scheduler
+host must be Linux amd64: the existing preflight case explicitly asserts
+`Linux/x86_64`. Returned run logs establish successful image execution and
+the required cases;
+this archive does not preserve the separate build logs.
 
 ## Required receipts and non-empty success
 
@@ -131,4 +144,30 @@ assertion name, so an empty or partial success cannot satisfy this handoff.
 | template-overwrite | 4 |
 | test-docker-install-mode | 22 assertions / 5 scenarios |
 
-Current integration result: `could not run: execution reserved to user scheduler; 15 jobs prepared`.
+## Observed results
+
+All rows below have `HANDOFF-RECEIPT` verdict PASS, no errors and zero harness
+exit; the exact ordered case IDs/assertion names match the frozen manifest.
+
+| Job slug | Scheduler job | Observed count |
+|---|---|---:|
+| `epic-03-spawn` | `j20261014225817-11ebc5` | 22 |
+| `epic-04-interact` | `j20261014225817-fd5e65` | 11 |
+| `epic-05-stop` | `j20261014225817-9d0ceb` | 15 |
+| `epic-06-discover` | `j20261014225817-ca9241` | 12 |
+| `epic-07-templates` | `j20261014225818-e44612` | 8 |
+| `epic-08-recovery` | `j20261014225818-920cb0` | 8 |
+| `epic-09-resume` | `j20261014225818-71292a` | 11 |
+| `epic-10-relay` | `j20261014225818-c76c21` | 8 |
+| `epic-11-mcp` | `j20261014225818-880868` | 9 |
+| `epic-12-install` | `j20261014225818-fa6f73` | 13 |
+| `epic-13-agents` | `j20261014225818-ba41ae` | 24 |
+| `harness-smoke` | `j20261014225819-15e19b` | 5 |
+| `installsh-preflight-gates` | `j20261014225819-4af4e0` | 2 |
+| `template-overwrite` | `j20261014225819-ebf575` | 4 |
+| `test-docker-install-mode` | `j20261014225819-80fdfc` | 22 |
+
+Current integration result: **PASS**. The five install-mode scenarios are the
+frozen suite's scenario inventory; the run log independently lists its 22
+passing assertions. The context remains byte-identical at payload SHA-256
+`ee259f45e8ae667ae8f083b03128ebeb2d46526903aa9d72fa2b1165822a49fe`.

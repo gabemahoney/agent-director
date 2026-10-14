@@ -1,4 +1,4 @@
-# b.w21: local unit evidence and remaining validation
+# b.w21: validation evidence and remaining model gate
 
 The user approved local `make sandbox CMD=...` and `make test-sandbox` on
 gmahoney-dev, with `/usr/local/go/bin` in `PATH`. A separate host is not
@@ -20,7 +20,8 @@ local logs and original summaries remain under `dist/b.w21/`.
 | First full `make test-sandbox` | Go: 64 passing packages (5 cached), 3 failing packages, 12 without tests. Bun: 420 pass, zero fail, 57 files. |
 | Lifecycle expectation correction | All 3 cases passed in a focused rerun. |
 | Advice expectation correction | All 9 cases passed in a focused rerun. |
-| Final aggregate full suite | **PASS**, exit 0. Go: 67 passing packages (37 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files. |
+| Historical aggregate full suite before round 2 | **PASS**, exit 0. Go: 67 passing packages (37 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files. |
+| Round-2 full `make test-sandbox` | **PASS**, exit 0. Go: 67 passing packages (39 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files, 1,626 expect calls. |
 
 Red established the actual v6 migration and all eight already-stuck
 pending/waiting cases refusing with `ErrSendKeysWhileRelayed`. Four close-deny
@@ -43,6 +44,37 @@ The tested runtime is now committed at
 [final full-suite receipt](../../dist/b.w21/unit-green-final/summary.json).
 The integration context remains pinned to this source revision even if
 handoff documentation receives a later commit.
+
+## Current round: mixed-store model correction
+
+The returned fourteen-job fixed-model evidence has **13 prediction matches**:
+ten PASS, three expected failures and the unexpected initial `NoRace` failure
+(3,835 distinct states, depth 11). The [model diagnosis](../../spec/tla/codex/b.w21/fixed-r2/README.md)
+identifies a model ACK shortcut that production does not use. All 269 production
+Go files remain identical to `9d025f8f`, aggregate SHA-256
+`2550ab71219eb05813efd2741a99696926af97f05398a077e8d6777e936a9f79`.
+
+The new `TestLegacyRecoveryMixedModernDelivery` covers 32 public API cases:
+pending/check_permission × ACKed live, unACKed unknown before confirmation,
+ACKed unknown, ACKed gone × plain, valid hash, stale hash, obsolete legacy token.
+A current live or unconfirmed hook remains held before any pane access;
+ACKed unknown/gone controls retain the dialog, hash and obsolete-token refusals.
+[Targeted sandbox evidence](../../dist/b.w21/model-r2-unit/summary.json) records
+118 passing API/store cases and eight artifact cases, zero failures/skips;
+all 32 new cases pass. Two prior attempts corrected fixture/assertion mistakes
+and remain archived; they were not runtime failures. `TestCodexJobArtifacts`
+now also requires the round-2 manifest and its declared contexts.
+
+The fresh [full-suite receipt](../../dist/b.w21/model-r2-unit-full/summary.json)
+records `env PATH="/usr/local/go/bin:$PATH" make test-sandbox`, exit 0,
+from 23:25:35 to 23:29:12 UTC on 2026-10-14. Its SHA-256 is
+`f08b2931a4dcf238dac59d190bc7aa911a2fc6a165374af888a8d475528d4050`.
+All 269 production Go files matched `9d025f8f` before and after; all 713
+hashed test files were unchanged during the run. Nonverbose Go output gives
+package results, so individual test and skip counts are unavailable. Bun
+emitted no skip lines; this is not an independent count of all skipped cases.
+The receipt predates this documentation-only receipt and pin refresh; current
+pins identify current file bytes, without attributing them to that run.
 
 ## Recovery contract and limit
 
@@ -69,38 +101,34 @@ a historical reproduction belongs in a distinct disposable checkout with
 the release tag `v0.11.1` retained.
 
 The nine [phase-1 model receipts](../../spec/tla/codex/b.w21/README.md)
-remain frozen. The [fixed-model handoff](../../spec/tla/codex/b.w21/fixed/README.md)
-has fourteen prepared jobs, all **NOT_RUN**. Return their complete logs,
-job IDs, verdict lines and counterexamples for review.
-Its [exact commands](../../spec/tla/codex/b.w21/fixed/scheduler-commands.txt)
-predict eleven PASS results, one reachability-probe failure and two
-repair-mutant failures; no fixed-model pass is established yet.
+remain frozen. The [submitted fixed results](../../spec/tla/codex/b.w21/fixed/README.md)
+preserve the unexpected failure; original predictions, cfgs and contexts
+remain intact. The [round-2 handoff](../../spec/tla/codex/b.w21/fixed-r2/README.md)
+contains six ready jobs, all **NOT_RUN**, expected four PASS, one reachability
+probe failure and one `NoRace` mutant failure. Only the User submits:
 
-Docker integration needs **15 executions**: one `make test-docker EPIC=<slug>`
-for each of the 14 active entries in [docker-epics.txt](../docker-epics.txt),
-plus `make test-docker-install-mode`, additional to `epic-12-install`.
-The [integration handoff](integration/README.md) is **READY for user submission**.
-Run its [15 exact scheduler commands](integration/scheduler-commands.txt)
-from the worktree root. All integration observations remain **NOT_RUN**,
-with PASS predicted for every job: 152 EPIC cases plus 22 install-mode
-assertions covering five scenarios. The shared context at
-`dist/b.w21/integration/context-9d025f8f` contains 10 regular files,
-4,806,313 bytes, with payload SHA-256
+```sh
+bash spec/tla/codex/b.w21/fixed-r2/scheduler-commands.txt
+```
+
+The [integration evidence](integration/README.md) records **15 PASS** at the
+unchanged source: 152 EPIC cases and 22 install-mode assertions/five scenarios.
+Every raw run log attests source commit `9d025f8f` and context payload SHA-256
 `ee259f45e8ae667ae8f083b03128ebeb2d46526903aa9d72fa2b1165822a49fe`.
-Keep every context file immutable until all jobs finish. Image build and
-runtime capability remain unverified; the scheduler needs Linux amd64
-and the canonical network dependencies. The user submits all model and
-integration jobs and returns the full receipts specified in each handoff.
+Actual `--network off` is the User's statement; historical prepared network-on
+commands and immutable context `dist/b.w21/integration/context-9d025f8f`
+remain untouched. No integration repeat is required for this model-only round.
+The separate [observational archive](integration/integration-observed-receipts.json)
+contains all fifteen full run logs and user receipt. It does not include build
+logs or independently verify scheduler final state/network policy.
 
 ## Review status and remaining work
 
-Runtime code and unit tests passed review. The integration handoff's static
-code and test reviews found no issues; static checks establish preparation,
-not an image build or execution result. Relevant documentation contract
-findings are resolved and focused review confirmed them. The nine observed
-phase-1 outcomes, local red proof and final unit PASS are established; the
-fourteen fixed-model and fifteen integration observations remain **NOT_RUN**.
-The bug stays active pending review of those scheduler receipts.
+The prior runtime/code/test and handoff reviews found no actionable issues;
+those reviews and the old full-unit PASS predate the current model/test round.
+All nine red model outcomes, unit-red proof, fifteen integration passes
+and the round-2 full unit PASS are established. Corrected round-2 model
+receipts remain **PENDING**. The bug stays active pending that gate and review.
 
 Broad pre-existing documentation style work is deferred: internal/PRD
 references, the old unsupported-configuration note, duplicate recovery

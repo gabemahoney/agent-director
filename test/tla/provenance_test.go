@@ -125,7 +125,7 @@ func TestCodexJobArtifacts(t *testing.T) {
 	jarHash := fmt.Sprintf("%x", sha256.Sum256(jar))
 	declaredJars := map[string]bool{}
 	caseName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	for _, dir := range []string{"b.w21", "b.w21/fixed"} {
+	for _, dir := range []string{"b.w21", "b.w21/fixed", "b.w21/fixed-r2"} {
 		var manifest struct {
 			Bug   string `json:"bug"`
 			Cases []struct {

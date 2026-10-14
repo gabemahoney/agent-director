@@ -10,14 +10,21 @@ full logs and hashes. The model-failure gate is met; local sandbox regressions w
 red and the repair passed all 41 targeted cases. The final full sandbox unit
 suite passed after expectation and artifact/provenance corrections: 67 Go
 packages (37 cached), 420 Bun tests, zero failures and make exit 0.
-The [fixed-model handoff](b.w21/fixed/README.md) prepares fourteen separate
-self-contained jobs, all **NOT_RUN**: eleven expected PASS, an independent
-relaunch reachability failure and two repair-mutant failures. The
-[integration handoff](../../../test/b.w21/integration/README.md) is **READY
-for user submission**, with [15 exact commands](../../../test/b.w21/integration/scheduler-commands.txt)
-pinned to source commit `9d025f8f2caf176f3a60421f52ba94b293021bdb`;
-all integration observations remain **NOT_RUN**. See the
-[unit receipts and review limits](../../../test/b.w21/README.md).
+The [submitted fixed-model results](b.w21/fixed/README.md) record ten PASS,
+three expected failures and one unexpected `NoRace` failure: thirteen of
+fourteen predictions match at `9d025f8f`. Full logs, counts and immutable
+predictions are archived. The [round-2 handoff](b.w21/fixed-r2/README.md)
+corrects the seeded modern ACK hold in the model; six separate contexts
+are ready, all **NOT_RUN** (four expected PASS, one reachability FAIL,
+one `NoRace` mutant FAIL). No production runtime changed.
+The [integration evidence](../../../test/b.w21/integration/README.md) records
+all fifteen jobs PASS at unchanged source `9d025f8f`: 152 EPIC cases plus
+22 install-mode assertions/five scenarios. Actual network off is the User's
+statement; historical network-on commands remain preserved. New mixed-store
+API tests pass in targeted sandbox runs (118 API/store and eight artifact
+cases). The fresh full sandbox suite also passed: 67 Go packages (39 cached),
+420 Bun tests, zero failures and make exit 0.
+See [unit receipts and review limits](../../../test/b.w21/README.md).
 
 The b.ssz verdicts below are historical runs and have not been rerun with
 these extensions. The nine current-rule contexts remain the immutable
@@ -25,7 +32,7 @@ these extensions. The nine current-rule contexts remain the immutable
 `B21RecordsSettle`. `src/B146R5Cx.tla` is now the evolving model; the older
 final-model equivalence claims below describe the submitted b.ssz snapshots,
 not the modified current source. Original b.ssz job directories omit their
-jar; the manifest-declared b.w21 red/fixed contexts include canonical jar
+jar; the manifest-declared b.w21 red/fixed/round-2 contexts include canonical jar
 copies for self-contained scheduler submission.
 
 The design under check is `../srd-design-brief.md`, sections "Codex session-end rule" and

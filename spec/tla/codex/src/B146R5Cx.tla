@@ -417,14 +417,14 @@ LegacyDelivery(r) ==
 
 \* hookMayAnswer reads closed_at, completed pane answers and row state, not
 \* delivered_at: an acked v7 hook can still be writing its answer. Keep the
-\* original v7 abstraction unless the b.w21 scenario is explicitly enabled.
+\* original v7 liveness abstraction even in a mixed legacy/current store:
+\* its time fallback conservatively holds through settlement, including ack.
 GuardClosed(r) == Answered(r) \/ cls[r] \/ LegacyReleased(r)
                   \/ (CloseOnMissing /\ rs = "missing")
 RelayHolds(r) ==
     rec[r] /\ ~GuardClosed(r)
     /\ IF r \in Legacy THEN LegacyDelivery(r) = "not_confirmed"
-        ELSE CASE LiveCheck = "exact" -> HookAlive(r)
-               [] OTHER -> ~ack[r] /\ ph[r] < 2
+        ELSE JudgedAlive(r)
 AnyRelayHolds == IF PreV7Old THEN \E r \in R : RelayHolds(r) ELSE AnyJudgedAlive
 
 Reported(r) ==
@@ -1560,4 +1560,21 @@ B21ProofFidelity ==
 B21ExpiredOrdinaryDelivered ==
     \A r \in Legacy : (ph[r] = 2 /\ ~PreV7CloseDeny) =>
                         LegacyDelivery(r) = "delivered" /\ ~Reported(r)
+
+\* A fresh request reaches its timeout ack through the original actions;
+\* neither the legacy release nor the ack proves that this hook exited.
+B21MixedAckedLive ==
+    /\ PreV7Old /\ nl /\ LegacyReleased(L) /\ ~RelayHolds(L)
+    /\ proc = "alive" /\ rs = "check_permission"
+    /\ rec[1] /\ dec[1] = "deny" /\ ack[1] /\ h[1] = "e" /\ ph[1] = 1
+B21MixedAckedLiveUnreachable == ~B21MixedAckedLive
+B21MixedAckedLiveHeld == B21MixedAckedLive => RelayHolds(1) /\ AnyRelayHolds
+
+\* Reproduce the submitted counterexample with real lifecycle/relay and
+\* pane-reader actions. The full Spec remains the integration obligation.
+B21MixedNext ==
+    \/ C(SessionStart)
+    \/ E(TurnStart \/ HX(1) \/ StraySend \/ OrcBlindAct(1))
+    \/ P(Ask(1) \/ Tick(1) \/ HP(1) \/ HD(1) \/ HE(1) \/ OrcRead(1))
+B21MixedSpec == Init /\ [][B21MixedNext]_vars
 =============================================================================
