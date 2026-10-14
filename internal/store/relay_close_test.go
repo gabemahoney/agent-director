@@ -159,10 +159,10 @@ func seedCloseRequests(t *testing.T, s *Store) {
 
 // TestCloseClosesRelayRequests (b.146 rule 12; SR-A-2.5; b.59i, b.6qr): each
 // close closes, with one closed_at, every request of its row that still awaits
-// an answer: an undecided one (from v7 on or before) is denied with the
+// an answer and every unacked pre-v7 verdict: an undecided one is denied with the
 // close's reason, a verdict its relay hook has not acked keeps its decision,
-// reason and decided_at; an acked request and a decided one from before v7
-// are left as they were, and the row's version advances by one. The same
+// reason and decided_at, including a decided one from before v7 (b.w21);
+// an acked request is left as it was, and the row's version advances by one. The same
 // close proves every request of the row gone (b.146 step 2c), closed now or
 // before, agent_gone at the close's instant, except C, whose tool ran before:
 // it keeps that proof. Another row's open request is left as it was,
@@ -211,7 +211,7 @@ func TestCloseClosesRelayRequests(t *testing.T) {
 				tokenA: {true, "deny", c.reason},
 				tokenB: {true, "deny", DecisionReasonOperator},
 				tokenC: {false, "allow", ""},
-				tokenD: {false, "allow", ""},
+				tokenD: {true, "allow", ""},
 				tokenE: {true, "deny", c.reason},
 			} {
 				got, was := mustRequest(t, s, tok), before[tok]
@@ -245,8 +245,8 @@ func TestCloseClosesRelayRequests(t *testing.T) {
 			}
 
 			var want []string // event/token, in trail order
-			for _, tok := range []string{tokenA, tokenB, tokenE} {
-				if tok != tokenB {
+			for _, tok := range []string{tokenA, tokenB, tokenD, tokenE} {
+				if tok == tokenA || tok == tokenE {
 					want = append(want, "ad.row_mutation.committed/"+tok)
 				}
 				if c.tick {

@@ -126,8 +126,10 @@ the archived execution evidence without parsing or rerunning the model.
 ## Remaining code and validation gates
 
 The current-rule failures and controls are confirmed. Upgraded-store and
-post-24-hour regressions are being written but must still be proven red on
-unfixed code through user scheduler jobs before product repair. Regression
+post-24-hour regressions must still be proven red on unfixed code before
+product repair. Follow the [unit-red handoff](../../../../test/b.w21/README.md)
+on a separate disposable test host with a container engine; the scheduler's
+job containers cannot run `make test-sandbox` unchanged. Regression
 red/green results, fixed-model results, the `make test-sandbox` unit suite
 and every Docker test group remain pending. This phase-1 evidence does not
 claim a product fix or a passing Go suite.

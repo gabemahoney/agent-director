@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# USER RUN ONLY: a separate disposable test host with a working container engine.
+# Start in a fresh directory containing the supplied unit-red.bundle.
+# Read README.md and compare the hash/commit with the orchestrator's handoff first.
+# Do not run on the development host or inside a scheduler job container.
+set -eu
+
+# Inspect this hash and the bundle refs before continuing.
+sha256sum unit-red.bundle > unit-red-bundle.sha256
+cat unit-red-bundle.sha256
+git bundle list-heads unit-red.bundle
+
+# The clone preserves the release tag needed by historical fixture coverage.
+git clone -b fix/b.w21 unit-red.bundle b.w21-unit-red
+git -C b.w21-unit-red bundle verify ../unit-red.bundle
+git -C b.w21-unit-red rev-parse --verify HEAD > unit-red-checkpoint.txt
+git -C b.w21-unit-red rev-parse --verify 'refs/tags/v0.11.1^{commit}' >> unit-red-checkpoint.txt
+cat unit-red-checkpoint.txt
+git -C b.w21-unit-red status --short
+
+# Require the runtime to match the original unfixed baseline.
+git -C b.w21-unit-red diff --exit-code 8c6998d4 HEAD -- . ':(exclude)**/*_test.go' ':(exclude)test/b.w21/**' ':(exclude)spec/tla/codex/b.w21/**' ':(exclude)spec/tla/codex/README.md'
+
+# Do not set BYPASS_CONTAINER_FOR_AGENT_DIRECTOR_TESTS or a sandbox marker.
+# Pass verbose Go execution into the real sandbox container.
+# Use a fresh disposable host without cached results for this checkpoint.
+export SANDBOX_FLAGS="-e GOFLAGS=-v"
+
+# Preserve Make's status while capturing the entire Go + Bun output.
+set +e
+make -C b.w21-unit-red test-sandbox > unit-red.log 2>&1
+unit_red_status=$?
+set -e
+printf '%s\n' "$unit_red_status" > unit-red.exitcode
+cat unit-red.log
+printf 'UNIT-RED-MAKE-EXIT=%s\n' "$unit_red_status"
+exit "$unit_red_status"
