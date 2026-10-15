@@ -31,7 +31,7 @@ func shellPlan(t *testing.T) (runner, root string) {
 		"driver/run-testplan.sh": string(src),
 		"driver/db-reset.sh":     fakeDBReset,
 		"tp/plan/t1.p.md":        "---\nid: t1.p\ntitle: rerun probe\nchildren:\n- t2.p\n---\n",
-		"tp/plan/t2.p/t2.p.md":   "---\nid: t2.p\n---\n```bash\n[ ! -e \"$M\" ] || exit 7\ntouch \"$M\"\nexit 1\n```\n",
+		"tp/plan/t2.p/t2.p.md":   "---\nid: t2.p\n---\n```bash\n[ ! -e \"$M\" ] || exit 7\ntouch \"$M\"\nset -e\ntrap 'printf \"cleanup\\n%.0s\" {1..12}' EXIT\n(false)\n```\n",
 	}
 	for name, body := range files {
 		path := filepath.Join(dir, name)
@@ -54,8 +54,8 @@ func TestShellModeRerunStartsFromAFreshReset(t *testing.T) {
 		failResetAt   string
 		want, notWant []string // substrings of the case's details
 	}{
-		{"rerun after a fresh reset", "", []string{"xtrace_tail: ", "+ exit 1"}, []string{"+ exit 7", "rerun skipped"}},
-		{"reset before the rerun fails", "2", []string{"xtrace rerun skipped: db-reset failed before it"}, []string{"xtrace_tail"}},
+		{"rerun after a fresh reset", "", []string{"CASE_FAILURE exit=1", "command=false", "xtrace_tail: "}, []string{"+ exit 7", "rerun skipped"}},
+		{"reset before the rerun fails", "2", []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun skipped: db-reset failed before it"}, []string{"xtrace_tail"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runner, root := shellPlan(t)

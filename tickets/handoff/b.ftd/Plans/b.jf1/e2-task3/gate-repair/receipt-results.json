@@ -1,0 +1,22 @@
+{
+  "focused-driver.log": {
+    "exit": 2,
+    "result": "test-side formatting failure, preserved"
+  },
+  "focused-driver-2.log": {
+    "exit": 0,
+    "result": "passed"
+  },
+  "focused-final.log": {
+    "exit": 2,
+    "result": "python3 unavailable; no tests after failed syntax utility"
+  },
+  "focused-final-2.log": {
+    "exit": 0,
+    "result": "passed"
+  },
+  "full-unit.log": {
+    "exit": 0,
+    "result": "passed, one full run"
+  }
+}

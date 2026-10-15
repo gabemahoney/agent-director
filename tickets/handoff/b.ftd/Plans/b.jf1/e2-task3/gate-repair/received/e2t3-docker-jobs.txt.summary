@@ -1,0 +1,16 @@
+epic-03-spawn succeeded {"summary":{"total":22,"pass":22,"fail":0}}
+epic-04-interact succeeded {"summary":{"total":11,"pass":11,"fail":0}}
+epic-05-stop succeeded {"summary":{"total":15,"pass":15,"fail":0}}
+epic-06-discover succeeded {"summary":{"total":12,"pass":12,"fail":0}}
+epic-07-templates succeeded {"summary":{"total":8,"pass":8,"fail":0}}
+epic-08-recovery succeeded {"summary":{"total":8,"pass":8,"fail":0}}
+epic-09-resume succeeded {"summary":{"total":11,"pass":11,"fail":0}}
+epic-10-relay succeeded {"summary":{"total":8,"pass":8,"fail":0}}
+epic-11-mcp succeeded {"summary":{"total":9,"pass":9,"fail":0}}
+epic-12-install succeeded {"summary":{"total":13,"pass":13,"fail":0}}
+epic-13-agents succeeded {"summary":{"total":24,"pass":24,"fail":0}}
+harness-smoke succeeded {"summary":{"total":5,"pass":5,"fail":0}}
+installsh-preflight-gates succeeded {"summary":{"total":2,"pass":2,"fail":0}}
+template-overwrite succeeded {"summary":{"total":4,"pass":4,"fail":0}}
+cursor-owned-launch failed {"summary":{"total":5,"pass":4,"fail":1}}
+cursor-relay failed {"summary":{"total":10,"pass":6,"fail":4}}

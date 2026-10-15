@@ -1,0 +1,165 @@
+diff --git a/test/driver-scripts/run_testplan_test.go b/test/driver-scripts/run_testplan_test.go
+index 823de546..d58942a8 100644
+--- a/test/driver-scripts/run_testplan_test.go
++++ b/test/driver-scripts/run_testplan_test.go
+@@ -31,7 +31,7 @@ func shellPlan(t *testing.T) (runner, root string) {
+ 		"driver/run-testplan.sh": string(src),
+ 		"driver/db-reset.sh":     fakeDBReset,
+ 		"tp/plan/t1.p.md":        "---\nid: t1.p\ntitle: rerun probe\nchildren:\n- t2.p\n---\n",
+-		"tp/plan/t2.p/t2.p.md":   "---\nid: t2.p\n---\n```bash\n[ ! -e \"$M\" ] || exit 7\ntouch \"$M\"\nexit 1\n```\n",
++		"tp/plan/t2.p/t2.p.md":   "---\nid: t2.p\n---\n```bash\n[ ! -e \"$M\" ] || exit 7\ntouch \"$M\"\nset -e\ntrap 'printf \"cleanup\\n%.0s\" {1..12}' EXIT\n(false)\n```\n",
+ 	}
+ 	for name, body := range files {
+ 		path := filepath.Join(dir, name)
+@@ -54,8 +54,8 @@ func TestShellModeRerunStartsFromAFreshReset(t *testing.T) {
+ 		failResetAt   string
+ 		want, notWant []string // substrings of the case's details
+ 	}{
+-		{"rerun after a fresh reset", "", []string{"xtrace_tail: ", "+ exit 1"}, []string{"+ exit 7", "rerun skipped"}},
+-		{"reset before the rerun fails", "2", []string{"xtrace rerun skipped: db-reset failed before it"}, []string{"xtrace_tail"}},
++		{"rerun after a fresh reset", "", []string{"CASE_FAILURE exit=1", "command=false", "xtrace_tail: "}, []string{"+ exit 7", "rerun skipped"}},
++		{"reset before the rerun fails", "2", []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun skipped: db-reset failed before it"}, []string{"xtrace_tail"}},
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			runner, root := shellPlan(t)
+diff --git a/test/driver/cursor-owned-launch.sh b/test/driver/cursor-owned-launch.sh
+index ee0247e1..69d13231 100644
+--- a/test/driver/cursor-owned-launch.sh
++++ b/test/driver/cursor-owned-launch.sh
+@@ -36,6 +36,20 @@ socket="$TMUX_TMPDIR/tmux-$(id -u)/default"
+ sleep 300 &
+ control_sentinel=$!
+ cleanup_cursor_case() {
++ local rc=$? command=$BASH_COMMAND
++ if (( rc != 0 )); then
++  printf 'CASE_EXIT exit=%s command=%q context=%s\n' "$rc" "$command" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=$case_dir" >&2
++  # Read only this synthetic case's evidence before killing its processes.
++  if declare -F sql >/dev/null; then
++   sql -readonly -json "SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='$id'; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='$id';" >&2 || true
++  fi
++  for artifact in scenario trace.jsonl permission.json error pause-error; do
++   if [[ -f $case_dir/$artifact ]]; then
++    printf 'CASE_ARTIFACT %s\n' "$artifact" >&2
++    cat "$case_dir/$artifact" >&2 || true
++   fi
++  done
++ fi
+  touch "$case_dir/gate-release"
+  tmux -S "$socket" kill-server >/dev/null 2>&1 || true
+  kill "$control_sentinel" >/dev/null 2>&1 || true
+@@ -132,7 +146,12 @@ else add('permission',execute.method,execute.params);
+ if(mode==='coverage') for(const kind of ['read','delete','fetch']) {
+  const p=structuredClone(execute.params);p.toolCall={...p.toolCall,toolCallId:'synthetic-'+kind,title:'Synthetic '+kind,kind,rawInput:null};add('synthetic-'+kind,execute.method,p);
+ }
+-fs.writeFileSync(dest,JSON.stringify({sessionId:session,requests:frames}));
++// Captures came from independent sessions; rebind only the synthetic session
++// identity to this connection while retaining each original authorization body.
++for (const frame of frames) if ('sessionId' in frame.params) frame.params.sessionId=session;
++// An unsupported authorization's cancellation must remain pending. An ordinary
++// end_turn from this peer would cancel the supervisor's cancellation deadline.
++fs.writeFileSync(dest,JSON.stringify({sessionId:session,requests:frames,...(mode==='unsupported'?{waitForRelease:true}:{})}));
+ SCENARIO
+ }
+ relay_retain_pipe() {
+@@ -142,12 +161,22 @@ relay_retain_pipe() {
+  wait_until test -f "$case_dir/pipe-ready"
+ }
+ relay_gate_after_ack() {
++ gate_check=${1:-first}
+  real_tmux=$(command -v tmux)
+  mkdir -m 700 "$case_dir/gate-bin"
+  cat > "$case_dir/gate-bin/tmux" <<GATE
+ #!/bin/bash
+ set -euo pipefail
+ if [[ -f '$case_dir/gate-armed' ]] && [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE delivered_at IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; then
++ if [[ '$gate_check' == final ]]; then
++  # Each CheckCursorAnswer ends in one list-panes. Allow the worker's
++  # initial guard; hold the second guard running under the transport timer.
++  if [[ " \$* " != *' list-panes '* ]]; then exec '$real_tmux' "\$@"; fi
++  if [[ ! -f '$case_dir/gate-first-check' ]]; then
++   touch '$case_dir/gate-first-check'
++   exec '$real_tmux' "\$@"
++  fi
++ fi
+  touch '$case_dir/gate-ready'
+  while [[ ! -f '$case_dir/gate-release' ]]; do sleep 0.01; done
+ fi
+diff --git a/test/driver/run-testplan.sh b/test/driver/run-testplan.sh
+index 722bd16c..0e5c83ae 100755
+--- a/test/driver/run-testplan.sh
++++ b/test/driver/run-testplan.sh
+@@ -148,14 +148,27 @@ run_case_shell() {
+         return 1
+     fi
+ 
++    # Inherit ERR through functions, command substitutions and case subshells.
++    # Report before an EXIT cleanup can hide the failing assertion in xtrace.
++    local diagnostics
++    diagnostics=$(cat <<'DIAGNOSTICS'
++set -E
++trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&2' ERR
++DIAGNOSTICS
++)
++    diagnostics+=$'\n'
+     local out rc
+-    out="$(bash -c "$script" 2>&1)" && rc=0 || rc=$?
++    out="$(bash -c "$diagnostics$script" 2>&1)" && rc=0 || rc=$?
+ 
+     if [[ "$rc" -eq 0 ]]; then
+         emit "$(emit_case "$case_id" pass "${out:0:200}")"
+         return 0
+     fi
+ 
++    # Preserve every original diagnostic, including nested subshell failures,
++    # outside the bounded JSON details field and before any diagnostic rerun.
++    printf 'driver: original failure for %s (exit=%s)\n%s\n' "$case_id" "$rc" "$out" >&2
++
+     # Failure surfacing: with `set -euo pipefail` in t2 bodies, an early
+     # assertion (`test ...`) that exits non-zero produces *no* stdout/stderr,
+     # which means CI logs see only `exit=1: ` and the diagnosis from the
+@@ -169,7 +182,7 @@ run_case_shell() {
+     # so the trace pointed at a step that had not failed).
+     local xout="" xrc=0 reset_failed=0
+     if bash "$DB_RESET" >&2; then
+-        xout="$(bash -x -c "$script" 2>&1)" && xrc=0 || xrc=$?
++        xout="$(bash -x -c "$diagnostics$script" 2>&1)" && xrc=0 || xrc=$?
+     else
+         reset_failed=1
+     fi
+@@ -177,9 +190,17 @@ run_case_shell() {
+     if [[ -n "$xout" ]]; then
+         # Keep the last ~6 xtrace lines so the failing assertion is visible
+         # without flooding the JSON details field. Drop empty lines.
+-        last_trace="$(printf '%s\n' "$xout" | grep -v '^$' | tail -n 6 | tr '\n' '|')"
++        last_trace="$(printf '%s\n' "$xout" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
++    fi
++    if [[ -n "$xout" ]]; then
++        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n' "$case_id" "$xrc" "$xout" >&2
+     fi
++    local assertion=""
++    assertion="$(printf '%s\n' "$out" | grep '^CASE_FAILURE ' | head -n 1)" || true
+     local combined="exit=${rc}"
++    if [[ -n "$assertion" ]]; then
++        combined+=" | ${assertion:0:600}"
++    fi
+     if [[ -n "$out" ]]; then
+         combined+=": ${out:0:300}"
+     fi
+diff --git a/tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md b/tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md
+index c253892a..207ad7e1 100644
+--- a/tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md
++++ b/tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md
+@@ -30,9 +30,12 @@ receipts=$(mktemp /tmp/cr-deadline-receipts-XXXXXX)
+ for seam in store_lock writer_guard; do
+  (
+   CURSOR_RELAY_TIMEOUT=2
++  # The final guard must cross its approval deadline before the existing
++  # 1500ms tmux query bound returns; keep both production bounds unchanged.
++  if [[ $seam == writer_guard ]]; then CURSOR_RELAY_TIMEOUT=1; fi
+   source /work/source/test/driver/cursor-owned-launch.sh
+   relay_scenario permission
+-  if [[ $seam == writer_guard ]]; then relay_gate_after_ack; fi
++  if [[ $seam == writer_guard ]]; then relay_gate_after_ack final; fi
+   relay_start on; wait_until request_count_is 1
+   token=$(sql "SELECT request_token FROM permission_requests WHERE instance_id='$id';")
+   before=$(raw_size)

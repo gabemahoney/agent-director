@@ -1,0 +1,5 @@
+Independent Test Reviewer — E2 Task3 scheduler repair
+1. No mandatory findings in the four-file repair. The existing parameterized driver test meaningfully checks inherited subshell diagnostics despite verbose cleanup and failed rerun reset.
+2. .02 remains causally unresolved. Static inspection of early_end, cancel_busy, relay_guard, terminal input, and request handling did not establish a defective predicate or justify a production change.
+3. The .01 session normalization, .08 unsupported-response barrier, and .10 final-guard gate address identifiable fixture defects without weakening safety assertions. Earlier .08 subscenarios and .10's store-lock outcome still require external evidence; these fixes do not establish historical first-failure locations.
+4. Approve committing the repair and preparing an exact-revision diagnostic scheduler rerun, with .02 explicitly unresolved. No tests executed, files edited, statuses changed, or commits made during this review. TLA+ not applicable: no model inputs changed.

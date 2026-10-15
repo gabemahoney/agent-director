@@ -1,0 +1,7 @@
+driver: loaded 5 t2 case(s) from /work/tickets/testplans/b.jf1/t1.jf1.cl/t1.jf1.cl.md
+{"case":"t2.jf1.cl.01","status":"pass","details":"{\"case\":\"t2.jf1.cl.01\",\"status\":\"pass\",\"checks\":\"selection,template,permissions,current-row,untracked,confirmed-pause\",\"authenticated_cursor\":false}"}
+{"case":"t2.jf1.cl.02","status":"pass","details":"{\"case\":\"t2.jf1.cl.02\",\"status\":\"pass\",\"checks\":\"literal-turn,read-pane,controller-refused,protected-order,proved-runtime-gone\",\"authenticated_cursor\":false}"}
+{"case":"t2.jf1.cl.03","status":"pass","details":"{\"case\":\"t2.jf1.cl.03\",\"status\":\"pass\",\"checks\":\"gateway-SIGKILL,runtime-gone,unrelated-survivor,missing,finished-kill-noop\",\"authenticated_cursor\":false}"}
+{"case":"t2.jf1.cl.04","status":"pass","details":"{\"case\":\"t2.jf1.cl.04\",\"status\":\"pass\",\"checks\":\"failed-end-publication,pause-timeout,proved-runtime-gone,no-fabricated-ended\",\"authenticated_cursor\":false}"}
+{"case":"t2.jf1.cl.05","status":"pass","details":"{\"case\":\"t2.jf1.cl.05\",\"status\":\"pass\",\"checks\":\"actual-Bun-default,launch-under-30000ms,unfinished-generation,caller-recreation,same-identity\",\"authenticated_cursor\":false}"}
+{"summary":{"total":5,"pass":5,"fail":0}}

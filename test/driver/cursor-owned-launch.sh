@@ -36,6 +36,20 @@ socket="$TMUX_TMPDIR/tmux-$(id -u)/default"
 sleep 300 &
 control_sentinel=$!
 cleanup_cursor_case() {
+ local rc=$? command=$BASH_COMMAND
+ if (( rc != 0 )); then
+  printf 'CASE_EXIT exit=%s command=%q context=%s\n' "$rc" "$command" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=$case_dir" >&2
+  # Read only this synthetic case's evidence before killing its processes.
+  if declare -F sql >/dev/null; then
+   sql -readonly -json "SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='$id'; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='$id';" >&2 || true
+  fi
+  for artifact in scenario trace.jsonl permission.json error pause-error; do
+   if [[ -f $case_dir/$artifact ]]; then
+    printf 'CASE_ARTIFACT %s\n' "$artifact" >&2
+    cat "$case_dir/$artifact" >&2 || true
+   fi
+  done
+ fi
  touch "$case_dir/gate-release"
  tmux -S "$socket" kill-server >/dev/null 2>&1 || true
  kill "$control_sentinel" >/dev/null 2>&1 || true
@@ -132,7 +146,12 @@ else add('permission',execute.method,execute.params);
 if(mode==='coverage') for(const kind of ['read','delete','fetch']) {
  const p=structuredClone(execute.params);p.toolCall={...p.toolCall,toolCallId:'synthetic-'+kind,title:'Synthetic '+kind,kind,rawInput:null};add('synthetic-'+kind,execute.method,p);
 }
-fs.writeFileSync(dest,JSON.stringify({sessionId:session,requests:frames}));
+// Captures came from independent sessions; rebind only the synthetic session
+// identity to this connection while retaining each original authorization body.
+for (const frame of frames) if ('sessionId' in frame.params) frame.params.sessionId=session;
+// An unsupported authorization's cancellation must remain pending. An ordinary
+// end_turn from this peer would cancel the supervisor's cancellation deadline.
+fs.writeFileSync(dest,JSON.stringify({sessionId:session,requests:frames,...(mode==='unsupported'?{waitForRelease:true}:{})}));
 SCENARIO
 }
 relay_retain_pipe() {
@@ -142,12 +161,22 @@ relay_retain_pipe() {
  wait_until test -f "$case_dir/pipe-ready"
 }
 relay_gate_after_ack() {
+ gate_check=${1:-first}
  real_tmux=$(command -v tmux)
  mkdir -m 700 "$case_dir/gate-bin"
  cat > "$case_dir/gate-bin/tmux" <<GATE
 #!/bin/bash
 set -euo pipefail
 if [[ -f '$case_dir/gate-armed' ]] && [[ \$(/opt/driver/sql.sh -readonly '$STORE' 'SELECT count(*) FROM permission_requests WHERE delivered_at IS NOT NULL;' 2>/dev/null || echo 0) != 0 ]]; then
+ if [[ '$gate_check' == final ]]; then
+  # Each CheckCursorAnswer ends in one list-panes. Allow the worker's
+  # initial guard; hold the second guard running under the transport timer.
+  if [[ " \$* " != *' list-panes '* ]]; then exec '$real_tmux' "\$@"; fi
+  if [[ ! -f '$case_dir/gate-first-check' ]]; then
+   touch '$case_dir/gate-first-check'
+   exec '$real_tmux' "\$@"
+  fi
+ fi
  touch '$case_dir/gate-ready'
  while [[ ! -f '$case_dir/gate-release' ]]; do sleep 0.01; done
 fi

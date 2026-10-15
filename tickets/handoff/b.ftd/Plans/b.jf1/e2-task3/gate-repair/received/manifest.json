@@ -1,0 +1,20 @@
+{
+  "operator_attestation": "15of16groupspass; cursor-owned-launch corrected rerun5/5. Relay .01/.02/.08/.10 failedtwice includingcorrectedversion0.13.0-ftde2t3b. Summaryfile retains first-run ownedversionfailure; raw aa5fd4 log confirms5/5rerun.",
+  "receipts": [
+    {
+      "path": "/home/horde/ad-codex/project/tickets/Ideas/b.ftd/e2t3-gate/e2t3-docker-jobs.txt.summary",
+      "sha256": "cca99fff37c2bb0a6bc1d6cf97c1797d6ddabc57671aafe67b942bd4fa2effac",
+      "copied_to": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair/received/e2t3-docker-jobs.txt.summary"
+    },
+    {
+      "path": "/home/horde/ad-codex/project/tickets/Ideas/b.ftd/e2t3-gate/j20261015165134-aa5fd4.run.log",
+      "sha256": "01e99c434cd37a051634116f490c0976c3b8f18c209e6efab877fb71cdd26681",
+      "copied_to": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair/received/j20261015165134-aa5fd4.run.log"
+    },
+    {
+      "path": "/home/horde/ad-codex/project/tickets/Ideas/b.ftd/e2t3-gate/j20261015165134-02ce08.run.log",
+      "sha256": "c2bb4350a1c287c055ee2596db0bbc96354be5156af29c8e7a81751fe9ea37f6",
+      "copied_to": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair/received/j20261015165134-02ce08.run.log"
+    }
+  ]
+}

@@ -148,13 +148,26 @@ run_case_shell() {
         return 1
     fi
 
+    # Inherit ERR through functions, command substitutions and case subshells.
+    # Report before an EXIT cleanup can hide the failing assertion in xtrace.
+    local diagnostics
+    diagnostics=$(cat <<'DIAGNOSTICS'
+set -E
+trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&2' ERR
+DIAGNOSTICS
+)
+    diagnostics+=$'\n'
     local out rc
-    out="$(bash -c "$script" 2>&1)" && rc=0 || rc=$?
+    out="$(bash -c "$diagnostics$script" 2>&1)" && rc=0 || rc=$?
 
     if [[ "$rc" -eq 0 ]]; then
         emit "$(emit_case "$case_id" pass "${out:0:200}")"
         return 0
     fi
+
+    # Preserve every original diagnostic, including nested subshell failures,
+    # outside the bounded JSON details field and before any diagnostic rerun.
+    printf 'driver: original failure for %s (exit=%s)\n%s\n' "$case_id" "$rc" "$out" >&2
 
     # Failure surfacing: with `set -euo pipefail` in t2 bodies, an early
     # assertion (`test ...`) that exits non-zero produces *no* stdout/stderr,
@@ -169,7 +182,7 @@ run_case_shell() {
     # so the trace pointed at a step that had not failed).
     local xout="" xrc=0 reset_failed=0
     if bash "$DB_RESET" >&2; then
-        xout="$(bash -x -c "$script" 2>&1)" && xrc=0 || xrc=$?
+        xout="$(bash -x -c "$diagnostics$script" 2>&1)" && xrc=0 || xrc=$?
     else
         reset_failed=1
     fi
@@ -177,9 +190,17 @@ run_case_shell() {
     if [[ -n "$xout" ]]; then
         # Keep the last ~6 xtrace lines so the failing assertion is visible
         # without flooding the JSON details field. Drop empty lines.
-        last_trace="$(printf '%s\n' "$xout" | grep -v '^$' | tail -n 6 | tr '\n' '|')"
+        last_trace="$(printf '%s\n' "$xout" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
     fi
+    if [[ -n "$xout" ]]; then
+        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n' "$case_id" "$xrc" "$xout" >&2
+    fi
+    local assertion=""
+    assertion="$(printf '%s\n' "$out" | grep '^CASE_FAILURE ' | head -n 1)" || true
     local combined="exit=${rc}"
+    if [[ -n "$assertion" ]]; then
+        combined+=" | ${assertion:0:600}"
+    fi
     if [[ -n "$out" ]]; then
         combined+=": ${out:0:300}"
     fi

@@ -1,0 +1,22 @@
+[
+  {
+    "path": "test/driver-scripts/run_testplan_test.go",
+    "before_sha256": "48ec1de1579f304c5aade3783057b1bcd5c813694916da47851914c1e38bb967",
+    "after_sha256": "38612d5d290eb332093ca115020e6001ef8801eb68db220295739c1606e3e528"
+  },
+  {
+    "path": "test/driver/cursor-owned-launch.sh",
+    "before_sha256": "12d01cb4dc588c4316cb9022b16fa12c9312e7818815a5f789ed81d6fec34121",
+    "after_sha256": "f00def2a7dd97e93e8feb00522513021f2f09a864615bd20d85a579e88f3f976"
+  },
+  {
+    "path": "test/driver/run-testplan.sh",
+    "before_sha256": "3b968df3c9a98ada646ba9f52eff950f393d971ae75e860cf57e7d4fbd52698e",
+    "after_sha256": "bebb5f9f76e38ddd791af029db4f211139e26ce83a0b9e529289d9245e7d9c95"
+  },
+  {
+    "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md",
+    "before_sha256": "2f2bb28aad50f09d0dff17e50ea924e1f4cb8baf29f8ee287d2a2735dc0056c7",
+    "after_sha256": "10dca1a480a7ebe9048892af2b11ca9c317ff5042de81eb75ec9ff2bb6b69cce"
+  }
+]
