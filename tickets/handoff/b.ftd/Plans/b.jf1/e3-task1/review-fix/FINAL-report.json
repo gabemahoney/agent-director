@@ -1,0 +1,53 @@
+{
+  "role": "apiary_engineer_e3_task1_review_fix",
+  "result": "All four mandatory source findings repaired; retained zero-byte final-guard regression now passes. New deterministic causal tests for R1/R2/R4 remain Test Writer work.",
+  "tree": "feature/b.ftd; inherited HEAD 9ff393a5216fd6d6377d3b40a1adab491fa296c6 and existing uncommitted source/tests preserved; no commit",
+  "tickets": {
+    "t3.jf1.r8.dt.xt": "done -> active -> done",
+    "t3.jf1.r8.dt.66": "done -> active -> done",
+    "t3.jf1.r8.dt.xv": "done -> active -> done"
+  },
+  "files_changed_this_pass": [
+    "internal/cursorhost/input.go",
+    "internal/cursorhost/session.go",
+    "internal/cursorhost/protocol.go",
+    "internal/cursorhost/transcript.go",
+    "internal/cursorhost/transcript_linux.go",
+    "internal/cursorhost/transcript_other.go"
+  ],
+  "repairs": {
+    "R1": "Run captures mailbox epoch before admission.take (including slow eligibility reads), carries that bound epoch on an accepted terminalInput, and inputMailbox.put preserves it. A control between admission and insertion cannot reauthorize an affected submission using the new epoch; existing cancellation/drain/writer guards retire it.",
+    "R2": "Every consumed interrupt/exit establishes the first cancellation deadline even while idle. Serial await no longer clears it after individual idle operations. The same deadline supervises control records, cancellation records, waiting reports and shutdown finalization; startup/completion/known-unwritten retirement no longer discard it. Recovery clears it only after the cancellation work and waiting report complete. Failure-cleanup transcript writes have a shared finite remaining budget, preventing a new unbounded defer. Existing owned-process termination remains authoritative; no ended report follows a failed protected record. Reset stale activeCancellation bookkeeping when its active submission finishes or retires.",
+    "R3": "Final writer guard reports the errPromptRetired sentinel as known prewrite, sends the original disposition to prompt callback and continues the healthy transport without Write. Initial guard behavior remains. Actual partial/error/timeout paths still retire transport with uncertainty and no replay. Other final authority failures retain E2 fail-closed behavior, verified by retained allow/deny guard2 regression.",
+    "R4": "Accepted initial submission is tracked in queue before submit performs runtime verification, user_input recording or UserPromptSubmit reporting. It remains tracked on pre-dispatch failure for healthy-transcript cancellation finalization; transfers to active ownership only after ACP request allocation, with queue removal on transfer or successful known-unstarted cancellation."
+  },
+  "testability_seam": {
+    "actual": "Unexported runWithTranscript takes the transcript opener; public Run always passes existing protected openTranscript. transcript.file now uses the minimal Stat/Write/Sync/Close interface. Default remains the exact protected os.File, identity validation and synchronization unchanged; no environment, user option, public API or alternate production behavior.",
+    "why": "Concrete *os.File previously prevented a deterministic blocked Sync/start-record test. An in-package test can open the real protected transcript, wrap its file, identify record kinds in Write and block/fail the following Sync. This observes actual control supervision and start-record-to-writer gate using the real Run implementation.",
+    "next_writer": "Use runWithTranscript with real protected opener plus a blocking file wrapper. Exercise idle input_control Sync, busy/start-record Sync, repeated controls and original deadline; inspect raw peer bytes, owned-runtime termination and absence of false ended. Release every wrapper barrier in cleanup. Keep protected Stat and real Write/Sync delegation. The seam is in-process; it does not inject test behavior into an out-of-process CLI."
+  },
+  "receipts": {
+    "01-final-guard-before.log": "Expected failing retained source regression before edit: both guards reached; raw_peer_bytes empty; old code returned uncertainty and poisoned later notify.",
+    "02-format.log": "Sandbox gofmt passed.",
+    "03-targeted-host.log": "PASS race 4.936s: existing nine behavioral tests for exact FIFO/lifecycle, controls, input/report capacity, durable holds, authority loss, queued protocol retirement, partial uncertainty, final guard and display pressure.",
+    "04-admission-transcript-preservation.log": "PASS race 6.763s: public committed-waiting admission, independent plan/permission, direct-question independence, final-guard regression and all three protected transcript tests.",
+    "05-targeted-pane.log": "PASS race 14.700s: actual tmux fresh FIFO/refusals/pause, repeated finite cancellation, protected persistence faults, working pause refusal/queued exit, baseline pause.",
+    "06-guards-cancellation.log": "Preserved intermediate failure: first broad classification recovered all final-guard errors and violated existing E2 allow/deny guard2 fail-closed expectation. Narrowed recoverable final prewrite disposition to errPromptRetired; no test changed.",
+    "07-guards-cancellation.log": "PASS race 8.482s after correction: queued allow/deny authority loss, bounded acknowledgement contention, controls, retained final-guard prompt regression, expired evidence checks, initial-versus-final authority failure behavior and protocol close completion/enqueue guards.",
+    "whitespace": "git diff --check passed."
+  },
+  "execution": "All repository execution and formatting used make sandbox CMD. Tests used GORACE=atexit_sleep_ms=0 solely to remove race-runtime exit delay. No full unit/integration suite, Docker TESTPLAN groups/collector, host built artifacts, live Cursor, credentials, real AD store, scheduler, TLA execution or push. No test/doc file edited; no delegation.",
+  "recovery_wording": "Existing interrupt advice remains: Cursor input cancelled; submit a new prompt to continue. No automatic replay or new conversation. Persistence finalization failure reports queued work will not be recovered. clear/new remain refused for Task1.",
+  "remaining_work": [
+    "Test Writer deterministic R1 admission-to-insertion retirement interleaving and R4 accepted-initial verification/report failure disposition coverage.",
+    "Deterministic blocked Sync/start-record finite-control tests using the new narrow recorder seam.",
+    "Legitimate eligible public pause with accepted queue remains an unproven coverage gap; do not fabricate row state or weaken pause guards.",
+    "Separate individual-byte and total waiting-byte capacity edge coverage remains missing.",
+    "Fresh quality/doc/advice work and final full suite remain coordinator-owned workflow; exact commit scheduler acceptance remains required."
+  ],
+  "models": "No spec/tla inputs changed. Existing hold models omit accepted FIFO/submission epochs/synchronized start-record gate; implementation tests do not prove those models cover the new queue. No invented model edits or baseline jobs.",
+  "deviations": [
+    "Added three transcript source-file changes solely for the concrete deterministic persistence testability gap requested in dispatch. No test/doc changes."
+  ],
+  "questions": []
+}

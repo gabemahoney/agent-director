@@ -108,14 +108,22 @@ tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
 ```
 
 The pane accepts editable Unicode text and bracketed multiline paste. Enter
-submits one prompt; successive idle submissions stay distinct. Ctrl-C requests
-cancellation of the current turn; readiness follows Cursor's completion
-when no genuine unanswered request holds the row. See
+submits one complete prompt, preserving its Unicode text and newlines.
+After confirmed startup, follow-ups wait in the order their submissions are
+observed at the terminal. The queue holds at most 32 waiting submissions and
+8 MiB of waiting text, in addition to one active prompt; each prompt is at
+most 1 MiB. A saved initial prompt goes first. Accepted submissions stay bound
+to that launch and confirmed conversation. One prompt runs at a time, after
+the previous turn and all outstanding decision holds have resolved. See
 [The dialog hold](permissions.md#the-dialog-hold).
-Busy follow-ups are visibly refused, with nothing sent. `/clear` and `/new`
-are also visibly refused; `/exit` is a local exit command. `pause` on an
+
+Ctrl-C requests interruption and cancels affected queued submissions
+individually. Controls take priority over queued input. `/clear` and `/new`
+remain visibly refused; `/exit` is a local exit command. `pause` on an
 eligible waiting row clears the draft and requests exit. Session termination
-is reported only after the owned runtime is gone.
+is reported only after the owned runtime is gone. Refusal, interruption and
+shutdown recovery follow the
+[Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
 Model selection (`--model` or `-m`) and one initial prompt are supported:
 
@@ -132,8 +140,12 @@ and question behavior is in [Permissions](permissions.md#cursor-spawns).
 `get` exposes the confirmed conversation's gateway transcript in `jsonl_path`.
 It is an ordered JSONL file beneath
 `~/.config/agent-director/cursor-transcripts/`, with private access. It records
-launch/conversation identity, accepted input, updates, authorization denials
-and confirmed outcomes. It is separate from Cursor's native session storage.
+launch/conversation identity and submission identities linking accepted input,
+dispatch starts, updates, cancellation and confirmed outcomes; refusals and
+uncertain delivery or completion are recorded separately. A dispatch-start
+record precedes prompt delivery and does not prove Cursor received it.
+Recorded admission does not establish execution or durable resumability.
+The transcript is separate from Cursor's native session storage.
 A path appears only after it is recorded by an accepted startup report;
 `transcript_status` describes the recorded reference, not a fresh file check.
 Availability and persistence failures are covered by the

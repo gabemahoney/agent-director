@@ -1,0 +1,70 @@
+{
+  "epic": "t1.jf1.r8",
+  "tasks": [
+    {
+      "id": "t2.jf1.r8.dt",
+      "number": 1,
+      "subtasks": {
+        "engineer": [
+          "t3.jf1.r8.dt.xt",
+          "t3.jf1.r8.dt.66",
+          "t3.jf1.r8.dt.xv"
+        ],
+        "test": [
+          "t3.jf1.r8.dt.w2",
+          "t3.jf1.r8.dt.k4",
+          "t3.jf1.r8.dt.cc",
+          "t3.jf1.r8.dt.c4",
+          "t3.jf1.r8.dt.p7"
+        ],
+        "doc": [
+          "t3.jf1.r8.dt.x9",
+          "t3.jf1.r8.dt.1t"
+        ]
+      }
+    },
+    {
+      "id": "t2.jf1.r8.sr",
+      "number": 2,
+      "subtasks": {
+        "engineer": [
+          "t3.jf1.r8.sr.77",
+          "t3.jf1.r8.sr.zy",
+          "t3.jf1.r8.sr.5x",
+          "t3.jf1.r8.sr.zg"
+        ],
+        "test": [
+          "t3.jf1.r8.sr.pp",
+          "t3.jf1.r8.sr.eg",
+          "t3.jf1.r8.sr.8z",
+          "t3.jf1.r8.sr.78",
+          "t3.jf1.r8.sr.e9",
+          "t3.jf1.r8.sr.66"
+        ],
+        "doc": [
+          "t3.jf1.r8.sr.vh",
+          "t3.jf1.r8.sr.be"
+        ]
+      }
+    },
+    {
+      "id": "t2.jf1.r8.a8",
+      "number": 3,
+      "subtasks": {
+        "test": [
+          "t3.jf1.r8.a8.wn",
+          "t3.jf1.r8.a8.8u",
+          "t3.jf1.r8.a8.wc",
+          "t3.jf1.r8.a8.ky",
+          "t3.jf1.r8.a8.6f",
+          "t3.jf1.r8.a8.yj",
+          "t3.jf1.r8.a8.zj"
+        ],
+        "doc": [
+          "t3.jf1.r8.a8.48",
+          "t3.jf1.r8.a8.ro"
+        ]
+      }
+    }
+  ]
+}

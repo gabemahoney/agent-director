@@ -1,0 +1,53 @@
+{
+  "role": "apiary_doc_writer_e3_task1",
+  "result": "Single initial prose pass settled. Architecture aggregate whole-file chain verified. User-facing prose awaits assigned postdoc literal-follow evidence before its Subtask can honestly close.",
+  "tickets": {
+    "t3.jf1.r8.dt.x9": "defined -> active; prose complete, retained active solely because its AC requires completed literal-follow recovery evidence",
+    "t3.jf1.r8.dt.1t": "defined -> active -> done; architecture update and verified whole-base/all-deltas aggregate complete"
+  },
+  "files_changed": [
+    "docs/usage.md",
+    "docs/permissions.md",
+    "docs/caller-contract.md",
+    "docs/architecture.md"
+  ],
+  "artifacts": [
+    "docs/architecture-delta.patch",
+    "docs/architecture-review-provenance.json",
+    "docs/document-hashes.json",
+    "docs/postdoc-advice-inventory.json",
+    "docs/FINAL-report.json"
+  ],
+  "changes": "Usage owns observed FIFO, exact Unicode/newlines, 32/8MiB plus active and 1MiB individual, initial priority, launch/conversation binding and lifecycle transcript meanings. Permissions owns durable independent holds/late exact proof and retained guards. Caller contract owns explicit capacity retry, interrupt recovery/no replay, shutdown guards, uncertain transport, display omission inspection and persistence failure. Architecture documents actual admission/mailbox/controller/protocol/transcript/display ownership and required fixture/component reuse. Clear/new and later lifecycle capabilities remain refused.",
+  "whole_architecture_review": {
+    "method": "Inherited four whole-base partition reports read and hashes verified; 22213-line b18e03... base snapshot verified. Exact correction patch verified byte-for-byte against git to 759fb631; exact gate-repair-3 patch verified byte-for-byte to current HEAD/base 2738e9b7. All new Task1 prose and context personally reviewed against source; companion opcodes cover equal/replaced full final file. Not a fresh personal 22k-line read.",
+    "final_sha256": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+    "final_lines": 22270,
+    "final_bytes": 1538333,
+    "whole_final_aggregate_covered": true,
+    "clean_document_claim": false,
+    "deferred_unchanged": [
+      "A2-A6",
+      "B3-B8",
+      "C2-C5",
+      "D1-D2"
+    ]
+  },
+  "review_basis": "Authoritative Bees Task, own Subtasks, PRD and relevant SRD requirements/technical decisions; CLAUDE and three doc guides; planning/doc proposal/PM reviews; engineer/code-review/SRD decision records and all initial behavior/repair/boundary/R5 FINAL reports. Actual admission, input, session, protocol writer, reporter, durable prompt authority, transcript/display and fixture boundaries inspected. Historical failed receipts remain untouched; R5 final report supersedes earlier pending gaps.",
+  "verification": [
+    "git diff --check -- docs PASS",
+    "All fenced blocks in four edited documents byte-identical to HEAD; no new or changed command",
+    "Verified inherited report hashes and both intervening exact architecture patches",
+    "New prose and changed recovery paragraphs personally reviewed; canonical exact prose retained in postdoc-advice-inventory.json"
+  ],
+  "source_contradictions": [],
+  "operator_actions": "Unchanged: no demonstrated new human-only procedure. Existing inspection owner linked. No new manual/guide/generated/install/skill or pin edits.",
+  "postdoc_handoff": "Final Test Writer owns literal capacity resubmission, interrupt later-explicit-input/no-replay, shutdown guards, rendering-loss protected-transcript inspection, persistence available-record/no-false-history-or-ended/unrecovered-queue advice. Exact settled prose is in postdoc-advice-inventory.json. No doc-parsing tests or manufactured executable advice requested. After literal evidence root may close x9; quality/full/scheduler remain separate.",
+  "limitations": "No tests, repository binaries, collectors, Docker groups, TLC/parsers, scheduler, live Cursor/auth, real AD stores, credentials, .claude access, staging, commits, delegation or agent messages. No full-suite/integration/authenticated/model-proof claim. No model input changes or TLA jobs.",
+  "deviations": [],
+  "incomplete": [
+    "x9 literal-follow evidence is assigned to postdoc Test Writer and not claimed complete here. All requested documentation changes and architecture provenance completed."
+  ],
+  "failures": [],
+  "questions_for_caller": []
+}

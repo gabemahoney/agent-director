@@ -1,0 +1,30 @@
+{
+  "role": "apiary_engineer_e3_task1",
+  "subtasks_done": [
+    "t3.jf1.r8.dt.xt",
+    "t3.jf1.r8.dt.66",
+    "t3.jf1.r8.dt.xv"
+  ],
+  "decisions": [
+    "FIFO 32 waiting/8MiB waiting text plus one dispatched active; individual1MiB",
+    "Submission IDs independentACP; acceptance/start/cancel/uncertainty/update/outcome protectedrecords",
+    "ACP ID allocated before synchronized startrecord; writergate preventsbytesbeforepersist",
+    "Controls bypass ordinarycapacity immediatelyretireprompt/decisionauthority; repeatedcancel preservesfirstdeadline",
+    "Knownprewrite retirement allows laterexplicitinput, uncertainoutputnoreplay",
+    "CheckCursorPrompt boundedauthoritytransaction verifiesdurableholds; emptymemoryrequestmap insufficient",
+    "Boundedindependentrenderbuffer, renderingloss inspectionnotice",
+    "Lateexacttoolproof canreleaseownhold, completioncannot"
+  ],
+  "targeted": "Reported Cursorhostrace10.250s/store2.898s/realpane21.985s pass; whitespacepass",
+  "preserved_failures": [
+    "Initialwaitinghandoff/SIGTERM source defects corrected",
+    "RepeatedCancellation/interrupt workingbarrier precedesACPdispatch; TestWriter adaptpeerreceipt beforeactivecancel assertion",
+    "Racedefault exitdelay reporttiming failures; GORACEatexit_sleep_ms0 passed unchangedproductbounds"
+  ],
+  "pending": [
+    "NewFIFO/pressure/rawwire acceptance TestWriter",
+    "Postdoc literalresubmission/capacity/renderloss/transcript/persistence advice"
+  ],
+  "model_assessment": "Existingholds omitFIFO/cancelepoch/transcriptwritergate; concretecoveragegap notcounterexample. No model edits or formal jobs. Must assess settleddesign honestly.",
+  "questions": []
+}

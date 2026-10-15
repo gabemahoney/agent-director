@@ -1,0 +1,28 @@
+ M docs/architecture.md
+ M docs/caller-contract.md
+ M docs/permissions.md
+ M docs/usage.md
+ M internal/cursorhost/admission.go
+ M internal/cursorhost/protocol.go
+ M internal/cursorhost/report.go
+ M internal/cursorhost/request_fixture_linux_test.go
+ M internal/cursorhost/request_runtime_linux_test.go
+ M internal/cursorhost/requests.go
+ M internal/cursorhost/session.go
+ M internal/cursorhost/terminal_linux.go
+ M internal/cursorhost/terminal_other.go
+ M internal/cursorhost/transcript.go
+ M internal/cursorhost/transcript_linux.go
+ M internal/cursorhost/transcript_other.go
+ M test/realtmux/cursor_failure_linux_test.go
+ M test/realtmux/cursor_launch_test.go
+ M test/realtmux/cursor_relay_pane_test.go
+?? internal/cursorhost/display.go
+?? internal/cursorhost/input.go
+?? internal/cursorhost/session_capacity_linux_test.go
+?? internal/cursorhost/session_controls_linux_test.go
+?? internal/cursorhost/session_fixture_linux_test.go
+?? internal/cursorhost/session_pause_linux_test.go
+?? internal/cursorhost/session_persistence_linux_test.go
+?? internal/store/cursor_prompt.go
+?? test/realtmux/cursor_queue_linux_test.go

@@ -22,6 +22,7 @@ type policyRejection struct{ error }
 
 type nativeChoice struct{ token, option, decision string }
 type pendingAuthorization struct {
+	generation                   uint64
 	auth                         *authorization
 	token                        string
 	settle, timeout, nativeUntil time.Time
@@ -33,15 +34,16 @@ type pendingAuthorization struct {
 	choice                       *nativeChoice
 }
 type requestController struct {
-	rep       *reporter
-	protocol  *protocol
-	out       io.Writer
-	requests  map[string]*pendingAuthorization
-	seenIDs   map[string]bool
-	seenTools map[string]bool
-	menuMu    sync.Mutex
-	menu      map[rune]nativeChoice
-	nextKey   int
+	rep        *reporter
+	protocol   *protocol
+	out        io.Writer
+	requests   map[string]*pendingAuthorization
+	seenIDs    map[string]bool
+	seenTools  map[string]bool
+	menuMu     sync.Mutex
+	menu       map[rune]nativeChoice
+	nextKey    int
+	generation atomic.Uint64
 }
 
 func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestController {
@@ -125,7 +127,7 @@ func (c *requestController) admit(f frame, session string) error {
 	if relay {
 		nativeUntil = settle.Add(30 * time.Minute)
 	}
-	r := &pendingAuthorization{auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
+	r := &pendingAuthorization{generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
 	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.check)
 	if e != nil {
 		return e
@@ -155,7 +157,7 @@ func (c *requestController) admit(f frame, session string) error {
 }
 func (c *requestController) choose(token, option string) {
 	r := c.requests[token]
-	if r == nil || r.terminal.Load() || r.queued || r.sent.Load() {
+	if r == nil || r.generation != c.generation.Load() || r.terminal.Load() || r.queued || r.sent.Load() {
 		fmt.Fprint(c.out, "Cursor choice expired; nothing sent\r\n")
 		return
 	}
@@ -187,6 +189,7 @@ func (c *requestController) choose(token, option string) {
 	c.menuMu.Unlock()
 }
 func (c *requestController) cancel() {
+	c.generation.Add(1)
 	for _, r := range c.requests {
 		r.terminal.Store(true)
 		r.retired.Store(true)
@@ -226,7 +229,7 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 	}
 	binding := c.rep.binding
 	current := func() error {
-		if r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(deadline) {
+		if r.generation != c.generation.Load() || r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(deadline) {
 			return fmt.Errorf("Cursor request response retired")
 		}
 		return nil
@@ -260,6 +263,11 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 }
 func (c *requestController) tick() error {
 	for _, r := range c.requests {
+		if r.generation != c.generation.Load() {
+			r.terminal.Store(true)
+			r.retired.Store(true)
+			c.removeKeys(r.token)
+		}
 		if r.terminal.Load() || r.sent.Load() {
 			continue
 		}

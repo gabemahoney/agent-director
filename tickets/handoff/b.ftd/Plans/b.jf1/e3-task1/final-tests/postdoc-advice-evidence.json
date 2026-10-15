@@ -1,0 +1,38 @@
+{
+  "settled_inventory": "../docs/postdoc-advice-inventory.json",
+  "result": "All five settled recovery sequences followed through existing behavioral owners; no documentation parsing or runtime manual dependency.",
+  "evidence": [
+    {
+      "topic": "capacity explicit resubmission",
+      "owner": "TestCursorWaitingMailboxByteBoundaries/aggregate/+1",
+      "follow": "Fill exactly 8MiB of individually legal waiting text behind actual HOLD, submit refused !, inspect protected capacity refusal and exact visible phrase, cancel to release capacity and await actual recovery, explicitly submit that same ! and observe its correlated protected outcome; then refill and execute exact FIFO. Peer sequence contains ! exactly once, only after explicit resubmission; accepted work is never replaced or implicitly replayed.",
+      "receipt": "02-postdoc-capacity-pane-guards.log; PASS race 11.179s"
+    },
+    {
+      "topic": "interrupt and known-unwritten recovery",
+      "owners": ["TestCursorControlsRetireQueuedSubmissions", "TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput", "TestCursorPartialPromptWriteIsUncertainAndNeverReplayed"],
+      "follow": "Control owner now inspects each affected queued ID's exactly-once protected and visible cancellation before later explicit input. Existing known-unwritten owner pins full source invitation, observes zero peer prompt/raw bytes before retirement, and submits later explicit text in the same conversation/life without replay. Existing actual partial-writer owner preserves uncertain transport failure and refuses a subsequent retry without new bytes.",
+      "receipt": "03-final-advice-quality.log; full suite covers retained partial-write owner"
+    },
+    {
+      "topic": "shutdown and retained guards",
+      "owners": ["TestCursorWorkingPauseRefusalAndQueuedExitAfterOwnedTermination", "TestCursorEligiblePublicPauseCancelsAcceptedQueue", "TestCursorRelayNativeFallbackClaims", "TestPauseHeldWhileSubagentRequestUnproven", "TestPauseRelayGuardScope"],
+      "follow": "Real-tmux working pause refusal preserves runtime with accepted queue, then typed /exit cancels queued identities and reports ended only with owned death. Existing legitimate Stop-after-commit waiting barrier permits actual api.Pause over verified-pane/PTTY, cancelling both queued IDs without prompt bytes. Existing Cursor real-pane native-request owner refuses pause while its genuine dialog remains open. Shared API dialog guard owners additionally pin refusal with no tmux/input/wait/write on their Claude/Codex fixtures; those fixtures are not Cursor-specific acceptance.",
+      "receipt": "01-postdoc-host.log and 02-postdoc-capacity-pane-guards.log; final causal eligible-pause fixture PASS in 05-full-failure-fixes.log, final Cursor dialog/native guard PASS in 06-relay-wrapped-refusal.log"
+    },
+    {
+      "topic": "rendering loss inspection",
+      "owner": "TestCursorBlockedPaneRenderingCannotDelayCancellation",
+      "follow": "Trigger real bounded display omission and pin full source notice. After notice, call actual api.Get, open returned jsonl_path, decode monotonic protected records and inspect both accepted queued IDs' cancellation outcomes; neither gains start/outcome despite omitted pane output. ACP still contains only actual HOLD. No screen classification of readiness/permission/termination.",
+      "receipt": "03-final-advice-quality.log"
+    },
+    {
+      "topic": "persistence failure and unavailable recovery",
+      "owner": "TestCursorPersistenceFailureStopsAdmission",
+      "follow": "Existing replacement/admission/cancellation/outcome fault cells inspect original protected records that remain available after failure, preserve replacement bytes, reject false protected end/outcome/queued execution, and retain previously accepted queued identity as incomplete history. Actual gateway/runtime death, failure trail and non-ended row remain authoritative. Releasing old HOLD after inspection cannot recover transient work or add protocol frames. End-publication fault still refuses successful pause. Existing blocked Sync/pre-active owners preserve finite bounds and honest partial records.",
+      "receipt": "02-postdoc-capacity-pane-guards.log; six-cell table and working pause owner PASS race 7.828s"
+    }
+  ],
+  "doc_writer_handoff": "No contradictory or changed advice discovered; no document changes required. Evidence permits coordinator closure of t3.jf1.r8.dt.x9; this writer did not change that ticket.",
+  "limitations": "Evidence uses isolated synthetic ACP runtime, actual real-tmux where named, and verified-pane/PTTY for eligible queued pause. No authenticated Cursor terminal acceptance, integration group/collector, scheduler or formal proof claim."
+}

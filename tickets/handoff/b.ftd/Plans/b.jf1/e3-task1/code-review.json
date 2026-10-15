@@ -1,0 +1,43 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task1",
+  "method": "Source inspection and whitespace only, no execution",
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "P1",
+      "location": "terminal_linux.go admission/mailbox insertion; input.go epoch assignment",
+      "problem": "Admission and insertion separate; policy cancellation can advance epoch between them, then old admitted work is inserted with new epoch and executes after cancellation.",
+      "required": "Bind admission/cancellation authority so all alreadyadmitted affected work retires without automatic restart."
+    },
+    {
+      "id": "R2",
+      "priority": "P1",
+      "location": "session.go cancellation deadline and input_control record",
+      "problem": "Idle exit/interrupt sees no pendingop/busy, no cancellation timer; awaits blocked transcript write/sync indefinitely before terminate.",
+      "required": "Preserve finite control/shutdown under idle transcript persistence pressure."
+    },
+    {
+      "id": "R3",
+      "priority": "P2",
+      "location": "session.go errPromptRetired guard; protocol.go secondguard handling",
+      "problem": "Cancellation during authoritycheck can return knownprewrite retired atsecondguard, converted to uncertainfailure/pipeclose; zero promptbytes yet conversationterminated.",
+      "required": "Distinguish knownprewrite retirement from actual transport uncertainty atbothguards; allow laterexplicitinput sameconversation."
+    },
+    {
+      "id": "R4",
+      "priority": "P2",
+      "location": "session.go accepted initialprompt before trackedsubmit",
+      "problem": "Initialprompt acceptance persisted beforequeue/activetracking; runtime/reportfailure beforeactive assignment leavesacceptedinput withoutdisposition evenhealthytranscript.",
+      "required": "Trackeveryacceptedinitialinput through explicit failure/cancellation disposition."
+    },
+    {
+      "id": "R5",
+      "priority": "P2",
+      "location": "session.go recovery reportWaiting Stop await and deadlineclear near533",
+      "problem": "Repeatedinterrupt incrementsmailboxepoch/signalswake while recoveryreportpending; await mayselectreportcompletionbeforewake, pendingControlnil, clearsfirsttimer despitechangedepoch; nextlooparmsfresh3s extendscancel.",
+      "required": "Clearonlyif recoveryowns captured epoch ANDnocontrolpending; otherwise retainoriginaldeadline/processcontrol. Deterministicreportcompletion/controlwakerace regression required."
+    }
+  ],
+  "disposition": "Allfourmandatory; routeEngineer sourcefix thenTestWriter causalcoverage. No ignoredfindings.",
+  "pending": "R1-R4 repaired, causalrevalidationrunning; R5 mandatory sourcefix pending"
+}

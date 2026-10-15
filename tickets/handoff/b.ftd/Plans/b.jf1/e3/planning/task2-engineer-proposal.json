@@ -1,0 +1,138 @@
+{
+  "provenance": "Coordinator structured transcription of apiary_engineer_planner_e3_t2 FINAL; planning only",
+  "subtasks": [
+    {
+      "title": "Add confirmed conversation rotation to the existing input controller",
+      "context": "session.go currently refuses clear/new. Startup/prompts share one outstanding ACP request. Task1 queue/cancel/transcript interfaces and accepted interface gate are prerequisites.",
+      "changes": [
+        "Clear/new aliases for fresh conversation within current launch/life.",
+        "Cancel active work, retire response authority, individually cancel every accepted old submission before fresh-session request.",
+        "If an ACP prompt is outstanding, require its correlated terminal outcome within the existing fixed cancellation bound; timeout cannot authorize rotation. When idle with no outstanding prompt, do not wait for a nonexistent cancellation response (session/cancel is a notification). Preserve durable permission guards in both cases.",
+        "Hold complete rotation-time submissions provisionally; admit observed order only after authoritative fresh confirmation and durable publication.",
+        "Bound provisional input using Task1 policy; explicitly refuse overflow/failure/invalid authority.",
+        "Controls priority during cancellation/session creation/report; repeated controls explicit disposition without overlapping requests.",
+        "Nonempty valid correlated genuinely fresh session ID required; transport writes/notifications/screens insufficient."
+      ],
+      "key_files": [
+        "internal/cursorhost/session.go",
+        "internal/cursorhost/admission.go",
+        "internal/cursorhost/terminal_linux.go",
+        "internal/cursorhost/terminal_other.go",
+        "internal/cursorhost/protocol.go",
+        "internal/cursorhost/requests.go"
+      ],
+      "acceptance": [
+        "Commands never model text; oldqueue never replacement/unconfirmed session.",
+        "No held prompt bytes before committed confirmation; exact ordered text on success.",
+        "Cancellationfailure/rejected malformed reusedID/timeout/uncertainty/persistencefailure visibly refuse held input.",
+        "Repeatedcontrols cannot extend firstdeadline or replay work.",
+        "Question denial/arbitration/guardedoutput/publicguards retained."
+      ]
+    },
+    {
+      "title": "Publish confirmed session, runtime binding and outgoing history consistently",
+      "context": "SetCursorRuntimeSession requires empty runtime session/pending Spawn; relaxing predicate alone unsafe. RecordSessionStartIdentity conditional history writes currently fail-open. Hookverification demands reportedID equals persisted runtime. Narrow coordinated Cursor extension, not global history redesign.",
+      "changes": [
+        "Narrow Cursor confirmed rotation retains independent gateway/runtime/pane verification and immediate-parent hookgate.",
+        "Condition exactoutgoing/currentlaunch/life/runtime/process/pipe/examinedrow.",
+        "Consistent newruntime binding/rowsession/transcriptreference/outgoing currentlifehistory publication.",
+        "Outgoingarchive required for successful Cursorrotation, generic Claude/Codex behavior preserved.",
+        "Preserve requesthold/stateproofrules; fresh session not unknown-dialog closureproof.",
+        "Keep startup-only assignment; reuse historywriter/conditionalwrites/mutationtrail.",
+        "Distinguish authoritativepublication from laterreport/transcriptfailure; no false rollbackclaim."
+      ],
+      "key_files": [
+        "internal/store/cursor_runtime.go",
+        "internal/store/hook_writes.go",
+        "internal/store/hook_gate.go",
+        "internal/store/session_history.go",
+        "internal/hook/handler.go",
+        "internal/cursorhost/report.go",
+        "internal/store/cursor_permission.go",
+        "internal/store/request_proof.go",
+        "cmd/agent-director \u2014 existing verifier wiring only if required"
+      ],
+      "acceptance": [
+        "Launch/life/priorhistory preserved, actualconfirmedID published.",
+        "No successfullypublished newrow paired oldruntime/missing required archive.",
+        "Archive/conditionalwrite/commitfailure never successfulrotation.",
+        "Repeated/stale confirmation no doublearchive/oldrestore.",
+        "Replacementlaunch/life/runtime/pane preventswrites.",
+        "Startup/hookparent/unknownproof/otheragenthistory retained; no schemahop without demonstratedneed."
+      ]
+    },
+    {
+      "title": "Reject stale conversation events and preserve truthful shutdown during rotation",
+      "context": "Currently uncorrelated responses/mismatched updates fatal. Known retiredtraffic must not kill continuing launch, while real ownedruntime death remains detectable. Task1 baseline queuedexit/pause; this owns duringrotation.",
+      "changes": [
+        "Distinguish current/pendingrotation/retired conversation/request identities in existingprotocol/controller.",
+        "Oldcompletion/sessionupdate/authcallback/child cannot mutatecurrent/releaseheld/completecurrentwork.",
+        "Malformed/unattributable traffic failclosed; knownretired not currentauthority.",
+        "Retain request/choice retirement; olddecisions nevernewrequests.",
+        "Exit/interruption/eligiblepause preemptrotation explicitly cancel heldinput.",
+        "Ownedprocess evidence fortermination; reconcilepublishedidentity acrossboundary failures.",
+        "Public unresolveddialog pauserefusal/killownership retained."
+      ],
+      "key_files": [
+        "internal/cursorhost/session.go",
+        "internal/cursorhost/protocol.go",
+        "internal/cursorhost/requests.go",
+        "internal/cursorhost/report.go",
+        "internal/cursorhost/process_linux.go",
+        "internal/hook/handler.go",
+        "internal/store/hook_gate.go",
+        "pkg/api/pause.go \u2014 guard dependency"
+      ],
+      "acceptance": [
+        "Knownoldcompletion/update/child cannot replaceconfirmedmain/endcontinuinglaunch.",
+        "Retiredresponses/choices nevernewrequest authority.",
+        "Exit/eligiblepause eachrotationphase cancelheld/endonlyconfirmedtermination.",
+        "Runtimedeath stopsadmission without unconfirmedidentityclaim; transportfailure alone notdeathproof.",
+        "No publicAPI/childtracking/resume/load/reuse/lifeswitch."
+      ]
+    },
+    {
+      "title": "Extend protected records across rotation and failure boundaries",
+      "context": "Task1 submissionlifecycle prerequisite. Existing protected recorder launch/life/connection/sessionbinding +sync+identitychecks; reuse format without replayqueue.",
+      "changes": [
+        "Distinguish rotationrequest/oldcancel/inputheld/freshconfirmed/published/failed records.",
+        "Oldaccepted attribution retained; heldinput notfalselyaccepted intoeitherconversation.",
+        "Releasedheldwork associates committednewconversation/originalorder.",
+        "Outgoingrecords available via existinghistoryreferences/protectedchecks.",
+        "Visible write/sync failure stops unrecordable admission/dispatch.",
+        "Distinguish ACPconfirmation/databasepublication/transcriptpersistence/termination."
+      ],
+      "key_files": [
+        "internal/cursorhost/transcript_linux.go",
+        "internal/cursorhost/transcript_other.go",
+        "internal/cursorhost/transcript.go",
+        "internal/cursorhost/session.go",
+        "internal/cursorhost/admission.go",
+        "internal/cursorhost/report.go"
+      ],
+      "acceptance": [
+        "Transcript/history reconstruct rotation/eachsubmissiondisposition.",
+        "Cancelledold/refusedheld neverfalse newexecutionrecords.",
+        "Successiverotations retainpriorreferences samelife.",
+        "Persistencefailure nofabricated archive/acceptance/termination.",
+        "Crash/restart neverrestoreheld/queue; protectionsretained."
+      ]
+    }
+  ],
+  "decisions": [
+    "clear/new aliases oneboundedrotation",
+    "heldinput provisional distinctfromaccepted FIFO",
+    "freshID distinctfrompreviousconfirmed onconnection; rejectreuse",
+    "strictstartup plusnarrowauthenticated consistentrotationpublication",
+    "Cursorarchive required; genericfailopenhistoryunchanged",
+    "preferexistinglaunchtranscript withperrecordsession attribution unlessdemonstratedneed",
+    "ambiguouscreation/publication refuseheld+stopadmission, not silentlyresumeold",
+    "requests.cancel onlymemoryretirement; explicitly reconcile durablecancellation/remainingunknownholds, no sessioncreationasdialogproof"
+  ],
+  "model_assessment": "Phase5Hook Rotate/gatedSessionStart preserveslife, holdmodels conservativeholds; neitherproves newcorrelation/atomicpublication/heldrouting. Assesssettleddesign. Researchdoesnotmandatemodeledit; actualchangedmodels affectedonlyscheduler.",
+  "dependencies": "Task1acceptedinterface gate; Task2 immediateinterfacegate beforeTask3",
+  "questions": [],
+  "incomplete": [
+    "Noimplementation/verification performed; reconcileactualacceptedTask1interfaces at execution"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "result": "mandatory quality findings resolved before full units",
+  "basis": "All Task1 testing Subtasks, all e3-task1 role FINAL reports, settled postdoc advice inventory, code review R1-R5 and actual source/test changes; docs/test-writing-guide.md checklist/red flags and docs/engineering-guide.md.",
+  "findings_and_dispositions": [
+    "Capacity advice lacked literal same-refused-text resubmission: extended existing aggregate +1 boundary owner after released capacity; no second capacity matrix.",
+    "Interrupt owner inspected individual dispositions after new input: moved its existing per-ID protected/visible checks before later explicit input, awaiting asynchronous display within the unchanged observation bound.",
+    "Rendering-loss owner previously stopped at notice/existing records: now follows exact notice with actual api.Get and reads that jsonl_path, decodes ordered acceptance/cancellation identities and rejects fabricated queued execution.",
+    "Persistence owner lacked post-failure inspection: existing replacement-fault cells now read available original protected records, preserve partial/accepted-only evidence without claiming completion/end, and confirm inspection cannot recover work after actual owned runtime death.",
+    "Final writer-guard barrier lacked failure cleanup release: added cleanup release; original assertion and transport deadline unchanged.",
+    "Initial full suite exposed eligible-pause fixture waiting on a rendered ^ sentinel after public pause's repeated C-u redraws saturated bounded display. Replaced that lossy-rendering observation with a channel closed only after actual terminalLoop forwards /exit into Run's actual emit/mailbox callback; actual api.Pause, PTY input, reporter barrier, full cancellation/identity/death assertions and original three-second observation bound remain.",
+    "Initial full suite exposed obsolete exact refusal text in existing shared real-pane relay guard owner (three relay-off cells). Updated to complete current refusal phrase including reason; removed only terminal hard-wrap newlines for the exact comparison. First targeted attempt retained a failed receipt because the now-longer phrase wrapped across tmux columns. Final assertion matches every phrase character and retains no-prompt-bytes checks; diagnostic now shows actual captured pane. No deadline extension or source edit."
+  ],
+  "ownership": "Existing shared requestEnv, cursorfix Runtime/Scenario, actual report subprocesses, completeInput, recordBarrier, observedWire, real pane/process and protected transcript fixtures retained. Distinct causal R1-R5/byte/FIFO/holds/uncertainty owners remain; no helper tests, doc parsing, duplicate public caller matrix or new scenario implementation.",
+  "preservation": "Original three-second cancellation, bounded answer/both-guard/minimum deadlines and Codex 1.5-second guard unchanged. GORACE=atexit_sleep_ms=0 changes only race-runtime exit delay. Fresh fixture HOME/store/socket/processes and unrelated-worker isolation retained; all added barriers release in cleanup.",
+  "models": "TLA+ not applicable: no model inputs changed. Existing hold models do not prove FIFO/submission epochs/synchronized start-record gating.",
+  "scope": "Eligible public pause remains honestly API plus verified-pane/PTTY unit evidence; real tmux/synthetic runtime and authenticated actual terminal acceptance are separate. No Task2 rotation, Task3 collector/public matrix, source/doc edits or integration execution."
+}

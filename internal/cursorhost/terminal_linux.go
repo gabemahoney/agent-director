@@ -12,22 +12,17 @@ import (
 	"unicode/utf8"
 )
 
-type terminalInput struct {
-	choiceToken  string
-	choiceOption string
-	accepted     bool
-	text         string
-	interrupt    bool
-	err          error
-}
-
 // terminalInputLoop owns UTF-8 input decoding. Literal LF adds a line; Enter
 // (CR) submits one prompt. tmux send-keys sends embedded LF literally and
 // then a separate Enter, so consecutive multiline messages remain distinct.
 func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, admit func() bool, choices ...func(rune) (string, string, bool)) func() {
+	return terminalLoop(in, out, func(v terminalInput) { events <- v }, admit, choices...)
+}
+
+func terminalLoop(in *os.File, out io.Writer, emit func(terminalInput), admit func() bool, choices ...func(rune) (string, string, bool)) func() {
 	old, err := unix.IoctlGetTermios(int(in.Fd()), unix.TCGETS)
 	if err != nil {
-		events <- terminalInput{err: fmt.Errorf("Cursor gateway requires an interactive pane")}
+		emit(terminalInput{err: fmt.Errorf("Cursor gateway requires an interactive pane")})
 		return func() {}
 	}
 	raw := *old
@@ -38,7 +33,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 	raw.Cc[unix.VMIN] = 1
 	raw.Cc[unix.VTIME] = 0
 	if err = unix.IoctlSetTermios(int(in.Fd()), unix.TCSETS, &raw); err != nil {
-		events <- terminalInput{err: fmt.Errorf("Cursor pane input unavailable")}
+		emit(terminalInput{err: fmt.Errorf("Cursor pane input unavailable")})
 		return func() {}
 	}
 	fmt.Fprint(out, "\x1b[?2004h")
@@ -56,16 +51,16 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 		for {
 			r, size, e := reader.ReadRune()
 			if e != nil {
-				events <- terminalInput{err: e}
+				emit(terminalInput{err: e})
 				return
 			}
 			if r == utf8.RuneError && size == 1 {
-				events <- terminalInput{err: fmt.Errorf("invalid UTF-8 input")}
+				emit(terminalInput{err: fmt.Errorf("invalid UTF-8 input")})
 				return
 			}
 			if !paste && len(text) == 0 && len(choices) > 0 && r >= ' ' {
 				if token, option, ok := choices[0](r); ok {
-					events <- terminalInput{choiceToken: token, choiceOption: option}
+					emit(terminalInput{choiceToken: token, choiceOption: option})
 					continue
 				}
 			}
@@ -78,7 +73,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 						poll := []unix.PollFd{{Fd: int32(in.Fd()), Events: unix.POLLIN}}
 						n, e := unix.Poll(poll, 80)
 						if e != nil {
-							events <- terminalInput{err: fmt.Errorf("Cursor pane input failed")}
+							emit(terminalInput{err: fmt.Errorf("Cursor pane input failed")})
 							return
 						}
 						if n == 0 {
@@ -87,7 +82,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 					}
 					ch, e := reader.ReadByte()
 					if e != nil {
-						events <- terminalInput{err: e}
+						emit(terminalInput{err: e})
 						return
 					}
 					seq += string(ch)
@@ -99,7 +94,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 				case "":
 					text = nil
 					cursor = 0
-					events <- terminalInput{interrupt: true}
+					emit(terminalInput{interrupt: true})
 				case "[200~":
 					paste = true
 				case "[201~":
@@ -125,7 +120,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 				continue
 			}
 			if len(text) >= maxInputRunes && (r == '\n' || (r == '\r' && paste)) {
-				events <- terminalInput{err: fmt.Errorf("Cursor input exceeds limit")}
+				emit(terminalInput{err: fmt.Errorf("Cursor input exceeds limit")})
 				return
 			}
 			switch r {
@@ -144,7 +139,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 				if submitted != "" && submitted != "/exit" && submitted != "/new" && submitted != "/clear" {
 					accepted = admit()
 				}
-				events <- terminalInput{text: submitted, accepted: accepted}
+				emit(terminalInput{text: submitted, accepted: accepted})
 			case '\n':
 				text = append(text[:cursor], append([]rune{'\n'}, text[cursor:]...)...)
 				cursor++
@@ -157,7 +152,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 				text = nil
 				cursor = 0
 				fmt.Fprint(out, "\r\n")
-				events <- terminalInput{interrupt: true}
+				emit(terminalInput{interrupt: true})
 			case '\x7f', '\b':
 				if cursor > 0 {
 					text = append(text[:cursor-1], text[cursor:]...)
@@ -173,7 +168,7 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 			default:
 				if r >= ' ' || r == '\t' {
 					if len(text) >= maxInputRunes {
-						events <- terminalInput{err: fmt.Errorf("Cursor input exceeds limit")}
+						emit(terminalInput{err: fmt.Errorf("Cursor input exceeds limit")})
 						return
 					}
 					text = append(text[:cursor], append([]rune{r}, text[cursor:]...)...)

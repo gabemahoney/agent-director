@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -177,28 +178,32 @@ func (p *protocol) writeLoop() {
 				continue
 			}
 		}
-		result := make(chan error, 1)
+		type writeResult struct {
+			err      error
+			prewrite bool
+		}
+		result := make(chan writeResult, 1)
 		go func() {
 			// Frames which expired in the queue must never reach the pipe.
 			if !time.Now().Before(next.deadline) {
-				result <- fmt.Errorf("ACP transport write timed out")
+				result <- writeResult{err: fmt.Errorf("ACP transport write timed out")}
 				return
 			}
 			if next.guard != nil {
 				if err := next.guard(); err != nil {
-					result <- err
+					result <- writeResult{err: err, prewrite: errors.Is(err, errPromptRetired)}
 					return
 				}
 			}
 			// Authority checks may wait on tmux/kernel/store evidence. They
 			// cannot turn an expired transport frame into a late pipe write.
 			if !time.Now().Before(next.deadline) || p.writeFailed.Load() {
-				result <- fmt.Errorf("ACP response expired before write")
+				result <- writeResult{err: fmt.Errorf("ACP response expired before write")}
 				return
 			}
 			select {
 			case <-p.closed:
-				result <- fmt.Errorf("ACP transport closed")
+				result <- writeResult{err: fmt.Errorf("ACP transport closed")}
 				return
 			default:
 			}
@@ -206,18 +211,28 @@ func (p *protocol) writeLoop() {
 			if err == nil && n != len(next.raw) {
 				err = io.ErrShortWrite
 			}
-			result <- err
+			result <- writeResult{err: err}
 		}()
 		timer := time.NewTimer(time.Until(next.deadline))
 		var err error
+		prewrite := false
 		select {
-		case err = <-result:
+		case written := <-result:
+			err, prewrite = written.err, written.prewrite
 		case <-timer.C:
 			err = fmt.Errorf("ACP transport write timed out")
 		case <-p.closed:
 			err = fmt.Errorf("ACP transport closed")
 		}
 		timer.Stop()
+		if prewrite {
+			// A retired prompt is known unwritten at the final guard too.
+			// Other final authority failures retain their fail-closed behavior.
+			if next.done != nil {
+				next.done(err)
+			}
+			continue
+		}
 		if err != nil {
 			p.writeFailed.Store(true)
 			// Closing an owned pipe releases a stalled writer. The supervisor,
@@ -262,12 +277,20 @@ func (p *protocol) failQueued() {
 }
 
 func (p *protocol) request(method string, params any) (string, error) {
+	return p.requestGuarded(method, params, nil)
+}
+
+func (p *protocol) requestGuarded(method string, params any, guard func() error, completions ...func(error)) (string, error) {
+	var done func(error)
+	if len(completions) > 0 {
+		done = completions[0]
+	}
 	if p.pendingID != "" {
 		return "", fmt.Errorf("ACP request already pending")
 	}
 	p.next++
 	id := fmt.Sprint(p.next)
-	if err := p.send(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}); err != nil {
+	if err := p.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": p.next, "method": method, "params": params}, time.Now().Add(transportWriteWait), guard, done); err != nil {
 		return "", err
 	}
 	p.pendingID = id

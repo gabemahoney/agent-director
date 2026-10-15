@@ -1,0 +1,194 @@
+{
+  "provenance": "Coordinator faithful structured transcription apiary_test_writer_planner_e3_t2 FINAL; planning only",
+  "subtasks": [
+    {
+      "title": "Verify confirmed rotation, held input and shutdown during rotation",
+      "context": "Task1 FIFO/cancellation/transcript prerequisites. Own shared rotation-fixture extensions: newRequestEnv/prepareRunPTY/observedWire/runCursorReportHelper/cursorReportBarrier/cursorfix.Runtime+Scenario; actual-hook newCursorPaneScenario/newSpawnFix/buildHookCLI/waitFor realtmux substrate.",
+      "changes": [
+        "Parameterize clear/new focused rotation group.",
+        "Cancel activework/independentpermissionplan authority/alloldqueue beforefreshwork.",
+        "Hold complete input awayfromboth; successfulcommittedconfirmation releasesexacttext/order onlyagainstnewID.",
+        "Failed/unconfirmedrotation visibly refuseseachheld with rawwirezerobyteevidence.",
+        "Representative protocolrejection/invalidreusedID/delayedconfirmation/uncertaintransport/lateoldresponse, no Cartesianmatrix.",
+        "Oldupdates/completion/child/authresponse cannot replacemain/endnewturn/releaseunrelatedhold/restartcancelled.",
+        "Exit/eligiblepause duringrotation, unresolveddialog pauserefusal/realtermination retained.",
+        "Replaceonlyobsolete clear/newrefusal inexistingpanetest.",
+        "Actualhook/realpane success provesfixture report alone insufficient.",
+        "Explicit idle clear and new success without waiting for nonexistent cancellation response, alongside active-turn cancellation cases; durable guards remain in both."
+      ],
+      "key_files": [
+        "internal/cursorhost/session_rotation_linux_test.go \u2014 proposedowner",
+        "internal/cursorhost/request_fixture_linux_test.go",
+        "internal/cursorhost/report_linux_test.go",
+        "internal/testsupport/cursorfix/cursorfix.go",
+        "internal/testsupport/cursorfix/runtime.js",
+        "test/realtmux/cursor_launch_test.go",
+        "test/realtmux/cursor_rotation_linux_test.go \u2014 proposedactualhookowner"
+      ],
+      "acceptance": [
+        "Commands nevermodeltext; oldqueue nevermigrates; heldstartsafterconfirmation+applicabledurableguards.",
+        "Failurevisiblyrefusesheld; rawwireforzerobytes.",
+        "Staleresponses/retiredchoices cannot authorize/complete/redirectcurrent.",
+        "Ackbeforeoutput/bothguards/minexistingdeadline/postwaitauthority/no uncertainreplay retained.",
+        "Unknownholds existingproof, rotation/cancel notproof.",
+        "Repeatedcontrols/holdrelease nofirstcanceldeadlineextension.",
+        "Exit/eligiblepause cancelheld/endonlyrealtermination; lateconfirmation noadmissionreopen.",
+        "No E4/publicAPI/screenclassification/liveclaim."
+      ]
+    },
+    {
+      "title": "Verify conditional rotation publication and current-life history",
+      "context": "Own database consistency/conditional authority; group1 protocolrouting. Reuse cursorRowBinding/newV5Store/hgSeed/hgColumns/hgHistory/hgExamine/sessionhistoryfixtures; hook seedAgentRow/agentParent/hookConfig/ssgHandleWith/writeTranscript; apitest/storefix.InjectWriteFailure.",
+      "changes": [
+        "Test actualrotationoperation retaininginitialbind/replacementlaunchguards.",
+        "No proposedidentity current/historybeforeconfirmation.",
+        "Repeatedrotation samelife/priorhistory/transcriptrefs/duplicate stalepublication.",
+        "Changedlaunch/life/runtime/pane/retirement/deletion conditionalraces viaexistingseams.",
+        "Runtime/row/transcript/history consistency onrefusal/fault.",
+        "PostrotationSessionStart andstaleSessionEnd/Stop actualhookverification; child/unknowncannotreplacemain.",
+        "Oldconversationcompletion distinctfromownedprocessdeath.",
+        "Cursor-specific archivefailure settledcontract; preservegenericagentfailopen."
+      ],
+      "key_files": [
+        "internal/store/cursor_runtime_test.go",
+        "internal/store/hook_gate_session_start_test.go",
+        "internal/store/session_history_test.go",
+        "internal/hook/cursor_verify_test.go",
+        "internal/hook/cursor_classify_test.go \u2014 affectedonly",
+        "internal/testsupport/storefix/write_failure.go \u2014 demonstratedmissingseamonly",
+        "internal/store/cursor_runtime.go",
+        "internal/store/hook_writes.go",
+        "internal/store/hook_gate.go",
+        "internal/hook/handler.go"
+      ],
+      "acceptance": [
+        "Success preserveslife/priorhistory/noduplicatearchive; visibilityconsistentconfirmedID.",
+        "Failed/refusedpublication nofalsepass/inconsistentcommittedidentityhistory.",
+        "Stale/foreignhook nochange/successmutation.",
+        "Oldcompletion cannotendcontinuinglaunch; realowneddeathcannotleavefalselive dueoldID.",
+        "Independentpermissions/plans/unknownproof remain.",
+        "Claude/Codexhistory/lifecycle unchanged; no speculativemigration, demonstratedhopneed requiresaddedtestscopebeforeexecution."
+      ]
+    },
+    {
+      "title": "Verify rotation transcript attribution and persistence failures",
+      "context": "Task1 genericlifecycle/protection ownsbaseline; onlynewconversationboundary. Reuse newTestTranscript/transcriptBinding/Task1correlation/newCursorPaneScenario/hookTrailRecords/existingtranscriptfaults/storefix.InjectWriteFailure; sharedrotationfixture nogatewayclone. Group2 databaseatomicity, herevisiblegatewayrecords.",
+      "changes": [
+        "Oldcancel/rotationrequestconfirmationfailure/heldinputrecords.",
+        "Trueconversationattribution includinglateoldevents.",
+        "Priorhistory usableevidencerefs samelife withoutmandatedfilelayout.",
+        "Existingrealpanefaulttable onlynewrotationboundaries confirmation/publication/helddisposition.",
+        "Unrecordable/failedrotation cannotreleaseheld/fabricatehistory/overwriteprotectedreplacement.",
+        "RetainTask1genericprotections; removeonlyobsoleteexpectations."
+      ],
+      "key_files": [
+        "internal/cursorhost/transcript_test.go",
+        "test/realtmux/cursor_failure_linux_test.go",
+        "test/realtmux/cursor_rotation_linux_test.go \u2014 coordinatedrecordassertions",
+        "internal/cursorhost/transcript_linux.go",
+        "internal/cursorhost/session.go",
+        "internal/cursorhost/report.go"
+      ],
+      "acceptance": [
+        "Oldcancel/held/newwork/refused distinctwith nofalseexecution/completion.",
+        "Exacttext/submissionID correctconversation.",
+        "Priorhistory accessibletruthfulunchangedlife.",
+        "Visiblepersistencefailure no unauthorizedpromptrelease/falsepublicationortermination.",
+        "Protections/nonreplayretain existingowners, no duplicatedgenericmatrix."
+      ]
+    },
+    {
+      "title": "Follow settled rotation recovery advice literally",
+      "context": "Afterinitialbehavior+settleddocs, separatepostdocowner avoidsdependencycycle. Reuse abovefixtures and adviceAssertAdvice/adviceAssertPhrase/adviceAwaitFinished whenAPI, newCursorPaneScenario whenpane. Existing TestAdviceFollow_A25_B14_CursorFreshInstanceRemedy ownsunchangedE4refusal.",
+      "changes": [
+        "Identifygenuinelychangederror/doc recoverysequences.",
+        "Triggerfailure, exactadvicephrase, performliteralcheck/wait/action, verifyoutcome.",
+        "Unresolvedcondition safelyrefusesretry; documentednextactionworksafterconditionclears.",
+        "Differentfailure/uncertainty/persistence/shutdown onlydifferentadvicecases.",
+        "Existingownerspreferred; focusedfileonlyneeded; explicitnochangedsequencefindingifnone."
+      ],
+      "key_files": [
+        "test/realtmux/advice_follow_pane_test.go",
+        "test/realtmux/advice_follow_cursor_rotation_test.go \u2014 onlyifneeded",
+        "pkg/api/advice_follow_pane_test.go",
+        "pkg/api/advice_follow_helpers_test.go",
+        "pkg/api/cursor_lifecycle_test.go \u2014 preserveunchanged",
+        "docs/usage.md",
+        "docs/caller-contract.md",
+        "docs/operator-actions.md"
+      ],
+      "acceptance": [
+        "Everychangedsequence literalbehavioralowner/evidence.",
+        "No unsupportedE4orreplayadvice.",
+        "Actualinstructionsfollowed, notconvenientalternative.",
+        "No docparsing/helpermetatests/manufacturedguideedits/duplicatedadvice.",
+        "Validationchanges reconciledprosebeforequalityclosure."
+      ]
+    },
+    {
+      "title": "Review Task 2 test quality and coverage boundaries",
+      "context": "Afterbehavior/docs/advice reviewallchangedfixtures/tests againstguidePreSubmit/RedFlags. Sharedcursorfix/requestreport/storehook/realpane/transcriptfault/advice onecoverageset.",
+      "changes": [
+        "Oneprimaryowner perbehavior, crossboundary distinctevidence.",
+        "Removeduplicatematrices/copiedsetup/helpertests/obsoleteexpectations/implementationassertions.",
+        "Realinterleaving synchronization no widenedproductdeadlines/retryuntilgreen.",
+        "Isolationandcleanup/unrelatedworkerpreservation.",
+        "Reporthelper cannotmanufacturesuccessreadingdesiredIDfromstore.",
+        "Actualtransition/modelassessment, actualchangedinputs affectedonlyschedulerwithwhy.",
+        "Task1/3ownershipretained."
+      ],
+      "key_files": [
+        "AllTask2changedtests/fixtures",
+        "docs/test-writing-guide.md",
+        "docs/engineering-guide.md",
+        "tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/context.md",
+        "spec/tla/** \u2014 actualchangedinputs only"
+      ],
+      "acceptance": [
+        "Mandatoryfindingsfixedbeforefull.",
+        "Sharedfixtures exercisedthroughbehavior.",
+        "Answer/cancelbounds/Codex1.5s unchanged.",
+        "pkg/api parallel orserialreason; Bunsequential.",
+        "Synthetic/realtmux/auth evidencehonest.",
+        "No modelchange noformaljobs.",
+        "ImmediateTask2interfacegate beforeTask3; noexecutinggatehere."
+      ]
+    },
+    {
+      "title": "Run settled full unit suite and resolve failures",
+      "context": "Final TestWriter soleowner OUTSIDElane aftersource/fixtures/tests/docs/advice/quality settle.",
+      "changes": [
+        "Run make test-sandbox once settledtree.",
+        "Investigate/fixactualfailures no assertionweakening/deadlineextensions/dismissal.",
+        "Preservefailedreceipt/causalchecks/finalgreenreceipt ifcorrectionsneeded.",
+        "Reportunresolvedfailures."
+      ],
+      "key_files": [
+        "Makefile",
+        "Existingsandboxsetup",
+        "Filesimplicatedactualfailures"
+      ],
+      "acceptance": [
+        "Allrequiredunitspassbeforecomplete.",
+        "Exacttestedrevision/tree/GoBuncounts/unresolvedfailuresreported.",
+        "No prohibitedhost/store/credentials/.claude/heavy/parser/scheduler/push.",
+        "NointegrationexecutionSubtask."
+      ]
+    }
+  ],
+  "lanes": {
+    "suggested": 1,
+    "lane1": "Subtasks1-5 sharedrotationprotocol/reportbarriers/runtime/realpane/storefault/identityhistory",
+    "outside_lanes": "Finalfullunit6"
+  },
+  "dependencies": "Source\u2192behavior1-3\u2192docs\u2192advice4\u2192quality5\u2192full6\u2192callerinterfacegate\u2192Task3; docsNOTdependadvice",
+  "findings": [
+    "SetCursorRuntimeSession initialbindrefusalretained; ownrotationoperation",
+    "Genericarchivefailopenunchanged, Cursorrotationexplicit",
+    "cursorfixcurrentlyoneID everynew; extendexistingfixture",
+    "Reporthelper derivesstoredID; cannothidepayloadmismatch/missinghistory, actualhooktestrequired"
+  ],
+  "execution_boundary": "Everyaffectedticketexactquote+fullsandbox/isolation/no realstore/credentials/.claude/heavy/push restrictions percontext",
+  "questions": [],
+  "incomplete": []
+}

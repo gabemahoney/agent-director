@@ -1,0 +1,85 @@
+{
+  "role": "apiary_test_writer_e3_task1_final",
+  "result": "passed after fixing test-side observation and obsolete refusal expectations; all assigned postdoc advice, quality and full-unit work complete",
+  "tickets": {
+    "t3.jf1.r8.dt.k4": "active -> done; settled capacity/interruption/shutdown literal-follow evidence complete",
+    "t3.jf1.r8.dt.cc": "active -> done; actual protected inspection and persistence literal-follow evidence complete",
+    "t3.jf1.r8.dt.c4": "active -> done, reopened active for initial full-suite findings, then done after test-side fixes and targeted race validation",
+    "t3.jf1.r8.dt.p7": "defined -> active -> done; final full make test-sandbox exited zero and tested manifest verified unchanged",
+    "t3.jf1.r8.dt.w2": "read only; done retained",
+    "t3.jf1.r8.dt.x9": "read only; active retained for coordinator closure using postdoc-advice-evidence.json",
+    "t3.jf1.r8.dt.1t": "read only; done retained"
+  },
+  "files_changed_this_pass": [
+    "internal/cursorhost/session_capacity_linux_test.go",
+    "internal/cursorhost/session_controls_linux_test.go",
+    "internal/cursorhost/session_persistence_linux_test.go",
+    "internal/cursorhost/session_pause_linux_test.go",
+    "test/realtmux/cursor_failure_linux_test.go",
+    "test/realtmux/cursor_relay_pane_test.go"
+  ],
+  "source_or_doc_files_changed_this_pass": [],
+  "tested_tree": {
+    "branch": "feature/b.ftd",
+    "head": "9ff393a5216fd6d6377d3b40a1adab491fa296c6",
+    "description": "Inherited settled uncommitted source/docs/tests plus this pass's six test files; no commit. HEAD pins unchanged tracked content, tested-tracked.diff captures tracked docs/internal/test changes, tested-git-status.txt records all changed/untracked source paths, and the content manifest includes all tracked plus nonignored untracked source/test/doc files in the named paths.",
+    "manifest": "tested-source-test-doc.sha256",
+    "manifest_file_count": 2022,
+    "manifest_scope": "Makefile, README.md, LICENSE, go.mod/go.sum, cmd, internal, pkg, skills, spec, test, tools, .github and docs; excludes .claude, ignored build artifacts/caches and handoff receipts",
+    "manifest_sha256": "80cc6a6da6d5e022d3e2737cd22f3d19148d70a44bf5654e3d010e62c440c837",
+    "tracked_diff": "tested-tracked.diff",
+    "tracked_diff_sha256": "54cc7845ebb0a9f1438a1fc4ca372d868965700be07af6335cc25243c79d091d",
+    "after_run_verification": "sha256sum --quiet -c tested-source-test-doc.sha256: all 2022 files matched; 08-manifest-check.exit is 0. git diff --check passed. No test/source/doc changes after final green run.",
+    "doc_sha256": {
+      "docs/usage.md": "44a9efb9faa5fe357185bd6a943dc5a51de8714185300ef3fc0e997de56db12d",
+      "docs/permissions.md": "24baf86f441d30fdd721963804ce46200a1ed6d1157be418fb613e31587a8144",
+      "docs/caller-contract.md": "54c5e81d5acf762e9fb7e86cee7c13680d72e8937374e37f85af66ae608d88da",
+      "docs/architecture.md": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d"
+    }
+  },
+  "postdoc_advice": {
+    "evidence": "postdoc-advice-evidence.json",
+    "result": "All five exact settled inventory sequences followed. Capacity resubmits the same refused text after space; interruption inspects each cancellation before explicit new input; known-unwritten recovery retains conversation/life; working/dialog pause refusals and legitimate waiting pause remain; rendering notice now leads to actual api.Get/jsonl_path inspection; persistence faults inspect available protected partial records without false execution/end or queue restoration.",
+    "documentation_reroute": "No contradiction or changed advice found; no additional Doc Writer pass needed. Coordinator can close x9 from this evidence."
+  },
+  "quality": {
+    "review": "quality-review.json",
+    "result": "mandatory findings resolved; reused existing behavior owners/shared fixtures, no duplicated matrix/meta-test/doc parsing/manufactured source or guide edit",
+    "bounds": "Original cancellation three seconds, answer/both-guard/minimum deadlines and Codex 1.5-second guard unchanged. Targeted GORACE=atexit_sleep_ms=0 removes only race-runtime exit delay."
+  },
+  "receipts": {
+    "01-postdoc-host.log": "PASS targeted race controls, known-unwritten recovery, eligible pause and rendering inspection; 2.474s",
+    "02-postdoc-capacity-pane-guards.log": "PASS actual aggregate/+1 literal resubmission race 11.179s; six persistence cells plus real working-pause/exit owner race 7.828s; existing shared API dialog guards race 0.463s",
+    "03-final-advice-quality.log": "PASS final pre-new-input cancellation inspection, known-unwritten full invitation, rendering inspection and final writer-guard cleanup; race 2.042s",
+    "04-full-unit.log": "Initial make test-sandbox: Go 66 passed packages, 2 failed packages, 13 no-test packages; Bun 429 passed, zero failed, 57 files, 1659 assertions. Raw failed receipt retained; exit 2.",
+    "04-full-unit.log_sha256": "99f3cb6e3d8605dfe4388e570c3d9bd2feefe427df6958998206eec1b8a47ef5",
+    "04-tested-source-test-doc.sha256": "Preserved initial tested content manifest; SHA256 f8001be7f5bf199ec28ebbc377ab9b86967087fdc553e5612759c8c6234092fc; matching initial tracked diff/status also preserved",
+    "05-full-failure-fixes.log": "Eligible-pause causal terminal-consumption channel PASS race 0.890s. Relay-off exact updated phrase still failed because real tmux wrapped it; failed assertion/receipt retained, then corrected only wrap normalization.",
+    "06-relay-wrapped-refusal.log": "PASS race actual Cursor native/dialog and genuine-question guard owners: 13.645s, all six subcases; exact full phrase preserved across terminal hard wraps, no prompt bytes",
+    "07-full-unit-final.log": "Final make test-sandbox: PASS, exit 0; Go 68 passed packages (61 cached), zero failed packages, 13 no-test packages; Bun 429 passed, zero failed, 57 files, 1659 assertions. cursorhost 46.714s, realtmux 156.386s, Bun 14.44s.",
+    "07-full-unit-final.log_sha256": "ce2cfbeac8e0f76f1af16fa76e726ca4ad70ba48c3bde8600346cc6bdf0aa3e0",
+    "08-manifest-check.log": "Empty successful all-file verification receipt; explicit exit file 0"
+  },
+  "full_unit_command": "make test-sandbox",
+  "full_unit_runs": 2,
+  "second_full_run_justification": "Initial full run demonstrated actual test-side failures. Fixed them without source edits, assertion weakening or timing changes; targeted causal/race checks passed before one justified replacement full run. No broad tests repeated after final green.",
+  "all_failure_dispositions": [
+    "TestCursorEligiblePublicPauseCancelsAcceptedQueue: public pause repeated C-u redraws can saturate the deliberately lossy display, making rendered ^ an invalid consumption barrier. Existing actual terminalLoop now notifies after forwarding /exit to actual Run emit/mailbox. Keeps api.Pause, PTY keys, genuine committed-waiting barrier, individual cancellations, identity/raw-byte/death/end assertions and original three-second observation bound.",
+    "TestCursorRelayNativeFallbackClaims/off and TestCursorRelayQuestionPolicyPreservesGenuineRequest/{false-off,true-off}: existing shared real-pane helper expected obsolete refusal text. Pin full current phrase with reason; remove terminal hard-wrap newlines for exact comparison and preserve all no-prompt-bytes/permission outcomes. Initial phrase-only correction's targeted failure is retained in 05; final corrected helper passes in 06 and full 07.",
+    "No source failures, deadline extensions or dismissed unrelated failures. Original Codex 1.5-second guard was not edited and final realtmux package passed. All historical failed receipts including the 94MB boundary raw log remain untouched and local."
+  ],
+  "deviations": [
+    "First combined targeted selector did not select the capacity subcase; executed it separately with exact slash-separated selection in 02 before the initial full suite.",
+    "Two full runs were necessary solely because the first exposed actual test-side failures; preserved both exact tested-tree manifests and raw receipts."
+  ],
+  "execution_boundary": "All repository execution/formatting via make sandbox or make test-sandbox with isolated fixture HOME/store/socket/owned processes. No source/docs edits, .claude content access, real AD store or credentials/login/logout access, live Cursor, integration/Docker TESTPLAN groups/collectors, scheduler jobs, TLC/parser/Java execution, push, commit, delegation or midflight agent messages.",
+  "limitations": [
+    "Go default full command emits package counts, not individual test/subtest counts; reported counts are exact package counts. Bun emits exact case/file/assertion counts.",
+    "Eligible queued pause is actual public API plus verified-pane/PTTY unit evidence; other named cases use real tmux with synthetic ACP runtime. No authenticated actual Cursor terminal acceptance claim.",
+    "Integration/exact-commit scheduler gate remains coordinator/user-owned after commit; no integration run claimed.",
+    "TLA+ not applicable: no model inputs changed. Existing hold models do not prove FIFO/submission epochs/start-record writer gating; no formal or baseline jobs requested."
+  ],
+  "incomplete_assigned_work": [],
+  "source_failures": [],
+  "questions_for_coordinator": []
+}

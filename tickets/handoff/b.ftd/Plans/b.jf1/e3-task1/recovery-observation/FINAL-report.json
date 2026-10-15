@@ -1,0 +1,30 @@
+{
+  "role": "apiary_engineer_e3_task1_recovery_observation",
+  "result": "Minimal internal completion-first observation added; existing targeted recovery and fixed-guard race tests pass. Causal R5 test remains Test Writer work.",
+  "tickets": {"t3.jf1.r8.dt.66": "done -> active -> done; only this Subtask updated"},
+  "files_changed_this_pass": ["internal/cursorhost/session.go"],
+  "tree": "feature/b.ftd; inherited HEAD 9ff393a5 and all existing source/test changes preserved; no commit",
+  "seam": {
+    "signature": "runWithInput(options, in, out, opener, startInput, afterRecoveryReport ...func())",
+    "behavior": "An optional first callback is called synchronously on the actual session goroutine immediately after recovery reportWaiting Stop succeeds through await, before pendingControl inspection and epoch-owned finalization. It runs outside mailbox locks. Omitted or nil callback does nothing. Callback may be invoked for each successful recovery report, so the test should gate only its intended first recovery.",
+    "minimality": "One optional argument on the existing internal entry; no new wrapper, dependency structure, public API, environment hook, fake controller, or copied recovery logic. Public Run and runWithTranscript signatures and default callers unchanged; existing runWithInput calls compile unchanged.",
+    "preserved_fix": "Clear timer/cancelAt and enable admission only with pendingControl nil and ownership of captured recovery epoch. A newer real mailbox control causes failed ownership, retains the original first deadline, and continues to consume/process controls. cancelWait remains three seconds."
+  },
+  "next_test_writer_use": [
+    "Extend only the test fixture to forward the optional callback to its existing runWithInput call; keep default fixture calls unchanged.",
+    "Use existing reporter Stop after-commit barrier to hold actual first recovery. Keep superseding controls absent until report completion has selected successfully; release that reporter and await the new callback's entered channel.",
+    "While callback holds the session goroutine, inject the superseding interrupt using emit captured from the actual inputStarter. Do not invoke ordinary admit for this control. Its real mailbox insertion advances epoch; pendingControl remains nil because the controller is parked after await and has not consumed that control.",
+    "Release callback to resume the actual pendingControl/ifCurrent finalization; block the subsequent protected input_control Sync using existing recordBarrier. Assert failure and owned termination obey the original first-control three-second deadline, rather than a fresh deadline after recovery. Use channel ordering and existing bounded receipts; no randomized select/scheduling assumptions. The callback itself adds no production timing behavior when omitted."
+  ],
+  "checks": {
+    "01-targeted-race.log": "PASS 16.397s: seven existing owners selected for blocked transcript/control deadline, saturated input/pending Stop reporting, known-unwritten start gate, final writer guard, FIFO/lifecycle, answer deadline after store wait/evidence and protocol guard-delay expiry. gofmt ran first in the same sandbox command.",
+    "02-whitespace.log": "PASS git diff --check (empty output)",
+    "03-subtask-status.log": "PASS Subtask update to done"
+  },
+  "command": "make sandbox CMD='gofmt -w internal/cursorhost/session.go && GORACE=atexit_sleep_ms=0 go test -race ./internal/cursorhost -run \"Test(CursorControlDeadlineSupervisesBlockedTranscriptSync|CursorControlBypassesSaturatedInputAndPendingReport|CursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput|CursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten|CursorFIFOExactTextAndLifecycle|CursorAckDeadlineAfterLockAndEvidence|ProtocolGuardDelayCannotWriteExpiredResponse)$\" -count=1 -timeout=2m'",
+  "scope": "No tests/docs edited, new product/recovery wording or feature added, Task2 work, full suite/integration run, commit, delegation or midflight messages. Repository execution only make sandbox CMD with fixture-owned isolated HOME/store/socket/processes. No real AD state, .claude, credentials/login/logout, live Cursor, host built artifacts, local Docker TESTPLAN collector/groups, scheduler jobs, TLC/parser or push. No spec/tla change.",
+  "limitations": ["This pass adds the deterministic observation only and does not claim causal R5 test coverage. Test Writer must implement that regression and coordinator retains remaining review/docs/full-suite ownership."],
+  "deviations": [],
+  "failures": [],
+  "questions": []
+}

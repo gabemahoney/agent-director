@@ -1,0 +1,8 @@
+[
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/boundary-closure/02-boundaries.log",
+    "bytes": 94394591,
+    "sha256": "58b98958016a0d51f1bbef47200843f5fdee8b04b90c3ab225a867d2d7b90a29",
+    "disposition": "Retain exact raw locally; exclude from commit. Report and hash inventory committed."
+  }
+]

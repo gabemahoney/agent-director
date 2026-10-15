@@ -136,9 +136,37 @@ Only model selection (`--model`, `-m`, with a separate or `=` value) and a
 single initial prompt are accepted in Cursor `agent_args`. Unsupported
 arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
 permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
-Busy follow-ups and `/clear` or `/new` are refused visibly in the pane,
-without forwarding. A successful `send-keys` means keys were sent, not that
-the gateway admitted a prompt; inspect the pane when admission is uncertain.
+Normal input ordering and limits are in
+[Fresh Cursor use](usage.md#fresh-cursor-use). `/clear` and `/new` remain
+refused visibly in the pane without forwarding. A successful `send-keys`
+means keys were sent, not that the gateway admitted a prompt. Literal text
+and Enter are separate operations; concurrent callers have no atomic
+submission guarantee. Inspect the pane and the
+[protected transcript](usage.md#cursor-transcripts) when admission or delivery
+is uncertain; do not blindly resend an uncertain submission.
+
+On an explicit capacity refusal, wait for capacity and explicitly submit the
+refused text again. Refused input is not queued for later execution and does
+not replace accepted work.
+
+After interruption, inspect each affected submission's cancellation or outcome.
+When the gateway invites a new prompt and decision holds are resolved, submit
+new input explicitly. Known retirement before any prompt bytes are written
+can leave the same conversation available for that input. Cancelled work is
+never automatically replayed; partial or uncertain writes stop the transport
+and are never retried.
+
+For shutdown, retain the working-state and dialog guards on `pause`; it is
+available only on an eligible waiting row. Local `/exit` or eligible `pause`
+cancels affected queued work and ends the row only after owned runtime
+termination is confirmed. A queued prompt is not a reason to bypass a pause
+refusal. Existing held-agent actions are in
+[Permission relay](#permission-relay).
+
+A slow pane can omit rendered output and show
+`Cursor pane output omitted under pressure; inspect the protected transcript`.
+Inspect the protected transcript at `get`'s `jsonl_path` for recorded submission
+outcomes. Display loss supplies no readiness, permission or termination evidence.
 
 `spawn` returns before the runtime confirms startup. Missing programs,
 unsupported platforms, failed lifetime protection or unavailable ownership
@@ -164,8 +192,11 @@ it does not prove the file is still readable. Before a confirmed startup,
 there may be no session or reference. Failed creation, an insecure or
 replaced path, failed writes or failed sync stop further prompt admission
 and produce a visible failure; AD does not invent a saved reference or
-claim unrecorded history. A partial transcript does not establish successful
-input execution or termination.
+claim unrecorded history. Inspect whatever protected records remain available;
+queued work will not be recovered. Do not treat a partial transcript as complete
+history, successful input execution or confirmed termination, and do not replay
+uncertain work. A persistence failure cannot produce a successful intentional
+end report.
 
 ## When a Codex agent exits
 

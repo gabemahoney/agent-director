@@ -1,0 +1,17 @@
+{
+  "verdict": "Task1 scope sound; approved after exact required corrections applied in task1-test-proposal.json and ticket execution-boundary attachment. Task2/3 NOTyetapproved detailedplanning.",
+  "corrections": [
+    "ExplicitTask1queuedexit/pause tests preserveendedafterrealtermination anddialogrefusal; notdeferredTask2.",
+    "Controls saturatedinput/report/transcript/outputpressure +queuedprotocolpromptretirementbeforebytes, uncertainwritesnoreplay.",
+    "Literal-followcapacity/interruption/shutdown ownergroup2 andtranscript/persistence ownergroup3, aftersettledprosebeforequality/full; no meta-tests.",
+    "Exactuserquote andsandbox/isolation/realstore/credentials/.claude/heavyrestrictions copiedtoaffectedtickets; actualmodelchangeonlyaffectedTLA,noartificialmodels/baselines."
+  ],
+  "coverage": "Task1AC1local/2/3/5queue+transcript+shutdown/6preservation;AC4Task2;AC7Task3. No newpublicAPI/schema/laterfeatures.",
+  "lanes": "One shared Cursor lane valid; finalfulloutside.",
+  "dependencies": "Source thenbehavior then docs thenadvice/quality thenfull; immediateinterfacegatebeforeTask2.",
+  "whole_doc_review": "Verifiedwholebase+EVERYdelta throughcurrent2738e9...andTask1delta,notold759...alone; no whole-doccertificationbyplanningPM.",
+  "questions": [],
+  "incomplete": [
+    "Task2/Task3 detailedplanningandwholeEpicreview"
+  ]
+}

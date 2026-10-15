@@ -5,11 +5,10 @@ package cursorhost
 import (
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"os"
 )
 
 type transcript struct {
-	file    *os.File
+	file    transcriptFile
 	path    string
 	binding store.CursorRuntime
 }

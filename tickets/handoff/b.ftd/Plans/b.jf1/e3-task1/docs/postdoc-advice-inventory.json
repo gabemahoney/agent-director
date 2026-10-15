@@ -1,0 +1,32 @@
+[
+  {
+    "owner": "docs/caller-contract.md#cursor-operation-boundaries",
+    "topic": "capacity explicit resubmission",
+    "exact_prose": "On an explicit capacity refusal, wait for capacity and explicitly submit the\nrefused text again. Refused input is not queued for later execution and does\nnot replace accepted work.",
+    "literal_follow_evidence": "pending final Test Writer; compare actual behavior and follow these actions, no documentation-parsing/meta-tests"
+  },
+  {
+    "owner": "docs/caller-contract.md#cursor-operation-boundaries",
+    "topic": "interrupt and known-unwritten recovery",
+    "exact_prose": "After interruption, inspect each affected submission's cancellation or outcome.\nWhen the gateway invites a new prompt and decision holds are resolved, submit\nnew input explicitly. Known retirement before any prompt bytes are written\ncan leave the same conversation available for that input. Cancelled work is\nnever automatically replayed; partial or uncertain writes stop the transport\nand are never retried.",
+    "literal_follow_evidence": "pending final Test Writer; compare actual behavior and follow these actions, no documentation-parsing/meta-tests"
+  },
+  {
+    "owner": "docs/caller-contract.md#cursor-operation-boundaries",
+    "topic": "shutdown and retained guards",
+    "exact_prose": "For shutdown, retain the working-state and dialog guards on `pause`; it is\navailable only on an eligible waiting row. Local `/exit` or eligible `pause`\ncancels affected queued work and ends the row only after owned runtime\ntermination is confirmed. A queued prompt is not a reason to bypass a pause\nrefusal. Existing held-agent actions are in\n[Permission relay](#permission-relay).",
+    "literal_follow_evidence": "pending final Test Writer; compare actual behavior and follow these actions, no documentation-parsing/meta-tests"
+  },
+  {
+    "owner": "docs/caller-contract.md#cursor-operation-boundaries",
+    "topic": "rendering loss inspection",
+    "exact_prose": "A slow pane can omit rendered output and show\n`Cursor pane output omitted under pressure; inspect the protected transcript`.\nInspect the protected transcript at `get`'s `jsonl_path` for recorded submission\noutcomes. Display loss supplies no readiness, permission or termination evidence.",
+    "literal_follow_evidence": "pending final Test Writer; compare actual behavior and follow these actions, no documentation-parsing/meta-tests"
+  },
+  {
+    "owner": "docs/caller-contract.md#cursor-operation-boundaries",
+    "topic": "persistence failure and unavailable recovery",
+    "exact_prose": "claim unrecorded history. Inspect whatever protected records remain available;\nqueued work will not be recovered. Do not treat a partial transcript as complete\nhistory, successful input execution or confirmed termination, and do not replay\nuncertain work. A persistence failure cannot produce a successful intentional\nend report.",
+    "literal_follow_evidence": "pending final Test Writer; compare actual behavior and follow these actions, no documentation-parsing/meta-tests"
+  }
+]

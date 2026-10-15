@@ -111,7 +111,7 @@ func (e *requestEnv) controller(t *testing.T, wire io.Writer, pane io.Writer) *r
 
 func (e *requestEnv) exec(t *testing.T, query string, args ...any) {
 	t.Helper()
-	db, err := sql.Open("sqlite", e.path)
+	db, err := sql.Open("sqlite", e.path+"?_pragma=busy_timeout(1000)")
 	if err != nil {
 		t.Fatal(err)
 	}

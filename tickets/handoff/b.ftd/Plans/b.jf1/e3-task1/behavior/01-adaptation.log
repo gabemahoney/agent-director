@@ -1,0 +1,60 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 DONE 0.0s
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+--- FAIL: TestCursorPublicWaitingPromptAdmission (7.53s)
+    --- FAIL: TestCursorPublicWaitingPromptAdmission/busy_queues_after_later_completion (2.20s)
+        request_runtime_linux_test.go:412: no actual admission/refusal outcome after hook release: frames=[map[id:[49] jsonrpc:[34 50 46 48 34] method:[34 105 110 105 116 105 97 108 105 122 101 34] params:[123 34 99 108 105 101 110 116 67 97 112 97 98 105 108 105 116 105 101 115 34 58 123 34 102 115 34 58 123 34 114 101 97 100 84 101 120 116 70 105 108 101 34 58 102 97 108 115 101 44 34 119 114 105 116 101 84 101 120 116 70 105 108 101 34 58 102 97 108 115 101 125 44 34 116 101 114 109 105 110 97 108 34 58 102 97 108 115 101 125 44 34 99 108 105 101 110 116 73 110 102 111 34 58 123 34 110 97 109 101 34 58 34 97 103 101 110 116 45 100 105 114 101 99 116 111 114 34 44 34 118 101 114 115 105 111 110 34 58 34 100 101 118 34 125 44 34 112 114 111 116 111 99 111 108 86 101 114 115 105 111 110 34 58 49 125]] map[id:[50] jsonrpc:[34 50 46 48 34] method:[34 115 101 115 115 105 111 110 47 110 101 119 34] params:[123 34 99 119 100 34 58 34 47 116 109 112 47 84 101 115 116 67 117 114 115 111 114 80 117 98 108 105 99 87 97 105 116 105 110 103 80 114 111 109 112 116 65 100 109 105 115 115 105 111 110 98 117 115 121 95 113 117 101 117 101 115 95 97 102 116 101 114 95 108 97 116 101 114 95 99 111 109 112 108 101 116 105 111 110 51 50 56 48 51 49 54 48 53 55 47 48 48 49 34 44 34 109 99 112 83 101 114 118 101 114 115 34 58 91 93 125]] map[id:[51] jsonrpc:[34 50 46 48 34] method:[34 115 101 115 115 105 111 110 47 112 114 111 109 112 116 34] params:[123 34 112 114 111 109 112 116 34 58 91 123 34 116 101 120 116 34 58 34 105 110 105 116 105 97 108 34 44 34 116 121 112 101 34 58 34 116 101 120 116 34 125 93 44 34 115 101 115 115 105 111 110 73 100 34 58 34 115 121 110 116 104 101 116 105 99 45 115 101 115 115 105 111 110 45 49 34 125]]] pane=[?2004hCursor gateway: starting a fresh conversation
+            Cursor ready
+            > Synthetic reply: initial[2K> t[2K> ty[2K> typ[2K> type[2K> typed
+            [2K> ~
+            Cursor turn complete
+            > Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent
+    --- FAIL: TestCursorPublicWaitingPromptAdmission/busy_new_clear_refuse (2.20s)
+        request_runtime_linux_test.go:412: no actual admission/refusal outcome after hook release: frames=[map[id:[49] jsonrpc:[34 50 46 48 34] method:[34 105 110 105 116 105 97 108 105 122 101 34] params:[123 34 99 108 105 101 110 116 67 97 112 97 98 105 108 105 116 105 101 115 34 58 123 34 102 115 34 58 123 34 114 101 97 100 84 101 120 116 70 105 108 101 34 58 102 97 108 115 101 44 34 119 114 105 116 101 84 101 120 116 70 105 108 101 34 58 102 97 108 115 101 125 44 34 116 101 114 109 105 110 97 108 34 58 102 97 108 115 101 125 44 34 99 108 105 101 110 116 73 110 102 111 34 58 123 34 110 97 109 101 34 58 34 97 103 101 110 116 45 100 105 114 101 99 116 111 114 34 44 34 118 101 114 115 105 111 110 34 58 34 100 101 118 34 125 44 34 112 114 111 116 111 99 111 108 86 101 114 115 105 111 110 34 58 49 125]] map[id:[50] jsonrpc:[34 50 46 48 34] method:[34 115 101 115 115 105 111 110 47 110 101 119 34] params:[123 34 99 119 100 34 58 34 47 116 109 112 47 84 101 115 116 67 117 114 115 111 114 80 117 98 108 105 99 87 97 105 116 105 110 103 80 114 111 109 112 116 65 100 109 105 115 115 105 111 110 98 117 115 121 95 110 101 119 95 99 108 101 97 114 95 114 101 102 117 115 101 50 56 53 50 55 50 57 53 54 54 47 48 48 49 34 44 34 109 99 112 83 101 114 118 101 114 115 34 58 91 93 125]] map[id:[51] jsonrpc:[34 50 46 48 34] method:[34 115 101 115 115 105 111 110 47 112 114 111 109 112 116 34] params:[123 34 112 114 111 109 112 116 34 58 91 123 34 116 101 120 116 34 58 34 105 110 105 116 105 97 108 34 44 34 116 121 112 101 34 58 34 116 101 120 116 34 125 93 44 34 115 101 115 115 105 111 110 73 100 34 58 34 115 121 110 116 104 101 116 105 99 45 115 101 115 115 105 111 110 45 49 34 125]]] pane=[?2004hCursor gateway: starting a fresh conversation
+            Cursor ready
+            > Synthetic reply: initial[2K> /[2K> /n[2K> /ne[2K> /new
+            [2K> /[2K> /c[2K> /cl[2K> /cle[2K> /clea[2K> /clear
+            [2K> t[2K> ty[2K> typ[2K> type[2K> typed
+            [2K> ~
+            Cursor turn complete
+            > Unsupported Cursor conversation control; nothing sent
+            > Unsupported Cursor conversation control; nothing sent
+            > Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/cursorhost	7.531s
+FAIL
+make: *** [Makefile:735: sandbox] Error 1

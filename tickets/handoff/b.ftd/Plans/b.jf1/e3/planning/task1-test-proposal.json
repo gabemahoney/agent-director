@@ -1,0 +1,156 @@
+{
+  "provenance": "Coordinator faithful structured transcription of apiary_test_writer_planner_e3_t1; proposals only, PM synthesis pending.",
+  "subtasks": [
+    {
+      "title": "Verify ordered prompt admission through existing terminal and runtime boundaries",
+      "context": "Task1 FIFO follow-ups bind current launch/confirmed conversation. Legitimately replace deliberate busy-refusal assertions while retaining E2 committed-waiting protection. Shared fixtures terminalPair/terminalEvent/newRequestEnv/prepareRunPTY/observedWire/runCursorReportHelper/cursorReportBarrier/cursorfix Runtime+Scenario, newCursorPaneScenario/newSpawnFix/buildHookCLI/waitFor; this owner extends shared fixtures for the lane.",
+      "changes": [
+        "Distinguish queued acceptance from actual ACP start in existing terminal/runtime cases.",
+        "Cover exact Unicode/multiline/bracketed paste/successive complete submissions, acceptance order and FIFO.",
+        "Use actual SessionStart/Stop report barriers; preserve saved initial priority and one active prompt.",
+        "Queued work waits for current turn and all independently outstanding decisions; normal outcome/one resolution/question denial cannot release another hold.",
+        "Exercise launch/conversation/runtime loss at acceptance and dispatch; rejected input cannot become future work or accepted work migrate.",
+        "Adapt existing real-tmux busy assertion while preserving ownership-hook rejection, exact text, transcript and shutdown checks.",
+        "Retain clear/new refusal and public pending/hash/dialog/permission/pause safeguards; remove only intentionally obsolete busy assertions, no duplicated proof matrices."
+      ],
+      "key_files": [
+        "internal/cursorhost/terminal_test.go",
+        "internal/cursorhost/request_runtime_linux_test.go",
+        "internal/cursorhost/request_fixture_linux_test.go",
+        "internal/cursorhost/report_linux_test.go",
+        "internal/testsupport/cursorfix/cursorfix.go",
+        "internal/testsupport/cursorfix/runtime.js",
+        "test/realtmux/cursor_launch_test.go",
+        "test/realtmux/cursor_relay_pane_test.go \u2014 existing guard adaptation only"
+      ],
+      "acceptance": [
+        "Received text/session establishes complete FIFO without duplication/gluing/implicit cancellation.",
+        "Committed-waiting survives hook tail; pending/stale refusals stay consumption-time effective.",
+        "Saved initial prompt first; no overlapping ACP prompt.",
+        "Any required independent decision hold blocks dispatch; question denial cannot resolve genuine requests.",
+        "Public guard errors retained; terminal transport success not equated with gateway acceptance.",
+        "Clear/new never rotate or become model text; no new public caller matrix/collector/auth acceptance here."
+      ]
+    },
+    {
+      "title": "Verify control priority, finite cancellation, and transient queue retirement",
+      "context": "Interruption must preempt queued work/transport pressure, cancel active and every unstarted prompt, prevent replay. Reuse lane shared newRequestEnv/prepareRunPTY/report barriers/observedWire/cursorfix plus newCursorPaneScenario/independent-worker sentinel/bounded observations; existing E2 finite-cancel and uncertain-delivery owners retained.",
+      "changes": [
+        "Focused controller/runtime interruption group with active turn and multiple accepted follow-ups.",
+        "Deterministic finite input/output pressure, not stress loops.",
+        "Independent plan/permission holds, repeated interrupts and completion/cancel races.",
+        "Individually visible queued cancellation outcomes, no next prompt; identity preserved, restart only later explicit submission.",
+        "Queue disposal on gateway/runtime loss and existing shutdown paths; do not duplicate Task2 complete exit/pause acceptance.",
+        "Retain original finite-cancel/blocked-transport bounds, survivor/death evidence and ack-before-byte/both-guard/existing-min-deadline/no-replay controls.",
+        "This subtask owns focused /exit and eligible public pause cases with accepted queued submissions: visibly cancel each unstarted submission, emit no later prompt for it, and report ended only after confirmed owned-runtime termination. Preserve unresolved-dialog pause refusal. Task2 adds rotation-related shutdown cases; Task3 owns final public acceptance matrix.",
+        "Deterministically cover controls behind saturated ordinary input, pending report completion, delayed transcript persistence and outbound transport pressure, preserving persistence/deadline guarantees. A prompt handed to serialized protocol queue but not written must retire before bytes on cancellation; partial/uncertain output stays uncertain and never replays. Raw-wire zero-byte evidence required.",
+        "After settled docs, own literal-follow validation of changed capacity/interruption/shutdown recovery sequences via existing behavioral fixtures. Record coverage or explicit no-changed-sequence finding; no doc-parsing/meta-tests or manufactured guide edits."
+      ],
+      "key_files": [
+        "internal/cursorhost/session_controls_linux_test.go \u2014 proposed focused behavioral owner",
+        "internal/cursorhost/request_fixture_linux_test.go",
+        "internal/testsupport/cursorfix/cursorfix.go",
+        "internal/testsupport/cursorfix/runtime.js",
+        "test/realtmux/cursor_relay_boundary_linux_test.go",
+        "test/realtmux/cursor_blocked_linux_test.go",
+        "test/realtmux/cursor_launch_test.go \u2014 repeated-cancel owner",
+        "internal/cursorhost/request_boundary_linux_test.go \u2014 preservation",
+        "internal/cursorhost/request_question_linux_test.go \u2014 preservation",
+        "internal/cursorhost/request_proof_linux_test.go \u2014 preservation",
+        "internal/cursorhost/protocol_test.go \u2014 preservation"
+      ],
+      "acceptance": [
+        "Interrupt never waits for queued ordinary work to run.",
+        "Each accepted unstarted submission has exactly one visible cancellation and never reaches ACP.",
+        "Repeated interrupts/hold release cannot extend cancel deadline/rearm generation.",
+        "Identity unchanged; late completion/policy denial/retirement cannot restart cancelled work.",
+        "Kill/crash/transport failure cannot replay or fabricate delivery/history/termination.",
+        "Ownership/proof/answer deadlines remain; observe product outcomes, not queue helpers directly."
+      ]
+    },
+    {
+      "title": "Verify protected submission and cancellation records and persistence failures",
+      "context": "Acceptance/cancelled-before-start need durable attribution. Reuse newTestTranscript/transcriptBinding and lane cursorfix/newCursorPaneScenario/hookTrailRecords/storefix.InjectWriteFailure/existing transcript faults; one lane owns shared evidence.",
+      "changes": [
+        "Extend existing transcript owners for submission identities/acceptance binding/cancel order/update-outcome association.",
+        "Distinguish unstarted/started/cancelled/completed without a recoverable queue.",
+        "Extend existing persistence-failure table only at new queue admission/cancellation-record boundaries.",
+        "Visible persistence failure cannot release queue or overwrite a replaced transcript; preserve protected mode/path/secret/raw-label tests.",
+        "Storage owns this group, scheduling first group, cancellation execution second group.",
+        "After settled docs, own literal-follow validation of changed transcript/persistence-failure recovery sequences through existing behavioral fixtures; record coverage or no-sequence-change finding, no parsing/meta-tests/guide edits."
+      ],
+      "key_files": [
+        "internal/cursorhost/transcript_test.go",
+        "test/realtmux/cursor_failure_linux_test.go",
+        "test/realtmux/cursor_launch_test.go \u2014 coordinated transcript assertions",
+        "internal/testsupport/storefix/write_failure.go \u2014 only demonstrated missing existing seam"
+      ],
+      "acceptance": [
+        "Monotonic records retain accepted launch/conversation attribution; each cancelled queued submission identifiable without false execution/completion.",
+        "Transcript reads do not restore transient work.",
+        "New persistence failures visibly fail without unauthorized next prompt.",
+        "Replacement/symlink/hardlink/mode/secret protections retained.",
+        "No speculative migration or new fault helper."
+      ]
+    },
+    {
+      "title": "Review Task 1 test quality and coverage ownership",
+      "context": "After implementation/test authoring apply test-writing-guide Pre-Submit Checklist/Red Flags. Review cursorfix, PTY/request/report barriers/real-pane/transcript/fault helpers; review work, not new meta-tests.",
+      "changes": [
+        "Assign every requirement one behavioral owner; remove duplicate setup/matrices/obsolete expectations/helper tests.",
+        "E2 changes only where Task1 deliberately changes behavior.",
+        "Cleanup waits owned processes, preserves unrelated workers and isolated HOME/store/socket/original bounds.",
+        "Assess actual new transitions/model coverage without forcing model edits or baseline jobs.",
+        "Retain Task2 rotation and Task3 collector/public/auth ownership."
+      ],
+      "key_files": [
+        "All changed test/fixture files",
+        "docs/test-writing-guide.md",
+        "docs/engineering-guide.md",
+        "tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/context.md",
+        "spec/tla/** \u2014 only actual changed model inputs"
+      ],
+      "acceptance": [
+        "Mandatory quality findings resolved before full units; no duplicate owners.",
+        "Original answer/cancel limits and unrelated Codex1.5s guard unchanged.",
+        "No helper/meta-tests/speculative stress/retry-until-green.",
+        "No model changes means TLA+ not applicable; changed models mean affected-only scheduler handoff.",
+        "No unrun collector or actual terminal acceptance pass claim."
+      ]
+    },
+    {
+      "title": "Run the settled full unit suite and resolve failures",
+      "context": "Final TestWriter owns this OUTSIDE lanes after source/fixtures/tests/docs/required corrections settle. Use existing isolated sandbox fixtures and Go/Bun setup.",
+      "changes": [
+        "Run make test-sandbox once against settled tree.",
+        "Investigate/fix real failures, no assertion weakening/deadline extension/dismissing unrelated failures.",
+        "If fixes required validate causally and obtain final all-green receipt; preserve original failed receipts and report unresolved failures.",
+        "Docker groups/applicable changed-model checks remain separately scheduler-owned."
+      ],
+      "key_files": [
+        "Makefile",
+        "Files implicated by actual failures",
+        "Existing sandbox/test fixture owners"
+      ],
+      "acceptance": [
+        "100percent required units pass before done.",
+        "Report exact tested revision/tree and Go/Bun counts, actual unresolved failures.",
+        "No host test/binary, local collector/TLC/parser/scheduler/credential/real-store access.",
+        "No integration-execution Subtask."
+      ]
+    }
+  ],
+  "lanes": {
+    "suggested": 1,
+    "lane1": "Ordered admission/control/transcript testing plus quality, all shared cursorfix/PTTY/report/real-pane correlated submission evidence.",
+    "outside_lanes": "Final full-unit suite only"
+  },
+  "findings": [
+    "Existing terminal_test.go/request_runtime_linux_test.go/realtmux cursor_launch_test.go intentionally busy-refuse; update those only for changed contract.",
+    "Engineer records capacity/refusal and submission identity as technical decisions before tests.",
+    "No new Task1 collector/public complete matrix; Task3 owns them."
+  ],
+  "questions": [],
+  "incomplete": [],
+  "advice_validation_sequencing": "Initial behavior pass precedes docs; final TestWriter reopens groups2/3 if advice validation requires it after prose settles. Quality closes only after advice validation; fullunits after docs+quality. Docdeps source+initialbehavior, qualitydeps docs+behavior, no graphcycle or duplicate test owner."
+}

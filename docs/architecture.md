@@ -126,19 +126,46 @@ short writes, transport errors and write timeouts make delivery uncertain and
 fatal, with no retry or replay. The controller continues observing child
 death, input and signals while writes stall. Cancellation retains the first
 request's fixed deadline; repeated interrupts or denials cannot extend it.
-`session.go` admits ordinary input only after confirmed startup or turn
-completion. Future input paths must reuse the private `promptAdmission` for
-one idle reservation and the waiting-report handoff. Enter can independently
-confirm committed `waiting` while the hook subprocess finishes, using shared
-`reporter.verifyReport` checks with no held unproven awaiting request. The
-handoff preserves that reservation; a saved initial prompt retains priority.
-`terminal_linux.go` handles Unicode editing, literal tabs,
-bracketed multiline paste and line clearing; input consumed pending or busy
-is refused and cannot run in a later turn.
-Busy follow-ups and clear/new commands are visibly refused. Local exit and
-eligible pause terminate the owned child before an intentional end report.
-Cancellation requests wait for correlated completion; the outbound frame
-queue never queues follow-up turns or rotates conversations.
+`session.go` owns one active prompt and a transient FIFO bound to the confirmed
+launch/conversation. `inputMailbox` reserves at most 32 waiting submissions and
+8 MiB of waiting text, separately from the active prompt; individual input is
+bounded to 1 MiB. Reservations persist across transfer to the controller queue
+and release at dispatch or cancellation. Future input paths MUST reuse
+`promptAdmission` and `inputMailbox`: initial startup retains one idle
+reservation, Enter can verify committed waiting through `reporter.verifyReport`
+while the hook finishes, and the saved initial prompt retains priority. Once
+startup is confirmed, eligible complete follow-ups queue in observed terminal
+order. `terminal_linux.go` preserves editable Unicode and multiline text;
+pending, held, stale or excess input is explicitly refused. Literal text and
+Enter remain separate public send-keys operations, without concurrent-caller
+atomicity. Clear/new remain refused; there is no conversation rotation.
+
+Dispatch requires the previous turn to finish and every retained durable dialog
+hold to resolve. Future dispatch paths MUST reuse `reporter.promptEligible`
+and `Store.CheckCursorPrompt`, which bound authority acquisition and verify
+runtime/pane/current binding and all unproven durable requests. An empty local
+request map, acknowledgement or local cancellation supplies no dialog proof.
+Late exact tool execution can discharge only its matching hold after completion.
+The guarded protocol request allocates its ACP identity before synchronizing
+`submission_started`; no prompt bytes may pass before that record succeeds.
+Both writer guards retire an obsolete prompt epoch before bytes. Known zero-byte
+retirement preserves a healthy transport for later explicit input; partial or
+uncertain output remains fatal and is never replayed.
+
+Controls use an independent mailbox lane and advance the cancellation epoch at
+consumption, including across a slow admission-to-insertion handoff. They retire
+affected prompt and decision authority and give each retained accepted submission
+an explicit disposition while persistence remains available. The first control's
+three-second deadline supervises cancellation, slow protected records, reporting
+and finalization; repeated controls cannot extend it. Recovery clears that bound
+and enables later explicit input only while owning its captured epoch with no
+pending control. Local exit and eligible pause cancel waiting work and require
+confirmed owned termination before an intentional end report; working and dialog
+pause guards remain. No accepted FIFO entry is restored or replayed after failure.
+
+`paneDisplay` separates bounded rendering from input/control consumption; future
+rendering paths MUST reuse it. Pressure may omit pane output with a transcript
+inspection notice. Display content or loss never classifies AD state or authority.
 
 `process_linux.go` installs ptrace EXITKILL and parent-death protection at the
 initial exec stop before ACP input. Fork/clone/exec descendants stay guarded
@@ -199,9 +226,15 @@ always returns untracked and empty; existing status response shapes remain.
 `transcript_linux.go` creates random private JSONL artifacts beneath the AD
 config directory, walks paths with no-follow protections, validates file
 identity/access and syncs each sequence-numbered record. Records bind launch,
-life, connection and confirmed conversation to input, updates, denials and
-outcomes. Replacement/symlink/insecure-path and persistence failures halt
-admission. Reports expose the actual recorded path through `jsonl_path`;
+life, connection and confirmed conversation to submission acceptance, dispatch
+start, updates, cancellation, refusal and outcomes. Submission identities are
+independent of ACP request IDs; start/update/outcome records correlate both.
+Accepted initial input remains tracked through pre-dispatch failures. A start
+record has unconfirmed delivery; termination and unconfirmed completion are
+separate dispositions. Replacement/symlink/insecure-path and persistence failures
+halt admission and cannot yield a false successful end or complete saved history.
+Future lifecycle records MUST reuse this protected synchronized recorder.
+Reports expose the actual recorded path through `jsonl_path`;
 `transcript_status` remains a reference summary, not a new reader-time file
 verification. Native Cursor storage is separate; no Claude JSONL substitute,
 load/replay/history recovery or successful unrecorded outcome is claimed.
@@ -368,7 +401,15 @@ Real-pane authors MUST extend `newCursorPaneScenario` in
 `test/realtmux/cursor_launch_test.go` for optional pre-launch `Script`, `Relay`
 and `Timeout`, preserving its existing string scenarios. Its cleanup stops
 only the private tmux server and waits for its owned runtime/worker before
-temporary files are removed. Public CLI/MCP/Go/Bun acceptance reuses the
+temporary files are removed. Controller ordering and persistence tests MUST reuse
+`session_fixture_linux_test.go`'s real Run/PTY/session helpers, completed-input
+callbacks and protected-file record barriers alongside existing request/report
+fixtures. The internal input starter and optional post-recovery observation keep
+production terminal defaults and expose actual controller boundaries; the
+transcript opener retains protected file creation. Use these seams for causal
+ordering and complete large submissions instead of copied controllers, alternate
+runtimes or per-rune stress. They do not supply production authority.
+Public CLI/MCP/Go/Bun acceptance reuses the
 existing spawn, MCP and current Bun `Client` paths; it adds no client harness.
 
 Both registered `cursor-owned-launch` and `cursor-relay` collectors MUST reuse

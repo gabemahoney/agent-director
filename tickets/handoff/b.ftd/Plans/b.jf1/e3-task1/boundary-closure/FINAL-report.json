@@ -1,0 +1,52 @@
+{
+  "role": "apiary_test_writer_e3_task1_boundary_closure",
+  "result": "R1 and all ordinary waiting byte boundaries are closed through real Run. Initial behavior is NOT completely closed: deterministic R5 completion-first observation still needs a narrow post-await recovery boundary. No source failure found; no invented R5 coverage.",
+  "tree": "feature/b.ftd; inherited HEAD 9ff393a5216fd6d6377d3b40a1adab491fa296c6 and source/test changes retained; no commit",
+  "tickets": {
+    "t3.jf1.r8.dt.w2": "active -> done: exact R1 handoff and ordinary waiting byte boundary gaps closed",
+    "t3.jf1.r8.dt.k4": "active retained: R5 causal test gap and postdoc literal-follow advice remain",
+    "t3.jf1.r8.dt.cc": "active retained: initial behavior complete; postdoc literal-follow advice remains",
+    "t3.jf1.r8.dt.c4": "active unchanged: final review pending R5/docs/advice",
+    "t3.jf1.r8.dt.p7": "untouched; no full unit suite owned or run"
+  },
+  "files_changed": [
+    "internal/cursorhost/session_fixture_linux_test.go",
+    "internal/cursorhost/session_capacity_linux_test.go"
+  ],
+  "coverage": {
+    "R1": "TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch calls Run's actual admission callback, retains the accepted ordinary terminalInput before Run's actual emit/mailbox put, injects a real interrupt without a second ordinary admission, waits for protected input_control, then emits the parked original value. Exactly one protected accepted identity/cancelled-before-start disposition, visible cancellation, zero raw peer bytes and no peer prompt for the old value. Later explicit input reaches ACP in the same session/life with no replay.",
+    "ordinary_individual_bytes": "Table exercises UTF-8 complete ordinary submissions at 1MiB-1, 1MiB and 1MiB+1 behind an actually received HOLD turn. Real admit/emit/controller, capacity-only refusal, protected text/order and no queued ACP output. This is distinct from retained saved-initial byte coverage.",
+    "ordinary_aggregate_bytes": "Table reserves 8MiB-1, exactly 8MiB and attempts 8MiB+1 behind real HOLD, using only individually legal entries and fewer than 32 entries. Eight accepted entries at capacity; the one-byte excess alone is refused with reason capacity. Cancellation releases every accepted reservation once, visibly and with raw zero-byte evidence. Refilling the same sizes then executes exact FIFO text through ACP, proving byte/count release without replay of the cancelled batch. Ordinary per-frame receipt waits use completed trace lines; no rune-by-rune redraw/stress.",
+    "fixture": "beginCursorSession now delegates to beginCursorSessionWithInput using terminalLoop by default. completeInput only retains actual Run callbacks and delegates real terminalLoop for PTY controls/cleanup. No fake mailbox, copied epoch/controller logic, parallel runtime or helper/meta-tests. Bounded failure diagnostics avoid dumping multi-megabyte frames/pane text.",
+    "R5": "Inspected source correction; no new causal regression claimed. Existing finite persistence/repeated-control owners remain, but do not establish report-completion-first selection."
+  },
+  "remaining_mandatory_behavior": [
+    {
+      "id": "R5",
+      "gap": "Deterministically select actual recovery Stop report completion first, then inject the superseding control before recovery clears the original first-control deadline, with pendingControl still nil; force a following protected operation to remain blocked and assert the original 3s limit.",
+      "reason": "The existing real after-commit report barrier holds the subprocess while Run is in await. Injecting control before releasing it deterministically allows await's control-first branch. Releasing it with controlWake pending makes two Go select cases ready; the selected case is unspecified, not controllable by inputStarter. The starter exposes admit/emit but no completion observation after await has selected the actual result and before the recovery epoch commit. No assertion can honestly distinguish which branch ran using the current external outputs alone. Timing sleeps, GOMAXPROCS/scheduling assumptions or repeated random attempts would not meet the requested deterministic interleaving.",
+      "minimal_engineer_request": "Expose an unexported optional observation/barrier immediately after the actual recovery Stop await returns successfully and before the pendingControl/ifCurrent recovery finalization, keeping public Run/runWithTranscript defaults unchanged. Test can hold real Stop after commit, preserve the first-control timestamp, complete that actual report, stop at this post-await boundary, inject the real interrupt via inputStarter, then resume into the actual epoch-owned finalization and block the next protected input_control Sync using existing recordBarrier. This guarantees completion-first/pendingControl-nil ordering without replacing controller logic. Engineer may choose an equally narrow existing-boundary alternative if it exposes the same ordering. Test Writer did not edit source."
+    }
+  ],
+  "receipts": {
+    "01-format.log": "PASS sandbox gofmt",
+    "02-boundaries.log": "FAIL test-side aggregate refill observation: one total 3s observation covered eight real multi-megabyte ACP turns; all acceptance/cancellation/byte-boundary checks passed, but only a prefix had completed. Retained original failed receipt (large diagnostic output). Changed new observation to the existing 3s budget per received frame; no product/cancellation guard changed.",
+    "03-boundaries.log": "FAIL test-side individual refill observation: raw ACP prefix count could observe a frame before the fixture recorded its complete parsed line, then /exit retired that still-in-flight frame. Aggregate cases passed. Fixed observation to require completed trace lines before shutdown; retained failed assertions/receipt.",
+    "04-boundaries.log": "PASS race 33.942s: R1 plus all six ordinary individual/aggregate byte cases with complete trace observation",
+    "05-targeted-host.log": "PASS race 81.048s: final affected Cursor/Protocol/Transcript selection, including both new tests and capacity refusal-reason assertions, FIFO/lifecycle, protected persistence/deadlines, R3/R4, independent holds/question denial, committed waiting admission, unknown-proof refusal, both answer guards and min-bounds, transport uncertainty/no replay. Not a full repository suite.",
+    "06-whitespace.log": "PASS git diff --check"
+  },
+  "final_command": "make sandbox CMD='gofmt -w internal/cursorhost/session_fixture_linux_test.go internal/cursorhost/session_capacity_linux_test.go && GORACE=atexit_sleep_ms=0 go test -race ./internal/cursorhost -run \"Test(Cursor|Protocol|Transcript)\" -count=1 -timeout=3m'",
+  "quality": "Read CLAUDE.md, complete test-writing guide including checklist/red flags, all Task1 testing Subtasks and named prior reports, relevant actual source and existing owning tests. Two new behavioral tests, byte table parameterized; reused session/request/cursorfix/protected records and actual callbacks. No duplicate proof/public caller matrices. Original cancellation, answer/min-bound and Codex 1.5s guards unchanged. Existing eligible pause remains honestly labeled actual API plus verified-pane/PTTY unit evidence; real-pane/auth owners are not relabeled.",
+  "postdoc_advice_inventory": [
+    "Capacity refusal: only later explicit resubmission; ordinary count and 1MiB/8MiB byte branches now have actual Run owners, refused entries do not replay.",
+    "Interrupt: each queued cancellation visible and protected, identity retained, later explicit input only; R1 now directly causal. R5 completion-first timing remains the explicit gap above.",
+    "Shutdown: working/dialog pause guards retained; eligible waiting pause cancels accepted work and reports ended only after owned termination; retain distinction between public API/PTTY unit and real pane evidence.",
+    "Rendering loss: inspect protected transcript; lifecycle remains complete despite omitted display, prior owner retained.",
+    "Persistence failure: visible failure/no false complete history or ended success/no replay; blocked Sync/start gate/pre-active initial dispositions and protected replacement faults retain their existing owners."
+  ],
+  "execution": "All repository execution and formatting used make sandbox CMD. Fixtures own fresh HOME/store/socket/processes. No full unit suite, integration/Docker TESTPLAN group/collector, source/doc edits, .claude access, credential or real AD store access, live Cursor, scheduler/TLC/parser jobs, push, commit, delegation or midflight messages. GORACE=atexit_sleep_ms=0 only removes race runtime exit delay.",
+  "models": "No spec/tla input changed; no formal execution, manufactured edit/baseline or model claim. Existing hold models do not prove FIFO/submission epochs/start-record writer gates.",
+  "deviations": ["Could not force R5's completion-first select path with the provided seams; reported precise observation gap instead of probabilistic or copied-state coverage."],
+  "questions_for_coordinator": ["Route the narrow R5 completion observation to Engineer (or identify an existing equivalent boundary), then dispatch the causal regression before claiming initial behavior complete. No user product decision is needed."]
+}

@@ -239,15 +239,20 @@ func TestCursorFreshRealPanePromptsRefusalsAndPause(t *testing.T) {
 	}
 	send("HOLD")
 	state(store.StateWorking)
-	send("must refuse busy")
-	paneContains("Cursor input refused while starting or busy; nothing sent")
+	send("queued follow-up")
+	waitFor(t, "follow-up accepted while HOLD runs", func() bool {
+		raw, err := os.ReadFile(readRow(t, f.DBPath, id).JSONLPath.(string))
+		return err == nil && strings.Contains(string(raw), `"text":"queued follow-up"`)
+	}, func() string { return fmt.Sprint(prompts()) })
 	if err = os.WriteFile(r.Release, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	state(store.StateWaiting)
-	want := append(expected, "HOLD")
+	want := append(expected, "HOLD", "queued follow-up")
+	waitFor(t, "queued follow-up completes", func() bool {
+		return len(prompts()) == len(want) && readRow(t, f.DBPath, id).State == store.StateWaiting
+	}, func() string { return fmt.Sprint(prompts()) })
 	if got := prompts(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("refusal submitted prompt: %q", got)
+		t.Fatalf("queued FIFO prompts: %q", got)
 	}
 	rawTranscript, err := os.ReadFile(readRow(t, f.DBPath, id).JSONLPath.(string))
 	if err != nil {
@@ -407,6 +412,14 @@ func TestCursorRepeatedCancellationDoesNotExtendDeadline(t *testing.T) {
 				t.Fatal(err)
 			}
 			waitFor(t, "working", func() bool { return readRow(t, f.DBPath, id).State == store.StateWorking }, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
+			waitFor(t, "actual prompt receipt before cancellation", func() bool {
+				for _, frame := range r.Frames(t) {
+					if string(frame["method"]) == `"session/prompt"` {
+						return true
+					}
+				}
+				return false
+			}, func() string { return fmt.Sprint(r.Frames(t)) })
 			gatewayPID := int(launch.Row.PanePID.(int64))
 			runtimePID := 0
 			if _, err := fmt.Sscan(readFileTrim(t, r.PID), &runtimePID); err != nil {

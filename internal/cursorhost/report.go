@@ -20,6 +20,17 @@ type reporter struct {
 	path    string
 }
 
+// A locally retired authorization is not evidence that the durable dialog is
+// gone. Every new turn checks all outstanding requests and the current binding.
+func (r *reporter) promptEligible() (bool, error) {
+	return r.store.CheckCursorPrompt(r.binding, time.Now().Add(transportWriteWait), func(row store.Spawn) error {
+		if err := VerifyRuntime(r.binding, false); err != nil {
+			return err
+		}
+		return VerifyPane(r.store, row, r.cfg)
+	})
+}
+
 func (r *reporter) report(event string) error {
 	return r.reportWaiting(event, nil)
 }
@@ -67,7 +78,8 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error 
 	cmd := exec.CommandContext(ctx, r.exe, "hook", "--agent", "cursor")
 	cmd.Stdin = bytes.NewReader(raw)
 	if waiting != nil {
-		waiting(func() bool { return r.verifyReport(event, beforeVersion, true) == nil })
+		snapshot := *r
+		waiting(func() bool { return snapshot.verifyReport(event, beforeVersion, true) == nil })
 	}
 	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("Cursor report failed")

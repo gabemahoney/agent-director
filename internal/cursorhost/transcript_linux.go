@@ -15,7 +15,7 @@ import (
 )
 
 type transcript struct {
-	file    *os.File
+	file    transcriptFile
 	path    string
 	binding store.CursorRuntime
 	seq     uint64

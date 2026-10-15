@@ -1,0 +1,105 @@
+{
+  "role": "apiary_test_writer_e3_task1_behavior",
+  "tree": "feature/b.ftd HEAD 9ff393a5216fd6d6377d3b40a1adab491fa296c6 plus Engineer's 10 uncommitted source files and this report's seven test files; no commits",
+  "result": "initial behavioral pass produced one deterministic source failure; failed assertion retained",
+  "tickets": {
+    "t3.jf1.r8.dt.w2": "active -> done; ordered admission initial scope completed",
+    "t3.jf1.r8.dt.k4": "defined -> active; source failure and remaining pressure/eligible-pause coverage plus postdoc advice pending",
+    "t3.jf1.r8.dt.cc": "defined -> active; initial lifecycle/persistence failure cases implemented; postdoc advice pending",
+    "t3.jf1.r8.dt.c4": "defined -> active; initial quality review completed, closure pending postdoc advice and source/test gap resolution",
+    "t3.jf1.r8.dt.p7": "untouched, defined; fresh final Test Writer owns full unit suite"
+  },
+  "files": [
+    "internal/cursorhost/request_fixture_linux_test.go",
+    "internal/cursorhost/request_runtime_linux_test.go",
+    "internal/cursorhost/session_fixture_linux_test.go",
+    "internal/cursorhost/session_controls_linux_test.go",
+    "test/realtmux/cursor_failure_linux_test.go",
+    "test/realtmux/cursor_launch_test.go",
+    "test/realtmux/cursor_queue_linux_test.go"
+  ],
+  "source_failure": {
+    "test": "TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten",
+    "receipt": "14-source-failure.log (also 10-final-guard.log and aggregate 11-targeted-host.log)",
+    "reproduce": "make sandbox CMD='GORACE=atexit_sleep_ms=0 go test -race ./internal/cursorhost -run TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten -count=1 -timeout=30s'",
+    "evidence": "Final guard invoked twice. Barrier retires prompt during second guard, before io.Writer.Write. raw_peer_bytes=\"\". Callback returns ACP transport write failed; delivery is uncertain instead of errPromptRetired. Subsequent session/cancel notify is rejected as ACP transport write failed.",
+    "cause": "internal/cursorhost/protocol.go writeLoop distinguishes initial guard failure from pipe failure, but the second guard runs in the worker goroutine and its failure enters generic uncertain-write handling. A known prewrite cancellation can therefore poison transport and terminate the conversation instead of permitting later explicit input.",
+    "required": "Retain honest known-zero-byte retirement at the final guard without replay or transport poisoning. Preserve actual partial-write uncertainty and existing bounds. No source edits made by Test Writer."
+  },
+  "coverage": {
+    "session_controls_linux_test.go": [
+      "Initial HOLD first, then exact Unicode/tabs/multiline/bracketed paste/successive submissions; actual received text/session FIFO; no overlap before first outcome",
+      "Protected real Run lifecycle: monotonic records, acceptance text/order/unique IDs, launch token/life/instance/session/connection attribution, ACP request correlation across start/update/outcome",
+      "Interrupt and typed exit cancel every accepted queued submission once; per-submission visible cancellation; no replay; later explicit input after interrupt",
+      "Actual UserPromptSubmit subprocess before-commit barrier plus 32 reserved submissions and overflow: control consumed past saturated ordinary mailbox, capacity refusal, all accepted work cancelled, raw peer bytes contain neither queued text nor unwritten first prompt; later explicit input works",
+      "Independent durable Bash/Plan holds absent the in-memory request map: normal completion/closing unknown request/one proof cannot release another; all proofs permit queue",
+      "Accepted queue cannot migrate after launch/session/connection loss or runtime crash; protected cancellation disposition, no intentional-end fabrication",
+      "Actual serialized protocol queue retires prompt before raw bytes and retains cancel frame",
+      "Partial prompt output remains uncertain, transport refuses replay",
+      "Deterministic final-prewrite-guard cancellation source failure",
+      "Blocked external pane writer plus finite rendering-buffer pressure cannot delay control; complete protected cancellations and later visible omitted-output advice"
+    ],
+    "request_runtime_linux_test.go": [
+      "Existing committed SessionStart/Stop waiting handoff and pending/held/stale admission ownership matrix retained",
+      "Across-confirm second Enter now executes as queued work; exact prompt count required before exit",
+      "Pre-dispatch initial UserPromptSubmit report still refuses input, renamed to avoid claiming it is a dispatched busy generation"
+    ],
+    "test/realtmux/cursor_launch_test.go": [
+      "Existing real-pane exact multiline text/ownership-hook refusal/clear-new refusal/transcript/pause test adapted to actual accepted queued follow-up while HOLD remains active",
+      "Repeated-cancel test now waits for peer prompt receipt before original unchanged finite deadline assertions"
+    ],
+    "test/realtmux/cursor_failure_linux_test.go": [
+      "Existing protected persistence table extended at queued admission and queued cancellation boundaries; replacement survives, runtime/gateway stop, no queued protocol dispatch or false ended"
+    ],
+    "test/realtmux/cursor_queue_linux_test.go": [
+      "Public working-state pause guard retained with accepted queue; typed /exit cancels each entry and ends only with actual owned-runtime death, same conversation/life"
+    ]
+  },
+  "receipts": {
+    "03-fifo-controls.log": "passed race targeted handoff/FIFO/cancellation group 7.702s",
+    "08-retirement.log": "passed race targeted durable holds/authority loss/protocol retirement/partial output 2.392s",
+    "09-render-pressure.log": "passed race blocked pane control/loss notice 0.660s",
+    "11-targeted-host.log": "broad affected cursorhost preservation selection failed only deterministic final-guard source failure; 30.325s",
+    "12-targeted-pane.log": "passed race targeted real-pane FIFO, repeated cancellation, six persistence cases, working pause/queued exit, blocked ACP pipe preservation; 18.715s",
+    "13-settled-behavior.log": "passed race new behavioral selection excluding intentionally retained failing regression; 4.892s",
+    "14-source-failure.log": "failed deterministic final guard regression with raw zero-byte evidence; 0.010s",
+    "15-real-pane-fifo.log": "passed final strengthened real-pane FIFO acceptance barrier; 1.487s",
+    "16-lifecycle-binding.log": "passed final lifecycle launch/life/instance attribution assertions; 1.019s",
+    "whitespace": "git diff --check passed"
+  },
+  "earlier_failed_receipts": [
+    "01: Test Writer initially attempted busy admission at Stop/before; waiting handoff deliberately disables admission before commit. Restored initial predispatch report expectations; actual dispatched busy FIFO has independent product owner.",
+    "02: new fixture compilation errors (JSONLPath string versus interface; unused import), corrected.",
+    "04: test fixture incorrectly wrote timestamp strings into integer permission columns, corrected to UnixMilli and awaited actual Stop completion.",
+    "05/06: fixture direct SQL mutations contended with real gateway writer; requestEnv.exec now uses bounded SQLite busy_timeout(1000), no retry loops.",
+    "07: attempted public pause during working generation correctly returned ErrSpawnNotPausable. Preserved guard and changed case to assert refusal then actual typed /exit. Eligible public pause with queued entries remains an explicit gap."
+  ],
+  "incomplete": [
+    "Engineer must fix final-guard known-unwritten retirement defect; failing regression retained.",
+    "No deterministic delayed transcript Sync/start-record gate case authored: transcript is concrete *os.File and existing faults expose replacement/mode/closed writer, but no deterministic Sync barrier. Pending report and blocked display/output tests do not claim this coverage.",
+    "Eligible public pause with accepted queue remains uncovered; working pause correctly refuses. Need a deterministic legitimate waiting-before-queued-dispatch window without fabricating row state or weakening pause guards.",
+    "Capacity-count/refusal is covered; separate 8MiB waiting-text/1MiB individual limit edges are not directly exercised through PTY (per-rune redraw makes large-input tests expensive).",
+    "Actual full unit suite, docs/advice closure, integration Docker groups, Task3 collector/public caller matrix and authenticated terminal acceptance not run."
+  ],
+  "quality": {
+    "guides": "Read CLAUDE.md, docs/test-writing-guide.md including Pre-Submit Checklist/Red Flags and docs/engineering-guide.md, planning/context plus all Task1 proposals/PM review/Engineer report, actual source diff and all test Subtasks.",
+    "ownership": "One shared lane; seven test files, reusable Run session helpers separated in session_fixture_linux_test.go; reused requestEnv, prepareRunPTY, observedWire, cursorfix, report barriers, blockProtocol, newCursorPane, protected file faults. No runtime.js parallel scenario/helper added, no fixture/helper meta-tests, no cloned broad proof/public matrices.",
+    "bounds": "Original cancel/answer/blocked-output/Codex guards unchanged. GORACE=atexit_sleep_ms=0 only removes race runtime exit delay. Fresh fixture HOME/store/socket and owned process cleanup retained.",
+    "initial_review": "Mandatory immediate issue is retained source regression; postdoc review must also close explicit missing cases before final suite. No source/docs/credential/.claude edits, no commit/delegation/scheduler or external messages."
+  },
+  "model_assessment": {
+    "actual_inputs_read": "spec/tla/hold36h/tla/Hold36h.tla VARIABLES, HoldsWith and Next; inventory of existing model inputs",
+    "finding": "Existing hold models cover independent request state/ack/pane/proof/conditional row writes and generic turn start/end/interrupt. Their state vector contains no accepted FIFO entries, submission IDs/cancellation epoch or synchronized transcript-to-writer gate. They do not prove the new queue.",
+    "decision": "No model file changed. The newly found final-guard failure is a concrete implementation counterexample from deterministic raw-wire testing, not a formal counterexample or reason to manufacture a baseline model edit. TLA+ not applicable under user rule; no formal execution or scheduler jobs."
+  },
+  "postdoc_advice_inventory": [
+    "Capacity refusal: only later explicit submission; no automatic replay.",
+    "Interrupt: each queued cancellation visible, identity retained, later explicit input only; final-guard defect currently blocks honest recovery in one race.",
+    "Shutdown: working/dialog pause refusal retained; explicit exit ends only after owned termination; eligible queued pause gap remains.",
+    "Rendering loss: inspect protected transcript, which stays complete; test verifies control and visible advice after output recovers.",
+    "Persistence/replacement failure: visible failure, no false saved history/ended success, no queued recovery; existing six-case behavior available for final literal-follow review."
+  ],
+  "questions_for_coordinator": [
+    "Please dispatch Engineer for the retained final-guard defect. A later Test Writer pass needs deterministic persistence Sync/start-record gating and legitimate eligible-pause/queued window coverage; current pass cannot close those by editing source."
+  ]
+}

@@ -251,15 +251,15 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 		{"SessionStart waiting", "SessionStart", "after", "", "typed\r", store.StateWaiting, 1, false, ""},
 		{"Stop waiting", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2, false, ""},
 		{"pending refuses", "SessionStart", "before", "", "typed\r", store.StatePending, 0, false, ""},
-		{"busy refuses after later completion", "UserPromptSubmit", "after", "initial", "typed\r", store.StateWorking, 1, false, ""},
-		{"busy new clear refuse", "UserPromptSubmit", "after", "initial", "/new\r/clear\rtyped\r", store.StateWorking, 1, false, ""},
+		{"initial start report does not admit follow-up", "UserPromptSubmit", "after", "initial", "typed\r", store.StateWorking, 1, false, ""},
+		{"initial start report new clear refuse", "UserPromptSubmit", "after", "initial", "/new\r/clear\rtyped\r", store.StateWorking, 1, false, ""},
 		{"initial prompt does not double admit", "SessionStart", "after", "initial", "typed\r", store.StateWaiting, 1, false, ""},
-		{"SessionStart two Enters across confirm", "SessionStart", "after", "", "typed\r", store.StateWaiting, 1, true, ""},
+		{"SessionStart two Enters across confirm", "SessionStart", "after", "", "typed\r", store.StateWaiting, 2, true, ""},
 		{"SessionStart launch replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "launch"},
 		{"SessionStart session replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "session"},
 		{"SessionStart runtime replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "runtime"},
 		{"SessionStart held replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "held"},
-		{"Stop two Enters across confirm", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2, true, ""},
+		{"Stop two Enters across confirm", "Stop", "after", "initial", "typed\r", store.StateWaiting, 3, true, ""},
 		{"Stop launch replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "launch"},
 		{"Stop session replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "session"},
 		{"Stop runtime replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "runtime"},
@@ -405,7 +405,7 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 				refused := bytes.Contains(pane.bytes(), []byte("Cursor input refused while starting or busy"))
 				completed, getErr := e.s.GetSpawn(e.binding.InstanceID)
 				initialSeen := tc.initial == "" || prompts >= 1
-				if getErr == nil && completed.State == store.StateWaiting && initialSeen && (refused || typed) {
+				if getErr == nil && completed.State == store.StateWaiting && initialSeen && prompts == tc.wantPrompts && (refused || typed) {
 					break
 				}
 				if time.Now().After(until) {
@@ -431,9 +431,6 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 				if string(f["method"]) == `"session/prompt"` {
 					prompts++
 					t.Logf("peer prompt: %s", f["params"])
-					if bytes.Contains(f["params"], []byte(`"second"`)) {
-						t.Error("second Enter became a queued prompt")
-					}
 				}
 			}
 			t.Logf("barrier=%s/%s publicState=%s EnterConsumedBeforeRelease=true prompts=%d want=%d pane=%q", tc.event, tc.phase, row.State, prompts, tc.wantPrompts, pane.bytes())

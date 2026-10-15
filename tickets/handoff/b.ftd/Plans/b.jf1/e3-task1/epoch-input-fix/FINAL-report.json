@@ -1,0 +1,44 @@
+{
+  "role": "apiary_engineer_e3_task1_epoch_and_input",
+  "result": "R5 source correction and narrow internal input starter implemented. Existing targeted race tests pass. New causal R1/R5 and waiting-byte tests remain Test Writer work.",
+  "tree": "feature/b.ftd; inherited HEAD 9ff393a5216fd6d6377d3b40a1adab491fa296c6 and uncommitted source/tests retained; no commit",
+  "tickets": {
+    "t3.jf1.r8.dt.xt": "done -> active -> done: internal input starter",
+    "t3.jf1.r8.dt.66": "done -> active -> done: epoch-owned recovery deadline",
+    "t3.jf1.r8.dt.xv": "read only, done retained; no recorder changes needed"
+  },
+  "source_files_changed_this_pass": ["internal/cursorhost/session.go"],
+  "artifacts": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/epoch-input-fix/",
+  "R5_causal_fix": "Recovery Stop reporting captures the mailbox epoch. Following await completion, pendingControl must be nil AND inputs.ifCurrent must still own that captured epoch before stopDeadline/cancelAt clearing/admission enable execute. All three actions share the mailbox lock, so a control that already advanced the epoch cannot be overlooked merely because await selected report completion first. Failed ownership retains the first cancellation timestamp and existing timer, sets idleControl and immediately continues to consume/process the control. A control admitted after successful recovery begins a legitimately new cancellation interval. Existing cancelWait remains exactly three seconds.",
+  "input_starter": {
+    "entry": "runWithInput(options, in, out, opener, startInput)",
+    "type": "inputStarter func(*os.File, io.Writer, func(terminalInput), func() bool, ...func(rune) (string, string, bool)) func()",
+    "defaults": "Public Run still calls runWithTranscript with openTranscript; unchanged runWithTranscript signature delegates to runWithInput with terminalLoop. Existing tests require no adaptation. The supplied starter receives the existing production admission, epoch-binding/mailbox emit and request-choice callbacks; returned restore is deferred as before.",
+    "scope": "Unexported dependency only; no environment option, public API, fake mailbox/controller, public test behavior or production terminal change.",
+    "R1_writer_handoff": "Wrap the starter's actual terminalLoop emit callback or retain the provided callbacks. Call the real admit callback for ordinary text, park its accepted terminalInput before forwarding emit, insert an interrupt with the real emit callback, await protected input_control, then release that original accepted input. Its old admission epoch must survive insertion and produce explicit acceptance/cancellation with zero raw prompt bytes. Only after its release call admit for later explicit recovery input. Preserve production serialization of ordinary admit/emit pairs: do not admit a second ordinary input while the first is parked, since the terminal's admissionEpoch handoff intentionally has one ordinary producer. Controls may be emitted separately without calling admit.",
+    "byte_writer_handoff": "Feed complete strings using accepted := admit(); emit(terminalInput{text: text, accepted: accepted}). Hold an actual active turn to retain queued reservations. Cover ordinary individual UTF-8 sizes at 1MiB-1, 1MiB, 1MiB+1, and aggregate waiting reservations at 8MiB-1, 8MiB, 8MiB+1 while staying below the 32-entry count limit. Use the real transcript and raw ACP correlation; no rune-by-rune PTY redraw is needed. The starter can delegate terminalLoop for ordinary control/cleanup keys while exposing complete-input injection.",
+    "R5_writer_handoff": "The same real control emit callback can place a newer interrupt while recovery Stop reporting is held at the existing reporter barrier. Release the report with a pending control wake and verify the original first-control time bounds any subsequent blocked protected operation. The new implementation's completion-first path checks mailbox ownership even with pendingControl nil. A causal regression must exercise that completion-first ordering, not only the already covered await-control-first branch. No new regression is claimed here."
+  },
+  "receipts": {
+    "01-format.log": "PASS sandbox gofmt session.go",
+    "02-targeted-host.log": "PASS race 18.869s: existing nine owners for blocked transcript Sync/deadline, queued cancellation, saturated pending-report controls, known-unwritten start recovery, final writer guard, FIFO lifecycle, pre-active initial failures, initial bytes, unknown-origin refusal. Follow-up continue-to-control adjustment was made after this run.",
+    "03-recovery-final.log": "PASS race 16.174s on final source: blocked transcript Sync/deadline, queued controls, saturated input/pending report, known-unwritten start recovery and FIFO lifecycle.",
+    "04-whitespace.log": "PASS git diff --check",
+    "failed_receipts": "None this pass; prior failed receipts remain untouched in review-fix and revalidation."
+  },
+  "preservation": "R1 epoch binding, R2 idle/persistence supervision, R3 sentinel handling at both writer guards and R4 pre-active initial ownership unchanged. No changes to bounded answer guards, acknowledgement-before-output, durable unknown-origin proof predicates, committed waiting, initial priority, transport uncertainty/no replay, clear/new refusal, or owned-runtime termination evidence.",
+  "recovery_changes": "Existing submit-a-new-prompt advice is emitted only after epoch-owned recovery succeeds; superseding controls are processed first. No changed advice text or automatic replay.",
+  "decisions_for_coordinator_SRD": [
+    "Deadline reset, recovery admission and captured epoch ownership linearize under the mailbox mutex after recovery report completion.",
+    "Add only an internal inputStarter dependency beside the existing protected recorder opener; keep public/default execution identical and existing runWithTranscript calls compatible."
+  ],
+  "incomplete": [
+    "Test Writer must add the newly enabled exact R1 handoff and ordinary waiting-byte boundary regressions.",
+    "Test Writer must add a causal R5 report-completion/control-wake regression; existing targeted tests validate preservation, not that exact new race.",
+    "Coordinator retains technical SRD recording, documentation/reviews, final full sandbox suite and exact-commit scheduler acceptance."
+  ],
+  "models": "No spec/tla files changed; no formal claim, artificial edits, TLC/parser or scheduler work.",
+  "execution": "Repository execution used make sandbox CMD only. GORACE=atexit_sleep_ms=0 only removes race-runtime exit delay. No full unit/integration suite, local Docker TESTPLAN/collector, host built artifacts, .claude access, real AD store access, credentials/login/logout, live Cursor, scheduler jobs, push, commits, subagents or midflight messages.",
+  "deviations": [],
+  "questions": []
+}

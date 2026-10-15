@@ -1,0 +1,6 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task1_fixcheck",
+  "R1_R3_R4": "No furtherfindings",
+  "R2": "R5 recoveryepoch deadline race remains, mandatory",
+  "execution": "Sourceinspectiononly"
+}

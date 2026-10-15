@@ -1,0 +1,46 @@
+{
+  "mandatory_source_findings": {
+    "R1": {
+      "disposition": "repaired and causally covered",
+      "evidence": "boundary-closure/FINAL-report.json"
+    },
+    "R2": {
+      "disposition": "repaired and causally covered",
+      "evidence": "revalidation/FINAL-report.json"
+    },
+    "R3": {
+      "disposition": "repaired and causally covered",
+      "evidence": "review-fix/FINAL-report.json and revalidation/FINAL-report.json"
+    },
+    "R4": {
+      "disposition": "repaired and causally covered",
+      "evidence": "revalidation/FINAL-report.json"
+    },
+    "R5": {
+      "disposition": "repaired and causally covered",
+      "evidence": "r5-regression/FINAL-report.json"
+    }
+  },
+  "ignored_current_source_findings": [],
+  "inherited_architecture_normalization_deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2"
+  ],
+  "architecture_coverage": "docs/architecture-review-provenance.json verified whole-base plus every delta, not fresh personal whole-file read",
+  "execution_deviations": [
+    {
+      "agent": "apiary_test_writer_e3_task1_revalidate",
+      "deviation": "Read .claude/skills/run-tests/SKILL.md contrary to dispatch restriction; read-only, no settings/credentials or edits reported",
+      "evidence": "revalidation/FINAL-report.json"
+    },
+    {
+      "agent": "apiary_test_writer_e3_task1_r5",
+      "deviation": "Same mistaken read-only skill-file access; no settings/credentials or edits reported",
+      "evidence": "r5-regression/FINAL-report.json"
+    }
+  ],
+  "pending": "Exactcommit externalDockerinterfacegate only; allscope/units/advice/PMapproved",
+  "pm_review": "pm-review.json"
+}

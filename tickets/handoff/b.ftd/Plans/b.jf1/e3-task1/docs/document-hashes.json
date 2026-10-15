@@ -1,0 +1,30 @@
+[
+  {
+    "path": "docs/usage.md",
+    "before_sha256": "fd4626ece6d9adb9bf77b2b179b2a255816f83f6993361513c912e0f6b59c568",
+    "sha256": "44a9efb9faa5fe357185bd6a943dc5a51de8714185300ef3fc0e997de56db12d",
+    "lines": 712,
+    "bytes": 36084
+  },
+  {
+    "path": "docs/permissions.md",
+    "before_sha256": "52e6649dc47d77a583b1ebba91c38ac86098718dbe2f59e050fa6d4a83e38250",
+    "sha256": "24baf86f441d30fdd721963804ce46200a1ed6d1157be418fb613e31587a8144",
+    "lines": 1477,
+    "bytes": 87372
+  },
+  {
+    "path": "docs/caller-contract.md",
+    "before_sha256": "9b94640871c987b22d9ffd5d967df94fefb0ccebb0a2fcd67908749ca2ede08b",
+    "sha256": "54c5e81d5acf762e9fb7e86cee7c13680d72e8937374e37f85af66ae608d88da",
+    "lines": 452,
+    "bytes": 27497
+  },
+  {
+    "path": "docs/architecture.md",
+    "before_sha256": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0",
+    "sha256": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+    "lines": 22270,
+    "bytes": 1538333
+  }
+]

@@ -4,6 +4,7 @@ package realtmux_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/adminapi"
@@ -23,7 +24,7 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real pane persistence failures")
 	}
-	for _, stage := range []string{"input replacement", "input permission", "turn outcome", "end publication"} {
+	for _, stage := range []string{"input replacement", "input permission", "queued admission", "queued cancellation", "turn outcome", "end publication"} {
 		t.Run(stage, func(t *testing.T) {
 			f, r, launch := newCursorPane(t, false)
 			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
@@ -32,14 +33,31 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 			runtimePID := 0
 			fmt.Sscan(readFileTrim(t, r.PID), &runtimePID)
 			gatewayPID := int(row.PanePID.(int64))
-			if stage == "turn outcome" {
+			if stage == "turn outcome" || strings.HasPrefix(stage, "queued") {
 				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "HOLD"}); err != nil {
 					t.Fatal(err)
 				}
 				waitFor(t, "held turn", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWorking }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+				waitFor(t, "held prompt receipt", func() bool {
+					for _, frame := range r.Frames(t) {
+						if string(frame["method"]) == `"session/prompt"` {
+							return true
+						}
+					}
+					return false
+				}, nil)
+			}
+			if stage == "queued cancellation" {
+				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "queued-never-dispatch"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "durable queued acceptance", func() bool {
+					raw, err := os.ReadFile(path)
+					return err == nil && strings.Contains(string(raw), `"kind":"submission_accepted"`) && strings.Contains(string(raw), "queued-never-dispatch")
+				}, nil)
 			}
 			switch stage {
-			case "input replacement", "turn outcome":
+			case "input replacement", "turn outcome", "queued admission", "queued cancellation":
 				if err := os.Rename(path, path+".original"); err != nil {
 					t.Fatal(err)
 				}
@@ -60,6 +78,8 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 				if err := os.WriteFile(r.Release, nil, 0600); err != nil {
 					t.Fatal(err)
 				}
+			} else if stage == "queued cancellation" {
+				launch.rt.run(t, "send-keys", "-t", launch.Row.PaneID.(string), "C-c")
 			} else if stage == "end publication" {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
@@ -81,14 +101,49 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 				t.Fatalf("observable failure missing: %v", failures)
 			}
 			for _, frame := range r.Frames(t) {
-				if strings.Contains(string(frame["params"]), "must not be admitted") {
+				if strings.Contains(string(frame["params"]), "must not be admitted") || strings.Contains(string(frame["params"]), "queued-never-dispatch") {
 					t.Fatal("failed persistence admitted prompt")
 				}
 			}
-			if stage == "input replacement" || stage == "turn outcome" {
+			if stage == "input replacement" || stage == "turn outcome" || strings.HasPrefix(stage, "queued") {
 				raw, err := os.ReadFile(path)
 				if err != nil || string(raw) != "replacement must survive\n" {
 					t.Fatalf("replacement mutated %q %v", raw, err)
+				}
+				// Inspect the original protected records that remain available. The
+				// replacement is not history, and an acceptance is not execution.
+				available, err := os.ReadFile(path + ".original")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var queuedID string
+				for _, line := range strings.Split(strings.TrimSpace(string(available)), "\n") {
+					var rec struct {
+						Kind string `json:"kind"`
+						Data struct {
+							ID   string `json:"submission_id"`
+							Text string `json:"text"`
+						} `json:"data"`
+					}
+					if err := json.Unmarshal([]byte(line), &rec); err != nil {
+						t.Fatal(err)
+					}
+					if rec.Kind == "submission_accepted" && rec.Data.Text == "queued-never-dispatch" {
+						queuedID = rec.Data.ID
+					}
+					if rec.Kind == "session_end" || rec.Kind == "turn_outcome" || (queuedID != "" && rec.Data.ID == queuedID && rec.Kind != "submission_accepted") {
+						t.Fatalf("partial protected history falsely confirms completion or queued execution: %s", rec.Kind)
+					}
+				}
+				if stage == "queued cancellation" && queuedID == "" {
+					t.Fatal("available records lost the previously accepted queued identity")
+				}
+				before := len(r.Frames(t))
+				if err := os.WriteFile(r.Release, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if len(r.Frames(t)) != before || !pidGone(runtimePID) {
+					t.Fatal("protected inspection recovered transient work")
 				}
 			}
 		})

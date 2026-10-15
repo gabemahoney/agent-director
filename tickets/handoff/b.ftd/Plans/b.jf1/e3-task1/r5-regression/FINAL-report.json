@@ -1,0 +1,48 @@
+{
+  "role": "apiary_test_writer_e3_task1_r5",
+  "result": "R5 deterministic completion-first regression passes. ALL initial mandatory Task1 behavioral gaps are now complete when combined with the prior behavior/revalidation/boundary reports. Documentation, postdoc advice/quality and the final full suite remain outstanding.",
+  "tree": "feature/b.ftd; inherited HEAD 9ff393a5216fd6d6377d3b40a1adab491fa296c6 and uncommitted source/test changes preserved; no commit",
+  "tickets": {
+    "t3.jf1.r8.dt.k4": "set active (already active); R5 coverage complete, retained active for postdoc literal-follow advice per dispatch",
+    "t3.jf1.r8.dt.cc": "read only; active retained for postdoc advice",
+    "t3.jf1.r8.dt.c4": "read only; active retained pending docs/advice/final quality",
+    "t3.jf1.r8.dt.p7": "read only; defined retained; not assigned, no full unit suite"
+  },
+  "files_changed_this_pass": [
+    "internal/cursorhost/session_fixture_linux_test.go",
+    "internal/cursorhost/session_persistence_linux_test.go"
+  ],
+  "coverage": {
+    "owner": "TestCursorRecoveryCompletionCannotRestartCancellationDeadline",
+    "causality": "Real Run consumes the first interrupt through completeInput's actual emit callback. Real Stop reporter is held after its actual commit, and the original control timestamp is read from its protected input_control record. Release that reporter with no superseding control present. The new optional callback is reached only after actual await selected successful report completion; it holds the actual session goroutine before pendingControl/epoch finalization. Spend 1.5s of the original cancellation budget at this barrier, then emit a real second interrupt while pendingControl is still nil, advancing the real mailbox epoch. Resume actual recovery finalization and hold the subsequent real input_control Sync with the existing recordBarrier. No replacement mailbox/controller/epoch logic, random selects, fake timer, fabricated row state or probability loops.",
+    "outcomes": "Actual timeout retains the original first control's three-second deadline (3.021798507s on final run), rather than a second-control deadline (at least 4.5s). Confirmed owned runtime termination before return, two protected controls, no ended row/session_end success, no false recovery invitation, no ACP prompt or automatic replay. The timer delay only spends real elapsed time to distinguish the two deadlines; channels establish all required causal ordering.",
+    "fixture": "Existing beginCursorSessionWithInput forwards the optional source callback with unchanged default callers. Existing protected-record decoder adds consumed_at. Existing completeInput, observedWire, reporter barriers, verified runtime/store/PTTY and recordBarrier reused; no source edits.",
+    "preservation": "All original cancellation/transport/answer bounds unchanged. Small targeted preservation selection includes idle interrupt/exit and busy/start-gate blocked Sync, saturated input plus pending report, known-unwritten recovery with later explicit input, and partial transport uncertainty/no replay. Prior R1/R2/R3/R4, exact ordinary waiting byte limits and E2 guard evidence retained without rerunning the broad 81.048s selection."
+  },
+  "receipts": {
+    "01-r5-race.log": "PASS race 3.659s: initial new regression, original deadline 3.026151374s",
+    "02-targeted-race.log": "PASS race 17.816s: final new regression plus four small existing recovery/persistence/uncertainty owners (blocked Sync owner has four subcases); added short-mode skip and explicit no-false-recovery-invitation assertion before this final run",
+    "03-whitespace.log": "PASS git diff --check (empty output)",
+    "failed_assertions": "None this pass. All prior failed receipts and causal corrections remain untouched in their original directories."
+  },
+  "final_command": "make sandbox CMD='gofmt -w internal/cursorhost/session_fixture_linux_test.go internal/cursorhost/session_persistence_linux_test.go && GORACE=atexit_sleep_ms=0 go test -race ./internal/cursorhost -run \"TestCursor(RecoveryCompletionCannotRestartCancellationDeadline|ControlDeadlineSupervisesBlockedTranscriptSync|ControlBypassesSaturatedInputAndPendingReport|StartRecordGateRetiresWithoutBytesAndAllowsExplicitInput|PartialPromptWriteIsUncertainAndNeverReplayed)$\" -count=1 -v -timeout=1m'",
+  "postdoc_advice_inventory": [
+    "Capacity refusal: later explicit resubmission only. Existing actual Run count and ordinary 1MiB/8MiB boundary owners prove refusal and no replay; compare settled wording and follow it literally.",
+    "Interrupt/known-unwritten recovery: each accepted queued identity visibly/protectedly cancelled, later explicit input in same conversation/life only. R1 admission handoff and R5 completion-first fixed-deadline gaps now directly causal.",
+    "Shutdown: retain working/dialog pause refusals; legitimately waiting eligible pause cancels queue and reports ended only after owned termination. Existing public API with verified-pane/PTTY evidence is distinct from real-pane/auth acceptance.",
+    "Rendering omission: inspect protected transcript; existing lifecycle owner remains despite omitted display.",
+    "Persistence failure: inspect whatever protected records are available; no false complete history/ended/recovered queue, no automatic replay. Existing replacement faults, start gate, pre-active disposition and blocked Sync owners retained."
+  ],
+  "remaining_work": [
+    "Coordinator may now route the single documentation pass; no initial behavioral gap remains.",
+    "After settled docs, literal-follow advice inventory and final quality review remain; then assigned fresh final writer owns the full make test-sandbox run.",
+    "Exact-commit Docker scheduler acceptance remains separately owned; no integration run claimed."
+  ],
+  "models": "No actual spec/tla model input changes; no formal/baseline execution or proof claim. Existing hold models do not prove FIFO/submission epochs/start-record writer gating.",
+  "execution": "All repository execution/formatting used make sandbox CMD with fixture-owned fresh HOME/store/socket/processes. No full suite, integration/Docker TESTPLAN collector/groups, source/doc edits, credentials/login/logout, live Cursor, real AD state, scheduler/TLC/parser, push, commit, delegation or midflight messages. GORACE=atexit_sleep_ms=0 removes only the race runtime's exit delay.",
+  "deviations": [
+    "I mistakenly read repository .claude/skills/run-tests/SKILL.md while following CLAUDE.md's test-command link before applying dispatch's explicit no-.claude-access restriction. Read-only; no settings/credentials access or .claude edits, and no further .claude access."
+  ],
+  "source_failures": [],
+  "questions_for_coordinator": []
+}

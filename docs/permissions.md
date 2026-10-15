@@ -87,7 +87,12 @@ requests. Only validated execution of the exact matching shell tool,
 or the owning spawn ending, releases their hold. Other execution evidence
 remains conservative. The shared [dialog hold](#the-dialog-hold) defines the
 proof fields and relay-on prompt/pause guards; relay-off requests still block
-ordinary prompt admission while awaiting their native answer. The hook flow,
+ordinary prompt admission while awaiting their native answer. Accepted
+[queued input](usage.md#fresh-cursor-use) waits for every durable decision
+hold to resolve before dispatch; a turn ending or a local request disappearing
+does not release it. Late exact-request execution proof releases only that
+request's hold. Pending-row, relay, pane-hash and pause safeguards still apply.
+The hook flow,
 hook envelope and hook timing below describe Claude and Codex; Cursor uses
 the request lifetime described here.
 

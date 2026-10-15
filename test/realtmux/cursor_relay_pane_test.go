@@ -124,8 +124,11 @@ func assertRelayPromptGuard(t *testing.T, f *spawnFix, r cursorfix.Runtime, id, 
 	if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: text}); e == nil {
 		waitFor(t, "gateway refuses ordinary input while request is open", func() bool {
 			p, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
-			return e == nil && strings.Contains(p.Pane, "Cursor input refused while starting or busy; nothing sent")
-		}, func() string { return fmt.Sprint(relayReplies(t, r)) })
+			return e == nil && strings.Contains(strings.ReplaceAll(p.Pane, "\n", ""), "Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent")
+		}, func() string {
+			p, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
+			return fmt.Sprintf("pane=%q err=%v replies=%v", p.Pane, e, relayReplies(t, r))
+		})
 	} else if !errors.Is(e, api.ErrSendKeysWhileRelayed) && !errors.Is(e, api.ErrRelayFallenBack) && !errors.Is(e, api.ErrDialogMaybeOpen) {
 		t.Fatalf("unexpected prompt refusal: %v", e)
 	}

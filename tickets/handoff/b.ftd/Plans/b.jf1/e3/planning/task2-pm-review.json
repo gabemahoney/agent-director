@@ -1,0 +1,19 @@
+{
+  "verdict": "Approved after precise idle cancellation correction applied",
+  "corrections": [
+    "Outstanding ACP prompt requires correlated terminal outcome within fixed cancel bound. Idle without prompt must not wait for nonexistent session/cancel notification response. Test group1 idle clear/new success added. Durable guards both cases."
+  ],
+  "coverage": "E3AC4/rotationAC5/SR0.2,3,4,6.2; 4source+6test+2doc, one sharedlane fulloutside; docsafterinitialbehavior beforeadvice/quality/full, immediategatebeforeTask3",
+  "preserve": [
+    "Unknownholds requireexistingproof/owningspawnend",
+    "startupbindingstrict Cursorarchive-required genericfailopenunchanged",
+    "Exactconditionalauthority",
+    "Provisionalnotaccepted, oldworknevermigrate",
+    "NoE4/API/installation/groups/help"
+  ],
+  "questions": [],
+  "incomplete": [
+    "Task3planning/wholeEpicreview",
+    "Implementation/verification/wholearchitecture/externalgate"
+  ]
+}
