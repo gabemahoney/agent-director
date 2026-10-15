@@ -1,0 +1,14 @@
+{
+  "revision": "b8236bbc1b4a881c3a810d31a865dc8c9530c1d6",
+  "acceptance": "explicit user report",
+  "docker": {
+    "groups_passed": 16,
+    "groups_failed": 0,
+    "cursor_relay_passed": 10,
+    "cursor_relay_failed": 0
+  },
+  "tla": "not applicable: no spec/tla changes; no formal jobs required",
+  "task_action": "mark t2.jf1.c1.3p done",
+  "epic_action": "leave t1.jf1.c1 active; user owns setting it done",
+  "scope": "Docker integration accepted; do not invent new authenticated live receipts; user explicitly authorizes E3 now"
+}
