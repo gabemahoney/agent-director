@@ -482,7 +482,7 @@
     },
     {
       "name": "send-keys",
-      "description": "Ordinary: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact transcript proof. ErrSubmissionUnconfirmed: not_started/partial_input_unconfirmed/submission_unconfirmed; no replay. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "State, relay and dialog guards precede delivery and proof reconciliation; ended/missing rows are refused. Supported native ordinary input uses readiness, 512-byte UTF-8 chunks/drain, one Enter and exact transcript proof. Without native capability, established pane input sends literal text plus one Enter without exact transcript proof; pending Codex input retains bounded hook observation. ErrSubmissionUnconfirmed: native not_started/partial_input_unconfirmed/submission_unconfirmed or unconfirmed pending-Codex hook observation; never replay text or Enter automatically. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -507,7 +507,7 @@
         {
           "name": "delivery_request_id",
           "type": "string",
-          "description": "Owns one ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay. A fresh id permits an intentional identical turn. Omitted ids conservatively reuse the last confirmed identical payload. Unresolved input blocks new automatic writes. Exclusive with manual key, no_enter, pane hash and permission answers.",
+          "description": "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -516,7 +516,7 @@
         {
           "name": "allow_pending",
           "type": "bool",
-          "description": "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected for new input (ErrSpawnNotInteractive); an existing ordinary request can return stored or late proof without input.",
+          "description": "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -585,7 +585,7 @@
         {
           "name": "request_id",
           "type": "string",
-          "description": "Ordinary delivery attempt identity; absent on manual operations.",
+          "description": "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -593,7 +593,7 @@
         {
           "name": "outcome",
           "type": "string",
-          "description": "submitted only with exact native transcript proof; absent on manual operations.",
+          "description": "submitted only with exact native transcript proof; absent on fallback pane input and manual operations.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null

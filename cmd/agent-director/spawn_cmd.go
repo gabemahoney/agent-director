@@ -132,7 +132,7 @@ func parseSendKeysFlags(args []string) (pkgapi.SendKeysParams, error) {
 	fs.StringVar(&p.Text, "text", "", "text to type into the Spawn's input (default empty: Enter only)")
 	fs.BoolVar(&p.AllowPending, "allow-pending", false, "also allow a pending row (a spawn, reuse or resume whose agent has not reported in yet); keys go only to a session started by the row's current launch; ended and missing rows are still rejected")
 	fs.BoolVar(&p.NoEnter, "no-enter", false, "type --text with no Enter after it")
-	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "own an ordinary text attempt; retry the same id and text to observe without replay; use a fresh id for an intentional identical turn")
+	fs.StringVar(&p.DeliveryRequestID, "delivery-request-id", "", "own a native ordinary text attempt; retry the same id and text to observe without replay after state, relay and dialog guards pass; use a fresh id for an intentional identical native turn; fallback pane input has no native deduplication guarantee")
 	fs.StringVar(&p.Key, "key", "", "send this one key instead of text, no Enter: Escape, Enter, Up, Down, Tab, or one character")
 	fs.StringVar(&p.ExpectPaneSHA256, "expect-pane-sha256", "", "pane_sha256 of the read-pane the keys were chosen from; refused with ErrPaneChanged if the pane changed; on a plain call a match also passes the hold of a permission request not proven gone (ErrDialogMaybeOpen); pass it only for a pane a person or LLM judged")
 	fs.Var(newDecimalInt(&p.NLines, pkgapi.DefaultReadPaneLines), "n-lines", "lines --expect-pane-sha256 is over (read-pane's --n-lines)")

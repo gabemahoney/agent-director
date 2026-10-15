@@ -7033,7 +7033,7 @@ the pane to check a caller's hash and types nothing, see
 its label on the row's recorded socket) and one pane listing
 (`ListPanes`) through the shared tmux client, then act by pane id
 (`SendKeysPane`, with `pause`'s `SendKeyPane` or, on a Codex row, `SendKeyPaneRepeat` before it; `CapturePaneID`).
-Ordinary text delivery repeats ownership and relay checks between writes
+Native ordinary text delivery repeats ownership and relay checks between writes
 and while pacing the terminal queue.
 They share one run, `paneRun`
 (`pkg/api/pane_run.go`); see
@@ -7051,7 +7051,9 @@ and `sendKeysStateGuard`); its tmux phase is the keys verbs' shared
 `pause` also uses; the shape of a call, the pane hash and the named keys
 are in `pkg/api/pane_answer.go`, and the relay guard in
 `pkg/api/sendkeys_relay.go`; `pkg/api/sendkeys_submission.go` coordinates
-ordinary delivery through `internal/inputdelivery`, described below.
+native ordinary delivery through `internal/inputdelivery`, described below;
+`pkg/api/sendkeys_legacy_submission.go` preserves the bounded pending-Codex
+hook observation for input without native capability.
 Delivery begins with a lookup
 (the session found by its `@ad_owner` label on the row's recorded socket)
 and, on Ours, one pane listing; automatic delivery then revalidates that
@@ -7116,22 +7118,24 @@ load-bearing:
   claim, never automatic recovery for missing submission evidence.
 
 **Ordinary delivery.** Nonempty text with Enter, no pane hash, no key and
-no permission request token enters the protocol in
+no permission request token enters the native protocol, where supported, in
 [Ordinary input delivery](#ordinary-input-delivery). It returns positive
 native transcript proof, or `ErrSubmissionUnconfirmed` with honest delivery
-details. All other sends retain manual transport semantics and return an
-empty success result; they participate in the same writer lock and journal.
+details. Launches without native capability retain literal text and one Enter
+with no exact transcript-confirmation claim. Other sends retain manual
+transport semantics and return an empty success result; launches with an
+identity token participate in the same writer lock and journal.
 Manual sends and `pause` can also return `ErrSubmissionUnconfirmed` with
 `not_started` when writer ownership or durable manual intent is unavailable. No
 missing evidence causes a text, Enter or editing-key retry. Caller handling
 is in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 
-State precondition for new input (`sendKeysStateGuard`, before any tmux call): the
+State precondition (`sendKeysStateGuard`, before native reconciliation or any tmux call): the
 row's `state` must be one of `waiting`, `working`, `ask_user`,
 `check_permission`. `ended` and `missing` are refused with
 `ErrSpawnNotInteractive` and no tmux call, with or without
-`allow_pending`. Passive reconciliation of an existing automatic request runs
-before this guard and may return proof on a finished row or without a pane.
+`allow_pending`. Passive reconciliation of an existing native request runs
+after the state, relay and dialog guards; finished rows cannot return proof.
 `pending` is refused the same way unless `allow_pending`
 is set. The agent's first SessionStart hook moves `pending` to `waiting`,
 after which the row is reachable without the flag. A `pending` row that
@@ -7236,7 +7240,7 @@ one pane listing, one capture (with `expect_pane_sha256`, so on every pane
 answer), the text call or the key call, the Enter call and one follow-up
 lookup. Without a hash its ceiling is 3Q + 2A + 5W, **9 s** at the
 defaults (SRD SR-13.2, the one source for this tmux bound); the capture adds
-one more action-class call and its pipe-close wait. Ordinary delivery has
+one more action-class call and its pipe-close wait. Native ordinary delivery has
 the additional bounded readiness, chunk/drain and confirmation phases below;
 the manual transport ceiling does not bound an ordinary request.
 Its trail is
@@ -7264,27 +7268,37 @@ runs the same guard, as a plain call without a pane hash (b.zdz; see
 [`pause`](#pause)).
 
 Order of the refusals before any tmux call (`sendKeysRun.run`): the shape
-of the params (`planSendKeys`), then the row read. Manual input runs its state
-guard before acquiring the writer lock. Automatic input validates framing,
-acquires the lock and passively reconciles an existing request before the state
-guard for new input. That state guard also refuses a
+of the params (`planSendKeys`), then the row read and state guard for every
+operation, including observation of existing native requests. Finished rows
+always return `ErrSpawnNotInteractive`. That state guard also refuses a
 `pending` row with no launch start or no launch token, so that row keeps
 `ErrSpawnNotInteractive` whatever its name. Then the relay guard and the
 unusable-recorded-name check:
 a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
-removing the row is a human's decision (docs/operator-actions.md). Only
-then the row's socket and the one lookup.
+removing the row is a human's decision (docs/operator-actions.md). Next resolve
+the row's socket, acquire the native writer lock when a launch token exists,
+select capability and reconcile any ordinary request. These steps cannot mask
+the existing state, relay or dialog refusals. Native framing validation follows
+reconciliation on supported launches. Only then perform the one lookup.
 
 ### Ordinary input delivery
 
-**Must use:** all automatic ordinary-text delivery goes through
+**Must use:** all supported native ordinary-text delivery goes through
 `sendKeysRun.deliverOrdinary` in `pkg/api/sendkeys_submission.go` and the
 `internal/inputdelivery.Backend`/`Session` interfaces. Extend the native
 adapter there for another agent, version or platform. Never infer readiness
 or acceptance from rendered terminal text, hook activity or an empty queue;
-never add automatic replay or a wake/editing-key fallback.
+never add automatic replay or a wake/editing-key fallback. When native
+capability is unavailable, preserve the established `keysRun.typeText` literal
+text plus one Enter path. That fallback returns an empty `SendKeysResult`,
+without exact transcript confirmation. `confirmLegacySubmission` observes a
+pending Codex row for up to 2 s after a successful fallback send with Enter;
+only hook-derived `working`, `ask_user` or `check_permission` state satisfies
+that observation. A changed launch, finished row, read failure or timeout
+returns `ErrSubmissionUnconfirmed` with `KeysSent=true`,
+`SubmissionConfirmed=false` and `RowState`. It never resends text or Enter.
 
 `ComposeLaunch` sets `CreateRequest.OrdinaryInputSafe` from
 `inputdelivery.SafeArgs`; relaunches do not acquire a fresh-composer contract.
@@ -7299,10 +7313,16 @@ environment when set, otherwise `os.UserHomeDir`; `CLAUDE_CONFIG_DIR` comes
 from the launch environment, then this process's environment, then
 `<effective-home>/.claude` when empty. `Prepare` explicitly forwards both
 `HOME` and `CLAUDE_CONFIG_DIR` so tmux launches with the inspected configuration.
-Unsupported versions or unsafe composer
-arguments still launch, but the ordinary input gate stays closed. Linux is
-the only native terminal/ownership probing implementation; other platforms
-refuse before automatic input.
+The capability probe removes all `AGENT_DIRECTOR_*` variables plus `TMUX` and
+`TMUX_PANE` from both inherited and supplied environment, so a wrapper that
+ignores `--version` cannot report hooks as the caller or new launch. The real
+launch retains its identity environment. Unsupported versions or unsafe composer
+arguments still launch and retain literal input. Linux is the only native
+terminal/ownership probing implementation; other platforms use literal input.
+`nativeSession.Supports` selects capability from the fresh matching manifest,
+pinned version, safe arguments, Codex keymap/managed checks and platform.
+`Ready` separately gates supported delivery; a readiness failure never switches
+that attempt to fallback.
 
 Codex gets a per-launch `log_dir` override,
 `RUST_LOG=off,codex_tui=info`, a complete `-c tui.keymap=…` and
@@ -7311,10 +7331,10 @@ the pinned schema: 12 contexts and 154 actions, including empty bindings,
 so lower user/project/cloud layers cannot merge in custom actions. These
 launch overrides replace configured bindings and disable Vim initially.
 The durable `KeymapPinned` manifest field is required at readiness; old
-manifests without it fail closed. `codexManagedComposerSafe` checks
+manifests without it lack native capability. `codexManagedComposerSafe` checks
 `/etc/codex/managed_config.toml` both at preparation and readiness using
 BurntSushi/toml; an unreadable or malformed file or keymap/Vim settings at any
-nested `tui` table fail the gate because managed settings can outrank CLI
+nested `tui` table disable native capability because managed settings can outrank CLI
 overrides. Codex's `CODEX_HOME` is forwarded only from `extra_env`; otherwise
 the tmux server's environment and Codex's home default apply, independently
 of this process's config. Its fresh `codex-tui.log` must contain
@@ -7368,7 +7388,8 @@ must have native creation time after the request snapshot. Known paths must
 retain their prefix and metadata; truncation or rewriting refuses proof.
 An unfinished record at the watermark cannot confirm the request. Validated
 owned paths and native session identity are persisted for later passive
-reconciliation, including after a descriptor closes or the process exits.
+reconciliation, including after a descriptor closes or the process exits,
+provided the row's state, relay and dialog guards still allow the call.
 Multiple exact records are ambiguous and never return submitted.
 
 The private directory is
@@ -7390,15 +7411,18 @@ automatic journal cleanup.
 Stored proof can be returned by ID even after a later settled request.
 Without an ID, only the most recent confirmed identical text is reused;
 use a new ID for an intentional identical turn. An unresolved owner blocks
-new automatic text. Reconciliation reads evidence only, persists late proof
-and never resumes a partial write. It runs under the writer lock before
-interactive-state, relay and pane guards: an existing request can settle with
-an `ended`/`missing` row or a gone pane. `useReconciledProof` rereads the row
+new native text and fallback resends even if native capability is now unavailable.
+Reconciliation reads evidence only, persists late proof and never resumes a
+partial write. It runs under the writer lock after interactive-state, relay,
+dialog and recorded-name guards, before the pane lookup. An existing request
+can settle with a gone pane only if those guards pass; `ended`/`missing` rows
+are refused. `useReconciledProof` rereads the row
 and requires the same life, full launch/process identity and any current
 native session mapping before returning proof. A different request that discovers late
 proof gets `not_started` rather than being sent in that call. Manual input
 persists interference without erasing the unresolved owner and disables new
-automatic delivery for the launch.
+native delivery for the launch. A standalone manual marker with no native
+bytes or Enter attempted does not disable an unsupported pane's literal input.
 
 `SendKeysResult` carries `outcome=submitted`, request/session identity,
 optional native record ID and raw record SHA-256. Refusals use
@@ -14600,11 +14624,13 @@ adds it here.
   only; see [`send-keys`](#send-keys)). A `pause` whose keys calls ended in
   `ErrTmuxUnresponsive` is retried later as it is: it sends `C-u` before
   typing `/exit` (see [`pause`](#pause)).
-- `ErrSubmissionUnconfirmed` distinguishes no automatic input started,
+- Native `ErrSubmissionUnconfirmed` distinguishes no automatic input started,
   potentially partial input and an unconfirmed Enter. Neither text nor Enter
   is replayed automatically. Re-issue the same delivery request to observe
-  exact late transcript proof; an unresolved owner blocks new automatic
-  text. Pane text and hook state are not submission evidence (see
+  exact late transcript proof while state, relay and dialog guards allow it;
+  an unresolved owner blocks new native text and fallback resends. Fallback
+  pending-Codex observation uses hook state without claiming exact text proof.
+  Pane text and hook state do not prove native submission (see
   [Ordinary text submission](caller-contract.md#ordinary-text-submission)).
 - The launch-timeout rule: after a timed-out spawn, reuse or `resume`
   (`ErrTmuxUnresponsive`, "the session may have been created") the row

@@ -148,9 +148,10 @@ type PaneKeySentDetails struct {
 	RequestToken string `json:"request_token"`
 }
 
-// SubmissionUnconfirmedDetails distinguishes a successful tmux send from
-// confirmed agent submission. RowState is the last raw state read, not a
-// synthetic state or proof that the prompt remains unsubmitted.
+// SubmissionUnconfirmedDetails describes an unconfirmed native delivery attempt
+// or pending Codex fallback input without a bounded hook-derived observation.
+// RowState is the last raw state read, not a synthetic state or proof that the
+// prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
 	RequestID            string `json:"request_id,omitempty"`
 	Outcome              string `json:"outcome"`
@@ -162,7 +163,7 @@ type SubmissionUnconfirmedDetails struct {
 	// KeysSent means input was attempted and may have reached the pane.
 	KeysSent bool `json:"keys_sent"`
 
-	// SubmissionConfirmed is false: exact native transcript proof is unavailable.
+	// SubmissionConfirmed is false: the applicable submission evidence is unavailable.
 	SubmissionConfirmed bool `json:"submission_confirmed"`
 
 	// RowState is the last raw state read, not proof of submission or its absence.

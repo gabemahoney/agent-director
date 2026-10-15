@@ -571,7 +571,11 @@ export interface GetResult {
  * `expect_pane_sha256`, takes no `text`, and sends exactly one key with no Enter.
  */
 export interface SendKeysParams {
-  /** Own an ordinary attempt; reuse to observe without replay, choose a fresh id for an intentional identical turn. */
+  /**
+   * Own a native ordinary attempt; reuse to observe without replay after state, relay and
+   * dialog guards pass. Choose a fresh id for an intentional identical native turn.
+   * Fallback pane input has no native request deduplication guarantee.
+   */
   delivery_request_id?: string;
   /** Id of the Spawn whose pane will receive the keys. */
   instance_id: string;
@@ -586,8 +590,7 @@ export interface SendKeysParams {
    * When true, also allows a pending row: a launch (spawn, reuse or resume)
    * whose agent has not reported in yet. Keys are delivered only to a
    * session started by the row's current launch. ended and missing rows are
-   * still rejected for new input. An existing ordinary request can return
-   * stored or late proof without sending input.
+   * still rejected, including requests to reconcile stored or late proof.
    */
   allow_pending?: boolean;
   /** Type `text` with no Enter after it (plain calls; a pane answer never presses Enter). */
@@ -617,7 +620,7 @@ export interface SendKeysParams {
   as?: "allow" | "deny";
 }
 
-/** Ordinary sends return exact native proof; manual operations return an empty object. */
+/** Supported native ordinary sends return exact proof; fallback pane input and manual operations return an empty object. */
 export interface SendKeysResult {
   request_id?: string;
   outcome?: "submitted";

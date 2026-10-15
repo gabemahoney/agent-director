@@ -579,7 +579,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Ordinary: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact transcript proof. ErrSubmissionUnconfirmed: not_started/partial_input_unconfirmed/submission_unconfirmed; no replay. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "State, relay and dialog guards precede delivery and proof reconciliation; ended/missing rows are refused. Supported native ordinary input uses readiness, 512-byte UTF-8 chunks/drain, one Enter and exact transcript proof. Without native capability, established pane input sends literal text plus one Enter without exact transcript proof; pending Codex input retains bounded hook observation. ErrSubmissionUnconfirmed: native not_started/partial_input_unconfirmed/submission_unconfirmed or unconfirmed pending-Codex hook observation; never replay text or Enter automatically. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -603,13 +603,13 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name: "delivery_request_id", Type: "string",
-				Description: "Owns one ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay. A fresh id permits an intentional identical turn. Omitted ids conservatively reuse the last confirmed identical payload. Unresolved input blocks new automatic writes. Exclusive with manual key, no_enter, pane hash and permission answers.",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
 				Required:    false, Nullable: false, AllowEmpty: true,
 			},
 			{
 				Name:          "allow_pending",
 				Type:          "bool",
-				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected for new input (ErrSpawnNotInteractive); an existing ordinary request can return stored or late proof without input.",
+				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -663,8 +663,8 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "request_id", Type: "string", Description: "Ordinary delivery attempt identity; absent on manual operations.", AllowEmpty: true},
-			{Name: "outcome", Type: "string", Description: "submitted only with exact native transcript proof; absent on manual operations.", AllowEmpty: true},
+			{Name: "request_id", Type: "string", Description: "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations.", AllowEmpty: true},
+			{Name: "outcome", Type: "string", Description: "submitted only with exact native transcript proof; absent on fallback pane input and manual operations.", AllowEmpty: true},
 			{Name: "session_id", Type: "string", Description: "Native session that recorded the ordinary prompt.", AllowEmpty: true},
 			{Name: "record_id", Type: "string", Description: "Native user record id when provided by the pinned schema.", AllowEmpty: true},
 			{Name: "record_sha256", Type: "string", Description: "SHA-256 of the exact structured user record.", AllowEmpty: true},

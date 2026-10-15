@@ -179,12 +179,15 @@ const result = await client.sendKeys({
 });
 ```
 
-Ordinary nonempty text with Enter and no pane hash returns `SendKeysResult`
+On a supported native launch, ordinary nonempty text with Enter and no pane
+hash returns `SendKeysResult`
 with `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
 `record_id` when the native record supplies it. It confirms the exact
 normalized text in the launch's native transcript. `delivery_request_id`
 owns one attempt: the same ID and text retrieve confirmation or reconcile
-without replay; a new ID allows an intentional identical turn. Manual
+without replay; a new ID allows an intentional identical turn. Launches without
+native capability retain literal text and one Enter, return an empty object on
+success and make no exact transcript-confirmation claim. Manual
 operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
 return an empty object on success; their input-ownership refusals are in
 [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
@@ -197,14 +200,17 @@ cancel submission.
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
 reuse or resume) whose agent has not reported in yet, for example to dismiss a
 prompt the agent shows before it reports in. Keys are delivered only to a
-session started by the row's current launch. New input to `ended` and `missing`
-rows is rejected; observing an existing delivery request can still return its
-confirmation. A `pending` row whose launch start or launch token is not recorded, or where
+session started by the row's current launch. `ended` and `missing` rows are
+rejected, including retries of an existing delivery request. State, relay and
+dialog guards precede native capability selection and request reconciliation.
+A `pending` row whose launch start or launch token is not recorded, or where
 only a session an earlier launch left behind is found, gets
 `ErrSpawnNotInteractive` and nothing is sent.
 
-`allow_pending` preserves the ordinary-delivery readiness and transcript
-requirements; it does not make a startup dialog an ordinary composer. The
+`allow_pending` preserves native readiness and transcript requirements on
+supported launches; it does not make a startup dialog an ordinary composer.
+For fallback input to a pending Codex row, the bounded hook-state observation
+and its unconfirmed result are described in the caller contract. The
 `ErrSubmissionUnconfirmed` class exposes `SubmissionUnconfirmedDetails`
 through `errDetails`, including `outcome`, `request_id`, `phase`,
 `bytes_attempted`, `enter_may_have_been_sent`, optional `last_queue`, `reason`,
@@ -570,7 +576,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | Error | When it fires |
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
-| `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows new input to a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. Observing an existing delivery request can retrieve stored or late confirmation after the row becomes `ended` or `missing`; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
+| `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
 | `ErrSubmissionUnconfirmed` | `errDetails` is `SubmissionUnconfirmedDetails`. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys` and `pause`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |

@@ -83,10 +83,11 @@ var (
 // rule 8, decision 7 A). A pane answer needs As, Key and ExpectPaneSHA256,
 // takes no Text, and sends exactly one key with no Enter after it.
 type SendKeysParams struct {
-	// DeliveryRequestID owns one ordinary text attempt for this launch. Retry
-	// the same ID and normalized text to observe it without replay. Use a new
-	// ID for an intentional identical turn. Omitted IDs conservatively reuse
-	// the most recent confirmed attempt with identical normalized text.
+	// DeliveryRequestID owns one native ordinary text attempt for this launch.
+	// Retry the same ID and normalized text to observe it without replay. Use a
+	// new ID for an intentional identical turn. Omitted IDs conservatively
+	// reuse the most recent confirmed attempt with identical normalized text.
+	// Fallback pane input has no native request deduplication guarantee.
 	DeliveryRequestID string `json:"delivery_request_id"`
 	// InstanceID identifies the Spawn whose pane will receive the keys.
 	InstanceID string `json:"instance_id"`
@@ -101,8 +102,7 @@ type SendKeysParams struct {
 	// AllowPending also allows a pending row: a launch (spawn, reuse or
 	// resume) whose agent has not reported in yet. Keys are delivered only to
 	// a session started by the row's current launch. ended and missing rows
-	// are still rejected for new input (SR-18.14). An existing ordinary
-	// request can return stored or late proof without sending input.
+	// are still rejected (SR-18.14).
 	AllowPending bool `json:"allow_pending"`
 	// NoEnter types Text with no Enter after it (plain calls; a pane answer
 	// never presses Enter).
@@ -131,8 +131,8 @@ type SendKeysParams struct {
 	As string `json:"as"`
 }
 
-// SendKeysResult carries native proof for an ordinary request. Manual pane
-// operations return an empty object and make no transcript-confirmation claim.
+// SendKeysResult carries native proof for a supported ordinary request. Other
+// pane operations return an empty object and make no exact-proof claim.
 type SendKeysResult struct {
 	RequestID    string `json:"request_id,omitempty"`
 	Outcome      string `json:"outcome,omitempty"`
@@ -226,21 +226,24 @@ type sendKeysGuard struct {
 //   - A pane answer (request_token; b.146 rule 8): exactly one key, never
 //     followed by Enter. See below.
 //
-// Ordinary nonempty text with Enter and no pane hash uses native delivery:
+// Where the launch supports it, ordinary nonempty text with Enter and no
+// pane hash uses native delivery:
 // a fresh version-supported readiness gate, UTF-8 writes of at most 512 bytes,
 // two empty terminal-queue samples 40 ms apart between writes, exactly one
 // Enter, and an exact launch-bound post-watermark transcript user record.
 // Hooks and empty queues never prove submission. Durable per-launch ownership
 // blocks automatic replay after partial delivery, missing proof or a crash.
 // delivery_request_id makes retries observation-only and allows deliberate
-// identical turns with fresh ids. Unsupported framing, versions and non-fresh
-// composers return not_started before input. Manual operations below retain
-// their separate contract and serialize with ordinary delivery.
+// identical native turns with fresh ids. Supported native composers reject unsafe
+// framing before input. Other launches retain the established pane input path,
+// without claiming exact transcript proof or native request deduplication.
+// Pending Codex fallback input retains bounded hook observation. An unresolved
+// native attempt blocks fallback resends. Manual operations below retain their
+// separate contract and serialize with ordinary delivery. State, relay and
+// dialog guards precede native setup and proof reconciliation.
 //
-// State precondition: new input requires a live interactive state (waiting,
-// working, ask_user or check_permission). An existing ordinary request can
-// return stored or late transcript proof even after the row ends or goes
-// missing, without sending input. New input on a finished row (ended or missing)
+// State precondition: the row requires a live interactive state (waiting,
+// working, ask_user or check_permission). A finished row (ended or missing)
 // is refused with ErrSpawnNotInteractive, with or without AllowPending, and
 // with no tmux call; so is a pending row (a launch whose agent has not
 // reported in yet) without AllowPending. With AllowPending, a pending row
@@ -435,42 +438,8 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	r.facts.RowState = row.State
 
-	r.automatic = !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
-	if !r.automatic {
-		if err := sendKeysStateGuard(row, params); err != nil {
-			return err
-		}
-	}
-	if r.automatic {
-		if _, err := inputdelivery.Chunks(plan.text); err != nil {
-			return deliveryNotStarted(row, err.Error())
-		}
-	}
-	if row.Identity.Token != "" {
-		backend := r.env.Input
-		if backend == nil {
-			backend = inputdelivery.Native{}
-		}
-		r.input, err = backend.Open(deliveryIdentity(row, r.s.StoreID()))
-		if err != nil {
-			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
-		}
-		defer r.input.Close()
-	} else if r.automatic {
-		return deliveryNotStarted(row, "launch has no native input identity")
-	}
-	// Observing a durable attempt needs no live composer, relay permission or
-	// pane. Keep this under the writer lock, before guards for new input.
-	if r.automatic {
-		handled, err := r.reconcileOrdinary(row, deliveryIdentity(row, r.s.StoreID()), plan.text, params.DeliveryRequestID)
-		if err != nil || handled {
-			return err
-		}
-	}
-	if r.automatic {
-		if err := sendKeysStateGuard(row, params); err != nil {
-			return err
-		}
+	if err := sendKeysStateGuard(row, params); err != nil {
+		return err
 	}
 
 	guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, row, params)
@@ -490,6 +459,32 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	if err != nil {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
+	if row.Identity.Token != "" {
+		backend := r.env.Input
+		if backend == nil {
+			backend = inputdelivery.Native{}
+		}
+		id := deliveryIdentity(row, r.s.StoreID())
+		r.input, err = backend.Open(id)
+		if err != nil {
+			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
+		}
+		defer r.input.Close()
+		r.automatic = supportsInput(r.input, id) && !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
+		if !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != "" {
+			// Even an unsupported launch must not replay an unresolved native
+			// attempt. Compatibility delivery is chosen only after ownership.
+			handled, err := r.reconcileOrdinary(row, id, plan.text, params.DeliveryRequestID)
+			if err != nil || handled {
+				return err
+			}
+		}
+		if r.automatic {
+			if _, err := inputdelivery.Chunks(plan.text); err != nil {
+				return deliveryNotStarted(row, err.Error())
+			}
+		}
+	}
 	r.keysRun = newKeysRun(r.t, r.env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	if plan.enter {
 		// A literal retry after a text call with Enter would type the text
@@ -504,6 +499,9 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	err = r.send(plan, params)
 	r.facts.keysFacts = r.found
+	if err == nil && !r.automatic && row.Agent == store.AgentCodex && row.State == store.StatePending && plan.enter {
+		return r.confirmLegacySubmission(row)
+	}
 	return err
 }
 

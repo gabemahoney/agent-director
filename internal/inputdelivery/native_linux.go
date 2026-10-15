@@ -13,6 +13,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const nativeTerminalSupported = true
+
 func (s *nativeSession) Queue(id Identity) (int, error) {
 	path := filepath.Join("/proc", strconv.Itoa(id.PID), "fd", "0")
 	tty, err := os.Readlink(path)

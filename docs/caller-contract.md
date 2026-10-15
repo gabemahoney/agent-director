@@ -91,14 +91,15 @@ To end a live row (`pending` included) and relaunch its id:
 ## Ordinary text submission
 
 A nonempty `text` with Enter, without `key`, `request_token` or
-`expect_pane_sha256`, uses confirmed ordinary delivery. CR bytes are removed;
-LF newlines are preserved. Success returns `outcome: "submitted"`,
+`expect_pane_sha256`, uses native ordinary delivery where the launch supports
+it. CR bytes are removed; LF newlines are preserved. Native success returns
+`outcome: "submitted"`,
 `request_id`, `session_id`, `record_sha256` and, when supplied by the native
 record, `record_id`: an exact new user record in this launch's native
 transcript proves the normalized text was submitted. Hook activity, a quiet input queue and pane text do not prove it.
 This proves submission, not completion of the agent's turn.
 
-Automatic delivery supports Linux with exactly Codex 0.159.2 or Claude Code
+Native delivery supports Linux with exactly Codex 0.159.2 or Claude Code
 2.1.280, on fresh launches with an ordinary empty composer. For new input, the row must be
 `waiting`, or `pending` with `allow_pending`. A resumed conversation,
 positional startup prompt, alternate mode or unsupported agent argument is
@@ -106,40 +107,55 @@ outside this contract. Accepted extra arguments are `--model`/`-m`,
 `--permission-mode`, `--effort` (each with a value), `--no-alt-screen` and
 `--dangerously-skip-permissions`. The launch's keybinding requirements and
 generated settings are in [Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings).
-Other versions and platforms can still launch agents; use operator-controlled
-manual input for those launches.
+When native capability is unavailable, including other versions, platforms,
+resumed conversations or unsupported launch arguments, `send-keys` retains
+literal text delivery followed by one Enter. Success returns an empty object
+and makes no exact transcript-confirmation claim. A pending Codex row is
+observed for up to 2 s for hook-derived `working`, `ask_user` or
+`check_permission` state. If that activity is not observed, the call returns
+`ErrSubmissionUnconfirmed` with `keys_sent: true`,
+`submission_confirmed: false` and `row_state`; it never resends input.
+
+State, permission-relay and dialog guards run before capability selection or
+stored-request observation. `ended` and `missing` rows are always refused
+with `ErrSpawnNotInteractive`, including retries of existing requests.
 
 Claude's local configuration checks are best effort: they do not verify the
 effective `editorMode` or managed or remote policy. Automatic Claude input
 remains enabled when those checks pass, but Vim settings or policy may still
-remap or consume input. If Enter is attempted and no exact matching transcript
-record appears, agent-director reports `ErrSubmissionUnconfirmed` with
+remap or consume input. For a supported native attempt, if Enter is attempted
+and no exact matching transcript record appears, agent-director reports
+`ErrSubmissionUnconfirmed` with
 `outcome: "submission_unconfirmed"`. It makes no submission claim without
 that proof and never retries text or Enter.
 
-Text must be valid UTF-8, at most 1 MiB after CR removal, with non-whitespace
-content. Apart from LF, control characters and Unicode line/paragraph
+For native delivery, text must be valid UTF-8, at most 1 MiB after CR removal,
+with non-whitespace content. Apart from LF, control characters and Unicode
+line/paragraph
 separators are refused. A first non-whitespace `/` or `!` requires an
 operator-controlled pane operation. Readiness is bounded by 12 s; input
 delivery by 60 s, followed by up to 12 s for transcript confirmation. Set a
 client timeout long enough to receive the result. A client timeout does not
 cancel a submission.
 
-Supply `delivery_request_id` to identify one attempt within a launch. Repeat
-the same ID and normalized text to retrieve stored confirmation or observe
+For native delivery, supply `delivery_request_id` to identify one attempt
+within a launch. Repeat the same ID and normalized text to retrieve stored
+confirmation or observe
 late proof without replaying input. Reusing an ID for different text or a
 different pane/process identity is refused. Use a fresh ID for an intentional
 identical turn. If omitted, an immediate repeat of the most recent confirmed
 identical text returns its existing result; this is not a general deduplication
-of every earlier turn. Observing an existing request works after the row becomes
-`ended` or `missing`, or its pane disappears, provided its exact launch and
-native session identity still match. This observation sends no input. An
-unresolved attempt blocks new automatic input even with a new ID. If a different
+of every earlier turn. Observing an existing request requires the state,
+permission-relay and dialog guards to pass, and its exact launch and native
+session identity to match. This observation sends no input. An unresolved
+native attempt blocks new input even with a new ID or when capability becomes
+unavailable; fallback never resends an unresolved native attempt. Request IDs
+do not give fallback sends native confirmation or deduplication. If a different
 request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
 has settled.
 
-`ErrSubmissionUnconfirmed` carries these `err_details`:
+For native delivery, `ErrSubmissionUnconfirmed` carries these `err_details`:
 
 | Field | Meaning |
 |---|---|
@@ -151,8 +167,9 @@ has settled.
 
 A `not_started` request can be re-issued after its stated condition clears.
 For partial or unconfirmed input, never automatically repeat text, Enter or
-editing keys: input may still submit later. Re-issue the same request only to
-observe proof; if it remains unresolved, escalate to a human using
+editing keys: input may still submit later. For a native attempt, re-issue the
+same request only to observe proof while the guards allow it; if it remains
+unresolved, escalate to a human using
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
 Agent-director never retries text or Enter on missing evidence, including
 after a crash.
@@ -168,10 +185,17 @@ with `outcome: "not_started"`, `keys_sent: false` and
 or its delivery journal cannot be read or saved. That call attempted no input;
 re-issue it after the stated condition clears. If another request still owns
 the writer, let it settle first; a persistent journal refusal needs an operator.
-See [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
 
-Manual input, including `pause`, changes the composer contract and prevents
-further new automatic input on that launch. A state, permission or pane refusal
+After Enter-only or pane-hash text sends with Enter to a `pending` Codex row,
+bounded hook observation can instead return `ErrSubmissionUnconfirmed` with
+`keys_sent: true`, `submission_confirmed: false` and `row_state`, without a
+native `outcome`. Check hook-derived `get` or `status` without resending text
+or Enter. If submission remains unknown, use
+[Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
+
+Manual input, including `pause`, changes the native composer contract and prevents
+further new native delivery on that launch. A pane without native capability
+retains its literal input path after manual input. A state, permission or pane refusal
 from `pause` does not change that contract. Manual input does not clear an
 unresolved attempt. Direct terminal writers must also be excluded during an
 automatic request; agent-director's lock cannot serialize them.

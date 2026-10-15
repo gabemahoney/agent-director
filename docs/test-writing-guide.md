@@ -389,7 +389,13 @@ transition or a tmux send returning nil. In `pkg/api`, reuse
 `sendkeys_submission_fixture_test.go`: they keep real store and tmux ownership
 guards while replacing native readiness, terminal samples and proof I/O through
 `SendKeysEnv.Input`. Advance the fixture clock through its injected `Sleep`;
-do not add wall-clock sleeps or weaken readiness for a recorder. Tests of manual
+do not add wall-clock sleeps or weaken readiness for a recorder. Test native
+capability separately from readiness: an unsupported launch retains literal text
+and one Enter with no exact-proof result, while a supported launch lacking
+readiness attempts no input. Compatibility regressions in
+`sendkeys_compatibility_regression_test.go` cover the existing state, relay and
+dialog refusals before native selection, bounded pending-Codex hook observation,
+and unresolved native ownership blocking fallback resends. Tests of manual
 transport should explicitly choose a manual operation.
 
 Native adapter tests in `internal/inputdelivery` use private temporary launch
@@ -400,6 +406,10 @@ reconciliation. Include an older identical record in a newly discovered Codex
 path so a descriptor discovered after input cannot masquerade as fresh proof.
 For unresolved delivery, assert conservative outcome fields and absence of
 replayed text or Enter. An empty queue never suffices for a submitted result.
+`launch_identity_regression_test.go` records the version probe's and real
+launch's environments: the probe must receive no
+`AGENT_DIRECTOR_*`, `TMUX` or `TMUX_PANE`, while the real launch retains its
+environment.
 
 ## Synthetic-regression test convention
 

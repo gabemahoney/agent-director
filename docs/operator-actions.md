@@ -51,9 +51,13 @@ tmux -u -S '<socket>' kill-pane -t '<pane id>'
 ## Unresolved ordinary input
 
 For `send-keys` with `partial_input_unconfirmed` or `submission_unconfirmed`,
-the original input may still submit later. Keep other writers away. First
-re-issue the original text with its `delivery_request_id` to observe any late
-transcript proof; this does not replay input. The outcome fields and supported
+or `ErrSubmissionUnconfirmed` with `keys_sent: true` and no native `outcome`,
+the original input may still submit later. Keep other writers away. For a native
+attempt, re-issue the original text with its `delivery_request_id`
+to observe any late transcript proof while the row's state, permission-relay
+and dialog guards allow it; this does not replay input. Finished rows are refused.
+For an unconfirmed manual or fallback send, check hook-derived `get` or `status`
+without resending. The outcome fields and supported
 launches are in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 
 If still unresolved, inspect the exact labelled session read-only using steps
@@ -64,8 +68,8 @@ after judging the agent's state, or end the owned session and verify its
 process has stopped before starting a fresh conversation. Ending a session
 does not undo a turn or its effects.
 
-Manual input does not reset automatic delivery eligibility. To return to
-automatic ordinary input, use a fresh supported launch with an empty composer;
+Manual input does not reset native delivery eligibility. To return to
+native ordinary input, use a fresh supported launch with an empty composer;
 `resume` does not provide that contract. Do not delete or edit input journals
 to bypass an unresolved attempt.
 

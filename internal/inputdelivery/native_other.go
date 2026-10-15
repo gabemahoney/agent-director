@@ -6,6 +6,8 @@ import (
 	"fmt"
 )
 
+const nativeTerminalSupported = false
+
 func (s *nativeSession) Queue(Identity) (int, error) {
 	return 0, fmt.Errorf("terminal probing unsupported")
 }

@@ -79,15 +79,17 @@ A fresh launch with the arguments supported by
 [Ordinary text submission](caller-contract.md#ordinary-text-submission) and
 exactly Codex 0.159.2 or Claude Code 2.1.280 gets additional launch settings.
 Resumed conversations, unsupported versions and other agent arguments do not
-get these additions. Automatic ordinary delivery requires Linux.
+get these additions. Native confirmed ordinary delivery requires Linux;
+when native capability is unavailable, literal input remains available as
+described in the caller contract.
 
 - **Claude Code:** a generated `--session-id`,
   `--debug-file <evidence-dir>/claude-debug.log` and `-d hooks`. The launch
   receives agent-director's `HOME` and the inspected `CLAUDE_CONFIG_DIR`:
   the spawn's `extra_env` value when present, otherwise agent-director's
   environment, falling back to `$HOME/.claude` when empty. A relative config
-  directory or an existing or unreadable `keybindings.json` disables automatic
-  delivery; these additions still apply to that launch.
+  directory or an existing or unreadable `keybindings.json` disables native
+  confirmed delivery; these additions still apply to that launch.
 - **Codex:** `-c log_dir="<evidence-dir>"`,
   `RUST_LOG=off,codex_tui=info`, a complete `-c tui.keymap=…` set to Codex
   0.159.2's built-in bindings, and `-c tui.vim_mode_default=false`. These
@@ -97,7 +99,7 @@ get these additions. Automatic ordinary delivery requires Linux.
   Codex uses the tmux server's environment and its normal home default.
   agent-director does not copy its own `CODEX_HOME` into the launch. A
   higher-priority `/etc/codex/managed_config.toml` containing keymap or Vim
-  settings, or one that cannot be read or parsed, disables automatic delivery.
+  settings, or one that cannot be read or parsed, disables native confirmed delivery.
 
 The evidence directory is
 `~/.config/agent-director/input/<store_id>/<launch_token>/`, under

@@ -22,8 +22,8 @@ var ErrClientClosed = errors.New("api: client is closed")
 // keys. send-keys types into waiting, working, ask_user and check_permission
 // rows. pending is a launch (spawn, reuse or resume) in progress whose agent
 // has not reported in yet (a resumed row included); it may be loading or at
-// a startup prompt. Existing ordinary requests can return stored or late proof
-// without sending input even on finished rows. New input returns this error for:
+// a startup prompt. State guards also apply to ordinary request reconciliation.
+// send-keys returns this error for:
 //   - a finished row (ended or missing), with or without allow_pending;
 //   - a pending row without allow_pending;
 //   - a pending row with allow_pending whose launch start or launch token is
@@ -35,11 +35,14 @@ var ErrClientClosed = errors.New("api: client is closed")
 // its current launch (SR-7.1, SR-18.14, SR-22.8).
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
-// ErrSubmissionUnconfirmed means ordinary delivery has no durable exact
-// transcript proof. SubmissionUnconfirmedDetails distinguishes not_started,
-// partial_input_unconfirmed and submission_unconfirmed. Partial or uncertain
-// input may still submit later; never replay text or Enter automatically.
-// Repeating delivery_request_id passively reconciles the original attempt.
+// ErrSubmissionUnconfirmed means native ordinary delivery has no durable exact
+// transcript proof, or pending Codex fallback input has no bounded hook-derived
+// submission observation. For native delivery, SubmissionUnconfirmedDetails
+// distinguishes not_started, partial_input_unconfirmed and submission_unconfirmed.
+// Fallback details carry KeysSent, SubmissionConfirmed and RowState. Partial or
+// uncertain input may still submit later; never replay text or Enter automatically.
+// Repeating a native delivery_request_id passively reconciles the original
+// attempt after the state, relay and dialog guards pass.
 var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
 
 // ErrSpawnNotPausable is returned by the pause verb when the target

@@ -460,9 +460,12 @@ export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
 /**
- * Ordinary delivery lacks durable exact native proof. errDetails distinguishes not_started,
- * partial_input_unconfirmed and submission_unconfirmed. Uncertain input may still submit
- * later; reuse delivery_request_id to observe without replaying text or Enter.
+ * Native ordinary delivery lacks durable exact proof, or pending Codex fallback input has
+ * no bounded hook-derived submission observation. Native errDetails distinguishes not_started,
+ * partial_input_unconfirmed and submission_unconfirmed; fallback details carry keys_sent,
+ * submission_confirmed and row_state. Uncertain input may still submit later; never replay
+ * text or Enter automatically. Reuse a native delivery_request_id to observe the attempt
+ * after state, relay and dialog guards pass.
  */
 export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
 /**

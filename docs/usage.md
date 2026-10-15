@@ -571,11 +571,11 @@ picker and does not control the agent's own picker; its resume guarantee applies
 to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)
 for refusals and recovery.
 
-Continue a resumed conversation through operator-controlled
-[manual input](caller-contract.md#manual-input-ownership). The automatic
+Continue a resumed conversation with `send-keys` using its literal input
+fallback. Native confirmed
 [ordinary text submission](caller-contract.md#ordinary-text-submission)
-path requires a fresh supported launch with an empty composer; `allow_pending`
-does not extend it to resumed conversations.
+requires a fresh supported launch with an empty composer; `allow_pending`
+does not extend native confirmation to resumed conversations.
 
 `resume` replays stored `agent_args` except recognized session selectors and
 their values, and Claude's `-p` / `--print`, so those options cannot replace

@@ -30,6 +30,17 @@ func deliveryIdentity(row Spawn, storeID string) inputdelivery.Identity {
 	return inputdelivery.Identity{StoreID: storeID, Token: row.Identity.Token, InstanceID: row.InstanceID, Socket: row.Identity.Socket, PaneID: row.Identity.PaneID, PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime, Agent: row.Agent, CWD: row.CWD}
 }
 
+// Adapters may opt out when no native contract exists for this launch. Older
+// injected adapters already implement that contract through Ready.
+func supportsInput(session inputdelivery.Session, id inputdelivery.Identity) bool {
+	if supported, ok := session.(interface {
+		Supports(inputdelivery.Identity) bool
+	}); ok {
+		return supported.Supports(id)
+	}
+	return true
+}
+
 func deliveryNotStarted(row Spawn, reason string) error {
 	return deliveryError(row, nil, "not_started", reason)
 }
@@ -66,6 +77,11 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 	previous, err := r.input.Load()
 	if err != nil {
 		return false, deliveryNotStarted(row, "delivery journal cannot be read")
+	}
+	if !r.automatic && previous != nil && previous.Phase == "manual_input" && previous.BytesAttempted == 0 && !previous.EnterAttempted {
+		// A manual operation on a plain pane is not an automatic attempt and
+		// must not permanently disable its established input path.
+		previous = nil
 	}
 	if requestID != "" {
 		owned, err := r.input.LoadRequest(requestID)
@@ -112,8 +128,9 @@ func (r *sendKeysRun) reconcileOrdinary(row Spawn, id inputdelivery.Identity, te
 	return false, nil
 }
 
-// A passive read does not need a pane or interactive state, but the proof must
-// still belong to the row's exact launch, including any native session mapping.
+// After the state, relay and dialog guards pass, passive proof reconciliation
+// needs no pane. Proof must still belong to the row's exact launch, including
+// any native session mapping.
 func (r *sendKeysRun) useReconciledProof(row Spawn, a *inputdelivery.Attempt) error {
 	current, err := r.s.GetSpawnWithin(row.InstanceID, time.Second)
 	if err != nil {
@@ -387,6 +404,9 @@ func recordManualDelivery(session inputdelivery.Session, id inputdelivery.Identi
 		if err = session.Save(old); err != nil {
 			return deliveryNotStarted(row, "cannot persist manual input ownership")
 		}
+		return nil
+	}
+	if old == nil && !supportsInput(session, id) {
 		return nil
 	}
 	a, err := inputdelivery.NewAttempt(id, "", nil)

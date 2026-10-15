@@ -34,7 +34,7 @@ func SafeArgs(args []string) bool {
 }
 
 // Prepare provisions fresh native diagnostics for the exact launch. Unsupported
-// binaries still launch, but their automatic input gate will remain closed.
+// binaries still launch and retain the established pane input contract.
 func Prepare(id Identity, command []string, env map[string]string, safe bool) ([]string, map[string]string, error) {
 	dir, err := launchDir(id.StoreID, id.Token)
 	if err != nil {
@@ -158,9 +158,18 @@ func probeVersion(agent, program string, env map[string]string) string {
 	defer cancel()
 	version := exec.CommandContext(ctx, program, "--version")
 	version.WaitDelay = 200 * time.Millisecond
-	version.Env = os.Environ()
+	// This is a capability probe, not the launched pane. A wrapper that ignores
+	// --version must not run hooks as either the caller or the new launch.
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !probeIdentityKey(key) {
+			version.Env = append(version.Env, entry)
+		}
+	}
 	for k, v := range env {
-		version.Env = append(version.Env, k+"="+v)
+		if !probeIdentityKey(k) {
+			version.Env = append(version.Env, k+"="+v)
+		}
 	}
 	var output versionOutput
 	version.Stdout = &output
@@ -175,13 +184,26 @@ func probeVersion(agent, program string, env map[string]string) string {
 	return ""
 }
 
-func (s *nativeSession) Ready(id Identity) (bool, error) {
+func probeIdentityKey(key string) bool {
+	return strings.HasPrefix(key, "AGENT_DIRECTOR_") || key == "TMUX" || key == "TMUX_PANE"
+}
+
+// Supports distinguishes launches with a native composer contract from panes
+// that retain ordinary tmux input. It does not claim that the agent is ready.
+func (s *nativeSession) Supports(id Identity) bool {
 	m := s.manifest
 	if !m.Safe || m.Version == "" || m.Token != id.Token || m.Socket != id.Socket || m.CWD != id.CWD || m.Agent != id.Agent || m.InstanceID != id.InstanceID {
-		return false, fmt.Errorf("unsupported or non-fresh ordinary composer launch")
+		return false
 	}
 	if id.Agent == "codex" && (!m.KeymapPinned || !codexManagedComposerSafe()) {
-		return false, fmt.Errorf("managed Codex composer settings are unsupported")
+		return false
+	}
+	return nativeTerminalSupported
+}
+
+func (s *nativeSession) Ready(id Identity) (bool, error) {
+	if !s.Supports(id) {
+		return false, fmt.Errorf("unsupported or non-fresh ordinary composer launch")
 	}
 	name, marker := "claude-debug.log", "Terminal capabilities:"
 	if id.Agent == "codex" {
