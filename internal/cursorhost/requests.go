@@ -22,6 +22,7 @@ type policyRejection struct{ error }
 
 type nativeChoice struct{ token, option, decision string }
 type pendingAuthorization struct {
+	session                      string
 	generation                   uint64
 	auth                         *authorization
 	token                        string
@@ -39,6 +40,7 @@ type requestController struct {
 	out        io.Writer
 	requests   map[string]*pendingAuthorization
 	seenIDs    map[string]bool
+	idSessions map[string]string
 	seenTools  map[string]bool
 	menuMu     sync.Mutex
 	menu       map[rune]nativeChoice
@@ -47,7 +49,7 @@ type requestController struct {
 }
 
 func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestController {
-	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
+	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, idSessions: map[string]string{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
 }
 func (c *requestController) check(row store.Spawn) error {
 	if e := VerifyRuntime(c.rep.binding, false); e != nil {
@@ -96,6 +98,7 @@ func (c *requestController) admit(f frame, session string) error {
 		return fmt.Errorf("duplicate or excessive Cursor request ids")
 	}
 	c.seenIDs[id] = true
+	c.idSessions[id] = session
 	a, e := parseAuthorization(f, session)
 	if e != nil {
 		return policyRejection{e}
@@ -127,7 +130,7 @@ func (c *requestController) admit(f frame, session string) error {
 	if relay {
 		nativeUntil = settle.Add(30 * time.Minute)
 	}
-	r := &pendingAuthorization{generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
+	r := &pendingAuthorization{session: session, generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
 	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.check)
 	if e != nil {
 		return e
@@ -154,6 +157,31 @@ func (c *requestController) admit(f frame, session string) error {
 		}
 	}
 	return nil
+}
+
+// The plan extension does not supply a session id. Retain its independently
+// observed request/tool identity so delayed callbacks cannot acquire authority
+// over a later conversation on this connection.
+func (c *requestController) retiredAuthorization(f frame, current, retiring string) string {
+	if len(f.ID) == 0 {
+		return ""
+	}
+	id, e := requestID(f.ID)
+	if e == nil {
+		if sid := c.idSessions[id]; sid != "" && (sid != current || sid == retiring) {
+			return sid
+		}
+	}
+	a, e := parseAuthorization(f, current)
+	if e != nil {
+		return ""
+	}
+	for _, r := range c.requests {
+		if r.auth.toolID == a.toolID && (r.session != current || r.session == retiring) {
+			return r.session
+		}
+	}
+	return ""
 }
 func (c *requestController) choose(token, option string) {
 	r := c.requests[token]
@@ -373,7 +401,7 @@ func (c *requestController) execution(params json.RawMessage) error {
 		return nil
 	}
 	for _, r := range c.requests {
-		if r.auth.plan || r.auth.kind != "execute" || r.auth.toolID != p.Update.Tool {
+		if r.session != p.Session || r.auth.plan || r.auth.kind != "execute" || r.auth.toolID != p.Update.Tool {
 			continue
 		}
 		var output map[string]json.RawMessage

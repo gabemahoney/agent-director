@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,17 +38,18 @@ type outgoingFrame struct {
 }
 
 type protocol struct {
-	input         io.Writer
-	outgoing      chan outgoingFrame
-	writes        chan error
-	closed        chan struct{}
-	outputMu      sync.Mutex // serializes enqueue with transport retirement
-	closeOnce     sync.Once
-	writeFailed   atomic.Bool
-	frames        chan incoming
-	next          uint64
-	pendingID     string
-	pendingMethod string
+	input          io.Writer
+	outgoing       chan outgoingFrame
+	writes         chan error
+	closed         chan struct{}
+	outputMu       sync.Mutex // serializes enqueue with transport retirement
+	closeOnce      sync.Once
+	writeFailed    atomic.Bool
+	frames         chan incoming
+	next           uint64
+	pendingID      string
+	pendingMethod  string
+	retiredThrough uint64
 }
 
 func newProtocol(in io.Writer, out io.Reader) *protocol {
@@ -304,12 +306,26 @@ func (p *protocol) response(f frame) (json.RawMessage, error) {
 	if f.Method != "" || string(bytes.TrimSpace(f.ID)) != p.pendingID || p.pendingID == "" {
 		return nil, fmt.Errorf("uncorrelated ACP response")
 	}
+	p.retiredThrough = p.next
 	p.pendingID = ""
 	p.pendingMethod = ""
 	if len(f.Error) > 0 {
 		return nil, fmt.Errorf("Cursor ACP request failed; check the selected runtime and existing login")
 	}
 	return f.Result, nil
+}
+
+func (p *protocol) retiredResponse(f frame) bool {
+	raw := string(bytes.TrimSpace(f.ID))
+	id, err := strconv.ParseUint(raw, 10, 64)
+	return f.Method == "" && err == nil && id != 0 && strconv.FormatUint(id, 10) == raw && id <= p.retiredThrough
+}
+
+func (p *protocol) retirePending() {
+	if p.pendingID != "" {
+		p.retiredThrough = p.next
+	}
+	p.pendingID, p.pendingMethod = "", ""
 }
 func (p *protocol) deny(f frame) (bool, error) {
 	if len(f.ID) == 0 {

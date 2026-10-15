@@ -198,8 +198,23 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 				if len(refill) == 0 {
 					refill = append(refill, byteBoundaryText(10, mib))
 				}
+				acceptedBeforeRefill := rotationRecordCount(c, t, "submission_accepted")
+				var consumed []terminalInput
 				for _, text := range refill {
-					i.submit(t, text)
+					if !i.admit() {
+						t.Fatal("waiting refill lacked consumption-time authority")
+					}
+					consumed = append(consumed, terminalInput{text: text, accepted: true})
+				}
+				for _, input := range consumed {
+					i.emit(input)
+				}
+				// Observe each acceptance separately; the first peer wait must not
+				// also time the full batch's protected persistence and hook setup.
+				for n := range consumed {
+					c.wait(t, fmt.Sprintf("refill acceptance %d", n+1), func() bool {
+						return rotationRecordCount(c, t, "submission_accepted") >= acceptedBeforeRefill+n+1
+					})
 				}
 				for n := range refill {
 					c.wait(t, fmt.Sprintf("refill peer receipt %d", n+1), func() bool {

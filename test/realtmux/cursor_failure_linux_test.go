@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -24,7 +26,7 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real pane persistence failures")
 	}
-	for _, stage := range []string{"input replacement", "input permission", "queued admission", "queued cancellation", "turn outcome", "end publication"} {
+	for _, stage := range []string{"input replacement", "input permission", "queued admission", "queued cancellation", "turn outcome", "end publication", "rotation confirmation", "rotation publication"} {
 		t.Run(stage, func(t *testing.T) {
 			f, r, launch := newCursorPane(t, false)
 			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
@@ -47,6 +49,28 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 					return false
 				}, nil)
 			}
+			if strings.HasPrefix(stage, "rotation ") {
+				r.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
+				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "/new"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "real pane rotation request", func() bool {
+					n := 0
+					for _, frame := range r.Frames(t) {
+						if string(frame["method"]) == `"session/new"` {
+							n++
+						}
+					}
+					return n == 2
+				}, nil)
+				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "real-rotation-held"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "real pane held record", func() bool {
+					raw, err := os.ReadFile(path)
+					return err == nil && strings.Contains(string(raw), `"kind":"input_held"`)
+				}, nil)
+			}
 			if stage == "queued cancellation" {
 				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "queued-never-dispatch"}); err != nil {
 					t.Fatal(err)
@@ -57,13 +81,15 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 				}, nil)
 			}
 			switch stage {
-			case "input replacement", "turn outcome", "queued admission", "queued cancellation":
+			case "input replacement", "turn outcome", "queued admission", "queued cancellation", "rotation confirmation":
 				if err := os.Rename(path, path+".original"); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(path, []byte("replacement must survive\n"), 0600); err != nil {
 					t.Fatal(err)
 				}
+			case "rotation publication":
+				storefix.InjectWriteFailure(t, f.DBPath, storefix.WriteFailReuseArchive, launch.ID)
 			case "input permission":
 				if err := os.Chmod(path, 0644); err != nil {
 					t.Fatal(err)
@@ -74,7 +100,11 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 				}
 				storefix.InjectWriteFailure(t, f.DBPath, storefix.WriteFailSubagentRecord, launch.ID)
 			}
-			if stage == "turn outcome" {
+			if strings.HasPrefix(stage, "rotation ") {
+				if err := os.WriteFile(r.NewRelease, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if stage == "turn outcome" {
 				if err := os.WriteFile(r.Release, nil, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -96,16 +126,79 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 			if after := readRow(t, f.DBPath, launch.ID); after.State == store.StateEnded {
 				t.Fatal("persistence failure fabricated ended")
 			}
+			if strings.HasPrefix(stage, "rotation ") {
+				actual, err := store.Open(f.DBPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				after, readErr := actual.GetSpawn(launch.ID)
+				history, historyErr := actual.ListSessionHistory(launch.ID, after.LifeNumber)
+				bound, bindErr := actual.ReadCursorRuntime(launch.ID)
+				actual.Close()
+				if readErr != nil || historyErr != nil || bindErr != nil || after.SessionID != row.SessionID || bound.SessionID != after.SessionID || len(history) != 0 {
+					t.Fatalf("failed actual rotation fabricated identity/history: %+v %+v %+v errors=%v/%v/%v", after, bound, history, readErr, bindErr, historyErr)
+				}
+				raw, err := os.ReadFile(r.Raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(raw), "real-rotation-held") {
+					t.Fatal("failed actual rotation sent provisional bytes")
+				}
+			}
 			failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", launch.ID)
 			if len(failures) != 1 {
 				t.Fatalf("observable failure missing: %v", failures)
+			}
+			if stage == "rotation publication" {
+				if !strings.Contains(fmt.Sprint(failures[0]["reason"]), "Cursor rotation report failed; publication may already be committed; held input refused") {
+					t.Fatalf("actual failed rotation lost exact notice: %v", failures)
+				}
+				inspected, err := f.API.Get(launch.ID)
+				if err != nil || inspected.SessionID != row.SessionID || len(inspected.PriorSessions) != 0 {
+					t.Fatalf("public failed-row inspection: %+v %v", inspected, err)
+				}
+				available, err := os.ReadFile(inspected.JSONLPath)
+				if err != nil || !strings.Contains(string(available), `"kind":"input_held"`) || strings.Contains(string(available), `"kind":"session_end"`) {
+					t.Fatalf("available records invented successful end: %q %v", available, err)
+				}
+				// Follow the documented live-row cleanup, then inspect public status.
+				if inspected.State != store.StateEnded && inspected.State != store.StateMissing {
+					if _, err := f.API.Kill(api.KillParams{InstanceID: launch.ID}); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := f.API.FindMissing(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				status, err := f.API.Status(launch.ID)
+				if err != nil || status.State != store.StateEnded && status.State != store.StateMissing {
+					t.Fatalf("cleanup did not reconcile failed row: %+v %v", status, err)
+				}
+				freshID := newInstanceID("cursor-recovery")
+				cmd := exec.Command(buildHookCLI(t, t.TempDir()), "spawn", "--store-path", f.DBPath, "--agent", "cursor", "--instance-id", freshID, "--cwd", f.CWD, "--no-pre-trust")
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("fresh unique instance after reconciliation: %v %s", err, out)
+				}
+				fresh := f.launched(t, freshID)
+				t.Cleanup(func() { fresh.rt.run(t, "kill-server") })
+				waitFor(t, "fresh recovery instance ready", func() bool {
+					pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: freshID, NLines: 100})
+					return err == nil && strings.Contains(pane.Pane, "Cursor ready")
+				}, nil)
+				if raw, err := os.ReadFile(r.Raw); err != nil || strings.Contains(string(raw), "real-rotation-held") {
+					t.Fatalf("fresh instance replayed refused input: %v", err)
+				}
+				if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: freshID}); err != nil {
+					t.Fatal(err)
+				}
 			}
 			for _, frame := range r.Frames(t) {
 				if strings.Contains(string(frame["params"]), "must not be admitted") || strings.Contains(string(frame["params"]), "queued-never-dispatch") {
 					t.Fatal("failed persistence admitted prompt")
 				}
 			}
-			if stage == "input replacement" || stage == "turn outcome" || strings.HasPrefix(stage, "queued") {
+			if stage == "input replacement" || stage == "turn outcome" || strings.HasPrefix(stage, "queued") || stage == "rotation confirmation" {
 				raw, err := os.ReadFile(path)
 				if err != nil || string(raw) != "replacement must survive\n" {
 					t.Fatalf("replacement mutated %q %v", raw, err)

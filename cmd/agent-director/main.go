@@ -262,19 +262,20 @@ func runHook() int {
 	// the same readers and relay window the verbs judge it with.
 	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
-		Agent:         args.agent,
-		Env:           hook.OSGetenv,
-		Cfg:           cfg.Relay,
-		Clock:         hook.DefaultPollClock(),
-		ParentPID:     os.Getppid,
-		ParentProc:    hookParentProc(),
-		VerifyCursor:  hookCursorVerifier(cfg),
-		Now:           time.Now,
-		PendingGrace:  cfg.Tmux.EffectivePendingGrace(),
-		Start:         start,
-		RelayTimeout:  args.timeout,
-		Self:          hookSelf(probe.NewProcChecker()),
-		RelayHookGone: hookRelayHookGone(cfg.Relay),
+		Agent:                args.agent,
+		Env:                  hook.OSGetenv,
+		Cfg:                  cfg.Relay,
+		Clock:                hook.DefaultPollClock(),
+		ParentPID:            os.Getppid,
+		ParentProc:           hookParentProc(),
+		VerifyCursor:         hookCursorVerifier(cfg),
+		VerifyCursorRotation: hookCursorRotationVerifier(cfg),
+		Now:                  time.Now,
+		PendingGrace:         cfg.Tmux.EffectivePendingGrace(),
+		Start:                start,
+		RelayTimeout:         args.timeout,
+		Self:                 hookSelf(probe.NewProcChecker()),
+		RelayHookGone:        hookRelayHookGone(cfg.Relay),
 	}
 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
 		hookLog(logger, "hook: handle: %v", err)

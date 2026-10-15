@@ -138,8 +138,9 @@ fire.
 
 ## Cursor reporting
 
-Cursor's gateway reports authoritative fresh session startup, submitted
-prompts, correlated turn completion and confirmed intentional termination.
+Cursor's gateway reports authoritative fresh session startup, same-launch
+conversation rotation, submitted prompts, correlated turn completion and
+confirmed intentional termination.
 It directly invokes `agent-director hook --agent cursor` as the row's own
 pane process. Reports also require independently verified runtime,
 connection, transcript and current pane evidence for that launch. Optional
@@ -149,6 +150,11 @@ process. Pane text is never classified to produce state.
 Cursor startup confirms a conversation before the row becomes `waiting`;
 accepted input yields `working`, a confirmed completion yields `waiting`,
 and intentional termination yields `ended` only after the runtime is gone.
+Rotation reporting authenticates the outgoing conversation and publishes the
+fresh current identity with required outgoing history in one operation; an
+old or child report cannot replace the main conversation. The interaction and
+history references are in [Fresh Cursor use](usage.md#fresh-cursor-use);
+publication uncertainty follows the caller contract below.
 Unexpected child loss is distinct from transport failure and follows the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 [Permissions](permissions.md#cursor-spawns) owns authorization handling.

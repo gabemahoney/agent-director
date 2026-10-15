@@ -1,0 +1,14 @@
+{
+  "original_base": {
+    "sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+    "lines": 22213,
+    "bytes": 1534189
+  },
+  "task2_base": {
+    "sha256": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+    "lines": 22270,
+    "bytes": 1538333
+  },
+  "source": "HEAD:docs/architecture.md; complete reverse reconstruction through all three inherited patches",
+  "personal_whole_file_read": false
+}

@@ -1,0 +1,283 @@
+{
+  "01-controller.log": {
+    "sha256": "abe5469199390d78bd2871eec606cbd2c8b682923312bea040e65d04ef53ee2f",
+    "result": "FAIL",
+    "outcome_lines": 17,
+    "leaf_outcomes": {
+      "PASS": 11,
+      "FAIL": 4,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "02-store.log": {
+    "sha256": "c4611ec5d92bfbc837ce075f0463ef37f35560a13c468de2f406a9ae7e3b4774",
+    "result": "FAIL",
+    "outcome_lines": 0,
+    "leaf_outcomes": {
+      "PASS": 0,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "03-controller-store.log": {
+    "sha256": "fde296075660b9909ef96d5e5c69f4506fe01515fb48e2323f0eb5a063d2a905",
+    "result": "FAIL",
+    "outcome_lines": 50,
+    "leaf_outcomes": {
+      "PASS": 44,
+      "FAIL": 1,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t6.575s"
+    ],
+    "race_warnings": 0
+  },
+  "04-boundaries.log": {
+    "sha256": "3733cdd7baf6744b939a258cbeae5915302e6a62d8bb2759b160a8bef93bb4aa",
+    "result": "FAIL",
+    "outcome_lines": 0,
+    "leaf_outcomes": {
+      "PASS": 0,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "05-boundaries.log": {
+    "sha256": "331b71a02a367caaaeb6dab272f2ed46fc20ffd68793ca055c9c593b232c43c5",
+    "result": "FAIL",
+    "outcome_lines": 48,
+    "leaf_outcomes": {
+      "PASS": 40,
+      "FAIL": 3,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t0.516s"
+    ],
+    "race_warnings": 0
+  },
+  "06-hook-real-pane.log": {
+    "sha256": "e4a1bbafdb765f7afc8009f91ab7f952cdff5bd82982a965ed93c9cb89a71c59",
+    "result": "PASS",
+    "outcome_lines": 13,
+    "leaf_outcomes": {
+      "PASS": 12,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t0.274s",
+      "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t1.553s"
+    ],
+    "race_warnings": 0
+  },
+  "07-retired-zero-attribution.log": {
+    "sha256": "dda4e37ab9065d5069c105e52b4d46e85d8a5bfa8c1184a602fcedd0dd83c80d",
+    "result": "FAIL",
+    "outcome_lines": 11,
+    "leaf_outcomes": {
+      "PASS": 8,
+      "FAIL": 1,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "08-capacity-start-report.log": {
+    "sha256": "99fa573d82d53d2dc7f9f0c7164ecced686576f95f6b40c710c94123934907dd",
+    "result": "PASS",
+    "outcome_lines": 4,
+    "leaf_outcomes": {
+      "PASS": 3,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t2.748s"
+    ],
+    "race_warnings": 0
+  },
+  "09-retired-requests.log": {
+    "sha256": "29ee7831ddc3a303cd76539fbff080e02cc5650ba874809f4993967f2eeb248f",
+    "result": "FAIL",
+    "outcome_lines": 1,
+    "leaf_outcomes": {
+      "PASS": 0,
+      "FAIL": 1,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "10-retired-requests.log": {
+    "sha256": "fd48303e6f90ae314f9923bb38b808b87710da9990b953c84cee3c70136acc4b",
+    "result": "PASS",
+    "outcome_lines": 1,
+    "leaf_outcomes": {
+      "PASS": 1,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t0.705s"
+    ],
+    "race_warnings": 0
+  },
+  "11-store-hook-race.log": {
+    "sha256": "a630206391ab07bb0afa95173708331d279715e446f51266efb64e310591b86d",
+    "result": "PASS",
+    "outcome_lines": 62,
+    "leaf_outcomes": {
+      "PASS": 54,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t4.322s",
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t0.911s"
+    ],
+    "race_warnings": 0
+  },
+  "12-controller-race.log": {
+    "sha256": "ba248456258f1f97add80c24424661d0464a8c1c681bec47042006ac5c44cfd1",
+    "result": "FAIL",
+    "outcome_lines": 75,
+    "leaf_outcomes": {
+      "PASS": 60,
+      "FAIL": 6,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "13-preservation-race.log": {
+    "sha256": "79442a98c4ba93d48b819da4fd8997d7eecb13e6f4ec83bd7719be462162b2a9",
+    "result": "PASS",
+    "outcome_lines": 131,
+    "leaf_outcomes": {
+      "PASS": 116,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t13.261s",
+      "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t9.638s",
+      "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t0.653s"
+    ],
+    "race_warnings": 0
+  },
+  "14-active-cancellation.log": {
+    "sha256": "fd2cb825b95d95e0b51fa70f87c72e2ae9b3b91f90fc6d972c76e6e6442ccffd",
+    "result": "PASS",
+    "outcome_lines": 3,
+    "leaf_outcomes": {
+      "PASS": 2,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t0.899s"
+    ],
+    "race_warnings": 0
+  },
+  "15-capacity-observation-race.log": {
+    "sha256": "8074c96f7980e606be1b0fbec4b1d7bbef6d1c6cc5f4e6df8fad3f1cd75813d4",
+    "result": "PASS",
+    "outcome_lines": 5,
+    "leaf_outcomes": {
+      "PASS": 4,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t17.789s"
+    ],
+    "race_warnings": 0
+  },
+  "16-source-regressions.log": {
+    "sha256": "06730ead02da8e336bc32abd9c414fb9e76907b9674894960dbe5512f9c7aad7",
+    "result": "FAIL",
+    "outcome_lines": 6,
+    "leaf_outcomes": {
+      "PASS": 1,
+      "FAIL": 3,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "17-transcript-write.log": {
+    "sha256": "ed5ba40c9d27fa8bd2a79a4b371423361553187b93ca462d4062eca52cc73495",
+    "result": "PASS",
+    "outcome_lines": 2,
+    "leaf_outcomes": {
+      "PASS": 1,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t0.582s"
+    ],
+    "race_warnings": 0
+  },
+  "18-real-pane-rotation-faults.log": {
+    "sha256": "8229a27dc7f271e287cbbb41e5402c972e1dc214a9a29f695a3d2dd4fc2fbbb6",
+    "result": "PASS",
+    "outcome_lines": 10,
+    "leaf_outcomes": {
+      "PASS": 8,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t1.431s",
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t0.629s"
+    ],
+    "race_warnings": 0
+  },
+  "19-retired-record-attribution.log": {
+    "sha256": "9ce14aa1e27d416bba3dda0fb27c4cffc536665d1b1665acdb0dc683638532db",
+    "result": "FAIL",
+    "outcome_lines": 2,
+    "leaf_outcomes": {
+      "PASS": 0,
+      "FAIL": 1,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "20-final-source-regressions.log": {
+    "sha256": "15fc34fd7c682a1bb27bc0cc3da19a469e344dc86f0c3448b54701f6456e42b5",
+    "result": "FAIL",
+    "outcome_lines": 9,
+    "leaf_outcomes": {
+      "PASS": 1,
+      "FAIL": 5,
+      "SKIP": 0
+    },
+    "packages": [],
+    "race_warnings": 0
+  },
+  "21-raw-wire-final.log": {
+    "sha256": "de3a6af08a0c28959b56d2ea505ee147d335d74055983ffe24f898c8dd87d004",
+    "result": "PASS",
+    "outcome_lines": 9,
+    "leaf_outcomes": {
+      "PASS": 7,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "packages": [
+      "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t4.060s"
+    ],
+    "race_warnings": 0
+  }
+}

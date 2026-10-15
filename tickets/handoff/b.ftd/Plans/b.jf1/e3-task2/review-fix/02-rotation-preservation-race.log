@@ -1,0 +1,510 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestCursorAckCommittedBeforeFirstByte
+=== RUN   TestCursorAckCommittedBeforeFirstByte/allow
+=== RUN   TestCursorAckCommittedBeforeFirstByte/deny
+=== RUN   TestCursorAckCommittedBeforeFirstByte/timeout
+--- PASS: TestCursorAckCommittedBeforeFirstByte (0.72s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/allow (0.46s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/deny (0.14s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/timeout (0.12s)
+=== RUN   TestCursorQueuedAnswersLoseAuthority
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deadline
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/settlement_retirement
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/cancel
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/runtime_death
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/connection
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/session
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/launch
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deleted_ack
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deleted_row
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/closed
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deadline
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/settlement_retirement
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/cancel
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/runtime_death
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/connection
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/session
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/launch
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deleted_ack
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deleted_row
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/closed
+--- PASS: TestCursorQueuedAnswersLoseAuthority (3.19s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deadline (0.27s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/settlement_retirement (0.13s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/cancel (0.13s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/runtime_death (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/connection (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/session (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/launch (0.13s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deleted_ack (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deleted_row (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/closed (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deadline (0.42s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/settlement_retirement (0.13s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/cancel (0.13s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/runtime_death (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/connection (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/session (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/launch (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deleted_ack (0.15s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deleted_row (0.14s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/closed (0.14s)
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/allow/failed_mutation
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/allow/missing_request
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/allow/stale_connection
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/deny/failed_mutation
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/deny/missing_request
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/deny/stale_connection
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/timeout/failed_mutation
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/timeout/missing_request
+=== RUN   TestCursorMissingOrFailedAckEmitsNothing/timeout/stale_connection
+--- PASS: TestCursorMissingOrFailedAckEmitsNothing (1.01s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/allow/failed_mutation (0.13s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/allow/missing_request (0.10s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/allow/stale_connection (0.11s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/deny/failed_mutation (0.13s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/deny/missing_request (0.11s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/deny/stale_connection (0.11s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/timeout/failed_mutation (0.12s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/timeout/missing_request (0.10s)
+    --- PASS: TestCursorMissingOrFailedAckEmitsNothing/timeout/stale_connection (0.10s)
+=== RUN   TestCursorAckDeadlineAfterLockAndEvidence
+=== RUN   TestCursorAckDeadlineAfterLockAndEvidence/write_lock/allow_deadline
+=== RUN   TestCursorAckDeadlineAfterLockAndEvidence/write_lock/confirm_by
+=== RUN   TestCursorAckDeadlineAfterLockAndEvidence/evidence/allow_deadline
+=== RUN   TestCursorAckDeadlineAfterLockAndEvidence/evidence/confirm_by
+--- PASS: TestCursorAckDeadlineAfterLockAndEvidence (0.93s)
+    --- PASS: TestCursorAckDeadlineAfterLockAndEvidence/write_lock/allow_deadline (0.24s)
+    --- PASS: TestCursorAckDeadlineAfterLockAndEvidence/write_lock/confirm_by (0.24s)
+    --- PASS: TestCursorAckDeadlineAfterLockAndEvidence/evidence/allow_deadline (0.23s)
+    --- PASS: TestCursorAckDeadlineAfterLockAndEvidence/evidence/confirm_by (0.23s)
+=== RUN   TestCursorPartialAndAckOnlyNeverReplay
+=== RUN   TestCursorPartialAndAckOnlyNeverReplay/partial_output
+=== RUN   TestCursorPartialAndAckOnlyNeverReplay/after_ack_before_byte
+--- PASS: TestCursorPartialAndAckOnlyNeverReplay (0.28s)
+    --- PASS: TestCursorPartialAndAckOnlyNeverReplay/partial_output (0.12s)
+    --- PASS: TestCursorPartialAndAckOnlyNeverReplay/after_ack_before_byte (0.16s)
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/none
+    request_boundary_linux_test.go:482: first guard=<nil> storeBusy=false completion=<nil> elapsed=97.150291ms finiteHold=80ms remainingFrame=2.989727006s remainingApproval=19.836210368s durableAck=true firstBytes="{\"id\":\"first\",\"jsonrpc\":\"2.0\",\"result\":{\"outcome\":{\"optionId\":\"allow-once\",\"outcome\":\"selected\"}}}\n"
+    request_boundary_linux_test.go:526: later independently acknowledged response={"id":"first","jsonrpc":"2.0","result":{"outcome":{"optionId":"allow-once","outcome":"selected"}}}
+        {"id":"second","jsonrpc":"2.0","result":{"outcome":{"optionId":"allow-once","outcome":"selected"}}}
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/none
+    request_boundary_linux_test.go:482: first guard=<nil> storeBusy=false completion=<nil> elapsed=96.939611ms finiteHold=80ms remainingFrame=2.989596236s remainingApproval=19.838792933s durableAck=true firstBytes="{\"id\":\"first\",\"jsonrpc\":\"2.0\",\"result\":{\"outcome\":{\"optionId\":\"reject-once\",\"outcome\":\"selected\"}}}\n"
+    request_boundary_linux_test.go:526: later independently acknowledged response={"id":"first","jsonrpc":"2.0","result":{"outcome":{"optionId":"reject-once","outcome":"selected"}}}
+        {"id":"second","jsonrpc":"2.0","result":{"outcome":{"optionId":"reject-once","outcome":"selected"}}}
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry
+    request_boundary_linux_test.go:482: first guard=ErrStoreBusy: the store's connection was not free within 157 ms: another call of this process held it storeBusy=true completion=ErrStoreBusy: the store's connection was not free within 157 ms: another call of this process held it elapsed=158.450273ms finiteHold=400ms remainingFrame=157.950023ms remainingApproval=-244.120772ms durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/expiry
+    request_boundary_linux_test.go:482: first guard=ErrStoreBusy: the store's connection was not free within 159 ms: another call of this process held it storeBusy=true completion=ErrStoreBusy: the store's connection was not free within 159 ms: another call of this process held it elapsed=159.901303ms finiteHold=400ms remainingFrame=159.067008ms remainingApproval=-243.133068ms durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/cancel
+    request_boundary_linux_test.go:482: first guard=Cursor request response retired storeBusy=false completion=Cursor request response retired elapsed=88.722226ms finiteHold=80ms remainingFrame=2.989646076s remainingApproval=19.845153181s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/cancel
+    request_boundary_linux_test.go:482: first guard=Cursor request response retired storeBusy=false completion=Cursor request response retired elapsed=88.841166ms finiteHold=80ms remainingFrame=2.989768796s remainingApproval=19.846025217s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/runtime_death
+    request_boundary_linux_test.go:482: first guard=Cursor runtime identity unavailable storeBusy=false completion=Cursor runtime identity unavailable elapsed=84.342219ms finiteHold=80ms remainingFrame=2.990148726s remainingApproval=19.851025612s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/runtime_death
+    request_boundary_linux_test.go:482: first guard=Cursor runtime identity unavailable storeBusy=false completion=Cursor runtime identity unavailable elapsed=83.86186ms finiteHold=80ms remainingFrame=2.989598127s remainingApproval=19.851740338s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/launch
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.197636ms finiteHold=80ms remainingFrame=2.995573783s remainingApproval=19.836011823s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/launch
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.201926ms finiteHold=80ms remainingFrame=2.996278702s remainingApproval=19.836798177s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/session
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.134445ms finiteHold=80ms remainingFrame=2.996293942s remainingApproval=19.835175624s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/session
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.533725ms finiteHold=80ms remainingFrame=2.996115133s remainingApproval=19.835892949s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/connection
+    request_boundary_linux_test.go:482: first guard=store: Cursor connection authority changed storeBusy=false completion=store: Cursor connection authority changed elapsed=106.936205ms finiteHold=80ms remainingFrame=2.996279342s remainingApproval=19.835659353s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/connection
+    request_boundary_linux_test.go:482: first guard=store: Cursor connection authority changed storeBusy=false completion=store: Cursor connection authority changed elapsed=107.108015ms finiteHold=80ms remainingFrame=2.995650773s remainingApproval=19.834759018s durableAck=true firstBytes=""
+--- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention (3.94s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/none (0.28s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/none (0.27s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry (0.55s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/expiry (0.55s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/cancel (0.22s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/cancel (0.22s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/runtime_death (0.21s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/runtime_death (0.21s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/launch (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/launch (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/session (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/session (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/connection (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/connection (0.24s)
+=== RUN   TestCursorUnknownRequestRejectsGenericLifecycleProof
+--- PASS: TestCursorUnknownRequestRejectsGenericLifecycleProof (0.11s)
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/direct
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiselect
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/source-derived_fallback
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_tool_ID
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_AskQuestion
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_ask_prefix
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_skip
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple_allow_once
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/ambiguous_other
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/malformed_options
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/direct
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiselect
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/source-derived_fallback
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_tool_ID
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_AskQuestion
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_ask_prefix
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_skip
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple_allow_once
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/ambiguous_other
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/malformed_options
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/direct
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiselect
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/source-derived_fallback
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_tool_ID
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_AskQuestion
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_ask_prefix
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_skip
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple_allow_once
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/ambiguous_other
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/malformed_options
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/direct
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiselect
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/source-derived_fallback
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_tool_ID
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_AskQuestion
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_ask_prefix
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_skip
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple_allow_once
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/ambiguous_other
+=== RUN   TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/malformed_options
+--- PASS: TestCursorQuestionPolicyPreservesIndependentHold (0.45s)
+    --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true (0.11s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/direct (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiselect (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/source-derived_fallback (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_tool_ID (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_AskQuestion (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_ask_prefix (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_skip (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple_allow_once (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/ambiguous_other (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/malformed_options (0.00s)
+    --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false (0.12s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/direct (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiselect (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/source-derived_fallback (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_tool_ID (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_AskQuestion (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_ask_prefix (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_skip (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple_allow_once (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/ambiguous_other (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/malformed_options (0.00s)
+    --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true (0.11s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/direct (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiselect (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/source-derived_fallback (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_tool_ID (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_AskQuestion (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_ask_prefix (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_skip (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple_allow_once (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/ambiguous_other (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/malformed_options (0.00s)
+    --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false (0.11s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/direct (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiselect (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/source-derived_fallback (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_tool_ID (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_AskQuestion (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_ask_prefix (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_skip (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple_allow_once (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/ambiguous_other (0.00s)
+        --- PASS: TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/malformed_options (0.00s)
+=== RUN   TestCursorPublicWaitingPromptAdmission
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_waiting
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor submission 1 accepted\r\nSynthetic reply: typed\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_waiting
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=2 want=2 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor submission 1 accepted\r\nSynthetic reply: typed\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/pending_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/before publicState=pending EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/initial_start_report_does_not_admit_follow-up
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=UserPromptSubmit/after publicState=working EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> \r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\nSynthetic reply: initial\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/initial_prompt_does_not_double_admit
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\nSynthetic reply: initial\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_two_Enters_across_confirm
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"second","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=2 want=2 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor submission 1 accepted\r\n\r\x1b[2K> \r\x1b[2K> s\r\x1b[2K> se\r\x1b[2K> sec\r\x1b[2K> seco\r\x1b[2K> secon\r\x1b[2K> second\r\n\r\x1b[2K> ^Cursor submission 2 accepted\r\nSynthetic reply: typed\r\nCursor turn complete\r\n> Synthetic reply: second\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_launch_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_session_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_runtime_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_held_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_two_Enters_across_confirm
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"second","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=3 want=3 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor submission 1 accepted\r\n\r\x1b[2K> \r\x1b[2K> s\r\x1b[2K> se\r\x1b[2K> sec\r\x1b[2K> seco\r\x1b[2K> secon\r\x1b[2K> second\r\n\r\x1b[2K> ^Cursor submission 2 accepted\r\nSynthetic reply: typed\r\nCursor turn complete\r\n> Synthetic reply: second\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_launch_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_session_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_runtime_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_held_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+--- PASS: TestCursorPublicWaitingPromptAdmission (5.54s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_waiting (0.36s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_waiting (0.46s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/pending_refuses (0.27s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/initial_start_report_does_not_admit_follow-up (0.36s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/initial_prompt_does_not_double_admit (0.36s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_two_Enters_across_confirm (0.49s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_launch_replacement_refuses (0.29s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_session_replacement_refuses (0.29s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_runtime_replacement_refuses (0.28s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_held_replacement_refuses (0.28s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_two_Enters_across_confirm (0.58s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_launch_replacement_refuses (0.37s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_session_replacement_refuses (0.38s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_runtime_replacement_refuses (0.37s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_held_replacement_refuses (0.39s)
+=== RUN   TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch
+--- PASS: TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch (0.40s)
+=== RUN   TestCursorFIFOExactTextAndLifecycle
+--- PASS: TestCursorFIFOExactTextAndLifecycle (0.70s)
+=== RUN   TestCursorControlsRetireQueuedSubmissions
+=== RUN   TestCursorControlsRetireQueuedSubmissions/interrupt
+=== RUN   TestCursorControlsRetireQueuedSubmissions/exit
+--- PASS: TestCursorControlsRetireQueuedSubmissions (0.86s)
+    --- PASS: TestCursorControlsRetireQueuedSubmissions/interrupt (0.49s)
+    --- PASS: TestCursorControlsRetireQueuedSubmissions/exit (0.36s)
+=== RUN   TestCursorQueuedPromptWaitsForEveryDurableHold
+--- PASS: TestCursorQueuedPromptWaitsForEveryDurableHold (0.79s)
+=== RUN   TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss
+=== RUN   TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/launch
+    session_controls_linux_test.go:325: honest failure: Cursor launch changed
+=== RUN   TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/conversation
+    session_controls_linux_test.go:325: honest failure: Cursor report was not applied
+=== RUN   TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/connection
+    session_controls_linux_test.go:325: honest failure: Cursor report failed
+=== RUN   TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/runtime_crash
+    session_controls_linux_test.go:325: honest failure: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss (1.25s)
+    --- PASS: TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/launch (0.34s)
+    --- PASS: TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/conversation (0.32s)
+    --- PASS: TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/connection (0.31s)
+    --- PASS: TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/runtime_crash (0.28s)
+=== RUN   TestCursorProtocolQueuedUnwrittenPromptRetiresBeforeBytes
+--- PASS: TestCursorProtocolQueuedUnwrittenPromptRetiresBeforeBytes (0.00s)
+=== RUN   TestCursorPartialPromptWriteIsUncertainAndNeverReplayed
+--- PASS: TestCursorPartialPromptWriteIsUncertainAndNeverReplayed (0.00s)
+=== RUN   TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten
+    session_controls_linux_test.go:451: final guard retired before Write: calls=2 raw_peer_bytes=""
+--- PASS: TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten (0.00s)
+=== RUN   TestCursorBlockedPaneRenderingCannotDelayCancellation
+--- PASS: TestCursorBlockedPaneRenderingCannotDelayCancellation (0.34s)
+=== RUN   TestCursorRecoveryCompletionCannotRestartCancellationDeadline
+    session_persistence_linux_test.go:132: completion-first recovery retained original 3s deadline: 3.026655101s; owned runtime 7612 terminated; two controls, no ended success or prompt replay
+--- PASS: TestCursorRecoveryCompletionCannotRestartCancellationDeadline (3.22s)
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.037734303s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.045350419s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.021897533s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate
+    session_persistence_linux_test.go:175: blocked submission_started: Cursor ACP operation timed out after 3.021333803s
+--- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync (13.20s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt (3.24s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit (3.40s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy (3.28s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate (3.28s)
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/runtime_verification
+    session_persistence_linux_test.go:250: initial pre-active failure: ACP input binding changed
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/UserPromptSubmit
+    session_persistence_linux_test.go:250: initial pre-active failure: ACP input binding changed
+--- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking (0.48s)
+    --- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/runtime_verification (0.23s)
+    --- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/UserPromptSubmit (0.25s)
+=== RUN   TestCursorRotationHeldCapacityIsProvisional
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/entries
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/bytes
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/individual
+--- PASS: TestCursorRotationHeldCapacityIsProvisional (15.25s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/entries (3.94s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/bytes (9.91s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/individual (1.40s)
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor update lacks session attribution
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor event session mismatch
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority (1.21s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old (0.44s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic (0.21s)
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause
+--- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases (5.51s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/exit (0.31s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/interrupt (0.27s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit (0.26s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt (0.22s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause (0.41s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit (0.27s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt (0.24s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause (0.42s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit (0.31s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt (0.26s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause (0.43s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit (0.32s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt (0.27s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause (0.46s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit (0.32s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt (0.28s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause (0.46s)
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published_write
+--- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld (1.11s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed (0.23s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published (0.29s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted (0.30s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published_write (0.28s)
+=== RUN   TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue
+--- PASS: TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue (4.16s)
+=== RUN   TestCursorRotationRetiresPermissionPlanCallbacksAndChoices
+--- PASS: TestCursorRotationRetiresPermissionPlanCallbacksAndChoices (0.69s)
+=== RUN   TestCursorRotationAliasesIdleAndActive
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=true
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=true
+--- PASS: TestCursorRotationAliasesIdleAndActive (2.30s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=false (0.55s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=true (0.61s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=false (0.54s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=true (0.61s)
+=== RUN   TestCursorRotationPublicationAndEveryHoldPrecedePromotion
+--- PASS: TestCursorRotationPublicationAndEveryHoldPrecedePromotion (0.53s)
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/rejection
+    session_rotation_linux_test.go:326: causal failure: Cursor ACP request failed; check the selected runtime and existing login
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/missing_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/reused_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/archive
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/authority_loss
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/runtime_death
+    session_rotation_linux_test.go:326: causal failure: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationFailureRefusesEveryHeldInput (2.04s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/rejection (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/missing_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/reused_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/archive (0.31s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit (0.28s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/authority_loss (0.27s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/runtime_death (0.22s)
+=== RUN   TestCursorRotationRepeatedControlsPreserveFirstDeadline
+--- PASS: TestCursorRotationRepeatedControlsPreserveFirstDeadline (3.22s)
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report
+--- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome (0.97s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync (0.49s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report (0.48s)
+=== RUN   TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication
+--- PASS: TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication (0.44s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	74.859s

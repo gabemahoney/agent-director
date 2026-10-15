@@ -1,0 +1,460 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestProtocolCorrelationAndTransport
+--- PASS: TestProtocolCorrelationAndTransport (0.00s)
+=== RUN   TestProtocolCloseCompletesAcceptedFramesExactlyOnce
+=== RUN   TestProtocolCloseCompletesAcceptedFramesExactlyOnce/active_and_queued
+=== RUN   TestProtocolCloseCompletesAcceptedFramesExactlyOnce/concurrent_enqueue
+--- PASS: TestProtocolCloseCompletesAcceptedFramesExactlyOnce (0.05s)
+    --- PASS: TestProtocolCloseCompletesAcceptedFramesExactlyOnce/active_and_queued (0.02s)
+    --- PASS: TestProtocolCloseCompletesAcceptedFramesExactlyOnce/concurrent_enqueue (0.02s)
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/none
+    request_boundary_linux_test.go:482: first guard=<nil> storeBusy=false completion=<nil> elapsed=97.325751ms finiteHold=80ms remainingFrame=2.989185577s remainingApproval=19.824542965s durableAck=true firstBytes="{\"id\":\"first\",\"jsonrpc\":\"2.0\",\"result\":{\"outcome\":{\"optionId\":\"allow-once\",\"outcome\":\"selected\"}}}\n"
+    request_boundary_linux_test.go:526: later independently acknowledged response={"id":"first","jsonrpc":"2.0","result":{"outcome":{"optionId":"allow-once","outcome":"selected"}}}
+        {"id":"second","jsonrpc":"2.0","result":{"outcome":{"optionId":"allow-once","outcome":"selected"}}}
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/none
+    request_boundary_linux_test.go:482: first guard=<nil> storeBusy=false completion=<nil> elapsed=98.45937ms finiteHold=80ms remainingFrame=2.989578646s remainingApproval=19.833423347s durableAck=true firstBytes="{\"id\":\"first\",\"jsonrpc\":\"2.0\",\"result\":{\"outcome\":{\"optionId\":\"reject-once\",\"outcome\":\"selected\"}}}\n"
+    request_boundary_linux_test.go:526: later independently acknowledged response={"id":"first","jsonrpc":"2.0","result":{"outcome":{"optionId":"reject-once","outcome":"selected"}}}
+        {"id":"second","jsonrpc":"2.0","result":{"outcome":{"optionId":"reject-once","outcome":"selected"}}}
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry
+    request_boundary_linux_test.go:482: first guard=ErrStoreBusy: the store's connection was not free within 160 ms: another call of this process held it storeBusy=true completion=ErrStoreBusy: the store's connection was not free within 160 ms: another call of this process held it elapsed=161.258172ms finiteHold=400ms remainingFrame=160.204839ms remainingApproval=-242.396496ms durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/expiry
+    request_boundary_linux_test.go:482: first guard=ErrStoreBusy: the store's connection was not free within 158 ms: another call of this process held it storeBusy=true completion=ErrStoreBusy: the store's connection was not free within 158 ms: another call of this process held it elapsed=159.121464ms finiteHold=400ms remainingFrame=159.003191ms remainingApproval=-243.692744ms durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/cancel
+    request_boundary_linux_test.go:482: first guard=Cursor request response retired storeBusy=false completion=Cursor request response retired elapsed=88.757966ms finiteHold=80ms remainingFrame=2.989672077s remainingApproval=19.842717302s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/cancel
+    request_boundary_linux_test.go:482: first guard=Cursor request response retired storeBusy=false completion=Cursor request response retired elapsed=88.255306ms finiteHold=80ms remainingFrame=2.989657516s remainingApproval=19.844575106s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/runtime_death
+    request_boundary_linux_test.go:482: first guard=Cursor runtime identity unavailable storeBusy=false completion=Cursor runtime identity unavailable elapsed=84.630968ms finiteHold=80ms remainingFrame=2.989666766s remainingApproval=19.846516162s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/runtime_death
+    request_boundary_linux_test.go:482: first guard=Cursor runtime identity unavailable storeBusy=false completion=Cursor runtime identity unavailable elapsed=84.500898ms finiteHold=80ms remainingFrame=2.989486786s remainingApproval=19.836754689s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/launch
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.190815ms finiteHold=80ms remainingFrame=2.996212842s remainingApproval=19.834429389s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/launch
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.103836ms finiteHold=80ms remainingFrame=2.996060143s remainingApproval=19.834446317s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/session
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.270436ms finiteHold=80ms remainingFrame=2.996263402s remainingApproval=19.833754915s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/session
+    request_boundary_linux_test.go:482: first guard=store: Cursor launch authority changed storeBusy=false completion=store: Cursor launch authority changed elapsed=106.152316ms finiteHold=80ms remainingFrame=2.996134593s remainingApproval=19.836117429s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/connection
+    request_boundary_linux_test.go:482: first guard=store: Cursor connection authority changed storeBusy=false completion=store: Cursor connection authority changed elapsed=106.967835ms finiteHold=80ms remainingFrame=2.996192893s remainingApproval=19.831991688s durableAck=true firstBytes=""
+=== RUN   TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/connection
+    request_boundary_linux_test.go:482: first guard=store: Cursor connection authority changed storeBusy=false completion=store: Cursor connection authority changed elapsed=107.004425ms finiteHold=80ms remainingFrame=2.996251712s remainingApproval=19.831855646s durableAck=true firstBytes=""
+--- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention (5.35s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/none (0.81s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/none (0.28s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry (0.54s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/expiry (0.55s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/cancel (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/cancel (0.57s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/runtime_death (0.67s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/runtime_death (0.23s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/launch (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/launch (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/session (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/session (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/connection (0.24s)
+    --- PASS: TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/connection (0.25s)
+=== RUN   TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch
+--- PASS: TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch (0.39s)
+=== RUN   TestCursorFIFOExactTextAndLifecycle
+--- PASS: TestCursorFIFOExactTextAndLifecycle (0.71s)
+=== RUN   TestCursorControlsRetireQueuedSubmissions
+=== RUN   TestCursorControlsRetireQueuedSubmissions/interrupt
+=== RUN   TestCursorControlsRetireQueuedSubmissions/exit
+--- PASS: TestCursorControlsRetireQueuedSubmissions (0.86s)
+    --- PASS: TestCursorControlsRetireQueuedSubmissions/interrupt (0.51s)
+    --- PASS: TestCursorControlsRetireQueuedSubmissions/exit (0.35s)
+=== RUN   TestCursorQueuedPromptWaitsForEveryDurableHold
+--- PASS: TestCursorQueuedPromptWaitsForEveryDurableHold (0.74s)
+=== RUN   TestCursorEligiblePublicPauseCancelsAcceptedQueue
+--- PASS: TestCursorEligiblePublicPauseCancelsAcceptedQueue (0.52s)
+=== RUN   TestCursorRecoveryCompletionCannotRestartCancellationDeadline
+    session_persistence_linux_test.go:132: completion-first recovery retained original 3s deadline: 3.022803582s; owned runtime 5434 terminated; two controls, no ended success or prompt replay
+--- PASS: TestCursorRecoveryCompletionCannotRestartCancellationDeadline (3.22s)
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.027277s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.018190216s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.021926283s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate
+    session_persistence_linux_test.go:175: blocked submission_started: Cursor prompt start record timed out after 3.024647731s
+--- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync (12.99s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt (3.22s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit (3.22s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy (3.28s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate (3.28s)
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/runtime_verification
+    session_persistence_linux_test.go:250: initial pre-active failure: ACP input binding changed
+=== RUN   TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/UserPromptSubmit
+    session_persistence_linux_test.go:250: initial pre-active failure: ACP input binding changed
+--- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking (0.44s)
+    --- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/runtime_verification (0.21s)
+    --- PASS: TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/UserPromptSubmit (0.23s)
+=== RUN   TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput
+--- PASS: TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput (0.44s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	25.731s
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/SessionEnd
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/SessionStart
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/UserPromptSubmit
+=== RUN   TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/SessionEnd
+--- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent (5.72s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/UserPromptSubmit (0.17s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/current/SessionEnd (0.10s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/SessionStart (0.21s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/no_independent_binding/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/controller/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/unreadable_parent/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_instance/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_gateway/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/gateway_reused/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_output_pipe/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_input_FD/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/UserPromptSubmit (0.93s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/stale_token/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/UserPromptSubmit (0.11s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/old_life/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/runtime_start/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_connection/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_pipe/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/SessionStart (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/UserPromptSubmit (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_FD/SessionEnd (0.08s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/wrong_session/SessionEnd (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/SessionStart (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/UserPromptSubmit (0.09s)
+    --- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent/false_termination/SessionEnd (0.09s)
+=== RUN   TestCursorRuntimeConditionalBindingWrites
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InstanceID/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InstanceID/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Token/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Token/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Life/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Life/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/GatewayPID/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/GatewayPID/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/GatewayStart/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/GatewayStart/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/RuntimePID/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/RuntimePID/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/RuntimeStart/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/RuntimeStart/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Connection/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/Connection/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InputPipe/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InputPipe/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/OutputPipe/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/OutputPipe/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InputFD/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/InputFD/retirement
+=== RUN   TestCursorRuntimeConditionalBindingWrites/OutputFD/session
+=== RUN   TestCursorRuntimeConditionalBindingWrites/OutputFD/retirement
+--- PASS: TestCursorRuntimeConditionalBindingWrites (1.58s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InstanceID/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InstanceID/retirement (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Token/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Token/retirement (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Life/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Life/retirement (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/GatewayPID/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/GatewayPID/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/GatewayStart/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/GatewayStart/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/RuntimePID/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/RuntimePID/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/RuntimeStart/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/RuntimeStart/retirement (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Connection/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/Connection/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InputPipe/session (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InputPipe/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/OutputPipe/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/OutputPipe/retirement (0.07s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InputFD/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/InputFD/retirement (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/OutputFD/session (0.06s)
+    --- PASS: TestCursorRuntimeConditionalBindingWrites/OutputFD/retirement (0.06s)
+=== RUN   TestSessionHistoryReArchiveAcrossLives
+=== RUN   TestSessionHistoryReArchiveAcrossLives/cross-life_path_known
+=== RUN   TestSessionHistoryReArchiveAcrossLives/cross-life_path_NULL
+=== RUN   TestSessionHistoryReArchiveAcrossLives/same-life_path_known
+=== RUN   TestSessionHistoryReArchiveAcrossLives/same-life_NULL_path_keeps_the_known_one
+=== RUN   TestSessionHistoryReArchiveAcrossLives/same-life_NULL_entry_path_filled
+--- PASS: TestSessionHistoryReArchiveAcrossLives (0.49s)
+    --- PASS: TestSessionHistoryReArchiveAcrossLives/cross-life_path_known (0.10s)
+    --- PASS: TestSessionHistoryReArchiveAcrossLives/cross-life_path_NULL (0.10s)
+    --- PASS: TestSessionHistoryReArchiveAcrossLives/same-life_path_known (0.10s)
+    --- PASS: TestSessionHistoryReArchiveAcrossLives/same-life_NULL_path_keeps_the_known_one (0.10s)
+    --- PASS: TestSessionHistoryReArchiveAcrossLives/same-life_NULL_entry_path_filled (0.10s)
+=== RUN   TestSessionHistoryReadFiltersByLife
+--- PASS: TestSessionHistoryReadFiltersByLife (0.11s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	7.925s
+=== RUN   TestCursorHandleRequiresIndependentVerifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_connection
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_connection
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_connection
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_connection
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_connection
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/verified
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/missing_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/verification_error
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/replacement_during_verifier
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/unknown_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/child_origin
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/nested_child
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/surviving_report_after_retirement
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_immediate_parent
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/reused_parent_PID
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_session
+=== RUN   TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_connection
+--- PASS: TestCursorHandleRequiresIndependentVerifier (7.43s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/verified (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/missing_verifier (0.11s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/verification_error (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/replacement_during_verifier (0.27s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/unknown_origin (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/child_origin (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/nested_child (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/surviving_report_after_retirement (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_immediate_parent (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/reused_parent_PID (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_session (0.06s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=false/wrong_connection (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/verified (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/missing_verifier (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/verification_error (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/replacement_during_verifier (0.14s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/unknown_origin (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/child_origin (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/nested_child (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/surviving_report_after_retirement (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_immediate_parent (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/reused_parent_PID (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_session (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Stop/held=true/wrong_connection (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/verified (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/missing_verifier (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/verification_error (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/replacement_during_verifier (0.14s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/unknown_origin (0.70s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/child_origin (0.28s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/nested_child (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/surviving_report_after_retirement (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_immediate_parent (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/reused_parent_PID (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_session (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=false/wrong_connection (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/verified (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/missing_verifier (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/verification_error (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/replacement_during_verifier (0.15s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/unknown_origin (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/child_origin (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/nested_child (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/surviving_report_after_retirement (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_immediate_parent (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/reused_parent_PID (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_session (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/Interrupt/held=true/wrong_connection (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/verified (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/missing_verifier (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/verification_error (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/replacement_during_verifier (0.13s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/unknown_origin (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/child_origin (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/nested_child (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/surviving_report_after_retirement (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_immediate_parent (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/reused_parent_PID (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_session (0.08s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=false/wrong_connection (0.07s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/verified (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/missing_verifier (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/verification_error (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/replacement_during_verifier (0.15s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/unknown_origin (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/child_origin (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/nested_child (0.09s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/surviving_report_after_retirement (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_immediate_parent (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/reused_parent_PID (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_session (0.10s)
+    --- PASS: TestCursorHandleRequiresIndependentVerifier/UserPromptSubmit/held=true/wrong_connection (0.10s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/hook	7.444s
+testing: warning: no tests to run
+PASS
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director	0.757s [no tests to run]

@@ -1,0 +1,158 @@
+{
+  "role": "apiary_test_writer_e3_task2_prestart_validate",
+  "result": "R3 independently revalidated; unchanged retained cancel-before-start leaf passes. Three-way real-store reconciliation and negative reporter handoff coverage pass. Initial behavioral scope complete; final docs/advice/quality/full suite remain downstream.",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.pp": "active -> active -> done",
+    "t3.jf1.r8.sr.eg": "done -> active -> done; reopened only for three-way reconciliation proof"
+  },
+  "untouched_statuses": ".8z done; .e9 active; .78/.66 defined; Task2/E3 active; Task3 unstarted; E2 intentionally active. No statuses beyond owned subtasks changed.",
+  "files_changed_this_pass": [
+    "internal/cursorhost/report_linux_test.go",
+    "internal/store/cursor_rotation_test.go"
+  ],
+  "evidence_files": [
+    "prestart-validation/FINAL-report.json",
+    "prestart-validation/report-evidence.mjs",
+    "prestart-validation/latest-leaf-observations.json",
+    "prestart-validation/05-report-generator-unavailable.log",
+    "prestart-validation/06-report-generation.log",
+    "prestart-validation/01-new-reconciliation-race.log",
+    "prestart-validation/02-controller-affected-race.log",
+    "prestart-validation/03-real-pane-affected-race.log",
+    "prestart-validation/04-outgoing-full-snapshot-race.log"
+  ],
+  "test_sha256": {
+    "internal/cursorhost/report_linux_test.go": "c5e6cc7cefc9a0589a1a742f8b690db17a303b9b210e29c9f57d05410205ee75",
+    "internal/store/cursor_rotation_test.go": "360c7e088516f9a0668f737a9be0ab0dbb57eee0a1075d102e1a400cfd793f72"
+  },
+  "source_sha256": {
+    "internal/cursorhost/report.go": "7accf4854e18fdf6b89be295fb1ee0b90fd917f4d4b3b29b8df2154dbac5c4cc",
+    "internal/store/cursor_rotation.go": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+    "cmd/agent-director/cursor_host_cmd.go": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+    "cmd/agent-director/main.go": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "internal/cursorhost/input.go": "024bf15c29221fad37d93918720fc7d9e6d0d61c72c1846e603dbe05bd2d9e0d",
+    "internal/cursorhost/protocol.go": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+    "internal/cursorhost/requests.go": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "internal/cursorhost/session.go": "00856c3cd90d904ef82f5c892d9200d5bd33200884597a54b5981a997ded3f50",
+    "internal/cursorhost/transcript_linux.go": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+    "internal/hook/handler.go": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8"
+  },
+  "source_integrity": "All ten assigned production sources match engineer prestart-fix report; no source or documentation changes in this pass.",
+  "evidence_generation": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/prestart-validation/report-evidence.mjs' passed (06-report-generation.log); source/fixture hashes and named receipt outcomes independently verified. git diff --check passed. Go formatting ran only in make sandbox.",
+  "unchanged_other_test_fixture_sha256": {
+    "internal/cursorhost/request_runtime_linux_test.go": "301fd4a426b50e5adf68b2246f33678b5864f3d0c399811569352f183ee94734",
+    "internal/cursorhost/session_fixture_linux_test.go": "141c9bdbb40290e9771f9a49b20cfdb89c2f6d3d1aa04110e167718c1eab4d77",
+    "internal/cursorhost/session_pause_linux_test.go": "5232bc659354c851ee26b79ab35b95c59d15ce38283437b15b3ee201a45b5b65",
+    "internal/cursorhost/session_rotation_linux_test.go": "b1e8e8d9c3cd6cd42da86a1c947040cc23ecb657f8c0097de87aebdd9dbbed70",
+    "internal/cursorhost/session_rotation_boundary_linux_test.go": "95404907768d7bdf6a075089d2b175c0edad190f62f084c6e92175ba8b224604",
+    "internal/hook/cursor_rotation_test.go": "147276f44dbf1880c25699ca8921e8b59305f2513ce0dbf9ecf10b35ce5cf14c",
+    "internal/testsupport/cursorfix/cursorfix.go": "667337f9d77c9f83ad9a515144660490b70865224af87239f482ab7ade93ad22",
+    "internal/testsupport/cursorfix/runtime.js": "6d34e8cb81e70e52a9e3229d6e91d615ab2abfb285e5b9286ace79700f0928e0",
+    "test/realtmux/cursor_launch_test.go": "c807b26b510cd6efa03f5d914ccb70f20198e0a2de05450fe2670897615e52d4",
+    "test/realtmux/cursor_failure_linux_test.go": "daf1b187711c8934a85b2bb091cdf37e5da2c340b2f668a95687aa98e665f9b2"
+  },
+  "coverage": {
+    "unchanged_and_committed": "Extended existing successive real-transaction owner: exact outgoing snapshot is unchanged-only and ObserveCursorRotation remains false; after actual atomic fresh publication reconciliation is committed-only. Existing independent before-COMMIT visibility and committed-only observer checks retained.",
+    "unknown_outgoing": "Added reconciliation assertions to existing changed-authority matrix, retaining original publisher refusal and replacement-preservation assertions: row snapshot version, row process without version change, old row session, launch/life/socket/server/pane, path, retirement, runtime pid/start/connection/pipes/fds and deletion all yield neither state. One inconsistent outgoing current-life archive case also yields neither. No copied authority matrix.",
+    "unknown_fresh_and_failed_reads": "Existing committed-publication negative owner checks both results for missing/wrong-life/wrong-path archive, replaced runtime/launch/pane/path. Explicit cancelled/expired context and closed-store errors; real sole-connection contention expires within caller budget and yields neither. Positive baseline retained before every corruption.",
+    "reporter": "Retained cancel-before-start leaf body/assertions/deadline unchanged. Added actual after-COMMIT runtime-connection replacement followed by cancellation: final unknown proof cannot call rotationReconciled. Existing deadline stop additionally requires no final reconciliation callback; independently proven prior committed observation is retained.",
+    "controller": "Affected rotation/intentional shutdown, original control deadline, blocked Sync/recovery, public eligible pause and unknown holds pass, including unreleased committed-hook exit/pause/interrupt/timeout/death; R2 parked provisional admission and S1-S3 causal regressions remain green.",
+    "physical_pane": "Existing actual built CLI/direct-parent hook/real tmux success, pause and persistence faults pass with synthetic ACP. No authenticated acceptance or Docker collector execution claimed."
+  },
+  "receipts": {
+    "01-new-reconciliation-race.log": {
+      "command": "make sandbox CMD='gofmt -w internal/store/cursor_rotation_test.go internal/cursorhost/report_linux_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/store ./internal/cursorhost -run \"Test(CursorRotationAtomicPublicationAndSuccessiveHistory|CursorRotationRejectsChangedExaminedAuthority|CursorRotationReconciliation|CursorRotationObservation|ReporterObservesCommittedRotationBeforeStalledHookReturns)\"'",
+      "result": "passed",
+      "sha256": "5fec8f99c2d64199a5b2cd1a6f69ee90180fc271786edda911ce816d0b62385d",
+      "pass_lines_including_parent_subtest_overlap": 39,
+      "leaf_outcomes": {
+        "PASS": 36,
+        "FAIL": 0,
+        "SKIP": 0
+      },
+      "data_race_warnings": 0,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t3.527s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t3.848s"
+      ]
+    },
+    "02-controller-affected-race.log": {
+      "command": "make sandbox CMD='env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost -run \"Test(CursorRotation|CursorDelayedOldAdmission|CursorEligiblePublicPause|CursorInterruptAndRotation|CursorControlDeadline|CursorRecoveryCompletion)\"'",
+      "result": "passed",
+      "sha256": "822a085cdc93866c9e9d2fe8dd2f767d4811ececd8fa91e465b8ac855c86db59",
+      "pass_lines_including_parent_subtest_overlap": 70,
+      "leaf_outcomes": {
+        "PASS": 61,
+        "FAIL": 0,
+        "SKIP": 0
+      },
+      "data_race_warnings": 0,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t60.047s"
+      ]
+    },
+    "03-real-pane-affected-race.log": {
+      "command": "make sandbox CMD='env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./test/realtmux -run \"TestCursor(FreshRealPanePromptsRefusalsAndPause|PersistenceFailureStopsAdmission)$\"'",
+      "result": "passed",
+      "sha256": "7d8e74396106dc4cd21050a9fc246274fb183d139af73fbc71bea5e080f70e0f",
+      "pass_lines_including_parent_subtest_overlap": 10,
+      "leaf_outcomes": {
+        "PASS": 9,
+        "FAIL": 0,
+        "SKIP": 0
+      },
+      "data_race_warnings": 0,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t10.891s"
+      ]
+    },
+    "04-outgoing-full-snapshot-race.log": {
+      "command": "make sandbox CMD='gofmt -w internal/store/cursor_rotation_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/store -run \"TestCursorRotationRejectsChangedExaminedAuthority/snapshot_process$\"'",
+      "result": "passed",
+      "sha256": "fc10d0221a53bb2435169dd7a3aa31d44378eef56ba0919e93ab1054a70369e1",
+      "pass_lines_including_parent_subtest_overlap": 2,
+      "leaf_outcomes": {
+        "PASS": 1,
+        "FAIL": 0,
+        "SKIP": 0
+      },
+      "data_race_warnings": 0,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t0.130s"
+      ]
+    }
+  },
+  "counts": {
+    "latest_distinct_leaves": {
+      "PASS": 107,
+      "FAIL": 0,
+      "SKIP": 0
+    },
+    "data_race_warnings": 0,
+    "limit": "Distinct named leaves across this pass receipts; parent/subtest overlap excluded. Not a full-suite total. Added snapshot-process leaf alone was run after addition; no unrelated rerun."
+  },
+  "causal_R3": {
+    "red": "../prestart-fix/01-retained-red.log",
+    "green": "01-new-reconciliation-race.log: TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start",
+    "limit": "Retained red is engineer pre-repair receipt, independently read; this pass did not restore old source. Reporter-level regression unchanged. No deterministic full Run pre-Start micro-window reproduction claimed. Source inspection confirms intentional-and-reconciled consumes positive handoff; controller tests cover other boundaries."
+  },
+  "review": "Reuses existing factories, negative matrices, subprocess barrier and real SQL. No source seam, copied controller, deadline extension, fake publication, assertion weakening or retry-until-green. Representative row-process mutation supplements row-version negative to check full snapshot participation without duplicating shared per-field snapshot suite.",
+  "failed_receipts": [
+    {
+      "05-report-generator-unavailable.log": "Evidence generator only: python3 absent from sandbox; make exit 2/underlying 127. No tests ran. Replaced generator with existing Bun runtime; no install or test rerun."
+    }
+  ],
+  "remaining_findings": [],
+  "remaining_work": [
+    "One settled documentation/SRD pass",
+    "Fresh final Test Writer: postdoc advice .78, final quality .e9 and sole settled make test-sandbox .66",
+    "Coordinator commit and user exact-revision scheduler Docker gate before Task3"
+  ],
+  "full_suite": "NOT RUN; explicitly not assigned this pass.",
+  "integration": "NOT RUN; not dispatched as integration Test Writer. Docker groups/collectors remain user scheduler only.",
+  "model_assessment": "TLA+ not applicable: no spec/tla inputs changed; zero formal/baseline jobs.",
+  "execution_boundary": "All repository execution/format/tests/evidence scripts through make sandbox CMD, isolated sandbox HOME and existing per-test stores/sockets/owned processes. No .claude access, outside-workspace discovery, real AD stores, credentials/login/logout, live Cursor, Docker groups/collectors, scheduler/TLC/Java/parser, source/docs edits, commit/push, delegation or midflight messages. CLAUDE.md used only for permitted documentation locations.",
+  "deviations": [],
+  "questions_for_caller": []
+}

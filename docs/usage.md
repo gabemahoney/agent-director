@@ -119,7 +119,20 @@ the previous turn and all outstanding decision holds have resolved. See
 
 Ctrl-C requests interruption and cancels affected queued submissions
 individually. Controls take priority over queued input. `/clear` and `/new`
-remain visibly refused; `/exit` is a local exit command. `pause` on an
+are aliases: cancel the current turn and accepted waiting work, then create a
+fresh conversation within the same life. Cancelled accepted input never moves
+to the new conversation. Repeated aliases while rotation is pending are
+reported and ignored; they do not start another rotation or extend its deadline.
+
+Complete input consumed during rotation is held provisionally, without admission
+to either conversation. This separate holding capacity is 32 submissions and
+8 MiB, with the same 1 MiB individual limit. A confirmed fresh identity alone
+does not admit held input: publication must also record the current conversation
+and outgoing history, and all remaining decision holds must resolve. Eligible
+held input then joins the fresh conversation's queue in its original observed
+order. See [The dialog hold](permissions.md#the-dialog-hold).
+
+`/exit` is a local exit command. `pause` on an
 eligible waiting row clears the draft and requests exit. Session termination
 is reported only after the owned runtime is gone. Refusal, interruption and
 shutdown recovery follow the
@@ -138,7 +151,7 @@ and question behavior is in [Permissions](permissions.md#cursor-spawns).
 ### Cursor transcripts
 
 `get` exposes the confirmed conversation's gateway transcript in `jsonl_path`.
-It is an ordered JSONL file beneath
+It is one ordered JSONL file for the launch beneath
 `~/.config/agent-director/cursor-transcripts/`, with private access. It records
 launch/conversation identity and submission identities linking accepted input,
 dispatch starts, updates, cancellation and confirmed outcomes; refusals and
@@ -146,6 +159,12 @@ uncertain delivery or completion are recorded separately. A dispatch-start
 record precedes prompt delivery and does not prove Cursor received it.
 Recorded admission does not establish execution or durable resumability.
 The transcript is separate from Cursor's native session storage.
+After rotation, `get`'s current session and `prior_sessions` can reference this
+same file within the current life. Individual records retain their known
+conversation identity; provisionally held or refused input has no admitted
+conversation. Rotation requested, fresh identity confirmed and publication are separate
+records. Known retired traffic retains its outgoing attribution; unknown origin
+stays unknown. These references do not provide Cursor resume or replay.
 A path appears only after it is recorded by an accepted startup report;
 `transcript_status` describes the recorded reference, not a fresh file check.
 Availability and persistence failures are covered by the

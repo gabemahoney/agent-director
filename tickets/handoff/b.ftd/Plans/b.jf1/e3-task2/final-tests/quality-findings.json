@@ -1,0 +1,101 @@
+{
+  "guide": "docs/test-writing-guide.md Pre-Submit Checklist and Red Flags; CLAUDE.md Documentation Locations",
+  "reviewed_changed_files": [
+    "internal/cursorhost/report_linux_test.go",
+    "internal/cursorhost/request_runtime_linux_test.go",
+    "internal/cursorhost/session_fixture_linux_test.go",
+    "internal/cursorhost/session_capacity_linux_test.go",
+    "internal/cursorhost/session_pause_linux_test.go",
+    "internal/cursorhost/session_rotation_linux_test.go",
+    "internal/cursorhost/session_rotation_boundary_linux_test.go",
+    "internal/store/cursor_rotation_test.go",
+    "internal/hook/cursor_rotation_test.go",
+    "internal/testsupport/cursorfix/cursorfix.go",
+    "internal/testsupport/cursorfix/runtime.js",
+    "test/realtmux/cursor_launch_test.go",
+    "test/realtmux/cursor_failure_linux_test.go"
+  ],
+  "findings_closed": [
+    "Capacity owner now follows later explicit eligible retry and proves no automatic replay before it. Its exact pane notice is awaited separately from protected record visibility, preserving the existing asynchronous rendering boundary and unchanged observer deadline; second full-run failure receipt retained.",
+    "Committed report-failure owner now pins actual advice and inspects real public current session/history.",
+    "Existing actual-hook archive-fault owner now follows public failed-row inspection, conditional cleanup and fresh UUID launch.",
+    "Full-suite inherited aggregate-byte refill observer included batch persistence in its first-peer timeout. Refill now consumes actual waiting admission snapshots before emitting the same complete batch, observes each real acceptance separately using existing protected record counter, then retains every original peer/FIFO/raw-byte/cancellation assertion. First attempted per-insertion synchronization crossed legitimate busy admission windows; retained failed targeted receipt prompted the corrected consumption boundary. No product/observer deadline widened."
+  ],
+  "mandatory_findings_remaining": [
+    "Historical pkg/api 09 deadline failures now fully accounted for, but causal disposition remains pending after bounded investigation."
+  ],
+  "ownership": {
+    "controller": "Actual routing/consumption-time admission, provisional capacities, FIFO/control/retirement, independent holds, protected attribution/disposition.",
+    "reporter": "Real subprocess report and bounded commit/reconciliation handoff before hook return; no fabricated published callback.",
+    "store": "Actual transaction atomicity, archive/runtime/COMMIT faults, full authority and three-way snapshot/connection budget. Store synthetic verifier is explicitly not kernel evidence.",
+    "hook": "Payload/direct-parent/deadline authentication and actual production handler; actual kernel verification belongs to real-pane owner.",
+    "real_pane": "Production CLI/gateway/direct-child hook and actual tmux, synthetic ACP peer; distinct physical boundary success/persistence failure/recovery."
+  },
+  "checks": [
+    "Matrices parameterized; >500-line files use related feature groups/shared factories, no copy-pasted controller/runtime or helper/meta-tests.",
+    "Reuse cursorfix, requestEnv, completeInput, observedWire, recordBarrier, rotationBarrier and guarded store/hook factories. Report helper derives desired fresh identity solely from actual payload; stored identity is outgoing authority only.",
+    "Barriers pause actual protected Write/Sync, actual hook transaction or actual consumption; no sleeping to choose race outcome. Existing original first-control, public Pause, product answer/SQL and Codex 1.5-second bounds retained.",
+    "R1 unreleased post-COMMIT hook and earlier control-release matrix exercise distinct boundaries; R2 during-rotation parked admission and Task1 before-rotation admission distinct. No duplicated generic E2 answer or Task1 capacity matrix.",
+    "Real temporary stores/files/kernel pipes; external protocol/pane/authentication only mocked at designated boundaries. Faults use actual protected file wrapper or SQL trigger, independent bytes/records/process evidence for results.",
+    "Serial environment-owning Go fixtures document reason, UUID tmux launch IDs, registered process/store/socket cleanup; no pkg/api or Bun changes. Bun stays sequential.",
+    "No assertion weakening, widened cancellation/answer/SQL timeout, retry-until-green, replaced protected file restoration, manufacture of history or fake rollback/replay.",
+    "No Task3 public adapter/collector added; no spec/tla changes and no formal jobs. Existing models do not prove new rotation/observation/admission properties."
+  ],
+  "source_findings": [],
+  "limitations": [
+    "Exact full Run pre-Start micro-window remains reporter-level causal coverage plus source branch inspection.",
+    "No live authenticated Cursor, human attach acceptance, Docker collector/group or scheduler execution."
+  ],
+  "result": "Final 13 suite passed; quality reopened for historical deadline failure accounting and explicit technical disposition",
+  "historical_failures_with_unknown_cause": [
+    {
+      "log": "09-full-test-sandbox.log",
+      "exit_code": 2,
+      "failures": [
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "elapsed": "5.700691482s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+2.72µs end=+202.441997ms elapsed=202.439277ms requested wait=499.9994ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+202.444327ms end=+1.399144119s elapsed=1.196699792s requested wait=297.557663ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+1.399149399s end=+2.499914299s elapsed=1.1007649s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+2.499920189s end=+5.600225394s elapsed=3.100305205s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+5.600230184s end=+5.700687552s elapsed=100.457368ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        },
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+          "elapsed": "2.484155549s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+4.38µs end=+3.401838ms elapsed=3.397458ms requested wait=499.99892ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+3.403688ms end=+4.446227ms elapsed=1.042539ms requested wait=496.599472ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+4.448387ms end=+4.793937ms elapsed=345.55µs requested wait=495.554723ms",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+4.796387ms end=+2.311064764s elapsed=2.306268377s requested wait=495.206843ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+2.311068484s end=+2.484152439s elapsed=173.083955ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        }
+      ],
+      "cause": "Unknown. Both calls exceeded the unchanged 1.5s bound before any sleep callback; the intended after-commit fixture lock was never acquired and cannot explain these failures. The store method timings include internal execution and scheduling and do not isolate connection acquisition, SQL/COMMIT, cleanup or synchronous postcommit trail emission.",
+      "scope": "No pkg/api source or test changes in Task2. This is a separate historical deadline failure, not a rotation or pane-notice synchronization failure.",
+      "inputs": "second-settled-input-manifest.json",
+      "post_inputs": "second-after-input-manifest.json",
+      "input_drift": false,
+      "final_green": "13-full-test-sandbox.log passes pkg/api; passing does not causally resolve the historical failures",
+      "disposition": "Bounded follow-up evidence in ../timing-investigation/FINAL-report.json; explicit coordinator technical disposition still required."
+    }
+  ],
+  "bounded_followup": {
+    "command": "make sandbox CMD='timeout 180s go test -timeout 2m -count=1 -v ./pkg/api -run \"^TestDecideMaxWaitUnderHeldLock$\"'",
+    "result": "passed: 23 leaves, uncached, original parallel subcases and bounds unchanged",
+    "causality": "Still unknown; focused success does not explain historical 09 violations",
+    "report": "../timing-investigation/FINAL-report.json"
+  }
+}

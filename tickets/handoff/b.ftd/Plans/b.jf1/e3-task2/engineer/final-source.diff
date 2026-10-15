@@ -1,0 +1,1030 @@
+diff --git a/cmd/agent-director/cursor_host_cmd.go b/cmd/agent-director/cursor_host_cmd.go
+index 19535225..8f040332 100644
+--- a/cmd/agent-director/cursor_host_cmd.go
++++ b/cmd/agent-director/cursor_host_cmd.go
+@@ -31,6 +31,18 @@ func hookCursorVerifier(cfg config.Config) func(*store.Store, store.CursorRuntim
+ 	}
+ }
+ 
++func hookCursorRotationVerifier(cfg config.Config) func(*store.Store, store.CursorRuntime, string, store.Spawn) error {
++	return func(st *store.Store, b store.CursorRuntime, path string, row store.Spawn) error {
++		if err := cursorhost.VerifyRuntime(b, false); err != nil {
++			return err
++		}
++		if err := cursorhost.VerifyTranscriptPath(path); err != nil {
++			return err
++		}
++		return cursorhost.VerifyPane(st, row, cfg)
++	}
++}
++
+ // cursor-host is internal and dispatched before public client setup. It opens
+ // an existing store only after parsing, and proves pane ownership before any
+ // runtime launch or ACP admission.
+diff --git a/cmd/agent-director/main.go b/cmd/agent-director/main.go
+index 5f0f083e..e3f61777 100644
+--- a/cmd/agent-director/main.go
++++ b/cmd/agent-director/main.go
+@@ -262,19 +262,20 @@ func runHook() int {
+ 	// the same readers and relay window the verbs judge it with.
+ 	args := parseHookArgs(os.Args[2:])
+ 	hc := hook.HandleConfig{
+-		Agent:         args.agent,
+-		Env:           hook.OSGetenv,
+-		Cfg:           cfg.Relay,
+-		Clock:         hook.DefaultPollClock(),
+-		ParentPID:     os.Getppid,
+-		ParentProc:    hookParentProc(),
+-		VerifyCursor:  hookCursorVerifier(cfg),
+-		Now:           time.Now,
+-		PendingGrace:  cfg.Tmux.EffectivePendingGrace(),
+-		Start:         start,
+-		RelayTimeout:  args.timeout,
+-		Self:          hookSelf(probe.NewProcChecker()),
+-		RelayHookGone: hookRelayHookGone(cfg.Relay),
++		Agent:                args.agent,
++		Env:                  hook.OSGetenv,
++		Cfg:                  cfg.Relay,
++		Clock:                hook.DefaultPollClock(),
++		ParentPID:            os.Getppid,
++		ParentProc:           hookParentProc(),
++		VerifyCursor:         hookCursorVerifier(cfg),
++		VerifyCursorRotation: hookCursorRotationVerifier(cfg),
++		Now:                  time.Now,
++		PendingGrace:         cfg.Tmux.EffectivePendingGrace(),
++		Start:                start,
++		RelayTimeout:         args.timeout,
++		Self:                 hookSelf(probe.NewProcChecker()),
++		RelayHookGone:        hookRelayHookGone(cfg.Relay),
+ 	}
+ 	if err := hook.Handle(context.Background(), bytes.NewReader(stdinRaw), stdout, st, hc, logger); err != nil {
+ 		hookLog(logger, "hook: handle: %v", err)
+diff --git a/internal/cursorhost/input.go b/internal/cursorhost/input.go
+index b4fe98ae..ab9f1d0b 100644
+--- a/internal/cursorhost/input.go
++++ b/internal/cursorhost/input.go
+@@ -8,6 +8,8 @@ import (
+ 
+ type terminalInput struct {
+ 	submission   string
++	sessionID    string
++	order        uint64
+ 	epoch        uint64
+ 	epochBound   bool
+ 	at           time.Time
+@@ -16,6 +18,9 @@ type terminalInput struct {
+ 	choiceToken  string
+ 	choiceOption string
+ 	accepted     bool
++	held         bool
++	repeats      uint64
++	repeatOnly   bool
+ 	text         string
+ 	interrupt    bool
+ 	err          error
+@@ -27,16 +32,19 @@ const maxQueuedBytes = 8 * 1024 * 1024
+ // The terminal never waits for ordinary work to drain before consuming a
+ // control. Accepted reservations include work transferred to the session queue.
+ type inputMailbox struct {
+-	mu           sync.Mutex
+-	wake         chan struct{}
+-	controlWake  chan struct{}
+-	items        []terminalInput
+-	control      *terminalInput
+-	next         uint64
+-	count, bytes int
+-	refused      uint64
+-	epoch        uint64
+-	onControl    func()
++	mu                   sync.Mutex
++	wake                 chan struct{}
++	controlWake          chan struct{}
++	items                []terminalInput
++	control              *terminalInput
++	next                 uint64
++	count, bytes         int
++	heldCount, heldBytes int
++	rotating             bool
++	stopped              bool
++	refused              uint64
++	epoch                uint64
++	onControl            func()
+ }
+ 
+ func newInputMailbox() *inputMailbox {
+@@ -46,14 +54,38 @@ func newInputMailbox() *inputMailbox {
+ func (m *inputMailbox) put(v terminalInput) {
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
++	if m.stopped {
++		return
++	}
+ 	m.next++
+ 	v.submission = fmt.Sprint(m.next)
++	v.order = m.next
+ 	if !v.epochBound {
+ 		v.epoch = m.epoch
+ 	}
+ 	v.at = time.Now()
+-	if v.interrupt || v.text == "/exit" || v.err != nil {
++	rotation := v.text == "/clear" || v.text == "/new"
++	if v.interrupt || v.text == "/exit" || v.err != nil || rotation {
++		if rotation && m.rotating {
++			// Repeated aliases have a bounded disposition, without advancing
++			// held-input authority or replacing the first control's timestamp.
++			if m.control != nil {
++				m.control.repeats++
++			} else {
++				v.repeats = 1
++				v.repeatOnly = true
++				m.control = &v
++			}
++			select {
++			case m.controlWake <- struct{}{}:
++			default:
++			}
++			return
++		}
+ 		m.epoch++
++		if rotation {
++			m.rotating = true
++		}
+ 		if m.onControl != nil {
+ 			m.onControl()
+ 		}
+@@ -61,7 +93,7 @@ func (m *inputMailbox) put(v terminalInput) {
+ 		// exit/input loss can only strengthen the pending control.
+ 		if m.control == nil {
+ 			m.control = &v
+-		} else if v.text == "/exit" || v.err != nil {
++		} else if v.text == "/exit" || v.err != nil || (rotation && m.control.text != "/exit" && m.control.err == nil) {
+ 			v.at = m.control.at
+ 			m.control = &v
+ 		}
+@@ -72,12 +104,26 @@ func (m *inputMailbox) put(v terminalInput) {
+ 		return
+ 	}
+ 	if v.accepted {
+-		if m.count >= maxQueuedSubmissions || len(v.text) > maxFrameBytes/2 || m.bytes+len(v.text) > maxQueuedBytes {
++		v.held = m.rotating && v.epoch == m.epoch
++		count, size := m.count, m.bytes
++		if !m.rotating {
++			count += m.heldCount
++			size += m.heldBytes
++		}
++		if v.held {
++			count, size = m.heldCount, m.heldBytes
++		}
++		if count >= maxQueuedSubmissions || len(v.text) > maxFrameBytes/2 || size+len(v.text) > maxQueuedBytes {
+ 			v.accepted = false
+ 			v.refusal = "capacity"
+ 		} else {
+-			m.count++
+-			m.bytes += len(v.text)
++			if v.held {
++				m.heldCount++
++				m.heldBytes += len(v.text)
++			} else {
++				m.count++
++				m.bytes += len(v.text)
++			}
+ 		}
+ 	}
+ 	if !v.accepted && v.choiceToken == "" && v.text != "" && v.text != "/new" && v.text != "/clear" {
+@@ -99,6 +145,33 @@ func (m *inputMailbox) put(v terminalInput) {
+ 	}
+ }
+ 
++// Provisional input can be promoted after newer ordinary input was admitted.
++// Its original observation order still precedes that later input.
++func insertSubmission(queue []terminalInput, v terminalInput) []terminalInput {
++	i := len(queue)
++	for i > 0 && queue[i-1].order > v.order {
++		i--
++	}
++	queue = append(queue, terminalInput{})
++	copy(queue[i+1:], queue[i:])
++	queue[i] = v
++	return queue
++}
++
++func (m *inputMailbox) promote(v terminalInput) (terminalInput, bool) {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	if m.stopped || m.epoch != v.epoch {
++		return v, false
++	}
++	m.heldCount--
++	m.heldBytes -= len(v.text)
++	m.count++
++	m.bytes += len(v.text)
++	v.held = false
++	return v, true
++}
++
+ func (m *inputMailbox) takeControl() *terminalInput {
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
+@@ -127,8 +200,33 @@ func (m *inputMailbox) take() (terminalInput, bool) {
+ func (m *inputMailbox) release(v terminalInput) {
+ 	m.mu.Lock()
+ 	defer m.mu.Unlock()
+-	m.count--
+-	m.bytes -= len(v.text)
++	if v.held {
++		m.heldCount--
++		m.heldBytes -= len(v.text)
++	} else {
++		m.count--
++		m.bytes -= len(v.text)
++	}
++}
++
++func (m *inputMailbox) holding() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.rotating }
++
++func (m *inputMailbox) stop() {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	m.stopped, m.rotating = true, false
++}
++
++// Publication is the only transition that admits provisional reservations.
++func (m *inputMailbox) publish(epoch uint64, action func()) bool {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	if m.epoch != epoch {
++		return false
++	}
++	m.rotating = false
++	action()
++	return true
+ }
+ 
+ func (m *inputMailbox) current(epoch uint64) bool {
+diff --git a/internal/cursorhost/protocol.go b/internal/cursorhost/protocol.go
+index 342b1fae..c911ea18 100644
+--- a/internal/cursorhost/protocol.go
++++ b/internal/cursorhost/protocol.go
+@@ -7,6 +7,7 @@ import (
+ 	"errors"
+ 	"fmt"
+ 	"io"
++	"strconv"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -37,17 +38,18 @@ type outgoingFrame struct {
+ }
+ 
+ type protocol struct {
+-	input         io.Writer
+-	outgoing      chan outgoingFrame
+-	writes        chan error
+-	closed        chan struct{}
+-	outputMu      sync.Mutex // serializes enqueue with transport retirement
+-	closeOnce     sync.Once
+-	writeFailed   atomic.Bool
+-	frames        chan incoming
+-	next          uint64
+-	pendingID     string
+-	pendingMethod string
++	input          io.Writer
++	outgoing       chan outgoingFrame
++	writes         chan error
++	closed         chan struct{}
++	outputMu       sync.Mutex // serializes enqueue with transport retirement
++	closeOnce      sync.Once
++	writeFailed    atomic.Bool
++	frames         chan incoming
++	next           uint64
++	pendingID      string
++	pendingMethod  string
++	retiredThrough uint64
+ }
+ 
+ func newProtocol(in io.Writer, out io.Reader) *protocol {
+@@ -304,6 +306,7 @@ func (p *protocol) response(f frame) (json.RawMessage, error) {
+ 	if f.Method != "" || string(bytes.TrimSpace(f.ID)) != p.pendingID || p.pendingID == "" {
+ 		return nil, fmt.Errorf("uncorrelated ACP response")
+ 	}
++	p.retiredThrough = p.next
+ 	p.pendingID = ""
+ 	p.pendingMethod = ""
+ 	if len(f.Error) > 0 {
+@@ -311,6 +314,19 @@ func (p *protocol) response(f frame) (json.RawMessage, error) {
+ 	}
+ 	return f.Result, nil
+ }
++
++func (p *protocol) retiredResponse(f frame) bool {
++	raw := string(bytes.TrimSpace(f.ID))
++	id, err := strconv.ParseUint(raw, 10, 64)
++	return f.Method == "" && err == nil && id != 0 && strconv.FormatUint(id, 10) == raw && id <= p.retiredThrough
++}
++
++func (p *protocol) retirePending() {
++	if p.pendingID != "" {
++		p.retiredThrough = p.next
++	}
++	p.pendingID, p.pendingMethod = "", ""
++}
+ func (p *protocol) deny(f frame) (bool, error) {
+ 	if len(f.ID) == 0 {
+ 		return false, nil
+diff --git a/internal/cursorhost/report.go b/internal/cursorhost/report.go
+index 8e14c19e..bc4d47ca 100644
+--- a/internal/cursorhost/report.go
++++ b/internal/cursorhost/report.go
+@@ -38,6 +38,12 @@ func (r *reporter) report(event string) error {
+ // reportWaiting lets Enter independently confirm the committed waiting report
+ // while its hook is finishing. It never grants admission before that commit.
+ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error {
++	return r.reportIdentity(event, waiting, "")
++}
++
++// reportIdentity publishes a rotation through the same direct-parent hook.
++// The binding remains outgoing until the hook transaction has committed.
++func (r *reporter) reportIdentity(event string, waiting func(func() bool), next string, rotationUntil ...time.Time) error {
+ 	if err := VerifyTranscriptPath(r.path); err != nil {
+ 		return err
+ 	}
+@@ -64,6 +70,14 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error
+ 		r.binding.Terminated = true
+ 	}
+ 	payload := map[string]any{"hook_event_name": event, "session_id": r.binding.SessionID, "transcript_path": r.path, "cursor_connection": r.binding.Connection, "origin": "main"}
++	if next != "" {
++		if len(rotationUntil) != 1 || !time.Now().Before(rotationUntil[0]) {
++			return fmt.Errorf("Cursor rotation publication deadline passed")
++		}
++		payload["cursor_previous_session"] = r.binding.SessionID
++		payload["session_id"] = next
++		payload["cursor_rotation_deadline"] = rotationUntil[0].UTC().Format(time.RFC3339Nano)
++	}
+ 	if terminated {
+ 		payload["reason"] = "prompt_input_exit"
+ 	}
+@@ -71,7 +85,11 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error
+ 	if err != nil {
+ 		return err
+ 	}
+-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	reportUntil := time.Now().Add(5 * time.Second)
++	if next != "" && rotationUntil[0].Before(reportUntil) {
++		reportUntil = rotationUntil[0]
++	}
++	ctx, cancel := context.WithDeadline(context.Background(), reportUntil)
+ 	defer cancel()
+ 	// The gateway directly execs the hook. No shell, wrapper, controller or
+ 	// child runtime can become its immediate parent.
+@@ -81,7 +99,28 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error
+ 		snapshot := *r
+ 		waiting(func() bool { return snapshot.verifyReport(event, beforeVersion, true) == nil })
+ 	}
+-	if err = cmd.Run(); err != nil {
++	commandErr := cmd.Run()
++	if next != "" {
++		// A hook exit or later verification failure cannot roll back a commit.
++		// Reconcile the durable binding before reporting the outcome.
++		expected := r.binding
++		expected.SessionID = next
++		bound, e := r.store.ReadCursorRuntime(r.binding.InstanceID)
++		if e == nil && bound == expected {
++			r.binding = expected
++		}
++		if e == nil && bound == expected {
++			history, historyErr := r.store.ListSessionHistory(expected.InstanceID, expected.Life)
++			found := false
++			for _, entry := range history {
++				found = found || (entry.SessionID == row.SessionID && entry.JSONLPath == row.JSONLPath)
++			}
++			if historyErr != nil || !found {
++				return fmt.Errorf("Cursor required rotation history was not confirmed; identity may already be published")
++			}
++		}
++	}
++	if commandErr != nil {
+ 		return fmt.Errorf("Cursor report failed")
+ 	}
+ 	return r.verifyReport(event, beforeVersion, false)
+diff --git a/internal/cursorhost/requests.go b/internal/cursorhost/requests.go
+index bf073d60..203780ed 100644
+--- a/internal/cursorhost/requests.go
++++ b/internal/cursorhost/requests.go
+@@ -22,6 +22,7 @@ type policyRejection struct{ error }
+ 
+ type nativeChoice struct{ token, option, decision string }
+ type pendingAuthorization struct {
++	session                      string
+ 	generation                   uint64
+ 	auth                         *authorization
+ 	token                        string
+@@ -39,6 +40,7 @@ type requestController struct {
+ 	out        io.Writer
+ 	requests   map[string]*pendingAuthorization
+ 	seenIDs    map[string]bool
++	idSessions map[string]string
+ 	seenTools  map[string]bool
+ 	menuMu     sync.Mutex
+ 	menu       map[rune]nativeChoice
+@@ -47,7 +49,7 @@ type requestController struct {
+ }
+ 
+ func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestController {
+-	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
++	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, idSessions: map[string]string{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
+ }
+ func (c *requestController) check(row store.Spawn) error {
+ 	if e := VerifyRuntime(c.rep.binding, false); e != nil {
+@@ -96,6 +98,7 @@ func (c *requestController) admit(f frame, session string) error {
+ 		return fmt.Errorf("duplicate or excessive Cursor request ids")
+ 	}
+ 	c.seenIDs[id] = true
++	c.idSessions[id] = session
+ 	a, e := parseAuthorization(f, session)
+ 	if e != nil {
+ 		return policyRejection{e}
+@@ -127,7 +130,7 @@ func (c *requestController) admit(f frame, session string) error {
+ 	if relay {
+ 		nativeUntil = settle.Add(30 * time.Minute)
+ 	}
+-	r := &pendingAuthorization{generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
++	r := &pendingAuthorization{session: session, generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
+ 	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.check)
+ 	if e != nil {
+ 		return e
+@@ -155,6 +158,28 @@ func (c *requestController) admit(f frame, session string) error {
+ 	}
+ 	return nil
+ }
++
++// The plan extension does not supply a session id. Retain its independently
++// observed request/tool identity so delayed callbacks cannot acquire authority
++// over a later conversation on this connection.
++func (c *requestController) retiredAuthorization(f frame, current, retiring string) bool {
++	id, e := requestID(f.ID)
++	if e == nil {
++		if sid := c.idSessions[id]; sid != "" && (sid != current || sid == retiring) {
++			return true
++		}
++	}
++	a, e := parseAuthorization(f, current)
++	if e != nil {
++		return false
++	}
++	for _, r := range c.requests {
++		if r.auth.toolID == a.toolID && (r.session != current || r.session == retiring) {
++			return true
++		}
++	}
++	return false
++}
+ func (c *requestController) choose(token, option string) {
+ 	r := c.requests[token]
+ 	if r == nil || r.generation != c.generation.Load() || r.terminal.Load() || r.queued || r.sent.Load() {
+@@ -373,7 +398,7 @@ func (c *requestController) execution(params json.RawMessage) error {
+ 		return nil
+ 	}
+ 	for _, r := range c.requests {
+-		if r.auth.plan || r.auth.kind != "execute" || r.auth.toolID != p.Update.Tool {
++		if r.session != p.Session || r.auth.plan || r.auth.kind != "execute" || r.auth.toolID != p.Update.Tool {
+ 			continue
+ 		}
+ 		var output map[string]json.RawMessage
+diff --git a/internal/cursorhost/session.go b/internal/cursorhost/session.go
+index f8371c6c..b9c2d81c 100644
+--- a/internal/cursorhost/session.go
++++ b/internal/cursorhost/session.go
+@@ -9,6 +9,8 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"runtime"
++	"strings"
++	"sync/atomic"
+ 	"syscall"
+ 	"time"
+ 
+@@ -144,13 +146,21 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 	// Capture cancellation authority before the potentially slow admission read.
+ 	// Insertion must never grant an old admission the epoch of a later control.
+ 	var admissionEpoch uint64
++	var admissionIdentity atomic.Value
++	admissionIdentity.Store("")
++	admissionSession := ""
+ 	restore := startInput(in, writer, func(v terminalInput) {
+ 		if v.accepted {
+ 			v.epoch, v.epochBound = admissionEpoch, true
++			v.sessionID = admissionSession
+ 		}
+ 		inputs.put(v)
+ 	}, func() bool {
+ 		admissionEpoch = inputs.epochValue()
++		admissionSession = admissionIdentity.Load().(string)
++		if inputs.holding() {
++			return true
++		}
+ 		return admission.take()
+ 	}, requests.key)
+ 	defer restore()
+@@ -186,6 +196,12 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 		}
+ 	}
+ 	var queue []terminalInput
++	var held []terminalInput
++	rotating := false
++	rotationEpoch := uint64(0)
++	rotationOld := ""
++	confirmedSessions := map[string]bool{}
++	retiredSessions := map[string]bool{}
+ 	var active *terminalInput
+ 	activeRequest := ""
+ 	promptFailures := make(chan error, 1)
+@@ -207,6 +223,24 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			}
+ 		}
+ 		kind := "interrupt"
++		rotationControl := input.text == "/new" || input.text == "/clear"
++		if rotationControl {
++			kind = "rotation"
++			if rotating || input.repeatOnly {
++				fmt.Fprint(writer, "Cursor rotation already pending; repeated control ignored\r\n")
++				if pendingControl == nil {
++					pendingControl = map[string]any{"control": "rotation_repeated", "input_id": input.submission, "count": 1 + input.repeats}
++				}
++				return nil
++			}
++			if session == "" {
++				return fmt.Errorf("Cursor rotation refused before session confirmation")
++			}
++			rotating, rotationOld, rotationEpoch = true, session, inputs.epochValue()
++			fmt.Fprint(writer, "Cursor rotation requested; new input is held until publication\r\n")
++		} else if rotating && input.text != "/exit" {
++			return fmt.Errorf("Cursor rotation interrupted; held input refused to both conversations")
++		}
+ 		if input.text == "/exit" {
+ 			kind = "exit"
+ 		}
+@@ -214,19 +248,19 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			kind = "input_closed"
+ 		}
+ 		if pendingControl == nil {
+-			pendingControl = map[string]any{"control": kind, "input_id": input.submission, "input_epoch": input.epoch, "consumed_at": input.at, "count": 1}
++			pendingControl = map[string]any{"control": kind, "input_id": input.submission, "input_epoch": input.epoch, "consumed_at": input.at, "count": 1 + input.repeats}
+ 			if active != nil {
+ 				pendingControl["submission_id"] = active.submission
+ 				pendingControl["request_id"] = activeRequest
+ 			}
+ 		} else {
+-			pendingControl["count"] = pendingControl["count"].(int) + 1
++			pendingControl["count"] = pendingControl["count"].(uint64) + 1
+ 			pendingControl["last_input_id"] = input.submission
+ 		}
+ 
+ 		admission.disable()
+ 		requests.cancel()
+-		if !busy {
++		if !busy && !rotating {
+ 			idleControl = true
+ 		}
+ 		if session == "" && options.InitialPrompt != "" {
+@@ -318,11 +352,29 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 	cancelSubmission := func(v terminalInput, reason string) error {
+ 		inputs.release(v)
+ 		fmt.Fprintf(writer, "Cursor submission %s cancelled before dispatch: %s\r\n", v.submission, reason)
+-		return record("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": reason, "started": false, "control_epoch": inputs.epochValue()})
++		return record("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": reason, "started": false, "control_epoch": inputs.epochValue()})
+ 	}
+ 	defer func() {
+ 		admission.disable()
++		inputs.stop()
+ 		requests.cancel()
++		if rotating {
++			fmt.Fprint(writer, "Cursor rotation failed or stopped; held input refused to both conversations; no automatic replay\r\n")
++		}
++		for _, v := range held {
++			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
++		}
++		var pending []terminalInput
++		for {
++			v, ok := inputs.take()
++			if !ok {
++				break
++			}
++			pending = append(pending, v)
++			if v.accepted && v.held {
++				fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
++			}
++		}
+ 		if err != nil {
+ 			protocol.close()
+ 			_ = p.terminate()
+@@ -366,20 +418,32 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			return true
+ 		}
+ 		for _, v := range queue {
+-			if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": "gateway stopped", "started": false}) {
++			if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
+ 				return
+ 			}
+ 		}
+-		for {
+-			v, ok := inputs.take()
+-			if !ok {
+-				break
++		for _, v := range held {
++			if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "rotation stopped; neither conversation admitted this input"}) {
++				return
++			}
++		}
++		if rotating {
++			if !finalRecord("rotation_failed", map[string]any{"previous_session_id": rotationOld, "last_observed_session_id": rep.binding.SessionID, "reason": "gateway stopped; publication may already have committed; no rollback or replay"}) {
++				return
+ 			}
++		}
++		for _, v := range pending {
+ 			if v.accepted {
+-				if !finalRecord("submission_accepted", map[string]any{"submission_id": v.submission, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch}) {
++				if v.held {
++					if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "text": v.text, "reason": "gateway stopped"}) {
++						return
++					}
++					continue
++				}
++				if !finalRecord("submission_accepted", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch}) {
+ 					return
+ 				}
+-				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": "gateway stopped", "started": false}) {
++				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
+ 					return
+ 				}
+ 			}
+@@ -469,8 +533,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			busy = false
+ 			cancelled = false
+ 			phase = "idle"
+-			protocol.pendingID = ""
+-			protocol.pendingMethod = ""
++			protocol.retirePending()
+ 			if err = record("submission_cancelled", map[string]any{"submission_id": active.submission, "request_id": activeRequest, "reason": "retired before write", "started": false, "bytes_written": 0}); err != nil {
+ 				return err
+ 			}
+@@ -478,7 +541,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			activeRequest = ""
+ 			activeRetiredBeforeWrite = false
+ 			activeCancellation = false
+-			idleControl = true
++			idleControl = !rotating
+ 		}
+ 		if pendingControl != nil {
+ 			data := pendingControl
+@@ -486,6 +549,11 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			if err = record("input_control", data); err != nil {
+ 				return err
+ 			}
++			if data["control"] == "rotation" {
++				if err = record("rotation_requested", map[string]any{"previous_session_id": rotationOld, "input_epoch": rotationEpoch}); err != nil {
++					return err
++				}
++			}
+ 		}
+ 		if activeCancellation && active != nil {
+ 			if err = record("submission_cancel_requested", map[string]any{"submission_id": active.submission, "request_id": activeRequest, "delivery": "unconfirmed"}); err != nil {
+@@ -502,13 +570,6 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				requests.choose(input.choiceToken, input.choiceOption)
+ 				continue
+ 			}
+-			if input.text == "/new" || input.text == "/clear" {
+-				if err = record("submission_refused", map[string]any{"submission_id": input.submission, "reason": "unsupported conversation control"}); err != nil {
+-					return err
+-				}
+-				fmt.Fprint(writer, "Unsupported Cursor conversation control; nothing sent\r\n> ")
+-				continue
+-			}
+ 			if input.text == "" && input.dropped == 0 && input.refusal == "" {
+ 				continue
+ 			}
+@@ -523,7 +584,30 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				fmt.Fprintf(writer, "Cursor input refused while starting or busy (%s); nothing sent\r\n", reason)
+ 				continue
+ 			}
+-			if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
++			if input.held {
++				if rotating && inputs.current(input.epoch) && input.epoch == rotationEpoch {
++					held = append(held, input)
++					if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
++						return err
++					}
++					fmt.Fprintf(writer, "Cursor submission %s held provisionally\r\n", input.submission)
++					continue
++				}
++				if !inputs.current(input.epoch) || intentional {
++					inputs.release(input)
++					fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", input.submission)
++					if err = record("held_input_refused", map[string]any{"submission_id": input.submission, "reason": "control retired provisional input"}); err != nil {
++						return err
++					}
++					continue
++				}
++				held = append(held, input)
++				if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
++					return err
++				}
++				continue
++			}
++			if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
+ 				return err
+ 			}
+ 			fmt.Fprintf(writer, "Cursor submission %s accepted\r\n", input.submission)
+@@ -536,7 +620,36 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				return err
+ 			}
+ 		}
+-		if idleControl && !busy && !intentional && session != "" {
++		for len(held) > 0 && (intentional || !inputs.current(held[0].epoch)) {
++			v := held[0]
++			inputs.release(v)
++			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
++			if err = record("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "control retired provisional input"}); err != nil {
++				return err
++			}
++			held = held[1:]
++		}
++		if rotating && !busy && !intentional && phase != "rotate_new" {
++			if !inputs.current(rotationEpoch) {
++				return fmt.Errorf("Cursor rotation authority retired")
++			}
++			rotationUntil := cancelAt.Add(cancelWait)
++			if !time.Now().Before(rotationUntil) {
++				return fmt.Errorf("Cursor rotation cancellation deadline passed")
++			}
++			requestEpoch := rotationEpoch
++			if _, err = protocol.requestGuarded("session/new", map[string]any{"cwd": row.CWD, "mcpServers": []any{}}, func() error {
++				if !inputs.current(requestEpoch) || !time.Now().Before(rotationUntil) {
++					return errPromptRetired
++				}
++				return nil
++			}); err != nil {
++				return err
++			}
++			phase = "rotate_new"
++			// The first control's existing fixed bound covers creation and publication.
++		}
++		if idleControl && !rotating && !busy && !intentional && session != "" {
+ 			idleControl = false
+ 			epoch := inputs.epochValue()
+ 			if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(epoch, func() { admission.waiting(check) }) }); err != nil {
+@@ -563,13 +676,31 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			}
+ 			fmt.Fprint(writer, "Cursor input cancelled; submit a new prompt to continue\r\n> ")
+ 		}
+-		if !intentional && !busy && len(queue) > 0 && !requests.open() {
++		if !rotating && !intentional && !busy && (len(queue) > 0 || len(held) > 0) && !requests.open() {
+ 			eligible := false
+ 			e := await(func() (e error) { eligible, e = rep.promptEligible(); return e })
+ 			if e != nil {
+ 				return e
+ 			}
+ 			if eligible {
++				for len(held) > 0 && inputs.current(held[0].epoch) && !intentional {
++					v := held[0]
++					var promoted bool
++					v, promoted = inputs.promote(v)
++					if !promoted {
++						break
++					}
++					v.sessionID = session
++					held = held[1:]
++					queue = insertSubmission(queue, v)
++					if err = record("submission_accepted", map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
++						return err
++					}
++					fmt.Fprintf(writer, "Cursor submission %s accepted after fresh publication\r\n", v.submission)
++				}
++				if len(queue) == 0 {
++					continue
++				}
+ 				v := queue[0]
+ 				if err = submit(v); err != nil {
+ 					if active != nil && active.submission == v.submission {
+@@ -635,7 +766,48 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 			if err = VerifyRuntime(rep.binding, false); err != nil {
+ 				return err
+ 			}
++			if protocol.retiredResponse(f) {
++				if err = record("retired_response", map[string]any{"request_id": json.RawMessage(f.ID)}); err != nil {
++					return err
++				}
++				continue
++			}
+ 			if f.Method != "" {
++				retiring := ""
++				if rotating {
++					retiring = rotationOld
++				}
++				if len(f.ID) > 0 && requests.retiredAuthorization(f, session, retiring) {
++					if err = record("retired_authorization", map[string]any{"authorization_id": json.RawMessage(f.ID), "method": f.Method}); err != nil {
++						return err
++					}
++					continue
++				}
++				// Session-attributed retired traffic is inspectable but grants no
++				// current lifecycle, answer or hold-release authority.
++				var attribution struct {
++					Session string `json:"sessionId"`
++				}
++				if json.Unmarshal(f.Params, &attribution) != nil {
++					return fmt.Errorf("invalid Cursor event attribution")
++				}
++				if retiredSessions[attribution.Session] || (rotating && attribution.Session == rotationOld) {
++					if err = record("retired_event", map[string]any{"session_id": attribution.Session, "method": f.Method, "params": json.RawMessage(f.Params)}); err != nil {
++						return err
++					}
++					if !retiredSessions[attribution.Session] && f.Method == "session/update" {
++						if err = requests.execution(f.Params); err != nil {
++							return err
++						}
++					}
++					continue
++				}
++				if attribution.Session != "" && attribution.Session != session {
++					return fmt.Errorf("Cursor event session mismatch")
++				}
++				if f.Method == "session/update" && session != "" && attribution.Session == "" {
++					return fmt.Errorf("Cursor update lacks session attribution")
++				}
+ 				if len(f.ID) > 0 {
+ 					if cancelled {
+ 						return fmt.Errorf("Cursor authorization after cancellation; no response sent")
+@@ -751,6 +923,65 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				}
+ 				phase = "new"
+ 				resetDeadline(protocolWait)
++			case "rotate_new":
++				var created struct {
++					ID string `json:"sessionId"`
++				}
++				if json.Unmarshal(raw, &created) != nil || created.ID == "" || strings.TrimSpace(created.ID) != created.ID || len(created.ID) > 512 || strings.ContainsAny(created.ID, "\x00\r\n") || confirmedSessions[created.ID] || len(confirmedSessions) >= maxConnectionRequests {
++					return fmt.Errorf("Cursor did not confirm a genuinely fresh session; held input refused")
++				}
++				if err = record("rotation_confirmed", map[string]any{"previous_session_id": rotationOld, "confirmed_session_id": created.ID}); err != nil {
++					return err
++				}
++				if !inputs.current(rotationEpoch) || intentional {
++					return fmt.Errorf("Cursor rotation confirmation retired")
++				}
++				publication := *rep
++				publicationUntil := cancelAt.Add(cancelWait)
++				publicationDone := make(chan store.CursorRuntime, 1)
++				err = await(func() error {
++					e := publication.reportIdentity("SessionStart", nil, created.ID, publicationUntil)
++					publicationDone <- publication.binding
++					return e
++				})
++				// Reconcile even if the hook committed before a later verification
++				// or record failure. Never claim that publication was rolled back.
++				expected := b
++				expected.SessionID = created.ID
++				var observed store.CursorRuntime
++				select {
++				case observed = <-publicationDone:
++				default:
++				}
++				if observed == expected {
++					b, rep.binding, tr.binding, session = expected, expected, expected, created.ID
++					retiredSessions[rotationOld] = true
++					confirmedSessions[session] = true
++				}
++				if err != nil {
++					return fmt.Errorf("Cursor rotation report failed; publication may already be committed; held input refused: %w", err)
++				}
++				if observed != expected {
++					return fmt.Errorf("Cursor rotation publication was not committed")
++				}
++				if err = record("rotation_published", map[string]any{"previous_session_id": rotationOld, "session_id": session}); err != nil {
++					return err
++				}
++				if intentional || !inputs.current(rotationEpoch) {
++					continue
++				}
++				admission.mu.Lock()
++				admissionReporter := *rep
++				admission.validate = func() bool { ok, e := admissionReporter.promptEligible(); return e == nil && ok }
++				admission.mu.Unlock()
++				if !inputs.publish(rotationEpoch, func() { admissionIdentity.Store(session); admission.enableQueue() }) {
++					continue
++				}
++				rotating, cancelled, idleControl, requestDeadlineHeld = false, false, false, false
++				phase = "idle"
++				stopDeadline()
++				cancelAt = time.Time{}
++				fmt.Fprint(writer, "Cursor fresh conversation published\r\n> ")
+ 			case "new":
+ 				var created struct {
+ 					ID string `json:"sessionId"`
+@@ -759,6 +990,8 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 					return fmt.Errorf("Cursor did not confirm a fresh session")
+ 				}
+ 				session = created.ID
++				admissionIdentity.Store(session)
++				confirmedSessions[session] = true
+ 				b.SessionID = session
+ 				rep.binding = b
+ 				tr.binding = b
+@@ -793,7 +1026,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				if options.InitialPrompt != "" {
+ 					text := options.InitialPrompt
+ 					options.InitialPrompt = ""
+-					v := terminalInput{text: text, accepted: true, submission: "initial", at: time.Now()}
++					v := terminalInput{text: text, sessionID: session, accepted: true, submission: "initial", at: time.Now()}
+ 					inputs.mu.Lock()
+ 					v.epoch = waitingEpoch
+ 					inputs.count++
+@@ -839,6 +1072,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
+ 				requestDeadlineHeld = false
+ 				cancelled = false
+ 				phase = "idle"
++				if rotating {
++					continue
++				}
+ 				if cancelAt.IsZero() {
+ 					stopDeadline()
+ 				} else {
+diff --git a/internal/cursorhost/transcript_linux.go b/internal/cursorhost/transcript_linux.go
+index 38d2b27d..29020d74 100644
+--- a/internal/cursorhost/transcript_linux.go
++++ b/internal/cursorhost/transcript_linux.go
+@@ -94,6 +94,15 @@ func (t *transcript) record(kind string, data any) error {
+ 
+ 	t.seq++
+ 	record := map[string]any{"sequence": t.seq, "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "kind": kind, "instance_id": t.binding.InstanceID, "life_number": t.binding.Life, "launch_token": t.binding.Token, "connection_id": t.binding.Connection, "session_id": t.binding.SessionID, "origin": "launch", "data": data}
++	if fields, ok := data.(map[string]any); ok {
++		if session, ok := fields["submission_session_id"].(string); ok {
++			record["session_id"] = session
++		}
++	}
++	if kind == "input_held" || kind == "held_input_refused" {
++		// Provisional input has no admitted conversation identity.
++		record["session_id"] = ""
++	}
+ 	raw, err := json.Marshal(record)
+ 	if err != nil {
+ 		return err
+diff --git a/internal/hook/handler.go b/internal/hook/handler.go
+index 5f1bce11..91f92849 100644
+--- a/internal/hook/handler.go
++++ b/internal/hook/handler.go
+@@ -106,6 +106,9 @@ type HandleConfig struct {
+ 	// tmux readers, keeping hook free of those dependencies. Nil denies every
+ 	// Cursor report; a payload's connection claim never grants authority.
+ 	VerifyCursor func(*store.Store, store.CursorRuntime, string, bool) error
++	// Rotation rechecks independent evidence using the row read under the
++	// publication lock; it must not acquire another connection on that store.
++	VerifyCursorRotation func(*store.Store, store.CursorRuntime, string, store.Spawn) error
+ 	// Now reads the injected clock that bounds SessionStart's wait for its
+ 	// launch's identity write (SR-22.9, SR-20.2): the grace bound is compared
+ 	// with it on the wall clock, and the wait's elapsed time, which
+@@ -443,8 +446,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
+ 		b, e := reader.ReadCursorRuntime(instanceID)
+ 		var claim struct {
+ 			Connection string `json:"cursor_connection"`
++			Previous   string `json:"cursor_previous_session"`
++			Deadline   string `json:"cursor_rotation_deadline"`
+ 		}
+-		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.SessionID != res.SessionID || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
++		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
++			return nil
++		}
++		if claim.Previous == "" && b.SessionID != res.SessionID {
+ 			return nil
+ 		}
+ 		ended := res.EventName == "SessionEnd"
+@@ -459,6 +467,30 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
+ 			return nil
+ 		}
+ 		gate.Cursor = &b
++		if claim.Previous != "" {
++			if ended || res.EventName != "SessionStart" || claim.Previous != b.SessionID || res.SessionID == b.SessionID || hc.VerifyCursorRotation == nil {
++				return nil
++			}
++			examined, e := actual.GetSpawn(instanceID)
++			if e != nil {
++				return nil
++			}
++			gate.SessionID = b.SessionID
++			until, e := time.Parse(time.RFC3339Nano, claim.Deadline)
++			if e != nil || !time.Now().Before(until) || until.After(time.Now().Add(3*time.Second)) {
++				return nil
++			}
++			_, e = actual.RotateCursorSession(examined, gate, res.SessionID, transcriptPath, until, func(row store.Spawn) error {
++				return hc.VerifyCursorRotation(actual, b, transcriptPath, row)
++			})
++			if e != nil {
++				failClosed(fmt.Sprintf("Cursor rotation publication: %v", e))
++			}
++			return nil
++		}
++		if b.SessionID != res.SessionID {
++			return nil
++		}
+ 	}
+ 	jsonlPresent := transcriptPresent(transcriptPath)
+ 	onIgnored := func(reason string) {

@@ -33,6 +33,26 @@ type submissionRecord struct {
 	} `json:"data"`
 }
 
+// Retired-response records preserve numeric JSON-RPC IDs while submission
+// lifecycle records use their printable correlation string.
+func (r *submissionRecord) UnmarshalJSON(raw []byte) error {
+	type plain submissionRecord
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return err
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["data"], &data); err != nil {
+		return err
+	}
+	if id := bytes.TrimSpace(data["request_id"]); len(id) > 0 && id[0] != '"' && string(id) != "null" {
+		data["request_id"], _ = json.Marshal(string(id))
+		envelope["data"], _ = json.Marshal(data)
+		raw, _ = json.Marshal(envelope)
+	}
+	return json.Unmarshal(raw, (*plain)(r))
+}
+
 type cursorSession struct {
 	e      *requestEnv
 	master *os.File

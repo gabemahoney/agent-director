@@ -1,0 +1,154 @@
+{
+  "role": "apiary_engineer_e3_task2_review_fix",
+  "result": "Batched source repair implemented for R1/R2 and S1/S2/S3. All targeted receipts pass. The five retained S1-S3 red leaves are now green without test/fixture changes. Precise new R1/R2 causal regressions remain the next Test Writer responsibility; no causal proof for those unauthored tests is claimed.",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.77": "done -> active -> done",
+    "t3.jf1.r8.sr.zy": "done -> active -> done",
+    "t3.jf1.r8.sr.5x": "done -> active -> done",
+    "t3.jf1.r8.sr.zg": "done -> active -> done"
+  },
+  "other_statuses": "No Task/Epic/behavior/quality/documentation ticket statuses changed.",
+  "files_changed_this_pass": [
+    "internal/cursorhost/input.go",
+    "internal/cursorhost/report.go",
+    "internal/cursorhost/requests.go",
+    "internal/cursorhost/session.go",
+    "internal/store/cursor_rotation.go"
+  ],
+  "source_sha256": {
+    "cmd/agent-director/cursor_host_cmd.go": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+    "cmd/agent-director/main.go": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "internal/cursorhost/input.go": "024bf15c29221fad37d93918720fc7d9e6d0d61c72c1846e603dbe05bd2d9e0d",
+    "internal/cursorhost/protocol.go": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+    "internal/cursorhost/report.go": "f3d92d06efc71312f54004bb16dc8e6b03fa3cff96da974189b4216db960a41e",
+    "internal/cursorhost/requests.go": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "internal/cursorhost/session.go": "00856c3cd90d904ef82f5c892d9200d5bd33200884597a54b5981a997ded3f50",
+    "internal/cursorhost/transcript_linux.go": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+    "internal/hook/handler.go": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8",
+    "internal/store/cursor_rotation.go": "40c10c567ac7884d271e04cd372a5e9d455c4530f4c6b498b664728eae99c359"
+  },
+  "unchanged_test_fixture_integrity": {
+    "internal/cursorhost/report_linux_test.go": true,
+    "internal/cursorhost/request_runtime_linux_test.go": true,
+    "internal/cursorhost/session_fixture_linux_test.go": true,
+    "internal/cursorhost/session_pause_linux_test.go": true,
+    "internal/cursorhost/session_rotation_linux_test.go": true,
+    "internal/cursorhost/session_rotation_boundary_linux_test.go": true,
+    "internal/store/cursor_rotation_test.go": true,
+    "internal/hook/cursor_rotation_test.go": true,
+    "internal/testsupport/cursorfix/cursorfix.go": true,
+    "internal/testsupport/cursorfix/runtime.js": true,
+    "test/realtmux/cursor_launch_test.go": true,
+    "test/realtmux/cursor_failure_linux_test.go": true
+  },
+  "repairs": {
+    "R1": {
+      "change": "Replace hook-completion-only publication observation with bounded observation of the actual committed database while the direct-parent hook is running. Store.ObserveCursorRotation performs a single context-bound snapshot checking complete runtime/connection/process/pipe/fd identity, exact examined launch/server/socket/pane, fresh row/session/path and required outgoing current-life archive. Atomic observation reaches the controller independently of the hook returning. Consumed intentional exit cancels the report hook; a final snapshot follows confirmed hook exit. Controller joining and observation use only the original first-control deadline. The observed committed binding is carried into transcript/report/shutdown even if reporting later fails. Intentional exit continues to actual owned-runtime termination and protected SessionEnd only after final reconciliation; blocked/failed persistence still cannot produce ended.",
+      "evidence": "Existing publication-before/after, report-error-after-commit, owned death, exit/pause/interrupt and real direct-parent pane success tests pass. Exact stalled-after-COMMIT/unreleased-helper cases are not yet separately authored; see next Test Writer instructions. No inference of commit from payload, screen, hook stdout or exit status."
+    },
+    "R2": {
+      "change": "Capture epoch, provisional state and admitted session under the same mailbox mutex at actual admission. Carry the provisional bit through emit/insertion rather than recomputing it from later rotating state. Publication cannot transform parked provisional input into ordinary old-session admission. Existing CheckCursorPrompt and epoch-owned promotion remain the only fresh-admission path. Submit also refuses a mismatched admitted conversation before runtime/report/model activity.",
+      "evidence": "Existing delayed ordinary admission, Task1 admission-before-insertion, aliases, capacity/holds/FIFO tests pass. Exact during-rotation-admission -> publication -> insertion causal test is still unauthored and is not claimed proven."
+    },
+    "S1": {
+      "change": "After successful rotation_confirmed synchronization, a consumed intentional exit continues to intentional finalization instead of returning confirmation-retired. No uncommitted fresh identity is installed. Other retired authority still fails closed.",
+      "causal_red_to_green": [
+        "behavior/20-final-source-regressions.log: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit FAIL -> review-fix/04-final-source-regressions-race.log PASS",
+        "behavior/20-final-source-regressions.log: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause FAIL -> review-fix/04-final-source-regressions-race.log PASS"
+      ],
+      "limit": "Retained pre-repair red receipt is from the initial Test Writer; this pass did not rerun pre-edit source."
+    },
+    "S2": {
+      "change": "Keep queue ownership of promoted unstarted submissions and visibly cancel every queued ID during cleanup before the persistenceFailed early return. Visibility does not depend on the broken recorder. Durable final cancellation remains conditional on recorder health and remaining original budget; published identity/archive are never rolled back or replayed.",
+      "causal_red_to_green": [
+        "behavior/20-final-source-regressions.log: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted FAIL -> review-fix/04-final-source-regressions-race.log PASS"
+      ]
+    },
+    "S3": {
+      "change": "Retired authorization classification returns its known originating session from the existing request-ID/tool ownership. Retired event and authorization records reuse submission_session_id attribution already supported by the protected recorder. Retired numeric RPC response attribution uses monotonically ordered per-session request boundaries, bounded by the existing 4096 confirmed-conversation cap; initialize/unknown origin remains empty. It never invents main/child origin or grants current authority.",
+      "causal_red_to_green": [
+        "behavior/20-final-source-regressions.log: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old FAIL -> review-fix/04-final-source-regressions-race.log PASS",
+        "behavior/20-final-source-regressions.log: TestCursorRotationRetiresPermissionPlanCallbacksAndChoices FAIL -> review-fix/04-final-source-regressions-race.log PASS"
+      ],
+      "remaining_coverage": "New explicit top-level attribution assertions for retired numeric responses and unknown initialize response should be added by the Test Writer; current retained S3 assertions pin events and permission/plan callbacks."
+    }
+  },
+  "next_test_writer": {
+    "R1_repro": "Use existing beginCursorSessionWithInput/runWithInput, actual rotationBarrier(t,\"after\"), real runCursorReportHelper/RotateCursorSession and rotationEntered. After startup, configure delayed new, consume /new and held input, release the runtime new reply and wait until the after-publication helper barrier is entered. Independently assert real store fresh runtime/row/history. Keep the report barrier UNRELEASED until Run exits; existing publication_after tests release it immediately after control, so they miss the original defect. Cover (a) /exit or public eligible Pause: real owned child dead, row ended on fresh committed identity, protected session_end fresh, no held bytes, no fake rollback; (b) interrupt: failure, actual owned runtime dead, fresh DB/history retained, no false intentional end; (c) original three-second timeout: unchanged first-control bound, held visible refusal/no ACP bytes, committed DB/history retained and no false end. Compare original source by isolated source overlay only under make sandbox if causal red proof needed. The real reporter private rotationObserved callback permits a companion reporter-level observation that must fire from committed SQL before the helper is released/returns, including timeout/death; it is not a copied controller helper. All reads retain original deadline; no additional allowance/retry/replay.",
+    "R2_repro": "Use completeInput with beginCursorSessionWithInput and the actual runWithInput admission/emit callbacks. Start and hold session/new. Call i.admit() during rotation and park its accepted terminalInput WITHOUT i.emit and WITHOUT another i.admit that would replace the captured observation. Release actual new reply and wait for committed publication plus mailbox publication (fresh invitation). Then i.emit(parked). Assert the entry records input_held with no admitted conversation, then only guarded released_from_hold submission_accepted on fresh identity; never ordinary accepted on old identity, and exact bytes go once to fresh session in original observed order. Prefer an independent unknown permission/plan hold retained through publication to prove input stays provisional until CheckCursorPrompt truly permits promotion. Preserve raw-wire zero-before-promotion and no-bypass assertions. Existing TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication covers ordinary admission BEFORE rotation, a different interleaving.",
+    "seams": "Existing inputStarter, completeInput, runtime new-release, rotation report barriers, protected record barrier and real stores suffice; no new public fault option or test seam was added. Private reporter callbacks are production commit observation, not fabricated publication."
+  },
+  "receipts": {
+    "00-format.log": {
+      "sha256": "245ace87ac91e5efe1afea71dae27b8368b6dc3965bf0c3785686dfdd31f61d7",
+      "result": "PASS",
+      "pass_lines_including_parent_subtest_overlap": 0,
+      "packages": []
+    },
+    "01-source-regressions.log": {
+      "sha256": "72e6d62f24401c19e81debf8e0bb9a92ff9be1e0268a5c9fb9f6bb73262a6c1d",
+      "result": "PASS",
+      "pass_lines_including_parent_subtest_overlap": 29,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t9.252s"
+      ]
+    },
+    "02-rotation-preservation-race.log": {
+      "sha256": "7bebfa8e97efd1d478626c0298de4a55f496b01e600a3e9feedf660c801e0edf",
+      "result": "PASS",
+      "pass_lines_including_parent_subtest_overlap": 202,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t74.859s"
+      ]
+    },
+    "03-publication-pane-race.log": {
+      "sha256": "aff6de1c258adee8db280b5c3da3b0efd3c3791d10bd1910d1251cb62d477949",
+      "result": "PASS",
+      "pass_lines_including_parent_subtest_overlap": 144,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t3.644s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t1.711s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t41.088s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t11.999s"
+      ]
+    },
+    "04-final-source-regressions-race.log": {
+      "sha256": "8a75fb1fd9f15d68edc5980f934230741c83e9e8deb10c9e1d3edaa051e70548",
+      "result": "PASS",
+      "pass_lines_including_parent_subtest_overlap": 37,
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t12.662s"
+      ]
+    }
+  },
+  "validation_limits": "01 is retained S1-S3 targeted green; 02 broader affected controller/answer/FIFO/holds/capacity/first-deadline race preservation; 03 guarded store/history/hook, generic Codex rotation, reporter and real-tmux production CLI/direct-parent hook success/persistence/pause; 04 final-source S1-S3 plus aliases/FIFO/delayed-admission/Task1 admission regression after final small guards. Earlier receipts can precede final small source refinements. Counts overlap and are not independent case totals. No race warning; git diff --check clean. No full suite or integration collector run.",
+  "technical_decisions_for_root_srd": [
+    "Supersede the original Task2 claim that a one-shot buffered hook completion is sufficient publication observation. Observe actual atomic runtime/row/required-history snapshots while the hook is alive; observing commit and completing the hook/report are distinct.",
+    "Cancel the hook on consumed intentional exit; reconcile after confirmed hook exit and carry actual observed committed identity into owned-runtime finalization. All observation/join/store acquisition remains bounded by the original first-control deadline; exhaustion remains uncertainty/failure rather than rollback or successful ended.",
+    "Treat provisional status as part of the consumption-time admission snapshot, alongside epoch and session, and preserve it through insertion. Promotion alone transfers to admitted fresh-session queue ownership after existing durable guards.",
+    "Every known unstarted queue owner gets a visible per-ID cancellation even when protected persistence has already failed. No successful protected disposition or terminal state is fabricated.",
+    "Known-retired protected records retain their actual known conversation; retired-response origin is bounded by per-conversation numeric request boundaries. Unknown origin stays unknown."
+  ],
+  "recovery_wording": [
+    "Cursor rotation requested; new input is held until publication",
+    "Cursor rotation already pending; repeated control ignored",
+    "Cursor fresh conversation published",
+    "Cursor rotation failed or stopped; held input refused to both conversations; no automatic replay",
+    "Cursor held submission <id> refused; nothing sent to either conversation",
+    "Cursor submission <id> cancelled before dispatch: gateway stopped",
+    "Cursor rotation report failed; publication may already be committed; held input refused",
+    "No restore/load/resume/replay procedure is introduced. Failure or exhausted protected persistence never promises saved history, rolled-back publication or ended success."
+  ],
+  "preserved": "Original three-second cancellation and answer/frame limits; both answer guards and acknowledgement before output; unknown-request proof/independent holds; question denial; saved initial priority and pending/hash/dialog/pause constraints; atomic runtime/row/required history; startup-only binding; independent kernel/pane/connection verification; existing generic Claude/Codex fail-open history. No schema/public API/E4/Task3 collector/life switch/model edits.",
+  "model_assessment": "TLA+ not applicable: no spec/tla model inputs changed, zero formal or baseline jobs. Existing models do not establish controller publication observation, admission/insertion interleavings or protected-origin attribution. New deterministic behavioral tests are required; no manufactured spec edits.",
+  "execution_boundary": "Repository formatting and all tests ran only through make sandbox CMD with fresh container HOME plus per-test temporary stores/sockets/owned processes. GORACE=atexit_sleep_ms=0 only removes race instrumentation helper-exit delay. No host repository binaries/tests, credentials/login/logout, real AD database contents, live authenticated Cursor, local Docker TESTPLAN groups/collectors, scheduler/TLC/parser/Java, commit/push, delegation or midflight agent messages. No .claude file contents read or modified; CLAUDE.md was read only for permitted docs locations and no forbidden links followed.",
+  "deviations": [
+    "Initial artifact-location discovery used find over /tmp and /home/horde with .claude pruned before descent, broader directory-entry traversal than necessary. It opened no file contents and no database/credential contents. Subsequent artifact access was workspace-scoped. No test/doc files edited."
+  ],
+  "incomplete_work": [
+    "Fresh Test Writer must author and causally validate exact R1/R2 regressions and retired-response attribution, then settle final behavioral validation.",
+    "Documentation/postdoc advice/final quality, sole final make test-sandbox owner, coordinator commit and user exact-commit scheduler interface gate remain downstream."
+  ],
+  "questions_for_caller": []
+}

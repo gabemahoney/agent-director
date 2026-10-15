@@ -229,6 +229,7 @@ func (e *requestEnv) prepareRunPTY(t *testing.T) (*os.File, *os.File) {
 	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
 	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
 	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+	t.Setenv("AD_TEST_CURSOR_REPORT_PAYLOADS", e.path+".reports")
 	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)
 	t.Setenv("AGENT_DIRECTOR_AGENT", "cursor")
@@ -252,7 +253,6 @@ func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
 		{"Stop waiting", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2, false, ""},
 		{"pending refuses", "SessionStart", "before", "", "typed\r", store.StatePending, 0, false, ""},
 		{"initial start report does not admit follow-up", "UserPromptSubmit", "after", "initial", "typed\r", store.StateWorking, 1, false, ""},
-		{"initial start report new clear refuse", "UserPromptSubmit", "after", "initial", "/new\r/clear\rtyped\r", store.StateWorking, 1, false, ""},
 		{"initial prompt does not double admit", "SessionStart", "after", "initial", "typed\r", store.StateWaiting, 1, false, ""},
 		{"SessionStart two Enters across confirm", "SessionStart", "after", "", "typed\r", store.StateWaiting, 2, true, ""},
 		{"SessionStart launch replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "launch"},

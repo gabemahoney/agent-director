@@ -1,0 +1,40 @@
+{
+  "owner": "t3.jf1.r8.sr.78",
+  "new_or_changed_commands": [],
+  "sequences": [
+    {
+      "id": "rotation_capacity",
+      "path": "docs/caller-contract.md",
+      "heading": "Cursor operation boundaries",
+      "marker": "During rotation, a provisional holding-capacity refusal likewise requires a",
+      "exact_prose": "During rotation, a provisional holding-capacity refusal likewise requires a\nlater explicit submission after capacity is available; refused text will not\nbe delivered automatically. Wait for publication and remaining decision holds\nto resolve before expecting held input to be admitted. A rotation notice or\nfresh-identity confirmation is not evidence of admission or prompt completion.",
+      "literal_follow_scope": "Observe explicit held-capacity refusal, then deliberately submit later when eligible; no automatic delivery. Preserve unknown/independent holds through publication and prove no admission before remaining guards."
+    },
+    {
+      "id": "failed_rotation",
+      "path": "docs/caller-contract.md",
+      "heading": "Cursor operation boundaries",
+      "marker": "The first control has a fixed three-second cancellation deadline, including",
+      "exact_prose": "The first control has a fixed three-second cancellation deadline, including\nfresh-session creation, publication and protected recording. Repeated controls\ncannot extend it. Cancellation timeout, missing, invalid or reused identity,\nrefused publication, lost authority or persistence failure stops admission and\nvisibly refuses held input to both conversations. Interrupting a pending\nrotation also stops the owned runtime. Do not send refused input to the old\nconversation or automatically replay it. Inspect `get` and available protected\nrecords, then use the existing live-row sequence above if cleanup is needed;\nstart a fresh unique instance once the failed row is reconciled.",
+      "literal_follow_scope": "Follow failure inspection and existing cleanup sequence only if needed, then fresh unique instance. Refused held text reaches neither conversation; no automatic replay, old resume, deadline extension or fabricated history. Use isolated fixtures and actual existing public owners; no live credentials."
+    },
+    {
+      "id": "committed_report_failure",
+      "path": "docs/caller-contract.md",
+      "heading": "Cursor operation boundaries",
+      "marker": "Publication and hook completion are distinct. A report failure or timeout can",
+      "exact_prose": "Publication and hook completion are distinct. A report failure or timeout can\noccur after the fresh session and required outgoing history have committed.\nDo not infer rollback from that failure, or treat an incomplete record as proof\nthat publication failed. Inspect the actual current session and history before\ndeciding what happened; AD does not restore the old conversation automatically.",
+      "literal_follow_scope": "On actual commit followed by failure/stalled hook, inspect real public current session/history and available transcript; preserve committed truth and refuse held text, without rollback/replay inference."
+    },
+    {
+      "id": "rotation_shutdown",
+      "path": "docs/caller-contract.md",
+      "heading": "Cursor operation boundaries",
+      "marker": "Exit or eligible pause can preempt rotation, but `ended` still requires actual",
+      "exact_prose": "Exit or eligible pause can preempt rotation, but `ended` still requires actual\nowned runtime death and a verified, durably recorded end for the authoritative\nconversation. Unknown binding or exhausted persistence cannot establish success.",
+      "literal_follow_scope": "Follow intentional shutdown with actual owned-death and authoritative ended evidence; unknown/failing persistence must remain failure. Retain reporter-only limit for pre-Start micro-window."
+    }
+  ],
+  "unchanged_advice": "Existing capacity/interruption/display/persistence/live-row advice remains its existing owner; changed rotation advice above is the scoped delta. No doc parsing/metatests or manufactured commands requested.",
+  "status": "awaiting literal-follow Test Writer; no advice execution claimed"
+}

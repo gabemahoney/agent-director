@@ -106,6 +106,9 @@ type HandleConfig struct {
 	// tmux readers, keeping hook free of those dependencies. Nil denies every
 	// Cursor report; a payload's connection claim never grants authority.
 	VerifyCursor func(*store.Store, store.CursorRuntime, string, bool) error
+	// Rotation rechecks independent evidence using the row read under the
+	// publication lock; it must not acquire another connection on that store.
+	VerifyCursorRotation func(*store.Store, store.CursorRuntime, string, store.Spawn) error
 	// Now reads the injected clock that bounds SessionStart's wait for its
 	// launch's identity write (SR-22.9, SR-20.2): the grace bound is compared
 	// with it on the wall clock, and the wait's elapsed time, which
@@ -443,8 +446,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		b, e := reader.ReadCursorRuntime(instanceID)
 		var claim struct {
 			Connection string `json:"cursor_connection"`
+			Previous   string `json:"cursor_previous_session"`
+			Deadline   string `json:"cursor_rotation_deadline"`
 		}
-		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.SessionID != res.SessionID || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
+		if e != nil || json.Unmarshal(raw, &claim) != nil || claim.Connection == "" || claim.Connection != b.Connection || b.SessionID == "" || b.GatewayPID != parent.pid || b.GatewayStart != parent.start {
+			return nil
+		}
+		if claim.Previous == "" && b.SessionID != res.SessionID {
 			return nil
 		}
 		ended := res.EventName == "SessionEnd"
@@ -459,6 +467,30 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 			return nil
 		}
 		gate.Cursor = &b
+		if claim.Previous != "" {
+			if ended || res.EventName != "SessionStart" || claim.Previous != b.SessionID || res.SessionID == b.SessionID || hc.VerifyCursorRotation == nil {
+				return nil
+			}
+			examined, e := actual.GetSpawn(instanceID)
+			if e != nil {
+				return nil
+			}
+			gate.SessionID = b.SessionID
+			until, e := time.Parse(time.RFC3339Nano, claim.Deadline)
+			if e != nil || !time.Now().Before(until) || until.After(time.Now().Add(3*time.Second)) {
+				return nil
+			}
+			_, e = actual.RotateCursorSession(examined, gate, res.SessionID, transcriptPath, until, func(row store.Spawn) error {
+				return hc.VerifyCursorRotation(actual, b, transcriptPath, row)
+			})
+			if e != nil {
+				failClosed(fmt.Sprintf("Cursor rotation publication: %v", e))
+			}
+			return nil
+		}
+		if b.SessionID != res.SessionID {
+			return nil
+		}
 	}
 	jsonlPresent := transcriptPresent(transcriptPath)
 	onIgnored := func(reason string) {

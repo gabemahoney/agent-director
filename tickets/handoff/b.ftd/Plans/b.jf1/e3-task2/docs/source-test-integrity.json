@@ -1,0 +1,112 @@
+[
+  {
+    "path": "internal/cursorhost/report.go",
+    "sha256": "7accf4854e18fdf6b89be295fb1ee0b90fd917f4d4b3b29b8df2154dbac5c4cc",
+    "unchanged": true
+  },
+  {
+    "path": "internal/store/cursor_rotation.go",
+    "sha256": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+    "unchanged": true
+  },
+  {
+    "path": "cmd/agent-director/cursor_host_cmd.go",
+    "sha256": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+    "unchanged": true
+  },
+  {
+    "path": "cmd/agent-director/main.go",
+    "sha256": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/input.go",
+    "sha256": "024bf15c29221fad37d93918720fc7d9e6d0d61c72c1846e603dbe05bd2d9e0d",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/protocol.go",
+    "sha256": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/requests.go",
+    "sha256": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/session.go",
+    "sha256": "00856c3cd90d904ef82f5c892d9200d5bd33200884597a54b5981a997ded3f50",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/transcript_linux.go",
+    "sha256": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+    "unchanged": true
+  },
+  {
+    "path": "internal/hook/handler.go",
+    "sha256": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/report_linux_test.go",
+    "sha256": "c5e6cc7cefc9a0589a1a742f8b690db17a303b9b210e29c9f57d05410205ee75",
+    "unchanged": true
+  },
+  {
+    "path": "internal/store/cursor_rotation_test.go",
+    "sha256": "360c7e088516f9a0668f737a9be0ab0dbb57eee0a1075d102e1a400cfd793f72",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/request_runtime_linux_test.go",
+    "sha256": "301fd4a426b50e5adf68b2246f33678b5864f3d0c399811569352f183ee94734",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/session_fixture_linux_test.go",
+    "sha256": "141c9bdbb40290e9771f9a49b20cfdb89c2f6d3d1aa04110e167718c1eab4d77",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/session_pause_linux_test.go",
+    "sha256": "5232bc659354c851ee26b79ab35b95c59d15ce38283437b15b3ee201a45b5b65",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/session_rotation_linux_test.go",
+    "sha256": "b1e8e8d9c3cd6cd42da86a1c947040cc23ecb657f8c0097de87aebdd9dbbed70",
+    "unchanged": true
+  },
+  {
+    "path": "internal/cursorhost/session_rotation_boundary_linux_test.go",
+    "sha256": "95404907768d7bdf6a075089d2b175c0edad190f62f084c6e92175ba8b224604",
+    "unchanged": true
+  },
+  {
+    "path": "internal/hook/cursor_rotation_test.go",
+    "sha256": "147276f44dbf1880c25699ca8921e8b59305f2513ce0dbf9ecf10b35ce5cf14c",
+    "unchanged": true
+  },
+  {
+    "path": "internal/testsupport/cursorfix/cursorfix.go",
+    "sha256": "667337f9d77c9f83ad9a515144660490b70865224af87239f482ab7ade93ad22",
+    "unchanged": true
+  },
+  {
+    "path": "internal/testsupport/cursorfix/runtime.js",
+    "sha256": "6d34e8cb81e70e52a9e3229d6e91d615ab2abfb285e5b9286ace79700f0928e0",
+    "unchanged": true
+  },
+  {
+    "path": "test/realtmux/cursor_launch_test.go",
+    "sha256": "c807b26b510cd6efa03f5d914ccb70f20198e0a2de05450fe2670897615e52d4",
+    "unchanged": true
+  },
+  {
+    "path": "test/realtmux/cursor_failure_linux_test.go",
+    "sha256": "daf1b187711c8934a85b2bb091cdf37e5da2c340b2f668a95687aa98e665f9b2",
+    "unchanged": true
+  }
+]

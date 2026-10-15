@@ -1,0 +1,33 @@
+{
+  "inventory": "../docs/postdoc-advice-inventory.json",
+  "sequences": {
+    "rotation_capacity": {
+      "primary_owner": "internal/cursorhost/session_rotation_boundary_linux_test.go: TestCursorRotationHeldCapacityIsProvisional",
+      "follow": "Pin actual capacity notice; hold exact bounded input until real publication, complete turns, independently verify overflow never reached raw ACP, explicitly resubmit the same eligible refused text, require exactly one fresh-session prompt. Individual over-1MiB case remains refused; it is not promised later admission unchanged.",
+      "receipt": "01-advice-focused.log",
+      "remaining_guard_owner": "TestCursorRotationPublicationAndEveryHoldPrecedePromotion in same receipt; independent unknown/Plan holds survive publication and closed_at; each independent proof required before promotion"
+    },
+    "failed_rotation": {
+      "primary_owner": "test/realtmux/cursor_failure_linux_test.go: TestCursorPersistenceFailureStopsAdmission/rotation_publication",
+      "follow": "Actual guarded hook archive failure, exact emitted failure reason, actual public Get and available protected records, owned runtime/gateway death, no held raw bytes, no invented history/end. Live row: public Kill, FindMissing, public Status must be ended/missing; then production CLI spawns a fresh UUID instance in SAME isolated store/config, reaches Cursor ready, no refused input replay, eligible public Pause succeeds.",
+      "receipt": "02-failed-rotation-follow.log",
+      "limit": "First cleanup check succeeds, so documented conditional later waits/repeated kill/escalation are not reached; their unchanged existing advice owners remain untouched. Synthetic ACP; real tmux/production CLI/hook, no live Cursor."
+    },
+    "committed_report_failure": {
+      "primary_owner": "internal/cursorhost/session_rotation_linux_test.go: TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit",
+      "follow": "Actual hook helper commits real rotation transaction then exits failure; pin exact returned publication-may-already-be-committed advice. Public api.Get exposes fresh current session and outgoing PriorSessions with exact shared protected path; independent store/history and protected records retain committed truth; per-ID refusal and raw zero bytes preclude replay/rollback inference.",
+      "receipt": "01-advice-focused.log",
+      "stalled_hook_companion": "Existing TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity; ../prestart-validation/02-controller-affected-race.log covers unreleased real helper, independent committed snapshot, actual death and truthful fresh end on exit/pause. Distinct report-stall boundary; not duplicated."
+    },
+    "rotation_shutdown": {
+      "primary_owner": "internal/cursorhost/session_rotation_boundary_linux_test.go: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases and TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity",
+      "receipts": ["../prestart-validation/02-controller-affected-race.log", "../prestart-validation/03-real-pane-affected-race.log"],
+      "follow": "Existing literal /exit and actual eligible public Pause at distinct real barriers require owned process death before success, authoritative row ended, exactly fresh protected session_end at committed stall, individual refusals/no held bytes. Persistence fault owner TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld plus real-pane persistence cases proves no invented ended on protected failure; unknown reporter/store reconciliation cases cannot authorize end.",
+      "no_duplicate_reason": "These settled owners already literally perform the exact shutdown instructions and independent outcomes; no separate advice matrix needed.",
+      "proof_limit": "Exact full Run pre-Start micro-window remains reporter causal regression plus inspected controller branch only; not reproduced end to end."
+    }
+  },
+  "new_or_changed_public_commands": [],
+  "task1_advice": "Unchanged existing owners retained; no E4 recovery/replay, concurrent SendKeys atomicity or authenticated acceptance claim.",
+  "result": "all four scoped changed sequences have literal behavioral owners and receipts"
+}

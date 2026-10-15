@@ -94,6 +94,15 @@ func (t *transcript) record(kind string, data any) error {
 
 	t.seq++
 	record := map[string]any{"sequence": t.seq, "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "kind": kind, "instance_id": t.binding.InstanceID, "life_number": t.binding.Life, "launch_token": t.binding.Token, "connection_id": t.binding.Connection, "session_id": t.binding.SessionID, "origin": "launch", "data": data}
+	if fields, ok := data.(map[string]any); ok {
+		if session, ok := fields["submission_session_id"].(string); ok {
+			record["session_id"] = session
+		}
+	}
+	if kind == "input_held" || kind == "held_input_refused" {
+		// Provisional input has no admitted conversation identity.
+		record["session_id"] = ""
+	}
 	raw, err := json.Marshal(record)
 	if err != nil {
 		return err

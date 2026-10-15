@@ -1,0 +1,27 @@
+{
+  "mandatory_findings": [
+    "R1 committedpublicationreconciliation",
+    "R2 capturedprovisionaladmission",
+    "S1 intentionalconfirmationSyncshutdown",
+    "S2 promotedinputvisiblefailuredisposition",
+    "S3 retiredtrafficprotectedorigin",
+    "R3 pre-hook-start canceled execution reconciliation"
+  ],
+  "disposition": "All rotation source findings repaired and independently validated. PM1 failure accounting corrected; PM2 bounded investigation complete. Historical generic deadline cause remains unknown and explicitly nonblocking for local commit/external gate per SRD-FINAL-VALIDATION-DISPOSITION.md, not claimed fixed or waived.",
+  "ignored_findings": [
+    "Historical DecideMaxWaitUnderHeldLock cause unresolved; explicit technical disposition accepts passing current suite for commit/externalgate."
+  ],
+  "inherited_doc_debt_deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2"
+  ],
+  "source_review": "code-review.json",
+  "behavior_report": "behavior/FINAL-report.json",
+  "scope": "Task2only; no Task3start/externalpassclaim",
+  "revalidation_report": "revalidation/FINAL-report.json",
+  "prestart_validation_report": "prestart-validation/FINAL-report.json",
+  "final_test_report": "final-tests/FINAL-report.json",
+  "timing_report": "timing-investigation/FINAL-report.json"
+}

@@ -31,6 +31,18 @@ func hookCursorVerifier(cfg config.Config) func(*store.Store, store.CursorRuntim
 	}
 }
 
+func hookCursorRotationVerifier(cfg config.Config) func(*store.Store, store.CursorRuntime, string, store.Spawn) error {
+	return func(st *store.Store, b store.CursorRuntime, path string, row store.Spawn) error {
+		if err := cursorhost.VerifyRuntime(b, false); err != nil {
+			return err
+		}
+		if err := cursorhost.VerifyTranscriptPath(path); err != nil {
+			return err
+		}
+		return cursorhost.VerifyPane(st, row, cfg)
+	}
+}
+
 // cursor-host is internal and dispatched before public client setup. It opens
 // an existing store only after parsing, and proves pane ownership before any
 // runtime launch or ACP admission.

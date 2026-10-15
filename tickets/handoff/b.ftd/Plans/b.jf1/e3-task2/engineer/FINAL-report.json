@@ -1,0 +1,157 @@
+{
+  "role": "apiary_engineer_e3_task2",
+  "result": "All four assigned SOURCE implementation subtasks completed. New Task2 behavioral tests/fixture adaptations, review, documentation, full unit and exact-commit external gates remain their assigned owners; no successful new-rotation behavioral acceptance is claimed by this source pass.",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.77": "defined -> active -> done",
+    "t3.jf1.r8.sr.zy": "defined -> active -> done",
+    "t3.jf1.r8.sr.5x": "defined -> active -> done",
+    "t3.jf1.r8.sr.zg": "defined -> active -> done"
+  },
+  "task_and_epic_statuses": "Only own four source subtasks changed. Task2/Epic remain ACTIVE; Task3 unstarted. No commits or pushes.",
+  "files_changed": [
+    "cmd/agent-director/cursor_host_cmd.go",
+    "cmd/agent-director/main.go",
+    "internal/cursorhost/input.go",
+    "internal/cursorhost/protocol.go",
+    "internal/cursorhost/report.go",
+    "internal/cursorhost/requests.go",
+    "internal/cursorhost/session.go",
+    "internal/cursorhost/transcript_linux.go",
+    "internal/hook/handler.go",
+    "internal/store/cursor_rotation.go"
+  ],
+  "source_hashes": {
+    "cmd/agent-director/cursor_host_cmd.go": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+    "cmd/agent-director/main.go": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "internal/cursorhost/input.go": "1616289b84bdd56d2dda3e20e5c261c7e4f43097f8c2d63bf7eeb93e76382c0e",
+    "internal/cursorhost/protocol.go": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+    "internal/cursorhost/report.go": "1c3288c66f7b2effe1dfa97dadec8b5ecf406b596e8a4ed79ae6d4e2c680ffa0",
+    "internal/cursorhost/requests.go": "9582b8b2b5be8f55eb2e912b7f647c66709321a59b9cbcdc750fcd909be3f77b",
+    "internal/cursorhost/session.go": "a267b53e56bbb8146306c15966dcc691bbbdcdb72a2bc74e725bd0ed3fb6616d",
+    "internal/cursorhost/transcript_linux.go": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+    "internal/hook/handler.go": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8",
+    "internal/store/cursor_rotation.go": "d85389dfc95de7ce699fa58d2d90c662478888889b63a310c040f4b585b58954"
+  },
+  "technical_decisions": [
+    "clear/new share the independent control mailbox lane. The first control advances cancellation authority immediately; repeated aliases coalesce with an explicit count/ignored disposition without a second request or deadline extension.",
+    "Outstanding prompt requires its correlated validated terminal response, or positive zero-byte retirement at the existing start/writer gate. Idle rotates immediately without waiting for a nonexistent cancel-notification response. Existing three-second first-control deadline supervises cancellation, new-session creation, publication and protected-record waits; the new-session writer checks epoch and original expiry before bytes.",
+    "Complete rotation input is provisionally reserved separately, bounded at 32 entries/8 MiB and the existing 1 MiB individual limit. It is not conversation admission. After publication it remains provisional until CheckCursorPrompt independently accepts all durable guards. Promotion transfers reservation ownership to the accepted FIFO; original monotonic observation order merges it ahead of newer ordinary admissions.",
+    "Fresh session IDs must be nonempty, bounded, without whitespace normalization or NUL/CR/LF, and distinct from all previously confirmed IDs on the connection. Session-creation results must correlate to the single pending request. Confirmed IDs are bounded by the existing connection request cap.",
+    "New Store.RotateCursorSession uses existing bounded immediate transaction, cursorAuthority, hookGateSQL, full examined snapshot and launch identity, existing state/settle writer, required upsertSessionHistoryEntry, conditional runtime update and mutation trails. Row identity/path, runtime and outgoing history commit together. No migration or generic history-policy change; SetCursorRuntimeSession remains startup-only.",
+    "A narrow SessionStart payload adds cursor_previous_session and absolute cursor_rotation_deadline. Handler still requires real immediate gateway parent and existing independent verifier. New VerifyCursorRotation rechecks runtime/protected path/pane from the transaction-read row, avoiding recursive acquisition of the single store connection. CLI wiring supplies the real implementation.",
+    "Required archive failure rolls back all publication writes. Reporter additionally verifies outgoing current-life history/path and complete new binding. A bounded supervisor receives the operation-observed identity through a buffered completion channel, including commits preceding later report errors. It never blocks on an unsupervised reconciliation read or claims rollback after possible publication.",
+    "Existing durable permission/plan holds survive cancellation and rotation. Unknown origin never receives main-turn proof. New held work remains blocked by CheckCursorPrompt and both original guarded writers. New authorization records retain their admitted session identity; old exact tool/request IDs cannot acquire current authority.",
+    "Known retired response IDs use a bounded numeric retirement watermark; known old session events and old authorization identities are inspectable without current lifecycle, prompt completion, answer or held-release authority. Missing current update attribution is fail-closed. Owned-runtime death checks precede retired event handling.",
+    "Exit/eligible public pause preempt every supervised phase and retain genuine owned-process termination before SessionEnd. Interrupt during rotation fails closed and terminates the owned runtime; it refuses held input and never silently resumes the outgoing conversation.",
+    "Reuse the single protected launch transcript. Held/refused records have no admitted session ID. Accepted input captures its session at consumption alongside the R1 cancellation epoch so a delayed old admission retains outgoing attribution after publication. Rotation-requested, confirmed, published, failed, held, refusal and existing individual old cancellation/start/outcome records remain distinct. No replay storage.",
+    "Persistence exhaustion never extends the original cancellation deadline to manufacture final records. Every observed held ID gets visible refusal at cleanup; protected final dispositions are written only while recorder and original remaining budget permit. Already durable publication is not undone by later transcript failure."
+  ],
+  "preserved": "Task1 R1-R5, fixed cancel deadline, prompt start-record gate, zero-byte retirement, epoch-owned recovery, output pressure handling, both answer guards, ack-before-relay, finite store acquisition, postwait authority/expiry, independent request holds and uncertain-write nonreplay. No public control API/E4/child tracking/install/group/help changes.",
+  "receipts": {
+    "01-targeted.log": {
+      "result": "FAIL",
+      "sha256": "f593889b88ec89ee61086a063639362784b42791cbdb2ea1cf4aedac882bac75",
+      "passed_test_and_subtest_lines": 94,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t4.903s",
+        "github.com/gabemahoney/agent-director/internal/store\t0.663s",
+        "github.com/gabemahoney/agent-director/cmd/agent-director\t0.507s [no tests to run]"
+      ]
+    },
+    "02-targeted.log": {
+      "result": "PASS",
+      "sha256": "543c2a6393f2d9bfe9d07fa912e4d22056d3e53d7652028d024ac2da9a392333",
+      "passed_test_and_subtest_lines": 101,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t3.925s",
+        "github.com/gabemahoney/agent-director/internal/store\t0.560s",
+        "github.com/gabemahoney/agent-director/internal/hook\t1.634s",
+        "github.com/gabemahoney/agent-director/cmd/agent-director\t0.590s [no tests to run]"
+      ]
+    },
+    "03-preservation-race.log": {
+      "result": "PASS",
+      "sha256": "6ca488fb4c47631dd1734a153635d9a3b7bd95d98c449bfe34462ff7ffb6fb1f",
+      "passed_test_and_subtest_lines": 193,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t28.548s",
+        "github.com/gabemahoney/agent-director/internal/store\t11.668s",
+        "github.com/gabemahoney/agent-director/internal/hook\t10.737s"
+      ]
+    },
+    "04-answer-protocol-race.log": {
+      "result": "PASS",
+      "sha256": "a6fa7fb8b53f92c724a5755625345c06123ee190abd4f34a21772c8bd213d700",
+      "passed_test_and_subtest_lines": 51,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t9.083s"
+      ]
+    },
+    "05-obsolete-rotation-assertions.log": {
+      "result": "FAIL",
+      "sha256": "01b3a74af06f6940d4c6d738b9b3255ec6c5fcc3de2facec86d2a6dc853e9a40",
+      "passed_test_and_subtest_lines": 0,
+      "packages": []
+    },
+    "06-final-targeted-race.log": {
+      "result": "PASS",
+      "sha256": "b4e63e7508759472ea5deb5fa819fb0b3aaf9785b3bb90656357bfbf1f3b6ad2",
+      "passed_test_and_subtest_lines": 196,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t25.731s",
+        "github.com/gabemahoney/agent-director/internal/store\t7.925s",
+        "github.com/gabemahoney/agent-director/internal/hook\t7.444s",
+        "github.com/gabemahoney/agent-director/cmd/agent-director\t0.757s [no tests to run]"
+      ]
+    },
+    "07-attribution-race.log": {
+      "result": "PASS",
+      "sha256": "f29caee6ade1163b3d41cc168e09ce9b35a6ad631a4fe99d29781fb61d623f4a",
+      "passed_test_and_subtest_lines": 10,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/cursorhost\t6.346s"
+      ]
+    },
+    "08-publication-preservation.log": {
+      "result": "PASS",
+      "sha256": "aed5a0ae0416ea033a0ece4e679395ed3a174449a3e9c0da8b2016c2284603e7",
+      "passed_test_and_subtest_lines": 106,
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/store\t0.882s",
+        "github.com/gabemahoney/agent-director/internal/hook\t1.775s",
+        "github.com/gabemahoney/agent-director/cmd/agent-director\t0.474s [no tests to run]"
+      ]
+    }
+  },
+  "failure_dispositions": [
+    "01-targeted.log: existing hook wrong_session cases detected that the independent verifier was invoked before rejecting an ordinary mismatched session. Restored early ordinary-session rejection; all corresponding cases pass in 02 and later receipts. Original failure retained.",
+    "05-obsolete-rotation-assertions.log: TestCursorInterruptAndRefusedRotationRetainUnknownOriginHold still demands three unsupported-control refusals and a live old conversation. Actual controller instead began rotation, held submission 5, rejected the fixture's reused session ID, visibly refused that held ID, and stopped safely. Exact error: Cursor did not confirm a genuinely fresh session; held input refused. This is an obsolete expectation/static-ID fixture limitation, not a deadline relaxed or source failure hidden."
+  ],
+  "needed_test_adaptations": [
+    "Extend existing cursorfix/runtime.js one-ID-per-session/new behavior with genuinely distinct IDs, delayed/failing/reused/malformed correlated responses and raw emitted-payload evidence.",
+    "Existing runCursorReportHelper reads its desired ID from the store and ignores the new payload fields. It must validate the actual session_id/previous_session/deadline and exercise the real guarded rotation transaction (plus actual hook/direct-parent real-pane success). It must not manufacture desired identity from stored data or skip required history.",
+    "Update only obsolete clear/new refusal expectations in TestCursorInterruptAndRefusedRotationRetainUnknownOriginHold, TestCursorPublicWaitingPromptAdmission initial-start new/clear cell, and TestCursorFreshRealPanePromptsRefusalsAndPause. Preserve unknown holds, original deadlines and zero-unconfirmed-bytes assertions.",
+    "Add assigned Task2 tests for actual successful idle and outstanding-prompt rotations, provisional FIFO/order/capacity, successive fresh IDs, atomic archive failure/commit races and guard replacements, retired events/choices/plan identities, every-phase exit/pause/interrupt, protected persistence/report boundaries and publication-after-error truth. Source pass did not add or edit tests."
+  ],
+  "verification_limits": "Targeted runs only through make sandbox; race receipts use existing GORACE=atexit_sleep_ms=0 to avoid instrumentation-only child exit delay. Receipt counts include parent/subtest overlaps and must not be summed as independent cases. cmd package was compiled but matched no tests. Earlier runs may precede subsequent source refinements; 07 covers final attribution/input changes and 08 final store identity predicate. No full unit/integration/new successful-rotation proof claimed.",
+  "recovery_wording": [
+    "Cursor rotation requested; new input is held until publication",
+    "Cursor rotation already pending; repeated control ignored",
+    "Cursor fresh conversation published",
+    "Cursor rotation failed or stopped; held input refused to both conversations; no automatic replay",
+    "Cursor held submission <id> refused; nothing sent to either conversation",
+    "Cursor rotation report failed; publication may already be committed; held input refused",
+    "No unsupported restore/replay/old-session-resume procedure added. Protected-record finalization failure remains explicit and does not fabricate saved history or ended state."
+  ],
+  "model_assessment": "No spec/tla inputs changed; TLA+ not applicable, zero formal or baseline jobs. Existing Phase5Hook Rotate/hold models do not model the new controller rotation phases, fresh-ID correlation, atomic three-write publication, held reservation/promotion/order or transcript publication boundaries. They are not proof of this implementation. Behavioral owner must assess the actual transitions; only demonstrated spec/model changes justify affected-only scheduler jobs.",
+  "execution_boundary": "No .claude access of any kind, credentials/login/logout access, real AD stores, live authenticated Cursor, Docker TESTPLAN collector/groups, scheduler/TLC/parser/Java, full suites, test/docs edits, commits, pushes, delegation or midflight agent messages. Repository formatting/execution only make sandbox. Read repository CLAUDE.md documentation locations without following any .claude links; engineering guide and relevant Cursor architecture read. Be careful that historical reports mention prior agents' historical .claude deviations; none occurred in this pass.",
+  "deviations": [],
+  "incomplete_source_work": [],
+  "remaining_owners": [
+    "Task2 Test Writer initial behavioral/fixture work and source issue reports",
+    "Single settled documentation pass then literal-follow advice/quality",
+    "Sole final writer full make test-sandbox",
+    "Coordinator local commit and user-owned exact-commit scheduler interface gate before Task3"
+  ],
+  "questions_for_caller": []
+}

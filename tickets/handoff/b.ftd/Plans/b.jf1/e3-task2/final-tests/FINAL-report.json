@@ -1,0 +1,449 @@
+{
+  "role": "apiary_test_writer_e3_task2_final",
+  "result": "Final full unit suite passed; historical deadline failures have unknown cause and require technical disposition",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.78": "defined -> active -> done",
+    "t3.jf1.r8.sr.e9": "done -> active for bounded timing investigation; disposition pending",
+    "t3.jf1.r8.sr.66": "defined -> active -> done"
+  },
+  "statuses_limit": "Only these own subtasks changed; Task2/E3 remain active, Task3 unstarted, E2 Epic intentionally active.",
+  "files_changed": [
+    "internal/cursorhost/session_rotation_boundary_linux_test.go",
+    "internal/cursorhost/session_rotation_linux_test.go",
+    "test/realtmux/cursor_failure_linux_test.go",
+    "internal/cursorhost/session_capacity_linux_test.go"
+  ],
+  "test_sha256": {
+    "internal/cursorhost/session_rotation_boundary_linux_test.go": "13514f9dda536c9314894bce4bc8f862c07cc32df048948a98ab7a6b95c991b4",
+    "internal/cursorhost/session_rotation_linux_test.go": "e52cf6c44a4858923ea6135448dde5d55dda73147f8e6a2d98f2328fee9c28f8",
+    "test/realtmux/cursor_failure_linux_test.go": "a242960aeddcbaa7f0c0e598462854a3836af4d0383d295f4f31ced5c2346f71",
+    "internal/cursorhost/session_capacity_linux_test.go": "8b02e8b95fb13c4e3d81847335e6c77d58263ac63eb0e2b038107b88375ccf6f"
+  },
+  "source_docs_integrity": {
+    "files": 15,
+    "unchanged": true,
+    "manifest": "after-source-doc-integrity.json",
+    "sha256": "f201ee03eb092081333992dc50c8b4cdfaa75a1d13a3e8c77d776f19b64f5d57"
+  },
+  "full_suite": {
+    "command": "make test-sandbox",
+    "result": "passed; refill and pane-notice test synchronization corrected; separate historical pkg/api deadline failures remain causally unresolved",
+    "exit_code": 0,
+    "runs": 3,
+    "go_packages_passed": 68,
+    "go_packages_cached": 62,
+    "go_packages_executed": 6,
+    "go_packages_without_tests": 13,
+    "bun": {
+      "passed": 429,
+      "failed": 0,
+      "expects": 1659,
+      "tests": 429,
+      "files": 57
+    },
+    "unresolved_failures": [],
+    "log": "13-full-test-sandbox.log",
+    "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+    "count_limit": "Go output reports package totals, not test/leaf counts; Bun totals are exact. Runs 04 and 09 failed. Run 09 included both the corrected pane-notice observation failure and two separate pkg/api deadline failures of unknown cause. Final 13 is retained unchanged; no new full run in the bounded follow-up.",
+    "unresolved_failures_scope": "The final 13 run has no failing tests. The separate historical_failures_with_unknown_cause field retains failures not causally explained by that green run."
+  },
+  "initial_full_suite": {
+    "log": "04-full-test-sandbox.log",
+    "exit_code": 2,
+    "go_packages_passed": 67,
+    "go_packages_cached": 42,
+    "go_packages_executed_and_passed": 25,
+    "go_packages_failed": 1,
+    "go_packages_without_tests": 13,
+    "bun": "429 pass, 0 fail, 1659 expects, 57 files",
+    "input_manifest": "initial-settled-input-manifest.json",
+    "sha256": "2c1774d983de87be56365a7f51d98a95414d588659938747b205eb6861a5ffa2"
+  },
+  "tested_inputs": {
+    "count": 2300,
+    "manifest": "settled-input-manifest.json",
+    "sha256": "8357ef9c1d88ae3ecf862755b967177d9369adda58e93b73cda8414aad307836",
+    "post_suite_manifest": "after-input-manifest.json",
+    "identical_after_suite": true,
+    "scope": "All tracked and nonignored untracked repository files excluding .claude before any file read/hash and tickets/handoff receipt/metadata artifacts. Includes all source/test/docs/build inputs; excludes gitignored build outputs, node_modules, receipts. All hashes generated inside sandbox."
+  },
+  "advice": "advice-inventory-mapping.json",
+  "quality": "quality-findings.json",
+  "targeted": {
+    "01-advice-focused.log": {
+      "passed_leaves": 12,
+      "failed_leaves": 0,
+      "race_warnings": 0,
+      "leaves": [
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/entries"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/bytes"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/individual"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationPublicationAndEveryHoldPrecedePromotion"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/rejection"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/missing_ID"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/reused_ID"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/archive"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/authority_loss"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationFailureRefusesEveryHeldInput/runtime_death"
+        }
+      ]
+    },
+    "02-failed-rotation-follow.log": {
+      "passed_leaves": 1,
+      "failed_leaves": 0,
+      "race_warnings": 0,
+      "leaves": [
+        {
+          "status": "PASS",
+          "name": "TestCursorPersistenceFailureStopsAdmission/rotation_publication"
+        }
+      ]
+    },
+    "06-refill-synchronization.log": {
+      "passed_leaves": 4,
+      "failed_leaves": 2,
+      "race_warnings": 0,
+      "leaves": [
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/-1"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/+0"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/+1"
+        },
+        {
+          "status": "FAIL",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/-1"
+        },
+        {
+          "status": "FAIL",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/+0"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/+1"
+        }
+      ]
+    },
+    "07-refill-consumption-boundary.log": {
+      "passed_leaves": 6,
+      "failed_leaves": 0,
+      "race_warnings": 0,
+      "leaves": [
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/-1"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/+0"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/individual/+1"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/-1"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/+0"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorWaitingMailboxByteBoundaries/aggregate/+1"
+        }
+      ]
+    },
+    "11-notice-synchronization.log": {
+      "passed_leaves": 3,
+      "failed_leaves": 0,
+      "race_warnings": 0,
+      "leaves": [
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/entries"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/bytes"
+        },
+        {
+          "status": "PASS",
+          "name": "TestCursorRotationHeldCapacityIsProvisional/individual"
+        }
+      ]
+    }
+  },
+  "receipts": {
+    "00-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs before'",
+      "sha256": "73368275d7813fc07b05a5ac198aa64f959bf6dac4d43a32675058f10483c164",
+      "result": "passed"
+    },
+    "01-advice-focused.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/session_rotation_boundary_linux_test.go internal/cursorhost/session_rotation_linux_test.go test/realtmux/cursor_failure_linux_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost ./test/realtmux -run \"TestCursor(RotationHeldCapacityIsProvisional|RotationPublicationAndEveryHoldPrecedePromotion|RotationFailureRefusesEveryHeldInput|PersistenceFailureStopsAdmission/rotation_publication)$\"'",
+      "sha256": "42b1c7bc702706b6b216c54345cef9b03c919aa7fdf8b77a10f3c199fbda45ec",
+      "result": "passed"
+    },
+    "02-failed-rotation-follow.log": {
+      "command": "make sandbox CMD='env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./test/realtmux -run \"^TestCursorPersistenceFailureStopsAdmission$/^rotation_publication$\"'",
+      "sha256": "4167b0e67785c7ff04b06c882e4bcad24ba4043baadaad43341b412c6d52c58f",
+      "result": "passed"
+    },
+    "03-settled-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs settled'",
+      "sha256": "45c505e8f80b5de7ecfb81994aaae61a68fe1c95599c2d8827c59e8b4d84a245",
+      "result": "passed"
+    },
+    "04-full-test-sandbox.log": {
+      "command": "make test-sandbox",
+      "sha256": "efb097545e52527e804e757d355f856c05efe4bc5d7a0514fa03b77b89b94095",
+      "result": "failed; retained, see cause"
+    },
+    "05-initial-failure-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs initial-after && cp tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/settled-input-manifest.json tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/initial-settled-input-manifest.json && cmp tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/initial-settled-input-manifest.json tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/initial-after-input-manifest.json'",
+      "sha256": "1f17356f84776ade3f173e05a2d73de457a70524af8c8e3fef253ccd3f5520e6",
+      "result": "passed"
+    },
+    "06-refill-synchronization.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/session_capacity_linux_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost -run \"^TestCursorWaitingMailboxByteBoundaries$\"'",
+      "sha256": "bf358fc60b3fb2d21773ea1580df36d388fecf2a658e3ba8c0cf41d4a081024f",
+      "result": "failed; retained, see cause"
+    },
+    "07-refill-consumption-boundary.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/session_capacity_linux_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost -run \"^TestCursorWaitingMailboxByteBoundaries$\"'",
+      "sha256": "9fc9df7091ff59c64bb80aa47b25820b0ee61d3c8427cd3d6750abb10b522981",
+      "result": "passed"
+    },
+    "08-final-settled-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs settled'",
+      "sha256": "9ce25fa188c5e5d8c48c7704372dc3b1669ba82c53af05667b0861d214675c3c",
+      "result": "passed"
+    },
+    "09-full-test-sandbox.log": {
+      "command": "make test-sandbox",
+      "sha256": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+      "result": "failed; retained, see cause"
+    },
+    "10-second-failure-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs second-after && cp tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/settled-input-manifest.json tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/second-settled-input-manifest.json && cmp tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/second-settled-input-manifest.json tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/second-after-input-manifest.json'",
+      "sha256": "a867d236dd9f01277b50f4ed1f05549d8a57f28ff00391b82f084e8a441d8caf",
+      "result": "passed"
+    },
+    "11-notice-synchronization.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/session_rotation_boundary_linux_test.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost -run \"^TestCursorRotationHeldCapacityIsProvisional$\"'",
+      "sha256": "0e157f1524c0340e5beb7331927664e323231296b7e5acb030bea7cc144566bb",
+      "result": "passed"
+    },
+    "12-final-settled-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs settled'",
+      "sha256": "0efe19ecd888f104f5dcf2effbc8b0edbcca786124db9004cc3a0da04c6c3026",
+      "result": "passed"
+    },
+    "13-full-test-sandbox.log": {
+      "command": "make test-sandbox",
+      "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+      "result": "passed"
+    },
+    "14-after-integrity.log": {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/final-tests/evidence.mjs after'",
+      "sha256": "419b92a3d9c0ff50955651a5199d0ddc26ae5cd9f40eff90f271cf3670ac75f8",
+      "result": "passed"
+    }
+  },
+  "failed_receipts": [
+    {
+      "log": "04-full-test-sandbox.log",
+      "exit_code": 2,
+      "failed_test": "TestCursorWaitingMailboxByteBoundaries/aggregate/+0",
+      "cause": "First refill peer wait expired after accepting the entire 8MiB batch; observer included preceding batch protected I/O/hook setup in a single per-event 3s wait. No source error or race warning observed. Corrected real consumption/acceptance synchronization, all original byte/FIFO/cancellation/raw-byte assertions retained. This does not claim forensic CPU/disk timing certainty from an uninstrumented failure.",
+      "inputs": "initial-settled-input-manifest.json",
+      "post_inputs": "initial-after-input-manifest.json",
+      "input_drift": false,
+      "bun": "429 pass, 0 fail, 1659 expects, 57 files"
+    },
+    {
+      "log": "06-refill-synchronization.log",
+      "exit_code": 2,
+      "failed_tests": [
+        "TestCursorWaitingMailboxByteBoundaries/aggregate/-1",
+        "TestCursorWaitingMailboxByteBoundaries/aggregate/+0"
+      ],
+      "cause": "First test-only correction waited between insertions, so dispatch legitimately began before later real admission checks; i.submit refused consumption-time authority. Corrected test consumes the full batch through actual admission before any insertion, then inserts same values and observes acceptances. No source/assertion/deadline change."
+    },
+    {
+      "log": "09-full-test-sandbox.log",
+      "exit_code": 2,
+      "failed_test": "TestCursorRotationHeldCapacityIsProvisional/individual",
+      "cause": "New exact-phrase assertion sampled the asynchronous pane immediately after the protected refusal record became visible; record writing precedes pane delivery. Replaced immediate sample with existing bounded c.wait for exact same phrase. No source, expected phrase, assertion, or deadline weakened.",
+      "inputs": "second-settled-input-manifest.json",
+      "post_inputs": "second-after-input-manifest.json",
+      "input_drift": false,
+      "focused_green": "11-notice-synchronization.log"
+    },
+    {
+      "log": "09-full-test-sandbox.log",
+      "exit_code": 2,
+      "failures": [
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "elapsed": "5.700691482s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+2.72µs end=+202.441997ms elapsed=202.439277ms requested wait=499.9994ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+202.444327ms end=+1.399144119s elapsed=1.196699792s requested wait=297.557663ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+1.399149399s end=+2.499914299s elapsed=1.1007649s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+2.499920189s end=+5.600225394s elapsed=3.100305205s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+5.600230184s end=+5.700687552s elapsed=100.457368ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        },
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+          "elapsed": "2.484155549s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+4.38µs end=+3.401838ms elapsed=3.397458ms requested wait=499.99892ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+3.403688ms end=+4.446227ms elapsed=1.042539ms requested wait=496.599472ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+4.448387ms end=+4.793937ms elapsed=345.55µs requested wait=495.554723ms",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+4.796387ms end=+2.311064764s elapsed=2.306268377s requested wait=495.206843ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+2.311068484s end=+2.484152439s elapsed=173.083955ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        }
+      ],
+      "cause": "Unknown. Both calls exceeded the unchanged 1.5s bound before any sleep callback; the intended after-commit fixture lock was never acquired and cannot explain these failures. The store method timings include internal execution and scheduling and do not isolate connection acquisition, SQL/COMMIT, cleanup or synchronous postcommit trail emission.",
+      "scope": "No pkg/api source or test changes in Task2. This is a separate historical deadline failure, not a rotation or pane-notice synchronization failure.",
+      "inputs": "second-settled-input-manifest.json",
+      "post_inputs": "second-after-input-manifest.json",
+      "input_drift": false,
+      "final_green": "13-full-test-sandbox.log passes pkg/api; passing does not causally resolve the historical failures",
+      "disposition": "Bounded follow-up evidence in ../timing-investigation/FINAL-report.json; explicit coordinator technical disposition still required."
+    }
+  ],
+  "operational_notes": [
+    "01 compiled realtmux but its combined Go -run expression matched no tests there; explicit correctly scoped 02 ran the required real-pane leaf successfully.",
+    "Read-only discovery encountered absent optional history/spawn-fixture paths; used actual get.go/spawn_test.go owners. No repo execution outside sandbox."
+  ],
+  "inherited_failure_evidence": "All prior engineer/behavior/revalidation/prestart red receipts remain in their original directories, with causes/dispositions retained in those FULL reports. No failure deleted, no source edit/restoration, no assertion/deadline weakening in this pass.",
+  "integration": "NOT RUN; not dispatched as integration Test Writer. Required Docker groups/collectors belong to user scheduler exact-revision gate; not acceptance here.",
+  "model_assessment": "TLA+ not applicable: no spec/tla changes. Zero formal/baseline jobs; existing models do not prove new rotation/observation/admission properties.",
+  "proof_limits": [
+    "Exact full Run pre-Start micro-window not reproduced: reporter causal test plus source branch inspection only.",
+    "Synthetic ACP with actual real-tmux/production CLI/hook evidence remains synthetic; no authenticated Cursor or human attach acceptance.",
+    "No Task3 public collector/caller parity claim; no arbitrary concurrent SendKeys atomicity promise."
+  ],
+  "execution_boundary": "All repository format/test/build/evidence scripts through make sandbox CMD or make test-sandbox. Isolated container HOME plus fixture stores/sockets/processes. No .claude reads/access, real AD stores, credentials/login/logout/live Cursor, external Docker TESTPLAN groups/collectors, scheduler/TLC/Java/parser, source/docs edits, commits/pushes, delegation or agent messages. Bees CLI only metadata read and own status updates; host read-only discovery/edit allowed.",
+  "deviations": [],
+  "incomplete_work": [
+    "Coordinator technical disposition of historical pkg/api deadline failures remains pending after bounded investigation."
+  ],
+  "remaining_downstream": "Coordinator local commit and exact-commit user scheduler interface acceptance before Task3; Task/Epic closure not owned here.",
+  "questions_for_caller": [],
+  "second_full_suite": {
+    "log": "09-full-test-sandbox.log",
+    "exit_code": 2,
+    "go_packages_passed": 66,
+    "go_packages_cached": 62,
+    "go_packages_failed": 2,
+    "go_packages_without_tests": 13,
+    "bun": "429 pass, 0 fail, 1659 expects, 57 files",
+    "input_manifest": "second-settled-input-manifest.json",
+    "sha256": "91ba9343a0390b7d905cec8372aa9a86a6846af7e6c84f4d9214c6272a857af1"
+  },
+  "historical_failures_with_unknown_cause": [
+    {
+      "log": "09-full-test-sandbox.log",
+      "exit_code": 2,
+      "failures": [
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "elapsed": "5.700691482s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+2.72µs end=+202.441997ms elapsed=202.439277ms requested wait=499.9994ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+202.444327ms end=+1.399144119s elapsed=1.196699792s requested wait=297.557663ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+1.399149399s end=+2.499914299s elapsed=1.1007649s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+2.499920189s end=+5.600225394s elapsed=3.100305205s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+5.600230184s end=+5.700687552s elapsed=100.457368ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        },
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+          "elapsed": "2.484155549s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+4.38µs end=+3.401838ms elapsed=3.397458ms requested wait=499.99892ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+3.403688ms end=+4.446227ms elapsed=1.042539ms requested wait=496.599472ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+4.448387ms end=+4.793937ms elapsed=345.55µs requested wait=495.554723ms",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+4.796387ms end=+2.311064764s elapsed=2.306268377s requested wait=495.206843ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+2.311068484s end=+2.484152439s elapsed=173.083955ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        }
+      ],
+      "cause": "Unknown. Both calls exceeded the unchanged 1.5s bound before any sleep callback; the intended after-commit fixture lock was never acquired and cannot explain these failures. The store method timings include internal execution and scheduling and do not isolate connection acquisition, SQL/COMMIT, cleanup or synchronous postcommit trail emission.",
+      "scope": "No pkg/api source or test changes in Task2. This is a separate historical deadline failure, not a rotation or pane-notice synchronization failure.",
+      "inputs": "second-settled-input-manifest.json",
+      "post_inputs": "second-after-input-manifest.json",
+      "input_drift": false,
+      "final_green": "13-full-test-sandbox.log passes pkg/api; passing does not causally resolve the historical failures",
+      "disposition": "Bounded follow-up evidence in ../timing-investigation/FINAL-report.json; explicit coordinator technical disposition still required."
+    }
+  ]
+}

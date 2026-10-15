@@ -1,0 +1,42 @@
+[
+  {
+    "path": "docs/usage.md",
+    "before_sha256": "44a9efb9faa5fe357185bd6a943dc5a51de8714185300ef3fc0e997de56db12d",
+    "sha256": "d444f6fa8a20bfabe711372a6eb9dbc6163ba1d7b7d050b1219ccffb8fe09503",
+    "lines": 731,
+    "bytes": 37390,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/caller-contract.md",
+    "before_sha256": "54c5e81d5acf762e9fb7e86cee7c13680d72e8937374e37f85af66ae608d88da",
+    "sha256": "b1e00b9463ff9fd822bbadc29bcd2fc0591650915d5c92cc9ce129b5a1861d65",
+    "lines": 476,
+    "bytes": 29124,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/permissions.md",
+    "before_sha256": "24baf86f441d30fdd721963804ce46200a1ed6d1157be418fb613e31587a8144",
+    "sha256": "9506c23a2910c0e4f043e819c4c32f2fb1587c8c4a764093acc23090b2ba015a",
+    "lines": 1481,
+    "bytes": 87689,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/hooks.md",
+    "before_sha256": "81aa89a70283296148261a8641462b0d0772664a75caa44ef9f08be95e5c95de",
+    "sha256": "00f94a31e170bea7483015e4d4117bcf945db55789288f4d3e0ff43fb987e3dd",
+    "lines": 1103,
+    "bytes": 64325,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/architecture.md",
+    "before_sha256": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+    "sha256": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+    "lines": 22358,
+    "bytes": 1544650,
+    "fenced_blocks_unchanged": true
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "coordinator_observation": "Final writer reports full suite PASS at 13-full-test-sandbox.log. Its second failed full run 09-full-test-sandbox.log also includes two TestDecideMaxWaitUnderHeldLock postcommit-lock deadline failures, omitted from failed_receipts narrative.",
+  "observed_elapsed_seconds": [
+    5.700691482,
+    2.484155549
+  ],
+  "asserted_bound_seconds": 1.5,
+  "source_test_change": "No pkg/api changes in Task2. Final run passes pkg/api.",
+  "cause": "Unresolved; phase timing evidence retained. No claim load alone explains it.",
+  "disposition": "Explicitly routed to final PM for required follow-up before commit; no assertion/deadline relaxation authorized."
+}

@@ -1,0 +1,461 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/current
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/no_hold
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/stale
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/connection
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/session
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/pane
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/retired
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/replacement
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/runtime_start
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/current
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/no_hold
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/stale
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/connection
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/session
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/pane
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/retired
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/replacement
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/runtime_start
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/current
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/no_hold
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/stale
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/connection
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/session
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/pane
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/retired
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/replacement
+=== RUN   TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/runtime_start
+--- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence (4.56s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/current (0.60s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/no_hold (0.11s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/stale (0.12s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/connection (0.19s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/session (0.17s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/pane (0.12s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/retired (0.15s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/replacement (0.13s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/runtime_start (0.16s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/current (0.23s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/no_hold (0.13s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/stale (0.15s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/connection (0.26s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/session (0.16s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/pane (0.15s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/retired (0.19s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/replacement (0.18s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/runtime_start (0.17s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/current (0.13s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/no_hold (0.13s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/stale (0.11s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/connection (0.14s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/session (0.12s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/pane (0.16s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/retired (0.12s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/replacement (0.12s)
+    --- PASS: TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/runtime_start (0.16s)
+=== RUN   TestReporterObservesCommittedRotationBeforeStalledHookReturns
+=== RUN   TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel
+    report_linux_test.go:310: report stop=cancel: Cursor report failed
+=== RUN   TestReporterObservesCommittedRotationBeforeStalledHookReturns/timeout
+    report_linux_test.go:310: report stop=timeout: Cursor rotation report deadline; publication may already be committed
+=== RUN   TestReporterObservesCommittedRotationBeforeStalledHookReturns/runtime_death
+    report_linux_test.go:310: report stop=runtime death: Cursor report failed
+=== RUN   TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start
+--- PASS: TestReporterObservesCommittedRotationBeforeStalledHookReturns (3.43s)
+    --- PASS: TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel (0.13s)
+    --- PASS: TestReporterObservesCommittedRotationBeforeStalledHookReturns/timeout (3.07s)
+    --- PASS: TestReporterObservesCommittedRotationBeforeStalledHookReturns/runtime_death (0.14s)
+    --- PASS: TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start (0.09s)
+=== RUN   TestCursorRotationHeldCapacityIsProvisional
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/entries
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/bytes
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/individual
+--- PASS: TestCursorRotationHeldCapacityIsProvisional (13.78s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/entries (3.77s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/bytes (8.74s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/individual (1.27s)
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor update lacks session attribution
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor event session mismatch
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic
+    session_rotation_boundary_linux_test.go:114: fail-closed traffic: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority (1.23s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old (0.45s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic (0.21s)
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause
+--- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases (5.49s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/exit (0.30s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/interrupt (0.25s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit (0.26s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt (0.23s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause (0.41s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit (0.28s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt (0.22s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause (0.41s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit (0.31s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt (0.27s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause (0.44s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit (0.32s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt (0.28s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause (0.46s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit (0.32s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt (0.27s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause (0.47s)
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published_write
+--- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld (1.11s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed (0.23s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published (0.29s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted (0.29s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published_write (0.30s)
+=== RUN   TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue
+--- PASS: TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue (4.09s)
+=== RUN   TestCursorRotationRetiresPermissionPlanCallbacksAndChoices
+--- PASS: TestCursorRotationRetiresPermissionPlanCallbacksAndChoices (0.69s)
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/exit
+    session_rotation_boundary_linux_test.go:537: first-control elapsed=134.050988ms; outcome=<nil>
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/pause
+    session_rotation_boundary_linux_test.go:537: first-control elapsed=269.312575ms; outcome=<nil>
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/interrupt
+    session_rotation_boundary_linux_test.go:537: first-control elapsed=92.198484ms; outcome=Cursor rotation report failed; publication may already be committed; held input refused: Cursor rotation interrupted; held input refused to both conversations
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/timeout
+    session_rotation_boundary_linux_test.go:537: first-control elapsed=3.017217826s; outcome=Cursor rotation report failed; publication may already be committed; held input refused: Cursor ACP operation timed out
+        Cursor transcript finalization failed: Cursor transcript finalization timed out
+=== RUN   TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/death
+    session_rotation_boundary_linux_test.go:537: first-control elapsed=83.358749ms; outcome=Cursor rotation report failed; publication may already be committed; held input refused: Cursor runtime exited during persistence or reporting
+--- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity (4.59s)
+    --- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/exit (0.33s)
+    --- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/pause (0.47s)
+    --- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/interrupt (0.29s)
+    --- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/timeout (3.22s)
+    --- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/death (0.28s)
+=== RUN   TestCursorRotationAliasesIdleAndActive
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=true
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=true
+--- PASS: TestCursorRotationAliasesIdleAndActive (2.33s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=false (0.55s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=true (0.62s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=false (0.55s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=true (0.61s)
+=== RUN   TestCursorRotationPublicationAndEveryHoldPrecedePromotion
+--- PASS: TestCursorRotationPublicationAndEveryHoldPrecedePromotion (0.57s)
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/rejection
+    session_rotation_linux_test.go:326: causal failure: Cursor ACP request failed; check the selected runtime and existing login
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/missing_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/reused_ID
+    session_rotation_linux_test.go:326: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/archive
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/authority_loss
+    session_rotation_linux_test.go:326: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/runtime_death
+    session_rotation_linux_test.go:326: causal failure: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationFailureRefusesEveryHeldInput (2.07s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/rejection (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/missing_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID (0.23s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/reused_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/archive (0.32s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit (0.30s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/authority_loss (0.27s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/runtime_death (0.23s)
+=== RUN   TestCursorRotationRepeatedControlsPreserveFirstDeadline
+--- PASS: TestCursorRotationRepeatedControlsPreserveFirstDeadline (3.22s)
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report
+--- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome (1.00s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync (0.50s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report (0.50s)
+=== RUN   TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication
+--- PASS: TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication (0.44s)
+=== RUN   TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional
+--- PASS: TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional (0.53s)
+=== RUN   TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries
+--- PASS: TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries (0.74s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	49.881s
+=== RUN   TestRecordSessionStartIdentity
+--- PASS: TestRecordSessionStartIdentity (0.06s)
+=== RUN   TestCursorRotationAtomicPublicationAndSuccessiveHistory
+--- PASS: TestCursorRotationAtomicPublicationAndSuccessiveHistory (0.24s)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive
+    cursor_rotation_test.go:125: causal archive refusal: store: required Cursor archive: constraint failed: injected write failure: reuse archive (1811)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update
+    cursor_rotation_test.go:125: causal runtime update refusal: constraint failed: synthetic runtime write failure (1811)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit
+    cursor_rotation_test.go:125: causal commit refusal: store: commit: constraint failed: FOREIGN KEY constraint failed (787)
+--- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether (0.42s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive (0.14s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update (0.13s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit (0.14s)
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/launch
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/life
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/pane
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/pane_start
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/server
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/socket
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/snapshot
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/transcript
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/old_session
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/retired
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/runtime_start
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/connection
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/input_pipe
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/output_pipe
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/deletion
+--- PASS: TestCursorRotationRejectsChangedExaminedAuthority (1.93s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/launch (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/life (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/pane (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/pane_start (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/server (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/socket (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/snapshot (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/transcript (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/old_session (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/retired (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid (0.10s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/runtime_start (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/connection (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/input_pipe (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/output_pipe (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/deletion (0.09s)
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity
+--- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory (0.64s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence (0.11s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path (0.08s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity (0.08s)
+=== RUN   TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds
+--- PASS: TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds (0.12s)
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled
+--- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication (0.86s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled (0.10s)
+=== RUN   TestCursorRotationObservationConnectionWaitUsesCallerDeadline
+--- PASS: TestCursorRotationObservationConnectionWaitUsesCallerDeadline (0.12s)
+=== RUN   TestEndReportClearedBySessionStart
+=== RUN   TestEndReportClearedBySessionStart/same_session
+=== RUN   TestEndReportClearedBySessionStart/new_session_archives_the_outgoing_pair
+=== RUN   TestEndReportClearedBySessionStart/foreign_process_changes_nothing
+--- PASS: TestEndReportClearedBySessionStart (0.26s)
+    --- PASS: TestEndReportClearedBySessionStart/same_session (0.07s)
+    --- PASS: TestEndReportClearedBySessionStart/new_session_archives_the_outgoing_pair (0.08s)
+    --- PASS: TestEndReportClearedBySessionStart/foreign_process_changes_nothing (0.07s)
+=== RUN   TestHookGateSessionStartOneWrite
+=== RUN   TestHookGateSessionStartOneWrite/pending
+=== RUN   TestHookGateSessionStartOneWrite/pending/pane_start_NULL
+=== RUN   TestHookGateSessionStartOneWrite/waiting
+=== RUN   TestHookGateSessionStartOneWrite/missing
+=== RUN   TestHookGateSessionStartOneWrite/ended
+--- PASS: TestHookGateSessionStartOneWrite (0.31s)
+    --- PASS: TestHookGateSessionStartOneWrite/pending (0.04s)
+    --- PASS: TestHookGateSessionStartOneWrite/pending/pane_start_NULL (0.04s)
+    --- PASS: TestHookGateSessionStartOneWrite/waiting (0.06s)
+    --- PASS: TestHookGateSessionStartOneWrite/missing (0.06s)
+    --- PASS: TestHookGateSessionStartOneWrite/ended (0.07s)
+=== RUN   TestHookGateSessionStartNotApplied
+=== RUN   TestHookGateSessionStartNotApplied/other_pid
+=== RUN   TestHookGateSessionStartNotApplied/same_pid_other_start
+=== RUN   TestHookGateSessionStartNotApplied/parent_start_unreadable
+=== RUN   TestHookGateSessionStartNotApplied/row_with_no_pane
+--- PASS: TestHookGateSessionStartNotApplied (0.33s)
+    --- PASS: TestHookGateSessionStartNotApplied/other_pid (0.07s)
+    --- PASS: TestHookGateSessionStartNotApplied/same_pid_other_start (0.07s)
+    --- PASS: TestHookGateSessionStartNotApplied/parent_start_unreadable (0.07s)
+    --- PASS: TestHookGateSessionStartNotApplied/row_with_no_pane (0.07s)
+=== RUN   TestHookGateSessionStartStaleSnapshot
+--- PASS: TestHookGateSessionStartStaleSnapshot (0.11s)
+=== RUN   TestHookGateSessionStartRotation
+=== RUN   TestHookGateSessionStartRotation/new_session_archives_the_pair
+=== RUN   TestHookGateSessionStartRotation/entry_of_another_life_moves
+=== RUN   TestHookGateSessionStartRotation/same_session_archives_nothing
+=== RUN   TestHookGateSessionStartRotation/archive_fails_open
+--- PASS: TestHookGateSessionStartRotation (0.35s)
+    --- PASS: TestHookGateSessionStartRotation/new_session_archives_the_pair (0.07s)
+    --- PASS: TestHookGateSessionStartRotation/entry_of_another_life_moves (0.07s)
+    --- PASS: TestHookGateSessionStartRotation/same_session_archives_nothing (0.07s)
+    --- PASS: TestHookGateSessionStartRotation/archive_fails_open (0.10s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	5.771s
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/verified
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/missing_rotation_verifier
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/rotation_evidence_lost
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/ordinary_evidence_lost
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_previous
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/expired
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/unbounded_deadline
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/malformed_deadline
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_parent
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/child
+=== RUN   TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/archive_failure
+--- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence (0.89s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/verified (0.11s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/missing_rotation_verifier (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/rotation_evidence_lost (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/ordinary_evidence_lost (0.08s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_previous (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/expired (0.08s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/unbounded_deadline (0.08s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/malformed_deadline (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_parent (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/child (0.07s)
+    --- PASS: TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/archive_failure (0.10s)
+=== RUN   TestCodexSessionStartRotation
+=== RUN   TestCodexSessionStartRotation/new_session,_startup
+=== RUN   TestCodexSessionStartRotation/new_session,_clear
+=== RUN   TestCodexSessionStartRotation/new_session,_fork
+=== RUN   TestCodexSessionStartRotation/new_session,_resume
+=== RUN   TestCodexSessionStartRotation/same_session_id
+=== RUN   TestCodexSessionStartRotation/resumed_row_brings_back_its_own_id
+--- PASS: TestCodexSessionStartRotation (0.58s)
+    --- PASS: TestCodexSessionStartRotation/new_session,_startup (0.09s)
+    --- PASS: TestCodexSessionStartRotation/new_session,_clear (0.09s)
+    --- PASS: TestCodexSessionStartRotation/new_session,_fork (0.10s)
+    --- PASS: TestCodexSessionStartRotation/new_session,_resume (0.09s)
+    --- PASS: TestCodexSessionStartRotation/same_session_id (0.09s)
+    --- PASS: TestCodexSessionStartRotation/resumed_row_brings_back_its_own_id (0.10s)
+=== RUN   TestSessionStartGateApplied
+=== RUN   TestSessionStartGateApplied/fresh_spawn's_pending_row
+=== RUN   TestSessionStartGateApplied/fresh_spawn's_pending_row,_pane_start_unread_at_the_create
+=== RUN   TestSessionStartGateApplied/resumed_pending_row,_kept_session_id_and_new_pane
+=== RUN   TestSessionStartGateApplied/row_marked_missing_before_its_agent_reported_in
+=== RUN   TestSessionStartGateApplied/pending_row_noted_unreported_before_its_agent_reported_in
+=== RUN   TestSessionStartGateApplied/live_row,_/clear
+=== RUN   TestSessionStartGateApplied/live_row,_in-session_/resume
+=== RUN   TestSessionStartGateApplied/live_row,_compaction
+--- PASS: TestSessionStartGateApplied (0.68s)
+    --- PASS: TestSessionStartGateApplied/fresh_spawn's_pending_row (0.07s)
+    --- PASS: TestSessionStartGateApplied/fresh_spawn's_pending_row,_pane_start_unread_at_the_create (0.07s)
+    --- PASS: TestSessionStartGateApplied/resumed_pending_row,_kept_session_id_and_new_pane (0.10s)
+    --- PASS: TestSessionStartGateApplied/row_marked_missing_before_its_agent_reported_in (0.08s)
+    --- PASS: TestSessionStartGateApplied/pending_row_noted_unreported_before_its_agent_reported_in (0.08s)
+    --- PASS: TestSessionStartGateApplied/live_row,_/clear (0.10s)
+    --- PASS: TestSessionStartGateApplied/live_row,_in-session_/resume (0.09s)
+    --- PASS: TestSessionStartGateApplied/live_row,_compaction (0.09s)
+=== RUN   TestSessionStartGateIgnored
+=== RUN   TestSessionStartGateIgnored/leftover_on_a_fresh_pending_row
+=== RUN   TestSessionStartGateIgnored/earlier_launch's_leftover_on_a_resumed_pending_row
+=== RUN   TestSessionStartGateIgnored/leftover_on_an_ended_row_with_a_pane
+=== RUN   TestSessionStartGateIgnored/leftover_on_an_ended_row_with_no_pane
+=== RUN   TestSessionStartGateIgnored/leftover_on_a_pending_row_with_no_pane,_launch_start_past_the_grace
+=== RUN   TestSessionStartGateIgnored/the_launch's_own_agent_on_a_pane-less_pending_row,_no_launch_start
+--- PASS: TestSessionStartGateIgnored (0.61s)
+    --- PASS: TestSessionStartGateIgnored/leftover_on_a_fresh_pending_row (0.09s)
+    --- PASS: TestSessionStartGateIgnored/earlier_launch's_leftover_on_a_resumed_pending_row (0.12s)
+    --- PASS: TestSessionStartGateIgnored/leftover_on_an_ended_row_with_a_pane (0.11s)
+    --- PASS: TestSessionStartGateIgnored/leftover_on_an_ended_row_with_no_pane (0.11s)
+    --- PASS: TestSessionStartGateIgnored/leftover_on_a_pending_row_with_no_pane,_launch_start_past_the_grace (0.09s)
+    --- PASS: TestSessionStartGateIgnored/the_launch's_own_agent_on_a_pane-less_pending_row,_no_launch_start (0.09s)
+=== RUN   TestSessionStartGateSnapshotRace
+=== RUN   TestSessionStartGateSnapshotRace/changed_once:_retried_and_applied
+=== RUN   TestSessionStartGateSnapshotRace/changed_twice:_nothing_written
+--- PASS: TestSessionStartGateSnapshotRace (0.17s)
+    --- PASS: TestSessionStartGateSnapshotRace/changed_once:_retried_and_applied (0.08s)
+    --- PASS: TestSessionStartGateSnapshotRace/changed_twice:_nothing_written (0.08s)
+=== RUN   TestSessionStartGateNoProbeOrTmuxDependency
+--- PASS: TestSessionStartGateNoProbeOrTmuxDependency (0.01s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/hook	2.950s

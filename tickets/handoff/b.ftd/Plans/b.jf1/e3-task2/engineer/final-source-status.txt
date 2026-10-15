@@ -1,0 +1,10 @@
+ M cmd/agent-director/cursor_host_cmd.go
+ M cmd/agent-director/main.go
+ M internal/cursorhost/input.go
+ M internal/cursorhost/protocol.go
+ M internal/cursorhost/report.go
+ M internal/cursorhost/requests.go
+ M internal/cursorhost/session.go
+ M internal/cursorhost/transcript_linux.go
+ M internal/hook/handler.go
+?? internal/store/cursor_rotation.go

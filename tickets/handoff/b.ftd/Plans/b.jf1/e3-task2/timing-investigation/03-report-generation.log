@@ -1,0 +1,186 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca 0.1s done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.1s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{
+  "result": "Bounded focused check passed; historical failure accounting corrected; causal disposition remains unresolved",
+  "current_check": {
+    "scope": "Only TestDecideMaxWaitUnderHeldLock, all original subcases; no other package tests or full suite",
+    "runs": 1,
+    "uncached": true,
+    "go_timeout": "2m",
+    "outer_timeout": "180s",
+    "max_wait_ms": 500,
+    "asserted_call_bound": "1.5s",
+    "parallelism": "Original t.Parallel calls, agent dimensions and busy timeout dimensions retained; no -parallel/-p/GOMAXPROCS override",
+    "race": false,
+    "passed_leaves": 23,
+    "failed_leaves": 0,
+    "package_result": "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t0.721s",
+    "leaves": [
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s"
+      }
+    ],
+    "phase_timing_limit": "Existing test emits detailed phases only on failure; successful leaf durations include setup/cleanup and are not measured Decide call durations. No successful per-phase timing or reached-lock count is claimed."
+  },
+  "integrity": {
+    "count": 2300,
+    "manifest": "../final-tests/settled-input-manifest.json",
+    "manifest_sha256": "8357ef9c1d88ae3ecf862755b967177d9369adda58e93b73cda8414aad307836",
+    "before": "before-integrity.json",
+    "after": "after-integrity.json",
+    "all_2300_existing_inputs_identical_before_and_after": true,
+    "identical_path_inventory": true,
+    "scope": "All original tracked/nonignored source/tests/docs/build inputs. Excludes .claude before any read/hash and tickets/handoff metadata. No persistent source/test/doc changes; new files are handoff evidence metadata only.",
+    "historical_logs": {
+      "09-full-test-sandbox.log": {
+        "bytes": 65926,
+        "lines": 837,
+        "sha256": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+        "expected": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+        "hash_matches": true,
+        "failed_leaves": [
+          "    --- FAIL: TestCursorRotationHeldCapacityIsProvisional/individual (0.64s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (10.87s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (11.26s)"
+        ],
+        "go_passed": 66,
+        "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+      },
+      "13-full-test-sandbox.log": {
+        "bytes": 48869,
+        "lines": 736,
+        "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+        "expected": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+        "hash_matches": true,
+        "failed_leaves": [],
+        "go_passed": 68,
+        "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+      }
+    }
+  },
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.e9": "done -> active; remains active pending coordinator technical disposition",
+    "t3.jf1.r8.sr.66": "done retained; no full rerun assigned or performed"
+  }
+}

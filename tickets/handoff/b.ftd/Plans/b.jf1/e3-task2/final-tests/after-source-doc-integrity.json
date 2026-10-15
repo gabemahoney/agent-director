@@ -1,0 +1,17 @@
+{
+  "internal/cursorhost/report.go": "7accf4854e18fdf6b89be295fb1ee0b90fd917f4d4b3b29b8df2154dbac5c4cc",
+  "internal/store/cursor_rotation.go": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+  "cmd/agent-director/cursor_host_cmd.go": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+  "cmd/agent-director/main.go": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+  "internal/cursorhost/input.go": "024bf15c29221fad37d93918720fc7d9e6d0d61c72c1846e603dbe05bd2d9e0d",
+  "internal/cursorhost/protocol.go": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+  "internal/cursorhost/requests.go": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+  "internal/cursorhost/session.go": "00856c3cd90d904ef82f5c892d9200d5bd33200884597a54b5981a997ded3f50",
+  "internal/cursorhost/transcript_linux.go": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+  "internal/hook/handler.go": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8",
+  "docs/usage.md": "d444f6fa8a20bfabe711372a6eb9dbc6163ba1d7b7d050b1219ccffb8fe09503",
+  "docs/caller-contract.md": "b1e00b9463ff9fd822bbadc29bcd2fc0591650915d5c92cc9ce129b5a1861d65",
+  "docs/permissions.md": "9506c23a2910c0e4f043e819c4c32f2fb1587c8c4a764093acc23090b2ba015a",
+  "docs/hooks.md": "00f94a31e170bea7483015e4d4117bcf945db55789288f4d3e0ff43fb987e3dd",
+  "docs/architecture.md": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0"
+}

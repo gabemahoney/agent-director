@@ -9,6 +9,9 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -144,13 +147,26 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	// Capture cancellation authority before the potentially slow admission read.
 	// Insertion must never grant an old admission the epoch of a later control.
 	var admissionEpoch uint64
+	var admissionHeld bool
+	var admissionIdentity atomic.Value
+	admissionIdentity.Store("")
+	admissionSession := ""
 	restore := startInput(in, writer, func(v terminalInput) {
 		if v.accepted {
 			v.epoch, v.epochBound = admissionEpoch, true
+			v.sessionID = admissionSession
+			v.held = admissionHeld
 		}
 		inputs.put(v)
 	}, func() bool {
-		admissionEpoch = inputs.epochValue()
+		inputs.mu.Lock()
+		admissionEpoch = inputs.epoch
+		admissionSession = admissionIdentity.Load().(string)
+		admissionHeld = inputs.rotating
+		inputs.mu.Unlock()
+		if admissionHeld {
+			return true
+		}
 		return admission.take()
 	}, requests.key)
 	defer restore()
@@ -186,8 +202,21 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		}
 	}
 	var queue []terminalInput
+	var held []terminalInput
+	rotating := false
+	rotationEpoch := uint64(0)
+	rotationOld := ""
+	confirmedSessions := map[string]bool{}
+	retiredSessions := map[string]bool{}
 	var active *terminalInput
 	activeRequest := ""
+	type responseOrigin struct {
+		first   uint64
+		session string
+	}
+	// Session boundaries bound retirement attribution by the same conversation
+	// cap as confirmedSessions, regardless of the number of completed prompts.
+	var responseOrigins []responseOrigin
 	promptFailures := make(chan error, 1)
 	activeRetiredBeforeWrite := false
 	persistenceFailed := false
@@ -196,6 +225,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	activeCancellation := false
 	idleControl := false
 	var pendingControl map[string]any
+	var stopPublication context.CancelFunc
 	handleControl := func(input terminalInput) error {
 		if runtimeEnded {
 			return nil
@@ -207,6 +237,24 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			}
 		}
 		kind := "interrupt"
+		rotationControl := input.text == "/new" || input.text == "/clear"
+		if rotationControl {
+			kind = "rotation"
+			if rotating || input.repeatOnly {
+				fmt.Fprint(writer, "Cursor rotation already pending; repeated control ignored\r\n")
+				if pendingControl == nil {
+					pendingControl = map[string]any{"control": "rotation_repeated", "input_id": input.submission, "count": 1 + input.repeats}
+				}
+				return nil
+			}
+			if session == "" {
+				return fmt.Errorf("Cursor rotation refused before session confirmation")
+			}
+			rotating, rotationOld, rotationEpoch = true, session, inputs.epochValue()
+			fmt.Fprint(writer, "Cursor rotation requested; new input is held until publication\r\n")
+		} else if rotating && input.text != "/exit" {
+			return fmt.Errorf("Cursor rotation interrupted; held input refused to both conversations")
+		}
 		if input.text == "/exit" {
 			kind = "exit"
 		}
@@ -214,19 +262,19 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			kind = "input_closed"
 		}
 		if pendingControl == nil {
-			pendingControl = map[string]any{"control": kind, "input_id": input.submission, "input_epoch": input.epoch, "consumed_at": input.at, "count": 1}
+			pendingControl = map[string]any{"control": kind, "input_id": input.submission, "input_epoch": input.epoch, "consumed_at": input.at, "count": 1 + input.repeats}
 			if active != nil {
 				pendingControl["submission_id"] = active.submission
 				pendingControl["request_id"] = activeRequest
 			}
 		} else {
-			pendingControl["count"] = pendingControl["count"].(int) + 1
+			pendingControl["count"] = pendingControl["count"].(uint64) + 1
 			pendingControl["last_input_id"] = input.submission
 		}
 
 		admission.disable()
 		requests.cancel()
-		if !busy {
+		if !busy && !rotating {
 			idleControl = true
 		}
 		if session == "" && options.InitialPrompt != "" {
@@ -239,6 +287,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		}
 		if input.text == "/exit" {
 			intentional = true
+			if stopPublication != nil {
+				stopPublication()
+			}
 		}
 		if cancelAt.IsZero() {
 			cancelAt = input.at
@@ -318,11 +369,32 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	cancelSubmission := func(v terminalInput, reason string) error {
 		inputs.release(v)
 		fmt.Fprintf(writer, "Cursor submission %s cancelled before dispatch: %s\r\n", v.submission, reason)
-		return record("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": reason, "started": false, "control_epoch": inputs.epochValue()})
+		return record("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": reason, "started": false, "control_epoch": inputs.epochValue()})
 	}
 	defer func() {
 		admission.disable()
+		inputs.stop()
 		requests.cancel()
+		if rotating {
+			fmt.Fprint(writer, "Cursor rotation failed or stopped; held input refused to both conversations; no automatic replay\r\n")
+		}
+		for _, v := range queue {
+			fmt.Fprintf(writer, "Cursor submission %s cancelled before dispatch: gateway stopped\r\n", v.submission)
+		}
+		for _, v := range held {
+			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
+		}
+		var pending []terminalInput
+		for {
+			v, ok := inputs.take()
+			if !ok {
+				break
+			}
+			pending = append(pending, v)
+			if v.accepted && v.held {
+				fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
+			}
+		}
 		if err != nil {
 			protocol.close()
 			_ = p.terminate()
@@ -366,20 +438,32 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			return true
 		}
 		for _, v := range queue {
-			if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": "gateway stopped", "started": false}) {
+			if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
 				return
 			}
 		}
-		for {
-			v, ok := inputs.take()
-			if !ok {
-				break
+		for _, v := range held {
+			if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "rotation stopped; neither conversation admitted this input"}) {
+				return
 			}
+		}
+		if rotating {
+			if !finalRecord("rotation_failed", map[string]any{"previous_session_id": rotationOld, "last_observed_session_id": rep.binding.SessionID, "reason": "gateway stopped; publication may already have committed; no rollback or replay"}) {
+				return
+			}
+		}
+		for _, v := range pending {
 			if v.accepted {
-				if !finalRecord("submission_accepted", map[string]any{"submission_id": v.submission, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch}) {
+				if v.held {
+					if !finalRecord("held_input_refused", map[string]any{"submission_id": v.submission, "text": v.text, "reason": "gateway stopped"}) {
+						return
+					}
+					continue
+				}
+				if !finalRecord("submission_accepted", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "text": v.text, "consumed_at": v.at, "input_epoch": v.epoch}) {
 					return
 				}
-				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "reason": "gateway stopped", "started": false}) {
+				if !finalRecord("submission_cancelled", map[string]any{"submission_id": v.submission, "submission_session_id": v.sessionID, "reason": "gateway stopped", "started": false}) {
 					return
 				}
 			}
@@ -391,6 +475,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		}
 	}()
 	submit := func(v terminalInput) error {
+		if v.sessionID != session {
+			return cancelSubmission(v, "conversation changed before dispatch")
+		}
 		if e := VerifyRuntime(rep.binding, false); e != nil {
 			return e
 		}
@@ -400,7 +487,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		if e := report("UserPromptSubmit"); e != nil {
 			return e
 		}
-		if intentional || !inputs.current(v.epoch) {
+		if intentional || !inputs.current(v.epoch) || v.sessionID != session {
 			return cancelSubmission(v, "control consumed before dispatch")
 		}
 		boundReporter := *rep
@@ -469,8 +556,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			busy = false
 			cancelled = false
 			phase = "idle"
-			protocol.pendingID = ""
-			protocol.pendingMethod = ""
+			protocol.retirePending()
 			if err = record("submission_cancelled", map[string]any{"submission_id": active.submission, "request_id": activeRequest, "reason": "retired before write", "started": false, "bytes_written": 0}); err != nil {
 				return err
 			}
@@ -478,13 +564,18 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			activeRequest = ""
 			activeRetiredBeforeWrite = false
 			activeCancellation = false
-			idleControl = true
+			idleControl = !rotating
 		}
 		if pendingControl != nil {
 			data := pendingControl
 			pendingControl = nil
 			if err = record("input_control", data); err != nil {
 				return err
+			}
+			if data["control"] == "rotation" {
+				if err = record("rotation_requested", map[string]any{"previous_session_id": rotationOld, "input_epoch": rotationEpoch}); err != nil {
+					return err
+				}
 			}
 		}
 		if activeCancellation && active != nil {
@@ -502,13 +593,6 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				requests.choose(input.choiceToken, input.choiceOption)
 				continue
 			}
-			if input.text == "/new" || input.text == "/clear" {
-				if err = record("submission_refused", map[string]any{"submission_id": input.submission, "reason": "unsupported conversation control"}); err != nil {
-					return err
-				}
-				fmt.Fprint(writer, "Unsupported Cursor conversation control; nothing sent\r\n> ")
-				continue
-			}
 			if input.text == "" && input.dropped == 0 && input.refusal == "" {
 				continue
 			}
@@ -523,7 +607,30 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				fmt.Fprintf(writer, "Cursor input refused while starting or busy (%s); nothing sent\r\n", reason)
 				continue
 			}
-			if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
+			if input.held {
+				if rotating && inputs.current(input.epoch) && input.epoch == rotationEpoch {
+					held = append(held, input)
+					if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
+						return err
+					}
+					fmt.Fprintf(writer, "Cursor submission %s held provisionally\r\n", input.submission)
+					continue
+				}
+				if !inputs.current(input.epoch) || intentional {
+					inputs.release(input)
+					fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", input.submission)
+					if err = record("held_input_refused", map[string]any{"submission_id": input.submission, "reason": "control retired provisional input"}); err != nil {
+						return err
+					}
+					continue
+				}
+				held = append(held, input)
+				if err = record("input_held", map[string]any{"submission_id": input.submission, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at}); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = record("submission_accepted", map[string]any{"submission_id": input.submission, "submission_session_id": input.sessionID, "text": input.text, "input_epoch": input.epoch, "consumed_at": input.at, "origin": "main"}); err != nil {
 				return err
 			}
 			fmt.Fprintf(writer, "Cursor submission %s accepted\r\n", input.submission)
@@ -536,7 +643,36 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				return err
 			}
 		}
-		if idleControl && !busy && !intentional && session != "" {
+		for len(held) > 0 && (intentional || !inputs.current(held[0].epoch)) {
+			v := held[0]
+			inputs.release(v)
+			fmt.Fprintf(writer, "Cursor held submission %s refused; nothing sent to either conversation\r\n", v.submission)
+			if err = record("held_input_refused", map[string]any{"submission_id": v.submission, "reason": "control retired provisional input"}); err != nil {
+				return err
+			}
+			held = held[1:]
+		}
+		if rotating && !busy && !intentional && phase != "rotate_new" {
+			if !inputs.current(rotationEpoch) {
+				return fmt.Errorf("Cursor rotation authority retired")
+			}
+			rotationUntil := cancelAt.Add(cancelWait)
+			if !time.Now().Before(rotationUntil) {
+				return fmt.Errorf("Cursor rotation cancellation deadline passed")
+			}
+			requestEpoch := rotationEpoch
+			if _, err = protocol.requestGuarded("session/new", map[string]any{"cwd": row.CWD, "mcpServers": []any{}}, func() error {
+				if !inputs.current(requestEpoch) || !time.Now().Before(rotationUntil) {
+					return errPromptRetired
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+			phase = "rotate_new"
+			// The first control's existing fixed bound covers creation and publication.
+		}
+		if idleControl && !rotating && !busy && !intentional && session != "" {
 			idleControl = false
 			epoch := inputs.epochValue()
 			if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(epoch, func() { admission.waiting(check) }) }); err != nil {
@@ -563,13 +699,31 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			}
 			fmt.Fprint(writer, "Cursor input cancelled; submit a new prompt to continue\r\n> ")
 		}
-		if !intentional && !busy && len(queue) > 0 && !requests.open() {
+		if !rotating && !intentional && !busy && (len(queue) > 0 || len(held) > 0) && !requests.open() {
 			eligible := false
 			e := await(func() (e error) { eligible, e = rep.promptEligible(); return e })
 			if e != nil {
 				return e
 			}
 			if eligible {
+				for len(held) > 0 && inputs.current(held[0].epoch) && !intentional {
+					v := held[0]
+					var promoted bool
+					v, promoted = inputs.promote(v)
+					if !promoted {
+						break
+					}
+					v.sessionID = session
+					held = held[1:]
+					queue = insertSubmission(queue, v)
+					if err = record("submission_accepted", map[string]any{"submission_id": v.submission, "text": v.text, "input_epoch": v.epoch, "consumed_at": v.at, "released_from_hold": true}); err != nil {
+						return err
+					}
+					fmt.Fprintf(writer, "Cursor submission %s accepted after fresh publication\r\n", v.submission)
+				}
+				if len(queue) == 0 {
+					continue
+				}
 				v := queue[0]
 				if err = submit(v); err != nil {
 					if active != nil && active.submission == v.submission {
@@ -635,7 +789,56 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			if err = VerifyRuntime(rep.binding, false); err != nil {
 				return err
 			}
+			if protocol.retiredResponse(f) {
+				id, _ := strconv.ParseUint(strings.TrimSpace(string(f.ID)), 10, 64)
+				origin := ""
+				for i := len(responseOrigins) - 1; i >= 0; i-- {
+					if id >= responseOrigins[i].first {
+						origin = responseOrigins[i].session
+						break
+					}
+				}
+				if err = record("retired_response", map[string]any{"request_id": json.RawMessage(f.ID), "submission_session_id": origin}); err != nil {
+					return err
+				}
+				continue
+			}
 			if f.Method != "" {
+				retiring := ""
+				if rotating {
+					retiring = rotationOld
+				}
+				if origin := requests.retiredAuthorization(f, session, retiring); len(f.ID) > 0 && origin != "" {
+					if err = record("retired_authorization", map[string]any{"authorization_id": json.RawMessage(f.ID), "method": f.Method, "submission_session_id": origin}); err != nil {
+						return err
+					}
+					continue
+				}
+				// Session-attributed retired traffic is inspectable but grants no
+				// current lifecycle, answer or hold-release authority.
+				var attribution struct {
+					Session string `json:"sessionId"`
+				}
+				if json.Unmarshal(f.Params, &attribution) != nil {
+					return fmt.Errorf("invalid Cursor event attribution")
+				}
+				if retiredSessions[attribution.Session] || (rotating && attribution.Session == rotationOld) {
+					if err = record("retired_event", map[string]any{"session_id": attribution.Session, "submission_session_id": attribution.Session, "method": f.Method, "params": json.RawMessage(f.Params)}); err != nil {
+						return err
+					}
+					if !retiredSessions[attribution.Session] && f.Method == "session/update" {
+						if err = requests.execution(f.Params); err != nil {
+							return err
+						}
+					}
+					continue
+				}
+				if attribution.Session != "" && attribution.Session != session {
+					return fmt.Errorf("Cursor event session mismatch")
+				}
+				if f.Method == "session/update" && session != "" && attribution.Session == "" {
+					return fmt.Errorf("Cursor update lacks session attribution")
+				}
 				if len(f.ID) > 0 {
 					if cancelled {
 						return fmt.Errorf("Cursor authorization after cancellation; no response sent")
@@ -751,6 +954,88 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				}
 				phase = "new"
 				resetDeadline(protocolWait)
+			case "rotate_new":
+				var created struct {
+					ID string `json:"sessionId"`
+				}
+				if json.Unmarshal(raw, &created) != nil || created.ID == "" || strings.TrimSpace(created.ID) != created.ID || len(created.ID) > 512 || strings.ContainsAny(created.ID, "\x00\r\n") || confirmedSessions[created.ID] || len(confirmedSessions) >= maxConnectionRequests {
+					return fmt.Errorf("Cursor did not confirm a genuinely fresh session; held input refused")
+				}
+				if err = record("rotation_confirmed", map[string]any{"previous_session_id": rotationOld, "confirmed_session_id": created.ID}); err != nil {
+					return err
+				}
+				if intentional {
+					continue
+				}
+				if !inputs.current(rotationEpoch) {
+					return fmt.Errorf("Cursor rotation confirmation retired")
+				}
+				publication := *rep
+				publicationUntil := cancelAt.Add(cancelWait)
+				publicationContext, cancelPublication := context.WithDeadline(context.Background(), publicationUntil)
+				publication.rotationContext = publicationContext
+				stopPublication = cancelPublication
+				var reconciled atomic.Bool
+				publication.rotationReconciled = func() { reconciled.Store(true) }
+				publicationFinished := make(chan struct{})
+				var committed atomic.Pointer[store.CursorRuntime]
+				publication.rotationObserved = func(bound store.CursorRuntime) { committed.Store(&bound) }
+				err = await(func() error {
+					defer close(publicationFinished)
+					return publication.reportIdentity("SessionStart", nil, created.ID, publicationUntil)
+				})
+				cancelPublication()
+				stopPublication = nil
+				// An interrupted await can finish before the canceled hook. Join
+				// only within the original bound; its final snapshot follows exit.
+				join := time.NewTimer(time.Until(publicationUntil))
+				select {
+				case <-publicationFinished:
+				case <-join.C:
+				}
+				join.Stop()
+				// Committed observations do not depend on hook completion. Neither
+				// observation nor joining can extend the first cancellation deadline.
+				expected := b
+				expected.SessionID = created.ID
+				var observed store.CursorRuntime
+				if bound := committed.Load(); bound != nil {
+					observed = *bound
+				}
+				if observed == expected {
+					b, rep.binding, tr.binding, session = expected, expected, expected, created.ID
+					retiredSessions[rotationOld] = true
+					confirmedSessions[session] = true
+					responseOrigins = append(responseOrigins, responseOrigin{protocol.next, session})
+				}
+				if intentional && reconciled.Load() {
+					err = nil
+					continue
+				}
+				if err != nil {
+					return fmt.Errorf("Cursor rotation report failed; publication may already be committed; held input refused: %w", err)
+				}
+				if observed != expected {
+					return fmt.Errorf("Cursor rotation publication was not committed")
+				}
+				if err = record("rotation_published", map[string]any{"previous_session_id": rotationOld, "session_id": session}); err != nil {
+					return err
+				}
+				if intentional || !inputs.current(rotationEpoch) {
+					continue
+				}
+				admission.mu.Lock()
+				admissionReporter := *rep
+				admission.validate = func() bool { ok, e := admissionReporter.promptEligible(); return e == nil && ok }
+				admission.mu.Unlock()
+				if !inputs.publish(rotationEpoch, func() { admissionIdentity.Store(session); admission.enableQueue() }) {
+					continue
+				}
+				rotating, cancelled, idleControl, requestDeadlineHeld = false, false, false, false
+				phase = "idle"
+				stopDeadline()
+				cancelAt = time.Time{}
+				fmt.Fprint(writer, "Cursor fresh conversation published\r\n> ")
 			case "new":
 				var created struct {
 					ID string `json:"sessionId"`
@@ -759,6 +1044,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 					return fmt.Errorf("Cursor did not confirm a fresh session")
 				}
 				session = created.ID
+				admissionIdentity.Store(session)
+				confirmedSessions[session] = true
+				responseOrigins = append(responseOrigins, responseOrigin{protocol.next, session})
 				b.SessionID = session
 				rep.binding = b
 				tr.binding = b
@@ -793,7 +1081,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				if options.InitialPrompt != "" {
 					text := options.InitialPrompt
 					options.InitialPrompt = ""
-					v := terminalInput{text: text, accepted: true, submission: "initial", at: time.Now()}
+					v := terminalInput{text: text, sessionID: session, accepted: true, submission: "initial", at: time.Now()}
 					inputs.mu.Lock()
 					v.epoch = waitingEpoch
 					inputs.count++
@@ -839,6 +1127,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				requestDeadlineHeld = false
 				cancelled = false
 				phase = "idle"
+				if rotating {
+					continue
+				}
 				if cancelAt.IsZero() {
 					stopDeadline()
 				} else {

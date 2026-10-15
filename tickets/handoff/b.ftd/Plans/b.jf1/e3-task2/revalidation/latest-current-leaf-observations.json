@@ -1,0 +1,1726 @@
+{
+  "TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterObservesCommittedRotationBeforeStalledHookReturns/timeout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterObservesCommittedRotationBeforeStalledHookReturns/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/timeout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity/death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAtomicPublicationAndSuccessiveHistory": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationObservationConnectionWaitUsesCallerDeadline": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/current": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/no_hold": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/stale": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/pane": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/retired": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/replacement": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Stop/runtime_start": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/current": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/no_hold": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/stale": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/pane": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/retired": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/replacement": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/Interrupt/runtime_start": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/current": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/no_hold": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/stale": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/pane": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/retired": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/replacement": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestReporterHeldLifecycleRequiresIndependentEvidence/UserPromptSubmit/runtime_start": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCapturedAdmission/execute": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCapturedAdmission/edit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCapturedAdmission/search": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCapturedAdmission/plan": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCapturedAdmission/other": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorSyntheticAdmissionPreservesOpaqueFields": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/numeric_and_string": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/equivalent_number": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/active_duplicate": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/answered_reuse": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/tool_duplicate": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/active_bound": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionIdentityAndBounds/connection_bound": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/duplicate_nested": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/duplicate_IDs": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/duplicate_kind": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/no_once_approval": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/no_once_rejection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/missing_name": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/unknown_option_field": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/unsupported_kind": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/numeric_option": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/stale_session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/unknown_title_shape": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedAdmission/nonpending": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/null": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/true": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/{}": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/[]": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/0.5": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/9007199254740992": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnsupportedIDsNeverAdmit/\"xxxxxxxxxxxxxxxxxxxxxxx": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/0": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/2": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/3": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/4": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/5": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/6": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/7": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/8": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMalformedPlansNeverAdmit/9": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckCommittedBeforeFirstByte/allow": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckCommittedBeforeFirstByte/deny": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckCommittedBeforeFirstByte/timeout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/deadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/settlement_retirement": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/cancel": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/launch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/deleted_ack": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/deleted_row": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/allow/closed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/deadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/settlement_retirement": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/cancel": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/launch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/deleted_ack": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/deleted_row": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedAnswersLoseAuthority/deny/closed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/allow/failed_mutation": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/allow/missing_request": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/allow/stale_connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/deny/failed_mutation": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/deny/missing_request": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/deny/stale_connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/timeout/failed_mutation": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/timeout/missing_request": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorMissingOrFailedAckEmitsNothing/timeout/stale_connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckDeadlineAfterLockAndEvidence/write_lock/allow_deadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckDeadlineAfterLockAndEvidence/write_lock/confirm_by": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckDeadlineAfterLockAndEvidence/evidence/allow_deadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAckDeadlineAfterLockAndEvidence/evidence/confirm_by": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPartialAndAckOnlyNeverReplay/partial_output": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPartialAndAckOnlyNeverReplay/after_ack_before_byte": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestProtocolGuardDelayCannotWriteExpiredResponse": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorFailedAdmissionHasZeroRelayBytes/insert_failure": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorFailedAdmissionHasZeroRelayBytes/ownership_changed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorFailedAdmissionHasZeroRelayBytes/store_closed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/none": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/none": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/expiry": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/cancel": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/cancel": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/launch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/launch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/deny/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer/allow-once/guard1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer/allow-once/guard2": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer/reject-once/guard1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer/reject-once/guard2": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorImmediateNativeKeyRoutesOnlyItsRequest/ASCII": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorImmediateNativeKeyRoutesOnlyItsRequest/Unicode": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/open_fallback": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/unacknowledged_API_allow": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/expired_key": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/native_timeout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/cancelled": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorNativeFallbackAndRetirement/disconnected": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPaneClaimsAreNotApprovalAuthority/intent": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPaneClaimsAreNotApprovalAuthority/sent": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPaneClaimsAreNotApprovalAuthority/outside": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPaneClaimsAreNotApprovalAuthority/other_menu_intent": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPaneClaimsAreNotApprovalAuthority/other_menu_sent": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCallerRestartKeepsFiniteDelivery/on": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCallerRestartKeepsFiniteDelivery/off": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/captured_shell_result": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/nonzero_shell_result_synthetic": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/generic_completion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/generic_failure": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/still_pending": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/wrong_authorization_kind": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/null_exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/string_exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/fractional_exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/missing_stdout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/null_stdout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/array_stdout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/null_stderr": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorExecutionProofRequiresMatchingShellResult/duplicate_output": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/session": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/token": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/life": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/runtime": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProofAndAdmissionRejectStaleAuthority/retired": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorUnknownRequestRejectsGenericLifecycleProof": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorGenericToolProofCannotBypassControllerValidation/PostToolUse_close": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorGenericToolProofCannotBypassControllerValidation/generic_tool_proof": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/direct": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiselect": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/source-derived_fallback": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_tool_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_AskQuestion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_ask_prefix": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/fallback_skip": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/multiple_allow_once": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/ambiguous_other": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_true/malformed_options": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/direct": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiselect": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/source-derived_fallback": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_tool_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_AskQuestion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_ask_prefix": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/fallback_skip": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/multiple_allow_once": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/ambiguous_other": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_on/disabled_false/malformed_options": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/direct": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiselect": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/source-derived_fallback": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_tool_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_AskQuestion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_ask_prefix": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/fallback_skip": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/multiple_allow_once": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/ambiguous_other": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_true/malformed_options": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/direct": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiselect": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/source-derived_fallback": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_tool_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_AskQuestion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_ask_prefix": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/fallback_skip": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/multiple_allow_once": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/ambiguous_other": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQuestionPolicyPreservesIndependentHold/relay_off/disabled_false/malformed_options": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCompetingDecisionsStayRequestScoped/API_allow": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCompetingDecisionsStayRequestScoped/API_deny": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCompetingDecisionsStayRequestScoped/native_allow": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCompetingDecisionsStayRequestScoped/native_deny": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorCompetingDecisionsStayRequestScoped/timeout": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorConcurrentAPIPaneArbitration": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRuntimeWaitsForIndependentPlanAndPermission": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_waiting": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_waiting": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/pending_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/initial_start_report_does_not_admit_follow-up": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/initial_prompt_does_not_double_admit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_two_Enters_across_confirm": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_launch_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_session_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_runtime_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/SessionStart_held_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_two_Enters_across_confirm": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_launch_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_session_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_runtime_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPublicWaitingPromptAdmission/Stop_held_replacement_refuses": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/individual/-1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/individual/+0": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/individual/+1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/aggregate/-1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/aggregate/+0": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorWaitingMailboxByteBoundaries/aggregate/+1": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorFIFOExactTextAndLifecycle": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlsRetireQueuedSubmissions/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlsRetireQueuedSubmissions/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlBypassesSaturatedInputAndPendingReport": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedPromptWaitsForEveryDurableHold": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/launch": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/conversation": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/connection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorQueuedPromptNeverMigratesAfterAuthorityLoss/runtime_crash": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorProtocolQueuedUnwrittenPromptRetiresBeforeBytes": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPartialPromptWriteIsUncertainAndNeverReplayed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorPromptRetiredAtFinalWriteGuardRemainsKnownUnwritten": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorBlockedPaneRenderingCannotDelayCancellation": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorEligiblePublicPauseCancelsAcceptedQueue": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInterruptAndRotationRetainUnknownOriginHold": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRecoveryCompletionCannotRestartCancellationDeadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/runtime_verification": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInitialAcceptedPromptHasDispositionBeforeActiveTracking/UserPromptSubmit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInitialPromptIndividualByteBoundary/1048575": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInitialPromptIndividualByteBoundary/1048576": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorInitialPromptIndividualByteBoundary/1048577": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationHeldCapacityIsProvisional/entries": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationHeldCapacityIsProvisional/bytes": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationHeldCapacityIsProvisional/individual": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/cancellation/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published_write": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRetiresPermissionPlanCallbacksAndChoices": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAliasesIdleAndActive//clear/active=false": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAliasesIdleAndActive//clear/active=true": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAliasesIdleAndActive//new/active=false": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAliasesIdleAndActive//new/active=true": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationPublicationAndEveryHoldPrecedePromotion": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/rejection": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/missing_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/reused_ID": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/archive": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/authority_loss": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationFailureRefusesEveryHeldInput/runtime_death": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationRepeatedControlsPreserveFirstDeadline": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication": {
+    "status": "PASS",
+    "receipt": "09-controller-affected-race.log"
+  },
+  "TestRecordSessionStartIdentity": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/launch": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/life": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/pane": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/pane_start": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/server": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/socket": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/snapshot": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/transcript": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/old_session": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/retired": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/runtime_start": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/connection": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/input_pipe": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/output_pipe": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationRejectsChangedExaminedAuthority/deletion": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestEndReportClearedBySessionStart/same_session": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestEndReportClearedBySessionStart/new_session_archives_the_outgoing_pair": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestEndReportClearedBySessionStart/foreign_process_changes_nothing": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartOneWrite/pending/pane_start_NULL": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartOneWrite/waiting": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartOneWrite/missing": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartOneWrite/ended": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartNotApplied/other_pid": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartNotApplied/same_pid_other_start": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartNotApplied/parent_start_unreadable": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartNotApplied/row_with_no_pane": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartStaleSnapshot": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartRotation/new_session_archives_the_pair": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartRotation/entry_of_another_life_moves": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartRotation/same_session_archives_nothing": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestHookGateSessionStartRotation/archive_fails_open": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/verified": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/missing_rotation_verifier": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/rotation_evidence_lost": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/ordinary_evidence_lost": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_previous": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/expired": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/unbounded_deadline": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/malformed_deadline": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/wrong_parent": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/child": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorRotationHandleAuthenticatesPreviousDeadlineAndIndependentEvidence/archive_failure": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/new_session,_startup": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/new_session,_clear": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/new_session,_fork": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/new_session,_resume": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/same_session_id": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCodexSessionStartRotation/resumed_row_brings_back_its_own_id": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/fresh_spawn's_pending_row": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/fresh_spawn's_pending_row,_pane_start_unread_at_the_create": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/resumed_pending_row,_kept_session_id_and_new_pane": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/row_marked_missing_before_its_agent_reported_in": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/pending_row_noted_unreported_before_its_agent_reported_in": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/live_row,_/clear": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/live_row,_in-session_/resume": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateApplied/live_row,_compaction": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/leftover_on_a_fresh_pending_row": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/earlier_launch's_leftover_on_a_resumed_pending_row": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/leftover_on_an_ended_row_with_a_pane": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/leftover_on_an_ended_row_with_no_pane": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/leftover_on_a_pending_row_with_no_pane,_launch_start_past_the_grace": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateIgnored/the_launch's_own_agent_on_a_pane-less_pending_row,_no_launch_start": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateSnapshotRace/changed_once:_retried_and_applied": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateSnapshotRace/changed_twice:_nothing_written": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestSessionStartGateNoProbeOrTmuxDependency": {
+    "status": "PASS",
+    "receipt": "10-store-hook-preservation-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/input_replacement": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/input_permission": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/queued_admission": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/queued_cancellation": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/turn_outcome": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/end_publication": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/rotation_confirmation": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorPersistenceFailureStopsAdmission/rotation_publication": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorFreshRealPanePromptsRefusalsAndPause": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorBaselinePauseNeverSubmitsModelPrompt": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorRepeatedCancellationDoesNotExtendDeadline/denial": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced": {
+    "status": "PASS",
+    "receipt": "12-real-pane-affected-race.log"
+  },
+  "TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start": {
+    "status": "FAIL",
+    "receipt": "13-cancel-before-start-reconciliation-race.log"
+  }
+}

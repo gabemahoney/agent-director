@@ -13,7 +13,7 @@ import (
 var scripts embed.FS
 
 // Runtime records received frames without accessing Cursor or authentication.
-type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused string }
+type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused, NewRelease string }
 
 func New(t testing.TB) Runtime { return NewWithWorker(t, false) }
 
@@ -21,12 +21,12 @@ func New(t testing.TB) Runtime { return NewWithWorker(t, false) }
 func NewWithWorker(t testing.TB, worker bool) Runtime {
 	t.Helper()
 	dir := t.TempDir()
-	r := Runtime{Program: filepath.Join(dir, "index.js"), Trace: filepath.Join(dir, "trace.jsonl"), PID: filepath.Join(dir, "pid"), Release: filepath.Join(dir, "release"), WorkerPID: filepath.Join(dir, "worker-pid"), WorkerRelease: filepath.Join(dir, "worker-release"), Scenario: filepath.Join(dir, "scenario"), Raw: filepath.Join(dir, "raw"), Observer: filepath.Join(dir, "observer"), Sent: filepath.Join(dir, "sent.jsonl"), Paused: filepath.Join(dir, "paused")}
+	r := Runtime{Program: filepath.Join(dir, "index.js"), Trace: filepath.Join(dir, "trace.jsonl"), PID: filepath.Join(dir, "pid"), Release: filepath.Join(dir, "release"), WorkerPID: filepath.Join(dir, "worker-pid"), WorkerRelease: filepath.Join(dir, "worker-release"), Scenario: filepath.Join(dir, "scenario"), Raw: filepath.Join(dir, "raw"), Observer: filepath.Join(dir, "observer"), Sent: filepath.Join(dir, "sent.jsonl"), Paused: filepath.Join(dir, "paused"), NewRelease: filepath.Join(dir, "new-release")}
 	raw, err := scripts.ReadFile("runtime.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings, _ := json.Marshal(map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused})
+	settings, _ := json.Marshal(map[string]any{"trace": r.Trace, "pid": r.PID, "release": r.Release, "worker": worker, "workerPID": r.WorkerPID, "workerRelease": r.WorkerRelease, "scenario": r.Scenario, "raw": r.Raw, "observer": r.Observer, "sent": r.Sent, "paused": r.Paused, "newRelease": r.NewRelease})
 	raw = append([]byte("#!/usr/local/bin/node\nconst SETTINGS = "+string(settings)+";\n"), raw...)
 	if err = os.WriteFile(r.Program, raw, 0700); err != nil {
 		t.Fatal(err)
@@ -77,6 +77,9 @@ func splitLines(raw []byte) [][]byte {
 
 // Scenario scripts synthetic peer traffic; captured envelopes retain separate provenance.
 type Scenario struct {
+	NewReplies            []json.RawMessage `json:"newReplies,omitempty"`
+	WaitForNew            bool              `json:"waitForNew,omitempty"`
+	AfterNew              []json.RawMessage `json:"afterNew,omitempty"`
 	SessionID             string            `json:"sessionId"`
 	Requests              []json.RawMessage `json:"requests"`
 	PauseAfterRequests    bool              `json:"pauseAfterRequests,omitempty"`

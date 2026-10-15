@@ -136,9 +136,19 @@ reservation, Enter can verify committed waiting through `reporter.verifyReport`
 while the hook finishes, and the saved initial prompt retains priority. Once
 startup is confirmed, eligible complete follow-ups queue in observed terminal
 order. `terminal_linux.go` preserves editable Unicode and multiline text;
-pending, held, stale or excess input is explicitly refused. Literal text and
+pending startup, stale or excess input is explicitly refused. Literal text and
 Enter remain separate public send-keys operations, without concurrent-caller
-atomicity. Clear/new remain refused; there is no conversation rotation.
+atomicity. `/clear` and `/new` share the priority control lane and start a
+same-life conversation rotation. Old accepted queue entries are cancelled
+individually and never migrate. Ordinary input consumed during rotation captures
+its epoch, conversation and provisional status together under the mailbox lock;
+that observation survives a delayed insertion across publication. Separate held
+reservations have the same 32-entry/8 MiB aggregate and 1 MiB individual bounds.
+They are not admission to either conversation. After publication, held input
+remains provisional until `CheckCursorPrompt` accepts every durable guard.
+`inputMailbox.promote` transfers reservation ownership and `insertSubmission`
+merges by original observation order ahead of newer accepted work. Future
+rotation/admission paths MUST reuse these components and the captured status.
 
 Dispatch requires the previous turn to finish and every retained durable dialog
 hold to resolve. Future dispatch paths MUST reuse `reporter.promptEligible`
@@ -162,6 +172,22 @@ and enables later explicit input only while owning its captured epoch with no
 pending control. Local exit and eligible pause cancel waiting work and require
 confirmed owned termination before an intentional end report; working and dialog
 pause guards remain. No accepted FIFO entry is restored or replayed after failure.
+
+For rotation, an outstanding prompt requires its correlated terminal response
+or positive retirement before any bytes at the existing prompt writer gate.
+An idle rotation does not wait for a response to the cancel notification.
+The original three-second first-control deadline covers cancellation, fresh
+creation, publication and protected records. Repeated aliases coalesce with
+an explicit ignored/count disposition, without new authority or extra time.
+The new-session writer checks epoch and expiry before bytes. Fresh identity
+confirmation must correlate to the one pending request and be nonempty, bounded,
+unchanged by whitespace trimming, free of NUL/CR/LF and never previously confirmed
+on this connection. Confirmed identities and their request-origin boundaries
+share the 4096 connection cap. Timeout, ambiguous identity, lost authority or
+publication failure refuses held work to both conversations and stops admission.
+Interrupt during rotation stops the owned runtime; it cannot resume the outgoing
+conversation. Exit and eligible public pause preempt supervised phases but still
+require real owned death and verified durable SessionEnd for intentional success.
 
 `paneDisplay` separates bounded rendering from input/control consumption; future
 rendering paths MUST reuse it. Pressure may omit pane output with a transcript
@@ -207,6 +233,32 @@ The CLI's `hookCursorVerifier` independently composes `VerifyRuntime`,
 report. `internal/hook.HandleConfig.VerifyCursor` injects this evidence seam
 without adding probe/tmux/cursorhost dependencies to `internal/hook`.
 Conditional store writes repeat the binding predicates after verification.
+Startup `SetCursorRuntimeSession` is not rotation authority. Same-launch rotation
+MUST use `Store.RotateCursorSession` in `internal/store/cursor_rotation.go`, via
+the direct-parent SessionStart report carrying `cursor_previous_session` and the
+absolute `cursor_rotation_deadline`. `HandleConfig.VerifyCursorRotation` and the
+CLI verifier independently recheck runtime, protected transcript and pane from
+the transaction-read row. The bounded immediate transaction repeats the full
+examined snapshot, launch/life/server/socket/pane, outgoing session and runtime
+connection/process/pipe/fd predicates, including post-wait expiry. It publishes
+the row's fresh session/path, required outgoing current-life history and runtime
+binding atomically. Required archive or COMMIT failure rolls back publication;
+generic Claude/Codex fail-open archival is unchanged. Existing state/settle
+writers preserve independent request holds as `check_permission`.
+
+Future publication observers MUST reuse `ObserveCursorRotation` (committed-only)
+and `ReconcileCursorRotation` (committed fresh, unchanged outgoing, or unknown).
+They read actual atomic binding/row/history snapshots under the original deadline;
+a false committed result alone does not prove the outgoing identity unchanged.
+The reporter observes COMMIT while the hook is alive, independently of hook
+completion. Consumed intentional exit cancels that hook and joins only within
+the remaining bound. Confirmed hook exit or failed Start permits a final bounded
+reconciliation; parent cancellation does not cancel this authoritative read
+early. Only positive committed or unchanged proof permits normal intentional
+finalization. Unknown/error/exhaustion cannot establish rollback or successful
+ended. An observed committed fresh identity remains authoritative after a later
+report error, transcript failure or timeout. SQL knowledge never proves runtime
+death or durable SessionEnd.
 Report confirmation must reuse `reporter.verifyReport` for both the Enter
 waiting check and post-hook verification. Post-hook verification also accepts
 `check_permission` in place of nominal
@@ -238,6 +290,15 @@ Reports expose the actual recorded path through `jsonl_path`;
 `transcript_status` remains a reference summary, not a new reader-time file
 verification. Native Cursor storage is separate; no Claude JSONL substitute,
 load/replay/history recovery or successful unrecorded outcome is claimed.
+One protected launch file can be referenced by current and multiple prior
+current-life sessions. Per-record attribution remains separate: accepted input
+keeps its consumption-time conversation, provisional `input_held` and
+`held_input_refused` have none, and known retired records keep their actual
+outgoing conversation. Requested, confirmed and published rotation are distinct
+records. Cleanup visibly disposes every known held or unstarted queue owner
+even after recorder failure; protected final dispositions require recorder health
+and remaining original budget. No deadline extension manufactures a final record,
+complete history, rollback or successful intentional end.
 
 ### Cursor authorization dataflow and authority
 
@@ -339,7 +400,18 @@ preserving NULL-agent/Claude/Codex compatibility. Main-turn proof still requires
 durable eligibility plus NULL child identity; actual unknown-origin admission
 never grants it. No child tracking or main conversation replacement is inferred.
 
-Queuing/rotation, load/resume/reuse, expanded runtime setup, group profiles and
+`protocol.retiredResponse` uses a bounded numeric retirement watermark;
+current/pending correlation remains strict. Known retired session events and
+authorization/tool identities are inspectable without current lifecycle,
+completion, answer or held-release authority. Numeric response attribution uses
+the known per-conversation request boundaries; initialize/unknown origin remains
+empty. Missing current update attribution fails closed. Owned-runtime death is
+checked before retired traffic. Rotation and local cancellation never turn
+unknown request origin into eligible main-turn proof, nor close independent
+holds. Both guarded answer writers and acknowledgement-before-output remain
+mandatory across identity changes.
+
+Load/resume/reuse, expanded runtime setup, group profiles and
 session help remain outside the current route. Linux protected lifetime and
 account limits remain; synthetic controller evidence does not establish
 runtime/version/platform acceptance or all interleavings. Existing formal
@@ -350,7 +422,9 @@ models do not prove this controller; its formal assessment remains separate.
 Runtime/report checks use `VerifyRuntime`, `VerifyTranscriptPath`, `VerifyPane`
 and `HandleConfig.VerifyCursor`, keeping immediate-parent and conditional
 store guards mandatory. New Cursor record writes use the existing
-`RegisterCursorRuntime`, `SetCursorRuntimeSession`, `MarkCursorRuntimeGone`
+`RegisterCursorRuntime`, startup-only `SetCursorRuntimeSession`,
+`RotateCursorSession`, `ObserveCursorRotation`, `ReconcileCursorRotation`,
+`MarkCursorRuntimeGone`
 and conditional hook store paths. Authorization changes MUST extend
 `parseAuthorization`, `authorization.result` and the single `requestController`;
 reuse `InsertCursorRequest`, `AckCursorDecision`, `ClaimCursorPaneAnswer`,
@@ -394,8 +468,17 @@ envelopes. `Authorizations` remains the captured permission/plan factory;
 and publishes `Paused` before blocking the event loop until `Release`.
 `AfterAnswers` and `WaitForRelease` control subsequent correlated updates;
 `CompleteBeforeAnswers` allows a normal turn outcome with requests still
-outstanding. Scripted session updates use `SessionID`. These seams provide
+outstanding. Scripted request scenarios use `SessionID`. These seams provide
 controlled ordering, not load/resume, policy or ordinary-input queue support.
+Successive fresh identities and correlated scripted `Scenario.NewReplies`,
+`WaitForNew`/`Runtime.NewRelease` and `AfterNew` extend this same peer for
+rotation; prompt updates use the actual prompt's session. Rotation tests MUST
+reuse these controls, the real `runCursorReportHelper` payload validation and
+guarded publication, existing `rotationBarrier` before/after publication,
+`beginCursorSessionWithInput`/`completeInput` and protected-record barriers.
+Store rotation tests reuse `rotationStore`, `rotationVisibility`,
+`cursorTrailEnv` and the existing hook/store fixture
+owners rather than copying controller logic or manufacturing publication proof.
 
 Real-pane authors MUST extend `newCursorPaneScenario` in
 `test/realtmux/cursor_launch_test.go` for optional pre-launch `Script`, `Relay`
@@ -13317,7 +13400,8 @@ The FK `ON DELETE SET NULL` cascade (Epic 3 schema) handles the
 
 ### SessionStart hook side of the contract
 
-SessionStart is one gated statement, `RecordSessionStartIdentity`
+For Claude/Codex and ordinary startup, SessionStart uses the gated statement
+`RecordSessionStartIdentity`
 (`internal/store/hook_writes.go`; see [Hooks move a row only for its own
 agent](#hooks-move-a-row-only-for-its-own-agent)). It applies only when
 the hook's parent is the row's recorded pane process, and for a resumed
@@ -13383,7 +13467,11 @@ wall) is treated conservatively as "not present". The provisional NULL is not
 lossy — the resume fallback recomputes the path, and `find-missing` heals the
 row once the transcript appears (below).
 
-**Session-history archival on rotation (b.v2c AC6).** When the SessionStart
+**Session-history archival on rotation (b.v2c AC6).** Cursor same-launch rotation
+uses the required atomic publication described in
+[Cursor gateway and current-launch binding](#cursor-gateway-and-current-launch-binding);
+its archive cannot fail open. The following policy describes generic
+Claude/Codex SessionStart. When the SessionStart
 payload carries a **different** `session_id` than the row currently holds
 (a rotation — for example the agent restarted with a new session), the
 store archives the prior `(session_id, jsonl_path)` pair into

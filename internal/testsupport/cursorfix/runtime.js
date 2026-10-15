@@ -21,6 +21,7 @@ process.stdin.on('data', chunk => {
 });
 const input = readline.createInterface({input:process.stdin});
 let pendingScenario = null;
+let newCount = 0;
 function scenario() {
  if(!fs.existsSync(SETTINGS.scenario)) return null;
  const raw=fs.readFileSync(SETTINGS.scenario,'utf8');
@@ -41,12 +42,18 @@ input.on('line', async line => {
    while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
    setInterval(()=>{},1000);
   }
-  send({id:frame.id,result:{sessionId:scenario()?.sessionId || 'synthetic-session-1'}});
+  const scripted = scenario();
+  const count = ++newCount;
+  if(count > 1 && scripted?.waitForNew)
+   while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
+  const reply = count > 1 ? scripted?.newReplies?.[count-2] : null;
+  send({id:frame.id,...(reply || {result:{sessionId:count===1 ? (scripted?.sessionId || 'synthetic-session-1') : 'synthetic-session-'+count}})});
+  if(count > 1 && scripted?.afterNew) for(const event of scripted.afterNew) send(event);
  }
  else if(frame.method==='session/prompt') {
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
-  if(scripted && scripted.requests.length) {
+  if(scripted?.requests?.length) {
    const answers = new Promise(resolve=>{
     if(scripted.pauseAfterRequests) { input.pause(); process.stdin.pause(); }
     pendingScenario={resolve,ids:new Set(scripted.requests.map(r=>JSON.stringify(r.id)))};
@@ -76,7 +83,7 @@ input.on('line', async line => {
    send({id:'plan',method:'cursor/create_plan',params:{}});
   }
 
-  send({method:'session/update',params:{sessionId:scripted?.sessionId || 'synthetic-session-1',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Synthetic reply: '+text}}}});
+  send({method:'session/update',params:{sessionId:frame.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Synthetic reply: '+text}}}});
   send({id:frame.id,result:{stopReason:'end_turn'}});
  }
 });

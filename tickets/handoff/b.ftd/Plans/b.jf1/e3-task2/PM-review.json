@@ -1,0 +1,35 @@
+{
+  "reviewer": "apiary_product_manager_e3_task2",
+  "verdict": "Mandatory follow-up before local commit and scheduler handoff",
+  "mandatory_findings": [
+    {
+      "id": "PM1",
+      "action": "Correct writer final report and quality failure accounting for two omitted DecideMaxWaitUnderHeldLock leaves in full run09; final13 green does not explain09 timing."
+    },
+    {
+      "id": "PM2",
+      "action": "Bounded focused investigation with original concurrency,500ms/1.5s bounds; phases show zero real sleep, intended aftercommit lock callback not reached. Background-context SQL/cleanup and synchronous trail are candidates, not proven causes. If unresolved root must explicitly disposition."
+    }
+  ],
+  "rotation_source_findings": [],
+  "task_children": "12 all done:4source6test2docs",
+  "collectors": "Static registered collectors contain no stale clear/new refusal assertion; new cursor-pane-controls belongs to Task3.",
+  "test_verification": "Receipt hashes,10 source hashes and identical pre/post2300inputmanifest independently matched.13fullPASS68Go62cached13notests/429Bun0fail57files1659expects.",
+  "ignored_deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2",
+    "Inherited hooks/permissions guide-scope and recovery-placement debt"
+  ],
+  "architecture_review": "Verified full-base partitions and every delta through b2dc75; no fresh personal whole22kread or clean-document claim.",
+  "limits": [
+    "Exact fullRun preStart interleaving reporterlevel+controllerbranchinspection only",
+    "Historical research paths absent; authoritative PRD/SRD/evidence available",
+    "Scheduler/authenticated-human acceptance/Task3publiccoverage not performed",
+    "No spec/tla changed; no formaljobs"
+  ],
+  "contentious_product_choices": [],
+  "ticket_conflicting_decisions": [],
+  "execution": "Readonly no files/status/test/collector/build/scheduler changes."
+}

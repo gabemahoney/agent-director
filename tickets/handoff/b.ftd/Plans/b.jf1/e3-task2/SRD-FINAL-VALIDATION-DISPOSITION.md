@@ -1,0 +1,11 @@
+
+
+### E3 Task 2 final validation disposition — coordinator, 2026-10-15
+
+All R1/R2/R3/S1-S3 rotation findings are repaired and independently validated. Twelve Task2 Subtasks complete their scoped work. Task2 and Epic3 remain active pending exact-revision scheduler acceptance; Task3 remains unstarted.
+
+Technical decision: accept the settled passing sandbox suite for local commit and external Docker validation, while retaining two historical DecideMaxWaitUnderHeldLock deadline violations as an unresolved validation risk. Those calls took 5.700691482s and 2.484155549s against the unchanged 1.5s assertion before reaching the intended postcommit-lock callback. Their cause is unknown; neither fixture-lock nor load-only causality is established. Background-context SQL/cleanup, synchronous trail work and scheduling are candidates, not diagnoses. No pkg/api or lock-wait source/test change belongs to this Task. The final full run passes all 68 Go packages and 429 Bun tests, and one bounded uncached follow-up passes all 23 original parallel cases with the original 500ms request and 1.5s bounds. The focused execution does not reproduce whole-suite context or explain the failures. These observations justify proceeding without a speculative source repair or repeated broad tests; they do not establish that the historical timing problem is fixed or waive any gate/assertion. Any recurrence must retain its first failure and phase evidence for investigation. The scheduler handoff must disclose this risk, not report an entirely explained test history.
+
+PM failure-accounting omission is corrected in the final writer report, quality report and generator. Raw failed and passing receipts plus all 2300 source/test/doc/build input hashes are unchanged. PM requested explicit coordinator disposition when causality remains unknown; this is that disposition. No new rotation source finding is ignored. Inherited A2-A6/B3-B8/C2-C5/D1-D2 and hooks/permissions guide-scope/recovery-placement normalization debt remains deferred.
+
+Evidence: timing-investigation/FINAL-report.json, final-tests/FINAL-report.json, PM-review.json. No model inputs changed; no TLA+ jobs. Exact full Run pre-Start micro-window remains reporter-level causal evidence plus inspected controller branches.

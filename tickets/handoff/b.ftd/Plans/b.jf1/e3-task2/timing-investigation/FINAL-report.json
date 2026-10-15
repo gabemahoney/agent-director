@@ -1,0 +1,281 @@
+{
+  "role": "apiary_test_writer_e3_task2_timing_investigation",
+  "result": "Bounded focused check passed; historical failure accounting corrected; causal disposition remains unresolved",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.e9": "done -> active; remains active pending coordinator technical disposition",
+    "t3.jf1.r8.sr.66": "done retained; no full rerun assigned or performed"
+  },
+  "status_scope": "Only e9 changed. Task2/Epic remain active and Task3 unstarted; no other ticket statuses changed.",
+  "commands": [
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.sr.e9 --status active",
+      "result": "success; only own quality Subtask reopened"
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/timing-investigation/evidence.mjs before'",
+      "exit_code": 0,
+      "log": "00-before-integrity.log"
+    },
+    {
+      "command": "make sandbox CMD='timeout 180s go test -timeout 2m -count=1 -v ./pkg/api -run \"^TestDecideMaxWaitUnderHeldLock$\"'",
+      "exit_code": 0,
+      "log": "01-focused-deadline.log"
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/timing-investigation/evidence.mjs after'",
+      "exit_code": 0,
+      "log": "02-after-integrity.log"
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/timing-investigation/report.mjs'",
+      "exit_code": 0,
+      "log": "03-report-generation.log"
+    }
+  ],
+  "current_check": {
+    "scope": "Only TestDecideMaxWaitUnderHeldLock, all original subcases; no other package tests or full suite",
+    "runs": 1,
+    "uncached": true,
+    "go_timeout": "2m",
+    "outer_timeout": "180s",
+    "max_wait_ms": 500,
+    "asserted_call_bound": "1.5s",
+    "parallelism": "Original t.Parallel calls, agent dimensions and busy timeout dimensions retained; no -parallel/-p/GOMAXPROCS override",
+    "race": false,
+    "passed_leaves": 23,
+    "failed_leaves": 0,
+    "package_result": "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t0.721s",
+    "leaves": [
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      },
+      {
+        "status": "PASS",
+        "name": "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s"
+      }
+    ],
+    "phase_timing_limit": "Existing test emits detailed phases only on failure; successful leaf durations include setup/cleanup and are not measured Decide call durations. No successful per-phase timing or reached-lock count is claimed."
+  },
+  "historical_accounting": [
+    {
+      "log": "09-full-test-sandbox.log",
+      "exit_code": 2,
+      "failures": [
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "elapsed": "5.700691482s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+2.72µs end=+202.441997ms elapsed=202.439277ms requested wait=499.9994ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+202.444327ms end=+1.399144119s elapsed=1.196699792s requested wait=297.557663ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+1.399149399s end=+2.499914299s elapsed=1.1007649s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+2.499920189s end=+5.600225394s elapsed=3.100305205s requested wait=0s",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+5.600230184s end=+5.700687552s elapsed=100.457368ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        },
+        {
+          "failed_test": "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+          "elapsed": "2.484155549s",
+          "asserted_bound": "1.5s",
+          "max_wait_ms": 500,
+          "total_real_sleep": "0s",
+          "phases": [
+            "decide_delivery_test.go:248: decide phase GetSpawnWithin: start=+4.38µs end=+3.401838ms elapsed=3.397458ms requested wait=499.99892ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+3.403688ms end=+4.446227ms elapsed=1.042539ms requested wait=496.599472ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+4.448387ms end=+4.793937ms elapsed=345.55µs requested wait=495.554723ms",
+            "decide_delivery_test.go:248: decide phase DecideRelayRequest (including verdict write return): start=+4.796387ms end=+2.311064764s elapsed=2.306268377s requested wait=495.206843ms",
+            "decide_delivery_test.go:248: decide phase GetPermissionRequestWithin: start=+2.311068484s end=+2.484152439s elapsed=173.083955ms requested wait=0s"
+          ],
+          "intended_postcommit_lock_reached": false
+        }
+      ],
+      "cause": "Unknown. Both calls exceeded the unchanged 1.5s bound before any sleep callback; the intended after-commit fixture lock was never acquired and cannot explain these failures. The store method timings include internal execution and scheduling and do not isolate connection acquisition, SQL/COMMIT, cleanup or synchronous postcommit trail emission.",
+      "scope": "No pkg/api source or test changes in Task2. This is a separate historical deadline failure, not a rotation or pane-notice synchronization failure.",
+      "inputs": "second-settled-input-manifest.json",
+      "post_inputs": "second-after-input-manifest.json",
+      "input_drift": false,
+      "final_green": "13-full-test-sandbox.log passes pkg/api; passing does not causally resolve the historical failures",
+      "disposition": "Bounded follow-up evidence in ../timing-investigation/FINAL-report.json; explicit coordinator technical disposition still required."
+    }
+  ],
+  "historical_vs_current_scope": "09 and 13 were whole-repository make test-sandbox runs with cross-package concurrency and all pkg/api top-level tests. This one focused invocation retains every selected test subcase and its concurrency, but does not reproduce the full-suite execution context. Its pass is not a causal experiment that clears 09.",
+  "source_inspection": {
+    "files_sha256": {
+      "pkg/api/decide_delivery_test.go": "f6026cb62891a823b6e3c981af497ec2bf5404ceb666b22c03ead6f364314dd2",
+      "pkg/api/decide.go": "b5bfbff9db33f6c02d802c92f397cc7998e009cf1f8dc3771a450e4655eb4085",
+      "pkg/api/codex_reporting_test.go": "777c27253a8ae67e28e5b3bde936c216a6de0a231aea3c0e6321706aa6886c25",
+      "internal/store/lockwait.go": "414bb78c51b2d9845b554f46abf08c42e6f1233438e3643022f33ab29537d948",
+      "internal/store/permission.go": "55c6faf6e4b5676d0b150d2e53d05bea90212305f7cb674cca95cadbb3ef4f78",
+      "internal/trail/trail.go": "b7c444678a57fad0d2dea1f24c14e0aed56ead5d9189ed5c662b273b63223278"
+    },
+    "observations": [
+      "deadlineStore times whole delegated methods. Each interval includes acquisition, SQLite work, timeout restoration, connection return and time not scheduled; it cannot separate these components.",
+      "boundedConn gives database/sql connection acquisition a context deadline (at least 1ms connGrab) and computes remaining SQLite busy_timeout. These bounds cover waits for connection/SQLite busy, not a guaranteed wall-clock bound on every statement or goroutine scheduling.",
+      "withConn uses context.Background for statements and deferred busy_timeout restoration. inWriteTx executes BEGIN IMMEDIATE, query, COMMIT and any rollback on that context; neither SQL work nor restoration/connection cleanup has a call-deadline context here.",
+      "DecideRelayRequest calls emitDecisionCommitted synchronously after inWriteTx returns. trail.Emit takes the singleton Writer mutex and writes and Syncs; Writer.Emit ignores its context. The whole DecideRelayRequest observation includes this postcommit work.",
+      "Both historical failures have total real sleep zero and no callback-enter/holder-ready phase. In these lockLater cases the only intended competing lock acquisition is inside that callback, so it was not reached. Neither historical deadline violation can be attributed to that intended fixture lock.",
+      "Historical max busy leaf: GetPermissionRequestWithin took 1.196699792s for requested 297.557663ms, then 1.1007649s for requested zero; DecideRelayRequest took 3.100305205s for requested zero. Busy 10s leaf: DecideRelayRequest took 2.306268377s for requested 495.206843ms. These are observed method durations, not SQL busy durations.",
+      "No connection-acquisition/SQL/COMMIT/cleanup/trail/scheduler split exists in the historical receipt. Source inspection establishes possible contributors, not which contributor caused either failure."
+    ],
+    "candidate_causes": "SQL execution/COMMIT or filesystem latency, cleanup/timeout restoration, synchronous shared-trail mutex/write/Sync, scheduling delays, and connection acquisition overhead remain candidates only. No load-only, trail-only, SQLite-only or new rotation-defect conclusion is supported."
+  },
+  "final_full_suite_retained": {
+    "command": "make test-sandbox",
+    "log": "../final-tests/13-full-test-sandbox.log",
+    "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+    "result": "passed",
+    "go_packages_passed": 68,
+    "go_packages_cached": 62,
+    "go_packages_without_tests": 13,
+    "bun_passed": 429,
+    "bun_failed": 0,
+    "new_full_runs": 0
+  },
+  "integrity": {
+    "count": 2300,
+    "manifest": "../final-tests/settled-input-manifest.json",
+    "manifest_sha256": "8357ef9c1d88ae3ecf862755b967177d9369adda58e93b73cda8414aad307836",
+    "before": "before-integrity.json",
+    "after": "after-integrity.json",
+    "all_2300_existing_inputs_identical_before_and_after": true,
+    "identical_path_inventory": true,
+    "scope": "All original tracked/nonignored source/tests/docs/build inputs. Excludes .claude before any read/hash and tickets/handoff metadata. No persistent source/test/doc changes; new files are handoff evidence metadata only.",
+    "historical_logs": {
+      "09-full-test-sandbox.log": {
+        "bytes": 65926,
+        "lines": 837,
+        "sha256": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+        "expected": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+        "hash_matches": true,
+        "failed_leaves": [
+          "    --- FAIL: TestCursorRotationHeldCapacityIsProvisional/individual (0.64s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (10.87s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (11.26s)"
+        ],
+        "go_passed": 66,
+        "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+      },
+      "13-full-test-sandbox.log": {
+        "bytes": 48869,
+        "lines": 736,
+        "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+        "expected": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+        "hash_matches": true,
+        "failed_leaves": [],
+        "go_passed": 68,
+        "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+      }
+    }
+  },
+  "corrected_files": [
+    "../final-tests/FINAL-report.json",
+    "../final-tests/quality-findings.json",
+    "../final-tests/report.mjs"
+  ],
+  "generator_preservation": "Original final-tests/report.mjs now calls correctFinalReport from this directory, preserving explicit historical unknown causes on regeneration; correction is idempotent.",
+  "receipt_sha256": {
+    "02-after-integrity.log": "472f6e7ffffe86bd602621b85ee8460ca00f0ca299942059c5634fe98d66ed6d",
+    "01-focused-deadline.log": "2bdf901448de5fd86d887bd8623bbf26b4dc247e58762cc062988b0e2b1295d8",
+    "00-before-integrity.log": "3f77e80931aa9bed2d34144e7e534cb3f929226500cb3fde997c3c06ee34e887"
+  },
+  "deviations": [],
+  "integration": "NOT RUN; not dispatched as integration Test Writer. No Docker groups/collectors or scheduler execution.",
+  "formal": "No spec/tla changes; no formal jobs, Java, TLC or parser execution.",
+  "investigation_limits": "No runtime trace, ephemeral diagnostic test copy, source instrumentation, store-test expansion, host load probe, artificial stress, sleep, deadline widening or retries. Existing failure phases suffice to bound the evidence without changing execution inputs.",
+  "recommended_disposition": "Coordinator must explicitly decide technical treatment of the two historical deadline violations before quality closure. Retain final 13 pass as full-suite evidence and keep the failure cause unknown. If root requires a proven cause before acceptance, route scoped Engineer work to separate connection/SQL/COMMIT/cleanup/trail/scheduling timing; do not silently clear failures, relax assertions or rerun broadly.",
+  "incomplete_work": [
+    "Historical timing cause is unresolved; e9 remains active pending coordinator technical disposition."
+  ],
+  "genuine_blockers": [],
+  "questions_for_caller": []
+}

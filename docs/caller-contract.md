@@ -137,8 +137,7 @@ single initial prompt are accepted in Cursor `agent_args`. Unsupported
 arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
 permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
 Normal input ordering and limits are in
-[Fresh Cursor use](usage.md#fresh-cursor-use). `/clear` and `/new` remain
-refused visibly in the pane without forwarding. A successful `send-keys`
+[Fresh Cursor use](usage.md#fresh-cursor-use). A successful `send-keys`
 means keys were sent, not that the gateway admitted a prompt. Literal text
 and Enter are separate operations; concurrent callers have no atomic
 submission guarantee. Inspect the pane and the
@@ -148,6 +147,28 @@ is uncertain; do not blindly resend an uncertain submission.
 On an explicit capacity refusal, wait for capacity and explicitly submit the
 refused text again. Refused input is not queued for later execution and does
 not replace accepted work.
+
+During rotation, a provisional holding-capacity refusal likewise requires a
+later explicit submission after capacity is available; refused text will not
+be delivered automatically. Wait for publication and remaining decision holds
+to resolve before expecting held input to be admitted. A rotation notice or
+fresh-identity confirmation is not evidence of admission or prompt completion.
+
+The first control has a fixed three-second cancellation deadline, including
+fresh-session creation, publication and protected recording. Repeated controls
+cannot extend it. Cancellation timeout, missing, invalid or reused identity,
+refused publication, lost authority or persistence failure stops admission and
+visibly refuses held input to both conversations. Interrupting a pending
+rotation also stops the owned runtime. Do not send refused input to the old
+conversation or automatically replay it. Inspect `get` and available protected
+records, then use the existing live-row sequence above if cleanup is needed;
+start a fresh unique instance once the failed row is reconciled.
+
+Publication and hook completion are distinct. A report failure or timeout can
+occur after the fresh session and required outgoing history have committed.
+Do not infer rollback from that failure, or treat an incomplete record as proof
+that publication failed. Inspect the actual current session and history before
+deciding what happened; AD does not restore the old conversation automatically.
 
 After interruption, inspect each affected submission's cancellation or outcome.
 When the gateway invites a new prompt and decision holds are resolved, submit
@@ -162,6 +183,9 @@ cancels affected queued work and ends the row only after owned runtime
 termination is confirmed. A queued prompt is not a reason to bypass a pause
 refusal. Existing held-agent actions are in
 [Permission relay](#permission-relay).
+Exit or eligible pause can preempt rotation, but `ended` still requires actual
+owned runtime death and a verified, durably recorded end for the authoritative
+conversation. Unknown binding or exhausted persistence cannot establish success.
 
 A slow pane can omit rendered output and show
 `Cursor pane output omitted under pressure; inspect the protected transcript`.

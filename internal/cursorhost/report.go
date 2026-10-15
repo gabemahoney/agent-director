@@ -13,11 +13,14 @@ import (
 )
 
 type reporter struct {
-	store   *store.Store
-	cfg     config.Config
-	binding store.CursorRuntime
-	exe     string
-	path    string
+	store              *store.Store
+	cfg                config.Config
+	binding            store.CursorRuntime
+	exe                string
+	path               string
+	rotationContext    context.Context
+	rotationObserved   func(store.CursorRuntime)
+	rotationReconciled func()
 }
 
 // A locally retired authorization is not evidence that the durable dialog is
@@ -38,6 +41,12 @@ func (r *reporter) report(event string) error {
 // reportWaiting lets Enter independently confirm the committed waiting report
 // while its hook is finishing. It never grants admission before that commit.
 func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error {
+	return r.reportIdentity(event, waiting, "")
+}
+
+// reportIdentity publishes a rotation through the same direct-parent hook.
+// The binding remains outgoing until the hook transaction has committed.
+func (r *reporter) reportIdentity(event string, waiting func(func() bool), next string, rotationUntil ...time.Time) error {
 	if err := VerifyTranscriptPath(r.path); err != nil {
 		return err
 	}
@@ -64,6 +73,14 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error 
 		r.binding.Terminated = true
 	}
 	payload := map[string]any{"hook_event_name": event, "session_id": r.binding.SessionID, "transcript_path": r.path, "cursor_connection": r.binding.Connection, "origin": "main"}
+	if next != "" {
+		if len(rotationUntil) != 1 || !time.Now().Before(rotationUntil[0]) {
+			return fmt.Errorf("Cursor rotation publication deadline passed")
+		}
+		payload["cursor_previous_session"] = r.binding.SessionID
+		payload["session_id"] = next
+		payload["cursor_rotation_deadline"] = rotationUntil[0].UTC().Format(time.RFC3339Nano)
+	}
 	if terminated {
 		payload["reason"] = "prompt_input_exit"
 	}
@@ -71,7 +88,15 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error 
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	reportUntil := time.Now().Add(5 * time.Second)
+	if next != "" && rotationUntil[0].Before(reportUntil) {
+		reportUntil = rotationUntil[0]
+	}
+	parent := r.rotationContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithDeadline(parent, reportUntil)
 	defer cancel()
 	// The gateway directly execs the hook. No shell, wrapper, controller or
 	// child runtime can become its immediate parent.
@@ -81,7 +106,68 @@ func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error 
 		snapshot := *r
 		waiting(func() bool { return snapshot.verifyReport(event, beforeVersion, true) == nil })
 	}
-	if err = cmd.Run(); err != nil {
+	var commandErr error
+	if next == "" {
+		commandErr = cmd.Run()
+	} else {
+		expected := r.binding
+		expected.SessionID = next
+		observationContext, stopObservation := context.WithDeadline(context.Background(), reportUntil)
+		defer stopObservation()
+		observe := func(final bool) bool {
+			committed, unchanged, e := r.store.ReconcileCursorRotation(observationContext, r.binding, row, next, r.path)
+			if final && e == nil && (committed || unchanged) && r.rotationReconciled != nil {
+				r.rotationReconciled()
+			}
+			if e == nil && committed {
+				if r.rotationObserved != nil {
+					r.rotationObserved(expected)
+				}
+				return true
+			}
+			return false
+		}
+		// Observe the transaction while the direct child hook is still running.
+		// Hook exit/output is not the publication evidence: row, full binding,
+		// examined launch and required history must agree in the database.
+		if commandErr = cmd.Start(); commandErr == nil {
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			committed := false
+		waitHook:
+			for {
+				select {
+				case commandErr = <-done:
+					committed = observe(true) || committed
+					break waitHook
+				case <-ticker.C:
+					if !committed {
+						committed = observe(false)
+					}
+				case <-ctx.Done():
+					// Stop the hook before the final bounded snapshot, so it cannot
+					// commit after a negative observation during intentional exit.
+					select {
+					case commandErr = <-done:
+						committed = observe(true) || committed
+						break waitHook
+					case <-observationContext.Done():
+						return fmt.Errorf("Cursor rotation report deadline; publication may already be committed")
+					}
+				}
+			}
+			if committed {
+				r.binding = expected
+			}
+		} else if observe(true) {
+			// No child exists after Start fails, so this final bounded snapshot
+			// cannot be overtaken by a later commit from this hook.
+			r.binding = expected
+		}
+	}
+	if commandErr != nil {
 		return fmt.Errorf("Cursor report failed")
 	}
 	return r.verifyReport(event, beforeVersion, false)

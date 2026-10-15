@@ -1,0 +1,35 @@
+{
+  "phase": "before",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "manifest_count": 2300,
+  "settled_manifest_sha256": "8357ef9c1d88ae3ecf862755b967177d9369adda58e93b73cda8414aad307836",
+  "all_existing_inputs_identical": true,
+  "same_paths": true,
+  "mismatches": [],
+  "historical_logs": {
+    "09-full-test-sandbox.log": {
+      "bytes": 65926,
+      "lines": 837,
+      "sha256": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+      "expected": "b865dc2460d0e34e0cc23d8bce0b22528d558fa7fa8864d60a42dd36b8c20dae",
+      "hash_matches": true,
+      "failed_leaves": [
+        "    --- FAIL: TestCursorRotationHeldCapacityIsProvisional/individual (0.64s)",
+        "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (10.87s)",
+        "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (11.26s)"
+      ],
+      "go_passed": 66,
+      "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+    },
+    "13-full-test-sandbox.log": {
+      "bytes": 48869,
+      "lines": 736,
+      "sha256": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+      "expected": "00eb01f03e74cc84f13c498c769a645b5a7c4ab3fcc25a111e9cc17f23a68d90",
+      "hash_matches": true,
+      "failed_leaves": [],
+      "go_passed": 68,
+      "bun_summary": "429 pass\n 0 fail\n 1659 expect() calls\nRan 429 tests across 57 files"
+    }
+  }
+}

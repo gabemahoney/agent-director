@@ -154,7 +154,7 @@ func TestCursorEligiblePublicPauseCancelsAcceptedQueue(t *testing.T) {
 	}
 }
 
-func TestCursorInterruptAndRefusedRotationRetainUnknownOriginHold(t *testing.T) {
+func TestCursorInterruptAndRotationRetainUnknownOriginHold(t *testing.T) {
 	// Serial: real Run owns environment and signal handlers.
 	c := startCursorSession(t, "HOLD")
 	c.wait(t, "active receipt", func() bool { return len(c.prompts(t)) == 1 })
@@ -181,31 +181,27 @@ func TestCursorInterruptAndRefusedRotationRetainUnknownOriginHold(t *testing.T) 
 		t.Fatal(err)
 	}
 	c.wait(t, "control disposed queue and recovered", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
-	c.keys(t, "/clear\r/new\rmust-stay-refused\r^")
-	c.wait(t, "refused input consumed", func() bool {
-		n := 0
-		for _, r := range c.records(t) {
-			if r.Kind == "submission_refused" {
-				n++
-			}
-		}
-		return n == 3 && bytes.Contains(c.pane.bytes(), []byte("\r\x1b[2K> ^"))
+	c.keys(t, "/clear\r/new\rmust-stay-held\r")
+	c.wait(t, "rotation published despite unknown hold", func() bool {
+		row, err := c.e.s.GetSpawn(b.InstanceID)
+		return err == nil && row.SessionID == "synthetic-session-2" && bytes.Contains(c.pane.bytes(), []byte("Cursor fresh conversation published"))
 	})
+	c.wait(t, "provisional input recorded", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
 	request, err := c.e.s.GetPermissionRequest(b.InstanceID, token)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if request.ProvenGone() || request.MainTurnEndEligible || request.AgentID != "" {
-		t.Fatalf("interruption/unsupported rotation fabricated unknown proof: %+v", request)
+		t.Fatalf("interruption/rotation fabricated unknown proof: %+v", request)
 	}
 	row, err := c.e.s.GetSpawn(b.InstanceID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.SessionID != b.SessionID || row.LifeNumber != b.Life {
-		t.Fatal("refused rotation changed conversation/life")
+	if row.SessionID != "synthetic-session-2" || row.LifeNumber != b.Life {
+		t.Fatal("rotation failed to preserve fresh conversation/life")
 	}
-	if got := c.prompts(t); len(got) != 1 || got[0] != "HOLD" {
+	if got := rotationPrompts(c, t); len(got) != 1 || got[0].Text != "HOLD" {
 		t.Fatalf("hold released dispatch: %q", got)
 	}
 	cancelled := 0

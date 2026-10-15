@@ -42,7 +42,11 @@ an answer through agent-director.
 
 Validated Cursor permission and blocking plan requests use `check_permission`,
 `get-permission`, the permission fields of `get`/`list`, and `decide`. Each has
-its own `request_token`; answering one never answers another. `tool_name` is
+its own `request_token`; answering one never answers another. Requests retain
+their admitted conversation. [Conversation rotation](usage.md#fresh-cursor-use)
+does not transfer old choices or request identities to the fresh conversation.
+Cancellation, a new session id and turn completion cannot prove unknown-origin
+requests gone or release independent permission or plan holds. `tool_name` is
 the supplied action title or plan name, `tool_use_id` is its actual
 `toolCallId`, and `tool_input` retains the complete supplied params JSON
 byte for byte, including options and absent versus null fields. Internal

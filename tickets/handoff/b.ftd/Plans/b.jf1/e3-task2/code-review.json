@@ -1,0 +1,28 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task2",
+  "method": "Read-onlysourceinspection/whitespace, no execution",
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "P1",
+      "location": "internal/cursorhost/session.go publicationDone supervision near942-962",
+      "problem": "Publicationmaycommitthenhookstall; awaitdeadline/interrupt/childexitreturnswhileone-shotpublicationDoneempty, repkeepsoldidentity, latercompletionabandoned. Intentionalexit canleavefreshpublishedrownonterminal.",
+      "required": "Boundedreconcileactualcommittedidentity andtruthfulownedshutdown forcommit-before-timeout/exit; no false rollback/unboundedreads/deadlineweakening."
+    },
+    {
+      "id": "R2",
+      "priority": "P2",
+      "location": "internal/cursorhost/session.go admissionholding near159-164; internal/cursorhost/input.go insertion helddecision near107",
+      "problem": "Admitcapturesoldsession/provisionalstatus, publicationbetweenadmitandputclearsrotatingwithoutnewepoch; putrecomputesheldfalse, becomesordinaryoldsessionaccepted butdispatchnewsession bypassingpromotion.",
+      "required": "Carryconsumptiontimeprovisionalstatus throughinsertion; onlyguardednewsessionpromotion admitsit. Deterministicadmission/publication/insertionregression."
+    },
+    {
+      "id": "R3",
+      "priority": "P1",
+      "location": "report.go cmd.Start preflight cancellation near133; session.go reporterror branchnear1011",
+      "problem": "Intentionalexit/pause cancels publicationctx duringpreflight; cmd.Start fails androtationReconciled nevercalled; reportingerrorreturnkillsruntimebutknownoutgoingrownonterminal, nohookstarted.",
+      "required": "Boundedauthoritativereconcile andnormalverifiedintentionalshutdown forcancel-before-start, originaldeadline/protectedpersist retained. Deterministicpreflight-before-Start regression."
+    }
+  ],
+  "disposition": "R1/R2/S1-S3implemented/newcausalrevalidationrunning; R3mandatorynewrepairpending. No ignoredfindings."
+}

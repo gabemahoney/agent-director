@@ -1,0 +1,93 @@
+{
+  "role": "apiary_engineer_e3_task2_prestart_fix",
+  "result": "R3 source repair complete. Retained deterministic cancel-before-start regression reproduced red, then passes unchanged. Final focused race run passes all three affected packages. Independent Test Writer revalidation remains downstream.",
+  "workspace": "/home/horde/ad-codex/project/agent-director-ftd",
+  "branch": "feature/b.ftd",
+  "head": "8fabf73e473630e2902f37d6060a5b84bd4daab0",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.zy": "done -> active -> done; authoritative publication/reconciliation proof",
+    "t3.jf1.r8.sr.5x": "done -> active -> done; prestart intentional shutdown reconciliation"
+  },
+  "other_statuses": "No other Subtask, Task, Epic or Bee status changed. .77/.zg remain done; behavioral/final quality/full-suite owners remain untouched. Task3 untouched, E2 Epic intentionally active.",
+  "files_changed_this_pass": [
+    "internal/cursorhost/report.go",
+    "internal/store/cursor_rotation.go"
+  ],
+  "source_sha256": {
+    "internal/cursorhost/report.go": "7accf4854e18fdf6b89be295fb1ee0b90fd917f4d4b3b29b8df2154dbac5c4cc",
+    "internal/store/cursor_rotation.go": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d"
+  },
+  "unchanged_source_sha256": {
+    "cmd/agent-director/cursor_host_cmd.go": "a28c5375d1c93107e363934da04a378609bfc748843e5dac0584443a913064e5",
+    "cmd/agent-director/main.go": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "internal/cursorhost/input.go": "024bf15c29221fad37d93918720fc7d9e6d0d61c72c1846e603dbe05bd2d9e0d",
+    "internal/cursorhost/protocol.go": "701b61d4b9c9c16c9f8d5027aec09e37c4390154a6e81ae29d973a35557db92c",
+    "internal/cursorhost/requests.go": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "internal/cursorhost/session.go": "00856c3cd90d904ef82f5c892d9200d5bd33200884597a54b5981a997ded3f50",
+    "internal/cursorhost/transcript_linux.go": "d8644cb9ea5f4f54adaa64cda1bb5caa4296dfc9c8dd66f9c057ba3ea199f189",
+    "internal/hook/handler.go": "5668bbc7fd6a483944e13741665cba5597c161d6a73acf7b7380fbbceb4462c8"
+  },
+  "test_integrity": {
+    "internal/cursorhost/report_linux_test.go": "af975a2e2287783bc0be4e4399e88cfcdd652f784074469cdd78a937082db70a",
+    "internal/cursorhost/session_rotation_linux_test.go": "b1e8e8d9c3cd6cd42da86a1c947040cc23ecb657f8c0097de87aebdd9dbbed70",
+    "internal/cursorhost/session_rotation_boundary_linux_test.go": "95404907768d7bdf6a075089d2b175c0edad190f62f084c6e92175ba8b224604",
+    "internal/store/cursor_rotation_test.go": "17f748d6cf96bc5825aa23869324ca33bbc571a38d2cdb6af97d8ca47323202a",
+    "other_original_fixtures": "request_runtime_linux_test.go, session_fixture_linux_test.go, session_pause_linux_test.go, internal/hook/cursor_rotation_test.go, cursorfix.go/runtime.js and realtmux cursor_launch_test.go/cursor_failure_linux_test.go hashes independently checked against behavior/FINAL-report.json and remain identical. No tests, fixtures or documentation edited."
+  },
+  "repair": {
+    "start_failure": "The cmd.Start error branch now executes the same final observation used after confirmed hook exit. A failed Start leaves no hook child that could later overtake the snapshot with a commit. The hook error is still returned; the supervisor can suppress it only for consumed intentional shutdown with valid final evidence.",
+    "three_outcomes": "New production Store.ReconcileCursorRotation returns committed and unchanged booleans from one context-bound SQL snapshot. Both false means unknown. Query errors, expiration, connection contention and mismatched evidence never signal rotationReconciled. The existing ObserveCursorRotation committed-only reader delegates to this query, preserving its contract.",
+    "shared_evidence": "The CTE requires the exact complete stored runtime/process/start/connection/pipe/fd identity, unretired runtime, Cursor row agent, launch token/life, protected path, socket/server tuple and pane tuple. Fresh proof additionally requires runtime and row session equal the confirmed next identity plus outgoing current-life history at the same path. Unchanged proof requires runtime and row still outgoing, the full existing snapshotMatchSQL predicate for the examined row and no outgoing current-life archive.",
+    "supervisor": "No session.go edit required. Existing rotationReconciled atomic handoff now means a positively known outgoing or fresh identity rather than any successful negative fresh query. Existing rotationObserved carries only a proven fresh commit. The intentional branch can continue with the outgoing binding after cancellation prevented Start, while unknown state remains failure. Actual owned termination, independent final hook/runtime/pane verification and protected end persistence still gate ended success.",
+    "deadline": "Observation remains detached from the canceled publication parent but bounded by reportUntil, which is capped at the ORIGINAL first-control deadline. QueryRowContext includes sole-connection acquisition in that budget. No retry, new allowance, rollback, publication write, unconfirmed identity adoption or recovery/replay was added."
+  },
+  "technical_decisions_for_srd": [
+    "A failed publication-hook Start is a terminal hook boundary requiring final reconciliation just as confirmed child exit does. Parent cancellation must not cancel the bounded authoritative read before its original deadline.",
+    "A false committed query is not proof of the outgoing binding. Reconciliation must distinguish known unchanged outgoing, known committed fresh and unknown/error; only the first two permit consumed intentional shutdown to continue normal verified finalization.",
+    "Keep evidence atomic in one real store snapshot. Reuse full runtime/launch/pane identity predicates and the existing full examined-row snapshot predicate for unchanged proof; require outgoing current-life history for fresh proof and its absence for unchanged proof.",
+    "Preserve the committed-only ObserveCursorRotation reader while adding a production reconciliation result for the reporter. No new hook, public fault flag or test seam is introduced.",
+    "Neither SQL identity knowledge nor hook launch failure proves runtime death or durable SessionEnd. Those remain the existing independently verified finalization obligations under the same original bound."
+  ],
+  "receipts": {
+    "01-retained-red.log": {
+      "command": "make sandbox CMD='env GORACE=atexit_sleep_ms=0 go test -race -count=1 -v ./internal/cursorhost -run \"TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start$\"'",
+      "result": "EXPECTED FAIL before source edits; make exit 2, Go test fails the unchanged mandatory R3 leaf",
+      "cause": "Actual pre-canceled exec.Start never starts helper; valid outgoing SQL/no history remains; rotationReconciled callback omitted.",
+      "sha256": "e6ab35b269f966fdfe97dc1c09b302ab19d9b15522d31886ea509e16b163e286"
+    },
+    "02-retained-green.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/report.go internal/store/cursor_rotation.go && env GORACE=atexit_sleep_ms=0 go test -race -count=1 -v ./internal/cursorhost -run \"TestReporterObservesCommittedRotationBeforeStalledHookReturns/cancel_before_start$\"'",
+      "result": "PASS; exit 0, unchanged regression; precedes final full-snapshot refinement",
+      "sha256": "f6e6cfd150f404d7c8b852c782cf86472162fcfeacca398b302df6a2e5f2ab31"
+    },
+    "03-affected-race.log": {
+      "command": "make sandbox CMD='env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost ./internal/store ./internal/hook -run \"Test(Reporter|CursorRotation|CursorDelayedOldAdmission|CursorExit|CursorPause|CursorRepeatedCancellation|HookGateSessionStart|SessionStartGate|CodexSessionStartRotation|RecordSessionStartIdentity|EndReportClearedBySessionStart)\"'",
+      "result": "PASS; exit 0; cursorhost 49.881s, store 5.771s, hook 2.950s; 199 PASS lines including parent/subtest overlap; precedes final full-snapshot refinement",
+      "sha256": "dcb542c06574c774c944074d8f4bede4af9eeebf1ed0a8c47f816120d5c87d15"
+    },
+    "04-final-affected-race.log": {
+      "command": "make sandbox CMD='gofmt -w internal/cursorhost/report.go internal/store/cursor_rotation.go && env GORACE=atexit_sleep_ms=0 go test -race -timeout 15m -count=1 -v ./internal/cursorhost ./internal/store ./internal/hook -run \"Test(Reporter|CursorRotation|CursorDelayedOldAdmission|CursorEligiblePublicPause|CursorInterruptAndRotation|CursorControlDeadline|CursorRecoveryCompletion|HookGateSessionStart|SessionStartGate|CodexSessionStartRotation|RecordSessionStartIdentity|EndReportClearedBySessionStart)\"'",
+      "result": "PASS FINAL SOURCE; exit 0; cursorhost 67.013s, store 5.938s, hook 3.047s; 207 PASS lines including parent/subtest overlap; zero FAIL lines or race warnings",
+      "coverage": "Retained prestart regression, all reporter stopped-hook cases, committed-hook-stall exit/pause/interrupt/timeout/death, all rotation phases including confirmation Sync and intentional exit/pause, protected failure/refusal, retired traffic and numeric attribution, parked provisional admission, aliases/FIFO/capacity/holds, actual eligible public pause, unknown-origin hold, original control deadline under blocked Sync and recovery, guarded store/archive/commit/authority and bounded observer contention, generic SessionStart/Codex preservation.",
+      "sha256": "bdfda4c4565b4a6f53331a04079c2606d16035311d0bd93412bdb989c3090a5e"
+    }
+  },
+  "verification": "gofmt only inside make sandbox; git diff --check passes. 05-report-validation.log: make sandbox CMD='jq -e . tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/prestart-fix/FINAL-report.json >/dev/null && sha256sum internal/cursorhost/report.go internal/store/cursor_rotation.go' exited 0 and matched final-source hashes. Counts overlap parents/subtests and receipts; they are not a full-suite or independent-leaf total. Runs were repeated only after a source refinement, not repeated until green; retained red and all causes remain available.",
+  "proof_limit": "The R3 causal red-to-green test is reporter-level: real owned runtime/pane/path, future original deadline, pre-canceled actual exec.Start, helper never starts, unchanged outgoing row and no history, final reconciliation callback. It does NOT reproduce the exact full Run pre-Start micro-window. Existing full controller tests prove other rotation/publication boundaries; source inspection establishes how the existing intentional-and-reconciled branch consumes the repaired handoff. No full Run pre-Start proof is claimed.",
+  "next_test_writer": [
+    "Independently revalidate unchanged retained cancel-before-start reporter regression and affected shutdown/rotation cases on these exact source hashes.",
+    "Pin the new reconciliation distinction directly with real store fixtures: valid unchanged outgoing gives unchanged only; real fresh commit gives committed only; changed outgoing full snapshot/runtime/path/launch/pane or inconsistent history gives neither; failed/expired/contended observation cannot authorize final reconciliation. Existing store fixtures and production method suffice; no new source hook is needed for this matrix.",
+    "Preserve the honest reporter-level limitation unless a deterministic full Run pre-Start reproduction is actually constructed. Do not label later before-COMMIT or confirmation-Sync interleavings as that exact proof."
+  ],
+  "incomplete_source_work": [],
+  "remaining_owners": [
+    "Independent Test Writer behavioral revalidation and any new test-only proof cases",
+    "One settled documentation/SRD pass, postdoc advice and final quality, sole final make test-sandbox owner",
+    "Coordinator commit and user-owned exact-revision scheduler interface gate before Task3"
+  ],
+  "model_assessment": "TLA+ not applicable: no spec/tla model inputs changed; zero formal or baseline jobs requested.",
+  "execution_boundary": "All repository execution/format/tests only through make sandbox CMD with fresh container HOME and existing per-test temporary stores/sockets/owned processes. No .claude access or reads, credentials/login/logout, real AD stores, live Cursor, broad outside-workspace discovery, Docker groups/collector bodies, scheduler, Java/TLC/parser, full suite, commits/pushes, delegation or midflight messages. CLAUDE.md read only for permitted documentation locations; forbidden links not followed. Source-only repair plus assigned handoff JSON/log artifacts; tests/docs untouched.",
+  "operational_notes": "Initial bees metadata reads used unsupported show syntax, then omitted required --ids on show-ticket; CLI rejected both before any read/mutation. Corrected show-ticket --ids read Task and all four source Subtasks. No implementation/test failure other than the retained expected pre-repair R3 red.",
+  "deviations": [],
+  "questions_for_caller": []
+}

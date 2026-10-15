@@ -1,0 +1,396 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca 0.5s done
+#7 naming to docker.io/library/agent-director-sandbox
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.5s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestCursorPublicWaitingPromptAdmission
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_waiting
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor submission 1 accepted\r\nSynthetic reply: typed\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_waiting
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=2 want=2 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor submission 1 accepted\r\nSynthetic reply: typed\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/pending_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/before publicState=pending EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/initial_start_report_does_not_admit_follow-up
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=UserPromptSubmit/after publicState=working EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> \r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\nSynthetic reply: initial\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/initial_prompt_does_not_double_admit
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\nSynthetic reply: initial\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_two_Enters_across_confirm
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"second","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=2 want=2 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor submission 1 accepted\r\n\r\x1b[2K> \r\x1b[2K> s\r\x1b[2K> se\r\x1b[2K> sec\r\x1b[2K> seco\r\x1b[2K> secon\r\x1b[2K> second\r\n\r\x1b[2K> ^Cursor submission 2 accepted\r\nSynthetic reply: typed\r\nCursor turn complete\r\n> Synthetic reply: second\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_launch_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_session_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_runtime_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/SessionStart_held_replacement_refuses
+    request_runtime_linux_test.go:436: barrier=SessionStart/after publicState=waiting EnterConsumedBeforeRelease=true prompts=0 want=0 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\n\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~Cursor ready\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_two_Enters_across_confirm
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"typed","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"second","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=3 want=3 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor submission 1 accepted\r\n\r\x1b[2K> \r\x1b[2K> s\r\x1b[2K> se\r\x1b[2K> sec\r\x1b[2K> seco\r\x1b[2K> secon\r\x1b[2K> second\r\n\r\x1b[2K> ^Cursor submission 2 accepted\r\nSynthetic reply: typed\r\nCursor turn complete\r\n> Synthetic reply: second\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\n\r\nCursor turn complete\r\n> Cursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_launch_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_session_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_runtime_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+=== RUN   TestCursorPublicWaitingPromptAdmission/Stop_held_replacement_refuses
+    request_runtime_linux_test.go:433: peer prompt: {"prompt":[{"text":"initial","type":"text"}],"sessionId":"synthetic-session-1"}
+    request_runtime_linux_test.go:436: barrier=Stop/after publicState=waiting EnterConsumedBeforeRelease=true prompts=1 want=1 pane="\x1b[?2004hCursor gateway: starting a fresh conversation\r\nCursor ready\r\n> Synthetic reply: initial\r\x1b[2K> t\r\x1b[2K> ty\r\x1b[2K> typ\r\x1b[2K> type\r\x1b[2K> typed\r\n\r\x1b[2K> ~\r\nCursor turn complete\r\n> Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent\r\n\r\x1b[2K> \r\x1b[2K> /\r\x1b[2K> /e\r\x1b[2K> /ex\r\x1b[2K> /exi\r\x1b[2K> /exit\r\nCursor runtime terminated\r\n\x1b[?2004l"
+--- PASS: TestCursorPublicWaitingPromptAdmission (5.87s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_waiting (0.70s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_waiting (0.47s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/pending_refuses (0.27s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/initial_start_report_does_not_admit_follow-up (0.36s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/initial_prompt_does_not_double_admit (0.36s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_two_Enters_across_confirm (0.49s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_launch_replacement_refuses (0.28s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_session_replacement_refuses (0.28s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_runtime_replacement_refuses (0.28s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/SessionStart_held_replacement_refuses (0.29s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_two_Enters_across_confirm (0.58s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_launch_replacement_refuses (0.37s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_session_replacement_refuses (0.38s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_runtime_replacement_refuses (0.38s)
+    --- PASS: TestCursorPublicWaitingPromptAdmission/Stop_held_replacement_refuses (0.38s)
+=== RUN   TestCursorInterruptAndRotationRetainUnknownOriginHold
+--- PASS: TestCursorInterruptAndRotationRetainUnknownOriginHold (0.50s)
+=== RUN   TestCursorRecoveryCompletionCannotRestartCancellationDeadline
+    session_persistence_linux_test.go:132: completion-first recovery retained original 3s deadline: 3.024588201s; owned runtime 3989 terminated; two controls, no ended success or prompt replay
+--- PASS: TestCursorRecoveryCompletionCannotRestartCancellationDeadline (3.22s)
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.021594653s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.023951811s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy
+    session_persistence_linux_test.go:175: blocked input_control: Cursor ACP operation timed out after 3.021606703s
+=== RUN   TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate
+    session_persistence_linux_test.go:175: blocked submission_started: Cursor ACP operation timed out after 3.021061223s
+--- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync (13.02s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_interrupt (3.22s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/idle_exit (3.26s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/busy (3.27s)
+    --- PASS: TestCursorControlDeadlineSupervisesBlockedTranscriptSync/start_gate (3.27s)
+=== RUN   TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput
+--- PASS: TestCursorStartRecordGateRetiresWithoutBytesAndAllowsExplicitInput (0.45s)
+=== RUN   TestCursorRotationHeldCapacityIsProvisional
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/entries
+    session_rotation_boundary_linux_test.go:74: all capacity released through new conversation: frame count=26 pane tail=sor submission 21 accepted after fresh publication
+        Cursor submission 22 accepted after fresh publication
+        Cursor submission 23 accepted after fresh publication
+        Cursor submission 24 accepted after fresh publication
+        Cursor submission 25 accepted after fresh publication
+        Cursor submission 26 accepted after fresh publication
+        Cursor submission 27 accepted after fresh publication
+        Cursor submission 28 accepted after fresh publication
+        Cursor submission 29 accepted after fresh publication
+        Cursor submission 30 accepted after fresh publication
+        Cursor submission 31 accepted after fresh publication
+        Cursor submission 32 accepted after fresh publication
+        Cursor submission 33 accepted after fresh publication
+        Synthetic reply: held-entry-00
+        Cursor turn complete
+        > Synthetic reply: held-entry-01
+        Cursor turn complete
+        > Synthetic reply: held-entry-02
+        Cursor turn complete
+        > Synthetic reply: held-entry-03
+        Cursor turn complete
+        > Synthetic reply: held-entry-04
+        Cursor turn complete
+        > Synthetic reply: held-entry-05
+        Cursor turn complete
+        > Synthetic reply: held-entry-06
+        Cursor turn complete
+        > Synthetic reply: held-entry-07
+        Cursor turn complete
+        > Synthetic reply: held-entry-08
+        Cursor turn complete
+        > Synthetic reply: held-entry-09
+        Cursor turn complete
+        > Synthetic reply: held-entry-10
+        Cursor turn complete
+        > Synthetic reply: held-entry-11
+        Cursor turn complete
+        > Synthetic reply: held-entry-12
+        Cursor turn complete
+        > Synthetic reply: held-entry-13
+        Cursor turn complete
+        > Synthetic reply: held-entry-14
+        Cursor turn complete
+        > Synthetic reply: held-entry-15
+        Cursor turn complete
+        > Synthetic reply: held-entry-16
+        Cursor turn complete
+        > Synthetic reply: held-entry-17
+        Cursor turn complete
+        > Synthetic reply: held-entry-18
+        Cursor turn complete
+        > Synthetic reply: held-entry-19
+        Cursor turn complete
+        > Synthetic reply: held-entry-20
+        Cursor turn complete
+        > Synthetic reply: held-entry-21
+        Cursor turn complete
+        > Synthetic reply: held-entry-22
+        Cursor turn complete
+        > 
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/bytes
+    session_rotation_boundary_linux_test.go:74: all capacity released through new conversation: session ended Cursor ACP operation timed out
+        Cursor transcript finalization failed: Cursor transcript finalization timed out; pane=[?2004hCursor gateway: starting a fresh conversation
+        Cursor ready
+        > Cursor rotation requested; new input is held until publication
+        Cursor submission 2 held provisionally
+        Cursor submission 3 held provisionally
+        Cursor submission 4 held provisionally
+        Cursor submission 5 held provisionally
+        Cursor submission 6 held provisionally
+        Cursor submission 7 held provisionally
+        Cursor submission 8 held provisionally
+        Cursor submission 9 held provisionally
+        Cursor input refused while starting or busy (capacity); nothing sent
+        Cursor rotation failed or stopped; held input refused to both conversations; no automatic replay
+        Cursor held submission 2 refused; nothing sent to either conversation
+        Cursor held submission 3 refused; nothing sent to either conversation
+        Cursor held submission 4 refused; nothing sent to either conversation
+        Cursor held submission 5 refused; nothing sent to either conversation
+        Cursor held submission 6 refused; nothing sent to either conversation
+        Cursor held submission 7 refused; nothing sent to either conversation
+        Cursor held submission 8 refused; nothing sent to either conversation
+        Cursor held submission 9 refused; nothing sent to either conversation
+        Cursor transcript finalization failed; queued work will not be recovered
+        [?2004l
+=== RUN   TestCursorRotationHeldCapacityIsProvisional/individual
+--- FAIL: TestCursorRotationHeldCapacityIsProvisional (11.94s)
+    --- FAIL: TestCursorRotationHeldCapacityIsProvisional/entries (3.36s)
+    --- FAIL: TestCursorRotationHeldCapacityIsProvisional/bytes (6.26s)
+    --- PASS: TestCursorRotationHeldCapacityIsProvisional/individual (2.32s)
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed
+    session_rotation_boundary_linux_test.go:112: fail-closed traffic: Cursor update lacks session attribution
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign
+    session_rotation_boundary_linux_test.go:112: fail-closed traffic: Cursor event session mismatch
+=== RUN   TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic
+    session_rotation_boundary_linux_test.go:112: fail-closed traffic: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority (1.31s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/known_old (0.52s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/unattributed (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/foreign (0.28s)
+    --- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority/owned_death_with_old_traffic (0.21s)
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit
+    session_rotation_boundary_linux_test.go:224: intentional shutdown failed: Cursor rotation confirmation retired
+    session_rotation_boundary_linux_test.go:241: real intentional termination left false-live row: {InstanceID:report-row ParentID: State:waiting CWD:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncexit3358317104/001 TmuxSessionName:report-session AgentArgs:[] RelayMode:off JSONLPath:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncexit3358317104/001/.config/agent-director/cursor-transcripts/1475cbcdf70d94d4c820786ea1986479.jsonl SessionID:synthetic-session-1 Labels:map[] StartedAt:2026-10-15 22:01:00 +0000 UTC LastSeenAt:2026-10-15 22:01:00 +0000 UTC EndedAt:<nil> ExtraEnv:map[] PID:0 ProcStarttime: LivenessUnverifiedSince: LivenessNote: RowVersion:3 LaunchStartedAtMillis:0 LifeNumber:0 NoPreTrust:false EndedAtText: Snapshot:{RowVersion:3 StartedAt:2026-10-15 22:01:00 SessionID:synthetic-session-1 PID:0 ProcStarttime: TmuxSessionName:report-session} Identity:{Token:1111111111111111 Socket:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncexit3358317104/005/socket ServerPID:1075 ServerStart:1792101660 ServerStarttime:439240526 PaneID:%0 PanePID:1075 PaneStarttime:439240526} LaunchOwner:{PID:0 Starttime: PIDNamespace:} IdleSince: Agent:cursor EndReportedAtMillis:0 SubagentTracking:false ReportedState:waiting}
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause
+    session_rotation_boundary_linux_test.go:197: eligible pause failed: ErrPauseTimeout: spawn report-row did not reach ended within 5s
+    session_rotation_boundary_linux_test.go:224: intentional shutdown failed: Cursor rotation confirmation retired
+    session_rotation_boundary_linux_test.go:241: real intentional termination left false-live row: {InstanceID:report-row ParentID: State:waiting CWD:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncpause4076298713/001 TmuxSessionName:report-session AgentArgs:[] RelayMode:off JSONLPath:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncpause4076298713/001/.config/agent-director/cursor-transcripts/10a97cd2d455886b73f05624a637c8b8.jsonl SessionID:synthetic-session-1 Labels:map[] StartedAt:2026-10-15 22:01:01 +0000 UTC LastSeenAt:2026-10-15 22:01:01 +0000 UTC EndedAt:<nil> ExtraEnv:map[] PID:0 ProcStarttime: LivenessUnverifiedSince: LivenessNote: RowVersion:3 LaunchStartedAtMillis:0 LifeNumber:0 NoPreTrust:false EndedAtText: Snapshot:{RowVersion:3 StartedAt:2026-10-15 22:01:01 SessionID:synthetic-session-1 PID:0 ProcStarttime: TmuxSessionName:report-session} Identity:{Token:1111111111111111 Socket:/tmp/TestCursorRotationExitInterruptAndEligiblePausePreemptPhasesconfirmation_syncpause4076298713/005/socket ServerPID:1075 ServerStart:1792101661 ServerStarttime:439240526 PaneID:%0 PanePID:1075 PaneStarttime:439240526} LaunchOwner:{PID:0 Starttime: PIDNamespace:} IdleSince: Agent:cursor EndReportedAtMillis:0 SubagentTracking:false ReportedState:waiting}
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt
+=== RUN   TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause
+--- FAIL: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases (9.76s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/exit (0.29s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/interrupt (0.22s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/new_pending/pause (0.41s)
+    --- FAIL: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/exit (0.23s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/interrupt (0.24s)
+    --- FAIL: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/confirmation_sync/pause (5.21s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/exit (0.33s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/interrupt (0.25s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_before/pause (0.44s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/exit (0.32s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/interrupt (0.28s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/publication_after/pause (0.46s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/exit (0.33s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/interrupt (0.28s)
+    --- PASS: TestCursorRotationExitInterruptAndEligiblePausePreemptPhases/published_sync/pause (0.46s)
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published
+=== RUN   TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted
+    session_rotation_boundary_linux_test.go:280: unrecordable admission lost per-held visible refusal for 2; pane=[?2004hCursor gateway: starting a fresh conversation
+        Cursor ready
+        > [2K> /[2K> /n[2K> /ne[2K> /new
+        Cursor rotation requested; new input is held until publication
+        [2K> s[2K> sy[2K> syn[2K> sync[2K> sync-[2K> sync-f[2K> sync-fa[2K> sync-fai[2K> sync-fail[2K> sync-faile[2K> sync-failed[2K> sync-failed-[2K> sync-failed-h[2K> sync-failed-he[2K> sync-failed-hel[2K> sync-failed-held
+        Cursor submission 2 held provisionally
+        Cursor fresh conversation published
+        > [?2004l
+--- FAIL: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld (0.97s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_confirmed (0.31s)
+    --- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/rotation_published (0.28s)
+    --- FAIL: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld/submission_accepted (0.37s)
+=== RUN   TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue
+    session_rotation_boundary_linux_test.go:344: full fresh FIFO drained: frame count=33 pane tail=resh publication
+        Cursor submission 58 accepted after fresh publication
+        Cursor submission 59 accepted after fresh publication
+        Cursor submission 60 accepted after fresh publication
+        Cursor submission 61 accepted after fresh publication
+        Cursor submission 62 accepted after fresh publication
+        Cursor submission 63 accepted after fresh publication
+        Cursor submission 64 accepted after fresh publication
+        Cursor submission 65 accepted after fresh publication
+        Synthetic reply: fresh-full-00
+        Cursor turn complete
+        > Synthetic reply: fresh-full-01
+        Cursor turn complete
+        > Synthetic reply: fresh-full-02
+        Cursor turn complete
+        > Synthetic reply: fresh-full-03
+        Cursor turn complete
+        > Synthetic reply: fresh-full-04
+        Cursor turn complete
+        > Synthetic reply: fresh-full-05
+        Cursor turn complete
+        > Synthetic reply: fresh-full-06
+        Cursor turn complete
+        > Synthetic reply: fresh-full-07
+        Cursor turn complete
+        > Synthetic reply: fresh-full-08
+        Cursor turn complete
+        > Synthetic reply: fresh-full-09
+        Cursor turn complete
+        > Synthetic reply: fresh-full-10
+        Cursor turn complete
+        > Synthetic reply: fresh-full-11
+        Cursor turn complete
+        > Synthetic reply: fresh-full-12
+        Cursor turn complete
+        > Synthetic reply: fresh-full-13
+        Cursor turn complete
+        > Synthetic reply: fresh-full-14
+        Cursor turn complete
+        > Synthetic reply: fresh-full-15
+        Cursor turn complete
+        > Synthetic reply: fresh-full-16
+        Cursor turn complete
+        > Synthetic reply: fresh-full-17
+        Cursor turn complete
+        > Synthetic reply: fresh-full-18
+        Cursor turn complete
+        > Synthetic reply: fresh-full-19
+        Cursor turn complete
+        > Synthetic reply: fresh-full-20
+        Cursor turn complete
+        > Synthetic reply: fresh-full-21
+        Cursor turn complete
+        > Synthetic reply: fresh-full-22
+        Cursor turn complete
+        > Synthetic reply: fresh-full-23
+        Cursor turn complete
+        > Synthetic reply: fresh-full-24
+        Cursor turn complete
+        > Synthetic reply: fresh-full-25
+        Cursor turn complete
+        > Synthetic reply: fresh-full-26
+        Cursor turn complete
+        > Synthetic reply: fresh-full-27
+--- FAIL: TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue (3.73s)
+=== RUN   TestCursorRotationRetiresPermissionPlanCallbacksAndChoices
+--- PASS: TestCursorRotationRetiresPermissionPlanCallbacksAndChoices (0.68s)
+=== RUN   TestCursorRotationAliasesIdleAndActive
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//clear/active=true
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=false
+=== RUN   TestCursorRotationAliasesIdleAndActive//new/active=true
+--- PASS: TestCursorRotationAliasesIdleAndActive (2.31s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=false (0.54s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//clear/active=true (0.61s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=false (0.55s)
+    --- PASS: TestCursorRotationAliasesIdleAndActive//new/active=true (0.61s)
+=== RUN   TestCursorRotationPublicationAndEveryHoldPrecedePromotion
+--- PASS: TestCursorRotationPublicationAndEveryHoldPrecedePromotion (0.52s)
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/rejection
+    session_rotation_linux_test.go:310: causal failure: Cursor ACP request failed; check the selected runtime and existing login
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/missing_ID
+    session_rotation_linux_test.go:310: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID
+    session_rotation_linux_test.go:310: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/reused_ID
+    session_rotation_linux_test.go:310: causal failure: Cursor did not confirm a genuinely fresh session; held input refused
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/archive
+    session_rotation_linux_test.go:310: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit
+    session_rotation_linux_test.go:310: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/authority_loss
+    session_rotation_linux_test.go:310: causal failure: Cursor rotation report failed; publication may already be committed; held input refused: Cursor report failed
+=== RUN   TestCursorRotationFailureRefusesEveryHeldInput/runtime_death
+    session_rotation_linux_test.go:310: causal failure: Cursor ACP transport failed; child termination must be confirmed separately
+--- PASS: TestCursorRotationFailureRefusesEveryHeldInput (2.02s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/rejection (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/missing_ID (0.23s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/malformed_ID (0.23s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/reused_ID (0.24s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/archive (0.32s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/report_after_commit (0.29s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/authority_loss (0.25s)
+    --- PASS: TestCursorRotationFailureRefusesEveryHeldInput/runtime_death (0.23s)
+=== RUN   TestCursorRotationRepeatedControlsPreserveFirstDeadline
+--- PASS: TestCursorRotationRepeatedControlsPreserveFirstDeadline (3.20s)
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync
+=== RUN   TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report
+--- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome (0.99s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_Sync (0.49s)
+    --- PASS: TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome/start_report (0.49s)
+=== RUN   TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication
+--- PASS: TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication (0.44s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/cursorhost	60.942s
+FAIL
+make: *** [Makefile:735: sandbox] Error 1

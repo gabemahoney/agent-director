@@ -233,9 +233,30 @@ func TestCursorFreshRealPanePromptsRefusalsAndPause(t *testing.T) {
 	if got := prompts(); !reflect.DeepEqual(got, expected) {
 		t.Fatalf("distinct multiline prompts %q; want %q", got, expected)
 	}
-	for _, text := range []string{"/clear", "/new"} {
+	for index, text := range []string{"/clear", "/new"} {
+		outgoing := readRow(t, f.DBPath, id)
+		previous := outgoing.SessionID
 		send(text)
-		paneContains("Unsupported Cursor conversation control; nothing sent")
+		waitFor(t, "real hook published fresh conversation", func() bool {
+			return readRow(t, f.DBPath, id).SessionID != previous && readRow(t, f.DBPath, id).State == store.StateWaiting
+		}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
+		paneContains("Cursor fresh conversation published")
+		// Independent reads verify the actual built hook's three-write transaction.
+		current := readRow(t, f.DBPath, id)
+		actual, err := store.Open(f.DBPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, bindErr := actual.ReadCursorRuntime(id)
+		history, historyErr := actual.ListSessionHistory(id, bound.Life)
+		actual.Close()
+		found := false
+		for _, entry := range history {
+			found = found || (entry.SessionID == previous && entry.JSONLPath == outgoing.JSONLPath)
+		}
+		if bindErr != nil || historyErr != nil || bound.SessionID != current.SessionID || len(history) != index+1 || !found || current.LifeNumber != before.LifeNumber || current.JSONLPath != before.JSONLPath {
+			t.Fatalf("actual hook lost atomic identity/history: row=%+v binding=%+v history=%+v errors=%v/%v", current, bound, history, bindErr, historyErr)
+		}
 	}
 	send("HOLD")
 	state(store.StateWorking)

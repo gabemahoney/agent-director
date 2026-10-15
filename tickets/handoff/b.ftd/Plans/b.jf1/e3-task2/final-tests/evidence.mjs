@@ -1,0 +1,15 @@
+import {createHash} from 'node:crypto';
+import {readFileSync, writeFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+const root='tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/';
+const dir=root+'final-tests/';
+const digest=p=>createHash('sha256').update(readFileSync(p)).digest('hex');
+const phase=process.argv[2];
+const source=JSON.parse(readFileSync(root+'prestart-validation/FINAL-report.json')).source_sha256;
+const docs=JSON.parse(readFileSync(root+'docs/document-hashes.json'));
+const integrity=Object.fromEntries([...Object.entries(source),...docs.map(x=>[x.path,x.sha256])].map(([p,h])=>{const actual=digest(p);if(actual!==h)throw Error('Integrity mismatch '+p);return [p,actual]}));
+writeFileSync(dir+phase+'-source-doc-integrity.json',JSON.stringify(integrity,null,2)+'\n');
+const paths=execFileSync('git',['ls-files','-z','--cached','--others','--exclude-standard','--', '.',':(exclude).claude/**',':(exclude)tickets/handoff/**'],{encoding:'utf8'}).split('\0').filter(Boolean).filter(p=>p!=='.claude'&&!p.startsWith('.claude/')).sort();
+const manifest=paths.map(p=>({path:p,sha256:digest(p)}));
+writeFileSync(dir+phase+'-input-manifest.json',JSON.stringify(manifest,null,2)+'\n');
+console.log(JSON.stringify({phase,integrity_files:Object.keys(integrity).length,inputs:manifest.length,manifest_sha256:digest(dir+phase+'-input-manifest.json')}));

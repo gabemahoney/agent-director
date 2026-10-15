@@ -1,0 +1,122 @@
+{
+  "role": "apiary_doc_writer_e3_task2",
+  "result": "One settled initial documentation pass complete; whole-base/all-delta aggregate architecture chain verified. Literal-follow advice, final quality and full suite remain assigned downstream.",
+  "ticket_statuses": {
+    "t3.jf1.r8.sr.vh": "defined -> active -> done; changed recovery sequences explicitly assigned to .78 via exact inventory; execution not claimed",
+    "t3.jf1.r8.sr.be": "defined -> active -> done; complete aggregate chain verified"
+  },
+  "statuses_limit": "Only own documentation Subtasks updated; Task/Epic and other Subtasks untouched.",
+  "files_changed": [
+    "docs/usage.md",
+    "docs/caller-contract.md",
+    "docs/permissions.md",
+    "docs/hooks.md",
+    "docs/architecture.md"
+  ],
+  "artifacts": [
+    "docs/FINAL-report.json",
+    "docs/reviewed-base.json",
+    "docs/architecture-review-provenance.json",
+    "docs/architecture-delta.patch",
+    "docs/document-hashes.json",
+    "docs/postdoc-advice-inventory.json",
+    "docs/source-test-integrity.json",
+    "docs/verify-evidence.mjs",
+    "docs/verification.log"
+  ],
+  "documentation": "Usage owns same-life aliases, individual old accepted cancellations, provisional capacity/consumption-time ownership and guarded promotion, and per-record/current-life shared transcript references. Caller contract owns fixed deadline, failure/refusal, interruption during rotation, publication versus hook completion, no automatic old delivery/rollback/replay, and truthful shutdown. Permissions owns retained request identities/independent unknown-origin holds. Hooks owns authenticated outgoing-to-fresh publication. Architecture names mandatory component and shared fixture reuse, atomic required archive, three-way bounded reconciliation, retired correlation and persistence truth.",
+  "whole_architecture_review": {
+    "method": "Inherited four complete partition reviews with exact hashes verified; reverse-applied every full-context patch from known 6c36 Task1 endpoint through 2738e9 and 759fb to complete b18e original base, validating every endpoint. Own exact Task2 delta reverse-reconstructs 6c36; new prose/context personally inspected against source. Aggregate coverage, not a personal 22k-line read.",
+    "chain": [
+      {
+        "from": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+        "to": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+        "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-corrections-architecture-delta.patch",
+        "exact_patch_verified": true,
+        "patch_sha256": "16234d1669085b1346769ba08175cc5c516afdb67e63dc63a6bd6fd29339fe70",
+        "strict_hunks_and_complete_endpoints_verified": true
+      },
+      {
+        "from": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+        "to": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0",
+        "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/doc-architecture-delta.patch",
+        "exact_patch_verified": true,
+        "patch_sha256": "1b7ae89f481d360d9e14bafd8bb68c13845447d226cb3d87afedbe2d4057d57d",
+        "strict_hunks_and_complete_endpoints_verified": true
+      },
+      {
+        "from": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0",
+        "to": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+        "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/docs/architecture-delta.patch",
+        "review": "all changed prose and context personally read against actual source",
+        "patch_sha256": "dde29846726636653991d0b79e54fff497310ef97b2667e08ce1d5e694eeb1da",
+        "strict_hunks_and_complete_endpoints_verified": true
+      },
+      {
+        "from": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+        "to": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+        "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/architecture-delta.patch",
+        "patch_sha256": "97e2d610af123722a73b74098e245faee6ec66f850e3e92304ff0989ded51087",
+        "strict_hunks_and_complete_endpoints_verified": true,
+        "review": "All new Task2 prose and changed context personally read against production source and settled reports"
+      }
+    ],
+    "original_base": {
+      "sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+      "lines": 22213,
+      "bytes": 1534189
+    },
+    "task2_base": {
+      "sha256": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+      "lines": 22270,
+      "bytes": 1538333
+    },
+    "final": {
+      "sha256": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+      "lines": 22358,
+      "bytes": 1544650
+    },
+    "whole_final_aggregate_covered": true,
+    "clean_document_claim": false,
+    "deferred": [
+      "A2-A6",
+      "B3-B8",
+      "C2-C5",
+      "D1-D2"
+    ]
+  },
+  "review_basis": "Task2, own two authoritative doc Subtasks and relevant PRD/SRD; CLAUDE documentation locations and all three doc guides; complete engineer/behavior/code-review/review-fix/revalidation/prestart-fix/prestart-validation reports and all three SRD decision records, with later final reports superseding historical pending findings. Actual controller admission/promotion/publication/shutdown, mailbox, protected recorder, reporter reconciliation, guarded transaction, hook verification and reusable fixture boundaries inspected.",
+  "verification": [
+    "make sandbox CMD=...verify-evidence.mjs PASS; exact complete architecture endpoints/hunks and partition hashes verified",
+    "git diff --check -- docs PASS",
+    "All fenced command blocks in five edited docs unchanged from HEAD; no new executable advice",
+    "Production and test/fixture hashes unchanged against latest prestart-validation report"
+  ],
+  "source_test_contradictions": [],
+  "operator_actions": "Unchanged: no demonstrated new human-only procedure; existing caller cleanup and operator inspection owners linked. No install, pins, skills, generated references, manuals or new guides touched.",
+  "srd_decisions_for_caller": "Documentation adopts existing SRD-DECISIONS plus superseding REVIEW and PRESTART decisions. No new technical/product decision. Historical pending prose in those records is superseded by final revalidation; this pass does not edit SRD tickets.",
+  "postdoc_handoff": {
+    "owner": "t3.jf1.r8.sr.78",
+    "inventory": "docs/postdoc-advice-inventory.json",
+    "sequences": [
+      "rotation_capacity",
+      "failed_rotation",
+      "committed_report_failure",
+      "rotation_shutdown"
+    ],
+    "request": "Follow exact changed advice literally with isolated real behavior/public fixtures; reuse existing owners, no doc-parsing or manufactured commands. Validate explicit capacity resubmission, remaining durable holds before admission, failed-rotation inspection/cleanup/fresh unique instance, committed report-failure truth/no replay, and authoritative intentional shutdown. Existing live-row sequence is reused, not changed."
+  },
+  "limitations": [
+    "No tests or full suite run by doc writer; .78 advice, .e9 final quality and .66 sole settled make test-sandbox remain next owner",
+    "R3 deterministic proof remains reporter-level plus controller source inspection; no actual full Run pre-Start micro-window claim",
+    "No live/authenticated Cursor, external Docker acceptance or formal proof claim. No spec/tla change; zero formal jobs",
+    "No whole clean architecture certification; inherited A2-A6/B3-B8/C2-C5/D1-D2 remain deferred"
+  ],
+  "execution_boundary": "All evidence script execution only make sandbox CMD; no source/test edits, host repo artifacts, .claude reads/access, real AD stores, credentials/login/logout/live Cursor, Docker groups/collectors, scheduler/TLC/Java/parser, full suite, commits/pushes/delegation/messages. Workspace-only discovery. Bees CLI used only authorized metadata reads and own status updates.",
+  "deviations": [],
+  "failures": [],
+  "incomplete_work": [
+    "Downstream .78 literal validation, .e9 final quality, .66 settled full suite, coordinator commit and user exact-revision scheduler gate remain outstanding; no remaining assigned documentation edits"
+  ],
+  "questions_for_caller": []
+}
