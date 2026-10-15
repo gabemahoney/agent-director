@@ -41,7 +41,13 @@ var launchInProgress = []string{
 // pendingSites lists every manifest site that states the meaning of pending;
 // send-keys' allow_pending sites are in allowPendingSites.
 var pendingSites = []pendingSite{
-	{name: "status description", verb: "status", require: launchInProgress},
+	{name: "status description", verb: "status", require: []string{
+		"pending/waiting/working/ask_user/check_permission/ended/missing",
+		"pending: launch (spawn/reuse/resume) underway",
+		"no sessionstart hook report yet",
+		"may be loading or at a startup prompt",
+		"resumed pending keeps session id/history",
+	}},
 	{name: "status state", verb: "status", result: "state", require: launchInProgress},
 	{name: "get state", verb: "get", result: "state", require: launchInProgress},
 	{name: "list spawns", verb: "list", result: "spawns", require: []string{

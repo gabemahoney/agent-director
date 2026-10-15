@@ -1,0 +1,9 @@
+migration: leaves {('store', 'pass'): 9, ('api', 'pass'): 6, ('cursorhost', 'pass'): 3}; all test/subtest outcomes {'pass': 21}
+focused: leaves {('cursorhost', 'pass'): 247, ('store', 'pass'): 178, ('api', 'pass'): 55, ('api', 'fail'): 6}; all test/subtest outcomes {'pass': 535, 'fail': 7}
+api-final: leaves {('api', 'pass'): 61}; all test/subtest outcomes {'pass': 69}
+exact-proof-final: leaves {('store', 'pass'): 11, ('api', 'pass'): 6}; all test/subtest outcomes {'pass': 19}
+protocol-race: leaves {('cursorhost', 'pass'): 190}; all test/subtest outcomes {'pass': 220}
+controller-race: leaves {('cursorhost', 'pass'): 31, ('cursorhost', 'fail'): 1}; all test/subtest outcomes {'pass': 35, 'fail': 1}
+arbitration-diagnostic: leaves {('cursorhost', 'fail'): 8, ('cursorhost', 'pass'): 2}; all test/subtest outcomes {'fail': 8, 'pass': 2}
+controller-race-final: leaves {('cursorhost', 'pass'): 42}; all test/subtest outcomes {'pass': 46}
+final: leaves {('cursorhost', 'pass'): 247, ('store', 'pass'): 178, ('api', 'pass'): 61}; all test/subtest outcomes {'pass': 542}

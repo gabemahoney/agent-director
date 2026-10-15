@@ -1,0 +1,36 @@
+E2 TASK2 HELP SOURCE REPAIR — COMPLETE; FINAL TEST WRITER REQUIRED
+Task t2.jf1.c1.cz; owned source subtask t3.jf1.c1.cz.gk.
+Checkout feature/b.ftd, HEAD f97b3fcb7978286e25e93f67a98c021073943302 plus existing settled Task2 diff.
+
+RESULT / STATUS
+Owned .gk done→active→done. No sibling/parent ticket status changed; .kd remains active. Help stdout now exactly14642 bytes, down334 from14976. Existing helpStdoutBytes14642 and helpHardCap15160 BOTH UNCHANGED. No downward re-record needed. Source-side help failure fixed. Semantic changes: NONE; wording only, no behavior/signature/parameter/error/API changes.
+
+FILES CHANGED BY THIS ENGINEER (4; other inherited work retained)
+- pkg/api/manifest/manifest.go: three canonical verb descriptions only compared with settled final TestWriter snapshot.
+- pkg/api/manifest/surface.json: normal generator output.
+- docs/cli-reference.md: normal generator output.
+- docs/mcp-reference.md: normal generator output.
+Generated files were regenerated exclusively by make sandbox CMD='make generate'; no manual generated/prose/docs/test/golden edits. All settled files were SHA256 compared with /tmp/ftd-task2-final-after-manifest.json: precisely those four differ. Thus all existing manual docs, test/fixture files, recovery/operator/install pins and other source files retain their prior exact bytes.
+
+WORDING / FACT PRESERVATION
+167B saved in decide,92B in get-permission,75B in status =334B. Preferred Task2 descriptions supply259B; existing status supplies remaining75B.
+Decide retains caller allow/deny, open-request/relay-on restriction, first winner/ErrAlreadyDecided, offered allow_once/blocking-plan only versus supported rejection, deliberate native persistent choice at pane, one-second ack wait/delivery values, poll/confirm_by, immediate hook-gone fallback, no-open causes and no pane answer, max_wait_ms pre-record wait/ErrStoreBusy.
+Get-permission retains request_token lookup, full raw permission/plan envelope, options and absent/null fields, no connection context, null undecided decision/decided_at, decided requests remaining open until ack and delivery as outcome.
+Status retains all seven states, launch kinds, no SessionStart hook report yet, loading/startup prompt possibilities, resumed pending session id/history. No hook liveness, ACP receipt/execution or safety fact changed; detailed payload/delivery/proof descriptions remain byte-for-byte unchanged from inherited Task2.
+Exact before/after canonical strings and per-verb savings are in ftd-help-wording-changes.json.
+
+ACTUAL TARGETED VALIDATION
+1 make sandbox CMD='make generate' — exit0; initial generation (later repeated after final wording adjustment).
+2 make sandbox CMD='make generate && go test ./cmd/agent-director -run "TestHelpSize(Guard|Over)$" -count=1 -v && go test ./pkg/api/manifest ./pkg/api/apitest ./pkg/api/errnames -count=1 -json'
+Receipt /tmp/ftd-help-focused.log. Whole shell/make exit2 because two stale exact-wording fixtures fail; all repo generators and help guards PASS. Help stdout14642B, recorded14642B, hardcap15160B. TestHelpSizeGuard and TestHelpSizeOver including its five boundary subcases pass.
+Canonical Go leaves: manifest167 pass/2 fail; apitest10 pass; errnames108 pass. No skipped leaves. Total285 pass/2 fail. Parent test failures are not extra leaf failures.
+3 make sandbox CMD='go build ./cmd/agent-director ./cmd/agent-director-admin && cd pkg/ts-bun-client && bun test test/public-surface.test.ts' — exit0. Both binary packages build. Bun22 pass/0 fail,46 expectations,1file; receipt /tmp/ftd-help-build-ts.log.
+4 git diff --check — exit0.
+
+NEXT TEST WRITER — TWO STALE EXACT TEXT FIXTURES, DO NOT CHANGE SEMANTICS
+- pkg/api/manifest/manifest_texts_test.go TestManifestTextCases/get-permission:_undecided_versus_open: expects old literal "null while undecided" and "a decided request can remain open until acknowledged". New semantically equivalent phrases "Undecided: decision/decided_at null" and "Decided may stay open until acked". Keep separate null-undecided versus still-open-after-decision assertions.
+- pkg/api/manifest/pending_meaning_test.go TestManifestDefinesPendingAsLaunchInProgress/status_description: expects "a launch (spawn, reuse or resume)", "in progress", "has not reported in", "resumed pending row keeps its session id and history". New equivalent "launch (spawn/reuse/resume) underway", "no SessionStart hook report yet", "Resumed pending keeps session id/history". Preserve seven-state, all-launch-kind, no-hook-report and resumed-history facts. Other surfaces' assertions already pass.
+These fixtures were not changed per source lane instructions. No unresolved source-side failure identified. Fresh final TestWriter must reconcile these exact-text assertions and run its sole fresh full make test-sandbox; this Engineer did NOT run a full suite or claim full-unit acceptance.
+
+LIMITS / DEVIATIONS / QUESTIONS
+No behavioral deviations or semantic changes. Status description trim outside newly changed Task2 wording was necessary for75B after trimming Task2 wording259B; no facts removed. No unit tests, goldens or manual product docs edited. Generated-doc exception used only through existing generator. No host Go/Bun/artifacts; all repository execution used make sandbox CMD. No Docker integration groups/TLC/parser/scheduler/live/authenticatedCursor, real AD stores, login/logout/credentials/.claude/push, commits, delegation or agent messages. Host processing only read/edit/report/git/bees own status operations. Questions: none.

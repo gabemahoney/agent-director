@@ -1,0 +1,43 @@
+E2 TASK2 SOURCE REPAIR REPORT
+Checkout /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd, HEAD f97b3fcb plus existing settled source/test diff. No commits/pushes. No delegation or other agent messages. All tests and fixtures unchanged by this repair lane.
+
+OWN STATUS
+Reopened active then completed ONLY t3.jf1.c1.cz.nt, t3.jf1.c1.cz.ip, t3.jf1.c1.cz.v6. Other own source subtasks .4f/.j2/.gk remain done untouched. Parent/Epic and sibling test/doc statuses untouched.
+Read complete preceding Engineer and behavioral reports, current Task/all 18 subtasks, SRD decisions including behavioral repair disposition, CLAUDE documentation locations, relevant engineering/architecture and current source/test owners.
+
+REPAIR FILES (4)
+internal/cursorhost/requests.go
+internal/cursorhost/protocol.go
+internal/store/pane_writes.go
+internal/store/request_proof.go
+No generated output change needed. No public API/migration or later-Epic capability.
+
+TECHNICAL CHOICES / RESULT
+1. requests.go tick rejects a captured expired relay choice BEFORE clearing relay state for connected fallback. Existing fresh deliberate choices after settlement remain usable, including after an unacknowledged recorded API allow; terminal timeout/cancel and queued/uncertain answers retain retirement/no-replay. All six NativeFallbackAndRetirement variants pass unchanged.
+2. Generic CloseToolRanRequests now requires the owning Spawn agent IS NOT cursor in the actual gated SQL mutation; ProveRequestsGone applies the same non-Cursor SQL restriction ONLY for tool_ran. SQLite IS NOT deliberately retains historical NULL-agent behavior. Existing parent HookGate and non-Cursor Claude/Codex behavior remain intact. Turn-end eligibility/age/child identity conditions untouched. Cursor proof still works through ProveCursorToolRan with current binding, exact token/toolCallId and prior controller ACP execution-output validation. Actual-controller valid shell, malformed output, independent holds, reopen/lifecycle and stale authority cases pass. Fake current Cursor HookGate no longer bypasses evidence.
+3. protocol outputMu linearizes bounded nonblocking enqueue against close/worker retirement. A prior closed transport deterministically refuses; writable outgoing queue never competes with a ready closed channel. Every accepted frame belongs to the single writer: its deferred failQueued marks admission failed under the same mutex, drains the fixed queue, and invokes each pending failure callback once outside the lock. Close during active output now follows its failure/completion callback path instead of returning early. No waiting on writer from close, no lock held across guards/I/O/callbacks, no duplicate callbacks or retry/replay. Fixed queue size and transport deadlines remain unchanged; uncertain partial writes stay fatal. Existing guard-delay/second-guard/queued-deadline challenges stay green; protocol race detector green.
+
+RECEIPTS (leaf counts; parents excluded, packages not counted as tests)
+A. Independent RED before source changes, exit 2 from make:
+make sandbox CMD='go test ./internal/cursorhost -run "TestCursorNativeFallbackAndRetirement/expired_key|TestCursorGenericToolProofCannotBypassControllerValidation|TestProtocolClosedTransportRejectsEveryEnqueue" -count=1 -json'
+/tmp/ftd-task2-repair-red.log: 0 pass, 4 fail, 0 skip. Reproduced exact reported expired_key, PostToolUse_close, generic_tool_proof, and closed transport failures.
+B. Initial GREEN unchanged assertions, exit 0:
+make sandbox CMD='gofmt -w internal/cursorhost/requests.go internal/cursorhost/protocol.go internal/store/pane_writes.go internal/store/request_proof.go && go test ./internal/cursorhost -run "TestCursorNativeFallbackAndRetirement|TestCursorGenericToolProofCannotBypassControllerValidation|TestProtocolClosedTransportRejectsEveryEnqueue" -count=1 -json'
+/tmp/ftd-task2-repair-green.log: 9 pass, 0 fail, 0 skip; covers original four plus all fallback/retirement siblings.
+C. Broader focused GREEN, exit 0:
+make sandbox CMD='gofmt -w internal/store/pane_writes.go && go build ./... && go vet ./internal/cursorhost ./internal/store ./pkg/api && go test ./internal/cursorhost -run "Test(Cursor|AuthorizationAlwaysDenied|AuthorizationNotificationAndTransportFailures|ReporterHeldLifecycleRequiresIndependentEvidence|Protocol|OwnedRuntimeProtectedAndTerminated|IndependentCursorWorkerSurvivesRuntimeTermination|EditableTerminalSubmission|TerminalAdmissionReservesOneIdleTurn)" -count=1 -json && go test ./internal/store -run "Test(Cursor|InsertRelayRequestOneTransaction|RelayAckAndTimeoutDeny|DecideRelayRequestGuards|RelayWritePrecondition|PaneAnswerIntentThenSent|RecordPaneOutsideClaims|CloseToolRanRequests|LegacyNullAgentGatedWritesAndProof|ProveRequestsGone|TurnEnd|ProvenGoneRequest|UnprovenRequest)" -count=1 -json'
+/tmp/ftd-task2-repair-focused.log: build/vet PASS; cursorhost 245 pass, store 167 pass = 412 pass, 0 fail, 0 skip. Includes first-byte durable ack, expiry/slow evidence, actual controller proof and process/lifetime regressions.
+D. Compatibility receipt with honest old expectations RED, make exit 2:
+make sandbox CMD='go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|DecideRecordsVerdict|DecideFirstCallWins|DecideConcurrentFirstCallWins|GetPermission|PlainSendKeysHeldUntilProven|UnknownOriginHoldAfterReopen|PauseHeldWhileSubagentRequestUnproven|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json && go test ./internal/store -run "Test(RequestEligibilityWritersReadersAndProof|CurrentSchemaContradictoryChildRemainsHeld|ExplicitFalseUnknownClosePreservesOtherHolds)" -count=1 -json'
+/tmp/ftd-task2-repair-compat.log: pkg/api 58 pass, 3 fail, 0 skip. The && store leg did NOT run here; ran independently below. All failures are TestUnknownOriginHoldAfterReopen/cursor/{answered_at_the_pane_(pane_answer_sent),acked_by_its_relay_hook_(delivered),recorded_with_record-pane-answer_(pane_answer_outside)} at pkg/api/sendkeys_hold_test.go:312. Old p.prove(toolRan(paToolUseID)) delegates to generic ProveRequestsGone and expects 1; correctly now receives 0 for Cursor. Must migrate Cursor proof to authenticated exact-request route while retaining all pre-proof holds/hash/reopen assertions and the matching-tool/independent-hold distinction. Claude cases pass. No test edits or bypass restoration.
+E. Store eligibility receipt independently executed, make exit 2:
+make sandbox CMD='go test ./internal/store -run "Test(RequestEligibilityWritersReadersAndProof|CurrentSchemaContradictoryChildRemainsHeld|ExplicitFalseUnknownClosePreservesOtherHolds)" -count=1 -json'
+/tmp/ftd-task2-repair-store-eligibility.log: 9 pass, 2 fail, 0 skip. Only TestRequestEligibilityWritersReadersAndProof/{cursor_unknown,cursor_known_child}, internal/store/request_eligibility_test.go:119. These seeded Task1 cases also expect generic tool_ran proof count 1. Must migrate to authenticated Cursor route, retaining main-proof false/child safety and exact matching request assertions. Cursor proven-main turn-end and remaining legacy/Claude/Codex/independent-hold controls pass. No source main eligibility guard loosened.
+F. Protocol race-detector GREEN, exit 0:
+make sandbox CMD='go test -race ./internal/cursorhost -run "TestProtocol" -count=1 -json'
+/tmp/ftd-task2-repair-protocol-race.log: 17 pass, 0 fail, 0 skip, no race report.
+G. git diff --check PASS.
+Counts are separate receipts with overlapping tests, not one aggregate execution or full-suite result.
+
+INCOMPLETE / HANDOFF
+All three requested source fixes complete with unchanged new behavioral assertions green. Five old test expectation leaves require legitimate TestWriter migration, detailed above; left red and intact. Do not restore generic Cursor proof authority. Full unit, documentation, PM and external exact-revision gates remain their assigned owners. No full suite, Docker TESTPLAN, TLC, scheduler submission, live Cursor, credentials/login, .claude edits or real AD stores accessed. All repo build/test/gofmt/vet only through make sandbox CMD. No product questions.

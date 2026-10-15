@@ -1,0 +1,26 @@
+{
+  "architecture": {
+    "lines": 22160,
+    "bytes": 1530681,
+    "sha256": "455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42"
+  },
+  "recovery_section": {
+    "path": "docs/operator-actions.md",
+    "first_line": 842,
+    "last_line": 937,
+    "lines": 96,
+    "bytes": 4920,
+    "sha256": "1cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc"
+  },
+  "unchanged_files": {
+    "cmd/agent-director/help_size_test.go": "78e11fbf2ae0104e6e23e402e65d4ebc93f8c15fddd23d8bd16df49ff38a37fe",
+    "docs/operator-actions.md": "f0a9b4df47c926548f6aa33218613292dde98b7f1c5a27e6b41e21501eadd123",
+    "pkg/ts-bun-client/test/fixtures/public-surface/index.d.ts.golden": "ac9eed452f4e19919c483948d376643703a911c73b6c79566d0ba2d27d53c642",
+    "pkg/ts-bun-client/test/fixtures/public-surface/errors.d.ts.golden": "6b870e9d3ff671c2433234671a8e14492a312bdfadbba994921a23b5079b0bf1",
+    "pkg/ts-bun-client/test/fixtures/public-surface/types.d.ts.golden": "df4b400c2014fc08af30108c8b486c5df8d031afb99b1c0f1ce204adea012f3b",
+    "test/install-sh/current_layout_rollback_test.go": "f83fedfdf16dc968e43d3057fb5f173c5caea42667c600c8f2e7f7c6e634fc62",
+    "test/install-sh/advice_follow.sh": "f3305464da3affc61f786f8d77a8e6a1b06eab1b6600fcc19149e078b82481d5",
+    "pkg/api/old_path_test.go": "f399d0c582b1f5f16e04dddca1e98e7f45a03cf203e979462967fee4d5dcac70",
+    "pkg/api/readme_operator_actions_more_test.go": "3d5589b2be2b742d1ad293e0606ab543f4e4e25b8b6e7d1ce1eb9adb8c067ac4"
+  }
+}

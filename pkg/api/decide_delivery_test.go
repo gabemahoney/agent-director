@@ -329,13 +329,13 @@ func holdStoreConnection(t *testing.T, s *store.Store, releaseLock func()) (rele
 }
 
 // TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission: F8 decide's
-// not_confirmed, "poll get-permission; it ends by confirm_by". Followed
+// not_confirmed, "poll get-permission; ends by confirm_by". Followed
 // literally, get-permission polled until confirm_by reads delivered once the
 // hook acks, fallen_back once it is gone without one, and never
 // not_confirmed at confirm_by.
 func TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "decide", "", "returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by)")
+	adviceAssertManifest(t, "decide", "", "delivery delivered/not_confirmed (poll get-permission; ends by confirm_by)")
 	for _, tc := range []struct {
 		name  string
 		after func(e *relayEnv) // what the hook does after decide returned

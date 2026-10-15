@@ -289,7 +289,7 @@ const closeToolRanSQL = `UPDATE permission_requests AS pr
 	       proven_gone_how = CASE WHEN pr.proven_gone_at IS NULL THEN '` + ProvenGoneToolRan + `' ELSE pr.proven_gone_how END,
 	       proven_gone_at = COALESCE(pr.proven_gone_at, ?)
 	 WHERE pr.request_id = ? AND pr.instance_id = ? AND pr.tool_use_id = ? AND ` + awaitingAnswerSQL + `
-	   AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + hookGateSQL + `)
+	   AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND agent IS NOT 'cursor' AND ` + hookGateSQL + `)
 	 RETURNING request_token, tool_name`
 
 // CloseToolRanRequests is the PostToolUse close (b.146 rule 13): Claude
@@ -308,6 +308,8 @@ const closeToolRanSQL = `UPDATE permission_requests AS pr
 // hook's gate holds (hookGateSQL: the hook's parent is the row's recorded
 // pane process, SR-22.9). A nil gone closes nothing. An empty toolUseID
 // reads and closes nothing.
+// Cursor requests require validated ACP execution evidence through
+// ProveCursorToolRan; this generic hook path cannot close them.
 //
 // Each statement waits for the write lock as every hook write does (the
 // store's busy timeout). It returns the tokens it closed; each emits

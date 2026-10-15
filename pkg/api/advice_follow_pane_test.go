@@ -632,8 +632,8 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 // - 1 s (SR-4.2, SR-4.4), is TestDecideDeliverabilityBoundary's.
 func TestAdviceFollow_E7_DecideFallenBackAnswerAtPane(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "decide", "", "first call wins (else ErrAlreadyDecided)",
-		"A request whose relay hook is gone is refused at once with ErrRelayFallenBack.")
+	adviceAssertManifest(t, "decide", "", "first wins (else ErrAlreadyDecided)",
+		"Hook gone: immediate ErrRelayFallenBack.")
 	settled := relayGuardSettled // decide's last read of the request and the guard's release
 	ages := []struct {
 		name string

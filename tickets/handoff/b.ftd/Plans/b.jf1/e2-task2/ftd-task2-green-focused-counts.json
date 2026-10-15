@@ -1,0 +1,18 @@
+{
+  "leaf_counts": {
+    "github.com/gabemahoney/agent-director/pkg/api/apitest": {
+      "pass": 10
+    },
+    "github.com/gabemahoney/agent-director/pkg/api/errnames": {
+      "pass": 108
+    },
+    "github.com/gabemahoney/agent-director/pkg/api/manifest": {
+      "pass": 169
+    }
+  },
+  "help_guard_log": [
+    "    help_size_test.go:74: help stdout 14642 bytes; recorded 14642 (no slack); hard cap 15160"
+  ],
+  "bun_summary": "22 pass\n 0 fail\n 46 expect() calls\nRan 22 tests across 1 file. [1055.00ms]",
+  "non_json_help_note": "Verbose help package outcomes excluded from JSON leaf counts; guard and boundary cases pass."
+}

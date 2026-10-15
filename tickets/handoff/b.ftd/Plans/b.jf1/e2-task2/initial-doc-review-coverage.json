@@ -1,0 +1,44 @@
+{
+  "architecture": {
+    "lines": 22122,
+    "bytes": 1527763,
+    "sha256": "6fc3ba3747916d664c7f520f288521bfe319890c1b18d52385d7cf07f3ef7f5e"
+  },
+  "personally_reviewed_final_snapshot_ranges": [
+    [
+      1,
+      344
+    ],
+    [
+      1465,
+      1540
+    ],
+    [
+      11040,
+      11150
+    ],
+    [
+      17558,
+      17585
+    ]
+  ],
+  "coverage_type": "partial personal model reading; full changed diff also reviewed; NOT full-file coverage",
+  "whole_file_review_remaining": true,
+  "small_docs_full_read": [
+    "docs/permissions.md",
+    "docs/settings.md",
+    "docs/usage.md",
+    "docs/caller-contract.md"
+  ],
+  "operator_read_only_ranges": [
+    [
+      1,
+      240
+    ],
+    [
+      842,
+      937
+    ]
+  ],
+  "source_basis": "HEAD f97b3fcb plus settled Engineer/TestWriter diff"
+}

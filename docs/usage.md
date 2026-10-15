@@ -473,11 +473,16 @@ agent-director decide --instance-id "$id" \
     --decision allow --max-wait-ms 2000
 ```
 
-`decide` records the verdict, then waits at most 1 s for the agent's relay
-hook to confirm it took the verdict, and returns the request's `delivery`:
+The same inspection and decision commands serve validated Cursor permissions
+and blocking plans; select the intended token by its actual request content,
+rather than assuming the oldest request is the visible menu. Cursor's input
+and lifetime rules are in [Permissions](permissions.md#cursor-spawns).
 
-- `delivered`: the relay hook confirmed the verdict before handing it to
-  the agent.
+`decide` records the verdict, then waits at most 1 s for the relay
+acknowledgement, and returns the request's `delivery`:
+
+- `delivered`: the relay durably acknowledged the verdict before output;
+  this does not establish runtime receipt, execution or dialog closure.
 - `not_confirmed`: no confirmation yet. Poll `get-permission` until
   `delivery` reads `delivered` or `fallen_back`; it does by `confirm_by`.
 
@@ -525,28 +530,30 @@ The response is a single permission row:
 }
 ```
 
-`decision_reason` says who recorded the verdict: `operator` (a `decide`
-deny; a `decide` allow has none), `timeout` (the relay hook's own deny),
-`find_missing` and `ended` (a deny written when the request was closed with
-its agent), `pane` (a pane answer through `send-keys`), `pane_outside`
-(`record-pane-answer`) and `tool_ran` (the request's tool ran, so it was
-allowed; a Claude agent only).
+`decision_reason` annotates the recorded verdict: `operator` (API deny),
+`timeout` (relay timeout deny), `find_missing`/`ended` (owning-spawn closure),
+`pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
+or `tool_ran` (tool execution). API allow initially has no reason; later
+validated Cursor execution can fill that missing reason with `tool_ran`,
+while preserving an existing verdict and reason. Read `decision` for the
+verdict and the [delivery and proof fields](permissions.md#delivery) for its
+outcome; a reason is not an immutable writer identity.
 
 `get` and `list` carry the same delivery fields on each request in a row's
 `permission_requests`; they list only requests that still await an answer,
 never a closed one. `hook_alive` is `null` when agent-director cannot check
-the relay hook's process (for example from another pid namespace, or for a
-request recorded by an older agent-director); such a request falls back by
-time, at `confirm_by`. A closed request's `delivery` reads the same way as
-any other's: `delivered` only if its relay hook confirmed a verdict. A row
+the relay hook's process (for example from another pid namespace, for a
+Cursor gateway request, or for a request recorded by an older agent-director);
+such a request falls back by time, at `confirm_by`. A closed request's `delivery` reads the same way as
+any other's: `delivered` only after durable relay acknowledgement. A row
 can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
-showed the request's dialog gone: `tool_ran` (its tool ran; a Claude agent
-only), `turn_end` (an eligible main request was written before the main
-turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
+showed the request's dialog gone: `tool_ran` (Claude tool execution or
+validated matching Cursor shell execution), `turn_end` (an eligible main request
+was written before the main turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
 `agent_gone` (the agent ended). A Codex agent's request carries
 no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
 [how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
@@ -557,10 +564,24 @@ reason to look at the pane: its dialog may still be there.
 
 ## Answer a request at the pane
 
-No answer from the relay reached a request whose relay hook is gone
-(`delivery` `fallen_back`); only an answer at the agent's pane can close
-it. Look at the pane, then send the one key that answers it, naming the
-request:
+For a connected Cursor request, use its displayed key, without Enter. Each
+menu names its `request_token` and supplies distinct keys; match that token
+and option to the request you inspected. At the attached pane a deliberate
+key competes with an active relay decision. A successful attached Cursor
+choice automatically records `pane_answer=sent` and `decision_reason=pane`;
+no `record-pane-answer` call is needed. That claim is not ACP delivery,
+Cursor receipt or execution proof. Through `send-keys`, use the
+existing guarded pane-answer command below once delivery has fallen back,
+substituting the displayed key for `Escape` and the chosen verdict for `deny`.
+Relay-off requests expose this path immediately, while `decide` remains
+refused. API allow is once-only; a persistent native option requires an
+explicit choice of that offered option. See [Cursor permissions](permissions.md#cursor-spawns)
+for the fixed relay/native lifetimes and retirement rules.
+
+A request with `delivery=fallen_back` has no confirmed relay answer.
+A pane answer can close it; validated execution proof or owning-spawn closure
+can also resolve it. To answer an open connected request, inspect its pane
+and send the one key for that request:
 
 ```sh
 pane=$(agent-director read-pane --instance-id "$id")
@@ -582,8 +603,9 @@ byte, and `--as` is stored as your claim. What each refusal means is in the
 [caller contract](caller-contract.md#permission-relay); on a refusal nothing
 is sent.
 
-If the request was answered outside agent-director, for example by a
-person at tmux, record that instead (it types nothing):
+If an outside answer has genuinely not been recorded, use
+`record-pane-answer` (it types nothing). An attached Cursor menu choice is
+already recorded automatically:
 
 ```sh
 agent-director record-pane-answer --request-token "$token" \
@@ -593,6 +615,9 @@ agent-director record-pane-answer --request-token "$token" \
 Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
 request whose tool then runs is closed on its own (`decision_reason`
 `tool_ran`); a Codex request is closed only by one of the two calls above.
+A Cursor request can close on validated matching shell execution as well;
+other tool/plan completion supplies no execution proof. `record-pane-answer`
+types nothing and neither authorizes Cursor approval nor proves a dialog gone.
 A Codex pane's keys and an example are in
 [Answering a Codex approval at the pane](permissions.md#answering-a-codex-approval-at-the-pane). A
 closed request keeps `delivery` `fallen_back`; its `pane_answer` (`sent`,

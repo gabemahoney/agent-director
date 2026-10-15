@@ -42,9 +42,15 @@ old-directory move procedure.
 This work stages fresh owned Cursor launches on Linux. It is not a full
 Cursor parity or release-completion claim. E1 owned-launch implementation at
 f4f41fd3 was accepted with external Docker 15/15, TLC g6/launch/subagent groups and both authorized live cases.
-E2 Task1 targeted behavioral checks are green, but installer synchronization,
-full units and its external Docker/TLC and live acceptance gates remain pending.
-No E2 completion or full permission/plan relay is claimed by fixture evidence.
+E2 Task1 source `4e12100c` and receipt commit `f97b3fcb` passed the accepted
+external gate: all 15 Docker groups/157 cases, default formal 92, launch 9,
+subagent 11 and the 46-row Codex receipt match. Its installer synchronization
+and full units are complete. Task2 implements validated permission/plan
+admission, durable relay acknowledgement and connected pane arbitration;
+its full `make test-sandbox` units PASSED (68 Go packages, 429 Bun tests,
+zero failures), while its exact-revision external gate remains PENDING. Synthetic
+controller checks do not establish authenticated Task2 behavior or whole-E2
+acceptance. No E2 completion or full permission/plan parity is claimed.
 Deferred lifecycle and platform capabilities must retain their staged status in published notes.
 
 ## Release author handoff

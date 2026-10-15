@@ -118,6 +118,12 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 	if err != nil || !ok {
 		return 0, err
 	}
+	// Cursor tool execution requires validated ACP output and exact request
+	// authority through ProveCursorToolRan, never a generic hook tool id.
+	toolGate := ""
+	if proof.How == ProvenGoneToolRan {
+		toolGate = "agent IS NOT 'cursor' AND "
+	}
 	var newest sql.NullInt64
 	read := `SELECT MAX(pr.request_id) FROM permission_requests pr
 	  WHERE pr.instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag
@@ -134,7 +140,7 @@ func (s *Store) ProveRequestsGone(instanceID string, gate HookGate, proof Reques
 	write := `UPDATE permission_requests AS pr
 	    SET proven_gone_at = ?, proven_gone_how = ?
 	  WHERE pr.instance_id = ? AND pr.proven_gone_at IS NULL AND ` + frag + ` AND pr.request_id <= ?
-	    AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + hookGateSQL + `)`
+	    AND EXISTS (SELECT 1 FROM spawns WHERE instance_id = ? AND ` + toolGate + hookGateSQL + `)`
 	args := append([]any{millisArg(at), proof.How, instanceID}, matchArgs...)
 	args = append(args, newest.Int64, instanceID)
 	args = append(args, hookGateArgs(gate)...)

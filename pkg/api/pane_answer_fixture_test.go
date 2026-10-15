@@ -82,7 +82,11 @@ func newPAEnvAgent(t *testing.T, agent, agentID string, eligible ...*bool) *paEn
 	if agent == "claude" {
 		r = seedRelayRow(t, e)
 	} else {
-		r = e.seedRow(t, killRowSpec{State: store.StateCheckPermission, RelayOn: true, Opts: agentRowOpts(agent)})
+		spec := killRowSpec{State: store.StateCheckPermission, RelayOn: true, Opts: agentRowOpts(agent)}
+		if agent == store.AgentCursor {
+			spec.SessionID = "synthetic-pane-session"
+		}
+		r = e.seedRow(t, spec)
 	}
 	p := &paEnv{killEnv: e, r: r, now: e.clock.Now(), self: paSender, sks: e.store, agentID: agentID, agent: agent}
 	if len(eligible) > 0 {
@@ -278,6 +282,17 @@ func (p *paEnv) request(t *testing.T, token string) store.PermissionRow {
 		t.Fatalf("GetPermissionRequest(%s): %v", token, err)
 	}
 	return pr
+}
+
+// proveCursorTool isolates SQL scope with a complete synthetic binding, not runtime proof.
+func (p *paEnv) proveCursorTool(t *testing.T, token, tool string) {
+	t.Helper()
+	err := storefix.WithSeedPane(p.dbPath, p.r.ID, func(gate store.HookGate) error {
+		return p.st.ProveCursorToolRan(*gate.Cursor, token, tool, func(store.Spawn) error { return nil })
+	})
+	if err != nil {
+		t.Fatalf("authenticated Cursor store proof: %v", err)
+	}
 }
 
 // paDyingStore is a SendKeysStore whose pane answer's sender dies once its

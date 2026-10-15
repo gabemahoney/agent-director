@@ -8,13 +8,15 @@ import (
 )
 
 type terminalInput struct {
-	accepted  bool
-	text      string
-	interrupt bool
-	err       error
+	choiceToken  string
+	choiceOption string
+	accepted     bool
+	text         string
+	interrupt    bool
+	err          error
 }
 
-func terminalInputLoop(*os.File, io.Writer, chan<- terminalInput, func() bool) func() {
+func terminalInputLoop(*os.File, io.Writer, chan<- terminalInput, func() bool, ...func(rune) (string, string, bool)) func() {
 	return func() {}
 }
 

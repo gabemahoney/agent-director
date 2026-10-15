@@ -1,0 +1,25 @@
+E2 TASK2 EXECUTION PM REVIEW — APPROVED FOR LOCAL COMMIT AND OPERATOR GATE
+Task t2.jf1.c1.cz. No mandatory source or behavioral repair identified. Does not approve Task2 completion, Task3 start, Epic completion or external acceptance.
+
+Reviewed Task, all18 completed Subtasks, Epic, Plan, approved PRD and relevant SRD requirements/technical decisions. Task3 remains defined and owns cursor-relay collector, public adversarial acceptance and formal assessment.
+
+AC1–2: Version-grounded permission/plan admission preserves raw params, supplied choices and absent/null fields. API approval selects once-only permission or plan acceptance. Independent correlation/malformed refusal implemented. Captured/synthetic evidence distinguished.
+AC3: AckCursorDecision commits before relay enqueue for allow, deny and timeout denial. Missing/failed ack yields no relay reply. Tests independently read committed ack at first output byte.
+AC4: NULL hook identity/immutable persisted settlement avoid gateway-as-request-hook; caller restart cannot extend confirmation; uncertain output not replayed.
+AC5: Transactional authority and per-request arbitration protect concurrent requests. Final guards cover allow/deny/expiry/cancellation/ownership loss; original regressions retained.
+AC6: Native keys bind actual choices; relay-off/fallback separate. Sent claim requires matching verdict; outside never authorizes ACP or proof. Disconnection fails visibly.
+AC7: Unknown-origin eligibility false and child NULL. Generic Cursor proof bypass excluded. Exact correlated shell output is narrow supported proof; main/child lifecycle and plan acceptance are not proof.
+AC8: Questions denied before admission under both settings/modes. Supported direct cancellation preserves genuine requests; unsupported forms bounded/fail closed. No live-question-denial or implemented-load claim.
+These are implementation/unit conclusions; broader Epic demonstrations remain outstanding.
+
+CODE REVIEW: No important new work items. Inspected authorization/controller/store source and all15 untracked source/test/fixture files plus affected protocol/session/proof/API/fixture paths. Earlier repairs are present: expired pane choices cannot become approvals, generic proof helpers cannot bypass validation, protocol close/enqueue retirement completes accepted frames, actual mutations emit postcommit cursor_host trails. Tests cover rollback/failedCOMMIT/fail-open emission/duplicate-proof idempotency. No new schema/publicAPI/screenclassification/laterEpicfeatures/weakened hook-parent gate. Help compression preserves facts and unchanged14642 recorded/15160 cap.
+
+VALIDATION: PM independently matched all58 path hashes/bytes/modes/statuses, HEAD and binarydiff to manifest3a6f1b38ac474d18d96e87aac48b3653624516121cf4539ed38b5e210ceb107a. Raw final full receipt:68Go packagespass(6executed62cached),0fail,13no-test; Bun429pass0fail57files1658expects. git diff --check passed. Overlapping targeted/race/trail counts not additive. Existing build/vet/generation reused, PM ran no tests/formatter/build/generator/Docker/TLC.
+
+DOC REVIEW: Mandatory A1–A4/B1–B4/C1–C5/D1–D3 resolved. C3 trail was fixed, not deferred. Whole-document coverage is aggregate evidence, NOT PM personal reread: four reviewers covered identical22122-line base, then exactdelta/context and complete edited-small-manual rereads by DocWriter. Final architecture22160lines SHA455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42. PM reviewed reports/disposition and current Task2 changes. Generatedcoverage combines priorwholefile review plus subsequent canonical/generation evidence, no fresh personalwholefile claim.
+
+IGNORED/RETAINED: A5–A8, B5–B11, C6–C11, D4–D5. Inherited architecture implementation/test catalogs, history/rationale/performance narratives, duplicated procedures, user-manual recovery/implementation material, settings native-reference/pseudocode/history debt, generated MCP heading conventions. These remain real guide violations beyond Task2 permission scope; not a clean-document declaration. Full prior numbered findings and disposition are in handoff.
+
+NONBLOCKING EDITORIAL: release-notes-breaking.md:50 says full units and externalgate pending. Update to distinguish fullsandboxunits PASSED/externalgate PENDING before handoff publishing. Root routes DocWriter; no behaviorrepair.
+
+No unresolved product question, contentious role disagreement or conflicting decision. Bounded fallback/conservative nonshellproof/question denial/actualwriter/lossless help choices fit scope. Root owns localcommit+exact-commit schedulerhandoff; Task2active and Task3unstarted until operatoracceptance. Later draftEpics outsideauthorization. Review made no writes/status changes/commits/delegation/messages/externalexecution.

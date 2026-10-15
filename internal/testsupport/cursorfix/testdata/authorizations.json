@@ -1,0 +1,179 @@
+[
+  {
+    "name": "execute",
+    "provenance": "captured",
+    "source": "R2/protocol.jsonl",
+    "method": "session/request_permission",
+    "id": 0,
+    "params": {
+      "sessionId": "8808822c-5a2b-4be6-8406-405cd727229e",
+      "toolCall": {
+        "toolCallId": "call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0",
+        "title": "`printf FTD_SHELL_ALLOWED`",
+        "kind": "execute",
+        "status": "pending",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"
+            }
+          }
+        ]
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-always",
+          "name": "Allow always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject-once",
+          "name": "Reject",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  },
+  {
+    "name": "edit",
+    "provenance": "captured",
+    "source": "R2/protocol.jsonl",
+    "method": "session/request_permission",
+    "id": 2,
+    "params": {
+      "sessionId": "8808822c-5a2b-4be6-8406-405cd727229e",
+      "toolCall": {
+        "toolCallId": "call-4c70a413-557f-4da9-9729-74eb47e5b26f-4\nfc_7aa43985-11e3-9c07-ba4a-6772fa817504_0",
+        "title": "Delete `/home/horde/ad-codex/ftd/live-2026-10-13/R2/work/output.txt`",
+        "kind": "edit",
+        "status": "pending"
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-always",
+          "name": "Allow always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject-once",
+          "name": "Reject",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  },
+  {
+    "name": "search",
+    "provenance": "captured",
+    "source": "R2/protocol.jsonl",
+    "method": "session/request_permission",
+    "id": 3,
+    "params": {
+      "sessionId": "8808822c-5a2b-4be6-8406-405cd727229e",
+      "toolCall": {
+        "toolCallId": "web_search_0",
+        "title": "Web search: official Cursor ACP documentation CLI",
+        "kind": "search",
+        "status": "pending"
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-always",
+          "name": "Allow always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject-once",
+          "name": "Reject",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  },
+  {
+    "name": "plan",
+    "provenance": "captured",
+    "source": "R2/protocol.jsonl",
+    "method": "cursor/create_plan",
+    "id": 6,
+    "params": {
+      "toolCallId": "call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769",
+      "name": "Example Calculator",
+      "overview": "Create a minimal calculator project with a small arithmetic API and focused automated tests.",
+      "plan": "# Example Calculator Plan\n\n1. **Create the calculator implementation**\n   - Add the project’s minimal source structure and expose `add`, `subtract`, `multiply`, and `divide` operations.\n   - Define clear behavior for invalid inputs and division by zero.\n\n2. **Add and run automated tests**\n   - Cover each operation, negative and decimal values, and error cases.\n   - Add only the configuration needed to run the test suite and verify it passes.",
+      "todos": [
+        {
+          "id": "implement-calculator",
+          "content": "Create the calculator project structure and arithmetic implementation",
+          "status": "pending"
+        },
+        {
+          "id": "test-calculator",
+          "content": "Add automated coverage and verify the test suite",
+          "status": "pending"
+        }
+      ],
+      "isProject": false,
+      "phases": []
+    }
+  },
+  {
+    "name": "other",
+    "provenance": "captured",
+    "source": "R2-mcp/protocol.jsonl",
+    "method": "session/request_permission",
+    "id": 0,
+    "params": {
+      "sessionId": "1c6a4a0f-9e6d-46a0-b87a-d32e36e8bf84",
+      "toolCall": {
+        "toolCallId": "call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0\nfc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0",
+        "title": "ftd-probe-ftd_identity: ftd_identity",
+        "kind": "other",
+        "status": "pending",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```json\n{}\n```"
+            }
+          }
+        ]
+      },
+      "options": [
+        {
+          "optionId": "allow-once",
+          "name": "Allow once",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow-always",
+          "name": "Allow always",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject-once",
+          "name": "Reject",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  }
+]

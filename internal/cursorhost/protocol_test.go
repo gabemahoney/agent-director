@@ -3,7 +3,10 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -152,8 +155,8 @@ func TestAuthorizationAlwaysDenied(t *testing.T) {
 		name, method, params, outcome string
 		cancel                        bool
 	}{
-		{"direct question", "cursor/ask_question", `{"questions":[{"text":"Continue?"}]}`, "cancelled", true},
-		{"multiple question", "cursor/ask_question", `{"questions":[{},{}]}`, "cancelled", true},
+		{"direct question", "cursor/ask_question", `{"questions":[{"text":"Continue?"}]}`, "cancelled", false},
+		{"multiple question", "cursor/ask_question", `{"questions":[{},{}]}`, "cancelled", false},
 		{"plan", "cursor/create_plan", `{}`, "rejected", false},
 		{"reject option", "session/request_permission", `{"options":[{"optionId":"allow","kind":"allow_once"},{"optionId":"deny","kind":"reject_once"}]}`, "selected", false},
 		{"question fallback", "session/request_permission", `{"toolCall":{"title":"AskUserQuestion"},"options":[{"optionId":"yes","kind":"allow_once"}]}`, "cancelled", true},
@@ -194,6 +197,107 @@ func TestAuthorizationAlwaysDenied(t *testing.T) {
 			}
 			if (tc.outcome == "cancelled" && bytes.Contains(got["result"], []byte(`"optionId"`))) || bytes.Contains(got["result"], []byte(`"optionId":"allow"`)) {
 				t.Fatal("selected allow")
+			}
+		})
+	}
+}
+
+func TestProtocolClosedTransportRejectsEveryEnqueue(t *testing.T) {
+	p := newProtocol(&bytes.Buffer{}, strings.NewReader(""))
+	p.close()
+	// Every call must refuse: a ready queue must not compete with closed authority.
+	for i := 0; i < 32; i++ {
+		if err := p.sendGuarded(map[string]int{"reply": i}, time.Now().Add(time.Second), nil, nil); err == nil {
+			t.Fatalf("closed transport accepted reply %d without a completion/failure path", i)
+		}
+	}
+}
+
+type blockedProtocolWriter struct {
+	io.WriteCloser
+	entered chan struct{}
+	calls   atomic.Int32
+}
+
+func (w *blockedProtocolWriter) Write(raw []byte) (int, error) {
+	if w.calls.Add(1) == 1 {
+		close(w.entered)
+	}
+	return w.WriteCloser.Write(raw)
+}
+
+func TestProtocolCloseCompletesAcceptedFramesExactlyOnce(t *testing.T) {
+	for _, concurrent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "active and queued", true: "concurrent enqueue"}[concurrent], func(t *testing.T) {
+			reader, writer := io.Pipe()
+			defer reader.Close()
+			wire := &blockedProtocolWriter{WriteCloser: writer, entered: make(chan struct{})}
+			p := newProtocol(wire, strings.NewReader(""))
+			defer p.close()
+			type completion struct {
+				id        int
+				err       error
+				reentered error
+			}
+			const count = 18
+			done := make(chan completion, count*2)
+			accepted := make([]bool, count)
+			enqueue := func(id int) {
+				err := p.sendGuarded(map[string]int{"reply": id}, time.Now().Add(time.Second), nil, func(err error) {
+					// A callback can reenter admission; retirement must not hold its lock.
+					done <- completion{id, err, p.send(map[string]int{"retry": id})}
+				})
+				accepted[id] = err == nil
+			}
+			enqueue(0)
+			select {
+			case <-wire.entered:
+			case <-time.After(time.Second):
+				t.Fatal("active frame did not reach transport")
+			}
+			enqueue(1)
+			if !accepted[0] || !accepted[1] {
+				t.Fatal("active and queued frames were not accepted")
+			}
+			if concurrent {
+				start := make(chan struct{})
+				var workers sync.WaitGroup
+				for id := 2; id < count; id++ {
+					workers.Add(1)
+					go func(id int) { defer workers.Done(); <-start; enqueue(id) }(id)
+				}
+				workers.Add(1)
+				go func() { defer workers.Done(); <-start; p.close() }()
+				close(start)
+				workers.Wait()
+			} else {
+				p.close()
+			}
+			want := 0
+			for _, ok := range accepted {
+				if ok {
+					want++
+				}
+			}
+			seen := make(map[int]bool)
+			for range want {
+				select {
+				case got := <-done:
+					if !accepted[got.id] || seen[got.id] || got.err == nil || got.reentered == nil {
+						t.Fatalf("invalid completion %+v, accepted %v, seen %v", got, accepted[got.id], seen[got.id])
+					}
+					seen[got.id] = true
+				case <-time.After(time.Second):
+					t.Fatalf("completed %d of %d accepted frames", len(seen), want)
+				}
+			}
+			select {
+			case extra := <-done:
+				t.Fatalf("duplicate or unaccepted completion %+v", extra)
+			case <-time.After(20 * time.Millisecond):
+			}
+			if wire.calls.Load() != 1 {
+				t.Fatalf("closed transport replayed queued frames: %d writes", wire.calls.Load())
 			}
 		})
 	}

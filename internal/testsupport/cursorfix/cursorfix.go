@@ -65,3 +65,20 @@ func splitLines(raw []byte) [][]byte {
 	}
 	return lines
 }
+
+// Scenario scripts synthetic peer traffic; captured envelopes retain separate provenance.
+type Scenario struct {
+	SessionID string            `json:"sessionId"`
+	Requests  []json.RawMessage `json:"requests"`
+}
+
+func (r Runtime) Configure(t testing.TB, scenario Scenario) {
+	t.Helper()
+	raw, err := json.Marshal(scenario)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(r.Scenario, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}

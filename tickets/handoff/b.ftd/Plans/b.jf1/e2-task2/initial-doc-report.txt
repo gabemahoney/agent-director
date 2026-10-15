@@ -1,0 +1,46 @@
+E2 TASK2 INITIAL CANONICAL DOC WRITER REPORT
+Task t2.jf1.c1.cz / feature/b.ftd / starting HEAD f97b3fcb plus settled source/tests.
+No commits, pushes, delegation, agent messages, source/test/generated edits or repository artifact execution.
+
+OWN TICKETS
+Set active at start: t3.jf1.c1.cz.iw, .yo, .ch, .er.
+Completed and set done: .iw (permissions/settings), .yo (usage), .ch (caller recovery).
+.er REMAINS ACTIVE: canonical architecture text settled, but complete-file cold model review is still required under its explicit execution division. Do not infer all 1.5 MB personally read. No parent or sibling status changed.
+
+FILES CHANGED (6)
+- docs/permissions.md: replace Cursor deny-only boundary with actual permission/plan representation and raw byte preservation, once API mapping, explicit native persistence effects, finite relay/native lifetimes, no-ack-zero-relay-byte contract, immediate relay-off fallback, single displayed key/no Enter, conservative unknown origin/proof and question policy. Reconcile shared delivery/proof table and stale deny-only statement; distinguish Claude/Codex hook flow/recovery and Cursor's recorded-unacknowledged fallback. Preserve inherited hash/intent/prompt/pause guards and races.
+- docs/settings.md: suppression remains accepted with either value and both relay modes, linking the policy owner; no new help/group/trust claim.
+- docs/usage.md: existing inspection/decision and guarded pane workflow now includes actual Cursor token/menu selection, shared acknowledgement meaning and exact shell proof. Automated fallback uses the displayed key in the existing command, not guessed Escape/1; attached native choice can compete with relay. Outside records send nothing and supply no approval/proof. Fresh/busy/rotation/resume/Linux/account limits retained.
+- docs/caller-contract.md: fixed gateway-independent settlement/null hook evidence; decision/ack/pipe/receipt/native claim/proof/closure distinction; no uncertain approval replay; retire queued both verdicts; fresh connected native fallback versus terminal/uncertain refusal. Clarify shared prompt guards apply on relay-on rows. Existing typed errors and anchors preserved.
+- docs/architecture.md: compact adapter/controller/store/guard/terminal/proof responsibilities and dataflow with MUST-reuse contracts. Explain full locked authority/evidence/time checks, immutable bounds, ack-before-enqueue, request final guards and race-safe completion; conservative exact-token shell proof and NULL-safe generic Cursor proof exclusion. Correct schema field writers/semantics, eligibility owner and fixture inventory. Separate captured envelopes, source-derived question signatures and synthetic executing runtime. Existing formal models do not prove this controller. No progress counts/history/test-strategy paragraph added.
+- tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md: minimal acceptance qualification. Task1 source4e12100c/receiptf97b3fcb accepted 15 Docker groups157cases/default92/launch9/subagent11/Codex46-row match. Task2 full units/external and whole E2 pending. No version, full parity or authenticated Task2 acceptance invented.
+
+UNCHANGED HUMAN RECOVERY
+No new human-only procedure or necessary operator correction identified. docs/operator-actions.md is BYTE-IDENTICAL to HEAD. Reviewed its Cursor/ownership material lines1-240 and canonical rollback lines842-937; did NOT claim its entire untouched937lines personally reread.
+Canonical "## Going back to the previous release" remains lines842-937 inclusive, 96lines/4920bytes, SHA2561cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc. No installer skill, install-12 fixture, testplan or recovery command changed. Prior three-way identity was not re-executed here; operator copy exactly matches the already-settled hash, so no Task2 pin migration is requested.
+
+REVIEW COVERAGE AND EXACT SETTLED SNAPSHOT
+architecture.md: 22122lines,1527763bytes,
+SHA256 6fc3ba3747916d664c7f520f288521bfe319890c1b18d52385d7cf07f3ef7f5e.
+Personally model-read final snapshot ranges (inclusive): 1-344;1465-1540;11040-11150;17558-17585. Also reviewed complete architecture diff against HEAD, plus earlier relevant owner contexts during source verification. These ranges are PARTIAL, not whole-file coverage. Earlier mixed output truncations were repaired by bounded reads of these final ranges and standalone final diff; automated scans did not substitute for model reading.
+Required root cold review must cover EVERY line1-22122 of this SAME hash using contiguous nonoverlapping partitions. Suggested four partitions:1-5531,5532-11062,11063-16593,16594-22122. Root owns their dispatch/aggregate review and one batched mandatory rework pass. .er stays active until that requirement and mandatory corrections are complete.
+Entire touched smaller manuals personally reread in modest chunks: permissions1477lines,settings444,usage694,caller-contract423; final small prose/formatting deltas also reviewed. Release-note handoff entire63lines reviewed. No new small-doc current-fact gap left identified.
+Exact full file hashes/line/byte counts: /tmp/ftd-e2-task2-doc-snapshot.json.
+Machine-readable honest personal review coverage: /tmp/ftd-e2-task2-doc-review-coverage.json.
+
+BASIS / VERIFICATION
+Read Task/all18Subtasks, approved PRD t1.ftd.y5, SRD t1.ftd.hj including SR0/4/5/9 and relevant current technical decisions, CLAUDE.md and actual user/readme/architecture guides. Read complete four /tmp/ftd-e2-task2-{engineer,behavior-test,source-repair,revalidation}-report.txt, repairing early truncated combined output with individual reads. Verified actual authorization.go/requests.go/store cursor_permission.go/session policy/terminal wiring/protocol denial and generic-proof source boundaries. Fixture provenance inspected. No real Cursor authentication or runtime operated.
+Final revalidation report's486 targeted passing leaves/protocol190/controller42 race outcomes are reported evidence, NOT this lane's execution or a full-suite receipt. Canonical docs settle before final .kd units and literal/golden synchronization. git diff --check PASS after final edits. Only read-only Git/static metadata processing and bees own-subtask updates executed on host; no tests/build/generators/integration/TLC/live commands.
+
+FINAL TEST WRITER HANDOFF / CANONICAL BOUNDARIES
+No recovery command text changed; preserve existing96line operator/installer/testplan pin.
+Canonical changed prose is in existing owners: Permissions "## Cursor spawns" to "## Codex spawns"; its "### Delivery" and "### The dialog hold" tables; "#### Recovering a wedged relayed spawn" now explicitly scopes the hook-only sequence. Usage "## Intercept permission prompts" and "## Answer a request at the pane"; Caller "## Permission relay" to EOF. Existing headings were not moved/renamed (architecture adds one new authorization subheading).
+Literal/golden tests must follow source descriptions and these final contracts, especially durable acknowledgement versus receipt; no claim generic Cursor PostToolUse establishes proof; no no-persistent-API exception; no fixed guessed native key or Enter; relay off does not enable decide; outside claim emits no ACP answer. No test edits made here. Final writer owns any demonstrated literal expectation migration and full sandbox units.
+
+DEVIATIONS / DEFERRED / INCOMPLETE
+Architecture full-file review explicitly delegated by ticket to root's cold read-only partition review; .er correctly remains active. No mandatory newly found current safety fact intentionally deferred. Replaced stale generic recovery assumptions instead of changing the unrelated human rollback procedure.
+Existing broad inherited guide normalization remains the explicit Task1 disposition: A8-A11/B3-B10/C2-C4/C6-C11/D3-D4, recorded in e2-task1/review-disposition.json and pm-review.txt. This includes inherited permissions implementation/research/history/recovery duplication, usage/parser duplication, caller implementation detail and architecture history/catalog/test-strategy/implementation walkthrough debt. No million-byte cleanup or whole-doc-clean claim. Source comment protocol.deny still describes its old E1 context internally; source comments are Engineer-owned and were not changed by this documentation lane; its actual current behavior is accurately documented as the pre-admission rejection path.
+Remaining required work: root complete-file architecture review and any one batched factual corrections, .kd final literal/golden/full units, execution PM, local task commit and exact-revision external Task2 gate before Task3. Task1 external acceptance does not prove Task2 or whole E2; no authenticated Task2 acceptance claimed.
+Questions: none. No product decision needed.
+
+FINAL SOURCE-READ CORRECTION: generic proof candidate/MAX SELECTs do not themselves exclude Cursor; their conditional UPDATEs enforce actual-Cursor exclusion with NULL-safe IS NOT. Corrected the detailed architecture wording to state the mutation boundary accurately; exact source predicate inspected. Same review ranges/line count, refreshed snapshot hash. No source change or test required.

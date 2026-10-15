@@ -31,6 +31,8 @@ type incoming struct {
 type outgoingFrame struct {
 	raw      []byte
 	deadline time.Time
+	guard    func() error
+	done     func(error)
 }
 
 type protocol struct {
@@ -38,6 +40,7 @@ type protocol struct {
 	outgoing      chan outgoingFrame
 	writes        chan error
 	closed        chan struct{}
+	outputMu      sync.Mutex // serializes enqueue with transport retirement
 	closeOnce     sync.Once
 	writeFailed   atomic.Bool
 	frames        chan incoming
@@ -73,7 +76,7 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 				break
 			}
 			var f frame
-			if e := json.Unmarshal(raw, &f); e != nil || f.JSONRPC != "2.0" {
+			if e := json.Unmarshal(raw, &f); e != nil || uniqueJSON(raw) != nil || f.JSONRPC != "2.0" {
 				p.deliver(incoming{err: fmt.Errorf("invalid ACP frame")})
 				return
 			}
@@ -102,6 +105,10 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 	return p
 }
 func (p *protocol) send(value any) error {
+	return p.sendGuarded(value, time.Now().Add(transportWriteWait), nil, nil)
+}
+
+func (p *protocol) sendGuarded(value any, deadline time.Time, guard func() error, done func(error)) error {
 	raw, e := json.Marshal(value)
 	if e != nil {
 		return e
@@ -109,13 +116,18 @@ func (p *protocol) send(value any) error {
 	if len(raw) > maxFrameBytes {
 		return fmt.Errorf("ACP output exceeds limit")
 	}
+	p.outputMu.Lock()
+	defer p.outputMu.Unlock()
 	if p.writeFailed.Load() {
 		return fmt.Errorf("ACP transport write failed")
 	}
 	select {
 	case <-p.closed:
 		return fmt.Errorf("ACP transport closed")
-	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: time.Now().Add(transportWriteWait)}:
+	default:
+	}
+	select {
+	case p.outgoing <- outgoingFrame{raw: append(raw, '\n'), deadline: deadline, guard: guard, done: done}:
 	default:
 		return fmt.Errorf("ACP output queue exceeds limit")
 	}
@@ -125,7 +137,9 @@ func (p *protocol) send(value any) error {
 // close releases pipe I/O without treating transport closure as process death.
 func (p *protocol) close() {
 	p.closeOnce.Do(func() {
+		p.outputMu.Lock()
 		close(p.closed)
+		p.outputMu.Unlock()
 		if closer, ok := p.input.(io.Closer); ok {
 			_ = closer.Close()
 		}
@@ -142,6 +156,10 @@ func (p *protocol) deliver(next incoming) {
 // One worker serializes writes. A timeout makes delivery uncertain and fatal;
 // no pending frame is replayed, and the main loop remains free to stop the child.
 func (p *protocol) writeLoop() {
+	// Once accepted, a frame belongs to this worker even if close or a
+	// preceding write failure stops it. Retire admission before draining so
+	// no successful enqueue can be stranded behind the stopped worker.
+	defer p.failQueued()
 	for {
 		var next outgoingFrame
 		select {
@@ -149,12 +167,40 @@ func (p *protocol) writeLoop() {
 			return
 		case next = <-p.outgoing:
 		}
+		// Retired request frames are discarded, including denials. Guard failure
+		// is a request failure, not an uncertain pipe write and never a retry.
+		if next.guard != nil {
+			if err := next.guard(); err != nil {
+				if next.done != nil {
+					next.done(err)
+				}
+				continue
+			}
+		}
 		result := make(chan error, 1)
 		go func() {
 			// Frames which expired in the queue must never reach the pipe.
 			if !time.Now().Before(next.deadline) {
 				result <- fmt.Errorf("ACP transport write timed out")
 				return
+			}
+			if next.guard != nil {
+				if err := next.guard(); err != nil {
+					result <- err
+					return
+				}
+			}
+			// Authority checks may wait on tmux/kernel/store evidence. They
+			// cannot turn an expired transport frame into a late pipe write.
+			if !time.Now().Before(next.deadline) || p.writeFailed.Load() {
+				result <- fmt.Errorf("ACP response expired before write")
+				return
+			}
+			select {
+			case <-p.closed:
+				result <- fmt.Errorf("ACP transport closed")
+				return
+			default:
 			}
 			n, err := p.input.Write(next.raw)
 			if err == nil && n != len(next.raw) {
@@ -169,8 +215,7 @@ func (p *protocol) writeLoop() {
 		case <-timer.C:
 			err = fmt.Errorf("ACP transport write timed out")
 		case <-p.closed:
-			timer.Stop()
-			return
+			err = fmt.Errorf("ACP transport closed")
 		}
 		timer.Stop()
 		if err != nil {
@@ -182,12 +227,35 @@ func (p *protocol) writeLoop() {
 			}
 			err = fmt.Errorf("ACP transport write failed; delivery is uncertain")
 		}
+		if next.done != nil {
+			next.done(err)
+		}
 		select {
 		case p.writes <- err:
 		case <-p.closed:
 			return
 		}
 		if err != nil {
+			return
+		}
+	}
+}
+
+func (p *protocol) failQueued() {
+	p.outputMu.Lock()
+	p.writeFailed.Store(true)
+	var pending []outgoingFrame
+	for {
+		select {
+		case next := <-p.outgoing:
+			pending = append(pending, next)
+		default:
+			p.outputMu.Unlock()
+			for _, next := range pending {
+				if next.done != nil {
+					next.done(fmt.Errorf("ACP transport stopped before response completion"))
+				}
+			}
 			return
 		}
 	}
@@ -228,8 +296,9 @@ func (p *protocol) deny(f frame) (bool, error) {
 	cancel := false
 	switch f.Method {
 	case "cursor/ask_question":
+		// Installed-source-supported cancellation is a complete question
+		// rejection; it does not cancel independent genuine requests.
 		outcome = map[string]any{"outcome": map[string]any{"outcome": "cancelled"}}
-		cancel = true
 	case "cursor/create_plan":
 		outcome = map[string]any{"outcome": map[string]any{"outcome": "rejected"}}
 	case "session/request_permission":
@@ -240,7 +309,7 @@ func (p *protocol) deny(f frame) (bool, error) {
 			} `json:"options"`
 		}
 		valid := json.Unmarshal(f.Params, &params) == nil
-		// All authorization is unsupported in E1, including fallback questions:
+		// Pre-admission policy rejection, including fallback questions:
 		// only a genuine reject option may be selected. Otherwise cancel the turn.
 		seen := make(map[string]bool, len(params.Options))
 		rejectID := ""

@@ -1,0 +1,56 @@
+E2 TASK2 FOCUSED TRAIL REVIEW-ROUND TEST WRITER
+Task t2.jf1.c1.cz; feature/b.ftd; HEAD f97b3fcb7978286e25e93f67a98c021073943302 plus settled Task2 diff.
+
+RESULT / NEXT
+GREEN. Ready for ONE batched DocWriter correction pass against settled source and tests. No production fix required. Final TestWriter still owns canonical literal/golden description synchronization and .kd full sandbox units AFTER documentation corrections settle. This focused run is neither full units nor integration acceptance.
+
+READ / SCOPE
+Read CLAUDE.md, current full test writing guide including its review checklist/red flags, Task and all18 children, full /tmp/ftd-e2-task2-review-source-report.txt, /tmp/ftd-e2-task2-revalidation-report.txt and /tmp/ftd-e2-task2-doc-review-c.txt (including C3). Reviewed actual cursor_permission.go, permission.go writer closed set, native/pane/proof controller tests, request/store/trail fixtures, transaction and failure seams and affected compatibility owners. Applied the guide checklist to this focused addition, not a claimed whole-repository test review. No test-review skill workflow was invoked.
+
+OWN STATUS CHANGES
+Reactivated t3.jf1.c1.cz.7p active, completed done after tests and vet green.
+.12 and .v7 remain done untouched: no controller behavior/source repair needed.
+.kd remains defined untouched; no full suite run.
+No parent, Epic, source, doc or other ticket status changed.
+Final status receipt: /tmp/ftd-task2-trail-final-status.json.
+
+EXACT FILES ADDED (3, TESTS ONLY)
+internal/store/cursor_trail_test.go (279 lines)
+internal/store/cursor_trail_failures_test.go (198 lines)
+internal/store/cursor_trail_export_test.go (8 lines)
+No other file edited by this writer; no production, docs, shared fixture implementations or generated files changed. No commit/push.
+
+COVERAGE / MEANINGFUL EVIDENCE
+36 new leaf tests, parameterized by behavior; reuse cursorRowBinding/newV5Store/hgSeed, established store.TrailMark/TrailEventsSince, existing transaction observation beforeEachExec seam and storefix.InjectWriteFailure. No cloned runtime harness, fixture/meta test, source-pattern assertion or production-method mock.
+
+- Admission emits established cursor_host/ad_store mutation insert with actual token/id/tool and NULL decision/reason. State transition retains ad_spawn_store, prior working/new check_permission, PermissionRequest, soft_refresh=false. NULL hook evidence and conservative eligibility retained. Collision AFTER spawn update, stale binding, elapsed deadline and invalid request all leave state/request inventory unchanged with NO mutation or state event.
+- Timeout mutation identifies cursor_host, deny/timeout and independent committed delivered_at. Duplicate acknowledgement emits none; acknowledging existing API allow or deny adds no mutation event.
+- Native direct allow/deny and consumption of the completed matching send-keys sent claim each emit one established update with final actual id/token/tool/decision/pane reason; native pane sent/as, no delivered_at/proof and independent hold retained.
+- Native mismatch, unfinished intent, outside claim, stale binding, elapsed deadline, missing/delivered/closed/proven request all emit none and leave target unchanged.
+- Proof from undecided, API allow/NULL reason, operator deny, timeout deny, native deny/pane, outside unknown, and partially complete proof emits exactly the final committed decision/reason. Earlier deny stays deny; operator/timeout/pane/pane_outside remain. Outside unknown follows current COALESCE to allow while preserving pane_outside, rather than inventing a universal allow/tool_ran event. Previously nonnull decided/proven timestamps, existing pane/as/ack, conservative origin and independent holds retained.
+- Duplicate completed proof adds no event, no timestamp/field changes and no UPDATE. The final stronger assertion installs a deferred foreign-key failure triggered by ANY subsequent permission UPDATE, so a redundant UPDATE would fail COMMIT even if assigned values were identical. The duplicate still succeeds. This replaces an initially weaker use of the shared undecided-only PermissionDecision trigger; no source or original assertion weakened.
+- Wrong token, wrong tool, independent token/tool mismatch, closed target and stale binding produce no proof event or target/independent mutation.
+- Existing beforeEachExec seam observes no mutation event immediately before COMMIT for actual admission/timeout/native/proof transactions. After event observation a separately opened store connection verifies the committed row and exact fields represented by that event.
+- Native/proof BEFORE UPDATE failure uses shared write-failure fixture. AFTER UPDATE deferred foreign-key violation fails actual COMMIT; both return errors, native returns claimed=false, original request survives unchanged and NO event appears. Receipt verifies COMMIT was reached and error identifies commit.
+- Real trail filesystem failure uses the established isolated test subprocess pattern and a regular file blocking the trail directory. Probe confirms failure before and after store writes. Admission, native deny/pane and proof allow/tool_ran still commit; native/proof calls succeed and a separate store read sees persisted values.
+- No new event/public fields, raw params/options/tool input/output, credentials or proof payload logging. Existing actual hook path discriminator assertions retained and green in TestRowMutationEmit/legacy targeted suites.
+
+Store CursorCheck is explicitly a persisted-binding SQL test seam. These tests do NOT claim independent actual runtime execution proof; the existing controller execution tests separately validate real protected synthetic-runtime evidence/rawOutput and passed in the regression selection. Existing original source-repair assertions were not changed.
+
+RUNS / RECEIPTS
+All Go artifacts, gofmt and vet executed ONLY through make sandbox CMD. Host commands limited to source/report reads, test edits, receipt processing, bees and read-only git. Docker invoked ONLY by make sandbox. No make test-sandbox, full unit run, integration TESTPLAN, TLC/scheduler/live Cursor, real AD store, credential/login/.claude access, later collector/Epics, delegation or agent messages.
+
+1 /tmp/ftd-task2-trail-initial.log — PASS30 initial new leaves, zero failures/skips.
+make sandbox CMD='gofmt -w internal/store/cursor_trail_test.go internal/store/cursor_trail_failures_test.go internal/store/cursor_trail_export_test.go && go test ./internal/store -run "TestCursorTrail" -count=1 -json'
+
+2 /tmp/ftd-task2-trail-focused.log — PASS475 leaves: store191 (36 new +155 inherited focused), cursorhost247, API37; zero failures/skips. Thus439 inherited focused regressions plus36 new cases in this selection. Do NOT add these counts to earlier486 or race receipts; selections overlap and differ.
+make sandbox CMD='gofmt -w internal/store/cursor_trail_test.go internal/store/cursor_trail_failures_test.go && go test ./internal/store -run "Test(CursorTrail|Cursor|RowMutationEmit|Trail|InsertRelayRequestOneTransaction|RelayAckAndTimeoutDeny|PaneAnswerIntentThenSent|RecordPaneOutsideClaims|CloseToolRanRequests|LegacyNullAgentGatedWritesAndProof|RequestEligibilityWritersReadersAndProof)" -count=1 -json && go test ./internal/cursorhost -run "Test(Cursor|AuthorizationAlwaysDenied|AuthorizationNotificationAndTransportFailures|ReporterHeldLifecycleRequiresIndependentEvidence|Protocol|OwnedRuntimeProtectedAndTerminated|IndependentCursorWorkerSurvivesRuntimeTermination|EditableTerminalSubmission|TerminalAdmissionReservesOneIdleTurn)" -count=1 -json && go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|UnknownOriginHoldAfterReopen|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json && go vet ./internal/store ./internal/cursorhost ./pkg/api'
+
+3 /tmp/ftd-task2-trail-final.log — PASS36 final new leaves under race detector after strengthening duplicate UPDATE check, zero failures/skips/race reports; vet passed.
+make sandbox CMD='gofmt -w internal/store/cursor_trail_test.go internal/store/cursor_trail_failures_test.go internal/store/cursor_trail_export_test.go && go test -race ./internal/store -run "TestCursorTrail" -count=1 -json && go vet ./internal/store'
+
+Counts exclude parent aggregates. /tmp/ftd-task2-trail-counts.txt and /tmp/ftd-task2-trail-per-test.tsv retain counts/exact outcomes. git diff --check PASS.
+
+DEVIATIONS / FAILURES / QUESTIONS
+No test execution failed and no required source fix found. Exploratory reads first attempted host /tmp reports inside the sandbox (not mounted); corrected to host report reads. rg is absent in sandbox, so read-only searches used host rg. Two initial bees syntax discovery errors corrected using --help; all own intended status updates succeeded. None affected test execution or acceptance evidence.
+No unresolved focused work or question. No integration run assigned or attempted; no integration acceptance claimed. Canonical DocWriter corrections may now proceed as one batched pass, including C3's actual postcommit Cursor events/writer inventory. New narrow reusable test helper exports the existing transaction observer for external store trail tests; no separate production observer or runtime evidence is introduced.

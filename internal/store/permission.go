@@ -53,6 +53,8 @@ const (
 //   - WriterProcessHook              — the hook verb's relay path, the
 //     PostToolUse close of a request whose tool ran (b.146 rule 13), and the
 //     terminal SessionEnd's close of its Spawn's requests (b.146 rule 12)
+//   - WriterProcessCursorHost        — the Cursor gateway's request admission,
+//     timeout decision, native answer claim and correlated execution proof
 //   - WriterProcessDecide            — the decide verb
 //   - WriterProcessFindMissing       — the find-missing reconciler
 //   - WriterProcessSendKeys          — send-keys' pane answer (b.146 rule 8)
@@ -66,6 +68,7 @@ const (
 // ad-hoc strings.
 const (
 	WriterProcessHook             = "hook"
+	WriterProcessCursorHost       = "cursor_host"
 	WriterProcessDecide           = "decide"
 	WriterProcessFindMissing      = "find_missing"
 	WriterProcessSendKeys         = "send_keys"
@@ -119,10 +122,12 @@ var ErrAmbiguousRequest = errors.New("ErrAmbiguousRequest")
 // PaneAnswerIntent is a pane answer through send-keys begun whose key may or
 // may not have been typed. Either still leaves a request awaiting an answer.
 // The other three close it: PaneAnswerSent, the pane answer's key was sent
+// or Cursor recorded a native choice (neither proves ACP delivery or receipt)
 // (rule 8); PaneAnswerOutside, a caller recorded it answered outside
 // agent-director (record-pane-answer, rule 13); PaneAnswerToolRan, the
 // agent's PostToolUse or PostToolUseFailure carried the request's
-// tool_use_id, so its tool ran (rule 13).
+// tool_use_id, or validated exact-request Cursor execution, so its tool ran
+// (rule 13).
 const (
 	PaneAnswerNone    = "none"
 	PaneAnswerIntent  = "intent"
@@ -183,8 +188,10 @@ type PermissionRow struct {
 	// MainTurnEndEligible is durable proof authority, independent of AgentID.
 	// Missing child identity alone never grants it to a Cursor request.
 	MainTurnEndEligible bool
-	// DeliveredAt is the hook's ack (rule 3): it is committed before the hook
-	// writes the request's answer to Claude Code.
+	// DeliveredAt is the relay's durable ack (rule 3): committed before any
+	// reply enqueue/write. It is not agent receipt, execution or dialog proof.
+	// Gateway-local Cursor relays have no Hook process identity and use finite
+	// persisted SettledAt, never gateway process liveness.
 	DeliveredAt time.Time
 	// SettledAt is the hook's kill instant plus the reserve (rule 4): the
 	// time a reader falls back to when it cannot check the hook process.
@@ -198,8 +205,10 @@ type PermissionRow struct {
 	AttemptedAt       time.Time
 	// PaneAnswer is pane_answer: PaneAnswerNone unless a pane answer was
 	// recorded (b.146 step 2b). PaneAs is that answer's claimed verdict
-	// (allow, deny, or unknown for a record-pane-answer that did not see it),
-	// PaneSender the process that sent a pane answer through send-keys, and
+	// (allow, deny, or unknown for a record-pane-answer that did not see it).
+	// Public storage is not screen verification or proof; Cursor additionally
+	// requires a sent claim to match the actual selected option verdict.
+	// PaneSender is the process that sent a pane answer through send-keys, and
 	// PaneIntentAt when that sender wrote its intent; both are zero once the
 	// sender released the intent (its call ended without recording sent).
 	PaneAnswer   string
@@ -707,7 +716,8 @@ func (s *Store) DecideRelayRequest(instanceID, requestToken, decision, reason, w
 // (find-missing's mark, the ended transition, resume's move; emitDeny), and
 // the closes at the pane
 // (b.146 step 2b: a pane answer's sent, record-pane-answer's outside, the
-// PostToolUse close). decision "" (an outside record claiming unknown) and
+// PostToolUse close), plus the Cursor gateway's timeout decision, native
+// claim and correlated execution proof. decision "" (an outside record claiming unknown) and
 // reason "" are emitted as null. A trail-emit failure must not fail the store
 // call (SR-A-3.2).
 func emitDecisionCommitted(instanceID, requestToken string, requestID int64, toolName, decision, reason, writerProcess string) {

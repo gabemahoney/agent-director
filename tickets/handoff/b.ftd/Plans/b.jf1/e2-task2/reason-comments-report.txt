@@ -1,0 +1,35 @@
+E2 TASK2 NARROW CANONICAL REASON COMMENTS COMPLETION
+Checkout /home/horde/ad-codex/project/agent-director-ftd feature/b.ftd, HEAD f97b3fcb plus settled Task2 source/tests/docs diff.
+
+OWN STATUS
+Reopened active, then completed done ONLY t3.jf1.c1.cz.gk. No other ticket status changes. No commits/pushes, delegation or agent messages.
+
+READ
+Read Task .gk, SRD SR4/5/9 and current technical decision excerpts, CLAUDE.md documentation locations, engineering guide including sandbox rules, relevant architecture Cursor authorization/store owners and decision reason inventory. Read /tmp/ftd-e2-task2-doc-review-c.txt, /tmp/ftd-e2-task2-review-source-report.txt and /tmp/ftd-e2-task2-trail-test-report.txt; verified actual ClaimCursorPaneAnswer and ProveCursorToolRan assignments. No whole-manual review claimed.
+
+EXACT CANONICAL SOURCE CHANGES (4 FILES)
+- pkg/api/get_permission.go: result/field comments distinguish initially NULL undecided/API allow reason from later validated Cursor execution proof, which fills missing reason with tool_ran while preserving earlier verdict/non-null reason. Include Cursor native pane choice and outside unknown's NULL verdict/pane_outside reason.
+- pkg/api/manifest/manifest.go: decision_reason describes pane from send-keys OR Cursor native choice; pane/pane_outside are claims, not ACP delivery/receipt/proof; initial NULL/API allow wording explicitly permits later exact Cursor proof to fill a missing reason without rewriting prior verdict/reason. pane_answer tool_ran includes validated Cursor execution, and distinguishes hook allow/tool_ran close from Cursor's preservation semantics. The nearby delivery description no longer incorrectly says only a pane answer/outside claim can close a request: validated execution proof and owning-spawn close are represented.
+- pkg/api/relay_delivery.go: matching sent comment explicitly excludes proof; tool_ran pane description includes validated Cursor execution and preserves earlier decision/reason semantics. ProvenGoneHow includes exact Cursor execution evidence; turn_end retains durable main eligibility/age and unknown-origin/child exclusion consistent with manifest/TS.
+- pkg/ts-bun-client/src/types.ts: matching pane_answer tool_ran/proof descriptions include validated Cursor gateway evidence, no longer hooks only; decision_reason distinguishes initial API allow NULL from later fill, native pane writer and claim versus proof. Nearby delivery explanation includes validated execution/owning-spawn closes. No declaration/type/enum changed.
+
+GENERATED ONLY (3 FILES)
+pkg/api/manifest/surface.json
+docs/cli-reference.md
+docs/mcp-reference.md
+Normal generator only; no hand edits. No test/golden/prose-manual edits. Existing settled changes by previous lanes retained.
+
+VALIDATION
+PASS /tmp/ftd-e2-task2-reason-comments-generate.log:
+make sandbox CMD='gofmt -w pkg/api/get_permission.go pkg/api/relay_delivery.go pkg/api/manifest/manifest.go && make generate'
+PASS /tmp/ftd-e2-task2-reason-comments-final.log:
+make sandbox CMD='gofmt -w pkg/api/get_permission.go pkg/api/relay_delivery.go pkg/api/manifest/manifest.go && make generate && go build ./...'
+PASS git diff --check.
+Repo artifacts executed only through make sandbox. No behavioral/full-unit tests repeated for this description-only pass; prior trail/regression evidence belongs to TestWriter. No Docker TESTPLAN/TLC/scheduler/live Cursor/real stores/credentials/.claude execution or modifications.
+
+NO RUNTIME CHANGE / HANDOFF
+Only canonical comments/descriptions and normal generated text changed by this lane. No behavior, SQL, enum values, events, public API or historical agent contract modified. Native sent/claims still do not establish ACP delivery/receipt/proof. Plain outside records still never send or authorize ACP; unknown-origin holds unchanged.
+Root can route the single batched DocWriter pass now. Final TestWriter owns canonical literal/golden assertions and final full sandbox units after docs settle. No acceptance claim beyond generation/build/diff checks.
+
+FAILURES / DEVIATIONS / QUESTIONS
+No unresolved failure, incomplete assigned work or product question. One initial read-only bees show-ticket syntax omitted --ids; corrected immediately. A combined large report/SRD read was clipped; relevant source report and bounded SRD sections were reread. Additional adjacent canonical delivery/proof comments corrected solely for the demonstrated Task2 facts. No further runtime change requested or made.

@@ -24,10 +24,11 @@ import (
 // RelayRequest is what the relay hook records with a new permission request
 // (b.146 rules 1, 2, 4 and 14).
 type RelayRequest struct {
-	// RequestToken is the request's UUIDv4 token, minted by the hook.
+	// RequestToken is the request's UUIDv4 token, minted by the request relay.
 	RequestToken string
 	// ToolName and ToolInput are the hook input's tool_name and tool_input
-	// (the raw JSON text).
+	// (the raw JSON text). Cursor gateway admission preserves the complete
+	// received permission/plan params envelope without adding internal context.
 	ToolName  string
 	ToolInput string
 	// ToolUseID and AgentID are the hook input's tool_use_id and agent_id;

@@ -8,5 +8,10 @@
   "authenticated_cursor": false,
   "source": "Task1 t3.jf1.3e.tv.6g; generated protocol fixtures, not captured Cursor evidence",
   "fixture_version": "1",
-  "interpreter_version": "Node.js v20.19.5 (sandbox pinned)"
+  "interpreter_version": "Node.js v20.19.5 (sandbox pinned)",
+  "authorization_fixtures": {
+    "captured": "authorizations.json: extracted permission/plan envelopes from sanitized R2 and R2-mcp protocol.jsonl, Cursor 2026.10.12-d47ca18 ACP1; whitespace formatted only",
+    "synthetic": "Permission factory variants, malformed requests, IDs, races and timing are synthetic; read/delete/fetch variants are not captured approvals",
+    "source_derived": "question signatures from sanitized R3-followup-source.json; no live question capture"
+  }
 }

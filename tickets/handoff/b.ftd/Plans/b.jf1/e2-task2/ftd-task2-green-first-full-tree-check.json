@@ -1,0 +1,5 @@
+{
+  "first_full_prerun_paths_unchanged_after_run": true,
+  "changed_prerun_paths": [],
+  "limitation": "Check covers paths in the first-full prerun manifest; two previously unchanged advice test paths were repaired afterwards and are added to the second-full manifest."
+}

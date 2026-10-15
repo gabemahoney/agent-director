@@ -96,11 +96,14 @@ type DecideStore interface {
 // Decision is either "allow" or "deny"; Reason is accepted for wire
 // compatibility but is currently discarded — the canonical
 // DecisionReasonOperator is persisted regardless of its value.
+// Cursor allow selects only the offered allow_once choice or accepts the
+// captured blocking plan; it never creates a persistent rule. Deny selects
+// supported rejection. Native persistent choices require a deliberate pane key.
 type DecideParams struct {
 	// InstanceID identifies the Spawn whose open permission request is
 	// being decided.
 	InstanceID string `json:"instance_id"`
-	// RequestToken is the UUIDv4 token minted by runRelay for the specific
+	// RequestToken is the UUIDv4 token minted by the relay controller for the specific
 	// permission request being decided. Required; empty string is rejected at
 	// the API layer (ErrMissingRequestToken) as well as at the CLI layer.
 	RequestToken string `json:"request_token"`
@@ -127,7 +130,8 @@ type DecideParams struct {
 // DecideResult is decide's result once its verdict is recorded (b.146
 // decision 1 A, rule 16): the request's delivery facts, read at the end of
 // decide's wait of at most 1 s for the relay hook's ack. Delivery is
-// delivered (the hook acked the verdict before writing it to Claude Code) or
+// delivered (durable relay ack before enqueue/write; not receipt, execution
+// or dialog closure) or
 // not_confirmed (no ack yet: ask get-permission, at the latest at
 // confirm_by). A request whose hook has fallen back is refused with
 // ErrRelayFallenBack instead.

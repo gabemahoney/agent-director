@@ -106,7 +106,8 @@ func holdsGoSource(dir string) (bool, error) {
 // copyModule copies the module rooted at src into dst: go.mod, go.sum and, in
 // each directory that holds Go source, every regular file except _test.go files
 // (so a package's embedded, cgo, assembly and .syso inputs come along), outside
-// the directories skipCopyDir leaves out. Other processes create and remove
+// the directories skipCopyDir leaves out, except testdata assets beside Go source
+// (which may be embedded). Other processes create and remove
 // untracked trees while the walk runs, so an entry that is gone when the walk
 // reaches it is skipped.
 func copyModule(t *testing.T, src, dst string) {
@@ -120,7 +121,8 @@ func copyModule(t *testing.T, src, dst string) {
 // path the walk reaches, before the walk reads it.
 func copyModuleFiles(src, dst string, reached func(path string)) error {
 	src = filepath.Clean(src)
-	goDirs := map[string]bool{} // directories that hold Go source
+	goDirs := map[string]bool{}    // directories that hold Go source
+	assetDirs := map[string]bool{} // package testdata inputs, including embedded descendants
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -132,7 +134,8 @@ func copyModuleFiles(src, dst string, reached func(path string)) error {
 			reached(path)
 		}
 		if d.IsDir() {
-			if path != src && skipCopyDir(path, d.Name()) {
+			assetDirs[path] = assetDirs[filepath.Dir(path)] || (d.Name() == "testdata" && goDirs[filepath.Dir(path)])
+			if path != src && !assetDirs[path] && skipCopyDir(path, d.Name()) {
 				return filepath.SkipDir
 			}
 			goDirs[path], err = holdsGoSource(path)
@@ -142,7 +145,7 @@ func copyModuleFiles(src, dst string, reached func(path string)) error {
 		if err != nil {
 			return err
 		}
-		packageFile := goDirs[filepath.Dir(path)] && d.Type().IsRegular() && !strings.HasSuffix(d.Name(), "_test.go")
+		packageFile := (goDirs[filepath.Dir(path)] || assetDirs[filepath.Dir(path)]) && d.Type().IsRegular() && !strings.HasSuffix(d.Name(), "_test.go")
 		if !packageFile && rel != "go.mod" && rel != "go.sum" {
 			return nil
 		}

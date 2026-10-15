@@ -1,0 +1,49 @@
+E2 TASK2 FINAL TEST WRITER — FULL SANDBOX UNITS GREEN
+Task t2.jf1.c1.cz; sole owned subtask t3.jf1.c1.cz.kd.
+Checkout /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd.
+
+RESULT / STATUS / NEXT
+Passed after synchronizing four existing exact-wording test expectations to the source Engineer's compact descriptions. Explicitly retained .kd active at start and set ONLY .kd done after the second full make test-sandbox passed. No parent, sibling, Task or Epic status changed. No unresolved source/test failure or question. Ready for PM/local-commit review; this is unit acceptance of the precise working tree below, not authenticated/formal/integration/external acceptance.
+
+FILES CHANGED BY THIS WRITER (4; inherited settled work retained)
+- pkg/api/manifest/manifest_texts_test.go: undecided-versus-open case separately requires decision/decided_at null while undecided and decided requests staying open until acknowledgement; prohibition of null-while-open remains.
+- pkg/api/manifest/pending_meaning_test.go: existing status-description table entry pins compact text for all seven states, spawn/reuse/resume launch underway, no SessionStart report, loading/startup prompt and preserved resumed session id/history. Other state sites retain their original stronger verbose phrases.
+- pkg/api/decide_delivery_test.go: F8 literal now requires delivery delivered/not_confirmed and poll get-permission ending by confirm_by; matching test comment follows wording. All actual polling/late-ack/dead-or-uncheckable-hook behavior assertions untouched.
+- pkg/api/advice_follow_pane_test.go: E7 literal now requires first wins/ErrAlreadyDecided and immediate ErrRelayFallenBack on hook loss. Existing clock/first-winner/pane/timeout/no-input behavior checks untouched.
+No source, manual docs, generated source, fixtures, goldens, help guards or runtime code edited in this pass. No new tests/harness/helpers or redundant behavioral expansion.
+
+READ / QUALITY / SCOPE
+Read Task and all18 Subtasks (current status snapshot included), CLAUDE.md, complete docs/test-writing-guide.md including review checklist/red flags, complete help-source/final-test/revalidation/trail-test/doc-corrections reports and source-review report. Reviewed actual canonical source strings and existing description, pending, advice-follow, shared proof/public-surface and request/trail fixture owners. Existing table and shared assertion helpers reused. No production-method mocks, Cartesian proliferation or new fixture/meta tests. Prior 486 distinct targeted behavioral leaves and separate protocol/controller races remain prior evidence, not rerun or summed into current totals; prior36 trail race leaves and475 focused leaves also overlap and remain separate. Original source-repair/proof/trail behavioral assertions are untouched. No new behavioral gap identified by this wording-only pass. No whole manual/generated-reference review is claimed; accepted doc-review evidence remains with its owners and PM owns final review.
+
+FOCUSED RUNS (PASS)
+1 /tmp/ftd-task2-green-focused.log, exit0:
+make sandbox CMD='gofmt -w pkg/api/manifest/manifest_texts_test.go pkg/api/manifest/pending_meaning_test.go && go test ./cmd/agent-director -run "TestHelpSize(Guard|Over)$" -count=1 -v && go test ./pkg/api/manifest ./pkg/api/apitest ./pkg/api/errnames -count=1 -json && cd pkg/ts-bun-client && bun test test/public-surface.test.ts'
+JSON Go287 leaf passes: manifest169, apitest10, errnames108; zero failures/skips. Separate verbose help guard and boundary cases pass: stdout14642 bytes, recorded14642, hard cap15160. Bun22 pass/0 fail,46 expectations,1file. These overlap full-suite coverage; do not add counts.
+2 /tmp/ftd-task2-green-advice-focused.log, exit0:
+make sandbox CMD='gofmt -w pkg/api/decide_delivery_test.go pkg/api/advice_follow_pane_test.go && go test ./pkg/api -run "TestAdviceFollow_(F8_DecideNotConfirmedAskGetPermission|E7_DecideFallenBackAnswerAtPane)$" -count=1 -json'
+13 Go leaf passes, zero failures/skips. Existing actual follow steps retained.
+
+FULL RUNS / HONEST COUNTS
+FIRST command make test-sandbox, /tmp/ftd-task2-green-full-unit.log, exit2.
+Go81 package outcomes:67 passed (25 executed,42 cached),1 failed (pkg/api),13 no-test-files. Exactly two top-level failures were stale literal assertions: TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission and TestAdviceFollow_E7_DecideFallenBackAnswerAtPane. Source compacted decide as well as get-permission/status; the two additional advice owners were missed by the initial focused scope. Bun429 pass/0 fail,57files,1658 expect calls. Failed raw receipt/counts preserved; no source defect hidden. An interim commentary incorrectly said Go had no failures; corrected immediately after complete receipt inspection.
+SECOND command make test-sandbox, /tmp/ftd-task2-green-second-full-unit.log, exit0.
+Go81 package outcomes:68 passed (6 executed,62 cached),0 failed,13 no-test-files.
+Bun429 pass/0 fail,57files,1658 expect calls. No Bun cache outcome reported.
+Nonverbose Go command does not expose individual passing/skipped test totals; none invented. Exact executed/cached/no-test package inventory in ftd-task2-green-second-full-unit-counts.json. Second full run justified by first full's two stale literal failures and actual test repairs. No further full repetition.
+Full target includes unit-level real-tmux/install-sh/smoke and cached test/tla package outcomes; this does not imply Docker TESTPLAN or actual TLC execution. No integration role assigned; no integration run/claim.
+
+EXACT TESTED TREE / RECOVERY PINS
+HEAD f97b3fcb7978286e25e93f67a98c021073943302 plus the entire settled Task2 working diff and these four test changes.
+Final ftd-task2-green-after-manifest.json includes ALL58 changed/untracked paths, including ALL15 untracked source/test/fixture files, with status, byte count, mode and SHA256. Its contents are byte-identical to ftd-task2-green-second-prerun-manifest.json: no covered path/status/mode/hash or tracked diff changed during the successful full run.
+Final manifest SHA256 3a6f1b38ac474d18d96e87aac48b3653624516121cf4539ed38b5e210ceb107a.
+HEAD tree 6e48b2007d4a9d4fa55b6f972da3a59d86024f8e.
+Tracked git diff --binary HEAD SHA256 2a6f1945c75ebb5153237e81779e03c9c0a21022ff05af45a784c8408311bb0d.
+Before manifest has55 inherited paths; first-full manifest56; second/full-green manifest58. Exactly these four test files differ from this pass's initial manifest; all inherited source/manual/generated/fixture hashes retained. First-full-tree-check covers its original prerun paths only; the two previously unchanged advice owners were subsequently added to the second-full manifest.
+Architecture remains22160 lines/1530681bytes/SHA256455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42.
+Operator recovery section remains lines842-937,96lines/4920bytes/SHA2561cb381810d82d01be1f1fa878f7f78dcdf66bf7c2a1b941f8a4806e2d99bcdfc.
+helpStdoutBytes=14642 and helpHardCap=15160 unchanged; guard file SHA25678e11fbf2ae0104e6e23e402e65d4ebc93f8c15fddd23d8bd16df49ff38a37fe. Existing operator/installSkill/install12-way-back recovery pins unchanged; actual full suites include pkg/api and install-sh. No new recovery command or golden edit.
+
+RECEIPTS / LIMITS / DEVIATIONS
+Raw logs/counts/manifests/pins/status snapshots copied under tickets/handoff/b.ftd/Plans/b.jf1/e2-task2/ using ftd-task2-green-* names. Exact receipt hashes in ftd-task2-green-receipts-manifest.json. Report /tmp/ftd-e2-task2-green-test-report.txt and handoff/green-test-report.txt. Earlier failed receipts untouched.
+Only repo execution: make sandbox CMD and make test-sandbox. Host processing limited to reads/test edits/git/bees own status/receipt handling. Sandbox Docker engine only for authorized unit targets. No host Go/Bun/binaries, integration groups, TLC/parser/scheduler/live/authenticated Cursor, real AD-store or credential/login/logout/.claude access, source/manual/generated edits, commit/push, delegation or agent messages.
+Deviation: full suite exposed two more stale decide advice literals than the source handoff's two named fixtures. Repaired only those test expectations and matching test comment, retained every behavior assertion, then13 focused leaves and fresh full suite green. Initial bees show syntax and snapshot metadata KeyError corrected; no test or source effect. No unresolved work/questions in this assignment. Root owns PM, commit, integration scheduling and external exact-revision gate.

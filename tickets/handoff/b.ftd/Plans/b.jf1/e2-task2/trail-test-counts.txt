@@ -1,0 +1,6 @@
+/tmp/ftd-task2-trail-initial.log {('store', 'pass'): 30}
+new-trail {'pass': 30}
+/tmp/ftd-task2-trail-focused.log {('store', 'pass'): 191, ('cursorhost', 'pass'): 247, ('api', 'pass'): 37}
+new-trail {'pass': 36}
+/tmp/ftd-task2-trail-final.log {('store', 'pass'): 36}
+new-trail {'pass': 36}

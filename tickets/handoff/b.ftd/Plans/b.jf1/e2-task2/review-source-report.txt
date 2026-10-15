@@ -1,0 +1,61 @@
+E2 TASK2 BATCHED SOURCE REVIEW CORRECTIONS
+Checkout /home/horde/ad-codex/project/agent-director-ftd feature/b.ftd, HEAD f97b3fcb plus existing settled Task2 diff. No commits/pushes, tests or prose manuals edited, delegation or agent messages. Normal generated docs only.
+
+OWN STATUSES
+Reopened active then completed done ONLY t3.jf1.c1.cz.gk, .ip, .v6, .nt. .4f/.j2 remained done untouched. No parent/Epic/test/doc statuses changed.
+Read current Task and six source Subtasks, SRD relevant SR9.1 mutation conventions, CLAUDE documentation locations, engineering guide and relevant architecture authorization/store/trail owners. Read all four mandatory engineer/source-repair/revalidation/doc reports and all four doc-review a/b/c/d reports. Earlier combined output clipping repaired with separate bounded relevant reads. No whole architecture reread claimed; four cold reviewer coverage remains their evidence.
+
+FILES CHANGED BY THIS LANE (12)
+internal/store/cursor_permission.go
+internal/store/permission.go
+internal/cursorhost/protocol.go (comment only)
+pkg/api/manifest/manifest.go
+pkg/api/relay_delivery.go
+pkg/api/sendkeys.go
+pkg/api/pane_answer.go
+pkg/api/record_pane_answer.go
+pkg/ts-bun-client/src/types.ts
+pkg/api/manifest/surface.json (normal generation)
+docs/cli-reference.md (normal generation)
+docs/mcp-reference.md (normal generation)
+No manual documentation/test/fixture edit. No API/parameter/error/event type/schema migration added.
+
+EXACT EVENT SEMANTICS / ROOT TECHNICAL RECORD
+- Deliberately extend internal/store/permission.go closed writer set with WriterProcessCursorHost = "cursor_host": the actual gateway's permission admission, timeout decision, native answer claim and correlated execution proof. Hook-executed writers remain WriterProcessHook unchanged. No ad-hoc writer string introduced.
+- InsertCursorRequest retains existing AFTER COMMIT state_transition (source ad_spawn_store, triggering_event_name PermissionRequest, prior/new state, soft_refresh false). Its AFTER COMMIT row_mutation insert now identifies writer_process cursor_host, source ad_store, request id/token/tool name, decision/reason null.
+- AckCursorDecision timeout decision mutation uses cursor_host rather than hook. Existing pure acknowledgement of an already-recorded verdict continues to emit no row_mutation, consistent with established ack conventions. No new ack event type.
+- ClaimCursorPaneAnswer retains its original transactional authority/deadline/first-writer/sent-claim predicates and native claim write. UPDATE RETURNING obtains final request_id/tool_name/decision/decision_reason inside that transaction. Only a successful matching UPDATE followed by successful COMMIT emits emitDecisionCommitted, writer cursor_host, mutation_kind update, source ad_store. Zero match or rollback emits none; returned claimed is false on transaction error. Trail failure remains fail-open. Native claim can consume send-keys' already-sent matching verdict, so no new native duplicate filter rejects that required path. Its original decided_at refresh semantics are preserved.
+- ProveCursorToolRan retains exact binding/token/tool/closed guards and COALESCE/CASE semantics. UPDATE RETURNING obtains FINAL persisted request id/tool name/decision/reason rather than assuming allow/tool_ran. Earlier deny/operator, deny/timeout, pane or outside reasons remain as stored; a previously null reason becomes tool_ran even for an earlier API allow. Event represents this final row, never a manufactured allow or rewritten reason.
+- Proof now adds an idempotency WHERE disjunction exactly covering assignments capable of changing values: missing proven_gone_at/how, undelivered pane_answer none/intent, missing decision/reason/decided_at. A complete duplicate proof performs no UPDATE and emits no mutation event. A partially filled row is updated only if one existing assignment changes it. Existing proof values/reasons/decisions are preserved. Successful matching mutation emits one postcommit established row_mutation update via emitDecisionCommitted, cursor_host/ad_store. Wrong tool/token, closed request, stale authority, rollback, or completed duplicate emits none. Public ProveCursorToolRan return signature remains error only.
+- No raw ACP params, labels, proof output, new secrets or runtime fields added to events. Existing tool_name convention retained.
+- Public trail writer enum/parity consumers: no separate production schema, TS/public API enum or manifest field constrains writer_process; repository static search found it emitted in store only. Canonical closed-set source was extended. Architecture source/event/writer inventory and any TestWriter discriminator coverage must include cursor_host. Existing Hook assertions remain valid for genuine hook path.
+
+CANONICAL CLAIM COMMENTS / GENERATION
+Manifest and corresponding Go/TS comments now say public send-keys/outside storage is a claim without screen verification/proof. Before answering ACP, Cursor additionally requires the sent claim verdict to match the actual selected offered option. Outside record never authorizes ACP and supplies no execution proof. pane_answer sent records a key send OR a Cursor native choice, not ACP delivery/runtime receipt/proof. Existing outside-only never-checked wording remains correctly scoped to record-pane-answer. protocol.deny's E1 all-authorization-unsupported comment is now current pre-admission rejection policy, no behavior change.
+Normal make generate produced surface.json and CLI/MCP references; no generated hand edits. Historical generator heading cleanup unchanged.
+
+VALIDATION / EXACT COMMANDS
+All repo artifacts executed ONLY via make sandbox CMD; Docker invoked only by that target. No full suite/test-sandbox, integration TESTPLAN, TLC, scheduler/live Cursor, real AD store, credentials/login/.claude execution or modifications.
+1 PASS /tmp/ftd-task2-review-source-build.log:
+make sandbox CMD='gofmt -w internal/store/cursor_permission.go internal/store/permission.go internal/cursorhost/protocol.go pkg/api/manifest/manifest.go pkg/api/relay_delivery.go pkg/api/sendkeys.go && make generate && go build ./... && go vet ./internal/cursorhost ./internal/store ./pkg/api'
+2 PASS /tmp/ftd-task2-review-source-targeted.log:
+make sandbox CMD='gofmt -w internal/store/permission.go pkg/api/pane_answer.go pkg/api/record_pane_answer.go pkg/api/manifest/manifest.go && make generate && go test ./internal/store -run "Test(Cursor|RowMutationEmit|Trail|RelayAckAndTimeoutDeny|PaneAnswerIntentThenSent|RecordPaneOutsideClaims|CloseToolRanRequests|LegacyNullAgentGatedWritesAndProof|RequestEligibilityWritersReadersAndProof)" -count=1 -json && go test ./internal/cursorhost -run "TestCursor" -count=1 -json && go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|UnknownOriginHoldAfterReopen|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json'
+151 store +173 cursorhost +37 API =361 passing leaf outcomes, zero failures/skips. Parents excluded, not full units and not new trail behavior coverage.
+3 PASS /tmp/ftd-task2-review-source-final-vet.log after final comment wrapping/helper inventory comment:
+make sandbox CMD='gofmt -w internal/store/permission.go pkg/api/sendkeys.go && go vet ./internal/store ./internal/cursorhost ./pkg/api'
+4 git diff --check PASS.
+No execution failure. One exploratory read guessed nonexistent internal/store/tx.go; corrected immediately to actual lockwait.go and read transaction behavior. No unresolved tool failure.
+
+TESTWRITER HANDOFF / SUGGESTED MEANINGFUL SEAMS
+No tests added or edited by source lane. TestWriter should independently observe trail from authenticated current Cursor transaction fixtures/controller:
+- native direct and consumed send-keys sent matching claim emit final id/tool/decision/pane reason and cursor_host only after independently readable commit;
+- mismatch, intent, outside, stale binding/deadline and rollback emit none;
+- exact proof on undecided, API allow/null reason, prior deny/operator or timeout, native pane and outside/unknown rows emits FINAL committed fields and preserves previous reasons/decision;
+- exact complete duplicate proof emits zero new mutation events and leaves timestamps/fields unchanged; wrong tool/token and independent request remain unaffected;
+- force transaction rollback/commit failure and trail filesystem failure independently; rollback emits zero, postcommit trail failure cannot undo successful claim/proof or fail the store call;
+- Insert and timeout identify cursor_host, actual hook paths still hook; state transition remains ad_spawn_store;
+- use existing trail observation and store failure fixtures, not source-implementation mirror tests.
+Final canonical literal/golden/description assertions may require legitimate updates to the claim/sent/record descriptions. No old-text test failure was observed because no full canonical-description suite was run; do not weaken tests or treat absent execution as proof of parity. Existing targeted assertions untouched and green.
+
+DEVIATIONS / INCOMPLETE / QUESTIONS
+No assigned source correction incomplete or product question. Native mutation semantics unchanged to preserve consuming existing send-keys sent records. Only necessary proof idempotency predicate added. DocWriter still owns prose corrections and exact source/writer inventory; TestWriter owns new postcommit/failure/idempotency tests and settled canonical pins/full units. Root owns SRD technical record, commits and external exact-revision gate. Task1 acceptance does not establish Task2 acceptance; no later Task3/E3+ capability added.

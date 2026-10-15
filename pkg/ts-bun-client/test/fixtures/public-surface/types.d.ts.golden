@@ -111,12 +111,14 @@ export interface VerbSummary {
 }
 /**
  * A permission request's delivery state:
- * - `"delivered"`: the request's relay hook acknowledged a verdict.
+ * - `"delivered"`: the relay durably acknowledged a verdict before enqueue/write;
+ *   this is not agent receipt, tool execution or dialog closure.
  * - `"not_confirmed"`: no ack yet and the relay hook may still run; it ends by `confirm_by`.
  * - `"fallen_back"`: no ack, and the relay hook is gone (or cannot be checked and `confirm_by`
  *   has passed): no answer from the relay reached the agent. While `pane_answer` is `"none"` or
- *   `"intent"` the request is open and only an answer at the pane, or `recordPaneAnswer`, closes
- *   it; with `"sent"`, `"outside"` or `"tool_ran"` it is closed.
+ *   `"intent"` the request awaits an answer unless acknowledged or closed with its Spawn. A pane
+ *   answer, `recordPaneAnswer` or validated execution proof can close it; with `"sent"`,
+ *   `"outside"` or `"tool_ran"` it is closed.
  */
 export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
 /**
@@ -124,16 +126,19 @@ export type Delivery = "delivered" | "not_confirmed" | "fallen_back";
  * - `"none"`: no pane answer recorded through agent-director (something outside it, such as a
  *   person at tmux, may still have answered it).
  * - `"intent"`: a pane answer through `sendKeys` was started; whether its key was typed is unknown.
- * - `"sent"`: a pane answer's key was sent (`decision_reason` `"pane"`).
+ * - `"sent"`: a pane answer's key was sent or Cursor recorded its native choice
+ *   (`decision_reason` `"pane"`); this does not establish ACP delivery, receipt or proof.
  * - `"outside"`: a caller recorded it answered outside agent-director (`recordPaneAnswer`,
  *   `decision_reason` `"pane_outside"`).
- * - `"tool_ran"`: the agent's hooks reported its tool ran (`decision` `"allow"`, `decision_reason`
- *   `"tool_ran"`).
+ * - `"tool_ran"`: agent hooks or validated correlated Cursor execution output established
+ *   its tool ran. The hook close records `decision` `"allow"` and `decision_reason` `"tool_ran"`;
+ *   Cursor proof preserves any earlier verdict and non-null reason, filling a missing reason
+ *   with `"tool_ran"`.
  * `"sent"`, `"outside"` and `"tool_ran"` close the request; its `delivery` stays `"fallen_back"`.
  */
 export type PaneAnswer = "none" | "intent" | "sent" | "outside" | "tool_ran";
 /**
- * A permission request's delivery facts, with whether the agent's hooks proved its dialog gone, on every
+ * A permission request's delivery facts, with whether agent evidence proved its dialog gone, on every
  * `get` / `list` permission request and `get`'s `unproven_requests`, on `getPermission` and on
  * `decide`'s result. Derived on every read. A recorded `decision` is not the outcome:
  * `delivery` is.
@@ -144,11 +149,14 @@ export interface RequestDelivery {
     /**
      * RFC3339 time by which `not_confirmed` ends: the relay hook's kill instant plus 2 s. For a
      * request with no recorded settle instant: `requested_at` plus the relay window plus 2 s.
+     * Cursor uses its finite persisted per-request settlement, independent of gateway lifetime;
+     * relay-off requests settle immediately.
      */
     confirm_by: string;
     /**
      * Whether the relay hook process runs: true, false, or null when it cannot be checked
      * (another or unreadable pid namespace, unreadable /proc, or no recorded hook identity).
+     * Cursor gateway-local controllers have no hook identity: null, never the gateway PID.
      */
     hook_alive: boolean | null;
     /** When a reader first found the request fallen back; null until then. */
@@ -157,17 +165,19 @@ export interface RequestDelivery {
     attempted_decision: "allow" | "deny" | null;
     /** When that refused decide ran; null when none. */
     attempted_at: string | null;
-    /** The request's tool_use_id from the agent's hook input; null when none was given. */
+    /** Hook tool_use_id or Cursor's supplied toolCallId; null when none was given. */
     tool_use_id: string | null;
     /** How the request was answered at the pane; see {@link PaneAnswer}. */
     pane_answer: PaneAnswer;
     /**
      * The verdict a pane answer claims: allow, deny, or unknown (an outside record that did not see
-     * the answer); null when none was recorded. The caller's claim, stored and never checked.
+     * the answer); null when none was recorded. Public send-keys and outside records store a claim
+     * without screen verification or proof. Before answering ACP, Cursor additionally requires a sent
+     * claim to match the actual selected option verdict. An outside record never authorizes an ACP answer.
      */
     pane_as: "allow" | "deny" | "unknown" | null;
     /**
-     * When the agent's hooks proved the request's permission dialog gone; null until
+     * When agent evidence proved the request's permission dialog gone; null until
      * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
      * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`,
      * and a `pause`, reject with `ErrDialogMaybeOpen`.
@@ -184,9 +194,9 @@ export interface RequestDelivery {
     unproven_since: string | null;
 }
 /**
- * How the agent's hooks proved a permission request's dialog gone:
- * - `"tool_ran"`: a Claude PostToolUse or PostToolUseFailure carried its `tool_use_id` (never on a
- *   Codex row).
+ * How agent evidence proved a permission request's dialog gone:
+ * - `"tool_ran"`: a Claude PostToolUse or PostToolUseFailure carried its `tool_use_id`, or
+ *   validated correlated Cursor execution output established that exact tool ran (never on a Codex row).
  * - `"turn_end"`: the turn of the agent that asked ended after it was written; the main agent's
  *   Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified
  *   Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded
@@ -206,11 +216,12 @@ export type ProvenGoneHow = "tool_ran" | "turn_end" | "agent_gone";
 export interface PermissionRequestInfo extends RequestDelivery {
     /** Autoincrement primary key of the permission_requests row. */
     request_id: number;
-    /** UUIDv4 token minted by runRelay for this request. Pass to the decide verb to target a specific row. */
+    /** UUIDv4 token minted by the relay controller for this request. Pass to the decide verb to target a specific row. */
     request_token: string;
-    /** Agent tool that triggered the permission request (e.g. "Bash"). */
+    /** Supplied tool name (e.g. "Bash") or Cursor action title/plan name. */
     tool_name: string;
-    /** Raw JSON string of the tool input as stored in the DB. NOT a nested object. */
+    /** Raw JSON string, not a nested object. Cursor preserves the entire received permission/plan
+     * params envelope byte for byte, including options and absent/null fields, without internal context. */
     tool_input: string;
     /** RFC3339 timestamp when the permission request row was created. */
     requested_at: string;
@@ -580,9 +591,14 @@ export interface SendKeysParams {
     /**
      * Makes the call a pane answer to this fallen-back permission request of the Spawn: one key
      * (`key`), no Enter, recorded as `pane_answer` `"sent"` with `decision` = `as`.
+     * This records the key send, not ACP delivery, receipt or proof.
      */
     request_token?: string;
-    /** A pane answer's claimed verdict, recorded as its decision; never checked against the key. */
+    /**
+     * A pane answer's claimed verdict, recorded as its decision without screen verification or proof.
+     * Before answering ACP, Cursor additionally requires the sent claim to match the selected
+     * offered option's verdict.
+     */
     as?: "allow" | "deny";
 }
 /** Successful sendKeys calls return an empty object. */
@@ -684,7 +700,11 @@ export interface GetPermissionResult extends RequestDelivery {
      * Canonical decision-reason string: "operator" | "timeout" | "find_missing" | "ended" for deny
      * rows ("find_missing" / "ended": still undecided when find-missing marked its spawn missing, or
      * when its spawn ended or was resumed, and closed); "pane" | "pane_outside" | "tool_ran" for a
-     * request closed at the pane; null while undecided and for allow rows decided by decide.
+     * request answered through sendKeys or a Cursor native choice ("pane"), recorded outside
+     * ("pane_outside"), or carrying tool execution evidence ("tool_ran"). Pane claims do not establish
+     * ACP delivery, receipt or proof. Initially null while undecided without an outside claim, and
+     * for an allow from decide. Validated Cursor execution proof fills a missing reason with
+     * "tool_ran" while preserving any earlier verdict and non-null reason.
      */
     decision_reason?: "operator" | "timeout" | "find_missing" | "ended" | "pane" | "pane_outside" | "tool_ran" | null;
     /** RFC3339 timestamp when the verdict was written; null while undecided. */
@@ -699,7 +719,8 @@ export interface RecordPaneAnswerParams {
     request_token: string;
     /**
      * How it was answered, as the caller claims: "allow", "deny", or "unknown" when the answer was
-     * not seen (pass "unknown" unless it was). Stored, never checked.
+     * not seen (pass "unknown" unless it was). Stored, never checked; it never authorizes a Cursor
+     * ACP answer or supplies execution proof.
      */
     as: "allow" | "deny" | "unknown";
     /** The `pane_sha256` of the readPane that showed it answered; compared byte for byte. */

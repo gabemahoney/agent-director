@@ -1,0 +1,76 @@
+E2 TASK2 SOLE BEHAVIORAL REVALIDATION TEST WRITER REPORT
+Task t2.jf1.c1.cz / Epic t1.jf1.c1 / Plan b.jf1.
+Checkout /home/horde/ad-codex/project/agent-director-ftd, feature/b.ftd, HEAD f97b3fcb plus Engineer and prior TestWriter source/test diff.
+Read Task/all 18 children, full prior Engineer/behavior/source-repair reports, CLAUDE test commands/documentation locations, test writing/review guide, current controller/protocol/store/API owners and shared fixtures. No delegation or agent messages. No commits or pushes.
+
+RESULT
+All THREE source repairs independently verified; original FOUR failing source assertions retained unchanged and now green. FIVE old Cursor generic-proof expectations legitimately migrated. Final targeted behavioral run: cursorhost 247 + store 178 + API 61 = 486 distinct passing leaf tests, ZERO failures and skips. This is a single final targeted three-package command, NOT a full unit suite. Parent aggregates excluded. Exact final per-test outcomes: /tmp/ftd-task2-revalidation-per-test.tsv. All run counts: /tmp/ftd-task2-revalidation-counts.txt. Protocol race: 19 leaves x10 =190 passing execution outcomes (19 distinct). Controller race final:32 leaves once plus10 repetitions of arbitration =42 passing execution outcomes (32 distinct), no race reports. Do not sum overlaps across receipts. Vet and git diff --check pass.
+
+OWN TICKET UPDATES
+At start explicitly set active: t3.jf1.c1.cz.6k, .12, .v7. After all relevant migrated/legacy/new/final/race checks green, set these three done. .ha/.bj/.yw/.7p remain done untouched. .kd remains defined and DEFERRED; no full suite owned or run. No Task/Epic/parent/source/doc ticket updates. Final status receipt: /tmp/ftd-task2-revalidation-final-status.json.
+
+FILES CHANGED IN THIS REVALIDATION (5)
+internal/cursorhost/protocol_test.go
+internal/cursorhost/request_question_linux_test.go
+internal/store/request_eligibility_test.go
+pkg/api/pane_answer_fixture_test.go
+pkg/api/sendkeys_hold_test.go
+No production/source fixture implementations, prose, generated output, or public surface edited. Earlier TestWriter files remain as inherited; no source repair assertion weakened.
+
+CHANGES AND EVIDENCE
+1. Deterministic TestProtocolCloseCompletesAcceptedFramesExactlyOnce has two parameterized cases. An actual io.Pipe with no reader guarantees an active Write remains blocked while a second frame is already accepted in the queue. Close must complete BOTH with errors exactly once. Every callback synchronously reenters admission: it must refuse and cannot deadlock on outputMu. The concurrent variant adds16 enqueue callers racing close; every accepted frame must have exactly one failure completion, rejected admissions have none, and only the initial transport Write may occur. Existing prior-close refusal assertion retained unchanged. Race detector10 repetitions passed; no callbacks-under-lock, accepted queued frame abandonment, or replay observed.
+2. Store eligibility fixture now establishes full synthetic persisted runtime/session identity through RegisterCursorRuntime/SetCursorRuntimeSession/gated lifecycle. Cursor unknown/known-child cases first assert generic tool_ran proves zero, then invoke authenticated ProveCursorToolRan with exact token/tool. Wrong tool and mismatched existing token/tool pairs prove nothing. Matching proof releases only target; independent request remains held; main eligibility remains false. Main-turn, child, duplicate/collision, all readers, decision/ack/reopen, legacy NULL/Claude/Codex controls preserved. Cursor explicit proven-main turn-end behavior unchanged. This isolates SQL scope using the existing CursorCheck seam and is NOT claimed as actual kernel/runtime execution evidence.
+3. API paEnv uses a nonempty synthetic session ONLY for Cursor. Narrow proveCursorTool helper reuses existing WithSeedPane complete synthetic binding and ProveCursorToolRan; it never writes proof columns directly or restores generic bypass. Reopened store is registered with shared seeder before adding independent request. All three Cursor sent/delivered/outside cases retain original pre-proof unknown/false/NULL child, reopen, main-turn refusal, stale outside claim, plain-send/pause holds and hash assertions. Added independent acknowledged request, wrong tool and mismatched token/tool negatives. Matching target proof leaves independent hold; only matching independent proof finally releases ordinary send. Historical Claude cases remain and receive the same independent-hold strengthening. Real controller tests independently require actual rawOutput/session/runtime evidence.
+4. Original expired_key selection stays refused before relay-state clearing; fresh connected fallback still works, including prior unacknowledged API allow. Native cancel/timeout/disconnect retirement and partial/uncertain no-replay assertions unchanged. Generic PostToolUse_close/tool_proof helpers fail for ACTUAL Cursor; valid controller execution proof works. NULL-agent/Claude/Codex source compatibility checks green.
+5. Complete focused suite covers independent committed SQL reads at FIRSTBYTE for allow, deny and timeout; noackzeroRELAYbytes for failed/deleted/missing acknowledgement and admission; immutable finite request evidence/restart/runtime loss; delayed locks AND evidence crossing approval/confirm_by; queued allow AND deny retirement; final second guard crossing transport expiry; partial/ack-only no replay; immediate request-specific terminal keys/persistent pane options; pane intent/sent/outside/other-menu semantics; simultaneous real synthetic runtime plan+permission; captured raw params preserved through actual API inspection; direct/fallback questions and opaque/malformed content; valid vs ambiguous shell rawOutput; full stale authority and lifecycle/independent-hold controls. Two prior E1 direct-question expectations remain false with the real concurrent genuine session hold test retained and green.
+
+DEVIATION / TEST-SIDE CORRECTIONS (HONEST RED RECEIPTS RETAINED)
+- Added independent-hold verification exposed missing RegisterStorePath on the reopened API fixture. Initial focused run had cursor247/store178 green but API55 pass/6 fail, all from that fixture contract. Fixed registration, then API61 pass and final486 pass; no source fix required. Initial migration receipt before adding independent hold was18 passing leaves.
+- Additional race testing exposed an older incorrect race-test wait: completedWrite waits for a physical pipe-write event, but final guard rejection uses the request failure callback and emits no writes event. Under competing API transactions the request had durable acknowledgement, queued=true, terminal=true, sent=false and zero output, while the test timed out. First race receipt31 pass/1 fail; diagnostic repetition2 pass/8 fail, NO data race. Source explicitly permits bounded visible fail-closed authority failure and uncertain ack is not receipt. Test now waits for sent OR terminal+visible failure. A sent reply must be exactly ONE and match the winning persisted verdict; a failed reply must have ZERO bytes, explicit failure output, durable ack or native claim, and never replay. Independent plan remains untouched. This aligns the test with the required at-most-one answer / truthful bounded-failure contract; no arbitrary errors, missing completion, replay or safety bypass are accepted. Original four source-repair assertions remain unchanged. Final controller race32 + ten arbitration repetitions passes; final whole targeted command486 passes.
+
+QUALITY REVIEW
+Applied guide's checklist to all additions and inherited Task2 owners: shared fixture reuse, parameterized variants, no cloned harness, external I/O fault seam only, no production-method mocks or fixture/meta tests, no Task3 collector/all-public work, no blanket Cartesian additions. Changed files remain below500 lines. API parallel/serial declarations preserved. The bounded20ms completion observation catches late duplicates; all other new waits bounded by actual callback/transport events. No source defect remains identified. .7p did not need reopening.
+
+RECEIPTS / COMMANDS
+Every repo execution/gofmt/vet ONLY via make sandbox CMD='...'. Host commands limited to read/edit/receipt processing, bees and read-only git. Logs below are retained including failures; counts exclude parent test aggregates:
+migration: leaves {('store', 'pass'): 9, ('api', 'pass'): 6, ('cursorhost', 'pass'): 3}; all test/subtest outcomes {'pass': 21}
+focused: leaves {('cursorhost', 'pass'): 247, ('store', 'pass'): 178, ('api', 'pass'): 55, ('api', 'fail'): 6}; all test/subtest outcomes {'pass': 535, 'fail': 7}
+api-final: leaves {('api', 'pass'): 61}; all test/subtest outcomes {'pass': 69}
+exact-proof-final: leaves {('store', 'pass'): 11, ('api', 'pass'): 6}; all test/subtest outcomes {'pass': 19}
+protocol-race: leaves {('cursorhost', 'pass'): 190}; all test/subtest outcomes {'pass': 220}
+controller-race: leaves {('cursorhost', 'pass'): 31, ('cursorhost', 'fail'): 1}; all test/subtest outcomes {'pass': 35, 'fail': 1}
+arbitration-diagnostic: leaves {('cursorhost', 'fail'): 8, ('cursorhost', 'pass'): 2}; all test/subtest outcomes {'fail': 8, 'pass': 2}
+controller-race-final: leaves {('cursorhost', 'pass'): 42}; all test/subtest outcomes {'pass': 46}
+final: leaves {('cursorhost', 'pass'): 247, ('store', 'pass'): 178, ('api', 'pass'): 61}; all test/subtest outcomes {'pass': 542}
+
+/tmp/ftd-task2-revalidation-migration.log
+make sandbox CMD='gofmt -w internal/store/request_eligibility_test.go pkg/api/pane_answer_fixture_test.go pkg/api/sendkeys_hold_test.go internal/cursorhost/protocol_test.go && go test ./internal/store -run "TestRequestEligibilityWritersReadersAndProof" -count=1 -json && go test ./pkg/api -run "TestUnknownOriginHoldAfterReopen" -count=1 -json && go test ./internal/cursorhost -run "TestProtocolClose" -count=1 -json'
+
+/tmp/ftd-task2-revalidation-focused.log
+make sandbox CMD='gofmt -w internal/store/request_eligibility_test.go pkg/api/sendkeys_hold_test.go && go test ./internal/cursorhost -run "Test(Cursor|AuthorizationAlwaysDenied|AuthorizationNotificationAndTransportFailures|ReporterHeldLifecycleRequiresIndependentEvidence|Protocol|OwnedRuntimeProtectedAndTerminated|IndependentCursorWorkerSurvivesRuntimeTermination|EditableTerminalSubmission|TerminalAdmissionReservesOneIdleTurn)" -count=1 -json && go test ./internal/store -run "Test(Cursor|InsertRelayRequestOneTransaction|RelayAckAndTimeoutDeny|DecideRelayRequestGuards|RelayWritePrecondition|PaneAnswerIntentThenSent|RecordPaneOutsideClaims|CloseToolRanRequests|LegacyNullAgentGatedWritesAndProof|ProveRequestsGone|TurnEnd|ProvenGoneRequest|UnprovenRequest|RequestEligibilityWritersReadersAndProof|CurrentSchemaContradictoryChildRemainsHeld|ExplicitFalseUnknownClosePreservesOtherHolds)" -count=1 -json && go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|DecideRecordsVerdict|DecideFirstCallWins|DecideConcurrentFirstCallWins|GetPermission|PlainSendKeysHeldUntilProven|UnknownOriginHoldAfterReopen|PauseHeldWhileSubagentRequestUnproven|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json && go vet ./internal/cursorhost ./internal/store ./pkg/api ./internal/testsupport/cursorfix'
+
+/tmp/ftd-task2-revalidation-protocol-race.log
+make sandbox CMD='go test -race ./internal/cursorhost -run "TestProtocol" -count=10 -json'
+
+/tmp/ftd-task2-revalidation-api-final.log
+make sandbox CMD='gofmt -w pkg/api/sendkeys_hold_test.go && go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|DecideRecordsVerdict|DecideFirstCallWins|DecideConcurrentFirstCallWins|GetPermission|PlainSendKeysHeldUntilProven|UnknownOriginHoldAfterReopen|PauseHeldWhileSubagentRequestUnproven|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json && go vet ./internal/cursorhost ./internal/store ./pkg/api ./internal/testsupport/cursorfix'
+
+/tmp/ftd-task2-revalidation-exact-proof-final.log
+make sandbox CMD='gofmt -w internal/store/request_eligibility_test.go pkg/api/sendkeys_hold_test.go && go test ./internal/store -run "Test(RequestEligibilityWritersReadersAndProof|CurrentSchemaContradictoryChildRemainsHeld|ExplicitFalseUnknownClosePreservesOtherHolds)" -count=1 -json && go test ./pkg/api -run "TestUnknownOriginHoldAfterReopen" -count=1 -json'
+
+/tmp/ftd-task2-revalidation-controller-race.log
+make sandbox CMD='go test -race ./internal/cursorhost -run "Test(CursorConcurrentAPIPaneArbitration|CursorQueuedAnswersLoseAuthority|CursorPartialAndAckOnlyNeverReplay|CursorNativeFallbackAndRetirement|ProtocolClose)" -count=1 -json'
+
+/tmp/ftd-task2-revalidation-arbitration-diagnostic.log
+make sandbox CMD='gofmt -w internal/cursorhost/request_question_linux_test.go && go test -race ./internal/cursorhost -run "TestCursorConcurrentAPIPaneArbitration" -count=10 -json'
+
+/tmp/ftd-task2-revalidation-controller-race-final.log
+make sandbox CMD='gofmt -w internal/cursorhost/request_question_linux_test.go && go test -race ./internal/cursorhost -run "Test(CursorConcurrentAPIPaneArbitration|CursorQueuedAnswersLoseAuthority|CursorPartialAndAckOnlyNeverReplay|CursorNativeFallbackAndRetirement|ProtocolClose)" -count=1 -json && go test -race ./internal/cursorhost -run "TestCursorConcurrentAPIPaneArbitration" -count=10 -json && go vet ./internal/cursorhost ./internal/store ./pkg/api ./internal/testsupport/cursorfix'
+
+/tmp/ftd-task2-revalidation-final.log
+make sandbox CMD='go test ./internal/cursorhost -run "Test(Cursor|AuthorizationAlwaysDenied|AuthorizationNotificationAndTransportFailures|ReporterHeldLifecycleRequiresIndependentEvidence|Protocol|OwnedRuntimeProtectedAndTerminated|IndependentCursorWorkerSurvivesRuntimeTermination|EditableTerminalSubmission|TerminalAdmissionReservesOneIdleTurn)" -count=1 -json && go test ./internal/store -run "Test(Cursor|InsertRelayRequestOneTransaction|RelayAckAndTimeoutDeny|DecideRelayRequestGuards|RelayWritePrecondition|PaneAnswerIntentThenSent|RecordPaneOutsideClaims|CloseToolRanRequests|LegacyNullAgentGatedWritesAndProof|ProveRequestsGone|TurnEnd|ProvenGoneRequest|UnprovenRequest|RequestEligibilityWritersReadersAndProof|CurrentSchemaContradictoryChildRemainsHeld|ExplicitFalseUnknownClosePreservesOtherHolds)" -count=1 -json && go test ./pkg/api -run "Test(DeliveryRule14Table|DeliveryFactsOnTheWire|DecideRecordsVerdict|DecideFirstCallWins|DecideConcurrentFirstCallWins|GetPermission|PlainSendKeysHeldUntilProven|UnknownOriginHoldAfterReopen|PauseHeldWhileSubagentRequestUnproven|DecideRefusesARequestAnsweredAtThePane)" -count=1 -json'
+
+No make test-sandbox, full-unit run, integration suite, Docker TESTPLAN group, TLC/scheduler/live Cursor run, credentials/auth/login/logout/token copying, .claude edits, real AD store access, source/prose/generated changes, commits or pushes. Docker used ONLY by make sandbox.
+
+INCOMPLETE / QUESTIONS / NEXT
+No unresolved behavioral failures or questions. Canonical DocWriter may proceed against settled source/test behavior. Final .kd writer still owns documentation literal/golden synchronization and full sandbox units AFTER docs settle. No integration run was assigned or attempted; no integration acceptance is claimed.

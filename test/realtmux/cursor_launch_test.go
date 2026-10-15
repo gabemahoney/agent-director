@@ -93,6 +93,13 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 		t.Fatalf("CLI Cursor result %s %v", out, err)
 	}
 	launch := f.launched(t, id)
+	if scenario != "blocked-input" {
+		// SessionStart publishes waiting before the gateway enables prompt input.
+		waitFor(t, "gateway ready for pane input", func() bool {
+			pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
+			return err == nil && strings.Contains(pane.Pane, "Cursor ready")
+		}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
+	}
 	return f, r, launch
 }
 
@@ -250,7 +257,12 @@ func TestCursorQuestionsDeniedWithEitherSetting(t *testing.T) {
 			f, r, launch := newCursorPane(t, disabled)
 			id := launch.ID
 			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, id).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
-			if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: "ASK"}); err != nil {
+			// Keep this question-policy check independent of unsupported extension requests.
+			r.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{
+				json.RawMessage(`{"jsonrpc":"2.0","id":"question-direct","method":"cursor/ask_question","params":{"questions":[{"text":"one"},{"text":"two"}]}}`),
+				json.RawMessage(`{"jsonrpc":"2.0","id":"question-fallback","method":"session/request_permission","params":{"toolCall":{"title":"AskUserQuestion"},"options":[{"optionId":"yes","kind":"allow_once"}]}}`),
+			}})
+			if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: "question policy"}); err != nil {
 				t.Fatal(err)
 			}
 			responses := func() map[string]map[string]json.RawMessage {
@@ -265,15 +277,12 @@ func TestCursorQuestionsDeniedWithEitherSetting(t *testing.T) {
 				}
 				return found
 			}
-			waitFor(t, "all authorization denied", func() bool { return len(responses()) == 4 }, func() string { return fmt.Sprint(responses()) })
+			waitFor(t, "both questions denied", func() bool { return len(responses()) == 2 }, func() string { return fmt.Sprint(responses()) })
 			got := responses()
 			for _, key := range []string{"question-direct", "question-fallback"} {
 				if !strings.Contains(string(got[key]["result"]), `"outcome":"cancelled"`) {
 					t.Fatalf("question authorized %s", got[key]["result"])
 				}
-			}
-			if len(got["unknown-auth"]["error"]) == 0 || !strings.Contains(string(got["plan"]["result"]), `"outcome":"rejected"`) {
-				t.Fatalf("authorization response %v", got)
 			}
 			for _, frame := range r.Frames(t) {
 				if string(frame["method"]) == `"initialize"` && strings.Contains(string(frame["params"]), "askQuestion") {
@@ -374,7 +383,11 @@ func TestCursorRepeatedCancellationDoesNotExtendDeadline(t *testing.T) {
 				}
 			}
 			failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
-			if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), "operation timed out") {
+			reason := "operation timed out"
+			if mode == "denial" {
+				reason = "authorization after cancellation; no response sent"
+			}
+			if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), reason) {
 				t.Fatalf("cancellation did not retain bounded deadline: %v", failures)
 			}
 			if cancels != 1 {

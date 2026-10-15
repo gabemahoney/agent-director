@@ -1,0 +1,92 @@
+E2 TASK2 BEHAVIORAL TESTWRITER REPORT
+Task t2.jf1.c1.cz; parent t1.jf1.c1; checkout feature/b.ftd at starting HEAD f97b3fcb plus Engineer's settled 19-file source diff.
+No commits; no production source or prose documentation edited. All own changes are tests/fixtures. No agent messages or delegation.
+Read all 18 Task children, full Engineer report, SRD technical decisions, CLAUDE documentation locations, test writing/review checklist, relevant architecture fixture inventory, current controller/store/protocol/API/terminal owners and existing fixtures/tests. Sanitized evidence read ONLY R2/protocol.jsonl, R2-mcp/protocol.jsonl and R3-followup-source.json. No authentication files or real AD stores accessed.
+
+OUTCOME / SOURCE FINDINGS: ENGINEER REPAIR REQUIRED (assertions retained)
+1. Stale pane choice becomes native fallback approval after settlement.
+   Repro: TestCursorNativeFallbackAndRetirement/expired_key (request_pane_linux_test.go).
+   A deliberate selection is held before relay expiry; advance both controller/persisted settlement past expiry before tick. requestController.tick clears r.relay at requests.go:261-270 before checking stale choice at 275; the stale-choice check now skips, and the old allow-always choice is claimed/sent under nativeUntil. The test expects ZERO bytes/queue for the expired selection. Freshly chosen fallback still passes, including superseding an unacknowledged API allow. Fix must discard the old selection while preserving new deliberate native fallback, not disable fallback.
+   Ownership: .v7 active (also relevant .12). No assertion weakened.
+2. Generic tool proof helpers bypass Cursor rawOutput validation.
+   Repro: TestCursorGenericToolProofCannotBypassControllerValidation/PostToolUse_close AND /generic_tool_proof (request_proof_linux_test.go).
+   Actual controller-admitted unknown-origin execute request (false main-turn eligibility, NULL child, NULL hook) plus otherwise current authenticated Cursor HookGate. CloseToolRanRequests(PostToolUse) writes pane_answer=tool_ran, decision=allow, proof=tool_ran without ACP rawOutput. ProveRequestsGone(How=tool_ran) independently writes proof without rawOutput. Relevant inherited owners internal/store/pane_writes.go:closeToolRanSQL/CloseToolRanRequests and request_proof.go:ProveRequestsGone.
+   The current external Cursor hook classifier rejects PostToolUse; this is an independently challenged STORE HELPER GUARD gap, not a claim that an external hook currently bypasses classification. Dispatch explicitly required no fake-PostToolUse helper loophole. Main Stop/Interrupt/child-task/generic status and validated controller malformed-output negatives PASS separately. Preserve historical Claude/Codex paths; narrow Cursor helper authority to actual validated gateway proof.
+   Ownership: .12 active.
+3. Closed protocol can accept queued response with no completion/failure path.
+   Repro: TestProtocolClosedTransportRejectsEveryEnqueue (protocol_test.go) reliably finds an accepted enqueue among 32 immediate attempts. sendGuarded selects between p.closed and writable p.outgoing without a prior closed-state refusal, so Go may select output after close. Writer has already stopped and no callback publishes failure. Also manifests intermittently as TestCursorNativeFallbackAndRetirement/disconnected reporting nil instead of failure (recorded red in /tmp/ftd-task2-source-failures.log, happened to pass in broad final receipt).
+   Relevant production owner protocol.go:sendGuarded select (around 120). Zero response bytes alone is insufficient when the API/controller reports successful queueing and never reports failure. Preserve bounded output and uncertain no-replay semantics.
+   Ownership: .6k and .v7 active.
+
+No additional unresolved test/fixture defect. Initial test authoring briefly failed to compile due to using func(Spawn) instead of PaneCheck's func(Spawn, []PermissionRow); corrected fixture signature before substantive pane tests. This was a test edit error, not a production finding.
+
+STATUS CHANGES (ONLY OWN SUBTASKS)
+t3.jf1.c1.cz.ha: done
+t3.jf1.c1.cz.6k: active
+t3.jf1.c1.cz.bj: done
+t3.jf1.c1.cz.12: active
+t3.jf1.c1.cz.v7: active
+t3.jf1.c1.cz.yw: done
+t3.jf1.c1.cz.7p: done
+.ha/.bj/.yw/.7p done; .6k/.12/.v7 remain active pending the above source repairs and focused rerun. .kd untouched/deferred. Parent/Epic/sibling source/doc statuses untouched. Test-quality review completed; failures are reported in band rather than accepted or marked done.
+
+FILES CHANGED (14)
+internal/cursorhost/protocol_test.go
+internal/cursorhost/report_linux_test.go
+internal/cursorhost/request_admission_linux_test.go
+internal/cursorhost/request_boundary_linux_test.go
+internal/cursorhost/request_fixture_linux_test.go
+internal/cursorhost/request_pane_linux_test.go
+internal/cursorhost/request_proof_linux_test.go
+internal/cursorhost/request_question_linux_test.go
+internal/cursorhost/request_runtime_linux_test.go
+internal/testsupport/cursorfix/authorization.go
+internal/testsupport/cursorfix/cursorfix.go
+internal/testsupport/cursorfix/runtime.js
+internal/testsupport/cursorfix/testdata/authorizations.json
+internal/testsupport/cursorfix/testdata/provenance.json
+
+COVERAGE / FIXTURE REUSE
+- Extracted the existing reporter's setup into newRequestEnv, reused by old reporter tests and all new controller/session tests; no cloned harness. Real protected synthetic Node process, actual kernel start/pipe/FD identity, isolated temporary store/HOME/fake-tmux socket, labels/pane ownership, transcript and deterministic cleanup. Every setup-changing test serial by scope; no pkg/api test declarations changed.
+- cursorfix owns typed Scenario/Configure, sanitized captured Authorizations and explicitly synthetic Permission factory. runtime.js now sends typed scenario requests and withholds prompt completion until every type-distinct response ID arrives. Existing string blocked-input scenario and default behavior retained. Real runtime test receives captured simultaneous plan/permission, independently resolves each and verifies peer saw exactly two responses.
+- Captured fixtures: original supplied R2 execute/edit/search/plan and R2-mcp other envelopes, whitespace formatted for checked-in fixture only. Runtime remains synthetic. Raw params as actually received/admitted are compared BYTE-FOR-BYTE via API GetPermission against stored ToolInput. No invented sessionId/options on real plan. Separate synthetic opaque rawInput/rawOutput/content/locations, absent/null plan fields, and uncaptured read/delete/fetch kinds. Provenance labels explicitly distinguish captured envelope, installed-source question signature and synthetic variants.
+- Actual controller admission/inspection, API Decide(max_wait_ms=0), once-only API allow despite offered persistent option, original title/name/tool IDs, NULL hook/child and false eligibility, simultaneous requests, numeric/string ACP IDs, equivalent spelling, active duplicates, answered reuse, bounded IDs/32 real active requests. Malformed nested duplicate/schema/options/names/IDs/kinds/missing once choices and malformed actual-plan fields all fail before answerable rows or wire output.
+- Independent SQL connection reads its own committed delivered_at at FIRST RESPONSE BYTE for allow, deny and timeout deny. Decision does not ack. Failed/deleted/missing ack, failed admission/store/ownership, queued allow AND deny crossing fixed deadlines, arbiter settlement, cancellation, launch/session/connection/runtime loss, deleted ack/row and closure all emit zero bytes. Holds remain independent. Real writer is protocol.sendGuarded/writeLoop, not a mock controller.
+- HoldWriteLock reused for ack crossing approval deadline and confirm_by; slow evidence callback also crosses each deadline. Final writer guard test specifically blocks the SECOND guard until timeout completes, resumes it, then watches for a forbidden late write (including after completion callback). Ack-only crash cut/partial output preserve truthful ack without proof and never replay via pane.
+- Actual PTY terminalInputLoop emits immediate one-key/no-Enter request-specific events for ASCII and Unicode. Two simultaneous menus remain distinct, stale key does not migrate. Explicit native persistent choice works; native claim has no relay ack/proof. Open relay-off/fallen-back choice works; terminal timeout/cancel never revive; intent cannot authorize until sent; other-menu intent/sent refuse; outside record never authorizes ACP/proof.
+- Real Run session uses shared reporter helper lifecycle seam (now also handles SessionEnd), admits a genuine request concurrent with a source-derived direct question, proves no session cancellation/no advertised question capability, resolves genuine request by actual displayed key and exits. Other unit tests independently exercise real store/controller behavior; no external/live integration claim.
+- Actual admitted request survives store reopen and accepting-runtime death while gateway lives with finite immutable confirm_by, NULL hook_alive, no decision-as-ack, no rearming, and fallen_back at deadline. No gateway PID used as request hook.
+- Matching execute-kind completed/failed + integer exitCode/non-null string stdout/stderr proves only exact tool. Missing/ambiguous/null/wrong rawOutput types, wrong session/tool/kind/status, duplicate fields, plan/task completion, Stop/Interrupt/child lifecycle and stale full authority refuse proof. Main identity unchanged; independent hold preserved. Fake generic tool helper gap above left red.
+- Source-derived direct/multiple/multiselect/fallback questions and synthetic ambiguous/malformed/persistent/policy-enabling variants tested under BOTH relay modes and BOTH disable_ask_user values. No answerable rows/pane authority; API allow attempt cannot acquire question authority. Direct supported cancelled extension preserves concurrent genuine hold. The two E1 cancel booleans updated to false with this stronger independent real-session assertion. Shared parser policy exercised; actual E4 load/resume NOT implemented or claimed.
+
+QUALITY REVIEW (.7p)
+All changed test/fixture owners reviewed against guide: per-behavior primary owner (queued/deadline tests only .6k), tables for variants, shared existing setup extracted, files below 500 lines, no fixture/meta-tests, no Task1 migration matrix or Task3 all-caller/collector duplication. No production-method mocks; true external boundaries are synthetic runtime/fake tmux and first-byte writer/fault observer. Time waits restricted to actual deadline challenges, bounded asynchronous observation, and process/terminal polling; no live services. Existing Claude/Codex/public hash/token/pane-intent guards were not weakened. Inherited generic helpers challenged directly and routed as source findings.
+
+AUTHORITATIVE TARGETED COMMANDS / EXACT COUNTS
+No full-suite receipt is claimed. Counts distinguish leaf tests from parent aggregates to avoid double counting.
+/tmp/ftd-task2-behavior-final.log: leaf pass=199, fail=4, skip=0; all test/subtest pass=223, fail=6, skip=0
+/tmp/ftd-task2-admission-final.log: leaf pass=42, fail=0, skip=0; all test/subtest pass=47, fail=0, skip=0
+/tmp/ftd-task2-boundary-final.log: leaf pass=42, fail=0, skip=0; all test/subtest pass=48, fail=0, skip=0
+/tmp/ftd-task2-question-final.log: leaf pass=45, fail=0, skip=0; all test/subtest pass=50, fail=0, skip=0
+Latest-per-test union across these receipts (NOT a single execution or full suite): leaf pass=215, fail=4, skip=0.
+
+Commands (every executed repo build/test/gofmt/vet ONLY through make sandbox CMD=...):
+1. Broad focused receipt /tmp/ftd-task2-behavior-final.log:
+make sandbox CMD='gofmt -w internal/cursorhost/protocol_test.go internal/cursorhost/request_boundary_linux_test.go internal/cursorhost/request_pane_linux_test.go && go test ./internal/cursorhost -run "Test(Cursor|AuthorizationAlwaysDenied|ReporterHeldLifecycleRequiresIndependentEvidence|ProtocolGuardDelayCannotWriteExpiredResponse|ProtocolClosedTransportRejectsEveryEnqueue|OwnedRuntimeProtectedAndTerminated|IndependentCursorWorkerSurvivesRuntimeTermination)" -count=1 -json'
+Exit 1, only the four source-finding leaves above red. Existing reporter 27-case lifecycle matrix and protected/worker runtime regressions pass.
+2. Admission final /tmp/ftd-task2-admission-final.log:
+make sandbox CMD='gofmt -w internal/cursorhost/request_admission_linux_test.go && go test ./internal/cursorhost -run "Test(CursorCaptured|CursorSynthetic|CursorAdmission|CursorMalformed|CursorUnsupported)" -count=1 -json'
+Exit 0, includes final malformed-plan and missing-once-option additions.
+3. Boundary final /tmp/ftd-task2-boundary-final.log:
+make sandbox CMD='gofmt -w internal/cursorhost/request_boundary_linux_test.go && go test ./internal/cursorhost -run "Test(CursorQueued|CursorAck|CursorMissing|CursorPartial|CursorFailedAdmission|ProtocolGuard)" -count=1 -json'
+Exit 0, includes final second-guard late-write observation and cleanup refinement.
+4. Question/session final /tmp/ftd-task2-question-final.log:
+make sandbox CMD='gofmt -w internal/cursorhost/request_question_linux_test.go && go test ./internal/cursorhost -run "Test(CursorQuestion|CursorSession)" -count=1 -json && go vet ./internal/cursorhost ./internal/testsupport/cursorfix'
+Exit 0, includes actual source-derived direct/fallback fields and API allow-attempt refusal. Vet passes.
+5. git diff --check passes (read-only host Git check).
+Earlier focused construction receipts retained at /tmp/ftd-task2-{admission,boundary,pane,proof,question,runtime,session,boundary-refine,source-failures}.log. These are superseded by final files for overlapping cases; initial pane compile error and known source-red receipts are not hidden. Exact counts above are only from authoritative final receipts.
+
+DEVIATIONS / INCOMPLETE / REFUSALS
+Source production fixes intentionally not performed; root must dispatch fresh Engineer with the three findings, then this lane/final TestWriter must rerun focused regressions before documentation/full units. No source assertions accepted/weakened. No source commits or prose documentation edits. All .kd/canonical literal/golden/advice pin sync deferred until source+Doc pass settle as dispatched.
+No full make test-sandbox, Docker TESTPLAN groups, TLC parse/run, scheduler submission, live Cursor, authentication/credential/login/logout/token copying, .claude edits, real AD store, migration changes or public-surface extensions. Sandboxed Docker used ONLY by make sandbox, not integration suite execution. No new formal model. No heavy/live/platform acceptance claimed.
+Questions: none. Three source findings require engineering work, not product clarification.

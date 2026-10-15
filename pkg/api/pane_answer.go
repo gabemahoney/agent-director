@@ -18,7 +18,9 @@ import (
 // the pane's hash, the named keys, the shape of a send-keys call (plain or a
 // pane answer) and the pane answer's sender. None of them reads what the pane
 // says: the hash is byte equality, the named keys are a lookup table, and the
-// claimed verdict (as) is stored, never checked against the key.
+// public send-keys claim (as) is stored without screen verification or proof.
+// The Cursor arbiter separately requires a sent claim to match the actual
+// selected offered option verdict before answering ACP.
 
 // paneSHA256 is the SHA-256 of pane's bytes, lowercase hex: read-pane's
 // pane_sha256, and what send-keys and record-pane-answer compare

@@ -1,0 +1,37 @@
+{
+  "docs/architecture.md": {
+    "sha256": "455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42",
+    "bytes": 1530681,
+    "lines": 22160
+  },
+  "docs/permissions.md": {
+    "sha256": "52e6649dc47d77a583b1ebba91c38ac86098718dbe2f59e050fa6d4a83e38250",
+    "bytes": 87054,
+    "lines": 1472
+  },
+  "docs/usage.md": {
+    "sha256": "fd4626ece6d9adb9bf77b2b179b2a255816f83f6993361513c912e0f6b59c568",
+    "bytes": 35281,
+    "lines": 700
+  },
+  "docs/caller-contract.md": {
+    "sha256": "9b94640871c987b22d9ffd5d967df94fefb0ccebb0a2fcd67908749ca2ede08b",
+    "bytes": 25719,
+    "lines": 421
+  },
+  "docs/settings.md": {
+    "sha256": "5aa57c241e75e85297e24c270a69c36ff2a66a354ea555f2a8ef952def5bb4a1",
+    "bytes": 20640,
+    "lines": 444
+  },
+  "docs/operator-actions.md": {
+    "sha256": "f0a9b4df47c926548f6aa33218613292dde98b7f1c5a27e6b41e21501eadd123",
+    "bytes": 48988,
+    "lines": 937
+  },
+  "tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md": {
+    "sha256": "529b504d25e91775c4b11cb8969fb5e17562160674357ab736a8818b1b033e4a",
+    "bytes": 3909,
+    "lines": 63
+  }
+}

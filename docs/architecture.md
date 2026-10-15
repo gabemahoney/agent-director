@@ -5,7 +5,7 @@
 A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
 - Spawns agent instances (Claude Code, Codex or fresh Cursor, chosen per Spawn) inside tmux sessions.
-- Tracks agent state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. Claude/Codex retain their permission relay; Cursor authorization is currently denied.
+- Tracks agent state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. All three agents share request inspection and decisions; Cursor validates ACP permissions/plans and denies questions before admission.
 - Exposes a CLI for humans and a stdio MCP server for LLM callers — both implemented by the same binary in different modes.
 
 ## Surfaces
@@ -84,7 +84,7 @@ branches on the agent anywhere else. Each seam's own section states its rule
   Codex launch stores `subagent_tracking` 0, an independent store guard. The
   close of a row's subagent entries when its agent is gone is [The liveness
   close of subagent entries](#the-liveness-close-of-subagent-entries).
-- **The permission relay.** What a row's relay proves and holds, per agent: [The
+- **The permission relay.** Claude/Codex relay proof and hold contracts: [The
   relay on Codex rows](#the-relay-on-codex-rows-bssz), checked by the models in
   [`spec/tla/codex/`](../spec/tla/codex/README.md) (see [Model check (`make
   tla`)](#model-check-make-tla)).
@@ -199,20 +199,107 @@ admission. Reports expose the actual recorded path through `jsonl_path`;
 verification. Native Cursor storage is separate; no Claude JSONL substitute,
 load/replay/history recovery or successful unrecorded outcome is claimed.
 
-Authorization is staged fail-closed: all permission/plan requests are denied
-or cancelled. Permission rejection validates the complete options schema:
-every option ID must be nonempty and unique, and every kind must be a known
-ACP allow/reject kind, including options after a usable rejection. Only then
-may the first `reject_once` be selected. Missing rejection, malformed or
-ambiguous options receive a correlated cancelled outcome and request bounded
-turn cancellation. IDs remain opaque exact strings. Questions are never
-advertised and are denied before a
-caller/pane path for either `disable_ask_user` value, including permission
-fallback. There is no answerable Cursor request, relay acknowledgement or
-question state. Full relay, queuing/rotation, resume/reuse, expanded runtime
-setup, group profiles and session help remain outside the current route.
-No group isolation, trust grant, runtime-version or authenticated platform
-acceptance follows from the fixture evidence.
+### Cursor authorization dataflow and authority
+
+`authorization.go` owns the version-grounded adapters and shared pre-admission
+question policy for Cursor `2026.10.12-d47ca18` / ACP1 envelopes.
+`parseAuthorization` validates the complete permission option list and captured
+`cursor/create_plan` fields, rejects duplicate JSON keys at every depth and retains the original params bytes as `ToolInput`.
+`ToolName` is the supplied title/plan name and `ToolUseID` the actual
+`toolCallId`. Optional absent/null plan fields remain untouched; plans acquire
+no fabricated session or native option list. Captured accepted/rejected plan
+outcomes are distinct from cancellation. API allow selects only `allow_once`,
+API deny `reject_once`; native persistent selection requires the exact
+explicitly offered option. Generic `other` is not non-question evidence: only
+the captured MCP title/option shape is admitted. Unsupported/ambiguous shapes
+fail closed visibly within a bound; no schema is invented for unobserved
+approvals. String and numeric request IDs have separate namespaces; equivalent
+numeric spellings normalize. They are independent of outbound RPC IDs, cannot
+replace active/answered IDs, and are bounded to 4096 per connection and 32
+active requests. Tool IDs also cannot be reused on the connection.
+
+`requests.go` owns one `requestController` event-loop arbiter for API decisions,
+native keys, timeout, cancellation and execution proof. Admission calls
+`InsertCursorRequest` to atomically raise `check_permission` and insert the
+request with unknown origin (`MainTurnEndEligible=false`, NULL child identity).
+`internal/store/cursor_permission.go` supplies authenticated gateway entry
+points; no gateway PID is disguised as per-request hook evidence and no fake
+`HookGate` is constructed. Each transaction acquires `BEGIN IMMEDIATE`,
+rereads Spawn and the complete CursorRuntime binding, and checks launch token,
+life, server/pane identity and pid/start, current confirmed session,
+runtime/connection/pipes/fds, nonretirement and nonterminal row state.
+`CursorCheck` independently runs `VerifyRuntime` and `VerifyPane` after the lock; time is checked after potentially
+slow evidence. The immediate-parent hook gate remains unchanged.
+
+Admission fixes a finite millisecond `SettledAt`: configured relay window plus
+four seconds. The approval deadline is settlement minus that reserve. Relay-off
+settlement is immediately past, so existing readers truthfully show
+`fallen_back` and pane availability without enabling `decide`. Native lifetime
+is separately bounded to 30 minutes from admission (relay off), or settlement
+plus 30 minutes (relay on). Prompt timing pauses while actual requests own
+these bounds. Caller restart never rearms settlement or replays a response.
+
+`AckCursorDecision` reuses first-writer decision/ack/timeout predicates and
+checks immutable settlement after lock/evidence delays. Every relay answer,
+allow, deny and timeout denial, commits its own `delivered_at` BEFORE enqueue.
+Failed/missing acknowledgement means zero relay reply bytes; admission/storage
+failure is bounded failure, not a generic unacknowledged denial. Supported
+policy rejection and separately validated cancellation are separate paths.
+An existing allow is never rewritten or acknowledged late. `delivered` is
+acknowledgement, not pipe output, Cursor receipt, native claim, execution or
+dialog closure; an ack-before-crash can remain delivered without receipt.
+
+`protocol.sendGuarded` uses the existing serialized bounded writer with a
+request-specific guard, fixed deadline and completion callback. Immediately
+before Write, `CheckCursorAnswer` rechecks current authority and the exact
+acknowledgement/native claim; the writer checks transport expiry again after
+slow guards. Allows expire at the decision deadline, denials by settlement.
+Queued allow AND deny retire on settlement/cancellation/ownership loss.
+Partial/uncertain output is never replayed. Close and enqueue linearize under
+`outputMu`; active/queued accepted frames receive bounded failure completion,
+with callbacks outside the lock and no locks held across guards or I/O.
+
+`terminalInputLoop` routes a displayed single key immediately without Enter.
+The menu binds each key to token/option at read time; keys are unique across
+the connection and simultaneous menus, never inferred upstream option numbers.
+`ClaimCursorPaneAnswer` arbitrates native choice against API decision, consuming
+automated intent only after `sent` and only when its claimed verdict matches
+the actual selected option. A native choice derives its verdict from that
+option. Neither sent nor native claim proves ACP delivery or receipt.
+Existing send-keys token/hash/ownership and
+intent/sent rules remain. `record-pane-answer` outside claims supply neither
+ACP approval authority nor proof. Before fallback transition, expired captured
+choices are discarded. A fresh deliberate connected choice after settlement
+may resolve an unacknowledged still-open native request, including a recorded
+API decision. Queued/uncertain replies, native timeout and terminal cancellation
+cannot revive. Disconnection is visible failure, never fake pane availability
+or runtime receipt.
+
+Questions are never advertised. Direct, fallback, multi-question and ambiguous
+authorization forms are rejected before admission in both relay modes and both
+`disable_ask_user` settings, with no answerable `ask_user` or pane choices.
+Supported direct extension cancellation does not cancel independent genuine
+requests. Unsupported authorization can require validated bounded session
+cancellation; independent stored holds remain conservative.
+
+Execution proof is deliberately narrow: the current exact request token,
+`toolCallId`, execute kind, session and runtime binding must match a
+`tool_call_update` with completed/failed status and shell `rawOutput` containing
+integer `exitCode` plus non-null string `stdout`/`stderr`.
+`ProveCursorToolRan` then applies existing proof/close semantics to that request
+only. Generic status, plan acceptance, main/child Stop/Interrupt/completion and
+session identity alone provide no such evidence. Non-shell proof remains
+conservative. Generic `CloseToolRanRequests` and
+`ProveRequestsGone(tool_ran)` exclude actual Cursor in SQL with `IS NOT`,
+preserving NULL-agent/Claude/Codex compatibility. Main-turn proof still requires
+durable eligibility plus NULL child identity; actual unknown-origin admission
+never grants it. No child tracking or main conversation replacement is inferred.
+
+Queuing/rotation, load/resume/reuse, expanded runtime setup, group profiles and
+session help remain outside the current route. Linux protected lifetime and
+account limits remain; synthetic controller evidence does not establish
+runtime/version/platform acceptance or all interleavings. Existing formal
+models do not prove this controller; its formal assessment remains separate.
 
 **Must use:** Cursor launch composition and argument checks use the existing
 `internal/spawn` seams and `CursorArgs`; no surface builds another launch.
@@ -220,9 +307,13 @@ Runtime/report checks use `VerifyRuntime`, `VerifyTranscriptPath`, `VerifyPane`
 and `HandleConfig.VerifyCursor`, keeping immediate-parent and conditional
 store guards mandatory. New Cursor record writes use the existing
 `RegisterCursorRuntime`, `SetCursorRuntimeSession`, `MarkCursorRuntimeGone`
-and conditional hook store paths. Outbound protocol changes use the bounded,
-serialized writer and independently closeable transport; preserve the
-registered ownership descriptor until end verification. Protocol, input and
+and conditional hook store paths. Authorization changes MUST extend
+`parseAuthorization`, `authorization.result` and the single `requestController`;
+reuse `InsertCursorRequest`, `AckCursorDecision`, `ClaimCursorPaneAnswer`,
+`CheckCursorAnswer` and `ProveCursorToolRan` with mandatory `CursorCheck`, rather
+than bypassing their transactional authority or fabricating hook evidence.
+Outbound protocol changes use the bounded, serialized writer and independently
+closeable transport; preserve the registered ownership descriptor until end verification. Protocol, input and
 persistence changes extend the single `internal/cursorhost`
 controller/recorder; do not create parallel pipes, a second input owner,
 screen classification or another transcript format.
@@ -235,8 +326,11 @@ Node stand-in, trace and independently observable accepting runtime/worker
 pid and release files. `Runtime.Frames` decodes the received-request trace.
 The fixture covers protocol interaction and controlled runtime/worker loss
 without Cursor authentication. `testdata/provenance.json` explicitly labels
-protocol 1, the pinned Node interpreter, synthetic origin and absence of
-an authenticated Cursor capture. A fixture pass proves the exercised AD
+protocol 1, the pinned Node interpreter and the synthetic unauthenticated
+runtime. It separately labels `authorizations.json` permission/plan envelopes
+extracted from sanitized captures, installed-source-derived question signatures,
+and synthetic malformed/kind/ID/race/timing variants. Captured envelopes do not
+make the executing stand-in authenticated. A fixture pass proves the exercised AD
 behavior; it does not prove native Cursor/version/platform support.
 
 **Must use:** tests requiring a Cursor protocol/runtime stand-in extend
@@ -1379,18 +1473,18 @@ columns to this same list. None has a CHECK constraint or an index.
 
 | Column | Type | Written by | Meaning |
 | --- | --- | --- | --- |
-| `hook_pid`, `hook_starttime`, `hook_pidns` | INTEGER, TEXT, TEXT | the relay hook's first write | The relay hook as it read itself at its start (`HandleConfig.Self`): its pid, its start time (field 22 of `/proc/self/stat`, the form `proc_starttime` records) and its pid namespace (the target of `/proc/self/ns/pid`, as `probe.SelfPIDNamespace` reads it; `""` on darwin). NULL when it could not read them. |
-| `tool_use_id`, `agent_id` | TEXT | the relay hook's first write | The hook input's fields; NULL when absent. Recorded, never a key (no index or UNIQUE covers either). |
-| `delivered_at` | INTEGER (epoch ms) | the relay hook's ack or timeout deny | The hook's confirmation, committed before it writes its answer. |
-| `settled_at` | INTEGER (epoch ms) | the relay hook's first write | The hook's kill instant plus the 2 s reserve: the request's `confirm_by`. NULL marks a request recorded before v7 (`PermissionRow.PreV7`). |
-| `hook_gone_at` | INTEGER (epoch ms) | readers, `decide`, `send-keys`, `record-pane-answer`, a pane answer's intent and the PostToolUse close | When a reader first found the request fallen back; `COALESCE`d, so the first value stays. |
+| `hook_pid`, `hook_starttime`, `hook_pidns` | INTEGER, TEXT, TEXT | the relay hook's first write (all NULL for Cursor gateway requests) | The relay hook as it read itself at its start (`HandleConfig.Self`): its pid, its start time (field 22 of `/proc/self/stat`, the form `proc_starttime` records) and its pid namespace (the target of `/proc/self/ns/pid`, as `probe.SelfPIDNamespace` reads it; `""` on darwin). NULL when it could not read them. |
+| `tool_use_id`, `agent_id` | TEXT | initial request admission | Hook input fields, or Cursor's actual `toolCallId` and NULL child identity. NULL when absent. No index or UNIQUE covers either; Cursor proof additionally binds the exact request token. |
+| `delivered_at` | INTEGER (epoch ms) | the relay hook's or Cursor request controller's ack/timeout deny | Durable acknowledgement committed before answer output; Cursor commits before enqueue. Never receipt or execution proof. |
+| `settled_at` | INTEGER (epoch ms) | initial request admission | The fixed `confirm_by`: Claude/Codex hook kill plus 2 s; Cursor decision window plus 4 s, immediately past for relay off. NULL marks a request recorded before v7 (`PermissionRow.PreV7`). |
+| `hook_gone_at` | INTEGER (epoch ms) | readers, `decide`, `send-keys`, `record-pane-answer`, pane intent, Cursor native claim and the PostToolUse close | When a reader first found the request fallen back; `COALESCE`d, so the first value stays. |
 | `attempted_decision`, `attempted_at` | TEXT, INTEGER (epoch ms) | `decide` refusing with `ErrRelayFallenBack` | The refused verdict, the latest one; shown, never acted on. |
-| `pane_answer` | TEXT NOT NULL DEFAULT `'none'` | the pane writes (`internal/store/pane_writes.go`) | How the request was answered at the pane (b.146 step 2b): `none` (nothing recorded through agent-director), `intent` (a pane answer's intent, its key maybe typed), `sent` (its key sent), `outside` (`record-pane-answer`), `tool_ran` (the PostToolUse close). `none` and `intent` leave a request awaiting an answer; the other three close it (`PermissionRow.PaneAnswered`). The values are the `PaneAnswer*` constants of `internal/store/permission.go`. |
-| `pane_as` | TEXT | a pane answer's intent, `record-pane-answer` | The verdict the pane answer claims (`allow`, `deny`; `unknown` from `record-pane-answer`): stored, never checked. |
+| `pane_answer` | TEXT NOT NULL DEFAULT `'none'` | pane writes (`internal/store/pane_writes.go`), Cursor native claim/proof | How the request was answered at the pane (b.146 step 2b): `none` (nothing recorded through agent-director), `intent` (a pane answer's intent, its key maybe typed), `sent` (its key sent or a Cursor native choice recorded; neither establishes ACP delivery, receipt or proof), `outside` (`record-pane-answer`), `tool_ran` (Claude PostToolUse close or validated Cursor execution). `none` and `intent` leave a request awaiting an answer; the other three close it (`PermissionRow.PaneAnswered`). The values are the `PaneAnswer*` constants of `internal/store/permission.go`. |
+| `pane_as` | TEXT | pane intent, `record-pane-answer`, Cursor native claim | The claimed verdict (`allow`, `deny`; `unknown` from `record-pane-answer`). Public pane writes store it without interpreting the screen or verifying its verdict. Before granting ACP response authority, Cursor additionally requires a sent claim to match the actual selected option; native choices derive their verdict from that option. An outside claim never supplies ACP approval authority or proof. |
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed, every request recorded before v7 included. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude only: a `PostToolUse` or `PostToolUseFailure` with its `tool_use_id`; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor execution (`ProveCursorToolRan`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor shell execution; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 ### v11 columns: durable main-turn proof eligibility
@@ -1412,8 +1506,9 @@ Legacy `UpsertOpenPermissionRequest[Result]` uses the same NULL-safe non-Cursor
 semantics in its gated INSERT SELECT. Supported historical NULL/malformed agents
 are compatibility data, never a public agent default. All public JSON and
 CLI/MCP/Go/TypeScript parameters remain unchanged; the bit is internal metadata.
-A future audited Cursor admission path must independently establish main origin;
-current authorization remains denied. Plan admission/proof policy is later work.
+`InsertCursorRequest` explicitly persists false with NULL child identity for
+actual Cursor admissions. Any future main-origin support requires independent
+evidence; authorization admission, plan acceptance and native claims grant none.
 
 Every request reader uses `permissionColumns`/`scanPermissionRow`, reconstructing
 the bit from SQLite after restart. Decision, acknowledgement, timeout, pane
@@ -1515,11 +1610,12 @@ guard reads. The writes and the derivation live in
 | `settled_state` | TEXT NOT NULL DEFAULT `''` | every write of `state`, in the same statement | The last settled state as of the row's last raw change: what a read with a settle time reports while that change has not held long enough. `''` only on a row no write has given one (a hand-inserted row), which every reader takes as its raw state. |
 | `state_changed_ms` | INTEGER NOT NULL DEFAULT 0 (epoch ms) | every write that changes `state`'s value, in the same statement | When the raw state last changed, from SQLite's own clock inside the writing statement, under its write lock (`nowMsSQL`: `unixepoch('subsec')` in whole milliseconds; SQLite 3.42 or later, the bundled one is 3.46.0). 0 is older than any settle time. A write of the same value keeps it. |
 
-- **Hook writes** of a non-terminal value V (`ApplyHookTransitionResult`'s
+- **Settling writes** of a non-terminal value V (`ApplyHookTransitionResult`'s
   transitions, both statements of `ApplyHookWaitingIfWorking`,
-  `RecordSessionStartIdentity` and `InsertRelayRequest`) use
-  `hookStateSet` with the writing process's settle time (`Store.settleMs`,
-  set by `SetSettleMs`). SET sees the row as it was before the statement,
+  `RecordSessionStartIdentity` and `InsertRelayRequest`), plus authenticated
+  gateway admission through `InsertCursorRequest`, use `hookWriteStateSet`
+  (which selects `hookStateSet` for a non-terminal value), with the writing
+  process's settle time (`Store.settleMs`, set by `SetSettleMs`). SET sees the row as it was before the statement,
   so the statement alone decides: V equal to the raw state changes none of
   the three columns, so a same-value write or a duplicate hook never
   restarts the clock (a soft refresh writes no state at all); otherwise
@@ -1532,7 +1628,8 @@ guard reads. The writes and the derivation live in
   restore writes it back; SessionStart sets `waiting` whatever the prior
   state), makes such a write: the move settles.
 - **Immediate writes**: a terminal value (`ended`, `missing`), a hook's
-  included, and every write that is not a hook's: `InsertPending`,
+  included, and every state write outside the settling category above:
+  `InsertPending`,
   `find-missing`'s mark (`MarkMissingIfSameLife`), its Codex move
   (`MarkEndedIfSameLife`) and its repair
   (`RepairCheckPermissionIfSameLife`), `EndHeldLaunch`, `MoveToPending`,
@@ -1561,8 +1658,9 @@ guard reads. The writes and the derivation live in
   to settle.
 - **Must use:** every statement that writes `spawns.state` writes both
   settle columns in that same statement, through `hookWriteStateSet` (a
-  hook's write) or `immediateStateSet` / `immediateSettleSet` (every other
-  write), never from a Go-side read of the row (a duplicate hook would
+  hook's write or authenticated Cursor request admission) or
+  `immediateStateSet` / `immediateSettleSet` (every other state write), never
+  from a Go-side read of the row (a duplicate hook would
   restart the clock) and never with a Go clock (the statement takes
   `nowMsSQL` under its write lock). Every read that reports a state to a
   caller takes it from `SettleRead.stateExpr`, with the reader's clock taken
@@ -4516,7 +4614,11 @@ row can read `working` while only they work: the row reflects the
 process. Claude Code and Codex hooks follow this process gate (see
 [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Cursor
 is also supported through its authenticated ACP runtime and lifecycle gate;
-its authorization requests remain denied. `respawn-pane` of the agent's pane changes the pane pid, so
+validated permissions and blocking plans use the
+[Cursor authorization controller](#cursor-authorization-dataflow-and-authority).
+Questions and unsupported or policy-rejected authorization remain denied or
+cancelled before admission. `respawn-pane` of the agent's pane changes the
+pane pid, so
 the agent's hooks are then ignored, visibly.
 
 ### Subagent capture
@@ -4980,12 +5082,15 @@ to the `state` that `status`, `get` and `list` report on every surface
   reads A, then C once C has held for T from the B→C change.
 - **At once.** A raw `ended` or `missing` reports at once, a hook's
   included, so a dead agent never reads as alive for T. So does every
-  change a command makes: `InsertPending` (spawn), `EndHeldLaunch`
+  command state change outside authenticated Cursor request admission:
+  `InsertPending` (spawn), `EndHeldLaunch`
   (spawn's held name), `find-missing`'s mark and its `check_permission`
   repair, `MoveToPending` and `RestoreAfterFailedResume` (`resume`),
   `ResetForReuse` and `RestoreAfterFailedReuse` (spawn with the reuse
   opt-in). Such a value becomes the last settled value at once: a caller
   that has just run `resume` reads `pending`, never `ended` for another T.
+  `InsertCursorRequest` instead uses the settling-write category described
+  under [Settle time](#settle-time-b3ie).
 - **Hooks out of a terminal state settle.** For Claude/Codex the hook gate checks only the
   hook's parent process, and a row keeps its pane through `find-missing`'s
   mark and the ended transition, and gets it back from resume's restore, so
@@ -7450,22 +7555,20 @@ with source `ad_send_keys` (see [`ad.*` event namespace](#ad-event-namespace)).
 Relay guard (b.146 rule 7, `evaluateRelayGuard` and
 `spawnRequests.sendKeysRefusal` in `pkg/api/sendkeys_relay.go`): on a row
 with `relay_mode=on`, in any live state, `SendKeys` reads every permission
-request of the row by the check-before-read rule, judging each relay hook
-by its process (rule 14), and refuses, with no tmux call, while a relay
-hook of the row may still answer (`ErrSendKeysWhileRelayed`), while a plain
-call meets an open fallen-back request (`ErrRelayFallenBack`), while a
-plain call without `expect_pane_sha256` meets a request no hook of Claude
-Code has proven gone (`ErrDialogMaybeOpen`, b.146 step 2c; a plain call
-with the hash is decided by its hash check instead), or while a pane
-answer's request is not open and fallen back or carries another pane
-answer still being sent. No time window, dialog probe or screen read is
-involved: the first rule holds exactly as long as a relay hook may still
-answer, and the dialog hold exactly until a hook proves the request gone.
-A pane answer applies the guard again under the store's write lock
-before its key (see "Send-keys interaction" and "The dialog hold" in the
-relay chapter for the rules, the pane answer and the messages). `pause`
-runs the same guard, as a plain call without a pane hash (b.zdz; see
-[`pause`](#pause)).
+request by the check-before-read rule. It judges process evidence where
+present and uses fixed persisted settlement when hook identity is NULL,
+including Cursor requests. It refuses, with no tmux call, while a request
+relay may still answer (`ErrSendKeysWhileRelayed`), while a plain call meets
+an open fallen-back request (`ErrRelayFallenBack`), or while a plain call
+without `expect_pane_sha256` meets an unproven dialog (`ErrDialogMaybeOpen`).
+A pane answer must name an open fallen-back request without another sender's
+pending answer. Valid agent-specific proof releases the dialog hold;
+acknowledgement or a pane claim does not. No screen classification supplies
+these facts. A pane answer repeats the guard under the store's write lock;
+`pause` uses it as a plain call without a hash. The public relay guard is
+skipped for relay-off rows; Cursor's native controller still checks request
+identity, lifetime and arbitration. See [Cursor authorization](#cursor-authorization-dataflow-and-authority)
+and the relay chapter's pane-answer and dialog-hold contracts.
 
 Order of the refusals before any tmux call (`sendKeysRun.run`): the shape
 of the params (`planSendKeys`), the state guard (which also refuses a
@@ -10296,7 +10399,9 @@ call, as they do to a CLI verb (see [Per-Client logger (Pin H4)](#per-client-log
 ## Permission relay
 
 Orchestrators can intercept tool permission requests from Spawns, decide
-allow/deny out-of-band, and learn whether the verdict reached the agent.
+allow/deny out-of-band, and learn whether the relay durably acknowledged
+the verdict. Acknowledgement does not establish agent receipt, execution or
+dialog closure.
 Conceptually:
 
 ```
@@ -10319,7 +10424,9 @@ pane") and `docs/caller-contract.md` ("Permission relay"). This section is the m
 (b.146 step 2: the rules and problems of the design, numbered as in
 `timeout-design-final.md`). The agent is Claude Code or Codex; what differs
 on a Codex row is gathered in "The relay on Codex rows" below, and the rest
-of this section holds for both. Every request carries a set of delivery facts
+of this hook lifecycle holds for both. Cursor uses the separate
+[authorization controller](#cursor-authorization-dataflow-and-authority).
+Every request carries a set of delivery facts
 derived when it is read; the store records only what the relay hook,
 `decide` and the readers observed (the v7 columns under
 [`internal/store`](#internalstore)).
@@ -10709,8 +10816,11 @@ refresh does not mean readiness; the reporter independently verifies a genuine
 hold as described in [Cursor gateway](#cursor-gateway-and-current-launch-binding).
 
 Bee b.36h's historical model in `spec/tla/hold36h/` checks the original
-working-write design. The changed E2 overlay and its pending scheduler evidence
-are described under [Model check (`make tla`)](#model-check-make-tla).
+working-write design. The E2 Task1 overlay
+has an [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
+for source `4e12100cc590c0c53e70c2e0ada336e116e713b5`, recorded in receipt
+commit `f97b3fcb`. Its scope does not prove the Task2 request controller or
+current authenticated behavior; see [Model check (`make tla`)](#model-check-make-tla).
 
 **A request proven gone holds nothing (b.omt).** A request a person
 answered at the pane outside agent-director still awaits an answer, since
@@ -10963,7 +11073,8 @@ only once its permission dialog is answered allow, and the agent's `PostToolUse`
   (b.omt; see "The row after the last answer" above).
   `CloseToolRanRequests` (`internal/store/pane_writes.go`) reads the row's
   requests recorded from v7 on (`settled_at` set) with that `tool_use_id`
-  that still await an answer, judges each one's relay hook with
+  that still await an answer. Its conditional mutation excludes actual Cursor
+  while preserving NULL-agent compatibility; it judges each one's relay hook with
   `HandleConfig.RelayHookGone` before its write (a request whose hook may
   still answer it is left alone), and closes each other one with one
   statement guarded by `awaitingAnswerSQL` and the hook gate: `pane_answer`
@@ -11010,9 +11121,11 @@ docs/engineering-guide.md).
   `proven_gone_how` on the requests the proof covers
   (`RequestProof.match`): `tool_ran` covers the requests whose
   `tool_use_id` is the hook's, whatever their `agent_id` (an empty id
-  proves nothing); `turn_end` means the turn of the agent that asked ended
-  after the request was written, and the main agent's `Stop` or idle
-  prompt, Codex main `Stop`/`Interrupt`, or verified Cursor main
+  proves nothing); the conditional UPDATE excludes actual Cursor with
+  NULL-safe `agent IS NOT 'cursor'`. Cursor uses only the authenticated validated
+  `ProveCursorToolRan` route described above; `turn_end` means the turn of the
+  agent that asked ended after the request was written, and the main agent's
+  `Stop` or idle prompt, Codex main `Stop`/`Interrupt`, or verified Cursor main
   `Stop`/`Interrupt`, cover only requests with durable eligibility true AND
   `agent_id IS NULL`, recorded before the hook started. Historical non-Cursor
   main behavior is preserved; child/unknown-origin completion or session end
@@ -11109,7 +11222,8 @@ docs/engineering-guide.md).
 `PermissionRow.ProvenGone()` (through `spawnRequests.unproven`), never a
 test of `delivered_at`, `pane_answer` or `closed_at`; whether it holds
 the row is `holdsRowSQL` (see "The row after the last answer" above); and a proof is
-written only through `ProveRequestsGone`, `proveAgentGoneSQL`, the
+written only through `ProveRequestsGone`, authenticated exact-request
+`ProveCursorToolRan` after validated execution, `proveAgentGoneSQL`, the
 PostToolUse close or the v6 → v7 hop's `v7ProveFinishedSQL` (see "Must use: a request's proof" under
 [`internal/store`](#internalstore)).
 
@@ -11369,11 +11483,14 @@ before the upgrade (rule 5's compatibility clause), through
     shares (`decide`'s, the relay hook's timeout deny, a close's deny
     through `closedRequest.emitDeny`, and the closes at the pane: a pane
     answer's `sent`, `record-pane-answer`'s `outside`, the PostToolUse
-    close); a `decision` of `""` (an outside record claiming `unknown`) is
+    close, and Cursor timeout/native/proof mutations through
+    `AckCursorDecision`, `ClaimCursorPaneAnswer` and `ProveCursorToolRan`);
+    events carry the actual final committed verdict and reason. A `decision`
+    of `""` (an outside record claiming `unknown`) is
     emitted as null, as an empty `decision_reason` is.
   - The value sets: `DecisionReason*` (`operator`, `timeout`,
     `find_missing`, `ended`, `pane`, `pane_outside`, `tool_ran`),
-    `WriterProcess*` (`hook`, `decide`, `find_missing`, `send_keys`,
+    `WriterProcess*` (`hook`, `cursor_host`, `decide`, `find_missing`, `send_keys`,
     `record_pane_answer`, `resume`), `PaneAnswer*` (`none`, `intent`,
     `sent`, `outside`, `tool_ran`) and `ProvenGone*` (`tool_ran`,
     `turn_end`, `agent_gone`), with the `PermissionRow` predicates
@@ -12206,7 +12323,8 @@ contract is pinned by `TestGetPermissionRequestByTokenConcurrentReads` in
 ### Cap-based GC
 
 To bound `permission_requests` table growth, every request insert
-(`InsertRelayRequest`, and the seeding `UpsertOpenPermissionRequest`) runs
+(`InsertRelayRequest`, authenticated `InsertCursorRequest`, and the seeding
+`UpsertOpenPermissionRequest`) runs
 an optional DELETE step **inside the same transaction as the INSERT**
 (`evictClosedRequests`, `internal/store/relay_writes.go`). After inserting
 the new request, if the total row count exceeds the effective cap, the
@@ -12280,27 +12398,26 @@ must use them, never free-form strings:
 | Value | `decision` | Written by |
 | --- | --- | --- |
 | `operator` | `deny` | `Decide` verb (orchestrator deny; an allow records no reason) |
-| `timeout` | `deny` | the relay hook's timeout deny (`DenyRelayTimeout`, which records its own `delivered_at` in the same statement) |
+| `timeout` | `deny` | the relay hook's `DenyRelayTimeout` or gateway `AckCursorDecision` timeout deny, recording its own `delivered_at` |
 | `find_missing` | `deny` | `find-missing`'s mark (`MarkMissingIfSameLife`), which denies the marked row's undecided open requests in the mark's own transaction (`closeOrphanedRequests`) |
 | `ended` | `deny` | the terminal SessionEnd's move to `ended` (`applyEndedTransition`) and resume's move to `pending` (`MoveToPending`), which deny the row's undecided open requests in their own transaction (`closeOrphanedRequests`), and `find-missing`'s and `pause`'s Codex move to `ended` (`MarkEndedIfSameLife`), which does the same on a Codex row whose process is gone and that holds an end report |
-| `pane` | `allow` or `deny` | a pane answer through `send-keys` (`RecordPaneSent`): the caller's claimed verdict |
+| `pane` | `allow` or `deny` | `RecordPaneSent` for a public `send-keys` claim, or `ClaimCursorPaneAnswer` for a native Cursor choice (including a matching sent claim) |
 | `pane_outside` | `allow`, `deny` or NULL | `record-pane-answer` (`RecordPaneOutside`): the caller's claim, NULL for `unknown` |
-| `tool_ran` | `allow` | the PostToolUse close (`CloseToolRanRequests`) |
+| `tool_ran` | `allow` or a preserved earlier verdict | the PostToolUse close (`CloseToolRanRequests`, allow), or authenticated `ProveCursorToolRan` filling a missing reason while preserving an earlier decision |
 
 `find_missing` and `ended` are the fail-closed deny a close writes, no
 verdict a caller or a relay hook chose (`PermissionRow.CloseDenied`): for a
 request recorded before v7, delivery counts it as no verdict.
 
-**Null semantics.** `decision_reason` is `NULL` in exactly two cases:
-
-- Open rows (`decision IS NULL`, no pane answer recorded) — no verdict has
-  been written yet.
-- Rows allowed by `decide` (`decision = 'allow'`) — a successful allow
-  carries no reason annotation.
-
-Every deny, and every verdict recorded at the pane, carries a non-null
-`decision_reason`; a row closed by `record-pane-answer` with the claim
-`unknown` carries `pane_outside` and a NULL `decision`.
+**Null semantics.** Undecided rows without a pane answer initially have no
+reason; a successful API allow also initially records NULL. Later validated
+Cursor execution through `ProveCursorToolRan` fills a missing reason with
+`tool_ran` without replacing an existing decision or non-null reason.
+Prior deny/operator, timeout, pane and outside reasons remain intact.
+Native Cursor choices can record `pane` without a `send-keys` call.
+Every deny and pane verdict has a reason; an outside `unknown` record has
+`pane_outside` and NULL decision until a later valid writer fills that verdict.
+A reason is an annotation, not an immutable identity of the original writer.
 
 **Stability policy.** New values are release-note-only changes; there is no
 `protocol_version` field on the wire. A caller that meets a
@@ -12433,8 +12550,8 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) both call.
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
 | `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.hook.pane_is_grandparent` | `ad_hook` | One per SessionStart refused with `pid_mismatch` on a `pending` row whose pane process is the hook's grandparent (b.9n6, b.zde; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), written by `emitPaneIsGrandparent` (`internal/hook/gate.go`) right after that hook's `ad.hook.ignored`; not once-only. Carries `instance_id`, `pane_pid` (the row's pane process), `pane_command` (its command name; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract and claims only that structure; `advice` is supplementary English naming both causes (a launcher that does not exec, a hook run through a shell), chosen by the row's agent: a Claude row's also names `[launch] claude_path`, a Codex row's names the `codex` program, the launcher case and `[launch] codex_path`. Fail-open; it changes nothing else. Never another row's id or any session-environment content (SR-14, SR-15) |
-| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write (`ApplyHookTransition`, `ApplyHookWaitingIfWorking`, `ApplyHookEndReport` (a Codex end report: prior and new state equal, `soft_refresh` true, `triggering_event_name` `SessionEnd`), `RecordSessionStartIdentity`, and the relay hook's first write `InsertRelayRequest`, from the prior state to `check_permission`, emitted after its transaction commits), including same-state writes, soft-refresh ticks and the gated `working` hold; a hook the gate did not apply emits none, and the relay hook's ack and timeout deny write no state and emit none. SessionStart on a resumed row records `prior_state` `pending`, and so does SessionStart on a row `find-missing` noted `unreported` (the note changes no state). Hook-driven writes are the only ones that emit it: a spawn's insert and `find-missing`'s writes (its mark, and its `unreported` note, which writes no state) never did, `resume`'s move and restore do not (their own `ad.resume.*` events record them), and reuse's reset and restore do not (`ad.spawn.reused` and `ad.spawn.reuse_restored` record them) (SR-A-2.2, SR-14) |
-| `ad.row_mutation.committed` | `ad_store` | One per committed request insert (`mutation_kind` `insert`) and per committed decision write (`emitDecisionCommitted`, its `writer_process` naming the writer: `decide`'s verdict (`decide`), the relay hook's timeout deny (`hook`), the deny a close of a Spawn's requests writes on each undecided request (`find_missing` for the mark and for the Codex move to `ended`, which `pause` can make too, `hook` for the terminal SessionEnd's ended transition, `resume` for resume's move; no record for a decided request the close only closed), a pane answer's `sent` (`send_keys`), `record-pane-answer`'s record (`record_pane_answer`; `decision` null for the claim `unknown`) and the PostToolUse close (`hook`)) (SR-A-2.6, Epic 3). The relay hook's ack, `hook_gone_at`, a refused `decide`'s attempted verdict and a pane answer's intent and its release write `permission_requests` without one: `ad.resume.observed` records an ack that reached stdout, and `ad.decide.called` a refused call |
+| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, and per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, find-missing, resume and reuse keep their own existing event contracts. |
+| `ad.row_mutation.committed` | `ad_store` | After COMMIT, one per request insert and established decision mutation, with final persisted request id/token/tool/decision/reason. `writer_process` uses the closed `WriterProcess*` set: `hook`, `cursor_host`, `decide`, `find_missing`, `send_keys`, `record_pane_answer`, `resume`. Actual gateway admission, timeout, native claim and exact-tool proof use `cursor_host`; genuine hook paths retain `hook`. Cursor native/proof writes reuse `emitDecisionCommitted`; complete duplicate proof performs no UPDATE or event. Pure acknowledgement of an existing verdict, hook-gone/attempt/intent/release writes, nonmatch, errors and rollback emit no mutation event. Trail failure after COMMIT is fail-open and cannot undo the mutation. No raw ACP params or execution output is logged. |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`), `ErrStoreBusy` (a `max_wait_ms` bound reached before the verdict was recorded) and `ErrInvalidFlags` (a negative `max_wait_ms`); a successful call is `ok` whether its `delivery` is `delivered` or `not_confirmed` (SR-A-2.4, Epic 4) |
 | `ad.find_missing.tick` | `ad_find_missing` | Written by find-missing only for a guarded write that applied (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)); fail-open. Every tick carries `instance_id`, `prior_state`, `new_state`, `reconciliation_reason` and `source`. **Codex-move ticks** (`markEndedSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied move of a Codex row to `ended`, made by `find-missing` or by `pause`, `prior_state` the row's state before the move, `new_state` `ended`, `reconciliation_reason` `proc_absent`, source `ad_find_missing` and no extra field; the move's close-out ticks and denies are as a mark's. **Mark ticks** (`markMissingSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied mark, `prior_state` the row's state before the mark and `new_state` `missing`, with `reconciliation_reason` one of `proc_absent` (the agent process, from the SessionStart identity or the pane identity, recorded or adopted, is gone; no extra field), `tmux_absent` (the lookup found no session of the row's current launch and no session holds the recorded name, or an Ours row that records no pane has no pane carrying its launch token; plus `lookup_outcome`, the lookup's outcome token: `gone`, `leftover` or `ours`) or `tmux_name_held` (as `tmux_absent`, but a session holds the recorded name; plus `lookup_outcome` and `tmux_session_name`, the recorded name). **Close-out ticks** (`MarkMissingIfSameLife` and `MarkEndedIfSameLife`, `internal/store/find_missing_writes.go`, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`): one `permission_orphan_closeout` per permission request the mark's transaction closed (each request still awaiting an answer: denied when undecided, or only closed when decided but unacked), written once it commits, in request-id order, each after that request's `ad.row_mutation.committed` when the mark denied it, and all before the mark's own tick, carrying `request_token`, `prior_state` and `new_state` null. **Note ticks** (`writeLivenessNote`, and `writeUnreportedNote` for the `unreported` note of a live `pending` row, b.kdf; both through `emitNoteTick`): `prior_state` and `new_state` null, `reconciliation_reason` the note (`probe_eacces`, `process_not_seen_session_present`, `process_not_seen_tmux_unchecked`, `tmux_server_changed`, `provenance_conflict`, `unreported`, or one of the unusable-recorded-name notes `tmux_session_name_empty`, `tmux_session_name_control_char` and `tmux_session_name_rewritten`, which carry no extra field), at most one per applied note write, and only when the row goes from no note to a note or enters `provenance_conflict` from no note or another note. So the `unreported` note ticks once, reason `unreported`, when it is written onto a row with no note, and not when it replaces another note; it writes no state, so it never has a state tick, and a sweep that finds the row already noted `unreported` writes and ticks nothing. No tick for a clear, for a note equal to the one the sweep read, for any other change of note, or for a write that found the row changed or absent or failed in the store (SR-11.4, SR-11.6, SR-14). A mark is the sweep's judgement on the evidence available to it, not proof that the agent has exited (SR-18.2). **Repair ticks** (`RepairCheckPermission`, `pkg/api/find_missing_repair.go`; b.146 rule 9): exactly one per applied repair of a relayed row left in `check_permission`, `prior_state` `check_permission`, `new_state` the state written (`waiting` or `working`) and `reconciliation_reason` `stale_check_permission`, with no extra field. There is no global-refusal tick. (SR-A-2.5) |
 | `ad.relay_attempt.completed` | `relay_hook` | One per worker permission-relay attempt (SR-A-2.3, Epic 6) |
@@ -12457,8 +12574,8 @@ The `source` field identifies which emitter wrote the line:
 | Value | Emitter |
 |-------|---------|
 | `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`) and `ad.hook.pane_is_grandparent` (`emitPaneIsGrandparent`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
-| `ad_spawn_store` | `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
-| `ad_store` | `internal/store/permission.go` — permission-request row mutations |
+| `ad_spawn_store` | `internal/store/cursor_permission.go` — authenticated Cursor admission (`ad.spawn.state_transition`); `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
+| `ad_store` | `internal/store/permission.go` — shared permission mutation emitter and writer constants; `internal/store/cursor_permission.go` — gateway admission, timeout, native and proof mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
 | `ad_find_missing` | The find-missing sweep: `pkg/api/find_missing_writes.go` — the mark, Codex-move and note ticks (`markMissingSameLife`, `markEndedSameLife`, `writeLivenessNote`, `writeUnreportedNote`); `internal/store/find_missing_writes.go` — the `permission_orphan_closeout` ticks of the requests its mark or Codex move closed (`MarkMissingIfSameLife`, `MarkEndedIfSameLife`, after its commit, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
 | `relay_hook` | `internal/hook/permission.go` and `cmd/agent-director/trail_emit_cmd.go` — relay-attempt completion |
@@ -16931,12 +17048,13 @@ and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
 or `ci/suite.tsv`, and `ci/run_ci.sh` never reads it.
 
-E2 Task1 adds an authored-only overlay to `Hold36hCx.tla`: independent
-`ChildID`/`Eligible`, default-off `CxUnknownOrigin` and an identity-inference
-control. `rx_U_null_safe.cfg` expects `KeysSafe` PASS; `rx_U_null_control.cfg`
-expects its violation. `PROVENANCE.txt` marks these changed artifacts UNCHECKED.
-No new external TLC result exists; historical scheduler receipts above
-do not validate the changed model text.
+The E2 Task1 `Hold36hCx.tla` eligibility overlay has an
+[accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
+for source `4e12100cc590c0c53e70c2e0ada336e116e713b5`, recorded in receipt
+commit `f97b3fcb`. The model's `PROVENANCE.txt` UNCHECKED label describes its
+historical authoring state, not a new execution claim. Historical receipts do
+not validate later model text. Task1 acceptance does not prove the Task2
+request controller, its formal assessment or current authenticated behavior.
 
 The runs back the Codex rules of this file. Six findings came out of them,
 and the README states each:
@@ -17470,8 +17588,15 @@ migration preservation, reentry and refusal setup. Request factories,
 `SeedDecideFixtureAgent` optional RelayRequest seeds and `newPAEnvAgent`
 optional origin control provide reusable request-origin setup. Cursor reporter
 fixtures provide synthetic kernel/runtime/pane evidence and an exec-command
-seam; they do not establish actual ACP authorization admission. Future authors
-MUST reuse these fixtures for their respective responsibilities.
+seam. Controller authorization fixtures reuse `cursorfix` request scenarios,
+`terminalPair`, lock/transport seams and the shared pane environment. They exercise
+actual AD controller/store/pipe paths against synthetic runtime authority;
+seeded store rows alone do not establish controller behavior. Future authors
+MUST reuse these fixtures for their respective responsibilities. Cursor
+mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
+`BeforeCursorTrailExecForTest` (the existing transaction observer) and
+`storefix.InjectWriteFailure` for committed-row observation and failure cuts;
+do not create a second trail observer or runtime-proof fixture.
 
 **Agent of a seeded row (current schema v11).** The store refuses to insert a
 row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
@@ -20563,7 +20688,11 @@ The files are package `api_test`; their doc comments carry the detail.
   `paEnv` carries the row's `agent`, with `isCodex` and
   `toolUseID` (`paToolUseID` on Claude, none on Codex). The proofs a case
   uses by agent are a table: Claude's `tool_ran` and `turn_end` (`Stop`),
-  Codex's `turn_end` (`Interrupt`) alone.
+  Codex's `turn_end` (`Interrupt`) alone. `paEnv.proveCursorTool(t, token, tool)`
+  uses the shared complete synthetic binding from `storefix.WithSeedPane`
+  and exact-token/tool `ProveCursorToolRan` for Cursor SQL-scope tests. Its
+  no-op evidence callback is fixture authority, not real runtime or rawOutput
+  proof; controller tests separately validate execution evidence.
 - `codexKinds` (`codex_reporting_test.go`) lists the five kinds of Codex
   request, the `tool_name` and the `tool_input` as the relay hook stores them.
 
@@ -20572,7 +20701,9 @@ The files are package `api_test`; their doc comments carry the detail.
 `label`; it seeds a Codex row with `SeedDecideFixtureAgent`,
 `newRelayEnvAgent` or `newPAEnvAgent`, never a hand-built Codex row with a
 `tool_use_id`, and never a test of its own that proves a Codex request by
-`tool_ran`.
+`tool_ran`. Cursor proof tests MUST reuse `paEnv.proveCursorTool` and the
+complete shared synthetic binding; generic hook `tool_ran` helpers support
+non-Cursor cases only. Main-turn eligibility and age cuts remain independent.
 
 ### pkg/api kill fixture and shared verb tables (reusable test fixtures)
 
@@ -20772,6 +20903,11 @@ each file's doc comments carry the detail.
     agent's hook does (`ProveRequestsGone` through the row's gate) and
     returns how many it proved, `proveGone(t, e, id, proof)` is it on a
     kill fixture's store and `p.prove(t, proof)` on a pane-answer env;
+    generic `tool_ran` proof is restricted to supported non-Cursor rows.
+    Cursor SQL-scope cases MUST use `paEnv.proveCursorTool` with the shared
+    complete synthetic binding and exact token/tool. Its no-op evidence check
+    supplies fixture authority only; actual runtime/rawOutput validation
+    belongs to controller tests. Main-turn eligibility/age cuts still apply;
     `find_missing_repair_test.go` uses `proveOn` too. A test that builds
     its own `turn_end` proof sets `RecordedBefore`: a zero one is
     `errTurnEndNoStart` and proves nothing.

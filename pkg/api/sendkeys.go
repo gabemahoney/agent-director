@@ -117,8 +117,9 @@ type SendKeysParams struct {
 	// pane answer on it is still being sent.
 	RequestToken string `json:"request_token"`
 	// As is a pane answer's claimed verdict, allow or deny, recorded as the
-	// request's decision once its key is sent. It is the caller's claim:
-	// agent-director never checks it against the key.
+	// request's decision once its key is sent. Public send-keys stores the
+	// claim without screen verification or proof. Before answering ACP, Cursor
+	// additionally requires it to match the selected offered option verdict.
 	As string `json:"as"`
 }
 
@@ -711,9 +712,11 @@ func isInteractiveState(state string) bool {
 // answers that permission request at the pane once it has fallen back: under
 // the store's write lock it checks the guards and the pane's hash and records
 // its intent, then sends exactly one key, never Enter, then records
-// pane_answer sent with decision As (the caller's claim, never checked) and
-// decision_reason pane. When that last write fails after the key was sent the
-// error is ErrInternal (an error matching no catalogued sentinel) with
+// pane_answer sent with decision As (the caller's claim) and decision_reason
+// pane. This records a key send, not ACP delivery, receipt or proof. Cursor
+// additionally requires the sent claim to match the selected offered option
+// verdict before answering ACP. When that last write fails after the key was
+// sent the error is ErrInternal (an error matching no catalogued sentinel) with
 // err_details [PaneKeySentDetails] (key_sent true): the key reached the pane,
 // so read it before anything else is sent.
 //

@@ -310,6 +310,28 @@ filtering applies and the agent's parser rejects incomplete input.
 
 ## Permission relay
 
+For Cursor, use the same request token, decision and delivery fields.
+`hook_alive` is null and no per-request hook process is claimed; the fixed
+`confirm_by` ends uncertainty independently of gateway liveness. Its precise
+bounds and once-only approval mapping are in
+[Cursor permissions](permissions.md#cursor-spawns).
+
+Every Cursor relay reply, including timeout denial, requires its own durable
+acknowledgement. Failed or missing acknowledgement means no relay answer is
+sent to Cursor. Separately validated cancellation or policy rejection is a
+distinct outcome. `delivered` can remain recorded after a crash without Cursor
+receipt; it is not execution or dialog-closure proof. Never resend an uncertain
+approval as though known absent. See [Cursor permissions](permissions.md#cursor-spawns)
+for delivery, proof and request lifetime rules.
+
+For fallback, inspect a connected current menu and make a fresh deliberate
+choice for that request. `fallen_back` alone does not guarantee an answerable
+native request. Do not reuse a choice from before the relay deadline, or retry
+an uncertain answer. Terminal cancellation or native timeout cannot revive a
+request. On disconnect, follow [Cursor operation boundaries](#cursor-operation-boundaries)
+and retain ownership checks. An outside answer record sends nothing and
+supplies neither ACP approval authority nor proof.
+
 - A relayed request's `decision` is the verdict recorded, not the outcome:
   read `delivery`. Pass `decide` a `--max-wait-ms` of at most your deadline
   minus 1 s (see [Intercept permission prompts](usage.md#intercept-permission-prompts)).
@@ -368,14 +390,14 @@ with:
 answer or has not been gone for 2 s yet, so the prompt may not be drawn:
 retry at `err_details.not_before` (null only while the hook is seen running).
 
-While a request of the agent is fallen back with no pane answer recorded, a
+On relay-on rows, while a request is fallen back with no pane answer recorded, a
 plain `send-keys` (no `--request-token`) is refused with
 `ErrRelayFallenBack`, whose `err_details` name that request and the agent's
 other open requests: close it with a pane answer or with
 `record-pane-answer`. While a relay hook of the agent may still answer,
 every `send-keys` is refused with `ErrSendKeysWhileRelayed`.
 
-After a permission request, a plain `send-keys` without
+On relay-on rows, after a permission request, a plain `send-keys` without
 `--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's
 hooks show the request's dialog gone. Follow the request's proof and delivery
 fields; completing or interrupting the main turn does not release a child or

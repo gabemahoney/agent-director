@@ -1,0 +1,62 @@
+{
+  "ftd-task2-final-after-manifest.json": {
+    "bytes": 10723,
+    "sha256": "03a5eec4d1bc6607902b984ee001ded139c2eb73724eeac6ba6b7fc174b92e76"
+  },
+  "ftd-task2-final-before-manifest.json": {
+    "bytes": 8557,
+    "sha256": "a6944649876cc0a3aed7d64855b34e3a0521327326c239982a2005f1b5638354"
+  },
+  "ftd-task2-final-canonical-counts.json": {
+    "bytes": 226,
+    "sha256": "f074a65db4adad5bb5e6425bed7ae42340581ad6919d29151882df6a8d2a056e"
+  },
+  "ftd-task2-final-canonical.log": {
+    "bytes": 284068,
+    "sha256": "c18296200dc6cfa95415a8c7cdec5ccc0049dc4382106d53a7e3c6ef2b7168d1"
+  },
+  "ftd-task2-final-cursor-compatibility-counts.json": {
+    "bytes": 17,
+    "sha256": "95e83ab9a3774e5f2bb23bbd3819f452afaad9e1999f1c82037a9b13ad3b23d2"
+  },
+  "ftd-task2-final-cursor-compatibility.log": {
+    "bytes": 28360,
+    "sha256": "e0d6d9737f21a09e81fb962554bf992c58cab79c13b0fc200c7b3a233a89182b"
+  },
+  "ftd-task2-final-fixture-repair-counts.json": {
+    "bytes": 158,
+    "sha256": "5467ef01b88daf9f5451f4d99d2a92be68f7bcf9b59b94680b4f17721b9a6179"
+  },
+  "ftd-task2-final-fixture-repair.log": {
+    "bytes": 20410,
+    "sha256": "e1cd37d041a5600b590bce324a9214d2c83b3d9fe5c6de1d2c6da2e12da2e6f1"
+  },
+  "ftd-task2-final-full-unit-counts.json": {
+    "bytes": 13020,
+    "sha256": "78906844688b641469058582246a475c517dd358eabcecbb39bf8efaff0e6067"
+  },
+  "ftd-task2-final-full-unit.log": {
+    "bytes": 52009,
+    "sha256": "f7dd3ce1c9666ca50ba1764c3415b4690462727c03ce4e432dd762501473bfc4"
+  },
+  "ftd-task2-final-golden.log": {
+    "bytes": 4148,
+    "sha256": "6e90cb59c85b503089a81347d569e8a4d6acf0cf0ba1a31c245623b655ae7f17"
+  },
+  "ftd-task2-final-matrix-targeted.log": {
+    "bytes": 51050,
+    "sha256": "fec701b0c430796b8a01b71eece4e32906a43772760dd6a5ecf1431a528b9a4a"
+  },
+  "ftd-task2-final-postrun-manifest.json": {
+    "bytes": 10271,
+    "sha256": "a9ab8b313396eb7944ff43f463a76c77a49ec2abc1e96f9a915dcfb7ba8a8741"
+  },
+  "ftd-task2-final-prerun-manifest.json": {
+    "bytes": 9105,
+    "sha256": "7c62ab6c3e1f375d472324ba89ce952ef411e6c510212a4d1c66519ae45cc60d"
+  },
+  "ftd-task2-final-subtasks.json": {
+    "bytes": 43588,
+    "sha256": "d037a875aaef6559c91d61688fa7615fa1e2dbbedfe9c51dc0d0797a853950e4"
+  }
+}

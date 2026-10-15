@@ -1,0 +1,45 @@
+{
+  "base_sha256": "6fc3ba3747916d664c7f520f288521bfe319890c1b18d52385d7cf07f3ef7f5e",
+  "base_lines": 22122,
+  "ranges": {
+    "a": [
+      1,
+      5531
+    ],
+    "b": [
+      5532,
+      11062
+    ],
+    "c": [
+      11063,
+      16593
+    ],
+    "d": [
+      16594,
+      22122
+    ]
+  },
+  "mandatory_source": [
+    "A3/B1 canonical pane-claim descriptions",
+    "C3 missing Cursor mutation trails and truthful writer attribution"
+  ],
+  "mandatory_docs": [
+    "A1-A4",
+    "B2-B4",
+    "C1-C5",
+    "D1-D3"
+  ],
+  "deferred": [
+    "A5-A8",
+    "B5-B11",
+    "C6-C11",
+    "D4-D5"
+  ],
+  "deferral_reason": "Inherited broad guide/history/implementation/test-catalog/reference normalization exceeds the Task2 permission interface; correct all current Task2 factual and new-prose issues. A8 additionally records inherited settings guide debt, same scope rationale.",
+  "correction_order": "Engineer canonical/trail fixes, focused TestWriter coverage, one batched DocWriter correction, final TestWriter full units, execution PM.",
+  "mandatory_source_resolved": true,
+  "mandatory_docs_resolved": true,
+  "final_architecture_sha256": "455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42",
+  "final_architecture_lines": 22160,
+  "final_coverage": "Four cold whole-base partitions plus exact changed architecture paragraphs/context and whole changed small-doc rereads."
+}

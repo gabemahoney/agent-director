@@ -1,0 +1,20 @@
+[
+  {
+    "verb": "decide",
+    "old": "Caller's allow/deny verdict on an open PermissionRequest (relay_mode=on only). Cursor allow selects only the offered allow_once choice or accepts the blocking plan; deny selects supported rejection. Persistent native choices require a deliberate pane selection. Records it, first call wins (else ErrAlreadyDecided), waits up to 1 s for the relay hook's ack and returns delivery: delivered, or not_confirmed (poll get-permission; it ends by confirm_by). A request whose relay hook is gone is refused at once with ErrRelayFallenBack. ErrNoOpenPermissionRequest (none open by that token, spawn ended or missing, or dialog may have closed): do not answer at the pane. max_wait_ms prevents a required wait before recording: ErrStoreBusy.",
+    "new": "Caller's allow/deny on open PermissionRequest (relay_mode=on only): first wins (else ErrAlreadyDecided). Cursor allow: offered allow_once or blocking-plan acceptance; deny: supported rejection; persistent native choices need deliberate pane selection. Up to 1 s for relay-hook ack: delivery delivered/not_confirmed (poll get-permission; ends by confirm_by). Hook gone: immediate ErrRelayFallenBack. ErrNoOpenPermissionRequest (no open token, spawn ended/missing, or dialog may have closed): no pane answer. max_wait_ms blocks required pre-record wait: ErrStoreBusy.",
+    "saved_bytes": 167
+  },
+  {
+    "verb": "get-permission",
+    "old": "Fetch a request by request_token. Cursor exposes the complete raw permission/plan params envelope without adding connection context; absent/null fields and supplied options are preserved. decision and decided_at are null while undecided; a decided request can remain open until acknowledged. Read delivery for the outcome.",
+    "new": "Get by request_token. Cursor: full raw permission/plan params envelope, preserving options/absent/null fields, no added connection context. Undecided: decision/decided_at null. Decided may stay open until acked. Outcome: delivery.",
+    "saved_bytes": 92
+  },
+  {
+    "verb": "status",
+    "old": "Return a row's state (pending/waiting/working/ask_user/check_permission/ended/missing). pending means a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or at a startup prompt. A resumed pending row keeps its session id and history.",
+    "new": "Row state: pending/waiting/working/ask_user/check_permission/ended/missing. pending: launch (spawn/reuse/resume) underway, no SessionStart hook report yet; may be loading or at a startup prompt. Resumed pending keeps session id/history.",
+    "saved_bytes": 75
+  }
+]

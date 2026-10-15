@@ -273,6 +273,7 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer reopened.Close()
+				storefix.RegisterStorePath(t, reopened, p.dbPath)
 				p.st, p.store.st, p.sks = reopened, reopened, reopened
 				tok := storefix.TestRequestTokenA
 				before := p.request(t, tok)
@@ -308,8 +309,38 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 				if after := p.request(t, tok); after.MainTurnEndEligible || after.ProvenGone() {
 					t.Fatal("pane/decision inferred proof")
 				}
-				if n := p.prove(t, toolRan(paToolUseID)); n != 1 {
+				other := storefix.TestRequestTokenB
+				p.seedRequest(t, other, "independent-tool", relayEnvHook)
+				if ok, err := p.st.DecideRelayRequest(p.r.ID, other, "deny", "", "", time.Time{}, store.DefaultLockWait); err != nil || !ok {
+					t.Fatalf("independent decision %v %v", ok, err)
+				}
+				if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, other, p.now, store.DefaultLockWait, nil); err != nil || !ok {
+					t.Fatalf("independent ack %v %v", ok, err)
+				}
+				if agent == store.AgentCursor {
+					if n := p.prove(t, toolRan(paToolUseID)); n != 0 {
+						t.Fatalf("generic Cursor proof released %d", n)
+					}
+					p.proveCursorTool(t, tok, "other-tool")
+					if p.request(t, tok).ProvenGone() {
+						t.Fatal("unmatched Cursor tool released hold")
+					}
+					p.proveCursorTool(t, other, paToolUseID)
+					if p.request(t, tok).ProvenGone() || p.request(t, other).ProvenGone() {
+						t.Fatal("mismatched Cursor token/tool pair released hold")
+					}
+					p.proveCursorTool(t, tok, paToolUseID)
+				} else if n := p.prove(t, toolRan(paToolUseID)); n != 1 {
 					t.Fatalf("matching execution %d", n)
+				}
+				if pr := p.request(t, tok); pr.ProvenGoneHow != store.ProvenGoneToolRan || pr.MainTurnEndEligible {
+					t.Fatalf("matching proof changed origin: %+v", pr)
+				}
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), other, store.StateCheckPermission)
+				if agent == store.AgentCursor {
+					p.proveCursorTool(t, other, "independent-tool")
+				} else if n := p.prove(t, toolRan("independent-tool")); n != 1 {
+					t.Fatalf("independent execution %d", n)
 				}
 				run = p.sendKeysRun(p.plain("hi"))
 				if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {

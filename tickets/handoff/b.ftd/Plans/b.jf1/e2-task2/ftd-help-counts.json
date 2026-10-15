@@ -1,0 +1,12 @@
+{
+  "github.com/gabemahoney/agent-director/pkg/api/apitest": {
+    "pass": 10
+  },
+  "github.com/gabemahoney/agent-director/pkg/api/errnames": {
+    "pass": 108
+  },
+  "github.com/gabemahoney/agent-director/pkg/api/manifest": {
+    "pass": 167,
+    "fail": 2
+  }
+}

@@ -5,17 +5,12 @@ package cursorhost
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
-	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
-	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 )
 
 func init() { cursorReportHelper = runCursorReportHelper }
@@ -46,6 +41,9 @@ func runCursorReportHelper() int {
 	target := store.StateWaiting
 	if payload.Event == "UserPromptSubmit" {
 		target = store.StateWorking
+	}
+	if payload.Event == "SessionEnd" {
+		target = store.StateEnded
 	}
 	g := store.HookGate{Event: payload.Event, ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
 	if _, a, e := s.ApplyHookTransitionResult(b.InstanceID, g, target, false, payload.Event, payload.Path, true); e != nil || !a.Applied {
@@ -81,78 +79,16 @@ func TestReporterHeldLifecycleRequiresIndependentEvidence(t *testing.T) {
 	for _, event := range []string{"Stop", "Interrupt", "UserPromptSubmit"} {
 		for _, mode := range []string{"current", "no hold", "stale", "connection", "session", "pane", "retired", "replacement", "runtime start"} {
 			t.Run(event+"/"+mode, func(t *testing.T) {
-				home := t.TempDir()
-				t.Setenv("HOME", home)
-				t.Setenv("PATH", faketmuxfix.Dir(t)+":"+os.Getenv("PATH"))
-				runtime := cursorfix.New(t)
-				process, err := startProcess(runtime.Program, []string{"acp"}, t.TempDir())
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer process.terminate()
-				defer process.input.Close()
-				defer process.output.Close()
-				start, alive, known := probe.NewProcChecker().StartTime(os.Getpid())
-				if !known || !alive {
-					t.Fatal("gateway kernel identity unavailable")
-				}
-				in, err := pipeAt(process.pid, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
-				out, err := pipeAt(process.pid, 1)
-				if err != nil {
-					t.Fatal(err)
-				}
-				path := filepath.Join(t.TempDir(), "state.db")
-				s, err := store.OpenOrInit(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer s.Close()
-				token := "1111111111111111"
-				id := "report-row"
-				socket := filepath.Join(t.TempDir(), "socket")
-				if err = s.InsertPending(store.Spawn{InstanceID: id, Agent: store.AgentCursor, CWD: home, TmuxSessionName: "report-session", RelayMode: "on", Identity: store.LaunchIdentity{Token: token, Socket: socket}}); err != nil {
-					t.Fatal(err)
-				}
-				row, err := s.GetSpawn(id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				li := store.LaunchIdentity{Token: token, Socket: socket, PaneID: "%0", PanePID: os.Getpid(), PaneStarttime: start, ServerPID: os.Getpid(), ServerStart: time.Now().Unix(), ServerStarttime: start}
-				if a, err := s.RecordLaunchIdentity(id, row.RowVersion, token, li); err != nil || a != store.CondApplied {
-					t.Fatalf("pane %v %v", a, err)
-				}
-				row, err = s.GetSpawn(id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				b := store.CursorRuntime{InstanceID: id, Token: token, Life: row.LifeNumber, GatewayPID: os.Getpid(), GatewayStart: start, RuntimePID: process.pid, RuntimeStart: process.start, Connection: "synthetic-report", InputPipe: in, OutputPipe: out, InputFD: int(process.input.Fd()), OutputFD: int(process.output.Fd())}
-				if ok, err := s.RegisterCursorRuntime(row, b); err != nil || !ok {
-					t.Fatalf("runtime %v %v", ok, err)
-				}
-				if ok, err := s.SetCursorRuntimeSession(b, "report-session-id"); err != nil || !ok {
-					t.Fatalf("session %v %v", ok, err)
-				}
-				b.SessionID = "report-session-id"
-				tr, err := openTranscript(home, b)
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer tr.file.Close()
+				e := newRequestEnv(t, "on", "report-session-id")
+				s, b, path := e.s, e.binding, e.path
+				id, start, tr := b.InstanceID, b.GatewayStart, e.tr
 
-				initial := store.HookGate{Event: "SessionStart", ParentPID: b.GatewayPID, ParentStart: start, SessionID: b.SessionID, Cursor: &b}
-				if a, err := s.ApplyHookTransition(id, initial, store.StateWaiting, false, "SessionStart", tr.path, true); err != nil || !a.Applied {
-					t.Fatalf("initial session %+v %v", a, err)
-				}
 				if mode != "no hold" {
 					g := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: start, SessionID: b.SessionID, Cursor: &b}
 					if _, a, err := s.InsertRelayRequest(id, g, store.RelayRequest{RequestToken: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", ToolName: "Bash", ToolInput: "{}", SettledAt: time.Now().Add(time.Hour)}, 0, store.DefaultLockWait); err != nil || !a.Applied {
 						t.Fatalf("seed request %+v %v", a, err)
 					}
 				}
-				faketmuxfix.Tables{}.Write(t, socket, faketmuxfix.Table{Server: &faketmuxfix.Server{PID: os.Getpid(), Start: li.ServerStart}, Sessions: []faketmuxfix.Session{{ID: "$0", Name: row.TmuxSessionName, Created: li.ServerStart, Label: fmt.Sprintf("ad1 %s $0 %s %s", token, id, s.StoreID()), Panes: []faketmuxfix.Pane{{ID: "%0", PID: os.Getpid(), AdPane: token + " %0"}}}}})
 				exe, err := os.Executable()
 				if err != nil {
 					t.Fatal(err)

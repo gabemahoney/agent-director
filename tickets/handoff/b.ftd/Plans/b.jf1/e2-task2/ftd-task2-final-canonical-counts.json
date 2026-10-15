@@ -1,0 +1,17 @@
+[
+  {
+    "package": "apitest",
+    "result": "pass",
+    "count": 10
+  },
+  {
+    "package": "errnames",
+    "result": "pass",
+    "count": 108
+  },
+  {
+    "package": "manifest",
+    "result": "pass",
+    "count": 169
+  }
+]

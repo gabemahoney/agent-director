@@ -43,7 +43,8 @@ session, and no cleanup is needed.
 
 ## Cursor launch settings
 
-`disable_ask_user` accepts either value for Cursor; neither enables questions.
+`disable_ask_user` accepts either value for Cursor; neither enables questions,
+with relay mode on or off.
 The enforced behavior and permission-list handling are owned by
 [Permissions](permissions.md#cursor-spawns). `inject_help_hook` currently adds
 no Cursor session guidance.

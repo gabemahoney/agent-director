@@ -1,0 +1,59 @@
+{
+  "leaf_counts": {
+    "pass": 13
+  },
+  "leaves": [
+    {
+      "name": "TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission/the_hook_dies_without_an_ack",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission/the_hook_acks_late",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission/the_hook_cannot_be_checked_and_never_acks",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_an_hour_past_its_window/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_at_decide's_last_read_of_it/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_just_before_decide's_last_read_of_it/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_a_margin_past_its_window/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_a_margin_past_its_window/relay_hook_alive,_its_timeout_deny_landing_just_before_decide's_last_read",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_at_the_end_of_its_window/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_at_the_end_of_its_window/relay_hook_alive,_its_timeout_deny_landing_just_before_decide's_last_read",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_as_decide_starts_refusing_it/relay_hook_dead",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_as_decide_starts_refusing_it/relay_hook_alive_to_its_poll_deadline",
+      "outcome": "pass"
+    },
+    {
+      "name": "TestAdviceFollow_E7_DecideFallenBackAnswerAtPane/request_as_decide_starts_refusing_it/relay_hook_alive,_its_timeout_deny_landing_just_before_decide's_last_read",
+      "outcome": "pass"
+    }
+  ]
+}

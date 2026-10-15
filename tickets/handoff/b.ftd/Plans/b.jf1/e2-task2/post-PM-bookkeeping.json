@@ -1,0 +1,11 @@
+{
+  "changed_since_full_units": [
+    {
+      "path": "tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md",
+      "tested_sha256": "529b504d25e91775c4b11cb8969fb5e17562160674357ab736a8818b1b033e4a",
+      "current_sha256": "2c5d7b16aece5fdac99ddd7213e84fc7b57917991cd18b27e7f7141b521bcb19"
+    }
+  ],
+  "reason": "PM-requested acceptance-status bookkeeping only: full units passed/external gate pending",
+  "remaining57_paths_unchanged": true
+}

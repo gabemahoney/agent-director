@@ -29,10 +29,12 @@ type GetPermissionParams struct {
 
 // GetPermissionResult is one permission request with its delivery facts.
 // Undecided requests have nil Decision and DecidedAt; a decided request may
-// still be open until its relay hook acknowledges it. DecisionReason is nil
-// while undecided and for an allow from Decide; pane answers can carry a
-// reason on either verdict. A RecordPaneAnswer claiming unknown leaves
-// Decision nil. Nil fields marshal to JSON null.
+// still be open until its relay hook acknowledges it. DecisionReason is
+// initially nil while undecided and for an allow from Decide. Validated Cursor execution
+// proof fills a missing reason with tool_ran, preserving any earlier verdict
+// and non-null reason. Pane answers, including Cursor native choices, carry
+// a reason on either verdict. A RecordPaneAnswer claiming unknown leaves
+// Decision nil with reason pane_outside. Nil fields marshal to JSON null.
 //
 // ToolInput is the raw JSON string, passed through byte for byte for callers
 // to parse. A recorded decision is not the outcome: read Delivery.
@@ -42,11 +44,13 @@ type GetPermissionResult struct {
 	// RequestID is the autoincrement primary key of the permission_requests row.
 	RequestID int64 `json:"request_id"`
 	// ToolName is the agent's tool that triggered the permission request
-	// (e.g. "Bash", "Write").
+	// (e.g. "Bash", "Write"); Cursor uses the supplied action title or plan name.
 	ToolName string `json:"tool_name"`
 	// ToolInput is the raw JSON string of the tool's input as stored in the DB.
 	// It is NOT a nested JSON object — callers unmarshal it themselves. The
-	// verb passes it through byte-identical from the DB column.
+	// verb passes it through byte-identical from the DB column. Cursor stores
+	// the entire received permission/plan params envelope, preserving supplied
+	// fields, options and absent/null values without adding connection context.
 	ToolInput string `json:"tool_input"`
 	// RequestedAt is the RFC3339 timestamp when the permission request row was
 	// created. Maps from the created_at DB column (SR-7.4 renames it on the
@@ -54,12 +58,15 @@ type GetPermissionResult struct {
 	RequestedAt time.Time `json:"requested_at"`
 	// Decision is "allow" or "deny" once a verdict is recorded; nil while the
 	// request is undecided or RecordPaneAnswer claims unknown. A nil pointer
-	// marshals to JSON null. A recorded verdict has reached the agent only when Delivery is
-	// delivered.
+	// marshals to JSON null. Delivery delivered means durable relay acknowledgement,
+	// not receipt, execution or dialog closure.
 	Decision *string `json:"decision"`
-	// DecisionReason is the recorded reason; nil while undecided and for an
-	// allow from Decide. Pane answers may record a reason for either verdict.
-	// A nil pointer marshals to JSON null.
+	// DecisionReason is initially nil while undecided and for an allow from
+	// Decide. Validated Cursor execution proof fills a missing reason with
+	// tool_ran, preserving any earlier verdict and non-null reason. Pane answers,
+	// including Cursor native choices, record a reason for either verdict; an
+	// outside unknown claim records pane_outside with no verdict. A nil pointer
+	// marshals to JSON null.
 	DecisionReason *string `json:"decision_reason"`
 	// DecidedAt is the RFC3339 timestamp when the verdict was written; nil
 	// while the request is undecided. A nil pointer marshals to JSON null.

@@ -27,7 +27,7 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, path := newRelayRow(t, "on", "")
-			// The writer's gate is intentionally seeded; Cursor admission is still denied.
+			// Synthetic store binding; controller tests own independent runtime evidence.
 			withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `UPDATE spawns SET agent=? WHERE instance_id=?`, tc.agent, relayID) })
 			gate := agentGate("PermissionRequest", "")
 			if tc.agent == AgentCursor {
@@ -36,7 +36,15 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 				if ok, err := s.RegisterCursorRuntime(row, b); err != nil || !ok {
 					t.Fatalf("runtime %v %v", ok, err)
 				}
+				if ok, err := s.SetCursorRuntimeSession(b, "synthetic-session"); err != nil || !ok {
+					t.Fatalf("runtime session %v %v", ok, err)
+				}
+				b.SessionID = "synthetic-session"
 				gate.Cursor = &b
+				gate.SessionID = b.SessionID
+				if a, err := s.ApplyHookTransition(relayID, gate, StateWorking, false, "test_seed", "", false); err != nil || !a.Applied {
+					t.Fatalf("session identity %+v %v", a, err)
+				}
 			}
 			if tc.legacy {
 				if a, err := s.UpsertOpenPermissionRequest(relayID, gate, tokenA, "Bash", "{}", 0, ""); err != nil || !a.Applied {
@@ -114,9 +122,35 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 				t.Fatalf("turn end %d %v; want %d", n, err, want)
 			}
 			if !tc.want && !tc.legacy {
-				n, err = s.ProveRequestsGone(relayID, gate, RequestProof{How: ProvenGoneToolRan, ToolUseID: "toolu_" + tokenA[:8], At: proofAt})
-				if err != nil || n != 1 {
-					t.Fatalf("correlated release %d %v", n, err)
+				independent := mainReq(tokenB)
+				independent.MainTurnEndEligible = eligibility(false)
+				if _, a, err := s.InsertRelayRequest(relayID, gate, independent, 0, DefaultLockWait); err != nil || !a.Applied {
+					t.Fatalf("independent request %+v %v", a, err)
+				}
+				tool := "toolu_" + tokenA[:8]
+				if tc.agent == AgentCursor {
+					if n, err = s.ProveRequestsGone(relayID, gate, RequestProof{How: ProvenGoneToolRan, ToolUseID: tool, At: proofAt}); err != nil || n != 0 {
+						t.Fatalf("generic Cursor proof %d %v", n, err)
+					}
+					check := func(Spawn) error { return nil }
+					if err = s.ProveCursorToolRan(*gate.Cursor, tokenA, "other-tool", check); err != nil || mustRequest(t, s, tokenA).ProvenGone() {
+						t.Fatalf("unmatched Cursor tool proof %v", err)
+					}
+					if err = s.ProveCursorToolRan(*gate.Cursor, tokenB, tool, check); err != nil || mustRequest(t, s, tokenA).ProvenGone() || mustRequest(t, s, tokenB).ProvenGone() {
+						t.Fatalf("mismatched Cursor token/tool pair %v", err)
+					}
+					err = s.ProveCursorToolRan(*gate.Cursor, tokenA, tool, check)
+				} else {
+					n, err = s.ProveRequestsGone(relayID, gate, RequestProof{How: ProvenGoneToolRan, ToolUseID: tool, At: proofAt})
+					if n != 1 {
+						t.Fatalf("correlated release %d %v", n, err)
+					}
+				}
+				if err != nil || mustRequest(t, s, tokenA).ProvenGoneHow != ProvenGoneToolRan || mustRequest(t, s, tokenA).MainTurnEndEligible != tc.want {
+					t.Fatalf("correlated release changed provenance: %v", err)
+				}
+				if mustRequest(t, s, tokenB).ProvenGone() {
+					t.Fatal("matching proof released independent request")
 				}
 			}
 		})

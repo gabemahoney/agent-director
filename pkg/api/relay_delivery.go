@@ -12,7 +12,8 @@ import (
 // The delivery values of a permission request (b.146 rule 15).
 const (
 	// DeliveryDelivered: the request's relay hook acked a verdict (committed
-	// delivered_at) before writing it to Claude Code.
+	// delivered_at) before enqueueing or writing the reply. This is not proof
+	// of agent receipt, tool execution or dialog closure.
 	DeliveryDelivered = "delivered"
 	// DeliveryNotConfirmed: no ack yet, and the relay hook may still be
 	// alive; it never lasts past confirm_by.
@@ -63,11 +64,13 @@ type RequestDelivery struct {
 	// ConfirmBy is when not_confirmed ends: the relay hook's kill instant
 	// plus a 2 s reserve, by when its hook has acked or is gone. For a
 	// request with no recorded settle instant it is created_at plus the relay
-	// window plus 2 s.
+	// window plus 2 s. Cursor uses its persisted finite per-request settlement
+	// deadline, independent of gateway lifetime; relay-off requests settle at once.
 	ConfirmBy time.Time `json:"confirm_by"`
 	// HookAlive is whether the relay hook process runs: true, false, or null
 	// when it cannot be checked (another or unreadable pid namespace, an
-	// unreadable /proc, or no hook identity on record).
+	// unreadable /proc, or no hook identity on record). Cursor gateway-local
+	// controllers record no hook identity: this is null, never the gateway PID.
 	HookAlive *bool `json:"hook_alive"`
 	// HookGoneAt is when a reader first found the request fallen back; null
 	// until then.
@@ -77,19 +80,26 @@ type RequestDelivery struct {
 	AttemptedDecision *string `json:"attempted_decision"`
 	// AttemptedAt is when that refused decide ran; null when none.
 	AttemptedAt *time.Time `json:"attempted_at"`
-	// ToolUseID is the hook input's tool_use_id; null when none was given.
+	// ToolUseID is the hook input's tool_use_id or Cursor's supplied toolCallId;
+	// null when none was given.
 	ToolUseID *string `json:"tool_use_id"`
 	// PaneAnswer is how the request was answered at the pane (b.146 step
 	// 2b): none (no pane answer recorded through agent-director: something
 	// outside it, such as a person at tmux, may still have answered it),
 	// intent (a pane answer through send-keys was started; whether its key
-	// was typed is unknown), sent (its key was sent), outside (a caller
-	// recorded it answered outside agent-director) or tool_ran (the agent
-	// reported its tool ran).
+	// was typed is unknown), sent (its key was sent or Cursor recorded a native
+	// choice; neither establishes ACP delivery, receipt or proof), outside (a caller
+	// recorded it answered outside agent-director) or tool_ran (agent hooks or
+	// validated correlated Cursor execution output established its tool ran).
+	// The hook close records allow/tool_ran; Cursor proof preserves an earlier
+	// verdict and non-null reason, filling a missing reason with tool_ran.
 	PaneAnswer string `json:"pane_answer"`
 	// PaneAs is the verdict a pane answer claims: allow, deny, or unknown (an
 	// outside record that did not see the answer); null when none was
-	// recorded. It is the caller's claim, stored and never checked.
+	// recorded. Public send-keys and outside records store a claim without
+	// screen verification or proof. Cursor additionally requires a sent claim
+	// to match the actual selected option verdict before answering ACP.
+	// An outside record never authorizes an ACP answer.
 	PaneAs *string `json:"pane_as"`
 	// ProvenGoneAt is when the agent proved the request's permission dialog
 	// gone (b.146 step 2c); null until then. While it is null, the request
@@ -97,10 +107,14 @@ type RequestDelivery struct {
 	// live Spawn (ErrDialogMaybeOpen).
 	ProvenGoneAt *time.Time `json:"proven_gone_at"`
 	// ProvenGoneHow is how: tool_ran (its tool's PostToolUse or
-	// PostToolUseFailure, by tool_use_id), turn_end (the turn of the agent
+	// PostToolUseFailure, by tool_use_id, or validated correlated Cursor
+	// execution output for that exact request), turn_end (the turn of the agent
 	// that asked ended after it: the main agent's Stop, idle-prompt
-	// Notification or (Codex) Interrupt proves a request with no agent_id) or agent_gone (its
-	// Spawn was marked missing, ended or resumed); null until then.
+	// Notification, Codex Interrupt or verified Cursor Stop/Interrupt proves
+	// only durably main-turn-eligible requests with no child identity recorded
+	// before the hook began; Cursor unknown-origin and child requests remain
+	// ineligible) or agent_gone (its Spawn was marked missing, ended or resumed);
+	// null until then.
 	ProvenGoneHow *string `json:"proven_gone_how"`
 	// UnprovenSince is, for a request not proven gone that no longer awaits
 	// an answer in agent-director's own records, when its record stopped

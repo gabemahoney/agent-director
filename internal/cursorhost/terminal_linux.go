@@ -13,16 +13,18 @@ import (
 )
 
 type terminalInput struct {
-	accepted  bool
-	text      string
-	interrupt bool
-	err       error
+	choiceToken  string
+	choiceOption string
+	accepted     bool
+	text         string
+	interrupt    bool
+	err          error
 }
 
 // terminalInputLoop owns UTF-8 input decoding. Literal LF adds a line; Enter
 // (CR) submits one prompt. tmux send-keys sends embedded LF literally and
 // then a separate Enter, so consecutive multiline messages remain distinct.
-func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, admit func() bool) func() {
+func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, admit func() bool, choices ...func(rune) (string, string, bool)) func() {
 	old, err := unix.IoctlGetTermios(int(in.Fd()), unix.TCGETS)
 	if err != nil {
 		events <- terminalInput{err: fmt.Errorf("Cursor gateway requires an interactive pane")}
@@ -60,6 +62,12 @@ func terminalInputLoop(in *os.File, out io.Writer, events chan<- terminalInput, 
 			if r == utf8.RuneError && size == 1 {
 				events <- terminalInput{err: fmt.Errorf("invalid UTF-8 input")}
 				return
+			}
+			if !paste && len(text) == 0 && len(choices) > 0 && r >= ' ' {
+				if token, option, ok := choices[0](r); ok {
+					events <- terminalInput{choiceToken: token, choiceOption: option}
+					continue
+				}
 			}
 			if r == '\x1b' {
 				// Only bounded known input escape sequences are interpreted, never

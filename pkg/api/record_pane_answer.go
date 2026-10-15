@@ -42,7 +42,7 @@ type RecordPaneAnswerParams struct {
 	RequestToken string `json:"request_token"`
 	// As is the caller's claim of how it was answered: allow, deny, or
 	// unknown when the caller did not see the answer. Required. It is stored,
-	// never checked.
+	// never checked, and never authorizes a Cursor ACP answer or proves execution.
 	As string `json:"as"`
 	// ExpectPaneSHA256 is the pane_sha256 read-pane returned for the pane the
 	// caller looked at; the agent's pane is captured again with the same
@@ -385,7 +385,8 @@ func (r *recordPaneRun) paneMatches(t ReadPaneTmux, paneID string, launch tmux.L
 // pane_as and decision the caller's claim As (decision null for unknown),
 // decision_reason pane_outside. It types nothing. Plain send-keys is then no
 // longer refused on the request's account. Pass As unknown unless the answer
-// was seen: the claim is stored, never checked.
+// was seen: the claim is stored, never checked. It never authorizes a Cursor
+// ACP answer or supplies execution proof.
 //
 // It is accepted only when the request has fallen back (its relay hook gone
 // and no verdict acked), no pane answer through agent-director on it is

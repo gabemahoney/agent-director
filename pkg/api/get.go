@@ -27,15 +27,17 @@ type PermissionRequestInfo struct {
 	// (e.g. "Bash", "Write").
 	ToolName string `json:"tool_name"`
 	// ToolInput is the raw JSON string of the tool's input as stored in the DB.
-	// It is NOT a nested JSON object — callers unmarshal it themselves.
+	// It is NOT a nested JSON object — callers unmarshal it themselves. Cursor
+	// preserves the whole permission/plan params envelope, including raw options
+	// and absent/null fields, without adding internal connection context.
 	ToolInput string `json:"tool_input"`
 	// RequestedAt is the RFC3339 timestamp when the permission request row was
 	// created (created_at column).
 	RequestedAt time.Time `json:"requested_at"`
 	// Decision is the verdict recorded on the request, "allow" or "deny";
 	// null while none is. A recorded verdict is not the outcome: Delivery
-	// says whether it reached the agent (an open request's verdict has not
-	// been acked yet).
+	// says whether the relay durably acknowledged it; acknowledgement does not
+	// establish receipt, execution or dialog closure.
 	Decision *string `json:"decision"`
 	// DecisionReason is the recorded verdict's decision_reason; null when
 	// none is recorded.

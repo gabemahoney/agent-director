@@ -1,0 +1,143 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{"Time":"2026-10-15T07:49:49.832715106Z","Action":"start","Package":"github.com/gabemahoney/agent-director/test/realtmux"}
+{"Time":"2026-10-15T07:49:49.836602453Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Output":"realtmux: tmux 3.3a at /usr/bin/tmux\n"}
+{"Time":"2026-10-15T07:49:49.836705833Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline"}
+{"Time":"2026-10-15T07:49:49.836710153Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline","Output":"=== RUN   TestCursorBlockedWriteStopAndDeadline\n"}
+{"Time":"2026-10-15T07:49:49.836735953Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/write_deadline"}
+{"Time":"2026-10-15T07:49:49.836740533Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/write_deadline","Output":"=== RUN   TestCursorBlockedWriteStopAndDeadline/write_deadline\n"}
+{"Time":"2026-10-15T07:49:53.433212782Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/write_deadline","Output":"--- PASS: TestCursorBlockedWriteStopAndDeadline/write_deadline (3.60s)\n"}
+{"Time":"2026-10-15T07:49:53.433492361Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/write_deadline","Elapsed":3.6}
+{"Time":"2026-10-15T07:49:53.433850631Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/local_exit"}
+{"Time":"2026-10-15T07:49:53.433858301Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/local_exit","Output":"=== RUN   TestCursorBlockedWriteStopAndDeadline/local_exit\n"}
+{"Time":"2026-10-15T07:49:54.110608459Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/local_exit","Output":"--- PASS: TestCursorBlockedWriteStopAndDeadline/local_exit (0.68s)\n"}
+{"Time":"2026-10-15T07:49:54.110661619Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/local_exit","Elapsed":0.68}
+{"Time":"2026-10-15T07:49:54.110669689Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/SIGTERM"}
+{"Time":"2026-10-15T07:49:54.110671849Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/SIGTERM","Output":"=== RUN   TestCursorBlockedWriteStopAndDeadline/SIGTERM\n"}
+{"Time":"2026-10-15T07:49:54.770378607Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/SIGTERM","Output":"--- PASS: TestCursorBlockedWriteStopAndDeadline/SIGTERM (0.66s)\n"}
+{"Time":"2026-10-15T07:49:54.770405057Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline/SIGTERM","Elapsed":0.66}
+{"Time":"2026-10-15T07:49:54.770410947Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline","Output":"--- PASS: TestCursorBlockedWriteStopAndDeadline (4.93s)\n"}
+{"Time":"2026-10-15T07:49:54.770418297Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBlockedWriteStopAndDeadline","Elapsed":4.93}
+{"Time":"2026-10-15T07:49:54.770422807Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission"}
+{"Time":"2026-10-15T07:49:54.770426297Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission","Output":"=== RUN   TestCursorPersistenceFailureStopsAdmission\n"}
+{"Time":"2026-10-15T07:49:54.770428377Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_replacement"}
+{"Time":"2026-10-15T07:49:54.770429877Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_replacement","Output":"=== RUN   TestCursorPersistenceFailureStopsAdmission/input_replacement\n"}
+{"Time":"2026-10-15T07:49:55.351210183Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_replacement","Output":"--- PASS: TestCursorPersistenceFailureStopsAdmission/input_replacement (0.58s)\n"}
+{"Time":"2026-10-15T07:49:55.351235393Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_replacement","Elapsed":0.58}
+{"Time":"2026-10-15T07:49:55.351241433Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_permission"}
+{"Time":"2026-10-15T07:49:55.351243793Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_permission","Output":"=== RUN   TestCursorPersistenceFailureStopsAdmission/input_permission\n"}
+{"Time":"2026-10-15T07:49:55.931555459Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_permission","Output":"--- PASS: TestCursorPersistenceFailureStopsAdmission/input_permission (0.58s)\n"}
+{"Time":"2026-10-15T07:49:55.931582119Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/input_permission","Elapsed":0.58}
+{"Time":"2026-10-15T07:49:55.931588229Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/turn_outcome"}
+{"Time":"2026-10-15T07:49:55.931590489Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/turn_outcome","Output":"=== RUN   TestCursorPersistenceFailureStopsAdmission/turn_outcome\n"}
+{"Time":"2026-10-15T07:49:56.563468124Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/turn_outcome","Output":"--- PASS: TestCursorPersistenceFailureStopsAdmission/turn_outcome (0.63s)\n"}
+{"Time":"2026-10-15T07:49:56.563493854Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/turn_outcome","Elapsed":0.63}
+{"Time":"2026-10-15T07:49:56.563499844Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/end_publication"}
+{"Time":"2026-10-15T07:49:56.563501964Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/end_publication","Output":"=== RUN   TestCursorPersistenceFailureStopsAdmission/end_publication\n"}
+{"Time":"2026-10-15T07:50:00.096128341Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/end_publication","Output":"--- PASS: TestCursorPersistenceFailureStopsAdmission/end_publication (3.53s)\n"}
+{"Time":"2026-10-15T07:50:00.096156231Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission/end_publication","Elapsed":3.53}
+{"Time":"2026-10-15T07:50:00.096165231Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission","Output":"--- PASS: TestCursorPersistenceFailureStopsAdmission (5.33s)\n"}
+{"Time":"2026-10-15T07:50:00.096167871Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorPersistenceFailureStopsAdmission","Elapsed":5.33}
+{"Time":"2026-10-15T07:50:00.096169991Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorHumanAdminDeleteLeavesRunningPaneUntracked"}
+{"Time":"2026-10-15T07:50:00.096171531Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorHumanAdminDeleteLeavesRunningPaneUntracked","Output":"=== RUN   TestCursorHumanAdminDeleteLeavesRunningPaneUntracked\n"}
+{"Time":"2026-10-15T07:50:00.679258766Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorHumanAdminDeleteLeavesRunningPaneUntracked","Output":"--- PASS: TestCursorHumanAdminDeleteLeavesRunningPaneUntracked (0.58s)\n"}
+{"Time":"2026-10-15T07:50:00.679287146Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorHumanAdminDeleteLeavesRunningPaneUntracked","Elapsed":0.58}
+{"Time":"2026-10-15T07:50:00.679293006Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker"}
+{"Time":"2026-10-15T07:50:00.679295156Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker","Output":"=== RUN   TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker\n"}
+{"Time":"2026-10-15T07:50:02.271539415Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker","Output":"--- PASS: TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker (1.59s)\n"}
+{"Time":"2026-10-15T07:50:02.271565755Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker","Elapsed":1.59}
+{"Time":"2026-10-15T07:50:02.271571435Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorFreshRealPanePromptsRefusalsAndPause"}
+{"Time":"2026-10-15T07:50:02.271577635Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorFreshRealPanePromptsRefusalsAndPause","Output":"=== RUN   TestCursorFreshRealPanePromptsRefusalsAndPause\n"}
+{"Time":"2026-10-15T07:50:03.646713957Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorFreshRealPanePromptsRefusalsAndPause","Output":"--- PASS: TestCursorFreshRealPanePromptsRefusalsAndPause (1.38s)\n"}
+{"Time":"2026-10-15T07:50:03.646739567Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorFreshRealPanePromptsRefusalsAndPause","Elapsed":1.38}
+{"Time":"2026-10-15T07:50:03.646747117Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting"}
+{"Time":"2026-10-15T07:50:03.646749287Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting","Output":"=== RUN   TestCursorQuestionsDeniedWithEitherSetting\n"}
+{"Time":"2026-10-15T07:50:03.646755787Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/false"}
+{"Time":"2026-10-15T07:50:03.646757057Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/false","Output":"=== RUN   TestCursorQuestionsDeniedWithEitherSetting/false\n"}
+{"Time":"2026-10-15T07:50:04.228909982Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/false","Output":"--- PASS: TestCursorQuestionsDeniedWithEitherSetting/false (0.58s)\n"}
+{"Time":"2026-10-15T07:50:04.228934792Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/false","Elapsed":0.58}
+{"Time":"2026-10-15T07:50:04.228942272Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/true"}
+{"Time":"2026-10-15T07:50:04.228944752Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/true","Output":"=== RUN   TestCursorQuestionsDeniedWithEitherSetting/true\n"}
+{"Time":"2026-10-15T07:50:04.83957489Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/true","Output":"--- PASS: TestCursorQuestionsDeniedWithEitherSetting/true (0.61s)\n"}
+{"Time":"2026-10-15T07:50:04.83960089Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting/true","Elapsed":0.61}
+{"Time":"2026-10-15T07:50:04.83960693Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting","Output":"--- PASS: TestCursorQuestionsDeniedWithEitherSetting (1.19s)\n"}
+{"Time":"2026-10-15T07:50:04.83960942Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorQuestionsDeniedWithEitherSetting","Elapsed":1.19}
+{"Time":"2026-10-15T07:50:04.83961139Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorUnexpectedRuntimeLossFollowsMissing"}
+{"Time":"2026-10-15T07:50:04.83961326Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorUnexpectedRuntimeLossFollowsMissing","Output":"=== RUN   TestCursorUnexpectedRuntimeLossFollowsMissing\n"}
+{"Time":"2026-10-15T07:50:05.431447759Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorUnexpectedRuntimeLossFollowsMissing","Output":"--- PASS: TestCursorUnexpectedRuntimeLossFollowsMissing (0.59s)\n"}
+{"Time":"2026-10-15T07:50:05.431472249Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorUnexpectedRuntimeLossFollowsMissing","Elapsed":0.59}
+{"Time":"2026-10-15T07:50:05.431479389Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBaselinePauseNeverSubmitsModelPrompt"}
+{"Time":"2026-10-15T07:50:05.431481729Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBaselinePauseNeverSubmitsModelPrompt","Output":"=== RUN   TestCursorBaselinePauseNeverSubmitsModelPrompt\n"}
+{"Time":"2026-10-15T07:50:06.189128618Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBaselinePauseNeverSubmitsModelPrompt","Output":"--- PASS: TestCursorBaselinePauseNeverSubmitsModelPrompt (0.76s)\n"}
+{"Time":"2026-10-15T07:50:06.189155278Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorBaselinePauseNeverSubmitsModelPrompt","Elapsed":0.76}
+{"Time":"2026-10-15T07:50:06.189160618Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline"}
+{"Time":"2026-10-15T07:50:06.189162378Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline","Output":"=== RUN   TestCursorRepeatedCancellationDoesNotExtendDeadline\n"}
+{"Time":"2026-10-15T07:50:06.189166548Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt"}
+{"Time":"2026-10-15T07:50:06.189167858Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt","Output":"=== RUN   TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt\n"}
+{"Time":"2026-10-15T07:50:09.808379202Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt","Output":"--- PASS: TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt (3.62s)\n"}
+{"Time":"2026-10-15T07:50:09.808406072Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/interrupt","Elapsed":3.62}
+{"Time":"2026-10-15T07:50:09.808413702Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/denial"}
+{"Time":"2026-10-15T07:50:09.808415952Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/denial","Output":"=== RUN   TestCursorRepeatedCancellationDoesNotExtendDeadline/denial\n"}
+{"Time":"2026-10-15T07:50:10.853549965Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/denial","Output":"--- PASS: TestCursorRepeatedCancellationDoesNotExtendDeadline/denial (1.05s)\n"}
+{"Time":"2026-10-15T07:50:10.853576925Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline/denial","Elapsed":1.05}
+{"Time":"2026-10-15T07:50:10.853583755Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline","Output":"--- PASS: TestCursorRepeatedCancellationDoesNotExtendDeadline (4.66s)\n"}
+{"Time":"2026-10-15T07:50:10.853586195Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorRepeatedCancellationDoesNotExtendDeadline","Elapsed":4.66}
+{"Time":"2026-10-15T07:50:10.853588115Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorDefaultTypeScriptLaunchAndCallerRecreation"}
+{"Time":"2026-10-15T07:50:10.853589795Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorDefaultTypeScriptLaunchAndCallerRecreation","Output":"=== RUN   TestCursorDefaultTypeScriptLaunchAndCallerRecreation\n"}
+{"Time":"2026-10-15T07:50:12.093450269Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorDefaultTypeScriptLaunchAndCallerRecreation","Output":"--- PASS: TestCursorDefaultTypeScriptLaunchAndCallerRecreation (1.24s)\n"}
+{"Time":"2026-10-15T07:50:12.093479129Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorDefaultTypeScriptLaunchAndCallerRecreation","Elapsed":1.24}
+{"Time":"2026-10-15T07:50:12.093484539Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership"}
+{"Time":"2026-10-15T07:50:12.093486449Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership","Output":"=== RUN   TestCursorIndependentPaneVerifierRejectsChangedOwnership\n"}
+{"Time":"2026-10-15T07:50:12.093490119Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved"}
+{"Time":"2026-10-15T07:50:12.093491959Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved","Output":"=== RUN   TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved\n"}
+{"Time":"2026-10-15T07:50:12.685253648Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved","Output":"--- PASS: TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved (0.59s)\n"}
+{"Time":"2026-10-15T07:50:12.685284908Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/moved","Elapsed":0.59}
+{"Time":"2026-10-15T07:50:12.685292818Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned"}
+{"Time":"2026-10-15T07:50:12.685294478Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned","Output":"=== RUN   TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned\n"}
+{"Time":"2026-10-15T07:50:13.326868658Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned","Output":"--- PASS: TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned (0.64s)\n"}
+{"Time":"2026-10-15T07:50:13.326896607Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned","Elapsed":0.64}
+{"Time":"2026-10-15T07:50:13.326903837Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label"}
+{"Time":"2026-10-15T07:50:13.326906217Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label","Output":"=== RUN   TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label\n"}
+{"Time":"2026-10-15T07:50:13.91353604Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label","Output":"--- PASS: TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label (0.59s)\n"}
+{"Time":"2026-10-15T07:50:13.9135632Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/conflicting_label","Elapsed":0.59}
+{"Time":"2026-10-15T07:50:13.91356928Z","Action":"run","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced"}
+{"Time":"2026-10-15T07:50:13.91357129Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced","Output":"=== RUN   TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced\n"}
+{"Time":"2026-10-15T07:50:14.484792682Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced","Output":"--- PASS: TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced (0.57s)\n"}
+{"Time":"2026-10-15T07:50:14.484819022Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced","Elapsed":0.57}
+{"Time":"2026-10-15T07:50:14.484825652Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership","Output":"--- PASS: TestCursorIndependentPaneVerifierRejectsChangedOwnership (2.39s)\n"}
+{"Time":"2026-10-15T07:50:14.484836552Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Test":"TestCursorIndependentPaneVerifierRejectsChangedOwnership","Elapsed":2.39}
+{"Time":"2026-10-15T07:50:14.484840882Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Output":"PASS\n"}
+{"Time":"2026-10-15T07:50:14.486489451Z","Action":"output","Package":"github.com/gabemahoney/agent-director/test/realtmux","Output":"ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t24.654s\n"}
+{"Time":"2026-10-15T07:50:14.486523591Z","Action":"pass","Package":"github.com/gabemahoney/agent-director/test/realtmux","Elapsed":24.654}

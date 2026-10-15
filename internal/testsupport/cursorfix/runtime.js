@@ -9,9 +9,20 @@ fs.writeFileSync(SETTINGS.pid, String(process.pid));
 if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
 function send(frame) { console.log(JSON.stringify({jsonrpc:'2.0',...frame})); }
 const input = readline.createInterface({input:process.stdin});
+let pendingScenario = null;
+function scenario() {
+ if(!fs.existsSync(SETTINGS.scenario)) return null;
+ const raw=fs.readFileSync(SETTINGS.scenario,'utf8');
+ return raw.startsWith('{') ? JSON.parse(raw) : null;
+}
 input.on('line', async line => {
  const frame=JSON.parse(line);
  fs.appendFileSync(SETTINGS.trace,JSON.stringify(frame)+'\n');
+ if(!frame.method && pendingScenario) {
+  pendingScenario.ids.delete(JSON.stringify(frame.id));
+  if(pendingScenario.ids.size===0) {pendingScenario.resolve();pendingScenario=null;}
+  return;
+ }
  if(frame.method==='initialize') send({id:frame.id,result:{protocolVersion:1,agentCapabilities:{askQuestion:true}}});
  else if(frame.method==='session/new') {
   if(fs.existsSync(SETTINGS.scenario) && fs.readFileSync(SETTINGS.scenario,'utf8')==='blocked-input') {
@@ -19,15 +30,23 @@ input.on('line', async line => {
    while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
    setInterval(()=>{},1000);
   }
-  send({id:frame.id,result:{sessionId:'synthetic-session-1'}});
+  send({id:frame.id,result:{sessionId:scenario()?.sessionId || 'synthetic-session-1'}});
  }
  else if(frame.method==='session/prompt') {
   const text=frame.params.prompt[0].text;
+  const scripted=scenario();
+  if(scripted && scripted.requests.length) {
+   await new Promise(resolve=>{
+    pendingScenario={resolve,ids:new Set(scripted.requests.map(r=>JSON.stringify(r.id)))};
+    for(const request of scripted.requests) send(request);
+   });
+  }
   if(text==='HOLD') while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
   if(text==='DIE') process.exit(0);
   if(text==='DENY_FOREVER') {
    let n=0;
-   setInterval(()=>send({id:'denial-'+(++n),method:'cursor/ask_question',params:{}}),150);
+   // Unsupported authorization requires turn cancellation; direct questions do not.
+   setInterval(()=>send({id:'denial-'+(++n),method:'cursor/authorize',params:{}}),150);
    return;
   }
   if(text==='ASK') {

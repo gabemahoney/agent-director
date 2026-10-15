@@ -1,0 +1,89 @@
+{
+  "receipts": [
+    {
+      "path": "ftd-task2-green-advice-focused-counts.json",
+      "bytes": 2219,
+      "sha256": "52e5711d792b0160bec840c77dd8d4b7ae90c4fd9aae1524daa936edbc634390"
+    },
+    {
+      "path": "ftd-task2-green-advice-focused.log",
+      "bytes": 27022,
+      "sha256": "32fd6c4409bd631e9ac1b61670686096363c4f4046049e972ac8e4f90fe7937f"
+    },
+    {
+      "path": "ftd-task2-green-after-manifest.json",
+      "bytes": 12824,
+      "sha256": "3a6f1b38ac474d18d96e87aac48b3653624516121cf4539ed38b5e210ceb107a"
+    },
+    {
+      "path": "ftd-task2-green-before-manifest.json",
+      "bytes": 10752,
+      "sha256": "5e1614fb0b95dfcf2e62a25c8b3a497e379cdff567ad5071bfb1baad2f0aaa4e"
+    },
+    {
+      "path": "ftd-task2-green-final-status.json",
+      "bytes": 2360,
+      "sha256": "6252dcbe7cd2f68797af8e137f47ae5eb63c1a26123c5cbfda8c8c4dee0f6c97"
+    },
+    {
+      "path": "ftd-task2-green-first-full-tree-check.json",
+      "bytes": 272,
+      "sha256": "79380527e0985ebe2b2aa69477e10834710793b6a5f650e1e5f7e6b39d10707e"
+    },
+    {
+      "path": "ftd-task2-green-focused-counts.json",
+      "bytes": 635,
+      "sha256": "61257a8176375dab93fe42965383eddf02d6f8cb41b586608562f885a24afc8e"
+    },
+    {
+      "path": "ftd-task2-green-focused.log",
+      "bytes": 284508,
+      "sha256": "25d331f4c17615100e156c77a5eed27a06c1554cae8c676b226095771f868969"
+    },
+    {
+      "path": "ftd-task2-green-full-unit-counts.json",
+      "bytes": 14384,
+      "sha256": "1d87dc33286a212a54b832c4d3f9447d1a6240a1238f67b43a9431b5415a4b5b"
+    },
+    {
+      "path": "ftd-task2-green-full-unit.log",
+      "bytes": 65544,
+      "sha256": "3a7538c31f83dfdb53f0305ec10eec234f8a53dbb6e65b0068c2415dd771c381"
+    },
+    {
+      "path": "ftd-task2-green-pins.json",
+      "bytes": 1493,
+      "sha256": "a1e0dc2d35c77e18bac20761d1dbbf21c0f3ea311320a0b5062036678a2a2c63"
+    },
+    {
+      "path": "ftd-task2-green-prerun-manifest.json",
+      "bytes": 10950,
+      "sha256": "e2cab7aa8721e349de97c646ceb80d72f7bdd93e27f01944a147b6efc067825e"
+    },
+    {
+      "path": "ftd-task2-green-second-full-unit-counts.json",
+      "bytes": 14436,
+      "sha256": "d1f1ebe1c748dbfaf8ea638ca2fce35408a965a52386eeec878bd11e62c56415"
+    },
+    {
+      "path": "ftd-task2-green-second-full-unit.log",
+      "bytes": 48852,
+      "sha256": "e7b61881d21946c722e7cffddf08c52ba55d1a7fb36f9f6256f892b9799566b3"
+    },
+    {
+      "path": "ftd-task2-green-second-prerun-manifest.json",
+      "bytes": 12824,
+      "sha256": "3a6f1b38ac474d18d96e87aac48b3653624516121cf4539ed38b5e210ceb107a"
+    },
+    {
+      "path": "ftd-task2-green-subtasks.json",
+      "bytes": 39150,
+      "sha256": "734e3d99c19dd46ecb796ed1b84e8466e21c67ced047cf79386a5eeb117b7aa3"
+    },
+    {
+      "path": "green-test-report.txt",
+      "bytes": 8473,
+      "sha256": "55175f661f2c71feae75f7fc168a19d50d2cd35ceb97ef5c2d178fda8a397925"
+    }
+  ]
+}

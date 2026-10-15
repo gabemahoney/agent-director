@@ -45,15 +45,16 @@ func DescDialogMaybeOpenCodex() DescCase {
 }
 
 // DescProvenGoneHow is the manifest's text of the proven_gone_how field on a
-// permission request's delivery facts: tool_ran is a Claude hook's proof and
-// never applies on a Codex row, turn_end is the main agent's Stop or idle-prompt
+// permission request's delivery facts: tool_ran is Claude hook or validated
+// Cursor execution proof, never Codex. turn_end is the main Stop or idle-prompt
 // Notification, Codex Interrupt or verified Cursor main Stop/Interrupt only
 // for durable eligible origin. Check it with AssertAgentTextCase.
 func DescProvenGoneHow() DescCase {
 	return DescCase{
 		Name: "proven_gone_how field",
 		Require: []string{
-			"tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id (never on a Codex row)",
+			"tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id",
+			"validated correlated Cursor execution output established that exact tool ran (never on a Codex row)",
 			"turn_end: the turn of the agent that asked ended after it was written",
 			"the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt",
 			"proves only a durably main-turn-eligible request recorded before the hook began",

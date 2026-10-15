@@ -1,0 +1,40 @@
+E2 TASK2 FINAL PM DOCUMENTATION BOOKKEEPING — COMPLETE
+Task t2.jf1.c1.cz; owned subtask t3.jf1.c1.cz.ch.
+Checkout feature/b.ftd, HEAD f97b3fcb7978286e25e93f67a98c021073943302 plus settled Task2 diff.
+
+OWN STATUS
+Set only t3.jf1.c1.cz.ch done -> active -> done. No other status changed.
+Task2 remains active; Task3 t2.jf1.c1.3p remains defined/unstarted.
+
+ONE TRACKED FILE CHANGED
+ tickets/handoff/b.ftd/Ideas/b.ftd/release-notes-breaking.md:50
+Replaced "its full units and exact-revision external gate remain pending."
+with "its full `make test-sandbox` units PASSED (68 Go packages, 429 Bun tests,
+zero failures), while its exact-revision external gate remains PENDING."
+Only acceptance-status bookkeeping changed. Existing implementation, staged-scope,
+release, schema migration, backup/recovery and external-acceptance limits retained.
+
+REVIEW AND VERIFICATION
+Read assigned Task/subtask, CLAUDE.md and user/readme/architecture writing guides,
+PM review, green-test, help-source and doc-corrections reports. Personally reread
+whole short release handoff before and after correction.
+Before correction all 58 paths matched /tmp/ftd-task2-green-after-manifest.json
+(hash, byte count, mode and git status). After correction all other 57 manifest
+paths remain unchanged in hash, bytes, mode and status; HEAD unchanged. Only the
+specified handoff prose differs from that accepted tested manifest. Consequently
+the earlier whole-tree hash describes the pre-editorial tree, not a new test run.
+Static git diff --check PASSED. Reported sandbox result is prior Test Writer/PM
+evidence: 68 Go packages passed (6 executed, 62 cached), 0 failed, 13 no-test-files;
+Bun 429 passed, 0 failed. No tests, suite, build, generator or repository artifact
+executed by this writer for this metadata-only correction.
+
+LIMITS / DEVIATIONS / FAILURES / QUESTIONS
+None. No source, tests, generated references, manuals, architecture, recovery
+commands or fixtures edited. No commit, push, delegation, agent messages, real AD
+stores, credentials/login/logout/.claude, Docker/TLC/scheduler/live Cursor activity.
+PM approval covers source behavior/local commit and operator gate handoff; it
+does not complete Task2, start Task3 or establish exact-revision external acceptance.
+
+REPORT COPIES
+/tmp/ftd-e2-task2-pm-doc-report.txt
+tickets/handoff/b.ftd/Plans/b.jf1/e2-task2/pm-doc-report.txt

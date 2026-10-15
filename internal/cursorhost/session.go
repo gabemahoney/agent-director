@@ -3,6 +3,7 @@ package cursorhost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,7 +38,7 @@ func (w *lockedWriter) Write(p []byte) (int, error) {
 }
 
 // Run owns one fresh Cursor conversation. It performs no authentication,
-// session restoration, relay decisions or queued follow-up admission.
+// session restoration or queued follow-up admission.
 func Run(options Options, in *os.File, out io.Writer) (err error) {
 	ownedID := ""
 	defer func() {
@@ -122,8 +123,12 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 	defer protocol.close()
 	writer := &lockedWriter{out: out}
 	inputs := make(chan terminalInput, 32)
+	requests := newRequestController(rep, protocol, writer)
+	defer requests.cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	var admission atomic.Bool
-	restore := terminalInputLoop(in, writer, inputs, func() bool { return admission.CompareAndSwap(true, false) })
+	restore := terminalInputLoop(in, writer, inputs, func() bool { return admission.CompareAndSwap(true, false) }, requests.key)
 	defer restore()
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
@@ -135,6 +140,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 	session := ""
 	phase := "initialize"
 	busy := false
+	requestDeadlineHeld := false
 	cancelled := false
 	deadline := time.NewTimer(protocolWait)
 	defer deadline.Stop()
@@ -185,15 +191,35 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			}
 			return fmt.Errorf("Cursor runtime exited unexpectedly")
 		case <-signals:
+			requests.cancel()
 			admission.Store(false)
 			intentional = true
+		case <-ticker.C:
+			if err = requests.tick(); err != nil {
+				return err
+			}
+			if requestDeadlineHeld && !requests.open() {
+				requestDeadlineHeld = false
+				if busy {
+					resetDeadline(30 * time.Minute)
+				}
+			}
 		case <-deadline.C:
+			requests.cancel()
 			return fmt.Errorf("Cursor ACP operation timed out")
 		case input := <-inputs:
 			if input.err != nil {
 				return fmt.Errorf("Cursor pane input closed")
 			}
+			if input.choiceToken != "" {
+				requests.choose(input.choiceToken, input.choiceOption)
+				if err = requests.tick(); err != nil {
+					return err
+				}
+				continue
+			}
 			if input.interrupt {
+				requests.cancel()
 				if busy && !cancelled {
 					if err = protocol.notify("session/cancel", map[string]any{"sessionId": session}); err != nil {
 						return err
@@ -222,7 +248,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 				fmt.Fprint(writer, "> ")
 				continue
 			}
-			if !input.accepted || session == "" || busy {
+			if !input.accepted || session == "" || busy || requests.open() {
 				fmt.Fprint(writer, "Cursor input refused while starting or busy; nothing sent\r\n")
 				continue
 			}
@@ -243,6 +269,29 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			}
 			if f.Method != "" {
 				if len(f.ID) > 0 {
+					if cancelled {
+						return fmt.Errorf("Cursor authorization after cancellation; no response sent")
+					}
+					if session != "" && !cancelled && busy {
+						if e := requests.admit(f, session); e == nil {
+							// Authorization has its own finite immutable bounds;
+							// time waiting on it is not prompt generation time.
+							stopDeadline()
+							requestDeadlineHeld = true
+							if e = tr.record("authorization_admitted", map[string]any{"method": f.Method, "origin": "unknown"}); e != nil {
+								return e
+							}
+							continue
+						} else {
+							var policy policyRejection
+							if !errors.As(e, &policy) {
+								return fmt.Errorf("Cursor authorization admission failed; no response sent: %w", e)
+							}
+							fmt.Fprintf(writer, "Cursor authorization unavailable: %s\r\n", safeText(e.Error()))
+						}
+					}
+					// Policy/unsupported failures are not relay responses. Their
+					// explicit reject/cancel is separate from admitted requests.
 					cancel, e := protocol.deny(f)
 					if e != nil {
 						return e
@@ -256,6 +305,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 							return fmt.Errorf("unsupported authorization during Cursor startup")
 						}
 						if !cancelled {
+							requests.cancel()
 							if err = protocol.notify("session/cancel", map[string]any{"sessionId": session}); err != nil {
 								return err
 							}
@@ -295,6 +345,9 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 						origin = "launch"
 					}
 					if err = tr.record("update", map[string]any{"origin": origin, "update": json.RawMessage(f.Params)}); err != nil {
+						return err
+					}
+					if err = requests.execution(f.Params); err != nil {
 						return err
 					}
 					if update.Update.Content.Type == "text" {
@@ -369,7 +422,11 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 				if err = tr.record("turn_outcome", map[string]any{"stop_reason": completed.Reason, "cancellation_requested": cancelled, "origin": "main"}); err != nil {
 					return err
 				}
+				if completed.Reason == "cancelled" {
+					requests.cancel()
+				}
 				busy = false
+				requestDeadlineHeld = false
 				cancelled = false
 				phase = "idle"
 				stopDeadline()
@@ -383,6 +440,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			}
 		}
 		if intentional {
+			requests.cancel()
 			admission.Store(false)
 			if busy {
 				_ = protocol.notify("session/cancel", map[string]any{"sessionId": session})
