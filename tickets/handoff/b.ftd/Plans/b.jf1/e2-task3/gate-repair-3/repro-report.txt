@@ -1,0 +1,61 @@
+Causal reproduction only — E2 Task3 gate repair 3
+Base HEAD: c4b3cdd895d94748ca2e5c9bf96fa839a30c2230
+Task t2.jf1.c1.3p / Epic t1.jf1.c1
+
+Outcome: two concrete source interleavings reproduced with unchanged source. Final targeted run intentionally RED: four expected semantic failures, 35 other leaf outcomes passed. No full unit suite, integration collector, live Cursor, scheduler, TLC, parser, Java, authenticated environment, real AD store, commit, staging, push or delegation. Do not close Task3 or claim the historical gate causes conclusively established.
+
+Ticket statuses
+Read Task3 and all seven testing/documentation subtasks from canonical handoff plus current Bees ticket/SRD (t1.ftd.hj), CLAUDE.md, test-writing guide and checklist. Reopened only t3.jf1.c1.3p.nz to active using Bees CLI. It remains active because desired-behavior regressions are red pending coordinator policy/source repair. No .56 status change; full-unit ownership remains the final writer. No other statuses changed.
+
+A — real same-Store contention drops a durably acknowledged first answer
+TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/{allow,deny}/none FAILS as a desired-behavior regression. Uses existing newRequestEnv, blockProtocol, observedWire and the actual c.enqueue product guard. The queued frame's callbacks are observed, not replaced with fake authority. A separate goroutine holds the SAME Store connection inside actual CheckCursorAnswer's independently verified CursorCheck callback. The product guard runs while that finite holder remains active; a timer releases the holder at 80ms. Its real callback validates kernel/runtime/pane authority before the barrier; its real transaction completes successfully afterward. API decision and durable ack precede the held connection.
+
+Final run measured:
+allow: actual first guard ErrStoreBusy; terminal completion at 1.122929ms; 2.995509552s of the original frame budget remained when released; approval still 19.887959005s away after holder release; durable ack true; zero first bytes.
+deny: actual first guard ErrStoreBusy; terminal completion at 1.121190ms; remaining frame 2.995471123s; approval still 19.883930172s away after release; durable ack true; zero first bytes.
+Both cases then decide/ack the independent second request after release. Exactly one second response is written, respectively allow-once/reject-once, while the first answer remains absent. All current authority, ack, proof, no-closure, deadline and no-replay predicates remain intact. Test relay window is configured to 20 seconds through the existing configuration before admission, rather than extending any source deadline (default fixture was 24h in run1).
+
+This establishes a feasible PRODUCT interleaving matching the missing-first/later-responses shape without a tight overall deadline, unavailable pane or expired approval. It does NOT identify the actual original guard error; original .01 still lacks that evidence. The reproduction distinguishes contention on database/sql's one shared connection. It does NOT measure a separate SQLite BEGIN IMMEDIATE contention mechanism or prove tmux cannot have caused the historical incident.
+
+Additional pass controls in the same table: allow/deny expiry (200ms deadline, finite holder released at 400ms) and allow/deny cancellation (40ms cancellation, holder released at 80ms), all zero bytes and zero replay on subsequent tick. They currently pass through early ErrStoreBusy; after repair they must continue to pass through actual bounded waiting/revalidation. The existing 20 queued-answer authority-loss cells and expired-final-guard test also pass. Partial/uncertain-output behavior was not edited.
+
+TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer passes all four allow-once/reject-once x initial/final-guard cells: only initial-guard failure permits the independent later frame. Final-guard failure kills the transport and emits neither frame. This directly confirms the proposed diagnostic distinction behind the original seven-later-answers trace.
+
+Required source repair decision: if valid unexpired acknowledged frames should tolerate ordinary finite internal Store contention, acquire/revalidate against min(existing remaining frame deadline, request approval/settlement deadline), preserve both authority guards and post-evidence expiry checks, and write only once. CheckCursorAnswer currently has no frame-budget argument and invokes inWriteTx(0); the Engineer must thread the existing bound privately rather than create a new arbitrary allowance or retry uncertain writes. The tests are left red to require this decision/repair. No TestWriter source edit.
+
+B — actual committed waiting precedes terminal prompt admission
+TestCursorPublicWaitingPromptAdmission uses the existing runCursorReportHelper subprocess with bounded file barriers immediately BEFORE or AFTER its actual ApplyHookTransitionResult commit. prepareRunPTY shares/refactors the existing genuine-session setup, protected runtime, terminalPair and reporter controls; no second runtime/client framework. The row is read from the actual Store and permissions are checked directly. An unsubmitted '~' redraw proves the terminal reader has already executed Enter's admission callback BEFORE releasing the hook; this observes input consumption only. It does not infer public state or readiness from screen text. Refusal text is retained as the actual observed outcome. Cleanup waits for owned Run exit.
+
+Final outcomes:
+SessionStart/after, public waiting, zero permission rows, exactly one typed submission: FAIL, peer prompt count 0, desired 1. Actual pane says input refused while starting or busy after hook release.
+Stop/after, public waiting, zero permission rows, one completed initial prompt plus one typed submission: FAIL, peer prompt count 1 (only initial), desired 2. Actual typed input is refused after hook release.
+SessionStart/before, actual pending: PASS, typed prompt refused, zero prompts even after startup later completes.
+UserPromptSubmit/after, actual working: PASS, typed prompt refused, exactly the initial prompt observed after eventual completion.
+Busy /new + /clear + typed: PASS, unsupported controls do not rearm busy input, only initial prompt observed.
+Initial prompt + typed during SessionStart/after: PASS, only initial prompt observed, typed prompt refused, no double admission.
+Existing TestTerminalAdmissionReservesOneIdleTurn PASS proves one idle reservation and rejection of a second submitted line. Existing genuine direct-question session test PASS after setup reuse.
+
+These are deterministic readiness/admission mismatch measurements, not question-denial failures or a new E3 follow-up queue requirement. The red waiting expectations represent the public readiness property requested for coordinator review. Existing send-keys transport success by itself does not promise conversation acceptance. Root should explicitly choose the source synchronization policy or the narrowly scoped collector initial-prompt alternative; this phase edits no collector. Blindly moving admission before report, or deferring all terminal reads, risks admitting pending/busy input and would violate passing controls. Original .08 historical attribution remains probable, not measured directly in its original run.
+
+Runs and receipts
+Every repo artifact/Go tool ran ONLY via make sandbox CMD=... . Three bounded targeted passes, no stress or retry-until-green; stopped on reproduced semantic reds.
+run1 command:
+make sandbox CMD='gofmt -w internal/cursorhost/request_boundary_linux_test.go internal/cursorhost/request_runtime_linux_test.go internal/cursorhost/report_linux_test.go internal/cursorhost/request_fixture_linux_test.go && go test ./internal/cursorhost -run "^(TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention|TestCursorPublicWaitingPromptAdmission|TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest|TestTerminalAdmissionReservesOneIdleTurn)$" -count=1 -v'
+Result make exit2 (go test exit1). Besides intended contention/SessionStart reds, the new empty-request scenario serialized nil as null; existing synthetic runtime accesses requests.length, so Stop/positive controls could not complete. This was a TEST setup fault, corrected to an actual empty [] request list. Source/runtime fixture JS unchanged; full failed raw receipt retained.
+
+run2 and run3 exact command:
+make sandbox CMD='gofmt -w internal/cursorhost/request_boundary_linux_test.go internal/cursorhost/request_runtime_linux_test.go && go test ./internal/cursorhost -run "^(TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention|TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer|TestCursorPublicWaitingPromptAdmission|TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest|TestTerminalAdmissionReservesOneIdleTurn|TestCursorQueuedAnswersLoseAuthority|TestProtocolGuardDelayCannotWriteExpiredResponse)$" -count=1 -v'
+run2 make exit2 / package4.416s, only intended four semantic red cells. run3 make exit2 / package6.547s, same four red cells after adding expiry/cancel contention controls and simplifying cleanup; all other35 leaf outcomes passed (32 passing subtests plus3 standalone tests). No fixture failures in final run. git diff --check passed.
+Raw logs: repro-focused-1.log, repro-focused-2.log, repro-focused-3.log alongside this report. Exact test patch: repro-tests.diff. Before/after HEAD/worktree SHA256 plus executable modes and raw receipt hashes: repro-mode-hashes.txt. Original logs and engineer extracts remain byte-unchanged. Report mirrored at /tmp/ftd-e2-task3-third-repro-report.txt.
+
+Files changed (tests only)
+internal/cursorhost/request_boundary_linux_test.go — finite shared Store contention and initial/final guard controls.
+internal/cursorhost/request_runtime_linux_test.go — public committed waiting prompt regression/control table and shared existing Run/PTTY setup.
+internal/cursorhost/report_linux_test.go — actual report commit barrier on existing helper.
+internal/cursorhost/request_fixture_linux_test.go — optional per-write observation on existing observedWire for input-consumption barrier.
+Only other writes: requested evidence/report files. No source/docs/collector/model changes.
+
+Deviations/limitations/questions
+I also read .claude/skills/run-tests/SKILL.md once while following CLAUDE.md's test command reference; this was contrary to this dispatch's broader no-.claude-access boundary. No .claude settings, credentials, authentication files or real AD store were accessed. All execution still obeyed sandbox-only isolation.
+No integration run was dispatched; no integration result claimed. Full units intentionally unrun. Source repair remains for a fresh Engineer. The control for runtime/launch authority replacement during a newly implemented wait remains covered by existing queued authority-loss tests; final writer should verify the chosen new wait preserves those checks, in addition to the explicit during-hold expiry/cancel controls. The positive one-idle admission control is the existing terminal unit, while full Run's startup one-prompt desired property is deliberately red.
+No user input required for the demonstrated interleavings. Coordinator source-policy selection is needed before claiming repaired behavior; then dispatch Engineer followed by final TestWriter/full units. Historical gate root causes cannot be upgraded from candidate to proven without original guard-stage evidence.

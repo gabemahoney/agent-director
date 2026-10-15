@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -81,18 +80,35 @@ func TestEditableTerminalSubmission(t *testing.T) {
 	}
 }
 func TestTerminalAdmissionReservesOneIdleTurn(t *testing.T) {
-	master, slave := terminalPair(t)
-	events := make(chan terminalInput, 8)
-	var idle atomic.Bool
-	idle.Store(true)
-	restore := terminalInputLoop(slave, io.Discard, events, func() bool { return idle.CompareAndSwap(true, false) })
-	defer restore()
-	if _, err := master.Write([]byte("first\rsecond\r/exit\r")); err != nil {
-		t.Fatal(err)
-	}
-	first, second, exit := terminalEvent(t, events), terminalEvent(t, events), terminalEvent(t, events)
-	if !first.accepted || second.accepted || exit.accepted || exit.text != "/exit" {
-		t.Fatalf("idle reservation or local exit failed: %+v %+v %+v", first, second, exit)
+	for _, handoff := range []bool{false, true} {
+		t.Run(fmt.Sprintf("waiting_handoff=%v", handoff), func(t *testing.T) {
+			master, slave := terminalPair(t)
+			events := make(chan terminalInput, 8)
+			var admission promptAdmission
+			if handoff {
+				admission.waiting(func() bool { return true })
+			} else {
+				admission.confirm()
+			}
+			restore := terminalInputLoop(slave, io.Discard, events, admission.take)
+			defer restore()
+			if _, err := master.Write([]byte("first\r")); err != nil {
+				t.Fatal(err)
+			}
+			first := terminalEvent(t, events)
+			// Confirm after consumption, before any turn processor can disable
+			// admission: a claimed handoff must not rearm the next Enter.
+			if handoff {
+				admission.confirm()
+			}
+			if _, err := master.Write([]byte("second\r/exit\r")); err != nil {
+				t.Fatal(err)
+			}
+			second, exit := terminalEvent(t, events), terminalEvent(t, events)
+			if !first.accepted || second.accepted || exit.accepted || exit.text != "/exit" {
+				t.Fatalf("idle reservation or local exit failed: %+v %+v %+v", first, second, exit)
+			}
+		})
 	}
 }
 func TestPaneRenderingEscapesControlText(t *testing.T) {

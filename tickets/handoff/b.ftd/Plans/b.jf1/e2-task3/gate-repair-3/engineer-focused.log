@@ -1,0 +1,63 @@
+Command: make sandbox CMD='go test ./internal/cursorhost -run "^(TestTerminalAdmissionReservesOneIdleTurn|TestCursorAckCommittedBeforeFirstByte|TestCursorQueuedAnswersLoseAuthority|TestProtocolGuardDelayCannotWriteExpiredResponse|TestCursorRuntimeWaitsForIndependentPlanAndPermission)$" -count=1 -v'
+Source HEAD: c4b3cdd895d94748ca2e5c9bf96fa839a30c2230
+Exit: 0
+Raw test output (final command chunk; initial sandbox engine/build preamble omitted):
+=== RUN   TestCursorAckCommittedBeforeFirstByte
+=== RUN   TestCursorAckCommittedBeforeFirstByte/allow
+=== RUN   TestCursorAckCommittedBeforeFirstByte/deny
+=== RUN   TestCursorAckCommittedBeforeFirstByte/timeout
+--- PASS: TestCursorAckCommittedBeforeFirstByte (0.82s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/allow (0.62s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/deny (0.09s)
+    --- PASS: TestCursorAckCommittedBeforeFirstByte/timeout (0.11s)
+=== RUN   TestCursorQueuedAnswersLoseAuthority
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deadline
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/settlement_retirement
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/cancel
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/runtime_death
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/connection
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/session
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/launch
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deleted_ack
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/deleted_row
+=== RUN   TestCursorQueuedAnswersLoseAuthority/allow/closed
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deadline
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/settlement_retirement
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/cancel
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/runtime_death
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/connection
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/session
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/launch
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deleted_ack
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/deleted_row
+=== RUN   TestCursorQueuedAnswersLoseAuthority/deny/closed
+--- PASS: TestCursorQueuedAnswersLoseAuthority (2.29s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deadline (0.22s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/settlement_retirement (0.08s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/cancel (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/runtime_death (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/connection (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/session (0.11s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/launch (0.09s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deleted_ack (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/deleted_row (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/allow/closed (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deadline (0.39s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/settlement_retirement (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/cancel (0.09s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/runtime_death (0.09s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/connection (0.07s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/session (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/launch (0.10s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deleted_ack (0.07s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/deleted_row (0.08s)
+    --- PASS: TestCursorQueuedAnswersLoseAuthority/deny/closed (0.09s)
+=== RUN   TestProtocolGuardDelayCannotWriteExpiredResponse
+--- PASS: TestProtocolGuardDelayCannotWriteExpiredResponse (0.12s)
+=== RUN   TestCursorRuntimeWaitsForIndependentPlanAndPermission
+--- PASS: TestCursorRuntimeWaitsForIndependentPlanAndPermission (0.15s)
+=== RUN   TestTerminalAdmissionReservesOneIdleTurn
+--- PASS: TestTerminalAdmissionReservesOneIdleTurn (0.00s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	3.395s
+

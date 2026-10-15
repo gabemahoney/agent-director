@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -45,8 +46,14 @@ func runCursorReportHelper() int {
 	if payload.Event == "SessionEnd" {
 		target = store.StateEnded
 	}
+	if !cursorReportBarrier(payload.Event, "before") {
+		return 2
+	}
 	g := store.HookGate{Event: payload.Event, ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
 	if _, a, e := s.ApplyHookTransitionResult(b.InstanceID, g, target, false, payload.Event, payload.Path, true); e != nil || !a.Applied {
+		return 2
+	}
+	if !cursorReportBarrier(payload.Event, "after") {
 		return 2
 	}
 	db, err := sql.Open("sqlite", path)
@@ -104,4 +111,29 @@ func TestReporterHeldLifecycleRequiresIndependentEvidence(t *testing.T) {
 			})
 		}
 	}
+}
+
+// cursorReportBarrier pauses the existing subprocess seam around its actual commit.
+func cursorReportBarrier(event, phase string) bool {
+	dir := os.Getenv("AD_TEST_CURSOR_BARRIER_DIR")
+	if event != os.Getenv("AD_TEST_CURSOR_BARRIER_EVENT") || phase != os.Getenv("AD_TEST_CURSOR_BARRIER_PHASE") {
+		if _, err := os.Stat(filepath.Join(dir, "release")); err != nil {
+			return true
+		}
+		dir = os.Getenv("AD_TEST_CURSOR_SECOND_BARRIER_DIR")
+		if dir == "" || event != "UserPromptSubmit" || phase != "before" {
+			return true
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "entered"), []byte(event+"/"+phase), 0600); err != nil {
+		return false
+	}
+	until := time.Now().Add(4 * time.Second)
+	for time.Now().Before(until) {
+		if _, err := os.Stat(filepath.Join(dir, "release")); err == nil {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
 }

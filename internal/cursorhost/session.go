@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -127,8 +126,9 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 	defer requests.cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-	var admission atomic.Bool
-	restore := terminalInputLoop(in, writer, inputs, func() bool { return admission.CompareAndSwap(true, false) }, requests.key)
+	var admission promptAdmission
+	defer admission.disable()
+	restore := terminalInputLoop(in, writer, inputs, admission.take, requests.key)
 	defer restore()
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
@@ -162,7 +162,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 		}
 	}
 	submit := func(text string) error {
-		admission.Store(false)
+		admission.disable()
 		if len(text) > maxFrameBytes/2 {
 			return fmt.Errorf("Cursor input exceeds limit")
 		}
@@ -192,7 +192,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			return fmt.Errorf("Cursor runtime exited unexpectedly")
 		case <-signals:
 			requests.cancel()
-			admission.Store(false)
+			admission.disable()
 			intentional = true
 		case <-ticker.C:
 			if err = requests.tick(); err != nil {
@@ -241,9 +241,6 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			}
 			if text == "/new" || text == "/clear" {
 				fmt.Fprint(writer, "Unsupported Cursor conversation control; nothing sent\r\n> ")
-				if session != "" && !busy {
-					admission.Store(true)
-				}
 				continue
 			}
 			if text == "" {
@@ -396,12 +393,18 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 				if err = tr.record("session_start", map[string]any{"origin": "main"}); err != nil {
 					return err
 				}
-				if err = rep.report("SessionStart"); err != nil {
+				var waiting func(func() bool)
+				if options.InitialPrompt == "" {
+					waiting = admission.waiting
+				}
+				if err = rep.reportWaiting("SessionStart", waiting); err != nil {
 					return err
 				}
 				stopDeadline()
 				fmt.Fprint(writer, "Cursor ready\r\n> ")
-				admission.Store(true)
+				if options.InitialPrompt == "" {
+					admission.confirm()
+				}
 				if options.InitialPrompt != "" {
 					text := options.InitialPrompt
 					options.InitialPrompt = ""
@@ -432,18 +435,18 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 				cancelled = false
 				phase = "idle"
 				stopDeadline()
-				if err = rep.report("Stop"); err != nil {
+				if err = rep.reportWaiting("Stop", admission.waiting); err != nil {
 					return err
 				}
 				fmt.Fprint(writer, "\r\nCursor turn complete\r\n> ")
-				admission.Store(true)
+				admission.confirm()
 			default:
 				return fmt.Errorf("unexpected Cursor response")
 			}
 		}
 		if intentional {
 			requests.cancel()
-			admission.Store(false)
+			admission.disable()
 			if busy {
 				_ = protocol.notify("session/cancel", map[string]any{"sessionId": session})
 			}

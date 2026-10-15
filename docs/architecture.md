@@ -127,9 +127,14 @@ fatal, with no retry or replay. The controller continues observing child
 death, input and signals while writes stall. Cancellation retains the first
 request's fixed deadline; repeated interrupts or denials cannot extend it.
 `session.go` admits ordinary input only after confirmed startup or turn
-completion. `terminal_linux.go` handles Unicode editing, literal tabs,
-bracketed multiline paste and line clearing; Enter reserves
-idle admission atomically so input received busy cannot run in a later turn.
+completion. Future input paths must reuse the private `promptAdmission` for
+one idle reservation and the waiting-report handoff. Enter can independently
+confirm committed `waiting` while the hook subprocess finishes, using shared
+`reporter.verifyReport` checks with no held unproven awaiting request. The
+handoff preserves that reservation; a saved initial prompt retains priority.
+`terminal_linux.go` handles Unicode editing, literal tabs,
+bracketed multiline paste and line clearing; input consumed pending or busy
+is refused and cannot run in a later turn.
 Busy follow-ups and clear/new commands are visibly refused. Local exit and
 eligible pause terminate the owned child before an intentional end report.
 Cancellation requests wait for correlated completion; the outbound frame
@@ -175,7 +180,9 @@ The CLI's `hookCursorVerifier` independently composes `VerifyRuntime`,
 report. `internal/hook.HandleConfig.VerifyCursor` injects this evidence seam
 without adding probe/tmux/cursorhost dependencies to `internal/hook`.
 Conditional store writes repeat the binding predicates after verification.
-`reporter.report` also accepts `check_permission` in place of nominal
+Report confirmation must reuse `reporter.verifyReport` for both the Enter
+waiting check and post-hook verification. Post-hook verification also accepts
+`check_permission` in place of nominal
 working/waiting only when a genuine request still awaits an answer and is
 unproven. It verifies its own token/life/session/transcript path and a strictly
 newer row version, rereads the exact runtime binding (connection, pipes,
@@ -253,7 +260,11 @@ dialog closure; an ack-before-crash can remain delivered without receipt.
 request-specific guard, fixed deadline and completion callback. Immediately
 before Write, `CheckCursorAnswer` rechecks current authority and the exact
 acknowledgement/native claim; the writer checks transport expiry again after
-slow guards. Allows expire at the decision deadline, denials by settlement.
+slow guards. Both guards use the earlier of the existing frame and applicable
+request deadlines. `CheckCursorAnswer` bounds connection and transaction
+acquisition by that remaining time, then revalidates current authority,
+retirement and expiry after waiting and independent evidence. Allows expire
+at the decision deadline, denials by settlement.
 Queued allow AND deny retire on settlement/cancellation/ownership loss.
 Partial/uncertain output is never replayed. Close and enqueue linearize under
 `outputMu`; active/queued accepted frames receive bounded failure completion,

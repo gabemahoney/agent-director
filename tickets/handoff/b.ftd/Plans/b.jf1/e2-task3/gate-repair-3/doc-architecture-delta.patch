@@ -1,0 +1,98 @@
+--- docs/architecture.md.before
++++ docs/architecture.md.after
+@@ -118,27 +118,32 @@
+ with `acp`, and owns both protocol pipes. The runtime never reads terminal
+ input. `protocol.go` bounds frames, correlates one outstanding initialize,
+ session/new or session/prompt request, validates protocol 1 and completions,
+ and rejects stale/mismatched responses. Its bounded FIFO and single outbound
+ writer serialize frames without blocking the controller. Enqueueing is not
+ delivery: each frame has a fixed write deadline from enqueue, independent of
+ startup, prompt and cancellation deadlines. Expired frames are never written;
+ short writes, transport errors and write timeouts make delivery uncertain and
+ fatal, with no retry or replay. The controller continues observing child
+ death, input and signals while writes stall. Cancellation retains the first
+ request's fixed deadline; repeated interrupts or denials cannot extend it.
+ `session.go` admits ordinary input only after confirmed startup or turn
+-completion. `terminal_linux.go` handles Unicode editing, literal tabs,
+-bracketed multiline paste and line clearing; Enter reserves
+-idle admission atomically so input received busy cannot run in a later turn.
++completion. Future input paths must reuse the private `promptAdmission` for
++one idle reservation and the waiting-report handoff. Enter can independently
++confirm committed `waiting` while the hook subprocess finishes, using shared
++`reporter.verifyReport` checks with no held unproven awaiting request. The
++handoff preserves that reservation; a saved initial prompt retains priority.
++`terminal_linux.go` handles Unicode editing, literal tabs,
++bracketed multiline paste and line clearing; input consumed pending or busy
++is refused and cannot run in a later turn.
+ Busy follow-ups and clear/new commands are visibly refused. Local exit and
+ eligible pause terminate the owned child before an intentional end report.
+ Cancellation requests wait for correlated completion; the outbound frame
+ queue never queues follow-up turns or rotates conversations.
+ 
+ `process_linux.go` installs ptrace EXITKILL and parent-death protection at the
+ initial exec stop before ACP input. Fork/clone/exec descendants stay guarded
+ across launcher chains. Runtime/pipes are independently identified; a second
+ ACP owner is refused. Only an explicitly identified same-runtime executable
+ or script worker-server possessing neither ACP pipe may detach. Unknown
+ process evidence grants no ownership. Stop reconciles inherited tracees
+ through kernel `TracerPid` matching the locked supervisor OS-thread id,
+@@ -166,25 +171,27 @@
+ Schema v11 separately adds durable request proof eligibility; see
+ [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility).
+ No Cursor permission or plan admission is implemented by this metadata change.
+ 
+ `reporter.report` directly execs the AD hook with the gateway as its immediate
+ parent. The unchanged gate must accept that parent; Cursor additionally checks
+ current launch, life, registered runtime/connection/session and termination.
+ The CLI's `hookCursorVerifier` independently composes `VerifyRuntime`,
+ `VerifyTranscriptPath` and `VerifyPane`. An absent/error verifier rejects the
+ report. `internal/hook.HandleConfig.VerifyCursor` injects this evidence seam
+ without adding probe/tmux/cursorhost dependencies to `internal/hook`.
+ Conditional store writes repeat the binding predicates after verification.
+-`reporter.report` also accepts `check_permission` in place of nominal
++Report confirmation must reuse `reporter.verifyReport` for both the Enter
++waiting check and post-hook verification. Post-hook verification also accepts
++`check_permission` in place of nominal
+ working/waiting only when a genuine request still awaits an answer and is
+ unproven. It verifies its own token/life/session/transcript path and a strictly
+ newer row version, rereads the exact runtime binding (connection, pipes,
+ session and termination included), and independently rechecks runtime and pane
+ evidence. An unrelated version increment, empty hold, stale session or changed
+ binding cannot confirm a report. Intentional SessionEnd still requires `ended`.
+ The actual opened store path is forwarded for routing, including client
+ store overrides; that path supplies no authority. Optional Cursor tool hooks
+ from a child, unrelated controllers, nested agents and stale launches cannot
+ report lifecycle. Unknown/child update provenance is retained without
+ inventing main-agent lifecycle or subagent records. Cursor subagent listing
+ always returns untracked and empty; existing status response shapes remain.
+@@ -244,25 +251,29 @@
+ allow, deny and timeout denial, commits its own `delivered_at` BEFORE enqueue.
+ Failed/missing acknowledgement means zero relay reply bytes; admission/storage
+ failure is bounded failure, not a generic unacknowledged denial. Supported
+ policy rejection and separately validated cancellation are separate paths.
+ An existing allow is never rewritten or acknowledged late. `delivered` is
+ acknowledgement, not pipe output, Cursor receipt, native claim, execution or
+ dialog closure; an ack-before-crash can remain delivered without receipt.
+ 
+ `protocol.sendGuarded` uses the existing serialized bounded writer with a
+ request-specific guard, fixed deadline and completion callback. Immediately
+ before Write, `CheckCursorAnswer` rechecks current authority and the exact
+ acknowledgement/native claim; the writer checks transport expiry again after
+-slow guards. Allows expire at the decision deadline, denials by settlement.
++slow guards. Both guards use the earlier of the existing frame and applicable
++request deadlines. `CheckCursorAnswer` bounds connection and transaction
++acquisition by that remaining time, then revalidates current authority,
++retirement and expiry after waiting and independent evidence. Allows expire
++at the decision deadline, denials by settlement.
+ Queued allow AND deny retire on settlement/cancellation/ownership loss.
+ Partial/uncertain output is never replayed. Close and enqueue linearize under
+ `outputMu`; active/queued accepted frames receive bounded failure completion,
+ with callbacks outside the lock and no locks held across guards or I/O.
+ 
+ `terminalInputLoop` routes a displayed single key immediately without Enter.
+ The menu binds each key to token/option at read time; keys are unique across
+ the connection and simultaneous menus, never inferred upstream option numbers.
+ `ClaimCursorPaneAnswer` arbitrates native choice against API decision, consuming
+ automated intent only after `sent` and only when its claimed verdict matches
+ the actual selected option. A native choice derives its verdict from that
+ option. Neither sent nor native claim proves ACP delivery or receipt.

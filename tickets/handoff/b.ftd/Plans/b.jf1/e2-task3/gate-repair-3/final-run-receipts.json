@@ -1,0 +1,49 @@
+[
+  {
+    "receipt": "final-focused-1.log",
+    "command": "make sandbox CMD='gofmt -w internal/cursorhost/request_runtime_linux_test.go internal/cursorhost/report_linux_test.go && go test ./internal/cursorhost -run \"^TestCursorPublicWaitingPromptAdmission$\" -count=1 -v'",
+    "make_exit": 2,
+    "leaf_pass": 15,
+    "leaf_fail": 1,
+    "explanation": "Test fixture fault: secondary UserPromptSubmit barrier incorrectly blocked the initial prompt before Stop. Fixed barrier activation to require the primary handoff release; source unchanged."
+  },
+  {
+    "receipt": "final-focused-2.log",
+    "command": "make sandbox CMD='gofmt -w internal/cursorhost/request_runtime_linux_test.go internal/cursorhost/report_linux_test.go internal/cursorhost/request_boundary_linux_test.go && go test ./internal/cursorhost -run \"^(TestCursorPublicWaitingPromptAdmission|TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention)$\" -count=1 -v'",
+    "make_exit": 0,
+    "leaf_pass": 24,
+    "leaf_fail": 0
+  },
+  {
+    "receipt": "final-race-1.log",
+    "command": "make sandbox CMD='go test -race ./internal/cursorhost -run \"^(TestCursorPublicWaitingPromptAdmission|TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention|TestReporterHeldLifecycleRequiresIndependentEvidence|TestCursorQueuedAnswersLoseAuthority|TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer|TestProtocolGuardDelayCannotWriteExpiredResponse|TestTerminalAdmissionReservesOneIdleTurn|TestCursorAckCommittedBeforeFirstByte)$\" -count=1 -v'",
+    "make_exit": 2,
+    "leaf_pass": 77,
+    "leaf_fail": 3,
+    "race_warnings": 0,
+    "explanation": "Default race-runtime atexit_sleep_ms=1000 delayed every actual report helper exit. Three ordinary admission observations exceeded their unchanged 2s test budget. No data race report. Next run removes this instrumentation-only exit sleep; no source or product/test deadline extension."
+  },
+  {
+    "receipt": "final-race-2.log",
+    "command": "make sandbox CMD='gofmt -w internal/cursorhost/request_boundary_linux_test.go internal/cursorhost/request_runtime_linux_test.go internal/cursorhost/terminal_test.go && env GORACE=atexit_sleep_ms=0 go test -race ./internal/cursorhost -run \"^(TestCursorPublicWaitingPromptAdmission|TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention|TestReporterHeldLifecycleRequiresIndependentEvidence|TestCursorQueuedAnswersLoseAuthority|TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer|TestProtocolGuardDelayCannotWriteExpiredResponse|TestTerminalAdmissionReservesOneIdleTurn|TestCursorAckCommittedBeforeFirstByte)$\" -count=1 -v'",
+    "make_exit": 0,
+    "leaf_pass": 87,
+    "leaf_fail": 0,
+    "race_warnings": 0,
+    "package_seconds": 16.345
+  },
+  {
+    "receipt": "final-full-1.log",
+    "command": "make test-sandbox",
+    "make_exit": 0,
+    "result": "passed",
+    "go_packages_with_tests": 68,
+    "go_packages_cached": 58,
+    "go_packages_executed": 10,
+    "go_packages_without_tests": 13,
+    "bun_pass": 429,
+    "bun_fail": 0,
+    "bun_files": 57,
+    "bun_expect_calls": 1659
+  }
+]

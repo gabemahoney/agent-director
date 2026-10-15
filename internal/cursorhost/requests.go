@@ -220,22 +220,34 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 		// already-established native bound, never a replay of this frame.
 		until = r.timeout
 	}
+	deadline := time.Now().Add(transportWriteWait)
+	if until.Before(deadline) {
+		deadline = until
+	}
 	binding := c.rep.binding
+	current := func() error {
+		if r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(deadline) {
+			return fmt.Errorf("Cursor request response retired")
+		}
+		return nil
+	}
 	check := func(row store.Spawn) error {
 		if e := VerifyRuntime(binding, false); e != nil {
 			return e
 		}
-		return VerifyPane(c.rep.store, row, c.rep.cfg)
+		if e := VerifyPane(c.rep.store, row, c.rep.cfg); e != nil {
+			return e
+		}
+		return current()
 	}
 	guard := func() error {
-		if r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(until) {
-			return fmt.Errorf("Cursor request response retired")
+		if e := current(); e != nil {
+			return e
 		}
-		return c.rep.store.CheckCursorAnswer(binding, r.token, relay, until, check)
-	}
-	deadline := time.Now().Add(transportWriteWait)
-	if until.Before(deadline) {
-		deadline = until
+		if e := c.rep.store.CheckCursorAnswer(binding, r.token, relay, deadline, check); e != nil {
+			return e
+		}
+		return current()
 	}
 	return c.protocol.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(r.auth.frame.ID), "result": result}, deadline, guard, func(e error) {
 		if e == nil {

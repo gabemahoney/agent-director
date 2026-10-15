@@ -1,0 +1,447 @@
+driver: diagnostic rerun for t2.jf1.cr.01 (exit=0)
+
+{"case":"t2.jf1.cr.01","status":"pass","checks":["AC1.raw-fields","AC1.actual-once","AC1.first-writer","AC1.null-origin","AC1.get-list-correlation","AC1.explicit-store-decoy-unchanged"],"evidence":"scripted-ACP-through-shipped-processes","authenticated_cursor":false,"facts":{"instance_id":"co-675cd11b-d81c-46b6-b456-2866471cb670","session_id":"8808822c-5a2b-4be6-8406-405cd727229e","gateway_pid":4820,"runtime_pid":4879,"control_sentinel_pid":4750,"parameters":{"mode":"","verdict":"","fault":"","relay":"","disable_ask_user":"","cut":"","seam":""}}}
+driver: diagnostic xtrace for t2.jf1.cr.01 (dedicated FD 8)
++ set -E
++ trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&9' ERR
++ set -euo pipefail
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-1KT4W5
+++ export HOME=/tmp/co-1KT4W5/home TMUX_TMPDIR=/tmp/co-1KT4W5/tmux CURSOR_CONFIG_DIR=/tmp/co-1KT4W5/cursor-config CURSOR_DATA_DIR=/tmp/co-1KT4W5/cursor-data TMPDIR=/tmp/co-1KT4W5/tmp
+++ HOME=/tmp/co-1KT4W5/home
+++ TMUX_TMPDIR=/tmp/co-1KT4W5/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-1KT4W5/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-1KT4W5/cursor-data
+++ TMPDIR=/tmp/co-1KT4W5/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-1KT4W5/home/.config/agent-director /tmp/co-1KT4W5/tmux /tmp/co-1KT4W5/cwd /tmp/co-1KT4W5/cursor-config /tmp/co-1KT4W5/cursor-data /tmp/co-1KT4W5/tmp
+++ STORE=/tmp/co-1KT4W5/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-675cd11b-d81c-46b6-b456-2866471cb670
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-1KT4W5 '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-1KT4W5/trace.jsonl","pid":"/tmp/co-1KT4W5/runtime-pid","release":"/tmp/co-1KT4W5/release","worker":false,"workerPID":"/tmp/co-1KT4W5/worker-pid","workerRelease":"/tmp/co-1KT4W5/worker-release","scenario":"/tmp/co-1KT4W5/scenario","raw":"/tmp/co-1KT4W5/raw","observer":"/tmp/co-1KT4W5/observer","sent":"/tmp/co-1KT4W5/sent.jsonl","paused":"/tmp/co-1KT4W5/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-1KT4W5/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-1KT4W5/tmux/tmux-1000/default
+++ control_sentinel=4750
+++ trap cleanup_cursor_case EXIT
+++ sleep 300
++ relay_scenario coverage
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-1KT4W5/scenario coverage
++ relay_observe
++ cat
++ chmod 700 /tmp/co-1KT4W5/observer
++ relay_start
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --cwd /tmp/co-1KT4W5/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --agent cursor --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --cwd /tmp/co-1KT4W5/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-675cd11b-d81c-46b6-b456-2866471cb670 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=15
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ gateway=4820
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ runtime=4879
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 4820 =~ ^[0-9]+$ ]]
++ [[ 4879 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --text 'scripted relay acceptance'
+++ jq '.requests|length' /tmp/co-1KT4W5/scenario
++ expected=8
++ wait_until request_count_is 8
++ local deadline=20
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 0 == \8 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 0 == \8 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 0 == \8 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 2 == \8 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 5 == \8 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 8
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ 8 == \8 ]]
++ decoy=/tmp/co-1KT4W5/home/.config/agent-director/state.db
++ agent-director list --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/home/.config/agent-director/state.db
++ sql 'ATTACH DATABASE '\''/tmp/co-1KT4W5/home/.config/agent-director/state.db'\'' AS decoy; INSERT INTO decoy.spawns SELECT * FROM main.spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\''; UPDATE decoy.spawns SET session_id='\''unrelated-default-session'\'',state='\''waiting'\'' WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\''; DETACH DATABASE decoy;'
++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'ATTACH DATABASE '\''/tmp/co-1KT4W5/home/.config/agent-director/state.db'\'' AS decoy; INSERT INTO decoy.spawns SELECT * FROM main.spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\''; UPDATE decoy.spawns SET session_id='\''unrelated-default-session'\'',state='\''waiting'\'' WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\''; DETACH DATABASE decoy;'
+++ /opt/driver/sql.sh -readonly -json /tmp/co-1KT4W5/home/.config/agent-director/state.db 'SELECT * FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ decoy_before='[{"instance_id":"co-675cd11b-d81c-46b6-b456-2866471cb670","parent_id":null,"state":"waiting","cwd":"/tmp/co-1KT4W5/cwd","tmux_session_name":"cwd-co-675cd","agent_args":"[]","relay_mode":"on","jsonl_path":"/tmp/co-1KT4W5/home/.config/agent-director/cursor-transcripts/e223b3aa8ec4dabfa21082fc589d15b8.jsonl","session_id":"unrelated-default-session","labels":"{}","started_at":"2026-10-15 17:51:04","last_seen_at":"2026-10-15 17:51:04","ended_at":null,"pid":4820,"proc_starttime":"437744612","liveness_unverified_since":null,"liveness_note":null,"extra_env":"{}","row_version":11,"launch_started_at":null,"life_number":0,"no_pre_trust":1,"launch_token":"9e33fba30064e9d1","tmux_socket":"/tmp/co-1KT4W5/tmux/tmux-1000/default","tmux_server_pid":4819,"tmux_server_started":1792086664,"tmux_server_starttime":"437744611","pane_id":"%0","pane_pid":4820,"pane_starttime":"437744612","launch_owner_pid":null,"launch_owner_starttime":null,"launch_owner_pidns":null,"idle_since":null,"settled_state":"working","state_changed_ms":1792086664787,"agent":"cursor","end_reported_at":null,"subagent_tracking":0}]'
++ ad get --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670
++ local verb=get
++ shift
++ agent-director get --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670
++ ad list
++ local verb=list
++ shift
++ agent-director list --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND hook_pid IS NULL AND agent_id IS NULL AND main_turn_end_eligible=0;'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND hook_pid IS NULL AND agent_id IS NULL AND main_turn_end_eligible=0;'
++ [[ 8 == \8 ]]
++ IFS=
++ read -r frame
+++ jq -c '.requests[]' /tmp/co-1KT4W5/scenario
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool='call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'
+++ request_token 'call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'\'';'
++ token=ebea240e3662fc5e8d7fbe0c36e8ae2a
++ [[ -n ebea240e3662fc5e8d7fbe0c36e8ae2a ]]
++ ad get-permission --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"execute","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0","title":"`printf FTD_SHELL_ALLOWED`","kind":"execute","status":"pending","content":[{"type":"content","content":{"type":"text","text":"Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"}}]},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t ebea240e3662fc5e8d7fbe0c36e8ae2a '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t ebea240e3662fc5e8d7fbe0c36e8ae2a '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide ebea240e3662fc5e8d7fbe0c36e8ae2a allow
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a --decision allow --max-wait-ms 1000
++ relay_decide ebea240e3662fc5e8d7fbe0c36e8ae2a deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token ebea240e3662fc5e8d7fbe0c36e8ae2a --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool='call-4c70a413-557f-4da9-9729-74eb47e5b26f-4
+fc_7aa43985-11e3-9c07-ba4a-6772fa817504_0'
+++ request_token 'call-4c70a413-557f-4da9-9729-74eb47e5b26f-4
+fc_7aa43985-11e3-9c07-ba4a-6772fa817504_0'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-4c70a413-557f-4da9-9729-74eb47e5b26f-4
+fc_7aa43985-11e3-9c07-ba4a-6772fa817504_0'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-4c70a413-557f-4da9-9729-74eb47e5b26f-4
+fc_7aa43985-11e3-9c07-ba4a-6772fa817504_0'\'';'
++ token=c375eff520ec21f4c8f2d359ab56fd33
++ [[ -n c375eff520ec21f4c8f2d359ab56fd33 ]]
++ ad get-permission --request-token c375eff520ec21f4c8f2d359ab56fd33
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token c375eff520ec21f4c8f2d359ab56fd33
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"edit","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"call-4c70a413-557f-4da9-9729-74eb47e5b26f-4\nfc_7aa43985-11e3-9c07-ba4a-6772fa817504_0","title":"Delete `/home/horde/ad-codex/ftd/live-2026-10-13/R2/work/output.txt`","kind":"edit","status":"pending"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t c375eff520ec21f4c8f2d359ab56fd33 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t c375eff520ec21f4c8f2d359ab56fd33 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide c375eff520ec21f4c8f2d359ab56fd33 allow
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token c375eff520ec21f4c8f2d359ab56fd33 --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token c375eff520ec21f4c8f2d359ab56fd33 --decision allow --max-wait-ms 1000
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ relay_decide c375eff520ec21f4c8f2d359ab56fd33 deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token c375eff520ec21f4c8f2d359ab56fd33 --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token c375eff520ec21f4c8f2d359ab56fd33 --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool=web_search_0
+++ request_token web_search_0
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''web_search_0'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''web_search_0'\'';'
++ token=13d72829c4a5da8e560a622110295dcb
++ [[ -n 13d72829c4a5da8e560a622110295dcb ]]
++ ad get-permission --request-token 13d72829c4a5da8e560a622110295dcb
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token 13d72829c4a5da8e560a622110295dcb
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"search","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"web_search_0","title":"Web search: official Cursor ACP documentation CLI","kind":"search","status":"pending"},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t 13d72829c4a5da8e560a622110295dcb '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t 13d72829c4a5da8e560a622110295dcb '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide 13d72829c4a5da8e560a622110295dcb allow
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 13d72829c4a5da8e560a622110295dcb --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 13d72829c4a5da8e560a622110295dcb --decision allow --max-wait-ms 1000
++ relay_decide 13d72829c4a5da8e560a622110295dcb deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 13d72829c4a5da8e560a622110295dcb --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 13d72829c4a5da8e560a622110295dcb --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool='call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'
+++ request_token 'call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'\'';'
++ token=cae25442b29649dc9e0f83f7c6d669b6
++ [[ -n cae25442b29649dc9e0f83f7c6d669b6 ]]
++ ad get-permission --request-token cae25442b29649dc9e0f83f7c6d669b6
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token cae25442b29649dc9e0f83f7c6d669b6
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"plan","method":"cursor/create_plan","params":{"toolCallId":"call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769","name":"Example Calculator","overview":"Create a minimal calculator project with a small arithmetic API and focused automated tests.","plan":"# Example Calculator Plan\n\n1. **Create the calculator implementation**\n   - Add the project’s minimal source structure and expose `add`, `subtract`, `multiply`, and `divide` operations.\n   - Define clear behavior for invalid inputs and division by zero.\n\n2. **Add and run automated tests**\n   - Cover each operation, negative and decimal values, and error cases.\n   - Add only the configuration needed to run the test suite and verify it passes.","todos":[{"id":"implement-calculator","content":"Create the calculator project structure and arithmetic implementation","status":"pending"},{"id":"test-calculator","content":"Add automated coverage and verify the test suite","status":"pending"}],"isProject":false,"phases":[]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t cae25442b29649dc9e0f83f7c6d669b6 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t cae25442b29649dc9e0f83f7c6d669b6 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide cae25442b29649dc9e0f83f7c6d669b6 allow
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token cae25442b29649dc9e0f83f7c6d669b6 --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token cae25442b29649dc9e0f83f7c6d669b6 --decision allow --max-wait-ms 1000
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ relay_decide cae25442b29649dc9e0f83f7c6d669b6 deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token cae25442b29649dc9e0f83f7c6d669b6 --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token cae25442b29649dc9e0f83f7c6d669b6 --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool='call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0
+fc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0'
+++ request_token 'call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0
+fc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0
+fc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0
+fc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0'\'';'
++ token=f35fdea7ff9d00afb363edc21fa8e163
++ [[ -n f35fdea7ff9d00afb363edc21fa8e163 ]]
++ ad get-permission --request-token f35fdea7ff9d00afb363edc21fa8e163
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token f35fdea7ff9d00afb363edc21fa8e163
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"other","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"call-cb1bcb26-d024-4788-8ca1-63e4652f22c7-0\nfc_fc556f2d-d5d6-909a-9c5d-ea26e4cb4064_0","title":"ftd-probe-ftd_identity: ftd_identity","kind":"other","status":"pending","content":[{"type":"content","content":{"type":"text","text":"```json\n{}\n```"}}]},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t f35fdea7ff9d00afb363edc21fa8e163 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t f35fdea7ff9d00afb363edc21fa8e163 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide f35fdea7ff9d00afb363edc21fa8e163 allow
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token f35fdea7ff9d00afb363edc21fa8e163 --decision allow --max-wait-ms 1000
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token f35fdea7ff9d00afb363edc21fa8e163 --decision allow --max-wait-ms 1000
++ relay_decide f35fdea7ff9d00afb363edc21fa8e163 deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token f35fdea7ff9d00afb363edc21fa8e163 --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token f35fdea7ff9d00afb363edc21fa8e163 --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool=synthetic-read
+++ request_token synthetic-read
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-read'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-read'\'';'
++ token=fd7fc8ed034804b02f0a056782044c7c
++ [[ -n fd7fc8ed034804b02f0a056782044c7c ]]
++ ad get-permission --request-token fd7fc8ed034804b02f0a056782044c7c
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token fd7fc8ed034804b02f0a056782044c7c
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"synthetic-read","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"synthetic-read","title":"Synthetic read","kind":"read","status":"pending","content":[{"type":"content","content":{"type":"text","text":"Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"}}],"rawInput":null},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t fd7fc8ed034804b02f0a056782044c7c '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t fd7fc8ed034804b02f0a056782044c7c '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide fd7fc8ed034804b02f0a056782044c7c allow
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token fd7fc8ed034804b02f0a056782044c7c --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token fd7fc8ed034804b02f0a056782044c7c --decision allow --max-wait-ms 1000
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ relay_decide fd7fc8ed034804b02f0a056782044c7c deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token fd7fc8ed034804b02f0a056782044c7c --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token fd7fc8ed034804b02f0a056782044c7c --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool=synthetic-delete
+++ request_token synthetic-delete
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-delete'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-delete'\'';'
++ token=442502fcfbd1de26f5df47a539aadada
++ [[ -n 442502fcfbd1de26f5df47a539aadada ]]
++ ad get-permission --request-token 442502fcfbd1de26f5df47a539aadada
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token 442502fcfbd1de26f5df47a539aadada
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"synthetic-delete","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"synthetic-delete","title":"Synthetic delete","kind":"delete","status":"pending","content":[{"type":"content","content":{"type":"text","text":"Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"}}],"rawInput":null},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t 442502fcfbd1de26f5df47a539aadada '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t 442502fcfbd1de26f5df47a539aadada '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide 442502fcfbd1de26f5df47a539aadada allow
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 442502fcfbd1de26f5df47a539aadada --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 442502fcfbd1de26f5df47a539aadada --decision allow --max-wait-ms 1000
++ relay_decide 442502fcfbd1de26f5df47a539aadada deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 442502fcfbd1de26f5df47a539aadada --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 442502fcfbd1de26f5df47a539aadada --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
+++ jq -r '.params.toolCall.toolCallId // .params.toolCallId'
++ tool=synthetic-fetch
+++ request_token synthetic-fetch
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-fetch'\'';'
+++ /opt/driver/sql.sh /tmp/co-1KT4W5/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'' AND tool_use_id='\''synthetic-fetch'\'';'
++ token=81240d23142fb3053bdf8fb149bba848
++ [[ -n 81240d23142fb3053bdf8fb149bba848 ]]
++ ad get-permission --request-token 81240d23142fb3053bdf8fb149bba848
++ local verb=get-permission
++ shift
++ agent-director get-permission --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --request-token 81240d23142fb3053bdf8fb149bba848
++ jq -e --argjson frame '{"jsonrpc":"2.0","id":"synthetic-fetch","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"synthetic-fetch","title":"Synthetic fetch","kind":"fetch","status":"pending","content":[{"type":"content","content":{"type":"text","text":"Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"}}],"rawInput":null},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}}' '.tool_input==($frame.params|tojson) and .tool_use_id==($frame.params.toolCall.toolCallId // $frame.params.toolCallId) and .hook_alive==null and .decision==null and .delivery=="not_confirmed"' /tmp/co-1KT4W5/permission.json
++ jq -e --arg t 81240d23142fb3053bdf8fb149bba848 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/get.json
++ jq -e --arg t 81240d23142fb3053bdf8fb149bba848 '..|objects|select(.request_token?==$t)' /tmp/co-1KT4W5/list.json
++ relay_decide 81240d23142fb3053bdf8fb149bba848 allow
++ jq -e '.delivery=="delivered" or .delivery=="not_confirmed"'
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 81240d23142fb3053bdf8fb149bba848 --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 81240d23142fb3053bdf8fb149bba848 --decision allow --max-wait-ms 1000
++ relay_decide 81240d23142fb3053bdf8fb149bba848 deny
++ ad decide --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 81240d23142fb3053bdf8fb149bba848 --decision deny --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-1KT4W5/home --store-path /tmp/co-1KT4W5/override.db --instance-id co-675cd11b-d81c-46b6-b456-2866471cb670 --request-token 81240d23142fb3053bdf8fb149bba848 --decision deny --max-wait-ms 1000
++ jq -e '.err_name=="ErrAlreadyDecided"' /tmp/co-1KT4W5/duplicate-error
++ IFS=
++ read -r frame
++ wait_until reply_count_is 8
++ local deadline=22
++ reply_count_is 8
+++ frames
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ [[ -f /tmp/co-1KT4W5/trace.jsonl ]]
+++ cat /tmp/co-1KT4W5/trace.jsonl
++ [[ 8 == \8 ]]
++ frames
++ [[ -f /tmp/co-1KT4W5/trace.jsonl ]]
++ cat /tmp/co-1KT4W5/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|all(.[]; .result.outcome.optionId=="allow-once" or .result.outcome.outcome=="accepted")'
+++ /opt/driver/sql.sh -readonly -json /tmp/co-1KT4W5/home/.config/agent-director/state.db 'SELECT * FROM spawns WHERE instance_id='\''co-675cd11b-d81c-46b6-b456-2866471cb670'\'';'
++ [[ [{"instance_id":"co-675cd11b-d81c-46b6-b456-2866471cb670","parent_id":null,"state":"waiting","cwd":"/tmp/co-1KT4W5/cwd","tmux_session_name":"cwd-co-675cd","agent_args":"[]","relay_mode":"on","jsonl_path":"/tmp/co-1KT4W5/home/.config/agent-director/cursor-transcripts/e223b3aa8ec4dabfa21082fc589d15b8.jsonl","session_id":"unrelated-default-session","labels":"{}","started_at":"2026-10-15 17:51:04","last_seen_at":"2026-10-15 17:51:04","ended_at":null,"pid":4820,"proc_starttime":"437744612","liveness_unverified_since":null,"liveness_note":null,"extra_env":"{}","row_version":11,"launch_started_at":null,"life_number":0,"no_pre_trust":1,"launch_token":"9e33fba30064e9d1","tmux_socket":"/tmp/co-1KT4W5/tmux/tmux-1000/default","tmux_server_pid":4819,"tmux_server_started":1792086664,"tmux_server_starttime":"437744611","pane_id":"%0","pane_pid":4820,"pane_starttime":"437744612","launch_owner_pid":null,"launch_owner_starttime":null,"launch_owner_pidns":null,"idle_since":null,"settled_state":"working","state_changed_ms":1792086664787,"agent":"cursor","end_reported_at":null,"subagent_tracking":0}] == \[\{\"\i\n\s\t\a\n\c\e\_\i\d\"\:\"\c\o\-\6\7\5\c\d\1\1\b\-\d\8\1\c\-\4\6\b\6\-\b\4\5\6\-\2\8\6\6\4\7\1\c\b\6\7\0\"\,\"\p\a\r\e\n\t\_\i\d\"\:\n\u\l\l\,\"\s\t\a\t\e\"\:\"\w\a\i\t\i\n\g\"\,\"\c\w\d\"\:\"\/\t\m\p\/\c\o\-\1\K\T\4\W\5\/\c\w\d\"\,\"\t\m\u\x\_\s\e\s\s\i\o\n\_\n\a\m\e\"\:\"\c\w\d\-\c\o\-\6\7\5\c\d\"\,\"\a\g\e\n\t\_\a\r\g\s\"\:\"\[\]\"\,\"\r\e\l\a\y\_\m\o\d\e\"\:\"\o\n\"\,\"\j\s\o\n\l\_\p\a\t\h\"\:\"\/\t\m\p\/\c\o\-\1\K\T\4\W\5\/\h\o\m\e\/\.\c\o\n\f\i\g\/\a\g\e\n\t\-\d\i\r\e\c\t\o\r\/\c\u\r\s\o\r\-\t\r\a\n\s\c\r\i\p\t\s\/\e\2\2\3\b\3\a\a\8\e\c\4\d\a\b\f\a\2\1\0\8\2\f\c\5\8\9\d\1\5\b\8\.\j\s\o\n\l\"\,\"\s\e\s\s\i\o\n\_\i\d\"\:\"\u\n\r\e\l\a\t\e\d\-\d\e\f\a\u\l\t\-\s\e\s\s\i\o\n\"\,\"\l\a\b\e\l\s\"\:\"\{\}\"\,\"\s\t\a\r\t\e\d\_\a\t\"\:\"\2\0\2\6\-\1\0\-\1\5\ \1\7\:\5\1\:\0\4\"\,\"\l\a\s\t\_\s\e\e\n\_\a\t\"\:\"\2\0\2\6\-\1\0\-\1\5\ \1\7\:\5\1\:\0\4\"\,\"\e\n\d\e\d\_\a\t\"\:\n\u\l\l\,\"\p\i\d\"\:\4\8\2\0\,\"\p\r\o\c\_\s\t\a\r\t\t\i\m\e\"\:\"\4\3\7\7\4\4\6\1\2\"\,\"\l\i\v\e\n\e\s\s\_\u\n\v\e\r\i\f\i\e\d\_\s\i\n\c\e\"\:\n\u\l\l\,\"\l\i\v\e\n\e\s\s\_\n\o\t\e\"\:\n\u\l\l\,\"\e\x\t\r\a\_\e\n\v\"\:\"\{\}\"\,\"\r\o\w\_\v\e\r\s\i\o\n\"\:\1\1\,\"\l\a\u\n\c\h\_\s\t\a\r\t\e\d\_\a\t\"\:\n\u\l\l\,\"\l\i\f\e\_\n\u\m\b\e\r\"\:\0\,\"\n\o\_\p\r\e\_\t\r\u\s\t\"\:\1\,\"\l\a\u\n\c\h\_\t\o\k\e\n\"\:\"\9\e\3\3\f\b\a\3\0\0\6\4\e\9\d\1\"\,\"\t\m\u\x\_\s\o\c\k\e\t\"\:\"\/\t\m\p\/\c\o\-\1\K\T\4\W\5\/\t\m\u\x\/\t\m\u\x\-\1\0\0\0\/\d\e\f\a\u\l\t\"\,\"\t\m\u\x\_\s\e\r\v\e\r\_\p\i\d\"\:\4\8\1\9\,\"\t\m\u\x\_\s\e\r\v\e\r\_\s\t\a\r\t\e\d\"\:\1\7\9\2\0\8\6\6\6\4\,\"\t\m\u\x\_\s\e\r\v\e\r\_\s\t\a\r\t\t\i\m\e\"\:\"\4\3\7\7\4\4\6\1\1\"\,\"\p\a\n\e\_\i\d\"\:\"\%\0\"\,\"\p\a\n\e\_\p\i\d\"\:\4\8\2\0\,\"\p\a\n\e\_\s\t\a\r\t\t\i\m\e\"\:\"\4\3\7\7\4\4\6\1\2\"\,\"\l\a\u\n\c\h\_\o\w\n\e\r\_\p\i\d\"\:\n\u\l\l\,\"\l\a\u\n\c\h\_\o\w\n\e\r\_\s\t\a\r\t\t\i\m\e\"\:\n\u\l\l\,\"\l\a\u\n\c\h\_\o\w\n\e\r\_\p\i\d\n\s\"\:\n\u\l\l\,\"\i\d\l\e\_\s\i\n\c\e\"\:\n\u\l\l\,\"\s\e\t\t\l\e\d\_\s\t\a\t\e\"\:\"\w\o\r\k\i\n\g\"\,\"\s\t\a\t\e\_\c\h\a\n\g\e\d\_\m\s\"\:\1\7\9\2\0\8\6\6\6\4\7\8\7\,\"\a\g\e\n\t\"\:\"\c\u\r\s\o\r\"\,\"\e\n\d\_\r\e\p\o\r\t\e\d\_\a\t\"\:\n\u\l\l\,\"\s\u\b\a\g\e\n\t\_\t\r\a\c\k\i\n\g\"\:\0\}\] ]]
++ [[ ! -e /tmp/co-1KT4W5/configured.db ]]
++ relay_receipt t2.jf1.cr.01 '["AC1.raw-fields","AC1.actual-once","AC1.first-writer","AC1.null-origin","AC1.get-list-correlation","AC1.explicit-store-decoy-unchanged"]'
++ local case_id=t2.jf1.cr.01 'checks=["AC1.raw-fields","AC1.actual-once","AC1.first-writer","AC1.null-origin","AC1.get-list-correlation","AC1.explicit-store-decoy-unchanged"]'
++ kill -0 4750
++ jq -cn --arg case t2.jf1.cr.01 --argjson checks '["AC1.raw-fields","AC1.actual-once","AC1.first-writer","AC1.null-origin","AC1.get-list-correlation","AC1.explicit-store-decoy-unchanged"]' --arg id co-675cd11b-d81c-46b6-b456-2866471cb670 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 4820 --argjson runtime 4879 --argjson sentinel 4750 --arg mode '' --arg verdict '' --arg fault '' --arg relay '' --arg disabled '' --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
++ cleanup_cursor_case
++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
++ ((  rc != 0  ))
++ touch /tmp/co-1KT4W5/gate-release
++ tmux -S /tmp/co-1KT4W5/tmux/tmux-1000/default kill-server
++ kill 4750
++ wait 4750
++ true
++ [[ -n '' ]]
++ [[ -n '' ]]

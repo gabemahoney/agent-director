@@ -1,0 +1,475 @@
+diff --git a/internal/cursorhost/report_linux_test.go b/internal/cursorhost/report_linux_test.go
+index 6c7670f8..dbf9e746 100644
+--- a/internal/cursorhost/report_linux_test.go
++++ b/internal/cursorhost/report_linux_test.go
+@@ -6,6 +6,7 @@ import (
+ 	"database/sql"
+ 	"encoding/json"
+ 	"os"
++	"path/filepath"
+ 	"testing"
+ 	"time"
+ 
+@@ -45,10 +46,16 @@ func runCursorReportHelper() int {
+ 	if payload.Event == "SessionEnd" {
+ 		target = store.StateEnded
+ 	}
++	if !cursorReportBarrier(payload.Event, "before") {
++		return 2
++	}
+ 	g := store.HookGate{Event: payload.Event, ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
+ 	if _, a, e := s.ApplyHookTransitionResult(b.InstanceID, g, target, false, payload.Event, payload.Path, true); e != nil || !a.Applied {
+ 		return 2
+ 	}
++	if !cursorReportBarrier(payload.Event, "after") {
++		return 2
++	}
+ 	db, err := sql.Open("sqlite", path)
+ 	if err != nil {
+ 		return 2
+@@ -105,3 +112,22 @@ func TestReporterHeldLifecycleRequiresIndependentEvidence(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// cursorReportBarrier pauses the existing subprocess seam around its actual commit.
++func cursorReportBarrier(event, phase string) bool {
++	if event != os.Getenv("AD_TEST_CURSOR_BARRIER_EVENT") || phase != os.Getenv("AD_TEST_CURSOR_BARRIER_PHASE") {
++		return true
++	}
++	dir := os.Getenv("AD_TEST_CURSOR_BARRIER_DIR")
++	if err := os.WriteFile(filepath.Join(dir, "entered"), []byte(event+"/"+phase), 0600); err != nil {
++		return false
++	}
++	until := time.Now().Add(4 * time.Second)
++	for time.Now().Before(until) {
++		if _, err := os.Stat(filepath.Join(dir, "release")); err == nil {
++			return true
++		}
++		time.Sleep(time.Millisecond)
++	}
++	return false
++}
+diff --git a/internal/cursorhost/request_boundary_linux_test.go b/internal/cursorhost/request_boundary_linux_test.go
+index 6e5040bf..6d3102c2 100644
+--- a/internal/cursorhost/request_boundary_linux_test.go
++++ b/internal/cursorhost/request_boundary_linux_test.go
+@@ -5,6 +5,7 @@ package cursorhost
+ import (
+ 	"bytes"
+ 	"database/sql"
++	"errors"
+ 	"fmt"
+ 	"io"
+ 	"sync"
+@@ -337,3 +338,196 @@ func TestCursorFailedAdmissionHasZeroRelayBytes(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
++	// Serial: b.jf1 Task3 .01 regression uses the verified HOME/PATH fixture.
++	for _, tc := range []struct{ decision, loss string }{
++		{"allow", "none"}, {"deny", "none"}, {"allow", "expiry"}, {"deny", "expiry"}, {"allow", "cancel"}, {"deny", "cancel"},
++	} {
++		t.Run(tc.decision+"/"+tc.loss, func(t *testing.T) {
++			decision := tc.decision
++			e := newRequestEnv(t, "on", "synthetic-session")
++			e.rep.cfg.Relay.TimeoutSeconds = 20
++			wire := &observedWire{}
++			c := e.controller(t, wire, io.Discard)
++			first := e.admit(t, c, `"first"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "first", "execute"))
++			second := e.admit(t, c, `"second"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "second", "execute"))
++			holdFor := 80 * time.Millisecond
++			if tc.loss == "expiry" {
++				first.timeout = time.UnixMilli(time.Now().Add(200 * time.Millisecond).UnixMilli())
++				first.settle = first.timeout
++				e.exec(t, `UPDATE permission_requests SET settled_at=? WHERE request_token=?`, first.settle.UnixMilli(), first.token)
++				holdFor = 400 * time.Millisecond
++			}
++			releaseWriter := blockProtocol(t, c.protocol)
++			e.decide(t, first.token, decision)
++			if err := c.tick(); err != nil {
++				t.Fatal(err)
++			}
++			if e.request(t, first.token).DeliveredAt.IsZero() {
++				t.Fatal("first answer lacks durable acknowledgement")
++			}
++
++			// Observe the actual product guard, without replacing its authority lookup.
++			next := <-c.protocol.outgoing
++			originalGuard, originalDone := next.guard, next.done
++			guardErrors := make(chan error, 2)
++			finished := make(chan error, 1)
++			next.guard = func() error {
++				err := originalGuard()
++				select {
++				case guardErrors <- err:
++				default:
++				}
++				return err
++			}
++			next.done = func(err error) { originalDone(err); finished <- err }
++			c.protocol.outgoing <- next
++
++			entered, releaseStore := make(chan struct{}), make(chan struct{})
++			var once sync.Once
++			unhold := func() { once.Do(func() { close(releaseStore) }) }
++			t.Cleanup(unhold)
++			holderDone := make(chan error, 1)
++			go func() {
++				holderDone <- e.s.CheckCursorAnswer(e.binding, first.token, true, first.timeout, func(row store.Spawn) error {
++					if err := c.check(row); err != nil {
++						return err
++					}
++					close(entered)
++					<-releaseStore
++					return nil
++				})
++			}()
++			select {
++			case <-entered:
++			case err := <-holderDone:
++				t.Fatalf("real store holder failed: %v", err)
++			case <-time.After(time.Second):
++				t.Fatal("store holder did not enter")
++			}
++			remaining := time.Until(next.deadline)
++			started := time.Now()
++			timer := time.AfterFunc(holdFor, unhold)
++			if tc.loss == "cancel" {
++				cancelTimer := time.AfterFunc(40*time.Millisecond, c.cancel)
++				defer cancelTimer.Stop()
++			}
++			defer timer.Stop()
++			releaseWriter()
++			var writeErr error
++			select {
++			case writeErr = <-finished:
++			case <-time.After(transportWriteWait + time.Second):
++				t.Fatal("answer did not finish within existing frame budget")
++			}
++			elapsed := time.Since(started)
++			if err := <-holderDone; err != nil && tc.loss != "expiry" {
++				t.Fatalf("holder lost real authority: %v", err)
++			}
++			unhold()
++			firstBytes := wire.bytes()
++			var guardErr error
++			select {
++			case guardErr = <-guardErrors:
++			default:
++				t.Fatal("actual guard was not called")
++			}
++			pr := e.request(t, first.token)
++			t.Logf("first guard=%v storeBusy=%v completion=%v elapsed=%s finiteHold=%s remainingFrame=%s remainingApproval=%s durableAck=%v firstBytes=%q", guardErr, errors.Is(guardErr, store.ErrStoreBusy), writeErr, elapsed, holdFor, remaining, time.Until(first.timeout), !pr.DeliveredAt.IsZero(), firstBytes)
++			if pr.DeliveredAt.IsZero() || pr.ProvenGone() || pr.Closed() {
++				t.Fatal("contention changed durable ack/proof")
++			}
++			if tc.loss != "none" {
++				if len(firstBytes) != 0 {
++					t.Errorf("%s during store contention emitted bytes: %s", tc.loss, firstBytes)
++				}
++				if err := c.tick(); err != nil {
++					t.Fatal(err)
++				}
++				if len(wire.bytes()) != 0 {
++					t.Fatal("retired response replayed")
++				}
++				return
++			}
++			if writeErr != nil || bytes.Count(firstBytes, []byte(`"id":"first"`)) != 1 {
++				t.Errorf("valid acknowledged %s answer lost under finite same-Store contention: guard=%v completion=%v bytes=%q", decision, guardErr, writeErr, firstBytes)
++			}
++			e.decide(t, second.token, decision)
++			if err := c.tick(); err != nil {
++				t.Fatal(err)
++			}
++			waitRequestTerminalOrSent := time.After(time.Second)
++			for !second.sent.Load() && !second.terminal.Load() {
++				select {
++				case <-waitRequestTerminalOrSent:
++					t.Fatal("independent second answer did not finish")
++				default:
++					time.Sleep(time.Millisecond)
++				}
++			}
++			if bytes.Count(wire.bytes(), []byte(`"id":"second"`)) != 1 {
++				t.Fatalf("independent later answer lost: %s", wire.bytes())
++			}
++			t.Logf("later independently acknowledged response=%s", wire.bytes())
++		})
++	}
++}
++
++func TestProtocolGuardFailureOnlyInitialFailurePreservesLaterAnswer(t *testing.T) {
++	// b.jf1 Task3 .01: a later answer distinguishes request refusal from failed transport.
++	for _, option := range []string{"allow-once", "reject-once"} {
++		for _, failAt := range []int32{1, 2} {
++			t.Run(fmt.Sprintf("%s/guard%d", option, failAt), func(t *testing.T) {
++				wire := &observedWire{}
++				p := newProtocol(wire, bytes.NewReader(nil))
++				defer p.close()
++				entered, release := make(chan struct{}), make(chan struct{})
++				var once sync.Once
++				unblock := func() { once.Do(func() { close(release) }) }
++				defer unblock()
++				var calls atomic.Int32
++				firstDone, laterDone := make(chan error, 1), make(chan error, 1)
++				guard := func() error {
++					if calls.Add(1) == failAt {
++						close(entered)
++						<-release
++						return fmt.Errorf("independent authority refused")
++					}
++					return nil
++				}
++				if err := p.sendGuarded(map[string]string{"id": "first", "optionId": option}, time.Now().Add(time.Second), guard, func(err error) { firstDone <- err }); err != nil {
++					t.Fatal(err)
++				}
++				select {
++				case <-entered:
++				case <-time.After(time.Second):
++					t.Fatal("guard not reached")
++				}
++				if err := p.sendGuarded(map[string]string{"id": "later", "optionId": option}, time.Now().Add(time.Second), nil, func(err error) { laterDone <- err }); err != nil {
++					t.Fatal(err)
++				}
++				unblock()
++				select {
++				case err := <-firstDone:
++					if err == nil {
++						t.Fatal("failed guard succeeded")
++					}
++				case <-time.After(time.Second):
++					t.Fatal("first completion missing")
++				}
++				select {
++				case err := <-laterDone:
++					if (err == nil) != (failAt == 1) {
++						t.Fatalf("later completion after guard%d: %v", failAt, err)
++					}
++				case <-time.After(time.Second):
++					t.Fatal("later completion missing")
++				}
++				if bytes.Contains(wire.bytes(), []byte(`"first"`)) || bytes.Contains(wire.bytes(), []byte(`"later"`)) != (failAt == 1) {
++					t.Fatalf("guard%d wire=%s", failAt, wire.bytes())
++				}
++			})
++		}
++	}
++}
+diff --git a/internal/cursorhost/request_fixture_linux_test.go b/internal/cursorhost/request_fixture_linux_test.go
+index cfc938f6..263f143d 100644
+--- a/internal/cursorhost/request_fixture_linux_test.go
++++ b/internal/cursorhost/request_fixture_linux_test.go
+@@ -163,6 +163,7 @@ type observedWire struct {
+ 	mu      sync.Mutex
+ 	raw     []byte
+ 	first   func() error
++	observe func([]byte)
+ 	err     error
+ 	partial bool
+ }
+@@ -181,6 +182,9 @@ func (w *observedWire) Write(p []byte) (int, error) {
+ 		return 1, io.ErrUnexpectedEOF
+ 	}
+ 	w.raw = append(w.raw, p...)
++	if w.observe != nil {
++		w.observe(p)
++	}
+ 	return len(p), nil
+ }
+ func (w *observedWire) bytes() []byte {
+diff --git a/internal/cursorhost/request_runtime_linux_test.go b/internal/cursorhost/request_runtime_linux_test.go
+index 17e064d3..26bb9934 100644
+--- a/internal/cursorhost/request_runtime_linux_test.go
++++ b/internal/cursorhost/request_runtime_linux_test.go
+@@ -6,6 +6,11 @@ import (
+ 	"bytes"
+ 	"encoding/json"
+ 	"io"
++	"os"
++	"path/filepath"
++	"sync"
++
++	"github.com/gabemahoney/agent-director/internal/store"
+ 	"regexp"
+ 	"testing"
+ 	"time"
+@@ -136,22 +141,10 @@ finished:
+ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
+ 	// Serial: Run installs signal handlers and fixture sets process-wide HOME/PATH/launch identity.
+ 	e := newRequestEnv(t, "off", "synthetic-session-1")
+-	// Reuse the verified pane setup for Run's fresh registration, without a second harness.
+-	if err := e.process.terminate(); err != nil {
+-		t.Fatal(err)
+-	}
+-	e.exec(t, `DELETE FROM cursor_runtimes`)
+-	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
+ 	permission, _ := json.Marshal(frame{JSONRPC: "2.0", ID: []byte(`7`), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-1", "genuine", "execute")})
+ 	question := json.RawMessage(`{"jsonrpc":"2.0","id":"question","method":"cursor/ask_question","params":{"toolCallId":"AskQuestion","questions":[{"id":"q1","prompt":"Continue?","options":[{"id":"yes","label":"Yes"}],"allowMultiple":false}]}}`)
+ 	e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{question, permission}})
+-	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
+-	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+-	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
+-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)
+-	t.Setenv("AGENT_DIRECTOR_AGENT", "cursor")
+-	t.Setenv("AGENT_DIRECTOR_CURSOR_STORE_PATH", e.path)
+-	master, slave := terminalPair(t)
++	master, slave := e.prepareRunPTY(t)
+ 	pane := &observedWire{}
+ 	done := make(chan error, 1)
+ 	go func() { done <- Run(Options{Runtime: e.runtime.Program, InitialPrompt: "scripted"}, slave, pane) }()
+@@ -225,3 +218,151 @@ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
+ 		t.Fatal("session did not exit")
+ 	}
+ }
++
++// prepareRunPTY reuses the verified pane for Run's fresh runtime registration.
++func (e *requestEnv) prepareRunPTY(t *testing.T) (*os.File, *os.File) {
++	t.Helper()
++	if err := e.process.terminate(); err != nil {
++		t.Fatal(err)
++	}
++	e.exec(t, `DELETE FROM cursor_runtimes`)
++	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
++	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
++	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
++	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
++	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)
++	t.Setenv("AGENT_DIRECTOR_AGENT", "cursor")
++	t.Setenv("AGENT_DIRECTOR_CURSOR_STORE_PATH", e.path)
++	return terminalPair(t)
++}
++
++func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
++	// Serial: b.jf1 Task3 .08 regression uses Run's actual report subprocess and PTY.
++	if testing.Short() {
++		t.Skip("protected runtime and report subprocess")
++	}
++	for _, tc := range []struct {
++		name, event, phase, initial, keys string
++		state                             string
++		wantPrompts                       int
++	}{
++		{"SessionStart waiting", "SessionStart", "after", "", "typed\r", store.StateWaiting, 1},
++		{"Stop waiting", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2},
++		{"pending refuses", "SessionStart", "before", "", "typed\r", store.StatePending, 0},
++		{"busy refuses after later completion", "UserPromptSubmit", "after", "initial", "typed\r", store.StateWorking, 1},
++		{"busy new clear refuse", "UserPromptSubmit", "after", "initial", "/new\r/clear\rtyped\r", store.StateWorking, 1},
++		{"initial prompt does not double admit", "SessionStart", "after", "initial", "typed\r", store.StateWaiting, 1},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			e := newRequestEnv(t, "off", "synthetic-session-1")
++			e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}})
++			master, slave := e.prepareRunPTY(t)
++			dir := t.TempDir()
++			t.Setenv("AD_TEST_CURSOR_BARRIER_EVENT", tc.event)
++			t.Setenv("AD_TEST_CURSOR_BARRIER_PHASE", tc.phase)
++			t.Setenv("AD_TEST_CURSOR_BARRIER_DIR", dir)
++			consumed := make(chan struct{})
++			var once sync.Once
++			// The redraw of an unsubmitted sentinel proves Enter's admission callback
++			// has run. It conveys input consumption only, never inferred public state.
++			pane := &observedWire{observe: func(p []byte) {
++				if bytes.Equal(p, []byte("\r\x1b[2K> ~")) {
++					once.Do(func() { close(consumed) })
++				}
++			}}
++			done := make(chan error, 1)
++			ended := false
++			go func() { done <- Run(Options{Runtime: e.runtime.Program, InitialPrompt: tc.initial}, slave, pane) }()
++			t.Cleanup(func() {
++				if ended {
++					return
++				}
++				os.WriteFile(filepath.Join(dir, "release"), nil, 0600)
++				master.Write([]byte("\x15/exit\r"))
++				select {
++				case err := <-done:
++					if err != nil {
++						t.Errorf("Run exit: %v; pane %s", err, pane.bytes())
++					}
++				case <-time.After(5 * time.Second):
++					slave.Close()
++					t.Error("Run cleanup timed out")
++				}
++			})
++			until := time.Now().Add(3 * time.Second)
++			for {
++				if _, err := os.Stat(filepath.Join(dir, "entered")); err == nil {
++					break
++				}
++				if time.Now().After(until) {
++					t.Fatalf("actual %s/%s report barrier not reached; pane %s", tc.event, tc.phase, pane.bytes())
++				}
++				time.Sleep(time.Millisecond)
++			}
++			row, err := e.s.GetSpawn(e.binding.InstanceID)
++			if err != nil || row.State != tc.state {
++				t.Fatalf("actual committed row=%+v err=%v want=%s", row, err, tc.state)
++			}
++			rows, err := e.s.PermissionRequestsForSpawn(e.binding.InstanceID)
++			if err != nil || len(rows) != 0 {
++				t.Fatalf("unexpected permissions before prompt: %v %v", rows, err)
++			}
++			if _, err = master.Write([]byte(tc.keys + "~")); err != nil {
++				t.Fatal(err)
++			}
++			select {
++			case <-consumed:
++			case <-time.After(time.Second):
++				t.Fatal("terminal reader did not consume submitted Enter before hook release")
++			}
++			if err = os.WriteFile(filepath.Join(dir, "release"), nil, 0600); err != nil {
++				t.Fatal(err)
++			}
++			until = time.Now().Add(2 * time.Second)
++			for {
++				frames := e.runtime.Frames(t)
++				prompts, typed := 0, false
++				for _, f := range frames {
++					if string(f["method"]) == `"session/prompt"` {
++						prompts++
++						typed = typed || bytes.Contains(f["params"], []byte(`"typed"`))
++					}
++				}
++				refused := bytes.Contains(pane.bytes(), []byte("Cursor input refused while starting or busy"))
++				completed, getErr := e.s.GetSpawn(e.binding.InstanceID)
++				initialSeen := tc.initial == "" || prompts >= 1
++				if getErr == nil && completed.State == store.StateWaiting && initialSeen && (refused || typed) {
++					break
++				}
++				if time.Now().After(until) {
++					t.Fatalf("no actual admission/refusal outcome after hook release: frames=%v pane=%s", frames, pane.bytes())
++				}
++				time.Sleep(time.Millisecond)
++			}
++			if _, err = master.Write([]byte("\x15/exit\r")); err != nil {
++				t.Fatal(err)
++			}
++			select {
++			case err = <-done:
++				if err != nil {
++					t.Fatalf("Run ended: %v; pane %s", err, pane.bytes())
++				}
++				ended = true
++			case <-time.After(3 * time.Second):
++				t.Fatal("Run did not process queued submission and exit")
++			}
++			frames := e.runtime.Frames(t)
++			prompts := 0
++			for _, f := range frames {
++				if string(f["method"]) == `"session/prompt"` {
++					prompts++
++					t.Logf("peer prompt: %s", f["params"])
++				}
++			}
++			t.Logf("barrier=%s/%s publicState=%s EnterConsumedBeforeRelease=true prompts=%d want=%d pane=%q", tc.event, tc.phase, row.State, prompts, tc.wantPrompts, pane.bytes())
++			if prompts != tc.wantPrompts {
++				t.Errorf("public waiting/admission mismatch: peer received %d prompts; want %d", prompts, tc.wantPrompts)
++			}
++		})
++	}
++}

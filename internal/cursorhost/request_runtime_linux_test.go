@@ -6,10 +6,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
+	"sync"
+
 	"regexp"
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
 
@@ -136,22 +141,10 @@ finished:
 func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
 	// Serial: Run installs signal handlers and fixture sets process-wide HOME/PATH/launch identity.
 	e := newRequestEnv(t, "off", "synthetic-session-1")
-	// Reuse the verified pane setup for Run's fresh registration, without a second harness.
-	if err := e.process.terminate(); err != nil {
-		t.Fatal(err)
-	}
-	e.exec(t, `DELETE FROM cursor_runtimes`)
-	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
 	permission, _ := json.Marshal(frame{JSONRPC: "2.0", ID: []byte(`7`), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-1", "genuine", "execute")})
 	question := json.RawMessage(`{"jsonrpc":"2.0","id":"question","method":"cursor/ask_question","params":{"toolCallId":"AskQuestion","questions":[{"id":"q1","prompt":"Continue?","options":[{"id":"yes","label":"Yes"}],"allowMultiple":false}]}}`)
 	e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{question, permission}})
-	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
-	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
-	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
-	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)
-	t.Setenv("AGENT_DIRECTOR_AGENT", "cursor")
-	t.Setenv("AGENT_DIRECTOR_CURSOR_STORE_PATH", e.path)
-	master, slave := terminalPair(t)
+	master, slave := e.prepareRunPTY(t)
 	pane := &observedWire{}
 	done := make(chan error, 1)
 	go func() { done <- Run(Options{Runtime: e.runtime.Program, InitialPrompt: "scripted"}, slave, pane) }()
@@ -223,5 +216,230 @@ func TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("session did not exit")
+	}
+}
+
+// prepareRunPTY reuses the verified pane for Run's fresh runtime registration.
+func (e *requestEnv) prepareRunPTY(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	if err := e.process.terminate(); err != nil {
+		t.Fatal(err)
+	}
+	e.exec(t, `DELETE FROM cursor_runtimes`)
+	e.exec(t, `UPDATE spawns SET state='pending',session_id=NULL`)
+	t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
+	t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+	t.Setenv("AD_TEST_CURSOR_REPORT_MODE", "current")
+	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", e.binding.InstanceID)
+	t.Setenv("AGENT_DIRECTOR_AGENT", "cursor")
+	t.Setenv("AGENT_DIRECTOR_CURSOR_STORE_PATH", e.path)
+	return terminalPair(t)
+}
+
+func TestCursorPublicWaitingPromptAdmission(t *testing.T) {
+	// Serial: b.jf1 Task3 .08 regression uses Run's actual report subprocess and PTY.
+	if testing.Short() {
+		t.Skip("protected runtime and report subprocess")
+	}
+	for _, tc := range []struct {
+		name, event, phase, initial, keys string
+		state                             string
+		wantPrompts                       int
+		second                            bool
+		loss                              string
+	}{
+		{"SessionStart waiting", "SessionStart", "after", "", "typed\r", store.StateWaiting, 1, false, ""},
+		{"Stop waiting", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2, false, ""},
+		{"pending refuses", "SessionStart", "before", "", "typed\r", store.StatePending, 0, false, ""},
+		{"busy refuses after later completion", "UserPromptSubmit", "after", "initial", "typed\r", store.StateWorking, 1, false, ""},
+		{"busy new clear refuse", "UserPromptSubmit", "after", "initial", "/new\r/clear\rtyped\r", store.StateWorking, 1, false, ""},
+		{"initial prompt does not double admit", "SessionStart", "after", "initial", "typed\r", store.StateWaiting, 1, false, ""},
+		{"SessionStart two Enters across confirm", "SessionStart", "after", "", "typed\r", store.StateWaiting, 1, true, ""},
+		{"SessionStart launch replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "launch"},
+		{"SessionStart session replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "session"},
+		{"SessionStart runtime replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "runtime"},
+		{"SessionStart held replacement refuses", "SessionStart", "after", "", "typed\r", store.StateWaiting, 0, false, "held"},
+		{"Stop two Enters across confirm", "Stop", "after", "initial", "typed\r", store.StateWaiting, 2, true, ""},
+		{"Stop launch replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "launch"},
+		{"Stop session replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "session"},
+		{"Stop runtime replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "runtime"},
+		{"Stop held replacement refuses", "Stop", "after", "initial", "typed\r", store.StateWaiting, 1, false, "held"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRequestEnv(t, "off", "synthetic-session-1")
+			e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}})
+			master, slave := e.prepareRunPTY(t)
+			dir := t.TempDir()
+			t.Setenv("AD_TEST_CURSOR_BARRIER_EVENT", tc.event)
+			t.Setenv("AD_TEST_CURSOR_BARRIER_PHASE", tc.phase)
+			t.Setenv("AD_TEST_CURSOR_BARRIER_DIR", dir)
+			secondDir := t.TempDir()
+			if tc.second {
+				t.Setenv("AD_TEST_CURSOR_SECOND_BARRIER_DIR", secondDir)
+			}
+			consumed := make(chan struct{})
+			secondConsumed := make(chan struct{})
+			var once sync.Once
+			// The redraw of an unsubmitted sentinel proves Enter's admission callback
+			// has run. It conveys input consumption only, never inferred public state.
+			pane := &observedWire{observe: func(p []byte) {
+				if bytes.Equal(p, []byte("\r\x1b[2K> ~")) {
+					once.Do(func() { close(consumed) })
+				}
+				if bytes.Equal(p, []byte("\r\x1b[2K> ^")) {
+					close(secondConsumed)
+				}
+			}}
+			done := make(chan error, 1)
+			ended := false
+			go func() { done <- Run(Options{Runtime: e.runtime.Program, InitialPrompt: tc.initial}, slave, pane) }()
+			t.Cleanup(func() {
+				if ended {
+					return
+				}
+				os.WriteFile(filepath.Join(dir, "release"), nil, 0600)
+				os.WriteFile(filepath.Join(secondDir, "release"), nil, 0600)
+				master.Write([]byte("\x15/exit\r"))
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Errorf("Run exit: %v; pane %s", err, pane.bytes())
+					}
+				case <-time.After(5 * time.Second):
+					slave.Close()
+					t.Error("Run cleanup timed out")
+				}
+			})
+			until := time.Now().Add(3 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(dir, "entered")); err == nil {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatalf("actual %s/%s report barrier not reached; pane %s", tc.event, tc.phase, pane.bytes())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			row, err := e.s.GetSpawn(e.binding.InstanceID)
+			if err != nil || row.State != tc.state {
+				t.Fatalf("actual committed row=%+v err=%v want=%s", row, err, tc.state)
+			}
+			rows, err := e.s.PermissionRequestsForSpawn(e.binding.InstanceID)
+			if err != nil || len(rows) != 0 {
+				t.Fatalf("unexpected permissions before prompt: %v %v", rows, err)
+			}
+			bound, err := e.s.ReadCursorRuntime(e.binding.InstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch tc.loss {
+			case "launch":
+				e.exec(t, `UPDATE spawns SET launch_token='2222222222222222'`)
+			case "session":
+				e.exec(t, `UPDATE spawns SET session_id='replacement'`)
+			case "runtime":
+				e.exec(t, `UPDATE cursor_runtimes SET bound_connection_id='replacement'`)
+			case "held":
+				g := store.HookGate{Event: "PermissionRequest", ParentPID: bound.GatewayPID, ParentStart: bound.GatewayStart, SessionID: bound.SessionID, Cursor: &bound}
+				if _, a, err := e.s.InsertRelayRequest(bound.InstanceID, g, store.RelayRequest{RequestToken: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", ToolName: "Bash", ToolInput: "{}", SettledAt: time.Now().Add(time.Minute)}, 0, store.DefaultLockWait); err != nil || !a.Applied {
+					t.Fatalf("held request: %+v %v", a, err)
+				}
+			}
+			if _, err = master.Write([]byte(tc.keys + "~")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-consumed:
+			case <-time.After(time.Second):
+				t.Fatal("terminal reader did not consume submitted Enter before hook release")
+			}
+			// Restore authority only after consumption: a refused Enter must never
+			// become a queued turn when readiness later returns.
+			switch tc.loss {
+			case "launch":
+				e.exec(t, `UPDATE spawns SET launch_token=?`, bound.Token)
+			case "session":
+				e.exec(t, `UPDATE spawns SET session_id=?`, bound.SessionID)
+			case "runtime":
+				e.exec(t, `UPDATE cursor_runtimes SET bound_connection_id=?`, bound.Connection)
+			case "held":
+				e.exec(t, `UPDATE permission_requests SET closed_at=CURRENT_TIMESTAMP`)
+				e.exec(t, `UPDATE spawns SET state='waiting'`)
+			}
+			if err = os.WriteFile(filepath.Join(dir, "release"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.second {
+				until = time.Now().Add(3 * time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(secondDir, "entered")); err == nil {
+						break
+					}
+					if time.Now().After(until) {
+						t.Fatalf("first turn did not reach post-confirm submission barrier: %s", pane.bytes())
+					}
+					time.Sleep(time.Millisecond)
+				}
+				if _, err := master.Write([]byte("\x15second\r^")); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case <-secondConsumed:
+				case <-time.After(time.Second):
+					t.Fatal("second Enter not consumed before first turn completes")
+				}
+				if err := os.WriteFile(filepath.Join(secondDir, "release"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			until = time.Now().Add(2 * time.Second)
+			for {
+				frames := e.runtime.Frames(t)
+				prompts, typed := 0, false
+				for _, f := range frames {
+					if string(f["method"]) == `"session/prompt"` {
+						prompts++
+						typed = typed || bytes.Contains(f["params"], []byte(`"typed"`))
+					}
+				}
+				refused := bytes.Contains(pane.bytes(), []byte("Cursor input refused while starting or busy"))
+				completed, getErr := e.s.GetSpawn(e.binding.InstanceID)
+				initialSeen := tc.initial == "" || prompts >= 1
+				if getErr == nil && completed.State == store.StateWaiting && initialSeen && (refused || typed) {
+					break
+				}
+				if time.Now().After(until) {
+					t.Fatalf("no actual admission/refusal outcome after hook release: frames=%v pane=%s", frames, pane.bytes())
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if _, err = master.Write([]byte("\x15/exit\r")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err = <-done:
+				if err != nil {
+					t.Fatalf("Run ended: %v; pane %s", err, pane.bytes())
+				}
+				ended = true
+			case <-time.After(3 * time.Second):
+				t.Fatal("Run did not process queued submission and exit")
+			}
+			frames := e.runtime.Frames(t)
+			prompts := 0
+			for _, f := range frames {
+				if string(f["method"]) == `"session/prompt"` {
+					prompts++
+					t.Logf("peer prompt: %s", f["params"])
+					if bytes.Contains(f["params"], []byte(`"second"`)) {
+						t.Error("second Enter became a queued prompt")
+					}
+				}
+			}
+			t.Logf("barrier=%s/%s publicState=%s EnterConsumedBeforeRelease=true prompts=%d want=%d pane=%q", tc.event, tc.phase, row.State, prompts, tc.wantPrompts, pane.bytes())
+			if prompts != tc.wantPrompts {
+				t.Errorf("public waiting/admission mismatch: peer received %d prompts; want %d", prompts, tc.wantPrompts)
+			}
+		})
 	}
 }

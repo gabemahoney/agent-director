@@ -1,0 +1,26 @@
+E2 Task3 gate-repair-3 narrow architecture follow-up — complete
+Task t2.jf1.c1.3p / Epic t1.jf1.c1; base HEAD c4b3cdd895d94748ca2e5c9bf96fa839a30c2230.
+No ticket statuses changed, as dispatched. No commits, staging, delegation or agent messages.
+
+Product documentation changed: docs/architecture.md ONLY. Three short edits within the existing Cursor gateway/current-launch and authorization section document private promptAdmission required reuse, one idle Enter reservation across waiting-report completion, shared reporter.verifyReport required reuse, confirmed waiting during the hook tail, saved initial prompt priority, and both writer guards' existing minimum frame/request deadline with bounded Store acquisition and post-wait authority/retirement/expiry checks. Pending/busy refusal, held-request evidence, questions, cancellation, screen-independent authority, no follow-up queue and no uncertain-write replay contracts remain intact. No public API/schema or customer-facing feature change. No source disagreement found.
+
+Read full engineer, reproduction and source-fix reports at /tmp/ftd-e2-task3-third-{engineer,repro,source-fix}-report.txt; CLAUDE.md and docs/architecture-docs-guide.md. Inspected the new admission.go and full report.go, changed requests.go/session.go/cursor_permission.go sections, cursorAuthority, lockwait.go and both protocol guards. All new prose and context personally read: final architecture106-205 and248-280. No claim of a new personal whole-architecture read.
+
+Architecture before: SHA256 759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094; 22218 lines;1534561 bytes. Exact dispatch base hash verified before changes.
+Architecture after: SHA256 2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0;22229 lines;1535306 bytes.
+Changed line ranges (inclusive): base130-132 -> final130-137; base178 -> final183-185; base256 -> final263-267. Exact complete diff with12lines context and complete equal/replace line+byte rangemap retained in companion artifacts. All unchanged spans byte-identical to reviewed base. All fenced blocks byte-identical. No commands, literal advice or recovery instructions added/changed. git diff --check passed.
+
+Inherited review provenance explicitly reused: complete doc-corrections-report.txt and architecture data in doc-corrections-coverage.json; all four preserved doc-review-a/b/c/d.txt reports read fully in bounded reads and their SHA256 values verified against that JSON. Earlier combined output was truncated; complete separate A/B and C/D reads and extracted complete architecture JSON repaired that read. Those reviewers covered original22213-line architecture1-5554,5555-11108,11109-16661,16662-22213 respectively, with their later correction writer's exact delta to this dispatch's verified22218-line base. This lane adds personal exact-new-delta/context review to that aggregate chain, preserving full aggregate coverage without misrepresenting inherited coverage as fresh personal reading. Companion coverage JSON records source evidence hashes, exact ranges and provenance.
+
+Deferred A2-A6/B3-B8/C2-C5/D1-D2 remain unchanged; no clean-doc or debt-cleared claim. No broad guide/manual cleanup, implementation/test inventory, history or recovery duplication added. No customer manual/guide/generated file changed.
+
+Validation limits: documentation reads/edits and metadata/diff verification only; no repository artifact, test/build/Docker/TLC/collector/scheduler/live Cursor/auth/real-store execution or .claude access. Source-fix report's69 and36 passing focused leaf selections remain attributed to that lane; overlapping selections are not summed here. Fresh final TestWriter owns adversarial combined handoff controls and full make test-sandbox. No full-unit or external acceptance result claimed. No spec/tla model changes: zero formal jobs. E2 remains active and E3 unstarted; PM/final acceptance remain coordinator-owned.
+
+Artifacts written:
+/tmp/ftd-e2-task3-third-doc-report.txt and gate-repair-3/doc-report.txt (identical).
+/tmp/ftd-e2-task3-third-doc-coverage.json and gate-repair-3/doc-coverage.json (identical).
+/tmp/ftd-e2-task3-third-doc-architecture-delta.patch and gate-repair-3/doc-architecture-delta.patch (identical).
+Base snapshot /tmp/ftd-e2-task3-third-doc-base.md.
+Handoff directory: tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/.
+
+Deviations: none. Incomplete assigned documentation work/failures: none. Questions for caller: none.

@@ -1,0 +1,22 @@
+{
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/j20261015174416-7f1212.run.log": "317f0ac5221b4cd3f3369387be004fe59a3f8e02ad363fa98e6fb7558476c999",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/engineer-original-01.log": "c7cbc477269f93b123cb5b80cacf616fabf59cbfdcd0fd6bba08b93e0e3a4533",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/engineer-original-08.log": "37f752ab1cd5c61ff0b669142972a585f4262cade53c164da4a519768cad3308",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/engineer-rerun-01.log": "f285c729b677fe214418f4d2884c40e053277180de3af8542e8a2b7b9a286371",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/engineer-rerun-08.log": "397c9b62cd4ea4f3b12d66ba0454f05713cb71593975a61b85b2a73ca66269ae",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/engineer-focused.log": "619438da11b02464f9d16970b97ad702ebca4dfa92eb933a653c5ceaff1b91f2",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/repro-focused-1.log": "a562567cf82c3fdd2cd9b34bc422d3fa51580118dd84d1b3c2ee53193cd02e84",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/repro-focused-2.log": "485f54eb7b780c85d59ee28f9a5c0da7f3bdd1aad78c2fcf440fc354db87bfe5",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/repro-focused-3.log": "021aceca88dbf4bdad6754f32001df9a6f8dfda9b949c38b6b3d8a00738555be",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/repro-tests.diff": "dd6035f41d4db23711b20051eb5cea6c5b3858b58c53d0899a415b5b31e5c377",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/repro-report.txt": "bef138dc1be15a2b37be653c6fab985f40f29417c1f5db33a704affce96fce77",
+  "internal/cursorhost/admission.go": "3842f31179f114f9ec2bd360fd2b7429c2edf6593623d868a227d58a32ed30f2",
+  "internal/cursorhost/report.go": "39d1f4a7482af104dee4e766a9c85362707f96b87038776d6ac35f83b8644491",
+  "internal/cursorhost/requests.go": "737aaa5572dea7421dd9c7a425dd4c8819a233dd4ff6224a02223180b6aabfd8",
+  "internal/cursorhost/session.go": "66fd605950909d92d2c6fbe8836b4bf0661eeeee60b50d15495a0f8614969850",
+  "internal/store/cursor_permission.go": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-focused-1.log": "f630b7ac5da2553c70176047a0a480a935b5af5e9b5d38f5f64769566663e521",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-focused-2.log": "ac517e2e11006832a6bd0edb627c1c4727e13ff48e41c30fa96e9ffc09be369e",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix.diff": "9b56e489d1ba50d3f3cd2212317412c6cce6ce411a127445d17edc8112075ec0",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-report.txt": "e675cf0f6f5c35c8599d267dce00538270401e7745819338df0bd11cce274983"
+}

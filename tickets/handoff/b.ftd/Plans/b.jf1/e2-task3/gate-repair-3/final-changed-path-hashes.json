@@ -1,0 +1,57 @@
+{
+  "docs/architecture.md": {
+    "mode": "0o664",
+    "bytes": 1535306,
+    "sha256": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0"
+  },
+  "internal/cursorhost/admission.go": {
+    "mode": "0o664",
+    "bytes": 1013,
+    "sha256": "3842f31179f114f9ec2bd360fd2b7429c2edf6593623d868a227d58a32ed30f2"
+  },
+  "internal/cursorhost/report.go": {
+    "mode": "0o664",
+    "bytes": 4529,
+    "sha256": "39d1f4a7482af104dee4e766a9c85362707f96b87038776d6ac35f83b8644491"
+  },
+  "internal/cursorhost/report_linux_test.go": {
+    "mode": "0o664",
+    "bytes": 4644,
+    "sha256": "f74a70e3a1c88f0af65a65263fa5dc6d3370b3f51f204db01507b81c69af4e7a"
+  },
+  "internal/cursorhost/request_boundary_linux_test.go": {
+    "mode": "0o664",
+    "bytes": 21479,
+    "sha256": "c3674cf03a1d38e6b508aa826e4122d4815970600045f67166a650c62a5d4207"
+  },
+  "internal/cursorhost/request_fixture_linux_test.go": {
+    "mode": "0o664",
+    "bytes": 6318,
+    "sha256": "02b1adfa44afc70b0c61d05a9088ef4fc6cb557234ac8dfce81303b93a2c9bc8"
+  },
+  "internal/cursorhost/request_runtime_linux_test.go": {
+    "mode": "0o664",
+    "bytes": 15846,
+    "sha256": "3101fdb9dbbb387be9d44a950a518f1da2ecbdb2f35988f9b6e60fb7a7c2ac7f"
+  },
+  "internal/cursorhost/requests.go": {
+    "mode": "0o664",
+    "bytes": 13046,
+    "sha256": "737aaa5572dea7421dd9c7a425dd4c8819a233dd4ff6224a02223180b6aabfd8"
+  },
+  "internal/cursorhost/session.go": {
+    "mode": "0o664",
+    "bytes": 14387,
+    "sha256": "66fd605950909d92d2c6fbe8836b4bf0661eeeee60b50d15495a0f8614969850"
+  },
+  "internal/cursorhost/terminal_test.go": {
+    "mode": "0o664",
+    "bytes": 3915,
+    "sha256": "559794e406aab9a811ba9ec42ba7e7c67d9e7ff76668965b6928c7ec11a44fcf"
+  },
+  "internal/store/cursor_permission.go": {
+    "mode": "0o664",
+    "bytes": 10863,
+    "sha256": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758"
+  }
+}

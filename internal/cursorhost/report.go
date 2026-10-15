@@ -21,6 +21,12 @@ type reporter struct {
 }
 
 func (r *reporter) report(event string) error {
+	return r.reportWaiting(event, nil)
+}
+
+// reportWaiting lets Enter independently confirm the committed waiting report
+// while its hook is finishing. It never grants admission before that commit.
+func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error {
 	if err := VerifyTranscriptPath(r.path); err != nil {
 		return err
 	}
@@ -60,10 +66,18 @@ func (r *reporter) report(event string) error {
 	// child runtime can become its immediate parent.
 	cmd := exec.CommandContext(ctx, r.exe, "hook", "--agent", "cursor")
 	cmd.Stdin = bytes.NewReader(raw)
+	if waiting != nil {
+		waiting(func() bool { return r.verifyReport(event, beforeVersion, true) == nil })
+	}
 	if err = cmd.Run(); err != nil {
 		return fmt.Errorf("Cursor report failed")
 	}
-	row, err = r.store.GetSpawn(r.binding.InstanceID)
+	return r.verifyReport(event, beforeVersion, false)
+}
+
+func (r *reporter) verifyReport(event string, beforeVersion int64, waitingOnly bool) error {
+	terminated := event == "SessionEnd"
+	row, err := r.store.GetSpawn(r.binding.InstanceID)
 	if err != nil || row.Identity.Token != r.binding.Token || row.LifeNumber != r.binding.Life || row.SessionID != r.binding.SessionID || row.Snapshot.RowVersion <= beforeVersion {
 		return fmt.Errorf("Cursor report was not applied")
 	}
@@ -76,6 +90,20 @@ func (r *reporter) report(event string) error {
 	}
 	if row.JSONLPath != r.path {
 		return fmt.Errorf("Cursor report was not applied")
+	}
+	if waitingOnly {
+		if row.State != store.StateWaiting || terminated || event == "UserPromptSubmit" {
+			return fmt.Errorf("Cursor waiting report was not applied")
+		}
+		requests, e := r.store.PermissionRequestsForSpawn(row.InstanceID)
+		if e != nil {
+			return fmt.Errorf("Cursor waiting requests unavailable")
+		}
+		for _, request := range requests {
+			if request.AwaitsAnswer() && !request.ProvenGone() {
+				return fmt.Errorf("Cursor waiting report has held requests")
+			}
+		}
 	}
 	if row.State != expected {
 		if terminated || row.State != store.StateCheckPermission {

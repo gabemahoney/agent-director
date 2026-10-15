@@ -1,0 +1,272 @@
+diff --git a/internal/cursorhost/report.go b/internal/cursorhost/report.go
+index 292a78a6..31ba9583 100644
+--- a/internal/cursorhost/report.go
++++ b/internal/cursorhost/report.go
+@@ -21,6 +21,12 @@ type reporter struct {
+ }
+ 
+ func (r *reporter) report(event string) error {
++	return r.reportWaiting(event, nil)
++}
++
++// reportWaiting lets Enter independently confirm the committed waiting report
++// while its hook is finishing. It never grants admission before that commit.
++func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error {
+ 	if err := VerifyTranscriptPath(r.path); err != nil {
+ 		return err
+ 	}
+@@ -60,10 +66,18 @@ func (r *reporter) report(event string) error {
+ 	// child runtime can become its immediate parent.
+ 	cmd := exec.CommandContext(ctx, r.exe, "hook", "--agent", "cursor")
+ 	cmd.Stdin = bytes.NewReader(raw)
++	if waiting != nil {
++		waiting(func() bool { return r.verifyReport(event, beforeVersion, true) == nil })
++	}
+ 	if err = cmd.Run(); err != nil {
+ 		return fmt.Errorf("Cursor report failed")
+ 	}
+-	row, err = r.store.GetSpawn(r.binding.InstanceID)
++	return r.verifyReport(event, beforeVersion, false)
++}
++
++func (r *reporter) verifyReport(event string, beforeVersion int64, waitingOnly bool) error {
++	terminated := event == "SessionEnd"
++	row, err := r.store.GetSpawn(r.binding.InstanceID)
+ 	if err != nil || row.Identity.Token != r.binding.Token || row.LifeNumber != r.binding.Life || row.SessionID != r.binding.SessionID || row.Snapshot.RowVersion <= beforeVersion {
+ 		return fmt.Errorf("Cursor report was not applied")
+ 	}
+@@ -77,6 +91,20 @@ func (r *reporter) report(event string) error {
+ 	if row.JSONLPath != r.path {
+ 		return fmt.Errorf("Cursor report was not applied")
+ 	}
++	if waitingOnly {
++		if row.State != store.StateWaiting || terminated || event == "UserPromptSubmit" {
++			return fmt.Errorf("Cursor waiting report was not applied")
++		}
++		requests, e := r.store.PermissionRequestsForSpawn(row.InstanceID)
++		if e != nil {
++			return fmt.Errorf("Cursor waiting requests unavailable")
++		}
++		for _, request := range requests {
++			if request.AwaitsAnswer() && !request.ProvenGone() {
++				return fmt.Errorf("Cursor waiting report has held requests")
++			}
++		}
++	}
+ 	if row.State != expected {
+ 		if terminated || row.State != store.StateCheckPermission {
+ 			return fmt.Errorf("Cursor report was not applied")
+diff --git a/internal/cursorhost/requests.go b/internal/cursorhost/requests.go
+index 5e5b593d..d4ca4796 100644
+--- a/internal/cursorhost/requests.go
++++ b/internal/cursorhost/requests.go
+@@ -220,22 +220,34 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
+ 		// already-established native bound, never a replay of this frame.
+ 		until = r.timeout
+ 	}
++	deadline := time.Now().Add(transportWriteWait)
++	if until.Before(deadline) {
++		deadline = until
++	}
+ 	binding := c.rep.binding
++	current := func() error {
++		if r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(deadline) {
++			return fmt.Errorf("Cursor request response retired")
++		}
++		return nil
++	}
+ 	check := func(row store.Spawn) error {
+ 		if e := VerifyRuntime(binding, false); e != nil {
+ 			return e
+ 		}
+-		return VerifyPane(c.rep.store, row, c.rep.cfg)
++		if e := VerifyPane(c.rep.store, row, c.rep.cfg); e != nil {
++			return e
++		}
++		return current()
+ 	}
+ 	guard := func() error {
+-		if r.terminal.Load() || (relay && r.retired.Load()) || !time.Now().Before(until) {
+-			return fmt.Errorf("Cursor request response retired")
++		if e := current(); e != nil {
++			return e
+ 		}
+-		return c.rep.store.CheckCursorAnswer(binding, r.token, relay, until, check)
+-	}
+-	deadline := time.Now().Add(transportWriteWait)
+-	if until.Before(deadline) {
+-		deadline = until
++		if e := c.rep.store.CheckCursorAnswer(binding, r.token, relay, deadline, check); e != nil {
++			return e
++		}
++		return current()
+ 	}
+ 	return c.protocol.sendGuarded(map[string]any{"jsonrpc": "2.0", "id": json.RawMessage(r.auth.frame.ID), "result": result}, deadline, guard, func(e error) {
+ 		if e == nil {
+diff --git a/internal/cursorhost/session.go b/internal/cursorhost/session.go
+index d4651f99..ae9e7281 100644
+--- a/internal/cursorhost/session.go
++++ b/internal/cursorhost/session.go
+@@ -10,7 +10,6 @@ import (
+ 	"os/signal"
+ 	"runtime"
+ 	"sync"
+-	"sync/atomic"
+ 	"syscall"
+ 	"time"
+ 
+@@ -127,8 +126,9 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 	defer requests.cancel()
+ 	ticker := time.NewTicker(50 * time.Millisecond)
+ 	defer ticker.Stop()
+-	var admission atomic.Bool
+-	restore := terminalInputLoop(in, writer, inputs, func() bool { return admission.CompareAndSwap(true, false) }, requests.key)
++	var admission promptAdmission
++	defer admission.disable()
++	restore := terminalInputLoop(in, writer, inputs, admission.take, requests.key)
+ 	defer restore()
+ 	signals := make(chan os.Signal, 2)
+ 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+@@ -162,7 +162,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 		}
+ 	}
+ 	submit := func(text string) error {
+-		admission.Store(false)
++		admission.disable()
+ 		if len(text) > maxFrameBytes/2 {
+ 			return fmt.Errorf("Cursor input exceeds limit")
+ 		}
+@@ -192,7 +192,7 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 			return fmt.Errorf("Cursor runtime exited unexpectedly")
+ 		case <-signals:
+ 			requests.cancel()
+-			admission.Store(false)
++			admission.disable()
+ 			intentional = true
+ 		case <-ticker.C:
+ 			if err = requests.tick(); err != nil {
+@@ -241,9 +241,6 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 			}
+ 			if text == "/new" || text == "/clear" {
+ 				fmt.Fprint(writer, "Unsupported Cursor conversation control; nothing sent\r\n> ")
+-				if session != "" && !busy {
+-					admission.Store(true)
+-				}
+ 				continue
+ 			}
+ 			if text == "" {
+@@ -396,12 +393,18 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 				if err = tr.record("session_start", map[string]any{"origin": "main"}); err != nil {
+ 					return err
+ 				}
+-				if err = rep.report("SessionStart"); err != nil {
++				var waiting func(func() bool)
++				if options.InitialPrompt == "" {
++					waiting = admission.waiting
++				}
++				if err = rep.reportWaiting("SessionStart", waiting); err != nil {
+ 					return err
+ 				}
+ 				stopDeadline()
+ 				fmt.Fprint(writer, "Cursor ready\r\n> ")
+-				admission.Store(true)
++				if options.InitialPrompt == "" {
++					admission.confirm()
++				}
+ 				if options.InitialPrompt != "" {
+ 					text := options.InitialPrompt
+ 					options.InitialPrompt = ""
+@@ -432,18 +435,18 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 				cancelled = false
+ 				phase = "idle"
+ 				stopDeadline()
+-				if err = rep.report("Stop"); err != nil {
++				if err = rep.reportWaiting("Stop", admission.waiting); err != nil {
+ 					return err
+ 				}
+ 				fmt.Fprint(writer, "\r\nCursor turn complete\r\n> ")
+-				admission.Store(true)
++				admission.confirm()
+ 			default:
+ 				return fmt.Errorf("unexpected Cursor response")
+ 			}
+ 		}
+ 		if intentional {
+ 			requests.cancel()
+-			admission.Store(false)
++			admission.disable()
+ 			if busy {
+ 				_ = protocol.notify("session/cancel", map[string]any{"sessionId": session})
+ 			}
+diff --git a/internal/store/cursor_permission.go b/internal/store/cursor_permission.go
+index b351a615..2a147274 100644
+--- a/internal/store/cursor_permission.go
++++ b/internal/store/cursor_permission.go
+@@ -179,7 +179,9 @@ func (s *Store) ClaimCursorPaneAnswer(b CursorRuntime, token, decision string, u
+ // CheckCursorAnswer is the writer's final authority check, including the exact
+ // request's durable acknowledgement or native claim. It does not prove receipt.
+ func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, until time.Time, check CursorCheck) error {
+-	return s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
++	// Wait only within the caller's existing response deadline. Revalidate
++	// authority and expiry after acquisition and independent evidence.
++	return s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
+ 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
+ 			return e
+ 		}
+diff --git a/internal/cursorhost/admission.go b/internal/cursorhost/admission.go
+new file mode 100644
+index 00000000..f5e17630
+--- /dev/null
++++ b/internal/cursorhost/admission.go
+@@ -0,0 +1,51 @@
++package cursorhost
++
++import (
++	"sync"
++	"sync/atomic"
++)
++
++// promptAdmission reserves one idle turn at Enter consumption. During a waiting
++// report, consumption verifies the actual commit rather than waiting for the
++// report to finish and turning earlier pending/busy input into a future turn.
++type promptAdmission struct {
++	mu      sync.Mutex
++	ready   atomic.Bool
++	check   func() bool
++	claimed bool
++}
++
++func (a *promptAdmission) take() bool {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	if a.ready.CompareAndSwap(true, false) {
++		return true
++	}
++	if a.check == nil || a.claimed || !a.check() {
++		return false
++	}
++	a.claimed = true
++	return true
++}
++
++func (a *promptAdmission) waiting(check func() bool) {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	a.ready.Store(false)
++	a.check = check
++	a.claimed = false
++}
++
++func (a *promptAdmission) confirm() {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	a.check = nil
++	a.ready.Store(!a.claimed)
++}
++
++func (a *promptAdmission) disable() {
++	a.mu.Lock()
++	defer a.mu.Unlock()
++	a.ready.Store(false)
++	a.check = nil
++}

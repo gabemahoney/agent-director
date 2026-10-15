@@ -1,0 +1,96 @@
+{
+  "base_head": "c4b3cdd895d94748ca2e5c9bf96fa839a30c2230",
+  "focused_make_exits": [
+    0,
+    0
+  ],
+  "inherited_tests_match_repro_manifest": true,
+  "ticket_status_changes": [],
+  "source_files": [
+    "internal/cursorhost/admission.go",
+    "internal/cursorhost/report.go",
+    "internal/cursorhost/requests.go",
+    "internal/cursorhost/session.go",
+    "internal/store/cursor_permission.go"
+  ],
+  "files": [
+    {
+      "path": "internal/cursorhost/admission.go",
+      "sha256": "3842f31179f114f9ec2bd360fd2b7429c2edf6593623d868a227d58a32ed30f2",
+      "mode": "0664",
+      "bytes": 1013
+    },
+    {
+      "path": "internal/cursorhost/report.go",
+      "sha256": "39d1f4a7482af104dee4e766a9c85362707f96b87038776d6ac35f83b8644491",
+      "mode": "0664",
+      "bytes": 4529
+    },
+    {
+      "path": "internal/cursorhost/requests.go",
+      "sha256": "737aaa5572dea7421dd9c7a425dd4c8819a233dd4ff6224a02223180b6aabfd8",
+      "mode": "0664",
+      "bytes": 13046
+    },
+    {
+      "path": "internal/cursorhost/session.go",
+      "sha256": "66fd605950909d92d2c6fbe8836b4bf0661eeeee60b50d15495a0f8614969850",
+      "mode": "0664",
+      "bytes": 14387
+    },
+    {
+      "path": "internal/store/cursor_permission.go",
+      "sha256": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758",
+      "mode": "0664",
+      "bytes": 10863
+    },
+    {
+      "path": "internal/cursorhost/report_linux_test.go",
+      "sha256": "16aac516e72befda7ee5a72fd6cc1cc956b86692e3a7a0ff37f490aad58a7d5a",
+      "mode": "0664",
+      "bytes": 4428
+    },
+    {
+      "path": "internal/cursorhost/request_boundary_linux_test.go",
+      "sha256": "f284592a9f94a29038a28ff069b7a78b04ef6b7bfec921084c81e2eeae04fafe",
+      "mode": "0664",
+      "bytes": 19426
+    },
+    {
+      "path": "internal/cursorhost/request_fixture_linux_test.go",
+      "sha256": "02b1adfa44afc70b0c61d05a9088ef4fc6cb557234ac8dfce81303b93a2c9bc8",
+      "mode": "0664",
+      "bytes": 6318
+    },
+    {
+      "path": "internal/cursorhost/request_runtime_linux_test.go",
+      "sha256": "2bd41a4394675b9a255323d248aaf045b61870b24c0b8f750baad2fb3a3c4943",
+      "mode": "0664",
+      "bytes": 11916
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-focused-1.log",
+      "sha256": "f630b7ac5da2553c70176047a0a480a935b5af5e9b5d38f5f64769566663e521",
+      "mode": "0664",
+      "bytes": 22369
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-focused-2.log",
+      "sha256": "ac517e2e11006832a6bd0edb627c1c4727e13ff48e41c30fa96e9ffc09be369e",
+      "mode": "0664",
+      "bytes": 10404
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix.diff",
+      "sha256": "9b56e489d1ba50d3f3cd2212317412c6cce6ce411a127445d17edc8112075ec0",
+      "mode": "0664",
+      "bytes": 9581
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/source-fix-report.txt",
+      "sha256": "e675cf0f6f5c35c8599d267dce00538270401e7745819338df0bd11cce274983",
+      "mode": "0664",
+      "bytes": 10166
+    }
+  ]
+}

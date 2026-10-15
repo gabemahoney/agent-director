@@ -163,6 +163,7 @@ type observedWire struct {
 	mu      sync.Mutex
 	raw     []byte
 	first   func() error
+	observe func([]byte)
 	err     error
 	partial bool
 }
@@ -181,6 +182,9 @@ func (w *observedWire) Write(p []byte) (int, error) {
 		return 1, io.ErrUnexpectedEOF
 	}
 	w.raw = append(w.raw, p...)
+	if w.observe != nil {
+		w.observe(p)
+	}
 	return len(p), nil
 }
 func (w *observedWire) bytes() []byte {

@@ -1,0 +1,22 @@
+Approve the settled 11-file repair for local commit and a new exact-SHA external gate. No mandatory code, test, or documentation corrections found. This is not approval to close Task3 or Epic2.
+
+Reviewed Task3 and all seven Subtasks through Bees, the parent Epic, Plan/Idea, approved PRD and relevant SRD requirements and coordinator amendments; all five repair reports and policy; all source/test changes, including untracked admission.go; and architecture delta/context and recorded review provenance. Applied code-review and doc-review within the read-only boundary. Ran no tests, lint, repository artifacts or heavy jobs; edited nothing and changed no statuses.
+
+The repair aligns with the existing contract:
+- Both answer guards retain acknowledgement/native-claim authority and use the existing minimum frame/request deadline. Store acquisition waits within that bound, then rechecks current authority, cancellation/retirement and expiry. Final transport expiry checks remain; no uncertain-write replay was introduced.
+- The private admission helper serializes one idle Enter reservation across waiting-report completion. Shared verification requires committed waiting, current launch/life/session/path/runtime binding, independent runtime/pane evidence and absence of held awaiting requests. Post-hook verification remains. Pending/busy input stays refused, initial-prompt priority remains, and confirmation cannot rearm an already claimed reservation.
+- The change adds no E3 follow-up queue, public API, schema, model or customer feature. The existing cancellation deadline correction and collector predicates remain intact.
+
+The tests exercise actual Run/PTY/report and Store boundaries. Coverage includes two Enters across the handoff, temporary launch/session/runtime/held-request changes restored only after consumption, finite shared-connection contention, independent SQLite authority changes, cancellation, expiry and runtime death. These address the source lane's outstanding combined-interleaving concerns.
+
+Recorded validation is sufficient for committing: 87 focused race leaf outcomes passed with no race warnings, followed by one settled make test-sandbox exit 0: 68 tested Go packages (10 executed, 58 cached), plus 429 Bun tests with zero failures. The GORACE=atexit_sleep_ms=0 exception removes instrumented helper-child exit delays; product bounds and assertions were not widened. Earlier setup failure and race observation timeouts remain disclosed. I independently verified all 11 changed files against the final mode/size/SHA inventory and verified byte-identical pre/post full-run manifests, SHA256 50c54e14110029b586161edd4aa2f2e854d04fbfe00423d78b1aefb6fae73bf1.
+
+Documentation adequately describes the reusable admission/shared-verification components and bounded authority checks. Whole-document coverage is the inherited complete-base review plus reviewed correction deltas and this new delta/context—not a new personal 22,229-line read. Inherited normalization findings A2–A6, B3–B8, C2–C5 and D1–D2 remain deferred, for their previously recorded broad cleanup scope. No new reviewer feedback is ignored, and no clean-document claim is warranted.
+
+No unresolved role disagreement or product question remains. The originally test-focused Task required production repairs under the explicit superseding coordinator policy; this is authorized contract restoration, not an unexplained ticket-scope departure. Preserve the reproduction writer's disclosed one-time .claude/skills/run-tests/SKILL.md access violation in the audit record; this review made no such access.
+
+Remaining acceptance and limitations:
+- The reproductions establish feasible product races matching the failures. They do not prove the original .01 guard error or .08 Enter timing, which were unlogged. Passing diagnostic reruns do not establish that the original 20-second bounds were insufficient.
+- The unrelated historical Codex 1.58341753s > 1.5s failure remains unresolved; its original guard is unchanged.
+- Commit the settled files, including admission.go, then prepare the new exact-SHA external Docker handoff. External acceptance and current authenticated E2 predicate disposition remain pending; Task3/Epic2 stay active and E3 stays unstarted.
+- TLA+ not applicable: no model inputs changed. Zero formal jobs.

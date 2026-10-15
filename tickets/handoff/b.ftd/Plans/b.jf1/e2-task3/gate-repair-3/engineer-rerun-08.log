@@ -1,0 +1,1682 @@
+driver: diagnostic rerun for t2.jf1.cr.08 (exit=0)
+
+{
+  "case": "t2.jf1.cr.08",
+  "status": "pass",
+  "checks": [
+    "AC8.source-derived-questions",
+    "AC8.both-settings-relay-modes",
+    "AC8.pre-admission-denial",
+    "AC8.no-capability",
+    "AC8.genuine-hold-survives",
+    "AC1.unsupported-fail-closed",
+    "AC8.synthetic-malformed-ambiguous",
+    "AC8.persistent-choice-refused"
+  ],
+  "authenticated_cursor": false,
+  "facts": {
+    "runs": [
+      {
+        "instance_id": "co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 75978,
+        "runtime_pid": 76039,
+        "control_sentinel_pid": 75910,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "on",
+          "disable_ask_user": "false",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-76a4d5a5-815d-43b0-b04c-fb6a688a7255",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 76660,
+        "runtime_pid": 76721,
+        "control_sentinel_pid": 76593,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "false",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-2c16e212-5506-4299-82a1-0654e9ec1263",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 77296,
+        "runtime_pid": 77355,
+        "control_sentinel_pid": 77230,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "on",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 77977,
+        "runtime_pid": 78037,
+        "control_sentinel_pid": 77909,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 78613,
+        "runtime_pid": 78676,
+        "control_sentinel_pid": 78545,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 79052,
+        "runtime_pid": 79113,
+        "control_sentinel_pid": 78984,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-f287c6b1-15d0-4810-a709-21bc5127d590",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 79479,
+        "runtime_pid": 79539,
+        "control_sentinel_pid": 79411,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      },
+      {
+        "instance_id": "co-a615e186-2e8e-4907-ad66-543819b01a59",
+        "session_id": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "gateway_pid": 79915,
+        "runtime_pid": 79976,
+        "control_sentinel_pid": 79847,
+        "parameters": {
+          "mode": "",
+          "verdict": "",
+          "fault": "",
+          "relay": "off",
+          "disable_ask_user": "true",
+          "cut": "",
+          "seam": ""
+        }
+      }
+    ]
+  }
+}
+driver: diagnostic xtrace for t2.jf1.cr.08 (dedicated FD 8)
++ set -E
++ trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&9' ERR
++ set -euo pipefail
+++ mktemp /tmp/cr-questions-receipts-XXXXXX
++ receipts=/tmp/cr-questions-receipts-QuTgEj
++ for disabled in false true
++ for relay in on off
++ CURSOR_DISABLE_QUESTIONS=false
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-oF6S0r
+++ export HOME=/tmp/co-oF6S0r/home TMUX_TMPDIR=/tmp/co-oF6S0r/tmux CURSOR_CONFIG_DIR=/tmp/co-oF6S0r/cursor-config CURSOR_DATA_DIR=/tmp/co-oF6S0r/cursor-data TMPDIR=/tmp/co-oF6S0r/tmp
+++ HOME=/tmp/co-oF6S0r/home
+++ TMUX_TMPDIR=/tmp/co-oF6S0r/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-oF6S0r/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-oF6S0r/cursor-data
+++ TMPDIR=/tmp/co-oF6S0r/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-oF6S0r/home/.config/agent-director /tmp/co-oF6S0r/tmux /tmp/co-oF6S0r/cwd /tmp/co-oF6S0r/cursor-config /tmp/co-oF6S0r/cursor-data /tmp/co-oF6S0r/tmp
+++ STORE=/tmp/co-oF6S0r/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-oF6S0r '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-oF6S0r/trace.jsonl","pid":"/tmp/co-oF6S0r/runtime-pid","release":"/tmp/co-oF6S0r/release","worker":false,"workerPID":"/tmp/co-oF6S0r/worker-pid","workerRelease":"/tmp/co-oF6S0r/worker-release","scenario":"/tmp/co-oF6S0r/scenario","raw":"/tmp/co-oF6S0r/raw","observer":"/tmp/co-oF6S0r/observer","sent":"/tmp/co-oF6S0r/sent.jsonl","paused":"/tmp/co-oF6S0r/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-oF6S0r/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-oF6S0r/tmux/tmux-1000/default
+++ control_sentinel=75910
+++ trap cleanup_cursor_case EXIT
+++ sleep 300
++ relay_scenario questions
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-oF6S0r/scenario questions
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --cwd /tmp/co-oF6S0r/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --agent cursor --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --cwd /tmp/co-oF6S0r/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=15
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ gateway=75978
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ runtime=76039
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 75978 =~ ^[0-9]+$ ]]
++ [[ 76039 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --text 'scripted relay acceptance'
++ wait_until request_count_is 1
++ local deadline=21
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ [[ 1 == \1 ]]
++ wait_until reply_count_is 3
++ local deadline=21
++ reply_count_is 3
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 1 == \3 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 3
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 3 == \3 ]]
++ frames
++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
++ cat /tmp/co-oF6S0r/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|all(.[]; .result.outcome.outcome=="cancelled" or .result.outcome.optionId=="__ask_question_skip__")'
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
++ [[ 1 == 1 ]]
++ frames
++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
++ cat /tmp/co-oF6S0r/trace.jsonl
++ jq -se '[.[]|select(.method=="initialize")]|all(.[]; (.params|tostring|contains("askQuestion"))|not)'
++ ad decide --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --request-token question-direct --decision allow
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --request-token question-direct --decision allow
++ relay_guard
++ local before
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ before=1
++ ad send-keys --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --text 'held prompt must not arrive'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --text 'held prompt must not arrive'
++ jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-oF6S0r/held-error
++ ad pause --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae
++ local verb=pause
++ shift
++ agent-director pause --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae
++ jq -e '.err_name=="ErrSpawnNotPausable" or .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-oF6S0r/pause-error
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ [[ 1 == \1 ]]
++ kill -0 75910
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
+++ /opt/driver/sql.sh /tmp/co-oF6S0r/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae'\'';'
++ token=3c8a72324ff51374b491ac829365442f
++ [[ on == on ]]
++ relay_decide 3c8a72324ff51374b491ac829365442f allow
++ ad decide --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --request-token 3c8a72324ff51374b491ac829365442f --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-oF6S0r/home --store-path /tmp/co-oF6S0r/override.db --instance-id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --request-token 3c8a72324ff51374b491ac829365442f --decision allow --max-wait-ms 1000
++ wait_until reply_count_is 4
++ local deadline=21
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 4 == \4 ]]
+++ frames
+++ [[ -f /tmp/co-oF6S0r/trace.jsonl ]]
+++ cat /tmp/co-oF6S0r/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/cancel")]|length'
++ [[ 0 == 0 ]]
++ relay_receipt t2.jf1.cr.08 '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ kill -0 75910
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]' --arg id co-1bb4efdd-1535-4a7c-a58d-0042d76e94ae --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 75978 --argjson runtime 76039 --argjson sentinel 75910 --arg mode '' --arg verdict '' --arg fault '' --arg relay on --arg disabled false --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-oF6S0r/gate-release
+++ tmux -S /tmp/co-oF6S0r/tmux/tmux-1000/default kill-server
+++ kill 75910
+++ wait 75910
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for relay in on off
++ CURSOR_DISABLE_QUESTIONS=false
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-JoGHes
+++ export HOME=/tmp/co-JoGHes/home TMUX_TMPDIR=/tmp/co-JoGHes/tmux CURSOR_CONFIG_DIR=/tmp/co-JoGHes/cursor-config CURSOR_DATA_DIR=/tmp/co-JoGHes/cursor-data TMPDIR=/tmp/co-JoGHes/tmp
+++ HOME=/tmp/co-JoGHes/home
+++ TMUX_TMPDIR=/tmp/co-JoGHes/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-JoGHes/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-JoGHes/cursor-data
+++ TMPDIR=/tmp/co-JoGHes/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-JoGHes/home/.config/agent-director /tmp/co-JoGHes/tmux /tmp/co-JoGHes/cwd /tmp/co-JoGHes/cursor-config /tmp/co-JoGHes/cursor-data /tmp/co-JoGHes/tmp
+++ STORE=/tmp/co-JoGHes/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-76a4d5a5-815d-43b0-b04c-fb6a688a7255
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-JoGHes '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-JoGHes/trace.jsonl","pid":"/tmp/co-JoGHes/runtime-pid","release":"/tmp/co-JoGHes/release","worker":false,"workerPID":"/tmp/co-JoGHes/worker-pid","workerRelease":"/tmp/co-JoGHes/worker-release","scenario":"/tmp/co-JoGHes/scenario","raw":"/tmp/co-JoGHes/raw","observer":"/tmp/co-JoGHes/observer","sent":"/tmp/co-JoGHes/sent.jsonl","paused":"/tmp/co-JoGHes/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-JoGHes/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-JoGHes/tmux/tmux-1000/default
+++ control_sentinel=76593
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario questions
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-JoGHes/scenario questions
++ relay_start off
++ spawn_cursor --relay-mode off
++ ad spawn --agent cursor --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --cwd /tmp/co-JoGHes/cwd --no-pre-trust --relay-mode off
++ jq -e --arg id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 '.instance_id==$id and .pre_trust=="skipped"'
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-JoGHes/home --store-path /tmp/co-JoGHes/override.db --agent cursor --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --cwd /tmp/co-JoGHes/cwd --no-pre-trust --relay-mode off
++ wait_state waiting
++ local want=waiting deadline=17
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ gateway=76660
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ runtime=76721
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 76660 =~ ^[0-9]+$ ]]
++ [[ 76721 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-JoGHes/home --store-path /tmp/co-JoGHes/override.db --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --text 'scripted relay acceptance'
++ wait_until request_count_is 1
++ local deadline=22
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ [[ 1 == \1 ]]
++ wait_until reply_count_is 3
++ local deadline=22
++ reply_count_is 3
+++ frames
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 3 == \3 ]]
++ frames
++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
++ cat /tmp/co-JoGHes/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|all(.[]; .result.outcome.outcome=="cancelled" or .result.outcome.optionId=="__ask_question_skip__")'
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
++ [[ 1 == 1 ]]
++ frames
++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
++ cat /tmp/co-JoGHes/trace.jsonl
++ jq -se '[.[]|select(.method=="initialize")]|all(.[]; (.params|tostring|contains("askQuestion"))|not)'
++ ad decide --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --request-token question-direct --decision allow
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-JoGHes/home --store-path /tmp/co-JoGHes/override.db --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --request-token question-direct --decision allow
++ relay_guard
++ local before
+++ frames
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ before=1
++ ad send-keys --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --text 'held prompt must not arrive'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-JoGHes/home --store-path /tmp/co-JoGHes/override.db --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --text 'held prompt must not arrive'
++ ad pause --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255
++ local verb=pause
++ shift
++ agent-director pause --home /tmp/co-JoGHes/home --store-path /tmp/co-JoGHes/override.db --instance-id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255
++ jq -e '.err_name=="ErrSpawnNotPausable" or .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-JoGHes/pause-error
+++ frames
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ [[ 1 == \1 ]]
++ kill -0 76593
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
+++ /opt/driver/sql.sh /tmp/co-JoGHes/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-76a4d5a5-815d-43b0-b04c-fb6a688a7255'\'';'
++ token=7db7948bc25e23d858beb54aa538ddb2
++ [[ off == on ]]
++ tmux -S /tmp/co-JoGHes/tmux/tmux-1000/default send-keys -t %0 -l -- 1
++ wait_until reply_count_is 4
++ local deadline=22
++ reply_count_is 4
+++ frames
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
++ [[ 3 == \4 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 4 == \4 ]]
+++ frames
+++ [[ -f /tmp/co-JoGHes/trace.jsonl ]]
+++ cat /tmp/co-JoGHes/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/cancel")]|length'
++ [[ 0 == 0 ]]
++ relay_receipt t2.jf1.cr.08 '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ kill -0 76593
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]' --arg id co-76a4d5a5-815d-43b0-b04c-fb6a688a7255 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 76660 --argjson runtime 76721 --argjson sentinel 76593 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled false --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-JoGHes/gate-release
+++ tmux -S /tmp/co-JoGHes/tmux/tmux-1000/default kill-server
+++ kill 76593
+++ wait 76593
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for disabled in false true
++ for relay in on off
++ CURSOR_DISABLE_QUESTIONS=true
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-JmFpCG
+++ export HOME=/tmp/co-JmFpCG/home TMUX_TMPDIR=/tmp/co-JmFpCG/tmux CURSOR_CONFIG_DIR=/tmp/co-JmFpCG/cursor-config CURSOR_DATA_DIR=/tmp/co-JmFpCG/cursor-data TMPDIR=/tmp/co-JmFpCG/tmp
+++ HOME=/tmp/co-JmFpCG/home
+++ TMUX_TMPDIR=/tmp/co-JmFpCG/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-JmFpCG/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-JmFpCG/cursor-data
+++ TMPDIR=/tmp/co-JmFpCG/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-JmFpCG/home/.config/agent-director /tmp/co-JmFpCG/tmux /tmp/co-JmFpCG/cwd /tmp/co-JmFpCG/cursor-config /tmp/co-JmFpCG/cursor-data /tmp/co-JmFpCG/tmp
+++ STORE=/tmp/co-JmFpCG/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-2c16e212-5506-4299-82a1-0654e9ec1263
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-JmFpCG '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-JmFpCG/trace.jsonl","pid":"/tmp/co-JmFpCG/runtime-pid","release":"/tmp/co-JmFpCG/release","worker":false,"workerPID":"/tmp/co-JmFpCG/worker-pid","workerRelease":"/tmp/co-JmFpCG/worker-release","scenario":"/tmp/co-JmFpCG/scenario","raw":"/tmp/co-JmFpCG/raw","observer":"/tmp/co-JmFpCG/observer","sent":"/tmp/co-JmFpCG/sent.jsonl","paused":"/tmp/co-JmFpCG/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-JmFpCG/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-JmFpCG/tmux/tmux-1000/default
+++ control_sentinel=77230
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario questions
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-JmFpCG/scenario questions
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --cwd /tmp/co-JmFpCG/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --agent cursor --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --cwd /tmp/co-JmFpCG/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-2c16e212-5506-4299-82a1-0654e9ec1263 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=18
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ gateway=77296
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ runtime=77355
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 77296 =~ ^[0-9]+$ ]]
++ [[ 77355 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --text 'scripted relay acceptance'
++ wait_until request_count_is 1
++ local deadline=23
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ [[ 1 == \1 ]]
++ wait_until reply_count_is 3
++ local deadline=23
++ reply_count_is 3
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ cat /tmp/co-JmFpCG/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 3 == \3 ]]
++ frames
++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
++ cat /tmp/co-JmFpCG/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|all(.[]; .result.outcome.outcome=="cancelled" or .result.outcome.optionId=="__ask_question_skip__")'
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
++ [[ 1 == 1 ]]
++ frames
++ jq -se '[.[]|select(.method=="initialize")]|all(.[]; (.params|tostring|contains("askQuestion"))|not)'
++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
++ cat /tmp/co-JmFpCG/trace.jsonl
++ ad decide --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --request-token question-direct --decision allow
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --request-token question-direct --decision allow
++ relay_guard
++ local before
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ cat /tmp/co-JmFpCG/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ before=1
++ ad send-keys --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --text 'held prompt must not arrive'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --text 'held prompt must not arrive'
++ jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-JmFpCG/held-error
++ ad pause --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263
++ local verb=pause
++ shift
++ agent-director pause --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263
++ jq -e '.err_name=="ErrSpawnNotPausable" or .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-JmFpCG/pause-error
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ cat /tmp/co-JmFpCG/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ [[ 1 == \1 ]]
++ kill -0 77230
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
+++ /opt/driver/sql.sh /tmp/co-JmFpCG/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-2c16e212-5506-4299-82a1-0654e9ec1263'\'';'
++ token=8eeca3a693ae69326ea0836e6a8ee964
++ [[ on == on ]]
++ relay_decide 8eeca3a693ae69326ea0836e6a8ee964 allow
++ ad decide --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --request-token 8eeca3a693ae69326ea0836e6a8ee964 --decision allow --max-wait-ms 1000
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-JmFpCG/home --store-path /tmp/co-JmFpCG/override.db --instance-id co-2c16e212-5506-4299-82a1-0654e9ec1263 --request-token 8eeca3a693ae69326ea0836e6a8ee964 --decision allow --max-wait-ms 1000
++ wait_until reply_count_is 4
++ local deadline=24
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ cat /tmp/co-JmFpCG/trace.jsonl
++ [[ 3 == \4 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ cat /tmp/co-JmFpCG/trace.jsonl
++ [[ 4 == \4 ]]
+++ frames
+++ [[ -f /tmp/co-JmFpCG/trace.jsonl ]]
+++ cat /tmp/co-JmFpCG/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/cancel")]|length'
++ [[ 0 == 0 ]]
++ relay_receipt t2.jf1.cr.08 '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ kill -0 77230
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]' --arg id co-2c16e212-5506-4299-82a1-0654e9ec1263 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 77296 --argjson runtime 77355 --argjson sentinel 77230 --arg mode '' --arg verdict '' --arg fault '' --arg relay on --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-JmFpCG/gate-release
+++ tmux -S /tmp/co-JmFpCG/tmux/tmux-1000/default kill-server
+++ kill 77230
+++ wait 77230
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for relay in on off
++ CURSOR_DISABLE_QUESTIONS=true
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-puZgwL
+++ export HOME=/tmp/co-puZgwL/home TMUX_TMPDIR=/tmp/co-puZgwL/tmux CURSOR_CONFIG_DIR=/tmp/co-puZgwL/cursor-config CURSOR_DATA_DIR=/tmp/co-puZgwL/cursor-data TMPDIR=/tmp/co-puZgwL/tmp
+++ HOME=/tmp/co-puZgwL/home
+++ TMUX_TMPDIR=/tmp/co-puZgwL/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-puZgwL/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-puZgwL/cursor-data
+++ TMPDIR=/tmp/co-puZgwL/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-puZgwL/home/.config/agent-director /tmp/co-puZgwL/tmux /tmp/co-puZgwL/cwd /tmp/co-puZgwL/cursor-config /tmp/co-puZgwL/cursor-data /tmp/co-puZgwL/tmp
+++ STORE=/tmp/co-puZgwL/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-puZgwL '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-puZgwL/trace.jsonl","pid":"/tmp/co-puZgwL/runtime-pid","release":"/tmp/co-puZgwL/release","worker":false,"workerPID":"/tmp/co-puZgwL/worker-pid","workerRelease":"/tmp/co-puZgwL/worker-release","scenario":"/tmp/co-puZgwL/scenario","raw":"/tmp/co-puZgwL/raw","observer":"/tmp/co-puZgwL/observer","sent":"/tmp/co-puZgwL/sent.jsonl","paused":"/tmp/co-puZgwL/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-puZgwL/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-puZgwL/tmux/tmux-1000/default
+++ control_sentinel=77909
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario questions
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-puZgwL/scenario questions
++ relay_start off
++ spawn_cursor --relay-mode off
++ jq -e --arg id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 '.instance_id==$id and .pre_trust=="skipped"'
++ ad spawn --agent cursor --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --cwd /tmp/co-puZgwL/cwd --no-pre-trust --relay-mode off
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-puZgwL/home --store-path /tmp/co-puZgwL/override.db --agent cursor --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --cwd /tmp/co-puZgwL/cwd --no-pre-trust --relay-mode off
++ wait_state waiting
++ local want=waiting deadline=19
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ gateway=77977
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ runtime=78037
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 77977 =~ ^[0-9]+$ ]]
++ [[ 78037 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-puZgwL/home --store-path /tmp/co-puZgwL/override.db --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --text 'scripted relay acceptance'
++ wait_until request_count_is 1
++ local deadline=25
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 1
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ [[ 1 == \1 ]]
++ wait_until reply_count_is 3
++ local deadline=25
++ reply_count_is 3
+++ frames
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 3 == \3 ]]
++ frames
++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
++ cat /tmp/co-puZgwL/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|all(.[]; .result.outcome.outcome=="cancelled" or .result.outcome.optionId=="__ask_question_skip__")'
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'' AND decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL;'
++ [[ 1 == 1 ]]
++ frames
++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
++ cat /tmp/co-puZgwL/trace.jsonl
++ jq -se '[.[]|select(.method=="initialize")]|all(.[]; (.params|tostring|contains("askQuestion"))|not)'
++ ad decide --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --request-token question-direct --decision allow
++ local verb=decide
++ shift
++ agent-director decide --home /tmp/co-puZgwL/home --store-path /tmp/co-puZgwL/override.db --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --request-token question-direct --decision allow
++ relay_guard
++ local before
+++ frames
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
++ before=1
++ ad send-keys --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --text 'held prompt must not arrive'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-puZgwL/home --store-path /tmp/co-puZgwL/override.db --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --text 'held prompt must not arrive'
++ ad pause --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3
++ local verb=pause
++ shift
++ agent-director pause --home /tmp/co-puZgwL/home --store-path /tmp/co-puZgwL/override.db --instance-id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3
++ jq -e '.err_name=="ErrSpawnNotPausable" or .err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-puZgwL/pause-error
+++ frames
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ [[ 1 == \1 ]]
++ kill -0 77909
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
+++ /opt/driver/sql.sh /tmp/co-puZgwL/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3'\'';'
++ token=ce2e4a39f4bd8c7dca66f7643826b7bd
++ [[ off == on ]]
++ tmux -S /tmp/co-puZgwL/tmux/tmux-1000/default send-keys -t %0 -l -- 1
++ wait_until reply_count_is 4
++ local deadline=25
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 3 == \4 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 4
+++ frames
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 4 == \4 ]]
+++ frames
+++ [[ -f /tmp/co-puZgwL/trace.jsonl ]]
+++ cat /tmp/co-puZgwL/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/cancel")]|length'
++ [[ 0 == 0 ]]
++ relay_receipt t2.jf1.cr.08 '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]'
++ kill -0 77909
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives"]' --arg id co-3ce9b5b0-44bf-45b8-b747-43d9aea432c3 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 77977 --argjson runtime 78037 --argjson sentinel 77909 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-puZgwL/gate-release
+++ tmux -S /tmp/co-puZgwL/tmux/tmux-1000/default kill-server
+++ kill 77909
+++ wait 77909
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for shape in direct-malformed persistent-fallback ambiguous
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-E3ZshM
+++ export HOME=/tmp/co-E3ZshM/home TMUX_TMPDIR=/tmp/co-E3ZshM/tmux CURSOR_CONFIG_DIR=/tmp/co-E3ZshM/cursor-config CURSOR_DATA_DIR=/tmp/co-E3ZshM/cursor-data TMPDIR=/tmp/co-E3ZshM/tmp
+++ HOME=/tmp/co-E3ZshM/home
+++ TMUX_TMPDIR=/tmp/co-E3ZshM/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-E3ZshM/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-E3ZshM/cursor-data
+++ TMPDIR=/tmp/co-E3ZshM/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-E3ZshM/home/.config/agent-director /tmp/co-E3ZshM/tmux /tmp/co-E3ZshM/cwd /tmp/co-E3ZshM/cursor-config /tmp/co-E3ZshM/cursor-data /tmp/co-E3ZshM/tmp
+++ STORE=/tmp/co-E3ZshM/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-E3ZshM '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-E3ZshM/trace.jsonl","pid":"/tmp/co-E3ZshM/runtime-pid","release":"/tmp/co-E3ZshM/release","worker":false,"workerPID":"/tmp/co-E3ZshM/worker-pid","workerRelease":"/tmp/co-E3ZshM/worker-release","scenario":"/tmp/co-E3ZshM/scenario","raw":"/tmp/co-E3ZshM/raw","observer":"/tmp/co-E3ZshM/observer","sent":"/tmp/co-E3ZshM/sent.jsonl","paused":"/tmp/co-E3ZshM/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-E3ZshM/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-E3ZshM/tmux/tmux-1000/default
+++ control_sentinel=78545
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario direct-malformed
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-E3ZshM/scenario direct-malformed
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 --cwd /tmp/co-E3ZshM/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-E3ZshM/home --store-path /tmp/co-E3ZshM/override.db --agent cursor --instance-id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 --cwd /tmp/co-E3ZshM/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=21
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ gateway=78613
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ runtime=78676
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 78613 =~ ^[0-9]+$ ]]
++ [[ 78676 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-E3ZshM/home --store-path /tmp/co-E3ZshM/override.db --instance-id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 --text 'scripted relay acceptance'
++ wait_until reply_count_is 1
++ local deadline=26
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-E3ZshM/trace.jsonl ]]
+++ cat /tmp/co-E3ZshM/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 1
+++ frames
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ [[ -f /tmp/co-E3ZshM/trace.jsonl ]]
+++ cat /tmp/co-E3ZshM/trace.jsonl
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-E3ZshM/trace.jsonl ]]
+++ cat /tmp/co-E3ZshM/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 1 == \1 ]]
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
+++ /opt/driver/sql.sh /tmp/co-E3ZshM/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0'\'';'
++ [[ 0 == 0 ]]
++ frames
++ [[ -f /tmp/co-E3ZshM/trace.jsonl ]]
++ cat /tmp/co-E3ZshM/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|length==1 and .[0].result.outcome.outcome=="cancelled"'
++ relay_receipt t2.jf1.cr.08 '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ kill -0 78545
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]' --arg id co-526ab978-5c63-40a9-9b3c-16edf4e4ffd0 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 78613 --argjson runtime 78676 --argjson sentinel 78545 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-E3ZshM/gate-release
+++ tmux -S /tmp/co-E3ZshM/tmux/tmux-1000/default kill-server
+++ kill 78545
+++ wait 78545
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for shape in direct-malformed persistent-fallback ambiguous
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-ePP1TJ
+++ export HOME=/tmp/co-ePP1TJ/home TMUX_TMPDIR=/tmp/co-ePP1TJ/tmux CURSOR_CONFIG_DIR=/tmp/co-ePP1TJ/cursor-config CURSOR_DATA_DIR=/tmp/co-ePP1TJ/cursor-data TMPDIR=/tmp/co-ePP1TJ/tmp
+++ HOME=/tmp/co-ePP1TJ/home
+++ TMUX_TMPDIR=/tmp/co-ePP1TJ/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-ePP1TJ/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-ePP1TJ/cursor-data
+++ TMPDIR=/tmp/co-ePP1TJ/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-ePP1TJ/home/.config/agent-director /tmp/co-ePP1TJ/tmux /tmp/co-ePP1TJ/cwd /tmp/co-ePP1TJ/cursor-config /tmp/co-ePP1TJ/cursor-data /tmp/co-ePP1TJ/tmp
+++ STORE=/tmp/co-ePP1TJ/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-ePP1TJ '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-ePP1TJ/trace.jsonl","pid":"/tmp/co-ePP1TJ/runtime-pid","release":"/tmp/co-ePP1TJ/release","worker":false,"workerPID":"/tmp/co-ePP1TJ/worker-pid","workerRelease":"/tmp/co-ePP1TJ/worker-release","scenario":"/tmp/co-ePP1TJ/scenario","raw":"/tmp/co-ePP1TJ/raw","observer":"/tmp/co-ePP1TJ/observer","sent":"/tmp/co-ePP1TJ/sent.jsonl","paused":"/tmp/co-ePP1TJ/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-ePP1TJ/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-ePP1TJ/tmux/tmux-1000/default
+++ control_sentinel=78984
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario persistent-fallback
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-ePP1TJ/scenario persistent-fallback
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 --cwd /tmp/co-ePP1TJ/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-ePP1TJ/home --store-path /tmp/co-ePP1TJ/override.db --agent cursor --instance-id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 --cwd /tmp/co-ePP1TJ/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=21
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ gateway=79052
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ runtime=79113
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 79052 =~ ^[0-9]+$ ]]
++ [[ 79113 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-ePP1TJ/home --store-path /tmp/co-ePP1TJ/override.db --instance-id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 --text 'scripted relay acceptance'
++ wait_until reply_count_is 1
++ local deadline=27
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-ePP1TJ/trace.jsonl ]]
+++ cat /tmp/co-ePP1TJ/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 1
+++ frames
+++ jq -sc '[.[]|select(has("method")|not)]|length'
+++ [[ -f /tmp/co-ePP1TJ/trace.jsonl ]]
+++ cat /tmp/co-ePP1TJ/trace.jsonl
++ [[ 1 == \1 ]]
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
+++ /opt/driver/sql.sh /tmp/co-ePP1TJ/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73'\'';'
++ [[ 0 == 0 ]]
++ frames
++ [[ -f /tmp/co-ePP1TJ/trace.jsonl ]]
++ cat /tmp/co-ePP1TJ/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|length==1 and .[0].result.outcome.outcome=="cancelled"'
++ relay_receipt t2.jf1.cr.08 '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ kill -0 78984
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]' --arg id co-210d0c8f-b1a7-4afd-b6fd-2e08b5709f73 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 79052 --argjson runtime 79113 --argjson sentinel 78984 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-ePP1TJ/gate-release
+++ tmux -S /tmp/co-ePP1TJ/tmux/tmux-1000/default kill-server
+++ kill 78984
+++ wait 78984
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ for shape in direct-malformed persistent-fallback ambiguous
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-i8QUJ4
+++ export HOME=/tmp/co-i8QUJ4/home TMUX_TMPDIR=/tmp/co-i8QUJ4/tmux CURSOR_CONFIG_DIR=/tmp/co-i8QUJ4/cursor-config CURSOR_DATA_DIR=/tmp/co-i8QUJ4/cursor-data TMPDIR=/tmp/co-i8QUJ4/tmp
+++ HOME=/tmp/co-i8QUJ4/home
+++ TMUX_TMPDIR=/tmp/co-i8QUJ4/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-i8QUJ4/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-i8QUJ4/cursor-data
+++ TMPDIR=/tmp/co-i8QUJ4/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-i8QUJ4/home/.config/agent-director /tmp/co-i8QUJ4/tmux /tmp/co-i8QUJ4/cwd /tmp/co-i8QUJ4/cursor-config /tmp/co-i8QUJ4/cursor-data /tmp/co-i8QUJ4/tmp
+++ STORE=/tmp/co-i8QUJ4/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-f287c6b1-15d0-4810-a709-21bc5127d590
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-i8QUJ4 '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-i8QUJ4/trace.jsonl","pid":"/tmp/co-i8QUJ4/runtime-pid","release":"/tmp/co-i8QUJ4/release","worker":false,"workerPID":"/tmp/co-i8QUJ4/worker-pid","workerRelease":"/tmp/co-i8QUJ4/worker-release","scenario":"/tmp/co-i8QUJ4/scenario","raw":"/tmp/co-i8QUJ4/raw","observer":"/tmp/co-i8QUJ4/observer","sent":"/tmp/co-i8QUJ4/sent.jsonl","paused":"/tmp/co-i8QUJ4/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-i8QUJ4/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-i8QUJ4/tmux/tmux-1000/default
+++ control_sentinel=79411
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario ambiguous
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-i8QUJ4/scenario ambiguous
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-f287c6b1-15d0-4810-a709-21bc5127d590 --cwd /tmp/co-i8QUJ4/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-i8QUJ4/home --store-path /tmp/co-i8QUJ4/override.db --agent cursor --instance-id co-f287c6b1-15d0-4810-a709-21bc5127d590 --cwd /tmp/co-i8QUJ4/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-f287c6b1-15d0-4810-a709-21bc5127d590 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=22
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ gateway=79479
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ runtime=79539
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 79479 =~ ^[0-9]+$ ]]
++ [[ 79539 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-f287c6b1-15d0-4810-a709-21bc5127d590 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-i8QUJ4/home --store-path /tmp/co-i8QUJ4/override.db --instance-id co-f287c6b1-15d0-4810-a709-21bc5127d590 --text 'scripted relay acceptance'
++ wait_until reply_count_is 1
++ local deadline=27
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-i8QUJ4/trace.jsonl ]]
+++ cat /tmp/co-i8QUJ4/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-i8QUJ4/trace.jsonl ]]
+++ cat /tmp/co-i8QUJ4/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 0 == \1 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ reply_count_is 1
+++ frames
+++ [[ -f /tmp/co-i8QUJ4/trace.jsonl ]]
+++ cat /tmp/co-i8QUJ4/trace.jsonl
+++ jq -sc '[.[]|select(has("method")|not)]|length'
++ [[ 1 == \1 ]]
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
+++ /opt/driver/sql.sh /tmp/co-i8QUJ4/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-f287c6b1-15d0-4810-a709-21bc5127d590'\'';'
++ [[ 0 == 0 ]]
++ frames
++ [[ -f /tmp/co-i8QUJ4/trace.jsonl ]]
++ cat /tmp/co-i8QUJ4/trace.jsonl
++ jq -se '[.[]|select(has("method")|not)]|length==1 and .[0].result.outcome.outcome=="cancelled"'
++ relay_receipt t2.jf1.cr.08 '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]'
++ kill -0 79411
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"]' --arg id co-f287c6b1-15d0-4810-a709-21bc5127d590 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 79479 --argjson runtime 79539 --argjson sentinel 79411 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-i8QUJ4/gate-release
+++ tmux -S /tmp/co-i8QUJ4/tmux/tmux-1000/default kill-server
+++ kill 79411
+++ wait 79411
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-ohfSkd
+++ export HOME=/tmp/co-ohfSkd/home TMUX_TMPDIR=/tmp/co-ohfSkd/tmux CURSOR_CONFIG_DIR=/tmp/co-ohfSkd/cursor-config CURSOR_DATA_DIR=/tmp/co-ohfSkd/cursor-data TMPDIR=/tmp/co-ohfSkd/tmp
+++ HOME=/tmp/co-ohfSkd/home
+++ TMUX_TMPDIR=/tmp/co-ohfSkd/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-ohfSkd/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-ohfSkd/cursor-data
+++ TMPDIR=/tmp/co-ohfSkd/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-ohfSkd/home/.config/agent-director /tmp/co-ohfSkd/tmux /tmp/co-ohfSkd/cwd /tmp/co-ohfSkd/cursor-config /tmp/co-ohfSkd/cursor-data /tmp/co-ohfSkd/tmp
+++ STORE=/tmp/co-ohfSkd/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-a615e186-2e8e-4907-ad66-543819b01a59
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-ohfSkd '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-ohfSkd/trace.jsonl","pid":"/tmp/co-ohfSkd/runtime-pid","release":"/tmp/co-ohfSkd/release","worker":false,"workerPID":"/tmp/co-ohfSkd/worker-pid","workerRelease":"/tmp/co-ohfSkd/worker-release","scenario":"/tmp/co-ohfSkd/scenario","raw":"/tmp/co-ohfSkd/raw","observer":"/tmp/co-ohfSkd/observer","sent":"/tmp/co-ohfSkd/sent.jsonl","paused":"/tmp/co-ohfSkd/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-ohfSkd/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-ohfSkd/tmux/tmux-1000/default
+++ control_sentinel=79847
+++ trap cleanup_cursor_case EXIT
++ relay_scenario unsupported
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-ohfSkd/scenario unsupported
+++ sleep 300
++ relay_start on
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-a615e186-2e8e-4907-ad66-543819b01a59 --cwd /tmp/co-ohfSkd/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-ohfSkd/home --store-path /tmp/co-ohfSkd/override.db --agent cursor --instance-id co-a615e186-2e8e-4907-ad66-543819b01a59 --cwd /tmp/co-ohfSkd/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-a615e186-2e8e-4907-ad66-543819b01a59 '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=23
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ gateway=79915
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ runtime=79976
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 79915 =~ ^[0-9]+$ ]]
++ [[ 79976 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-a615e186-2e8e-4907-ad66-543819b01a59 --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-ohfSkd/home --store-path /tmp/co-ohfSkd/override.db --instance-id co-a615e186-2e8e-4907-ad66-543819b01a59 --text 'scripted relay acceptance'
++ wait_gone 79915
++ local pid=79915 deadline=23
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ ((  SECONDS < deadline  ))
++ sleep 0.05
++ proc_gone 79915
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79915
++ wait_gone 79976
++ local pid=79976 deadline=26
++ proc_gone 79976
++ node -e 'const fs=require("fs");try{const s=fs.readFileSync("/proc/"+process.argv[1]+"/stat","utf8");process.exit(s.slice(s.lastIndexOf(")")+2).startsWith("Z ")?0:1)}catch(e){if(e.code==="ENOENT")process.exit(0);throw e}' 79976
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
+++ /opt/driver/sql.sh /tmp/co-ohfSkd/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-a615e186-2e8e-4907-ad66-543819b01a59'\'';'
++ [[ 0 == 0 ]]
++ frames
++ [[ -f /tmp/co-ohfSkd/trace.jsonl ]]
++ cat /tmp/co-ohfSkd/trace.jsonl
++ jq -se '[.[]|select(.id=="unknown")]|length==1 and .[0].error.code==-32601'
++ relay_receipt t2.jf1.cr.08 '["AC1.unsupported-fail-closed","AC8.no-question-authority"]'
++ local case_id=t2.jf1.cr.08 'checks=["AC1.unsupported-fail-closed","AC8.no-question-authority"]'
++ kill -0 79847
++ jq -cn --arg case t2.jf1.cr.08 --argjson checks '["AC1.unsupported-fail-closed","AC8.no-question-authority"]' --arg id co-a615e186-2e8e-4907-ad66-543819b01a59 --arg session 8808822c-5a2b-4be6-8406-405cd727229e --argjson gateway 79915 --argjson runtime 79976 --argjson sentinel 79847 --arg mode '' --arg verdict '' --arg fault '' --arg relay off --arg disabled true --arg cut '' --arg seam '' '{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'
+++ cleanup_cursor_case
+++ local rc=0 'command=jq -cn --arg case "$case_id" --argjson checks "$checks" --arg id "$id" --arg session "$session" --argjson gateway "$gateway" --argjson runtime "$runtime" --argjson sentinel "$control_sentinel" --arg mode "${mode:-}" --arg verdict "${verdict:-}" --arg fault "${fault:-}" --arg relay "${relay:-}" --arg disabled "${disabled:-}" --arg cut "${cut:-}" --arg seam "${seam:-}" '\''{case:$case,status:"pass",checks:$checks,evidence:"scripted-ACP-through-shipped-processes",authenticated_cursor:false,facts:{instance_id:$id,session_id:$session,gateway_pid:$gateway,runtime_pid:$runtime,control_sentinel_pid:$sentinel,parameters:{mode:$mode,verdict:$verdict,fault:$fault,relay:$relay,disable_ask_user:$disabled,cut:$cut,seam:$seam}}}'\'''
+++ ((  rc != 0  ))
+++ touch /tmp/co-ohfSkd/gate-release
+++ tmux -S /tmp/co-ohfSkd/tmux/tmux-1000/default kill-server
+++ true
+++ kill 79847
+++ wait 79847
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
++ jq -s '{case:"t2.jf1.cr.08",status:"pass",checks:["AC8.source-derived-questions","AC8.both-settings-relay-modes","AC8.pre-admission-denial","AC8.no-capability","AC8.genuine-hold-survives","AC1.unsupported-fail-closed","AC8.synthetic-malformed-ambiguous","AC8.persistent-choice-refused"],authenticated_cursor:false,facts:{runs:map(.facts)}}' /tmp/cr-questions-receipts-QuTgEj

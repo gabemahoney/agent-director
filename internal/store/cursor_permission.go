@@ -179,7 +179,9 @@ func (s *Store) ClaimCursorPaneAnswer(b CursorRuntime, token, decision string, u
 // CheckCursorAnswer is the writer's final authority check, including the exact
 // request's durable acknowledgement or native claim. It does not prove receipt.
 func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, until time.Time, check CursorCheck) error {
-	return s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
+	// Wait only within the caller's existing response deadline. Revalidate
+	// authority and expiry after acquisition and independent evidence.
+	return s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
 			return e
 		}
