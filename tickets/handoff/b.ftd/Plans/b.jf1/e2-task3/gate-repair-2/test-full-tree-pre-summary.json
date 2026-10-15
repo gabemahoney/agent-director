@@ -1,0 +1,12 @@
+{
+  "file": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-2/test-full-tree-pre.json",
+  "path_count": 2523,
+  "sha256": "05544616f861d436fd81b8808840189806ded930e0815b95f1f01ebd8109ad77",
+  "HEAD": "4502008be0aee7a42ac9c4e82fd2e00e1b8309a6",
+  "changed_paths": [
+    " M internal/cursorhost/session.go",
+    " M test/driver-scripts/run_testplan_test.go",
+    " M test/driver/run-testplan.sh",
+    " M test/realtmux/cursor_relay_boundary_linux_test.go"
+  ]
+}

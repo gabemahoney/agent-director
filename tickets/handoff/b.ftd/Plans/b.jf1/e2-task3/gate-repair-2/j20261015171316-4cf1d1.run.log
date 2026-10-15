@@ -1,0 +1,324 @@
+driver: loaded 10 t2 case(s) from /work/tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md
+{"case":"t2.jf1.cr.01","status":"pass","details":"{\"case\":\"t2.jf1.cr.01\",\"status\":\"pass\",\"checks\":[\"AC1.raw-fields\",\"AC1.actual-once\",\"AC1.first-writer\",\"AC1.null-origin\",\"AC1.get-list-correlation\",\"AC1.explicit-store-decoy-unchanged\"],\"evidence\":\"sc"}
+driver: original failure for t2.jf1.cr.02 (exit=1)
+CASE_FAILURE exit=1 line=76 command=\(\(\ SECONDS\ \<\ deadline\ \)\) context=mode=cancel_busy relay= disabled= seam= shape= case_dir=/tmp/co-wMFREO
+CASE_EXIT exit=1 command=\(\(\ SECONDS\ \<\ deadline\ \)\) context=mode=cancel_busy relay= disabled= seam= shape= case_dir=/tmp/co-wMFREO
+[{"state":"check_permission","session_id":"8808822c-5a2b-4be6-8406-405cd727229e","pane_pid":3031}]
+[{"request_token":"c5c7e4e51c72350a89916bd3bc13ea48","tool_use_id":"call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0","decision":null,"settled_at":1792084440703,"delivered_at":null,"proven_gone_at":null},
+{"request_token":"aae2e37020098b2a5d74ebddfa6d63a5","tool_use_id":"call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769","decision":"deny","settled_at":1792084440711,"delivered_at":1792084416903,"proven_gone_at":null}]
+CASE_ARTIFACT scenario
+{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","requests":[{"jsonrpc":"2.0","id":"permission","method":"session/request_permission","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e","toolCall":{"toolCallId":"call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0","title":"`printf FTD_SHELL_ALLOWED`","kind":"execute","status":"pending","content":[{"type":"content","content":{"type":"text","text":"Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"}}]},"options":[{"optionId":"allow-once","name":"Allow once","kind":"allow_once"},{"optionId":"allow-always","name":"Allow always","kind":"allow_always"},{"optionId":"reject-once","name":"Reject","kind":"reject_once"}]}},{"jsonrpc":"2.0","id":"plan","method":"cursor/create_plan","params":{"toolCallId":"call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769","name":"Example Calculator","overview":"Create a minimal calculator project with a small arithmetic API and focused automated tests.","plan":"# Example Calculator Plan\n\n1. **Create the calculator implementation**\n   - Add the project’s minimal source structure and expose `add`, `subtract`, `multiply`, and `divide` operations.\n   - Define clear behavior for invalid inputs and division by zero.\n\n2. **Add and run automated tests**\n   - Cover each operation, negative and decimal values, and error cases.\n   - Add only the configuration needed to run the test suite and verify it passes.","todos":[{"id":"implement-calculator","content":"Create the calculator project structure and arithmetic implementation","status":"pending"},{"id":"test-calculator","content":"Add automated coverage and verify the test suite","status":"pending"}],"isProject":false,"phases":[]}}]}CASE_ARTIFACT trace.jsonl
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"agent-director","version":"0.13.0-ftde2t3c"},"protocolVersion":1}}
+{"id":2,"jsonrpc":"2.0","method":"session/new","params":{"cwd":"/tmp/co-wMFREO/cwd","mcpServers":[]}}
+{"id":3,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"scripted relay acceptance","type":"text"}],"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e"}}
+{"id":"plan","jsonrpc":"2.0","result":{"outcome":{"outcome":"rejected"}}}
+{"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e"}}
+CASE_ARTIFACT pause-error
+{"err_name":"ErrSpawnNotPausable","err_description":"spawn co-05e4c8ea-d58f-4fae-b0a7-ac00ca86e15f state=check_permission"}
+CASE_FAILURE exit=1 line=35 command=$'( source /work/source/test/driver/cursor-owned-launch.sh; relay_scenario plan; if [[ $mode == early_end ]]; then\n    jq \'.completeBeforeAnswers=true\' "$case_dir/scenario" > "$case_dir/next"; mv "$case_dir/next" "$case_dir/scenario";\nfi; relay_start; wait_until request_count_is 2; plan_tool=$(jq -r \'.requests[]|select(.id=="plan")|.params.toolCallId\' "$case_dir/scenario"); permission_tool=$(jq -r \'.requests[]|select(.id=="permission")|.params.toolCall.toolCallId\' "$case_dir/scenario"); plan_token=$(request_token "$plan_tool"); permission_token=$(request_token "$permission_tool"); wait_state check_permission; if [[ $mode == early_end ]]; then\n    transcript=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id=\'$id\';"); function turn_ended () \n    { \n        jq -se \'any(.[]; .kind=="turn_outcome" and .data.stop_reason=="end_turn")\' "$transcript" > /dev/null\n    }; wait_until turn_ended;\nfi; [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id=\'$id\' AND proven_gone_at IS NULL;") == 2 ]]; relay_guard; relay_decide "$plan_token" deny > /dev/null; wait_until reply_count_is 1; frames | jq -se \'[.[]|select(.id=="plan")]|length==1 and .[0].result.outcome.outcome=="rejected"\' > /dev/null; [[ $(sql "SELECT decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL FROM permission_requests WHERE request_token=\'$permission_token\';") == 1 ]]; if [[ $mode == cancel_busy ]]; then\n    tmux -S "$socket" send-keys -t "$pane" C-c;\nelse\n    tmux -S "$socket" send-keys -t "$pane" -l -- /exit; tmux -S "$socket" send-keys -t "$pane" Enter;\nfi; wait_gone "$gateway"; wait_gone "$runtime"; cancels=$(frames | jq -sc \'[.[]|select(.method=="session/cancel")]|length\'); if [[ $mode == cancel_busy ]]; then\n    [[ $cancels == 1 ]];\nelse\n    [[ $cancels == 0 ]];\nfi; [[ $(frames | jq -sc \'[.[]|select(.id=="permission" and (has("method")|not))]|length\') == 0 ]]; kill -0 "$control_sentinel"; relay_receipt t2.jf1.cr.02 \'["AC2.blocking-plan","AC2.end-turn-held","AC2.independent-permission","AC2.reject","AC2.cancel-no-late-answer"]\' >> "$receipts" )' context=mode=cancel_busy relay= disabled= seam= shape= case_dir=
+driver: diagnostic rerun for t2.jf1.cr.02 (exit=4)
++ set -E
++ trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&2' ERR
++ set -euo pipefail
+++ mktemp /tmp/cr-plan-receipts-XXXXXX
++ receipts=/tmp/cr-plan-receipts-Z2xKV5
++ for mode in early_end cancel_busy
++ source /work/source/test/driver/cursor-owned-launch.sh
+++ set -euo pipefail
+++ [[ 1 == 1 ]]
++++ uname -s
+++ [[ Linux == Linux ]]
+++ for dependency in node bun tmux jq
+++ command -v node
+++ for dependency in node bun tmux jq
+++ command -v bun
+++ for dependency in node bun tmux jq
+++ command -v tmux
+++ for dependency in node bun tmux jq
+++ command -v jq
+++ SOURCE_DIR=/work/source
+++ [[ -r /work/source/internal/testsupport/cursorfix/runtime.js ]]
++++ mktemp -d /tmp/co-XXXXXX
+++ case_dir=/tmp/co-2xXjzb
+++ export HOME=/tmp/co-2xXjzb/home TMUX_TMPDIR=/tmp/co-2xXjzb/tmux CURSOR_CONFIG_DIR=/tmp/co-2xXjzb/cursor-config CURSOR_DATA_DIR=/tmp/co-2xXjzb/cursor-data TMPDIR=/tmp/co-2xXjzb/tmp
+++ HOME=/tmp/co-2xXjzb/home
+++ TMUX_TMPDIR=/tmp/co-2xXjzb/tmux
+++ CURSOR_CONFIG_DIR=/tmp/co-2xXjzb/cursor-config
+++ CURSOR_DATA_DIR=/tmp/co-2xXjzb/cursor-data
+++ TMPDIR=/tmp/co-2xXjzb/tmp
+++ unset TMUX TMUX_PANE AGENT_DIRECTOR_INSTANCE_ID AGENT_DIRECTOR_AGENT AGENT_DIRECTOR_CURSOR_STORE_PATH
+++ mkdir -m 700 -p /tmp/co-2xXjzb/home/.config/agent-director /tmp/co-2xXjzb/tmux /tmp/co-2xXjzb/cwd /tmp/co-2xXjzb/cursor-config /tmp/co-2xXjzb/cursor-data /tmp/co-2xXjzb/tmp
+++ STORE=/tmp/co-2xXjzb/override.db
++++ node -e 'console.log(require("crypto").randomUUID())'
+++ id=co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac
+++ export AD_CURSOR_FIX_SETTINGS
++++ jq -cn --arg dir /tmp/co-2xXjzb '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:false,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),observer:($dir+"/observer"),sent:($dir+"/sent.jsonl"),paused:($dir+"/paused")}'
+++ AD_CURSOR_FIX_SETTINGS='{"trace":"/tmp/co-2xXjzb/trace.jsonl","pid":"/tmp/co-2xXjzb/runtime-pid","release":"/tmp/co-2xXjzb/release","worker":false,"workerPID":"/tmp/co-2xXjzb/worker-pid","workerRelease":"/tmp/co-2xXjzb/worker-release","scenario":"/tmp/co-2xXjzb/scenario","raw":"/tmp/co-2xXjzb/raw","observer":"/tmp/co-2xXjzb/observer","sent":"/tmp/co-2xXjzb/sent.jsonl","paused":"/tmp/co-2xXjzb/paused"}'
+++ export AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ AD_CURSOR_FIX_SOURCE=/work/source/internal/testsupport/cursorfix/runtime.js
+++ cat
+++ chmod 700 /tmp/co-2xXjzb/index.js
+++ cat
++++ id -u
+++ socket=/tmp/co-2xXjzb/tmux/tmux-1000/default
+++ control_sentinel=5326
+++ sleep 300
+++ trap cleanup_cursor_case EXIT
++ relay_scenario plan
++ node - /work/source/internal/testsupport/cursorfix/testdata/authorizations.json /tmp/co-2xXjzb/scenario plan
++ [[ early_end == early_end ]]
++ jq .completeBeforeAnswers=true /tmp/co-2xXjzb/scenario
++ mv /tmp/co-2xXjzb/next /tmp/co-2xXjzb/scenario
++ relay_start
++ spawn_cursor --relay-mode on
++ ad spawn --agent cursor --instance-id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac --cwd /tmp/co-2xXjzb/cwd --no-pre-trust --relay-mode on
++ local verb=spawn
++ shift
++ agent-director spawn --home /tmp/co-2xXjzb/home --store-path /tmp/co-2xXjzb/override.db --agent cursor --instance-id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac --cwd /tmp/co-2xXjzb/cwd --no-pre-trust --relay-mode on
++ jq -e --arg id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac '.instance_id==$id and .pre_trust=="skipped"'
++ wait_state waiting
++ local want=waiting deadline=15
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ pending != \w\a\i\t\i\n\g ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.05
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ waiting != \w\a\i\t\i\n\g ]]
++ load_identity
+++ sql 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT pane_pid FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ gateway=5396
+++ sql 'SELECT pane_id FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT pane_id FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ pane=%0
+++ sql 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ runtime=5455
+++ sql 'SELECT session_id FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT session_id FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ session=8808822c-5a2b-4be6-8406-405cd727229e
++ [[ 5396 =~ ^[0-9]+$ ]]
++ [[ 5455 =~ ^[0-9]+$ ]]
++ [[ %0 =~ ^%[0-9]+$ ]]
++ [[ -n 8808822c-5a2b-4be6-8406-405cd727229e ]]
+++ sql 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT count(*) FROM spawns s JOIN cursor_runtimes c ON c.bound_instance_id=s.instance_id WHERE s.instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND s.agent='\''cursor'\'' AND c.bound_launch_token=s.launch_token AND c.bound_life_number=s.life_number AND c.bound_gateway_pid=s.pane_pid AND c.bound_gateway_start=s.pane_starttime AND c.bound_session_id=s.session_id;'
++ [[ 1 == 1 ]]
++ ad send-keys --instance-id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac --text 'scripted relay acceptance'
++ local verb=send-keys
++ shift
++ agent-director send-keys --home /tmp/co-2xXjzb/home --store-path /tmp/co-2xXjzb/override.db --instance-id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac --text 'scripted relay acceptance'
++ wait_until request_count_is 2
++ local deadline=20
++ request_count_is 2
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ 0 == \2 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 2
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ 1 == \2 ]]
++ ((  SECONDS < deadline  ))
++ sleep 0.02
++ request_count_is 2
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ 2 == \2 ]]
+++ jq -r '.requests[]|select(.id=="plan")|.params.toolCallId' /tmp/co-2xXjzb/scenario
++ plan_tool='call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'
+++ jq -r '.requests[]|select(.id=="permission")|.params.toolCall.toolCallId' /tmp/co-2xXjzb/scenario
++ permission_tool='call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'
+++ request_token 'call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND tool_use_id='\''call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND tool_use_id='\''call_jwNyrbhWqYR7VeQcrPK8AX7z
+fc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769'\'';'
++ plan_token=19034e8adc62ffb77b3ae9658062e501
+++ request_token 'call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'
+++ sql 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND tool_use_id='\''call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT request_token FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND tool_use_id='\''call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0
+fc_01ec76f0-3063-99c4-b386-3eef810a1340_0'\'';'
++ permission_token=5053fd69884c59be6d19706e3c8efd7f
++ wait_state check_permission
++ local want=check_permission deadline=15
+++ row_state
+++ sql 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT state FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ [[ check_permission != \c\h\e\c\k\_\p\e\r\m\i\s\s\i\o\n ]]
++ [[ early_end == early_end ]]
+++ sql 'SELECT jsonl_path FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT jsonl_path FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
++ transcript=/tmp/co-2xXjzb/home/.config/agent-director/cursor-transcripts/fb5f05c5624248607ad3b1cc60a5574d.jsonl
++ wait_until turn_ended
++ local deadline=20
++ turn_ended
++ jq -se 'any(.[]; .kind=="turn_outcome" and .data.stop_reason=="end_turn")' /tmp/co-2xXjzb/home/.config/agent-director/cursor-transcripts/fb5f05c5624248607ad3b1cc60a5574d.jsonl
+++ sql 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND proven_gone_at IS NULL;'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db 'SELECT count(*) FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'' AND proven_gone_at IS NULL;'
++ [[ 2 == 2 ]]
++ relay_guard
++ local before
+++ frames
+++ [[ -f /tmp/co-2xXjzb/trace.jsonl ]]
+++ cat /tmp/co-2xXjzb/trace.jsonl
+++ jq -sc '[.[]|select(.method=="session/prompt")]|length'
++ before=1
++ ad send-keys --instance-id co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac --text 'held prompt must not arrive'
++ jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' /tmp/co-2xXjzb/held-error
+parse error: Invalid numeric literal at line 1, column 2
+++ rc=4
+++ printf 'CASE_FAILURE exit=%s line=%s command=%q context=%s\n' 4 111 'jq -e '\''.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"'\'' "$case_dir/held-error" > /dev/null' 'mode=early_end relay= disabled= seam= shape= case_dir=/tmp/co-2xXjzb'
+CASE_FAILURE exit=4 line=111 command=jq\ -e\ \'.err_name==\"ErrSendKeysWhileRelayed\"\ or\ .err_name==\"ErrRelayFallenBack\"\ or\ .err_name==\"ErrDialogMaybeOpen\"\'\ \"\$case_dir/held-error\"\ \>\ /dev/null context=mode=early_end relay= disabled= seam= shape= case_dir=/tmp/co-2xXjzb
+++ cleanup_cursor_case
+++ local rc=4 'command=jq -e '\''.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"'\'' "$case_dir/held-error" > /dev/null'
+++ ((  rc != 0  ))
+++ printf 'CASE_EXIT exit=%s command=%q context=%s\n' 4 'jq -e '\''.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"'\'' "$case_dir/held-error" > /dev/null' 'mode=early_end relay= disabled= seam= shape= case_dir=/tmp/co-2xXjzb'
+CASE_EXIT exit=4 command=jq\ -e\ \'.err_name==\"ErrSendKeysWhileRelayed\"\ or\ .err_name==\"ErrRelayFallenBack\"\ or\ .err_name==\"ErrDialogMaybeOpen\"\'\ \"\$case_dir/held-error\"\ \>\ /dev/null context=mode=early_end relay= disabled= seam= shape= case_dir=/tmp/co-2xXjzb
+++ declare -F sql
+++ sql -readonly -json 'SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\''; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+++ /opt/driver/sql.sh /tmp/co-2xXjzb/override.db -readonly -json 'SELECT state,session_id,pane_pid FROM spawns WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\''; SELECT request_token,tool_use_id,decision,settled_at,delivered_at,proven_gone_at FROM permission_requests WHERE instance_id='\''co-613d7dc1-3f7f-45a4-a788-8de8a88bc9ac'\'';'
+[{"state":"check_permission","session_id":"8808822c-5a2b-4be6-8406-405cd727229e","pane_pid":5396}]
+[{"request_token":"5053fd69884c59be6d19706e3c8efd7f","tool_use_id":"call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0","decision":null,"settled_at":1792084455328,"delivered_at":null,"proven_gone_at":null},
+{"request_token":"19034e8adc62ffb77b3ae9658062e501","tool_use_id":"call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769","decision":null,"settled_at":1792084455336,"delivered_at":null,"proven_gone_at":null}]
+++ for artifact in scenario trace.jsonl permission.json error pause-error
+++ [[ -f /tmp/co-2xXjzb/scenario ]]
+++ printf 'CASE_ARTIFACT %s\n' scenario
+CASE_ARTIFACT scenario
+++ cat /tmp/co-2xXjzb/scenario
+{
+  "sessionId": "8808822c-5a2b-4be6-8406-405cd727229e",
+  "requests": [
+    {
+      "jsonrpc": "2.0",
+      "id": "permission",
+      "method": "session/request_permission",
+      "params": {
+        "sessionId": "8808822c-5a2b-4be6-8406-405cd727229e",
+        "toolCall": {
+          "toolCallId": "call-46890b5c-cb61-48f5-9fd2-0265bdd7fd97-0\nfc_01ec76f0-3063-99c4-b386-3eef810a1340_0",
+          "title": "`printf FTD_SHELL_ALLOWED`",
+          "kind": "execute",
+          "status": "pending",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Not in allowlist: printf • Not in team allowlist: printf FTD_SHELL_ALLOWED"
+              }
+            }
+          ]
+        },
+        "options": [
+          {
+            "optionId": "allow-once",
+            "name": "Allow once",
+            "kind": "allow_once"
+          },
+          {
+            "optionId": "allow-always",
+            "name": "Allow always",
+            "kind": "allow_always"
+          },
+          {
+            "optionId": "reject-once",
+            "name": "Reject",
+            "kind": "reject_once"
+          }
+        ]
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "plan",
+      "method": "cursor/create_plan",
+      "params": {
+        "toolCallId": "call_jwNyrbhWqYR7VeQcrPK8AX7z\nfc_04b458b1f13d692b016aceb40abb7487d18aa25affee190769",
+        "name": "Example Calculator",
+        "overview": "Create a minimal calculator project with a small arithmetic API and focused automated tests.",
+        "plan": "# Example Calculator Plan\n\n1. **Create the calculator implementation**\n   - Add the project’s minimal source structure and expose `add`, `subtract`, `multiply`, and `divide` operations.\n   - Define clear behavior for invalid inputs and division by zero.\n\n2. **Add and run automated tests**\n   - Cover each operation, negative and decimal values, and error cases.\n   - Add only the configuration needed to run the test suite and verify it passes.",
+        "todos": [
+          {
+            "id": "implement-calculator",
+            "content": "Create the calculator project structure and arithmetic implementation",
+            "status": "pending"
+          },
+          {
+            "id": "test-calculator",
+            "content": "Add automated coverage and verify the test suite",
+            "status": "pending"
+          }
+        ],
+        "isProject": false,
+        "phases": []
+      }
+    }
+  ],
+  "completeBeforeAnswers": true
+}
+++ for artifact in scenario trace.jsonl permission.json error pause-error
+++ [[ -f /tmp/co-2xXjzb/trace.jsonl ]]
+++ printf 'CASE_ARTIFACT %s\n' trace.jsonl
+CASE_ARTIFACT trace.jsonl
+++ cat /tmp/co-2xXjzb/trace.jsonl
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"agent-director","version":"0.13.0-ftde2t3c"},"protocolVersion":1}}
+{"id":2,"jsonrpc":"2.0","method":"session/new","params":{"cwd":"/tmp/co-2xXjzb/cwd","mcpServers":[]}}
+{"id":3,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"scripted relay acceptance","type":"text"}],"sessionId":"8808822c-5a2b-4be6-8406-405cd727229e"}}
+++ for artifact in scenario trace.jsonl permission.json error pause-error
+++ [[ -f /tmp/co-2xXjzb/permission.json ]]
+++ for artifact in scenario trace.jsonl permission.json error pause-error
+++ [[ -f /tmp/co-2xXjzb/error ]]
+++ for artifact in scenario trace.jsonl permission.json error pause-error
+++ [[ -f /tmp/co-2xXjzb/pause-error ]]
+++ touch /tmp/co-2xXjzb/gate-release
+++ tmux -S /tmp/co-2xXjzb/tmux/tmux-1000/default kill-server
+++ kill 5326
+++ wait 5326
+++ true
+++ [[ -n '' ]]
+++ [[ -n '' ]]
+++ rc=4
+++ printf 'CASE_FAILURE exit=%s line=%s command=%q context=%s\n' 4 35 '( source /work/source/test/driver/cursor-owned-launch.sh; relay_scenario plan; if [[ $mode == early_end ]]; then
+    jq '\''.completeBeforeAnswers=true'\'' "$case_dir/scenario" > "$case_dir/next"; mv "$case_dir/next" "$case_dir/scenario";
+fi; relay_start; wait_until request_count_is 2; plan_tool=$(jq -r '\''.requests[]|select(.id=="plan")|.params.toolCallId'\'' "$case_dir/scenario"); permission_tool=$(jq -r '\''.requests[]|select(.id=="permission")|.params.toolCall.toolCallId'\'' "$case_dir/scenario"); plan_token=$(request_token "$plan_tool"); permission_token=$(request_token "$permission_tool"); wait_state check_permission; if [[ $mode == early_end ]]; then
+    transcript=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='\''$id'\'';"); function turn_ended () 
+    { 
+        jq -se '\''any(.[]; .kind=="turn_outcome" and .data.stop_reason=="end_turn")'\'' "$transcript" > /dev/null
+    }; wait_until turn_ended;
+fi; [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id='\''$id'\'' AND proven_gone_at IS NULL;") == 2 ]]; relay_guard; relay_decide "$plan_token" deny > /dev/null; wait_until reply_count_is 1; frames | jq -se '\''[.[]|select(.id=="plan")]|length==1 and .[0].result.outcome.outcome=="rejected"'\'' > /dev/null; [[ $(sql "SELECT decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL FROM permission_requests WHERE request_token='\''$permission_token'\'';") == 1 ]]; if [[ $mode == cancel_busy ]]; then
+    tmux -S "$socket" send-keys -t "$pane" C-c;
+else
+    tmux -S "$socket" send-keys -t "$pane" -l -- /exit; tmux -S "$socket" send-keys -t "$pane" Enter;
+fi; wait_gone "$gateway"; wait_gone "$runtime"; cancels=$(frames | jq -sc '\''[.[]|select(.method=="session/cancel")]|length'\''); if [[ $mode == cancel_busy ]]; then
+    [[ $cancels == 1 ]];
+else
+    [[ $cancels == 0 ]];
+fi; [[ $(frames | jq -sc '\''[.[]|select(.id=="permission" and (has("method")|not))]|length'\'') == 0 ]]; kill -0 "$control_sentinel"; relay_receipt t2.jf1.cr.02 '\''["AC2.blocking-plan","AC2.end-turn-held","AC2.independent-permission","AC2.reject","AC2.cancel-no-late-answer"]'\'' >> "$receipts" )' 'mode=early_end relay= disabled= seam= shape= case_dir='
+CASE_FAILURE exit=4 line=35 command=$'( source /work/source/test/driver/cursor-owned-launch.sh; relay_scenario plan; if [[ $mode == early_end ]]; then\n    jq \'.completeBeforeAnswers=true\' "$case_dir/scenario" > "$case_dir/next"; mv "$case_dir/next" "$case_dir/scenario";\nfi; relay_start; wait_until request_count_is 2; plan_tool=$(jq -r \'.requests[]|select(.id=="plan")|.params.toolCallId\' "$case_dir/scenario"); permission_tool=$(jq -r \'.requests[]|select(.id=="permission")|.params.toolCall.toolCallId\' "$case_dir/scenario"); plan_token=$(request_token "$plan_tool"); permission_token=$(request_token "$permission_tool"); wait_state check_permission; if [[ $mode == early_end ]]; then\n    transcript=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id=\'$id\';"); function turn_ended () \n    { \n        jq -se \'any(.[]; .kind=="turn_outcome" and .data.stop_reason=="end_turn")\' "$transcript" > /dev/null\n    }; wait_until turn_ended;\nfi; [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id=\'$id\' AND proven_gone_at IS NULL;") == 2 ]]; relay_guard; relay_decide "$plan_token" deny > /dev/null; wait_until reply_count_is 1; frames | jq -se \'[.[]|select(.id=="plan")]|length==1 and .[0].result.outcome.outcome=="rejected"\' > /dev/null; [[ $(sql "SELECT decision IS NULL AND delivered_at IS NULL AND proven_gone_at IS NULL FROM permission_requests WHERE request_token=\'$permission_token\';") == 1 ]]; if [[ $mode == cancel_busy ]]; then\n    tmux -S "$socket" send-keys -t "$pane" C-c;\nelse\n    tmux -S "$socket" send-keys -t "$pane" -l -- /exit; tmux -S "$socket" send-keys -t "$pane" Enter;\nfi; wait_gone "$gateway"; wait_gone "$runtime"; cancels=$(frames | jq -sc \'[.[]|select(.method=="session/cancel")]|length\'); if [[ $mode == cancel_busy ]]; then\n    [[ $cancels == 1 ]];\nelse\n    [[ $cancels == 0 ]];\nfi; [[ $(frames | jq -sc \'[.[]|select(.id=="permission" and (has("method")|not))]|length\') == 0 ]]; kill -0 "$control_sentinel"; relay_receipt t2.jf1.cr.02 \'["AC2.blocking-plan","AC2.end-turn-held","AC2.independent-permission","AC2.reject","AC2.cancel-no-late-answer"]\' >> "$receipts" )' context=mode=early_end relay= disabled= seam= shape= case_dir=
+{"case":"t2.jf1.cr.02","status":"fail","details":"exit=1 | CASE_FAILURE exit=1 line=76 command=\\(\\(\\ SECONDS\\ \\<\\ deadline\\ \\)\\) context=mode=cancel_busy relay= disabled= seam= shape= case_dir=/tmp/co-wMFREO: CASE_FAILURE exit=1 line=76 command=\\(\\(\\ SECONDS\\ \\<\\ deadline\\ \\)\\) context=mode=cancel_busy relay= disabled= seam= shape= case_dir=/tmp/co-wMFREO\nCASE_EXIT exit=1 command=\\(\\(\\ SECONDS\\ \\<\\ deadline\\ \\)\\) context=mode=cancel_busy relay= disabled= seam= shape= case_dir=/tmp/co-wMFREO\n[{\"state\":\"ch | xtrace_tail: fi; wait_gone \"$gateway\"; wait_gone \"$runtime\"; cancels=$(frames | jq -sc '\\''[.[]|select(.method==\"session/cancel\")]|length'\\''); if [[ $mode == cancel_busy ]]; then|    [[ $cancels == 1 ]];|else|    [[ $cancels == 0 ]];|fi; [[ $(frames | jq -sc '\\''[.[]|select(.id==\"permission\" and (has(\"method\")|not))]|length'\\'') == 0 ]"}
+{"case":"t2.jf1.cr.03","status":"pass","details":"{\n  \"case\": \"t2.jf1.cr.03\",\n  \"status\": \"pass\",\n  \"checks\": [\n    \"AC3.committed-before-raw-byte\",\n    \"AC3.failed-ack-zero-bytes\",\n    \"AC3.missing-ack-zero-bytes\",\n    \"AC3.timeout-deny-zero-without"}
+{"case":"t2.jf1.cr.04","status":"pass","details":"{\"case\":\"t2.jf1.cr.04\",\"status\":\"pass\",\"checks\":[\"AC4.finite-confirm-by\",\"AC4.caller-recreation\",\"AC4.null-hook\",\"AC4.truthful-fallback\",\"AC4.disconnect-refusal\"],\"evidence\":\"scripted-ACP-through-ship"}
+{"case":"t2.jf1.cr.05","status":"pass","details":"{\"case\":\"t2.jf1.cr.05\",\"status\":\"pass\",\"checks\":[\"AC5.real-backpressure\",\"AC5.queued-allow-retired\",\"AC5.queued-deny-retired\",\"AC5.exact-control-zero-extra-bytes\",\"AC5.no-replay\"],\"evidence\":\"scripted"}
+{"case":"t2.jf1.cr.06","status":"pass","details":"{\n  \"case\": \"t2.jf1.cr.06\",\n  \"status\": \"pass\",\n  \"checks\": [\n    \"AC6.connected-native-on-off\",\n    \"AC6.stale-hash-refusal\",\n    \"AC6.sent-claim-not-relay-ack\",\n    \"AC6.no-execution-proof\",\n    \"AC"}
+{"case":"t2.jf1.cr.07","status":"pass","details":"{\"case\":\"t2.jf1.cr.07\",\"status\":\"pass\",\"checks\":[\"AC7.durable-unknown-origin\",\"AC7.reopen-preserves-hold\",\"AC7.null-child-not-main\",\"AC7.untracked-subagents\",\"AC7.correlated-execution-only\",\"AC7.main-"}
+{"case":"t2.jf1.cr.08","status":"pass","details":"{\n  \"case\": \"t2.jf1.cr.08\",\n  \"status\": \"pass\",\n  \"checks\": [\n    \"AC8.source-derived-questions\",\n    \"AC8.both-settings-relay-modes\",\n    \"AC8.pre-admission-denial\",\n    \"AC8.no-capability\",\n    \"AC8"}
+{"case":"t2.jf1.cr.09","status":"pass","details":"{\n  \"case\": \"t2.jf1.cr.09\",\n  \"status\": \"pass\",\n  \"checks\": [\n    \"AC3.ack-only-crash\",\n    \"AC3.raw-not-parser-receipt\",\n    \"AC4.delivered-not-execution\",\n    \"AC4.no-replay-after-crash\"\n  ],\n  \"aut"}
+{"case":"t2.jf1.cr.10","status":"pass","details":"{\n  \"case\": \"t2.jf1.cr.10\",\n  \"status\": \"pass\",\n  \"checks\": [\n    \"AC5.lock-crosses-fixed-approval-deadline\",\n    \"AC5.final-guard-expiry-zero-bytes\",\n    \"AC4.no-deadline-rearm\"\n  ],\n  \"authenticated"}
+{"summary":{"total":10,"pass":9,"fail":1}}

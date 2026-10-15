@@ -148,73 +148,72 @@ run_case_shell() {
         return 1
     fi
 
-    # Inherit ERR through functions, command substitutions and case subshells.
-    # Report before an EXIT cleanup can hide the failing assertion in xtrace.
+    # ERR can fire for expected failures in command substitutions even when
+    # the case passes. Record privately, before EXIT cleanup; publish only
+    # after the whole case fails. Dedicated descriptors keep both diagnostics
+    # and rerun xtrace out of command output and redirected JSON error files.
+    local diagnostic_dir
+    diagnostic_dir="$(mktemp -d)"
     local diagnostics
     diagnostics=$(cat <<'DIAGNOSTICS'
 set -E
-trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&2' ERR
+trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&9' ERR
 DIAGNOSTICS
 )
     diagnostics+=$'\n'
     local out rc
-    out="$(bash -c "$diagnostics$script" 2>&1)" && rc=0 || rc=$?
+    out="$(bash -c "$diagnostics$script" 9>"$diagnostic_dir/original" 2>&1)" && rc=0 || rc=$?
 
     if [[ "$rc" -eq 0 ]]; then
+        rm -f "$diagnostic_dir/original"
+        rmdir "$diagnostic_dir"
         emit "$(emit_case "$case_id" pass "${out:0:200}")"
         return 0
     fi
 
-    # Preserve every original diagnostic, including nested subshell failures,
-    # outside the bounded JSON details field and before any diagnostic rerun.
-    printf 'driver: original failure for %s (exit=%s)\n%s\n' "$case_id" "$rc" "$out" >&2
+    local original_failures
+    original_failures="$(cat "$diagnostic_dir/original")"
+    printf 'driver: original failure for %s (exit=%s)\n%s\n%s\n' "$case_id" "$rc" "$original_failures" "$out" >&2
 
-    # Failure surfacing: with `set -euo pipefail` in t2 bodies, an early
-    # assertion (`test ...`) that exits non-zero produces *no* stdout/stderr,
-    # which means CI logs see only `exit=1: ` and the diagnosis from the
-    # JSONL stream alone is impossible. Re-run under `bash -x` so the last
-    # command attempted appears in stderr; the xtrace tail is then the
-    # detail block.
-    #
-    # The rerun starts from a fresh DB-reset, as the first run did. Without
-    # it the rerun meets the first run's leftovers (b.ai5: the first run's
-    # cd- session made the rerun's spawn fail with ErrTmuxSessionConflict,
-    # so the trace pointed at a step that had not failed).
-    local xout="" xrc=0 reset_failed=0
+    # Reset independently and preserve the original verdict even if the rerun
+    # passes. Xtrace uses FD 8, never the case's stderr or a command capture.
+    local xout="" xrc=0 reset_failed=0 trace="" rerun_failures=""
     if bash "$DB_RESET" >&2; then
-        xout="$(bash -x -c "$diagnostics$script" 2>&1)" && xrc=0 || xrc=$?
+        xout="$(BASH_XTRACEFD=8 bash -x -c "$diagnostics$script" 8>"$diagnostic_dir/trace" 9>"$diagnostic_dir/rerun" 2>&1)" && xrc=0 || xrc=$?
+        trace="$(cat "$diagnostic_dir/trace")"
+        if [[ "$xrc" -ne 0 ]]; then
+            rerun_failures="$(cat "$diagnostic_dir/rerun")"
+        fi
+        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n%s\n' "$case_id" "$xrc" "$rerun_failures" "$xout" >&2
+        printf 'driver: diagnostic xtrace for %s (dedicated FD 8)\n%s\n' "$case_id" "$trace" >&2
     else
         reset_failed=1
     fi
     local last_trace=""
-    if [[ -n "$xout" ]]; then
-        # Keep the last ~6 xtrace lines so the failing assertion is visible
-        # without flooding the JSON details field. Drop empty lines.
-        last_trace="$(printf '%s\n' "$xout" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
-    fi
-    if [[ -n "$xout" ]]; then
-        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n' "$case_id" "$xrc" "$xout" >&2
+    if [[ -n "$trace" ]]; then
+        last_trace="$(printf '%s\n' "$trace" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
     fi
     local assertion=""
-    assertion="$(printf '%s\n' "$out" | grep '^CASE_FAILURE ' | head -n 1)" || true
+    assertion="$(printf '%s\n' "$original_failures" | tail -n 2 | tr '\n' '|')"
     local combined="exit=${rc}"
     if [[ -n "$assertion" ]]; then
-        combined+=" | ${assertion:0:600}"
+        combined+=" | ${assertion:0:350}"
     fi
     if [[ -n "$out" ]]; then
-        combined+=": ${out:0:300}"
+        combined+=": ${out:0:150}"
     fi
-    # The trace comes from a second run. When that run passes, its tail ends
-    # at the case's success line and does not show the first run's failure:
-    # say so, so the trace is not read as a failure after the success line.
     if [[ "$reset_failed" -eq 1 ]]; then
         combined+=" | xtrace rerun skipped: db-reset failed before it"
     elif [[ "$xrc" -eq 0 ]]; then
         combined+=" | xtrace rerun passed (exit=0): the trace below is that passing rerun, not the failure"
+    else
+        combined+=" | xtrace rerun failed (exit=${xrc})"
     fi
     if [[ -n "$last_trace" ]]; then
         combined+=" | xtrace_tail: ${last_trace:0:400}"
     fi
+    rm -f "$diagnostic_dir/original" "$diagnostic_dir/rerun" "$diagnostic_dir/trace"
+    rmdir "$diagnostic_dir"
     emit "$(emit_case "$case_id" fail "${combined:0:800}")"
     return 1
 }

@@ -1,0 +1,6 @@
+{
+  "source": "/home/horde/ad-codex/project/tickets/Ideas/b.ftd/e2t3-gate/j20261015171316-4cf1d1.run.log",
+  "sha256": "1ad88f3bd6de352710c838b000efc5561d714e4532e402dea09f2f02f7943654",
+  "revision": "4502008be0aee7a42ac9c4e82fd2e00e1b8309a6",
+  "observed": "cursor-relay9/10;originalcancel_busy waitdeadline;diagnosticrerunearly_end jq parseerror;remaininggroups reportedpassing, no fabricatednewpasscount"
+}

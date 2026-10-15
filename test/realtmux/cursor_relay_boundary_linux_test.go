@@ -153,3 +153,162 @@ func TestCursorRelayQueuedVerdictsNeverReplay(t *testing.T) {
 		}
 	}
 }
+
+// A held authorization must not replace the finite cancellation timer on release.
+func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
+	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
+	for _, mode := range []string{"interrupt", "policy", "successful release"} {
+		t.Run(mode, func(t *testing.T) {
+			script := relayCapturedScenario(t)
+			script.WaitForRelease = true
+			if mode == "policy" {
+				script.Requests = append(script.Requests, relayFrame("unsupported", "cursor/authorize", json.RawMessage(`{}`)))
+			}
+			f, r, launch := newCursorPaneScenario(t, false, "independent-worker", cursorPaneOptions{Script: &script, Relay: "on", Timeout: 30})
+			id := launch.ID
+			st, err := store.Open(f.DBPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+			binding, err := st.ReadCursorRuntime(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			worker := 0
+			waitFor(t, "independent worker sentinel", func() bool {
+				raw, err := os.ReadFile(r.WorkerPID)
+				if err == nil {
+					fmt.Sscan(string(raw), &worker)
+				}
+				return worker > 0
+			}, nil)
+			before := readRow(t, f.DBPath, id)
+			if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: "held cancellation"}); err != nil {
+				t.Fatal(err)
+			}
+			rows := relayRequests(t, f, id, 2)
+			var permission, plan store.PermissionRow
+			for _, row := range rows {
+				var params struct {
+					Tool string `json:"toolCallId"`
+				}
+				if err = json.Unmarshal([]byte(row.ToolInput), &params); err != nil {
+					t.Fatal(err)
+				}
+				if params.Tool != "" {
+					plan = row
+				} else {
+					permission = row
+				}
+			}
+			if permission.RequestToken == "" || plan.RequestToken == "" {
+				t.Fatalf("missing independent plan/permission: %+v", rows)
+			}
+			if mode != "policy" {
+				if _, err = f.API.Decide(api.DecideParams{InstanceID: id, RequestToken: plan.RequestToken, Decision: "deny"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "only plan rejection received", func() bool { return len(relayReplies(t, r)) == 1 }, nil)
+				if got := relayReplies(t, r)[0]; string(got["id"]) != `"plan"` || !strings.Contains(string(got["result"]), `"outcome":"rejected"`) {
+					t.Fatalf("wrong independent plan answer: %v", got)
+				}
+			}
+			completed := false
+			assertPreserved := func() {
+				t.Helper()
+				row := readRow(t, f.DBPath, id)
+				if row.SessionID != before.SessionID || row.LaunchToken != before.LaunchToken || row.PanePID != before.PanePID || (!completed && row.State != store.StateCheckPermission) {
+					t.Fatalf("conversation/hold changed before termination: %+v", row)
+				}
+				if pidGone(worker) {
+					t.Fatal("cancellation killed independent worker sentinel")
+				}
+				if mode != "successful release" {
+					got, err := st.GetPermissionRequest(id, permission.RequestToken)
+					if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
+						t.Fatalf("cancellation released independent permission: %+v %v", got, err)
+					}
+					if mode == "policy" {
+						got, err = st.GetPermissionRequest(id, plan.RequestToken)
+						if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
+							t.Fatalf("policy cancellation released independent plan: %+v %v", got, err)
+						}
+					}
+				}
+			}
+			assertPreserved()
+			started := time.Now()
+			if mode == "successful release" {
+				if _, err = f.API.Decide(api.DecideParams{InstanceID: id, RequestToken: permission.RequestToken, Decision: "allow"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "both independent answers received", func() bool { return len(relayReplies(t, r)) == 2 }, nil)
+				// Generation remains live beyond cancellation's 3s bound, then completes normally.
+				waitForObserved(t, 5*time.Second, "ordinary generation continues after successful hold release", func() bool {
+					assertPreserved()
+					if pidGone(binding.GatewayPID) || pidGone(binding.RuntimePID) {
+						t.Fatal("ordinary hold release armed a cancellation deadline")
+					}
+					return time.Since(started) >= 3200*time.Millisecond
+				}, nil)
+				if err = os.WriteFile(r.Release, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "successful release completes the same conversation", func() bool {
+					raw, err := os.ReadFile(before.JSONLPath.(string))
+					return err == nil && strings.Contains(string(raw), `"kind":"turn_outcome"`)
+				}, nil)
+				completed = true
+				assertPreserved()
+			} else {
+				lastInterrupt := time.Time{}
+				waitForObserved(t, 5*time.Second, "original cancellation deadline retires gateway and runtime", func() bool {
+					if pidGone(binding.GatewayPID) && pidGone(binding.RuntimePID) {
+						return true
+					}
+					assertPreserved()
+					if mode == "interrupt" && time.Since(lastInterrupt) >= 150*time.Millisecond {
+						launch.rt.run(t, "send-keys", "-t", launch.Row.PaneID.(string), "C-c")
+						lastInterrupt = time.Now()
+					}
+					return false
+				}, func() string {
+					return fmt.Sprintf("gateway=%s runtime=%s", procState(binding.GatewayPID), procState(binding.RuntimePID))
+				})
+				failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
+				if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), "operation timed out") {
+					t.Fatalf("expected original finite operation timeout: %v", failures)
+				}
+			}
+			cancels, permissionReplies, prompts, replies := 0, 0, 0, 0
+			for _, frame := range r.Frames(t) {
+				switch string(frame["method"]) {
+				case `"session/cancel"`:
+					cancels++
+					if !strings.Contains(string(frame["params"]), script.SessionID) {
+						t.Fatal("cancellation changed conversation")
+					}
+				case `"session/prompt"`:
+					prompts++
+				case "":
+					replies++
+					if mode == "policy" && (string(frame["id"]) != `"unsupported"` || len(frame["error"]) == 0) {
+						t.Fatalf("policy cancellation answered an admitted request: %v", frame)
+					}
+					if string(frame["id"]) == `"permission"` {
+						permissionReplies++
+					}
+				}
+			}
+			wantCancels, wantPermissionReplies, wantReplies := 1, 0, 1
+			if mode == "successful release" {
+				wantCancels, wantPermissionReplies, wantReplies = 0, 1, 2
+			}
+			if cancels != wantCancels || permissionReplies != wantPermissionReplies || replies != wantReplies || prompts != 1 || pidGone(worker) {
+				t.Fatalf("cancel=%d permission replies=%d total replies=%d prompts=%d sentinel gone=%v", cancels, permissionReplies, replies, prompts, pidGone(worker))
+			}
+			t.Logf("mode=%s original bound=5s elapsed=%s cancels=%d permission replies=%d sentinel preserved", mode, time.Since(started), cancels, permissionReplies)
+		})
+	}
+}

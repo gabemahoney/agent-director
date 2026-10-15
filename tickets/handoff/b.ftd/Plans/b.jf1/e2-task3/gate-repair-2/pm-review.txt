@@ -1,0 +1,14 @@
+Approve the settled four-file repair for local commit and a new exact-SHA external Docker handoff. No mandatory code, test, or documentation corrections found.
+
+- Root cause: Releasing authorization timing overwrote the active 3-second cancellation deadline with the 30-minute generation deadline. busy && !cancelled preserves cancellation ownership for interrupt and policy cancellation. Ordinary request release still resumes generation timing.
+- Checks preserved: No collector predicates, durable hold checks, late-answer protections, ownership checks, or original timing bounds were weakened. No E3 functionality was introduced.
+- Driver correctness: ERR records remain private until the whole case fails. Dedicated xtrace output avoids redirected JSON stderr contamination. Expected failures in passing cases stay silent; failed originals remain failures even when their diagnostic rerun passes. Nested assertion and cleanup evidence remain available.
+- Regression evidence: Old-source overlays fail both cancellation cases while the normal-release control passes. The repaired cases finish around 3 seconds. Old-driver evidence demonstrates the diagnostic defects. Final targeted receipt contains 13 PASS outcomes and no failures.
+- Full-unit evidence: Reviewed the single settled sandbox receipt: 68 Go packages, including 60 cached; 429 Bun passes, zero failures. Pre/post 2,523-path inventories match, and all four current changed-file hashes match the tested inventory. git diff --check passes. I ran no tests or independent lint execution in this read-only lane.
+- Documentation: Applied code-review and doc-review skills. Existing documentation already describes bounded cancellation and conservative independent holds. This repair restores that contract; no new manual or architecture update is required.
+
+Reviewed the Task, all seven Subtasks, Epic, Plan, Idea, approved PRD, and relevant SRD requirements through Bees CLI. No conflicting design decisions, contentious role recommendations, or new product questions.
+
+Deferred feedback: Existing broad documentation normalization findings A2–A6/B3–B8/C2–C5/D1–D2 remain explicitly deferred under the prior disposition. No new findings were ignored. The historical Codex 1.58341753s timing failure remains unexplained; this repair does not claim to resolve it.
+
+Remaining work: Root must commit and prepare the new exact-SHA handoff. External collector acceptance, including .02, and applicable authenticated E2 acceptance remain pending. Keep Task3 and Epic2 active; E3 remains unstarted. TLA+ not applicable: no model inputs changed, zero formal jobs.

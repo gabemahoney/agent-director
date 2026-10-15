@@ -200,7 +200,9 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
 			}
 			if requestDeadlineHeld && !requests.open() {
 				requestDeadlineHeld = false
-				if busy {
+				// Cancellation owns its fixed deadline even when it closes
+				// the authorization requests that paused prompt timing.
+				if busy && !cancelled {
 					resetDeadline(30 * time.Minute)
 				}
 			}

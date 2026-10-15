@@ -1,0 +1,736 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun  -w /work agent-director-sandbox \
+	bash -c 'cd /work/pkg/ts-bun-client || exit 1; \
+		echo "[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client"; \
+		bun install --frozen-lockfile || { echo "ERROR: test-sandbox: bun install --frozen-lockfile failed in pkg/ts-bun-client; no tests ran. If package.json changed, run bun install there (make sandbox CMD=...) and commit bun.lock." >&2; exit 1; }; \
+		bun run build || { echo "ERROR: test-sandbox: bun run build failed in pkg/ts-bun-client; no tests ran. Both suites need its dist/; fix the build errors above." >&2; exit 1; }; \
+		rc=0; (cd /work && go test -timeout 30m ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $rc'
+[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client
+bun install v1.3.13 (bf2e2cec)
+
+Checked 129 installs across 130 packages (no changes) [2.00ms]
+$ bun run build.ts
+Build complete: dist/
+?   	github.com/gabemahoney/agent-director/internal/adminapi	[no test files]
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director	(cached)
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director-admin	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/clisetup	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/config	(cached)
+?   	github.com/gabemahoney/agent-director/internal/testsupport/codexfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/cursorfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/cwdfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/dbpathfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/launchfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procstat	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/writefailfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/version	[no test files]
+?   	github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest	[no test files]
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	11.638s
+ok  	github.com/gabemahoney/agent-director/internal/hook	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/layout	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/mcp	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/oldnames	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/probe	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/spawn	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/store	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/storefix	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/tmux	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/trail	(cached)
+ok  	github.com/gabemahoney/agent-director/pkg/api	147.382s
+ok  	github.com/gabemahoney/agent-director/pkg/api/apitest	(cached)
+ok  	github.com/gabemahoney/agent-director/pkg/api/errnames	1.205s
+ok  	github.com/gabemahoney/agent-director/pkg/api/manifest	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay	1.371s
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub	0.002s
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution	(cached)
+ok  	github.com/gabemahoney/agent-director/test/driver-scripts	2.227s
+ok  	github.com/gabemahoney/agent-director/test/envelope-diff	(cached)
+ok  	github.com/gabemahoney/agent-director/test/fake-tmux	(cached)
+ok  	github.com/gabemahoney/agent-director/test/grounding-replay	(cached)
+ok  	github.com/gabemahoney/agent-director/test/install-sh	203.952s
+ok  	github.com/gabemahoney/agent-director/test/realtmux	154.208s
+ok  	github.com/gabemahoney/agent-director/test/reboot-recovery	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/cigates	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/cmdinject	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/gitmount	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/prebuild	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/releaseversion	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/requiresandbox	(cached)
+ok  	github.com/gabemahoney/agent-director/test/smoke/go	(cached)
+ok  	github.com/gabemahoney/agent-director/test/smoke/ts-helper	(cached)
+ok  	github.com/gabemahoney/agent-director/test/tla	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/check-doccomments	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/check-nondet	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/gen-docs	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/measure-exit	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/measure-exit/dryrun	(cached)
+bun test v1.3.13 (bf2e2cec)
+
+test/verbs-order.test.ts:
+make: Entering directory '/work'
+make: Nothing to be done for 'ts-helper'.
+make: Leaving directory '/work'
+make: Entering directory '/work'
+make: Nothing to be done for 'fake-tmux'.
+make: Leaving directory '/work'
+make: Entering directory '/work'
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=4502008be0aee7a42ac9c4e82fd2e00e1b8309a6" -o ./bin/agent-director ./cmd/agent-director
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=4502008be0aee7a42ac9c4e82fd2e00e1b8309a6" -o ./bin/agent-director-admin ./cmd/agent-director-admin
+make: Leaving directory '/work'
+(pass) VERBS equals surface.json's callable verbs, in order
+
+test/client-serialization.test.ts:
+(pass) 5 parallel version() calls on one Client never overlap: the CLI log alternates START, END [353.00ms]
+(pass) Cursor direct, empty args uses existing spawn/get/list/status/subagent methods [39.00ms]
+(pass) Cursor direct, model args uses existing spawn/get/list/status/subagent methods [34.00ms]
+(pass) Cursor template, absent args uses existing spawn/get/list/status/subagent methods [40.00ms]
+(pass) Cursor template, empty args uses existing spawn/get/list/status/subagent methods [40.00ms]
+(pass) 5 parallel spawn() calls on one Client execute serially in submission order [67.00ms]
+(pass) two independent Clients may overlap (SR-3.2): both complete without deadlock [8.00ms]
+
+test/release-bun-test-wiring.test.ts:
+(pass) bun-test.sh gate invokes bun install --frozen-lockfile and bun test [2.00ms]
+(pass) .github/workflows/ts-client-test.yml does not exist (wrong-gate redirect)
+
+test/check-version-coherence.test.ts:
+(pass) staging tree lives outside the repo tree (b.9qj) [1.00ms]
+(pass) --scope verify on a coherent tree → exit 0, empty stderr [18.00ms]
+(pass) --scope publish on a coherent tree → exit 0, empty stderr [18.00ms]
+(pass) site-3a: umbrella package.json at the wrong version → exit 1 naming the file, actual and expected [20.00ms]
+(pass) bad flags [ "--scope", "foo", "--expected-version", "9.9.9" ] → exit 1, stderr names foo [15.00ms]
+(pass) bad flags [ "--scope", "publish", "--expected-version", "v9.9.9" ] → exit 1, stderr names v9.9.9 [14.00ms]
+(pass) bad flags [ "--scope", "publish" ] → exit 1, stderr names --expected-version [14.00ms]
+(pass) site-dist-no-inline --scope verify: dist/index.js const NPM_PACKAGE_VERSION = "1.2.3"; → exit 1 naming it [17.00ms]
+(pass) site-dist-no-inline --scope verify: dist/index.js const version = "0.0.0"; → exit 1 naming it [17.00ms]
+(pass) site-dist-no-inline --scope publish: dist/index.js const NPM_PACKAGE_VERSION = "1.2.3"; → exit 1 naming it [19.00ms]
+(pass) site-dist-no-inline --scope publish: dist/index.js const version = "0.0.0"; → exit 1 naming it [18.00ms]
+(pass) site-dist-no-inline: dist/index.js absent → exit 1 naming the missing path [17.00ms]
+
+test/version-resolution.test.ts:
+(pass) two Clients each read package.json once across two version() calls [98.00ms]
+(pass) b.vod: a non-fallback readFile error propagates instead of being swallowed [14.00ms]
+
+test/settle-on.test.ts:
+(pass) settle-on: status, get and list give each golden with only the state read as settled [279.00ms]
+(pass) settle-on: a raw change younger than settle_ms reads the settled state, then the raw one [55.00ms]
+
+test/spawn-hook-stability.test.ts:
+(pass) hooks name the installed binary's absolute path, which survives an in-place re-install [27.00ms]
+(pass) a symlinked install: hooks name the resolved real binary, not the symlink [22.00ms]
+
+test/empty-global-options.test.ts:
+(pass) storePath: "" → every verb call rejects with ErrInvalidFlags "--store-path requires a value"; nothing under HOME [7.00ms]
+(pass) home: "" → every verb call rejects with ErrInvalidFlags "--home requires a value"; nothing under HOME [7.00ms]
+(pass) tmuxCommand: "" → every verb call rejects with ErrInvalidFlags "--tmux-command requires a value"; nothing under HOME [6.00ms]
+
+test/public-surface.test.ts:
+(pass) public-surface: dist/index.d.ts matches golden (SR-10.6)
+(pass) public-surface: dist/errors.d.ts matches golden (SR-10.6)
+(pass) public-surface: dist/types.d.ts matches golden (SR-10.6)
+(pass) public-surface: golden tracks all three TRACKED files
+(pass) public-surface: Client exposes no migrate method (SR-1) [1.00ms]
+(pass) public-surface: ListRow & GetResult carry additive-optional liveness fields (SR-8.3)
+(pass) public-surface: StatusResult carries additive-optional nullable launch_started_at (SR-22.2)
+(pass) public-surface: GetResult carries additive-optional nullable launch_started_at (SR-22.2) [1.00ms]
+(pass) public-surface: ListRow carries additive-optional nullable launch_started_at (SR-22.2)
+(pass) public-surface: GetResult carries additive-optional nullable tmux_socket (SR-16.4, AC-LKP-22)
+(pass) public-surface: StatusResult does not declare tmux_socket — get-only (SR-16.4, AC-LKP-22)
+(pass) public-surface: ListRow does not declare tmux_socket — get-only (SR-16.4, AC-LKP-22)
+(pass) public-surface: GetResult declares agent as a %s string (SR-1.1, SR-2.1)
+(pass) public-surface: ListRow declares agent as a %s string (SR-1.1, SR-2.1)
+(pass) public-surface: SpawnParams declares agent as a %s string (SR-1.1, SR-2.1)
+(pass) public-surface: MakeTemplateParams declares agent as a %s string (SR-1.1, SR-2.1)
+(pass) public-surface: GetResult carries jsonl_path; ListRow does not (SR-9.3/SR-10.3)
+(pass) public-surface: extra_env is INPUT-only — absent from GetResult & ListRow OUTPUT types (SR-9.3/SR-10.3) [1.00ms]
+(pass) public-surface: FindMissingResult carries unverified count and ids (SR-8)
+(pass) public-surface: state stays a plain string — no union/enum (SR-8.3 guardrail)
+(pass) public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)
+(pass) public-surface: SpawnResult carries optional nonnullable dropped_args
+
+test/discovery.test.ts:
+(pass) the standard install path wins over PATH [1.00ms]
+(pass) a binary only at the old install path is not found by step 1
+(pass) XDG_CONFIG_HOME is ignored: only $HOME/.config/agent-director/bin is the standard path [1.00ms]
+(pass) HOME without the binary → found by PATH lookup
+(pass) HOME unset → found by PATH lookup
+(pass) HOME empty → found by PATH lookup
+(pass) HOME relative → found by PATH lookup
+(pass) nothing found → ErrSystemInstallNotFound naming both locations (SR-3.1) [1.00ms]
+(pass) standard-path candidate not executable → ErrSystemInstallUnreachable(not-executable); PATH not consulted
+(pass) standard-path candidate a directory → ErrSystemInstallUnreachable(not-a-regular-file); PATH not consulted
+
+test/types-exports.test.ts:
+(pass) every catalog and TS-only error class, the factory, Client and resolveSystemBinary are exported [1.00ms]
+(pass) DEV_SENTINEL_VERSION is the literal '0.0.0-dev' (SR-4.5)
+(pass) vendored-binary error classes are gone (SR-4.6)
+
+test/no-leak.test.ts:
+(pass) no-leak: 1000 sequential list({state: 'check_permission'}) calls leak zero processes [2837.00ms]
+(pass) leak-catch: the scoped count rises for a child and returns to baseline after reap [9.00ms]
+(pass) sibling-immunity: the scoped count ignores a non-child the global count sees [10.00ms]
+
+test/release-version-coherence.test.ts:
+(pass) release-version-coherence: staged tree → pack → install → client.version() === 9.9.9 [1036.00ms]
+
+test/spawner.test.ts:
+(pass) valid JSON on stdout + exit 0 → {stdout, exitCode: 0, signalCode: null} [1.00ms]
+(pass) >64 KB stdout → no deadlock, every byte captured [15.00ms]
+(pass) exit 1 → ErrSubprocessCrash carrying the exit code and the full stderr [2.00ms]
+(pass) non-JSON stdout + exit 0 → ErrSubprocessCrash with exit code 0 (a parse failure)
+
+test/envelope-diff-invariants.test.ts:
+(pass) (a) every verb has a describe block in envelope-diff.test.ts
+(pass) (b) every verb has a success-path test in envelope-diff.test.ts
+(pass) (c) every non-allow-listed verb has an error-path test in envelope-diff.test.ts
+(pass) (d) nondeterministic.json contains an entry for every verb in VERBS
+(pass) (e) every assertEnvelopesEqual call in envelope-diff.test.ts passes loadIgnorePathsForVerb
+
+test/packaging.test.ts:
+(pass) package.json: name, no optionalDependencies (SR-6.4), no bin (SR-6.7), no lifecycle hooks (SR-6.3)
+(pass) package.json exports the bundle (SR-4.0) and dist/version-floor.json (SR-6.6)
+(pass) npm pack ships dist, version-floor.json, README and package.json, and nothing excluded (SR-6.1/6.2/6.5/6.7) [296.00ms]
+
+test/version-floor.test.ts:
+(pass) the floor parses as strict SemVer and is not the dev sentinel; src MIN_BINARY_VERSION is it
+(pass) dist/version-floor.json is byte-identical and the bundle's MIN_BINARY_VERSION equals it (SR-5.4) [2.00ms]
+(pass) `jq -r .min_binary_version` reads the shipped floor byte-exact (SR-5.5) [14.00ms]
+(pass) the floor is exactly the confirmed stable release 0.12.0
+(pass) a binary reporting 0.11.0 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [2.00ms]
+(pass) a binary reporting 0.11.1 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [1.00ms]
+(pass) a binary reporting 0.11.99 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [1.00ms]
+(pass) a binary reporting 0.11.9-rc.1 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [1.00ms]
+(pass) a binary reporting 0.12.0-0 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [1.00ms]
+(pass) a binary reporting 0.12.0-rc.1 is refused with ErrSystemInstallTooOld naming it and the floor (SR-14.4) [1.00ms]
+(pass) a binary reporting exactly the floor is accepted [1.00ms]
+
+test/open-errors.test.ts:
+(pass) HOME unset, no home, no storePath → list() rejects with ErrStoreOpen [6.00ms]
+(pass) HOME unset, no home, an absolute storePath → list() rejects with ErrStoreOpen [5.00ms]
+(pass) refused [pause] timeout_seconds → list() rejects with ErrConfigMalformed [4.00ms]
+(pass) the old directory only, no storePath → list() rejects with ErrOldLayout and creates nothing [5.00ms]
+(pass) the old directory only, with a storePath → list() is not refused [21.00ms]
+(pass) store schema newer than the binary → list() rejects with its class [22.00ms]
+(pass) store schema older than the binary → list() rejects with its class [20.00ms]
+
+test/subprocess-client.test.ts:
+(pass) call N rejects (subprocess crash) → call N+1 still succeeds [47.00ms]
+(pass) a fixture sleeping past callTimeoutMs → ErrCallTimeout (not ErrConsumerSignal) within the grace period [317.00ms]
+(pass) a fixture that SIGINTs itself → ErrConsumerSignal carrying the signal [2.00ms]
+(pass) b.6o1: version() reports the package version over the CLI's stamp; commit and config_dir pass through [32.00ms]
+(pass) HOME set: `~` values reach the CLI as given, with no os.homedir() path [2.00ms]
+(pass) HOME empty: `~` values reach the CLI as given, with no os.homedir() path [1.00ms]
+(pass) HOME unset: `~` values reach the CLI as given, with no os.homedir() path [2.00ms]
+
+test/smoke-invariants.test.ts:
+(pass) (a) every verb has a smoke test file [1.00ms]
+(pass) (b) every smoke file imports and calls withTempHome
+(pass) (c) every non-allow-listed smoke file has an error-case test
+
+test/version-bump.test.ts:
+(pass) default (all sites): stamps package.json; a second run writes nothing and logs skipped [31.00ms]
+(pass) --target umbrella-version: stamps package.json; a second run writes nothing and logs skipped [29.00ms]
+(pass) unknown --target → non-zero exit naming the value and the valid selectors [15.00ms]
+
+test/client-lifecycle.test.ts:
+(pass) close() is idempotent and a closed Client refuses calls with ErrClientClosed [3.00ms]
+(pass) a `using` block closes the Client at scope exit [3.00ms]
+
+test/errors.test.ts:
+(pass) base class: verb, errName, errDescription, name and `${err_name}: ${err_description}` message
+(pass) every catalog err_name maps to its own subclass in errorFromEnvelope and throwFromEnvelope [1.00ms]
+(pass) ErrAgentMissing: the exported class is what both factories build from its err_name
+(pass) ErrAgentInvalid: the exported class is what both factories build from its err_name
+(pass) ErrAgentArgsMismatch: the exported class is what both factories build from its err_name
+(pass) ErrPermissionsUnsupported: the exported class is what both factories build from its err_name
+(pass) ErrTemplateAgentMissing: the exported class is what both factories build from its err_name
+(pass) ErrOldLayout: the exported class is what both factories build from its err_name
+(pass) unknown err_name: errorFromEnvelope warns once and returns the base; throwFromEnvelope throws ErrUnknownErrorName [1.00ms]
+(pass) err_details an object: errDetails through errorFromEnvelope and throwFromEnvelope
+(pass) err_details absent: errDetails through errorFromEnvelope and throwFromEnvelope
+(pass) err_details null: errDetails through errorFromEnvelope and throwFromEnvelope
+(pass) err_details a list: errDetails through errorFromEnvelope and throwFromEnvelope
+(pass) err_details a string: errDetails through errorFromEnvelope and throwFromEnvelope
+(pass) TS_ONLY_ERROR_NAMES lists exactly the TS-only classes
+(pass) ErrClientClosed: direct subclass, name == errName, fields and message
+(pass) ErrBunVersionTooOld: direct subclass, name == errName, fields and message
+(pass) ErrConsumerSignal: direct subclass, name == errName, fields and message
+(pass) ErrCallTimeout: direct subclass, name == errName, fields and message
+(pass) ErrUnknownErrorName: direct subclass, name == errName, fields and message
+(pass) ErrSystemInstallNotFound: direct subclass, name == errName, fields and message
+(pass) ErrSystemInstallTooOld: direct subclass, name == errName, fields and message
+(pass) ErrSystemInstallUnreachable: direct subclass, name == errName, fields and message
+(pass) ErrCallerCwdUnreachable: direct subclass, name == errName, fields and message
+(pass) ErrSystemInstallDisappeared: direct subclass, name == errName, fields and message
+(pass) ErrCallerCwdUnreachable: cause defaults to null
+(pass) ErrSystemInstallUnreachable probe-nonzero-exit: opts kept and summarized in the message
+(pass) ErrSystemInstallUnreachable probe-killed-by-signal: opts kept and summarized in the message
+(pass) ErrSystemInstallUnreachable spawn-failed: opts kept and summarized in the message
+
+test/old-keys.test.ts:
+(pass) status with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) get with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) list-subagents with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) kill with %s → ErrInvalidFlags naming the new key; no process starts
+(pass) resume with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) pause with %s → ErrInvalidFlags naming the new key; no process starts [2.00ms]
+(pass) send-keys with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) read-pane with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) decide with %s → ErrInvalidFlags naming the new key; no process starts
+(pass) spawn with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) spawn with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) make-template with %s → ErrInvalidFlags naming the new key; no process starts [1.00ms]
+(pass) an old key is refused on a verb that does not take it, and next to its new key [1.00ms]
+(pass) two old keys in one call → one ErrInvalidFlags naming both new keys, joined by '; ' [1.00ms]
+(pass) the refusal leaves the Client usable: the same call with the new key starts the CLI [2.00ms]
+
+test/errors-catalog-drift.test.ts:
+(pass) TS subclasses equal shared err_name catalog
+
+test/setup.test.ts:
+(pass) fake-tmux stub is executable after setup
+
+test/envelope-diff.test.ts:
+(pass) spawn > success path [39.00ms]
+(pass) spawn > error path: ErrCwdMissing [22.00ms]
+(pass) spawn > error path: ErrAgentMissing [21.00ms]
+(pass) spawn > error path: ErrAgentInvalid [19.00ms]
+(pass) spawn > error path: ErrPermissionsUnsupported [21.00ms]
+(pass) status > success path [29.00ms]
+(pass) status > error path: ErrSpawnNotFound [20.00ms]
+(pass) get > success path [29.00ms]
+(pass) get > error path: ErrSpawnNotFound [21.00ms]
+(pass) list-subagents > success path: records with nulls and the three time encodings equal the CLI's [42.00ms]
+(pass) list-subagents > error path: ErrSpawnNotFound [20.00ms]
+(pass) send-keys > success path: the row's own session, lookup + pane listing + text then Enter by pane id on both sides [67.00ms]
+(pass) send-keys > error path: ErrSpawnNotInteractive [32.00ms]
+(pass) read-pane > success path: the row's own session, lookup + pane listing + one capture by pane id on both sides [48.00ms]
+(pass) read-pane > error path: ErrSpawnNotFound [22.00ms]
+(pass) read-pane > error path: ErrInvalidFlags for a negative n_lines, before the row is read (b.c4n) [21.00ms]
+(pass) kill > success path: Gone row, lookup only, kill_sent false on both sides [38.00ms]
+(pass) kill > error path: ErrSpawnNotFound [23.00ms]
+(pass) decide > success path [51.00ms]
+(pass) decide > error path: ErrRelayModeOff [32.00ms]
+(pass) get-permission > success path [35.00ms]
+(pass) get-permission > error path: ErrPermissionRequestNotFound [20.00ms]
+(pass) record-pane-answer > success path: a fallen-back request recorded answered outside, over read-pane's pane_sha256 [83.00ms]
+(pass) record-pane-answer > error path: ErrClaimTooSoon, its err_details the same on both sides [39.00ms]
+(pass) resume > success path [54.00ms]
+(pass) resume > error path: ErrSpawnNotResumable [28.00ms]
+(pass) find-missing > success path [20.00ms]
+(pass) expire > success path [21.00ms]
+(pass) expire > success path: one ended row deleted, one kept for its own session, one lookup on both sides [64.00ms]
+(pass) make-template > success path [20.00ms]
+(pass) make-template > error path: ErrTemplateNameUnsafe [21.00ms]
+(pass) make-template > error path: ErrTemplateAgentMissing [20.00ms]
+(pass) list > success path [43.00ms]
+(pass) list > error path: ErrListInvalidLabel [22.00ms]
+(pass) list > error path: ErrInvalidFlags for a negative limit (b.c4n) [22.00ms]
+(pass) pause > success path [29.00ms]
+(pass) pause > error path: ErrSpawnNotPausable [23.00ms]
+(pass) version > success path [19.00ms]
+
+test/settle-off.test.ts:
+(pass) settle-off (unset): status, get and list match the CLI goldens byte for byte [263.00ms]
+(pass) settle-off (zero): status, get and list match the CLI goldens byte for byte [254.00ms]
+
+test/operator-actions-absent.test.ts:
+(pass) VERBS has no delete, and still has kill (b.vqr) [1.00ms]
+(pass) Client has no delete method, and still has kill (b.vqr)
+(pass) kill argv never carries include_finished (b.vqr)
+
+test/rc-stamp.test.ts:
+(pass) the dev build setup.ts makes stamps version '0.0.0-dev' byte-exact [2.00ms]
+(pass) Client.create() accepts the RC-stamped binary with binaryVersion byte-exact [2068.00ms]
+(pass) comparator orders the RC at or above MIN_BINARY_VERSION and below its release
+(pass) the upcoming release is never below package.json's version or the floor's release [1.00ms]
+
+test/system-install-disappeared.test.ts:
+(pass) binary gone after construction → ErrSystemInstallDisappeared (b.xht) [9.00ms]
+(pass) cwd gone after construction → ErrCallerCwdUnreachable (b.xht) [3.00ms]
+
+test/adviceFollow.test.ts:
+(pass) K1 callTimeoutMs 0: omitting the field as advised constructs a working client [3.00ms]
+(pass) K1 callTimeoutMs -1: omitting the field as advised constructs a working client [2.00ms]
+(pass) K2 spawn extra_env key CLAUDE_CONFIG_DIR=<dir>: naming the variable as its own key, as advised, launches and pre-trusts <dir> [22.00ms]
+(pass) K2 make-template extra_env key CLAUDE_CONFIG_DIR=<dir>: naming the variable as its own key, as advised, saves a template whose spawn pre-trusts <dir> [27.00ms]
+(pass) K3 claude_instance_id: passing instance_id as advised, spawn launches under that id and status finds it [27.00ms]
+(pass) K4 spawn claude_args: passing agent_args as advised launches [19.00ms]
+(pass) K4 make-template claude_args: passing agent_args as advised saves the template [14.00ms]
+(pass) K5 spawn with no agent: passing agent as advised launches a row that runs it [31.00ms]
+(pass) K6 make-template agent_args with no agent: to pass agent, as advised, saves the template [17.00ms]
+(pass) K6 make-template agent_args with no agent: to remove agent_args, as advised, saves the template [17.00ms]
+(pass) K7 ErrAgentArgsMismatch: spawning the agent the advice names inherits the template's agent_args [34.00ms]
+(pass) K7 ErrAgentArgsMismatch: passing this call's own agent_args replaces the template's [33.00ms]
+
+test/readme-snippets.test.ts:
+(pass) README package symbols are all exported from src/index.ts
+(pass) README TS snippets typecheck [631.00ms]
+
+test/caller-cwd-unreachable.test.ts:
+(pass) Client.create() throws ErrCallerCwdUnreachable when cwd is deleted (b.cot) [3.00ms]
+(pass) resolveSystemBinary() throws ErrCallerCwdUnreachable when cwd is deleted (b.cot) [3.00ms]
+(pass) resolveSystemBinary() finds the PATH binary from a valid cwd (no false positive) [2.00ms]
+
+test/comparator.test.ts:
+(pass) compareVersions("0.7.0", "0.7.0") === 0
+(pass) compareVersions("0.7.0", "0.7.1") === -1
+(pass) compareVersions("0.7.1", "0.7.0") === 1
+(pass) compareVersions("1.0.0", "0.99.99") === 1
+(pass) compareVersions("0.99.99", "1.0.0") === -1
+(pass) compareVersions("10.0.0", "9.99.99") === 1
+(pass) compareVersions("0.0.1", "0.0.0") === 1
+(pass) compareVersions("0.7.0-rc1", "0.7.0") === -1
+(pass) compareVersions("0.7.0", "0.7.0-rc1") === 1
+(pass) compareVersions("0.7.0-rc1", "0.7.0-rc2") === -1
+(pass) compareVersions("0.7.0-beta", "0.7.0-alpha") === 1
+(pass) compareVersions("0.7.0-rc1", "0.7.0-rc1") === 0
+(pass) compareVersions("0.0.0-dev", "99.99.99") === 1
+(pass) compareVersions("99.99.99", "0.0.0-dev") === -1
+(pass) compareVersions("0.0.1", "0.0.0-dev") === -1
+(pass) compareVersions("0.0.0-dev", "0.0.0-dev") === 0
+(pass) parseVersion rejects v prefix "v0.7.0", and compareVersions throws on it
+(pass) parseVersion rejects build metadata "0.7.0+abc123", and compareVersions throws on it
+(pass) parseVersion rejects git describe "v0.6.2-13-gcd6817c", and compareVersions throws on it
+(pass) parseVersion rejects leading space " 0.7.0", and compareVersions throws on it
+(pass) parseVersion rejects trailing space "0.7.0 ", and compareVersions throws on it
+(pass) parseVersion rejects trailing newline "0.7.0\n", and compareVersions throws on it
+(pass) parseVersion rejects leading newline "\n0.7.0", and compareVersions throws on it
+(pass) parseVersion rejects trailing NBSP "0.7.0 ", and compareVersions throws on it
+(pass) parseVersion rejects empty "", and compareVersions throws on it
+(pass) parseVersion rejects two parts "0.7", and compareVersions throws on it
+(pass) parseVersion rejects four parts "0.7.0.0", and compareVersions throws on it
+(pass) parseVersion rejects non-numeric "a.b.c", and compareVersions throws on it
+(pass) parseVersion rejects bad prerelease char "0.7.0-rc!", and compareVersions throws on it
+(pass) only the byte-exact '0.0.0-dev' parses as the sentinel
+
+test/argv-builder.test.ts:
+(pass) version
+(pass) list: no params
+(pass) list: every filter
+(pass) list: limit 0 omitted
+(pass) list: negative limit passed through
+(pass) spawn: cwd only
+(pass) spawn: every option
+(pass) spawn: agent codex
+(pass) spawn: agent cursor with model and Unicode prompt
+(pass) spawn: Cursor template selection, empty args remain absent
+(pass) spawn: explicit Cursor with empty args omits --
+(pass) spawn: an empty agent counts as not given
+(pass) spawn: agent_args follow --, after every flag
+(pass) spawn: an empty agent_args list counts as none (no --)
+(pass) spawn: false booleans omitted (SR-10.1)
+(pass) spawn: odd but valid extra_env names pass unchanged
+(pass) status
+(pass) get
+(pass) list-subagents
+(pass) kill
+(pass) resume
+(pass) pause
+(pass) send-keys
+(pass) send-keys: empty text, allow_pending
+(pass) send-keys: no_enter, hash and n_lines
+(pass) send-keys: a key, no text
+(pass) send-keys: a pane answer
+(pass) record-pane-answer
+(pass) record-pane-answer: n_lines
+(pass) send-keys: negative n_lines passed through
+(pass) record-pane-answer: negative n_lines passed through
+(pass) read-pane: all options
+(pass) read-pane: false booleans omitted
+(pass) read-pane: n_lines 0 omitted
+(pass) read-pane: negative n_lines passed through
+(pass) decide: token and reason
+(pass) decide: no token or reason
+(pass) decide: max_wait_ms (b.146 decision 9 B), 0 included
+(pass) get-permission
+(pass) find-missing
+(pass) expire
+(pass) expire: no params
+(pass) make-template: name only
+(pass) make-template: every option
+(pass) make-template: agent with agent_args
+(pass) make-template: Cursor with model
+(pass) make-template: Cursor with empty args omits --agent-args
+(pass) make-template: an empty agent counts as not given
+(pass) make-template: an empty agent_args list counts as none
+(pass) make-template: untyped reuse_finished dropped
+(pass) spawn: extra_env key empty → ErrReservedEnvKey naming it and what is wrong
+(pass) spawn: extra_env key CLAUDE_CONFIG_DIR=/tmp/cfg → ErrReservedEnvKey naming it and what is wrong
+(pass) spawn: extra_env key HOME=/x, the malformed-key description → ErrReservedEnvKey naming it and what is wrong
+(pass) spawn: extra_env key NUL → ErrReservedEnvKey naming it and what is wrong
+(pass) spawn: extra_env key the smallest of several → ErrReservedEnvKey naming it and what is wrong
+(pass) make-template: extra_env key CLAUDE_CONFIG_DIR=/tmp/cfg → ErrReservedEnvKey naming it and what is wrong
+(pass) global options undefined → [] before the verb (b.32k, b.78b)
+(pass) global options {} → [] before the verb (b.32k, b.78b)
+(pass) global options {
+  storePath: "/tmp/foo.db",
+} → [ "--store-path", "/tmp/foo.db" ] before the verb (b.32k, b.78b)
+(pass) global options {
+  home: "/tmp/h",
+} → [ "--home", "/tmp/h" ] before the verb (b.32k, b.78b)
+(pass) global options {
+  tmuxCommand: "/usr/bin/tmux",
+} → [ "--tmux-command", "/usr/bin/tmux" ] before the verb (b.32k, b.78b)
+(pass) global options {
+  tmuxCommand: "/usr/bin/tmux",
+  home: "/tmp/h",
+  storePath: "/tmp/foo.db",
+} → [ "--store-path", "/tmp/foo.db", "--home", "/tmp/h", "--tmux-command", "/usr/bin/tmux" ] before the verb (b.32k, b.78b)
+(pass) global options {
+  createIfMissing: false,
+} → [ "--create-if-missing", "false" ] before the verb (b.32k, b.78b)
+(pass) global options {
+  createIfMissing: true,
+} → [] before the verb (b.32k, b.78b)
+(pass) global options {
+  createIfMissing: undefined,
+} → [] before the verb (b.32k, b.78b)
+(pass) global options {
+  createIfMissing: false,
+  storePath: "/tmp/foo.db",
+} → [ "--store-path", "/tmp/foo.db", "--create-if-missing", "false" ] before the verb (b.32k, b.78b)
+
+test/create-if-missing.test.ts:
+(pass) createIfMissing: false → list() rejects with ErrStoreOpen; no store or parent dir is created, version() still works [7.00ms]
+(pass) createIfMissing true → list() creates the missing store and its parent dir [16.00ms]
+(pass) createIfMissing omitted → list() creates the missing store and its parent dir [14.00ms]
+(pass) createIfMissing: false on an existing store → list() reads it [18.00ms]
+
+test/verify-installed-pkg.test.ts:
+(pass) --smoke happy path: exits 0 against the in-repo Client and CLI [29.00ms]
+(pass) --full happy path: exits 0 against the in-repo Client and CLI [59.00ms]
+(pass) --smoke error path: AD_VERIFY_AGAINST at a non-module file → non-zero exit, no unhandled rejection [17.00ms]
+(pass) flags [ "--smoke", "--full" ] → exit 1, stderr names [ "mutually exclusive" ] [15.00ms]
+(pass) flags [] → exit 1, stderr names [ "--smoke", "--full" ] [15.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=makeTemplate-create → non-zero exit and its FAIL line [18.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=makeTemplate-collision → non-zero exit and its FAIL line [19.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=makeTemplate-overwrite → non-zero exit and its FAIL line [17.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=makeTemplate-reread → non-zero exit and its FAIL line [19.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=getPermission-not-found → non-zero exit and its FAIL line [18.00ms]
+(pass) --full gauntlet: FAKE_CLIENT_FAIL_STEP=decide-missing-request-token → non-zero exit and its FAIL line [18.00ms]
+
+test/tree-write-lock.test.ts:
+(pass) the preload's lock helper (exclusive) and every docker-epic child (flock -s) lock the same file [257.00ms]
+(pass) docker-epics.sh builds bin/ under the exclusive lock, then runs the epics [190.00ms]
+(pass) docker-epics.sh with a failing bin/ build: one prebuild diagnostic, empty stdout, no epic run [57.00ms]
+(pass) git ignores the tree-write lock file [1.00ms]
+
+test/smoke/version.test.ts:
+(pass) version: happy path — returns version, commit and config_dir [5.00ms]
+
+test/smoke/read-pane.test.ts:
+(pass) read-pane: happy path — returns the row's pane text from its fake-tmux session [38.00ms]
+(pass) read-pane: error — unknown id → ErrSpawnNotFound [16.00ms]
+
+test/smoke/make-template.test.ts:
+(pass) make-template: happy path — writes template file under HOME [16.00ms]
+(pass) make-template: error — agent_args with no agent → ErrTemplateAgentMissing, nothing written [14.00ms]
+(pass) make-template: error — unsafe name with path separator → ErrTemplateNameUnsafe [14.00ms]
+
+test/smoke/expire.test.ts:
+(pass) expire: happy path — an ended row with no session is deleted, none kept [32.00ms]
+(pass) expire: an ended row whose own session is still in tmux is kept, not deleted [53.00ms]
+
+test/smoke/send-keys.test.ts:
+(pass) send-keys: happy path — sends the text, then Enter, to the row's pane by id [43.00ms]
+(pass) send-keys: error — a pane answer whose sent write fails after its key → ErrInternal, errDetails key_sent [72.00ms]
+(pass) send-keys: error — a request not proven gone → ErrDialogMaybeOpen with errDetails; the pane's hash passes the hold [94.00ms]
+(pass) send-keys: error — unknown id → ErrSpawnNotFound [15.00ms]
+(pass) send-keys: negative n_lines rejects before reading or sending, leaving the row unchanged [39.00ms]
+
+test/smoke/get-permission.test.ts:
+(pass) get-permission: happy path — returns open permission request row [36.00ms]
+(pass) get-permission: error — unknown token → ErrPermissionRequestNotFound [15.00ms]
+
+test/smoke/resume.test.ts:
+(pass) resume: happy path — relaunches an ended spawn, pre_trust ok for an allowed row [42.00ms]
+(pass) resume: happy path — relaunches an ended spawn, pre_trust skipped for an opted-out row [41.00ms]
+(pass) resume: error — unknown id → ErrSpawnNotFound [15.00ms]
+
+test/smoke/pause.test.ts:
+(pass) pause: happy path — no-op for already-terminal spawn [27.00ms]
+(pass) pause: error — working spawn is not pausable → ErrSpawnNotPausable [30.00ms]
+(pass) pause: error — held as a plain sendKeys: ErrRelayFallenBack, then ErrDialogMaybeOpen; sendKeys `/exit` with the pane's hash passes [97.00ms]
+
+test/smoke/record-pane-answer.test.ts:
+(pass) record-pane-answer: happy path — closes a fallen-back request, typing nothing [70.00ms]
+(pass) record-pane-answer: error — too soon → ErrClaimTooSoon with errDetails.not_before confirm_by + 2 s [41.00ms]
+(pass) record-pane-answer: error — unknown token → ErrPermissionRequestNotFound, no errDetails [15.00ms]
+(pass) record-pane-answer: negative n_lines rejects before reading or recording a claim [60.00ms]
+
+test/smoke/decide.test.ts:
+(pass) decide: happy path — allows an open permission request, no bound [48.00ms]
+(pass) decide: happy path — allows an open permission request, max_wait_ms 2000 [41.00ms]
+(pass) decide: error — invalid decision string → ErrInvalidDecision [15.00ms]
+(pass) decide: error — negative max_wait_ms → ErrInvalidFlags, nothing recorded [35.00ms]
+
+test/smoke/get.test.ts:
+(pass) get: happy path — returns full spawn row fields [28.00ms]
+(pass) get: a codex row shows agent codex [26.00ms]
+(pass) get: pending row carries launch_started_at at its started_at instant (SR-22.2) [21.00ms]
+(pass) get: row with a recorded socket shows that exact tmux_socket (AC-LKP-22) [28.00ms]
+(pass) get: row from before the release has no tmux_socket key (AC-LKP-22) [26.00ms]
+(pass) get: a check_permission row carries its open requests with their delivery facts (b.146 rule 15) [35.00ms]
+(pass) get: error — unknown id → ErrSpawnNotFound [16.00ms]
+
+test/smoke/spawn.test.ts:
+(pass) spawn: happy path — creates instance with valid cwd, pre_trust ok [23.00ms]
+(pass) spawn: happy path — creates instance with valid cwd, pre_trust skipped [23.00ms]
+(pass) spawn: error — empty cwd → ErrCwdMissing [21.00ms]
+(pass) spawn: error — agent absent → {}, no row [21.00ms]
+(pass) spawn: error — agent empty, which counts as absent → {
+  agent: "",
+}, no row [20.00ms]
+(pass) spawn: error — agent Claude, wrong case → {
+  agent: "Claude",
+}, no row [20.00ms]
+(pass) spawn: error — id containing newline → ErrInvalidFlags, no row, no session [34.00ms]
+(pass) spawn: error — id containing tab → ErrInvalidFlags, no row, no session [37.00ms]
+(pass) spawn: error — id containing DEL (0x7f) → ErrInvalidFlags, no row, no session [34.00ms]
+(pass) spawn: error — id containing newline with reuse_finished → ErrInvalidFlags, no row, no session [35.00ms]
+(pass) spawn: reuse_finished without instance_id → fresh spawn with a minted id [22.00ms]
+(pass) spawn: reuse_finished over an ended row → reused, get shows pending [40.00ms]
+(pass) spawn: reuse_finished over an ended codex row, spawned as claude → the row now runs claude [44.00ms]
+(pass) spawn: error — ended row, reuse_finished absent → ErrInstanceIdCollision [46.00ms]
+(pass) spawn: error — ended row, reuse_finished false → ErrInstanceIdCollision [47.00ms]
+(pass) spawn: typed argument refusal — same agent short [33.00ms]
+(pass) spawn: typed argument refusal — switch print [31.00ms]
+(pass) spawn: typed argument refusal — switch value owned long [32.00ms]
+
+test/smoke/kill.test.ts:
+(pass) kill: happy path — Gone row, no kill sent [28.00ms]
+(pass) kill: error — unknown id → ErrSpawnNotFound [16.00ms]
+
+test/smoke/list-subagents.test.ts:
+(pass) list-subagents: happy path — every record key, nulls and the three time encodings, in order [38.00ms]
+(pass) list-subagents: a tracked row with no records reads an empty list [28.00ms]
+(pass) list-subagents: a Codex row returns an untracked empty array [26.00ms]
+(pass) list-subagents: error — unknown id → ErrSpawnNotFound [15.00ms]
+
+test/smoke/find-missing.test.ts:
+(pass) find-missing: happy path — empty store returns count=0 [14.00ms]
+
+test/smoke/status.test.ts:
+(pass) status: happy path — returns state field for seeded spawn [27.00ms]
+(pass) status: pending row carries launch_started_at as RFC3339 UTC (SR-22.2) [20.00ms]
+(pass) status: error — unknown id → ErrSpawnNotFound [14.00ms]
+
+test/smoke/list.test.ts:
+(pass) list: happy path — returns seeded spawns array [25.00ms]
+(pass) list: a codex row shows agent codex [25.00ms]
+(pass) list: a check_permission row carries its open requests with their delivery facts (b.146 rule 15) [36.00ms]
+(pass) list: error — invalid label format → ErrListInvalidLabel [16.00ms]
+
+test/internal/structuralDiff.test.ts:
+(pass) equal primitives → no throw
+(pass) equal null → no throw
+(pass) equal nested objects → no throw
+(pass) equal empty objects → no throw
+(pass) ignored top-level fields → no throw
+(pass) ignored [*] wildcard → no throw
+(pass) ignored exact index → no throw
+(pass) selector without leading dot → no throw
+(pass) root primitive differs → throws naming 1
+(pass) top-level field differs → throws naming {
+  foo: 1,
+}
+(pass) nested array element field differs → throws naming {
+  foo: [
+    {
+      bar: "x",
+      ok: 1,
+    }
+  ],
+}
+(pass) deep field differs → throws naming {
+  a: {
+    b: {
+      c: 1,
+    },
+  },
+}
+(pass) string vs number differs → throws naming {
+  count: "5",
+}
+(pass) array vs object differs → throws naming {
+  data: [ 1, 2 ],
+}
+(pass) null vs array differs → throws naming {
+  ids: null,
+}
+(pass) array length differs → throws naming {
+  ids: [ "a", "b" ],
+}
+(pass) extra key on the TS side differs → throws naming {
+  a: 1,
+}
+(pass) key missing on the TS side differs → throws naming {
+  a: 1,
+  b: 2,
+}
+(pass) only the differing field is reported
+
+ 429 pass
+ 0 fail
+ 1659 expect() calls
+Ran 429 tests across 57 files. [15.33s]

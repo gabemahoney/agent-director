@@ -1,0 +1,31 @@
+{
+  "base_HEAD": "4502008be0aee7a42ac9c4e82fd2e00e1b8309a6",
+  "pre_post_source_tree_equal": true,
+  "source_engineer": [
+    "internal/cursorhost/session.go"
+  ],
+  "test_writer": [
+    "test/driver-scripts/run_testplan_test.go",
+    "test/driver/run-testplan.sh",
+    "test/realtmux/cursor_relay_boundary_linux_test.go"
+  ],
+  "changed_paths": [
+    {
+      "path": "internal/cursorhost/session.go",
+      "sha256": "cd58e6f01037f2e651a83c55cc4c7210e37f04d3738e4c4e427ca117f6b473a8"
+    },
+    {
+      "path": "test/driver-scripts/run_testplan_test.go",
+      "sha256": "9db7b7c1acd871adafb2f5e55410a45bdeb412626750aa1618af743ee6ff144b"
+    },
+    {
+      "path": "test/driver/run-testplan.sh",
+      "sha256": "c86402ec5d2c4183b169a6b25b3dcd329a6eb521e0e0d134f070baf45a33df17"
+    },
+    {
+      "path": "test/realtmux/cursor_relay_boundary_linux_test.go",
+      "sha256": "149859addef894b8269bc53c343986200fcf9a03ad4885f30ea44036dd1b35a6"
+    }
+  ],
+  "spec_tla_changed": false
+}

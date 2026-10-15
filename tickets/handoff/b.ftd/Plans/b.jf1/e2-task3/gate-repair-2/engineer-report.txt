@@ -1,0 +1,31 @@
+E2 Task3 cancellation deadline repair — Source Engineer
+
+Ticket / status
+- Rework for t2.jf1.c1.3p, Epic t1.jf1.c1. No new subtask or status updates, as dispatched. No commits, staging, pushes, delegation or outbound messages.
+- Base HEAD 4502008be0aee7a42ac9c4e82fd2e00e1b8309a6, feature/b.ftd.
+- Read on-disk task/child ticket material (no callable Bees tools exposed), SRD t1.ftd.hj SR-3/4/5, CLAUDE.md, engineering guide, architecture Cursor sections, prior gate-repair repair/review reports, supplied raw gate log.
+
+Demonstrated cause
+- Supplied raw log lines 3–18 identify original cancel_busy failure: plan rejection reached ACP, the other permission remained undecided/undelivered/unproven, session/cancel reached ACP exactly once, and wait_gone expired with gateway/runtime still live.
+- In Run, admission stops the prompt deadline and sets requestDeadlineHeld. Ctrl-C calls requests.cancel(), making requests.open() false, sets cancelled=true and resets the shared timer to cancelWait (3 seconds). The next 50ms ticker cleared requestDeadlineHeld and, because busy remained true until correlated completion, reset that same timer to 30 minutes. Thus waiting for authorization retirement erased the finite cancellation bound. Unsupported/policy authorization requiring session cancellation used the same sequence and had the same defect.
+- Diagnostic rerun early_end jq parse failure is separate xtrace contamination; not repaired in this source lane.
+
+Exact source change
+- internal/cursorhost/session.go: request-hold release rearms the generation timer only when busy && !cancelled; two comment lines explain deadline ownership.
+- Shared guard applies to both existing cancellation initiation paths; each already sets cancelled before returning to select. Repeated interrupts retain their existing !cancelled gate and cannot reset the cancellation timer. Correlated completion still stops/reset flags as before.
+- Ordinary successful release still resumes generation timing. Another open request still blocks release through unchanged !requests.open(). No durable holds, acknowledgement-before-answer guards, authority checks, protocol/schema/API, fixtures, docs or models changed. TLA+ not applicable; zero model jobs.
+
+Focused validation
+- Exit 0: make sandbox CMD='go test -timeout 3m ./internal/cursorhost -run "^(TestCursorRuntimeWaitsForIndependentPlanAndPermission|TestCursorSessionDirectQuestionDoesNotCancelGenuineRequest|TestCursorQuestionPolicyPreservesIndependentHold|TestCursorQueuedAnswersLoseAuthority|TestCursorNativeFallbackAndRetirement|TestAuthorizationAlwaysDenied|TestCursorAckCommittedBeforeFirstByte)$" -count=1 -v'
+- Package PASS in 3.144s. {"all_pass_outcomes": 98, "fail_outcomes": 0, "top_level_passes": 7}
+- Raw receipt engineer-focused.log; exact diff engineer-source.diff; SHA-256 inventory engineer-hashes.json. git diff --check passed.
+- No full suite, collector, integration TESTPLAN, TLC/parser/Java, scheduler, live Cursor, authentication, host Go/Bun/artifacts or real AD-store execution. Existing sandbox fixture only. Original 1.5s unit guards unchanged.
+
+Regression gaps / next Test Writer
+- Existing targeted tests protect independent plan/permission flow, direct-question hold preservation, cancellation authority retirement, native retirement, all supported policy denials and ack-before-first-byte. They do not directly assert Run's finite cancellation deadline after a paused authorization timer, so focused PASS is not a cancellation regression proof.
+- Add focused Run-level regressions reusing the existing verified pane/runtime fixture: outstanding simultaneous plan+permission with one answer delivered and one still held, runtime receives cancellation but withholds correlated prompt completion, first cancelWait must expire; repeated interrupts must not extend first deadline or send a second cancellation; unsupported/policy-driven cancellation while an admitted request holds timing must obey the same bound. Preserve undecided/undelivered request and conservative stored holds, zero late answer and independent sentinel ownership checks.
+- Keep normal successful request release/generation timing and independent direct-question rejection covered; no expanded deadline/sleep-based retry workaround.
+- Next writer also owns diagnostic xtrace contamination repair, full units and user scheduler acceptance. External cursor-relay gate remains pending; no claimed integration pass.
+
+Deviations / failures / questions
+- No source-scope deviations or execution failures. Bees ticket read used the existing local ticket mirror because no Bees tool was exposed. No product decision or user question required.

@@ -1,0 +1,406 @@
+diff --git a/test/driver-scripts/run_testplan_test.go b/test/driver-scripts/run_testplan_test.go
+index d58942a8..4ea5b54f 100644
+--- a/test/driver-scripts/run_testplan_test.go
++++ b/test/driver-scripts/run_testplan_test.go
+@@ -45,20 +45,55 @@ func shellPlan(t *testing.T) (runner, root string) {
+ 	return filepath.Join(dir, "driver", "run-testplan.sh"), filepath.Join(dir, "tp")
+ }
+ 
+-// TestShellModeRerunStartsFromAFreshReset: a failing case's xtrace rerun runs
+-// after a db-reset of its own, so its trace shows the case's failure, not the
+-// first run's leftovers; a reset that fails skips the rerun and says so (b.ai5).
++// The original verdict owns the result; diagnostics cannot alter shell output or JSON.
+ func TestShellModeRerunStartsFromAFreshReset(t *testing.T) {
++	const expectedFailure = `
++set +e
++negative() { printf '{"error":"expected refusal"}\n' >&2; return 7; }
++result=$(negative 2>"$M.json")
++status=$?
++set -e
++[ "$status" -eq 7 ]
++jq -e '.error == "expected refusal"' "$M.json" >/dev/null
++[ -z "$result" ]
++`
+ 	for _, tc := range []struct {
+-		name          string
+-		failResetAt   string
+-		want, notWant []string // substrings of the case's details
++		name, failResetAt, script string
++		pass                      bool
++		want, notWant             []string
+ 	}{
+-		{"rerun after a fresh reset", "", []string{"CASE_FAILURE exit=1", "command=false", "xtrace_tail: "}, []string{"+ exit 7", "rerun skipped"}},
+-		{"reset before the rerun fails", "2", []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun skipped: db-reset failed before it"}, []string{"xtrace_tail"}},
++		{name: "rerun after a fresh reset", want: []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun failed (exit=1)", "xtrace_tail: "}, notWant: []string{"+ exit 7", "rerun skipped"}},
++		{name: "reset before the rerun fails", failResetAt: "2", want: []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun skipped: db-reset failed before it"}, notWant: []string{"xtrace_tail"}},
++		{name: "expected nonzero assignments and subshells pass silently", script: expectedFailure + `
++set +e
++(false)
++status=$?
++set -e
++[ "$status" -eq 1 ]
++printf 'PASS\n'
++`, pass: true, want: []string{"PASS"}, notWant: []string{"CASE_FAILURE", "expected refusal", "negative", "exit=7", "xtrace"}},
++		{name: "rerun preserves JSON stderr and original failure", script: expectedFailure + `
++set -e
++mode=held
++trap 'printf "cleanup\n%.0s" {1..12}' EXIT
++(test "$status" -eq 0)
++`, want: []string{"CASE_FAILURE exit=1", `command=test\ \"\$status\"\ -eq\ 0`, "mode=held", "xtrace rerun failed (exit=1)"}, notWant: []string{"parse error", "Invalid numeric"}},
++		{name: "passing rerun cannot promote failed original", script: expectedFailure + `
++set -e
++if [ "$(cat "$RESETS")" = 1 ]; then
++  (false)
++fi
++printf 'PASS\n'
++`, want: []string{"CASE_FAILURE exit=1", "command=false", "xtrace rerun passed (exit=0)"}},
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+ 			runner, root := shellPlan(t)
++			if tc.script != "" {
++				body := "---\nid: t2.p\n---\n```bash\n" + tc.script + "\n```\n"
++				if err := os.WriteFile(filepath.Join(root, "plan", "t2.p", "t2.p.md"), []byte(body), 0600); err != nil {
++					t.Fatal(err)
++				}
++			}
+ 			state := t.TempDir()
+ 			resets := filepath.Join(state, "resets")
+ 			r := run(t, []string{
+@@ -66,27 +101,50 @@ func TestShellModeRerunStartsFromAFreshReset(t *testing.T) {
+ 				"M=" + filepath.Join(state, "m"), "RESETS=" + resets, "FAIL_RESET_AT=" + tc.failResetAt,
+ 			}, "", "bash", runner)
+ 			var got struct{ Case, Status, Details string }
+-			for _, line := range strings.Split(r.stdout, "\n") {
++			for _, line := range strings.Split(strings.TrimSpace(r.stdout), "\n") {
+ 				var rec struct{ Case, Status, Details string }
+-				if json.Unmarshal([]byte(line), &rec) == nil && rec.Case == "t2.p" {
++				if err := json.Unmarshal([]byte(line), &rec); err != nil {
++					t.Fatalf("non-JSON driver stdout: %q: %v", line, err)
++				}
++				if rec.Case == "t2.p" {
+ 					got = rec
+ 				}
+ 			}
+-			if r.code != 1 || got.Status != "fail" {
+-				t.Fatalf("want exit 1 and case t2.p failed: %s", r)
++			wantCode, wantStatus, wantResets := 1, "fail", "2\n"
++			if tc.pass {
++				wantCode, wantStatus, wantResets = 0, "pass", "1\n"
++			}
++			if r.code != wantCode || got.Status != wantStatus {
++				t.Fatalf("want exit %d and case %s: %s", wantCode, wantStatus, r)
+ 			}
+-			if n, _ := os.ReadFile(resets); string(n) != "2\n" {
+-				t.Errorf("db-reset ran %q times, want 2 (before the case and before its rerun)", n)
++			if n, _ := os.ReadFile(resets); string(n) != wantResets {
++				t.Errorf("db-reset ran %q times, want %q", n, wantResets)
+ 			}
+ 			for _, s := range tc.want {
+ 				if !strings.Contains(got.Details, s) {
+-					t.Errorf("details lack %q: %q", s, got.Details)
++					t.Errorf("details lack %q: %q; stderr %s", s, got.Details, r.stderr)
+ 				}
+ 			}
+ 			for _, s := range tc.notWant {
+-				if strings.Contains(got.Details, s) {
+-					t.Errorf("details contain %q: %q", s, got.Details)
++				haystack := got.Details
++				if tc.pass {
++					haystack = r.stdout + r.stderr
+ 				}
++				if strings.Contains(haystack, s) {
++					t.Errorf("output contains %q: %q", s, haystack)
++				}
++			}
++			if tc.script != "" {
++				raw, err := os.ReadFile(filepath.Join(state, "m.json"))
++				if err != nil || !json.Valid(raw) || string(raw) != "{\"error\":\"expected refusal\"}\n" {
++					t.Errorf("command stderr contaminated: %q %v", raw, err)
++				}
++			}
++			if tc.pass && !t.Failed() {
++				t.Logf("passing original: exit=0, resets=1, failure markers across stdout/stderr/JSON=0, expected refusal stderr remains exact JSON")
++			}
++			if !tc.pass && tc.failResetAt == "" && !strings.Contains(r.stderr, "dedicated FD 8") {
++				t.Error("missing independently captured rerun trace")
+ 			}
+ 		})
+ 	}
+diff --git a/test/driver/run-testplan.sh b/test/driver/run-testplan.sh
+index 0e5c83ae..51f11828 100755
+--- a/test/driver/run-testplan.sh
++++ b/test/driver/run-testplan.sh
+@@ -148,73 +148,72 @@ run_case_shell() {
+         return 1
+     fi
+ 
+-    # Inherit ERR through functions, command substitutions and case subshells.
+-    # Report before an EXIT cleanup can hide the failing assertion in xtrace.
++    # ERR can fire for expected failures in command substitutions even when
++    # the case passes. Record privately, before EXIT cleanup; publish only
++    # after the whole case fails. Dedicated descriptors keep both diagnostics
++    # and rerun xtrace out of command output and redirected JSON error files.
++    local diagnostic_dir
++    diagnostic_dir="$(mktemp -d)"
+     local diagnostics
+     diagnostics=$(cat <<'DIAGNOSTICS'
+ set -E
+-trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&2' ERR
++trap 'rc=$?; printf "CASE_FAILURE exit=%s line=%s command=%q context=%s\n" "$rc" "$LINENO" "$BASH_COMMAND" "mode=${mode:-} relay=${relay:-} disabled=${disabled:-} seam=${seam:-} shape=${shape:-} case_dir=${case_dir:-}" >&9' ERR
+ DIAGNOSTICS
+ )
+     diagnostics+=$'\n'
+     local out rc
+-    out="$(bash -c "$diagnostics$script" 2>&1)" && rc=0 || rc=$?
++    out="$(bash -c "$diagnostics$script" 9>"$diagnostic_dir/original" 2>&1)" && rc=0 || rc=$?
+ 
+     if [[ "$rc" -eq 0 ]]; then
++        rm -f "$diagnostic_dir/original"
++        rmdir "$diagnostic_dir"
+         emit "$(emit_case "$case_id" pass "${out:0:200}")"
+         return 0
+     fi
+ 
+-    # Preserve every original diagnostic, including nested subshell failures,
+-    # outside the bounded JSON details field and before any diagnostic rerun.
+-    printf 'driver: original failure for %s (exit=%s)\n%s\n' "$case_id" "$rc" "$out" >&2
+-
+-    # Failure surfacing: with `set -euo pipefail` in t2 bodies, an early
+-    # assertion (`test ...`) that exits non-zero produces *no* stdout/stderr,
+-    # which means CI logs see only `exit=1: ` and the diagnosis from the
+-    # JSONL stream alone is impossible. Re-run under `bash -x` so the last
+-    # command attempted appears in stderr; the xtrace tail is then the
+-    # detail block.
+-    #
+-    # The rerun starts from a fresh DB-reset, as the first run did. Without
+-    # it the rerun meets the first run's leftovers (b.ai5: the first run's
+-    # cd- session made the rerun's spawn fail with ErrTmuxSessionConflict,
+-    # so the trace pointed at a step that had not failed).
+-    local xout="" xrc=0 reset_failed=0
++    local original_failures
++    original_failures="$(cat "$diagnostic_dir/original")"
++    printf 'driver: original failure for %s (exit=%s)\n%s\n%s\n' "$case_id" "$rc" "$original_failures" "$out" >&2
++
++    # Reset independently and preserve the original verdict even if the rerun
++    # passes. Xtrace uses FD 8, never the case's stderr or a command capture.
++    local xout="" xrc=0 reset_failed=0 trace="" rerun_failures=""
+     if bash "$DB_RESET" >&2; then
+-        xout="$(bash -x -c "$diagnostics$script" 2>&1)" && xrc=0 || xrc=$?
++        xout="$(BASH_XTRACEFD=8 bash -x -c "$diagnostics$script" 8>"$diagnostic_dir/trace" 9>"$diagnostic_dir/rerun" 2>&1)" && xrc=0 || xrc=$?
++        trace="$(cat "$diagnostic_dir/trace")"
++        if [[ "$xrc" -ne 0 ]]; then
++            rerun_failures="$(cat "$diagnostic_dir/rerun")"
++        fi
++        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n%s\n' "$case_id" "$xrc" "$rerun_failures" "$xout" >&2
++        printf 'driver: diagnostic xtrace for %s (dedicated FD 8)\n%s\n' "$case_id" "$trace" >&2
+     else
+         reset_failed=1
+     fi
+     local last_trace=""
+-    if [[ -n "$xout" ]]; then
+-        # Keep the last ~6 xtrace lines so the failing assertion is visible
+-        # without flooding the JSON details field. Drop empty lines.
+-        last_trace="$(printf '%s\n' "$xout" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
+-    fi
+-    if [[ -n "$xout" ]]; then
+-        printf 'driver: diagnostic rerun for %s (exit=%s)\n%s\n' "$case_id" "$xrc" "$xout" >&2
++    if [[ -n "$trace" ]]; then
++        last_trace="$(printf '%s\n' "$trace" | grep -vE '^$|^\+ (trap |set -E$)' | tail -n 6 | tr '\n' '|')"
+     fi
+     local assertion=""
+-    assertion="$(printf '%s\n' "$out" | grep '^CASE_FAILURE ' | head -n 1)" || true
++    assertion="$(printf '%s\n' "$original_failures" | tail -n 2 | tr '\n' '|')"
+     local combined="exit=${rc}"
+     if [[ -n "$assertion" ]]; then
+-        combined+=" | ${assertion:0:600}"
++        combined+=" | ${assertion:0:350}"
+     fi
+     if [[ -n "$out" ]]; then
+-        combined+=": ${out:0:300}"
++        combined+=": ${out:0:150}"
+     fi
+-    # The trace comes from a second run. When that run passes, its tail ends
+-    # at the case's success line and does not show the first run's failure:
+-    # say so, so the trace is not read as a failure after the success line.
+     if [[ "$reset_failed" -eq 1 ]]; then
+         combined+=" | xtrace rerun skipped: db-reset failed before it"
+     elif [[ "$xrc" -eq 0 ]]; then
+         combined+=" | xtrace rerun passed (exit=0): the trace below is that passing rerun, not the failure"
++    else
++        combined+=" | xtrace rerun failed (exit=${xrc})"
+     fi
+     if [[ -n "$last_trace" ]]; then
+         combined+=" | xtrace_tail: ${last_trace:0:400}"
+     fi
++    rm -f "$diagnostic_dir/original" "$diagnostic_dir/rerun" "$diagnostic_dir/trace"
++    rmdir "$diagnostic_dir"
+     emit "$(emit_case "$case_id" fail "${combined:0:800}")"
+     return 1
+ }
+diff --git a/test/realtmux/cursor_relay_boundary_linux_test.go b/test/realtmux/cursor_relay_boundary_linux_test.go
+index 6517e73d..a57d96da 100644
+--- a/test/realtmux/cursor_relay_boundary_linux_test.go
++++ b/test/realtmux/cursor_relay_boundary_linux_test.go
+@@ -153,3 +153,162 @@ func TestCursorRelayQueuedVerdictsNeverReplay(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// A held authorization must not replace the finite cancellation timer on release.
++func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
++	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
++	for _, mode := range []string{"interrupt", "policy", "successful release"} {
++		t.Run(mode, func(t *testing.T) {
++			script := relayCapturedScenario(t)
++			script.WaitForRelease = true
++			if mode == "policy" {
++				script.Requests = append(script.Requests, relayFrame("unsupported", "cursor/authorize", json.RawMessage(`{}`)))
++			}
++			f, r, launch := newCursorPaneScenario(t, false, "independent-worker", cursorPaneOptions{Script: &script, Relay: "on", Timeout: 30})
++			id := launch.ID
++			st, err := store.Open(f.DBPath)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer st.Close()
++			binding, err := st.ReadCursorRuntime(id)
++			if err != nil {
++				t.Fatal(err)
++			}
++			worker := 0
++			waitFor(t, "independent worker sentinel", func() bool {
++				raw, err := os.ReadFile(r.WorkerPID)
++				if err == nil {
++					fmt.Sscan(string(raw), &worker)
++				}
++				return worker > 0
++			}, nil)
++			before := readRow(t, f.DBPath, id)
++			if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: "held cancellation"}); err != nil {
++				t.Fatal(err)
++			}
++			rows := relayRequests(t, f, id, 2)
++			var permission, plan store.PermissionRow
++			for _, row := range rows {
++				var params struct {
++					Tool string `json:"toolCallId"`
++				}
++				if err = json.Unmarshal([]byte(row.ToolInput), &params); err != nil {
++					t.Fatal(err)
++				}
++				if params.Tool != "" {
++					plan = row
++				} else {
++					permission = row
++				}
++			}
++			if permission.RequestToken == "" || plan.RequestToken == "" {
++				t.Fatalf("missing independent plan/permission: %+v", rows)
++			}
++			if mode != "policy" {
++				if _, err = f.API.Decide(api.DecideParams{InstanceID: id, RequestToken: plan.RequestToken, Decision: "deny"}); err != nil {
++					t.Fatal(err)
++				}
++				waitFor(t, "only plan rejection received", func() bool { return len(relayReplies(t, r)) == 1 }, nil)
++				if got := relayReplies(t, r)[0]; string(got["id"]) != `"plan"` || !strings.Contains(string(got["result"]), `"outcome":"rejected"`) {
++					t.Fatalf("wrong independent plan answer: %v", got)
++				}
++			}
++			completed := false
++			assertPreserved := func() {
++				t.Helper()
++				row := readRow(t, f.DBPath, id)
++				if row.SessionID != before.SessionID || row.LaunchToken != before.LaunchToken || row.PanePID != before.PanePID || (!completed && row.State != store.StateCheckPermission) {
++					t.Fatalf("conversation/hold changed before termination: %+v", row)
++				}
++				if pidGone(worker) {
++					t.Fatal("cancellation killed independent worker sentinel")
++				}
++				if mode != "successful release" {
++					got, err := st.GetPermissionRequest(id, permission.RequestToken)
++					if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
++						t.Fatalf("cancellation released independent permission: %+v %v", got, err)
++					}
++					if mode == "policy" {
++						got, err = st.GetPermissionRequest(id, plan.RequestToken)
++						if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
++							t.Fatalf("policy cancellation released independent plan: %+v %v", got, err)
++						}
++					}
++				}
++			}
++			assertPreserved()
++			started := time.Now()
++			if mode == "successful release" {
++				if _, err = f.API.Decide(api.DecideParams{InstanceID: id, RequestToken: permission.RequestToken, Decision: "allow"}); err != nil {
++					t.Fatal(err)
++				}
++				waitFor(t, "both independent answers received", func() bool { return len(relayReplies(t, r)) == 2 }, nil)
++				// Generation remains live beyond cancellation's 3s bound, then completes normally.
++				waitForObserved(t, 5*time.Second, "ordinary generation continues after successful hold release", func() bool {
++					assertPreserved()
++					if pidGone(binding.GatewayPID) || pidGone(binding.RuntimePID) {
++						t.Fatal("ordinary hold release armed a cancellation deadline")
++					}
++					return time.Since(started) >= 3200*time.Millisecond
++				}, nil)
++				if err = os.WriteFile(r.Release, nil, 0600); err != nil {
++					t.Fatal(err)
++				}
++				waitFor(t, "successful release completes the same conversation", func() bool {
++					raw, err := os.ReadFile(before.JSONLPath.(string))
++					return err == nil && strings.Contains(string(raw), `"kind":"turn_outcome"`)
++				}, nil)
++				completed = true
++				assertPreserved()
++			} else {
++				lastInterrupt := time.Time{}
++				waitForObserved(t, 5*time.Second, "original cancellation deadline retires gateway and runtime", func() bool {
++					if pidGone(binding.GatewayPID) && pidGone(binding.RuntimePID) {
++						return true
++					}
++					assertPreserved()
++					if mode == "interrupt" && time.Since(lastInterrupt) >= 150*time.Millisecond {
++						launch.rt.run(t, "send-keys", "-t", launch.Row.PaneID.(string), "C-c")
++						lastInterrupt = time.Now()
++					}
++					return false
++				}, func() string {
++					return fmt.Sprintf("gateway=%s runtime=%s", procState(binding.GatewayPID), procState(binding.RuntimePID))
++				})
++				failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
++				if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), "operation timed out") {
++					t.Fatalf("expected original finite operation timeout: %v", failures)
++				}
++			}
++			cancels, permissionReplies, prompts, replies := 0, 0, 0, 0
++			for _, frame := range r.Frames(t) {
++				switch string(frame["method"]) {
++				case `"session/cancel"`:
++					cancels++
++					if !strings.Contains(string(frame["params"]), script.SessionID) {
++						t.Fatal("cancellation changed conversation")
++					}
++				case `"session/prompt"`:
++					prompts++
++				case "":
++					replies++
++					if mode == "policy" && (string(frame["id"]) != `"unsupported"` || len(frame["error"]) == 0) {
++						t.Fatalf("policy cancellation answered an admitted request: %v", frame)
++					}
++					if string(frame["id"]) == `"permission"` {
++						permissionReplies++
++					}
++				}
++			}
++			wantCancels, wantPermissionReplies, wantReplies := 1, 0, 1
++			if mode == "successful release" {
++				wantCancels, wantPermissionReplies, wantReplies = 0, 1, 2
++			}
++			if cancels != wantCancels || permissionReplies != wantPermissionReplies || replies != wantReplies || prompts != 1 || pidGone(worker) {
++				t.Fatalf("cancel=%d permission replies=%d total replies=%d prompts=%d sentinel gone=%v", cancels, permissionReplies, replies, prompts, pidGone(worker))
++			}
++			t.Logf("mode=%s original bound=5s elapsed=%s cancels=%d permission replies=%d sentinel preserved", mode, time.Since(started), cancels, permissionReplies)
++		})
++	}
++}

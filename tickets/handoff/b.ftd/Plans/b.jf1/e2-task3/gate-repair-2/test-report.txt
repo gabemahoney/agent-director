@@ -1,0 +1,50 @@
+E2 Task3 second repair — sole Test Writer
+
+Ticket / statuses
+- t3.jf1.c1.3p.56 reopened active before work; done after the one settled full sandbox run passed. Status updated in the existing local ticket mirror; no callable Bees tool was exposed.
+- Parent t2.jf1.c1.3p / Epic t1.jf1.c1 statuses untouched. No commits, staging, pushes, delegation or outbound messages.
+- Base HEAD 4502008be0aee7a42ac9c4e82fd2e00e1b8309a6, feature/b.ftd.
+
+Changed files and ownership
+- Test Writer: test/driver/run-testplan.sh; test/driver-scripts/run_testplan_test.go; test/realtmux/cursor_relay_boundary_linux_test.go.
+- Source Engineer's pre-existing change only: internal/cursorhost/session.go, busy && !cancelled guard. Test Writer never edited tracked production code. No docs, schemas, APIs, fixture runtime, models or collector predicates changed. All original .02 hold/error predicates remain unchanged.
+- Full changed-path SHA-256 inventory: test-changed-paths.json. Writer diff: test-source.diff. Exact sandbox commands: test-commands.json.
+
+Separate causal findings
+1. Original external .02 cancel_busy: interruption retires in-memory requests and arms 3s cancellation; the next ticker released the held authorization timer and previously overwrote it with the 30-minute generation deadline. Engineer's guard preserves cancellation ownership. This is the actual product deadline defect; unit evidence below proves both interrupt and policy paths.
+2. Diagnostic rerun early_end: bash -x function traces entered redirected JSON stderr and caused jq parsing failure. Independently, expected nonzero operations could trigger inherited ERR while the overall original case passed, leaking CASE_FAILURE into passing JSON details. These are driver defects, independent of the product timeout.
+
+Behavioral coverage
+- Added one three-cell table in the existing real-tmux relay boundary owner, reusing relayCapturedScenario/newCursorPaneScenario/cursorfix and the independent-worker sentinel. It runs the actual production CLI/gateway process and real tmux pane with the shared synthetic ACP peer; no live Cursor/authentication.
+- Interrupt: simultaneous captured permission+plan, plan rejection delivered exactly once, permission remains undecided/undelivered/unproven/unclosed/unanswered; repeated C-c cannot extend the first deadline. Actual gateway and runtime exit within the existing 5s guard, one session/cancel, zero permission reply, no new prompt.
+- Policy: two unresolved admitted requests followed by unsupported authorization; exactly its protocol error plus one session/cancel, no permission/plan answer. Both independent durable holds and conversation identity remain while cancellation is pending; gateway/runtime exit within 5s.
+- Success control: both requests answered normally; generation remains live past the real 3s cancellation interval, then release yields correlated normal completion on the same conversation. No session/cancel. This control does not wait out the 30-minute generation timeout.
+- All three preserve the independent worker sentinel and original conversation identity. No widened production cancelWait, no fake clock, no changed original Codex 1.5s deadline assertion.
+
+Driver behavior
+- Inherited ERR records exact command/status/line/context privately through FD 9 before EXIT cleanup. Only whole-case nonzero results publish records. Passing original cases discard them and never rerun.
+- Diagnostic xtrace uses FD 8 and a separate file, so function stderr redirection and command substitution cannot contaminate JSON. Trace is incorporated only in a failed original case's report. Original and rerun outcomes are explicitly distinct; rerun success cannot promote original failure.
+- Existing driver behavioral test extended as one five-cell table: genuine nested failure with verbose EXIT cleanup; fresh reset failure; expected nonzero assignment+subshell overall PASS; failing assertion after expected JSON error (rerun JSON still exact); failed original/passing rerun.
+- Passing-negative regression asserts no CASE_FAILURE/negative-command/exit=7/xtrace/error payload in combined stdout/stderr/JSON details, no rerun (one reset), original exit 0 and exact parsable JSON command stderr. Final focused receipt logs failure marker count=0. Failure cells retain the exact nested assertion/context ahead of cleanup, and explicit rerun exit.
+- No Bash errexit/pipefail/subshell behavior changed to suppress failures. Existing set -E inheritance remains; case scripts retain their own failure policy.
+
+Meaningful red evidence (all inside sandbox, retained)
+- test-cancel-red-final.log: Go overlay replaces only the guarded production line in an isolated /tmp source copy; the tracked production file is never changed. Both interrupt and policy cells fail at 5s with actual gateway/runtime still live; success control passes. Counts: 1 passing cell, 2 failing cells, 1 failing parent (3 FAIL outcomes total). Overlay diff is in the raw log and inherited GOFLAGS applies to real CLI builds.
+- test-driver-red.log: isolated temporary Go-package/driver copy with HEAD's original driver script. New passing-negative cell demonstrates leaked CASE_FAILURE and lost PASS details; rerun cells demonstrate actual JSON xtrace contamination and jq parse error. 1 passing cell, 4 failing cells, 1 failing parent. No tracked driver mutation.
+- Earlier raw receipts retained: test-driver-focused.log (test-side first-record summary gap), test-targeted-1.log (initial focused pass), test-cancel-red.log (also exposed a too-strict success-control state assertion after legitimate completion). Corrected that newly authored assertion to allow normal lifecycle completion; no production workaround or collector predicate relaxation.
+
+Settled validation
+- Final targeted command in test-commands.json: sandbox bash syntax + Go focused tests, count=1, timeout 3m. EXIT 0; 13 PASS outcomes / 0 FAIL, 3 top-level tests (5 driver cells + 3 held timer cells + 2 prior repeated-cancellation cells). Raw test-targeted-final.log.
+- Actual interrupt/policy elapsed: 3.029309643s / 3.031615822s within original 5s test guard; success control 3.23182147s. Cancellation counts 1/1/0, permission reply counts 0/0/1; sentinel preserved.
+- AFTER all source/test changes settled: exactly ONE make test-sandbox, EXIT 0. Go: 68 passing packages, 8 executed / 60 cached, 0 failed. Bun: 429 pass, 0 fail, 57 files, 1659 expects. Raw test-full.log. No full-suite rerun or retry-until-green.
+- git diff --check passed.
+- Pre/post full-tree inventories cover every tracked and nonignored untracked path, sorted with exact mode, byte length and content SHA-256 (symlinks hash link text). Both contain 2523 paths and identical canonical manifest SHA-256:
+  05544616f861d436fd81b8808840189806ded930e0815b95f1f01ebd8109ad77
+  Files: test-full-tree-pre.json / test-full-tree-post.json and their summaries. No source-tree drift during the full run. Ignored handoff/log/build outputs are outside this source-input inventory.
+
+Review / boundaries / remaining acceptance
+- Read all Task testing Subtasks and repository test writing / review guide. Coverage has one owner per behavior; table-driven tests reuse shared harness/runtime, without a collector metatest or parallel fake framework. No additional review correction remains.
+- All tests/binaries/scripts executed only through make sandbox CMD=... or make test-sandbox. No Docker TESTPLAN/collector execution, scheduler submission, live Cursor/auth/real AD stores/.claude access, host Go/Bun/artifact runs or E3 work.
+- No spec/tla model changes; TLA+ not applicable, zero model jobs. The full Go suite's cached test/tla package is not a TLC/parser/Java run.
+- External cursor-relay .02 / user scheduler acceptance remains pending. These receipts establish local regression/unit success, not an external collector or integration pass. Original external failed receipts remain preserved.
+- Deviations: only the explicitly requested driver/test scope and local mirrored status fallback above. Unexpected source failures: none. Incomplete implementation/test work: none. Questions for caller: none.

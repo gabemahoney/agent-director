@@ -1,0 +1,15 @@
+diff --git a/internal/cursorhost/session.go b/internal/cursorhost/session.go
+index 287da694..d4651f99 100644
+--- a/internal/cursorhost/session.go
++++ b/internal/cursorhost/session.go
+@@ -200,7 +200,9 @@ func Run(options Options, in *os.File, out io.Writer) (err error) {
+ 			}
+ 			if requestDeadlineHeld && !requests.open() {
+ 				requestDeadlineHeld = false
+-				if busy {
++				// Cancellation owns its fixed deadline even when it closes
++				// the authorization requests that paused prompt timing.
++				if busy && !cancelled {
+ 					resetDeadline(30 * time.Minute)
+ 				}
+ 			}
