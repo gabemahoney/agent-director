@@ -53,8 +53,9 @@ project `.codex/`, and it needs no cleanup. It holds:
   [Hooks](hooks.md#the-codex-entry-set)), each trusted by its own hash, so
   Codex shows no hook-review dialog for them in any launch, `no_pre_trust` and
   a failed pre-trust included.
-- **The typing setting.** Enter submits at once, so a multi-line text arrives
-  as one prompt.
+- **The typing setting.** Codex's paste-burst delay is disabled so Enter
+  requests submission at once. Submission confirmation is covered by the
+  [caller contract](caller-contract.md#unconfirmed-codex-submission).
 - **The question tool, off.** While `disable_ask_user` is on, Codex's question
   tool is turned off for the launch (see
   [Permissions](permissions.md#disable_ask_user-config)).

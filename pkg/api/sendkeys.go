@@ -21,6 +21,8 @@ import (
 type SendKeysStore interface {
 	// GetSpawn reads the row; an unknown id is ErrSpawnNotFound.
 	GetSpawn(instanceID string) (Spawn, error)
+	// GetSpawnWithin bounds the submission check's connection and lock waits.
+	GetSpawnWithin(instanceID string, maxWait time.Duration) (Spawn, error)
 	// PermissionRequestsForSpawn reads every permission request of the row.
 	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 	// AdoptIdentityIfUnchanged records a found launch identity when the
@@ -142,6 +144,9 @@ type SendKeysEnv struct {
 	// IntentHold is how long a pane answer's intent whose sender cannot be
 	// checked counts as in progress (paneIntentHold).
 	IntentHold time.Duration
+	// Sleep pauses between reads while checking a pending Codex submission.
+	// Nil uses time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // self is e.Self's identity, or the zero identity when it is nil.
@@ -205,6 +210,13 @@ type sendKeysGuard struct {
 //     typed literally), no Enter.
 //   - A pane answer (request_token; b.146 rule 8): exactly one key, never
 //     followed by Enter. See below.
+//
+// After a plain text/Enter send on a pending Codex row, a bounded read-only
+// check looks for same-launch turn activity in the hook-driven raw state.
+// SessionStart's waiting alone does not confirm submission. Absent evidence
+// gives ErrSubmissionUnconfirmed with keys_sent true; it never resends keys
+// or changes the row's state. A quick turn may finish between reads, so an
+// unconfirmed result means unknown, not a proven submission failure.
 //
 // State precondition: the row must be in a live interactive state (waiting,
 // working, ask_user or check_permission). A finished row (ended or missing)
@@ -433,6 +445,9 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	err = r.send(plan, params)
 	r.facts.keysFacts = r.found
+	if err == nil && row.Agent == store.AgentCodex && row.State == store.StatePending && plan.enter {
+		return r.confirmSubmission(row)
+	}
 	return err
 }
 
@@ -781,6 +796,11 @@ func isInteractiveState(state string) bool {
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
+//   - [ErrSubmissionUnconfirmed]: tmux accepted the pending Codex row's
+//     plain text and Enter, but the bounded hook-state check could not
+//     confirm submission. The keys were sent; never repeat text or Enter
+//     automatically. Check hook-derived get or status and escalate to the
+//     caller or a human if submission remains unknown.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs.
@@ -810,5 +830,6 @@ func (c *Client) sendKeysEnv() SendKeysEnv {
 		Relay:      c.relayView(),
 		Self:       c.paneSelf,
 		IntentHold: paneIntentHold(c.cfg.Tmux),
+		Sleep:      c.sleep,
 	}
 }

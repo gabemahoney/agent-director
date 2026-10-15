@@ -74,6 +74,11 @@ func (w *killStore) refuseAdopt(res api.CondResult) { w.adoptRes = res }
 // GetSpawn delegates.
 func (w *killStore) GetSpawn(id string) (api.Spawn, error) { return w.st.GetSpawn(id) }
 
+// GetSpawnWithin delegates with the caller's remaining wait.
+func (w *killStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
+	return w.st.GetSpawnWithin(id, maxWait)
+}
+
 // StoreID delegates.
 func (w *killStore) StoreID() string { return w.st.StoreID() }
 

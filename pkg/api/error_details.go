@@ -148,6 +148,15 @@ type PaneKeySentDetails struct {
 	RequestToken string `json:"request_token"`
 }
 
+// SubmissionUnconfirmedDetails distinguishes a successful tmux send from
+// confirmed agent submission. RowState is the last raw state read, not a
+// synthetic state or proof that the prompt remains unsubmitted.
+type SubmissionUnconfirmedDetails struct {
+	KeysSent            bool   `json:"keys_sent"`
+	SubmissionConfirmed bool   `json:"submission_confirmed"`
+	RowState            string `json:"row_state"`
+}
+
 // PaneChangedDetails is ErrPaneChanged's err_details (b.146 rule 7): the
 // number of trailing pane lines captured and compared (n_lines), and the
 // request named, if any. It never carries the pane's new hash: a caller reads

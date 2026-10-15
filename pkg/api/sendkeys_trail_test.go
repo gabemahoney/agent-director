@@ -137,6 +137,8 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ok", rowState: "check_permission", guard: "released"},
 		{name: "ours, live row", seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},
 		{name: "ours, pending row", seed: sktPending(pendingOurs), allow: true, outcome: "ok", rowState: "pending"},
+		{name: "pending Codex submission unconfirmed", seed: sktRow(codexSpec(store.StatePending, agentAlive, false)),
+			allow: true, outcome: "ErrSubmissionUnconfirmed", rowState: "pending"},
 		{name: "ours, pending row turned live by a SessionStart after the lookup: row_state the state read",
 			seed: func(t *testing.T, e *killEnv) killRow {
 				r := e.seedPending(t, pendingFresh, pendingOurs)

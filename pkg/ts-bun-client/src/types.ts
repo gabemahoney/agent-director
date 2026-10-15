@@ -838,6 +838,13 @@ export interface PaneKeySentDetails {
   request_token: string;
 }
 
+/** ErrSubmissionUnconfirmed's errDetails; submission remains unknown despite keys_sent. */
+export interface SubmissionUnconfirmedDetails {
+  keys_sent: true;
+  submission_confirmed: false;
+  row_state: string;
+}
+
 /**
  * ErrPaneChanged's errDetails. It never carries the pane's
  * new hash: read the pane again before any retry.

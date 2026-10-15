@@ -288,10 +288,10 @@ if err != nil {
 
 Returns `SendKeysResult` (empty struct, reserved for future fields).
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
-`ErrInvalidFlags`, `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`,
-`ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
+`ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
+`ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
 `ErrTmuxSessionConflict`, `ErrTmuxUnresponsive` and `ErrTmuxNotAvailable`.
-`api.ErrDetails(err)` gives structured permission and pane refusal facts.
+`api.ErrDetails(err)` gives structured submission, permission and pane facts.
 Permission holds, retry rules and timeout recovery are in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
@@ -318,6 +318,13 @@ behind (not this launch's session). The keys reach the agent's pane, but
 the caller cannot be sure the prompt it saw is still showing when they
 arrive.
 
+On an initially pending Codex row, a plain text-and-Enter or Enter-only
+send also checks for same-launch turn activity for up to 2 s.
+`ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
+`api.ErrDetails(err)`: `KeysSent`, `SubmissionConfirmed` and `RowState`.
+See [Unconfirmed Codex submission](../../docs/caller-contract.md#unconfirmed-codex-submission)
+for their meaning and recovery.
+
 `LivenessNote` `unreported` means an alive agent has not reported since
 launch. For action on pending rows see the
 [caller contract](../../docs/caller-contract.md#caller-contract).
@@ -331,8 +338,11 @@ interfaces for callers that supply their own dependencies:
 func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysParams) (SendKeysResult, error)
 ```
 
-`SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity and
-`IntentHold`. Most callers use the Client method, which supplies these.
+`SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
+`IntentHold` and an optional `Sleep` for submission checks (nil uses
+`time.Sleep`). Most callers use the Client method, which supplies these.
+Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
+bounding connection and lock waits by the supplied duration.
 See their godoc for each field's contract.
 
 ```go

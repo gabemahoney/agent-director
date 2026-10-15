@@ -34,6 +34,14 @@ var ErrClientClosed = errors.New("api: client is closed")
 // its current launch (SR-7.1, SR-18.14, SR-22.8).
 var ErrSpawnNotInteractive = errors.New("ErrSpawnNotInteractive")
 
+// ErrSubmissionUnconfirmed means tmux accepted a pending Codex row's plain
+// text and Enter (or Enter alone), but no same-launch turn activity was
+// observed within the bounded check. The keys were sent; submission remains
+// unknown. Callers must not repeat either the text or Enter automatically;
+// check hook-derived get or status, then escalate to the caller or a human
+// if submission remains unknown.
+var ErrSubmissionUnconfirmed = errors.New("ErrSubmissionUnconfirmed")
+
 // ErrSpawnNotPausable is returned by the pause verb when the target
 // Spawn's state is not pausable (SRD §9). Pausable means `waiting`;
 // `pending` / `working` / `ask_user` / `check_permission` all reject.

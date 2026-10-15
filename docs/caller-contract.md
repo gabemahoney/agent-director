@@ -25,6 +25,8 @@ error:
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
+- `send-keys` returning `ErrSubmissionUnconfirmed`: follow
+  [Unconfirmed Codex submission](#unconfirmed-codex-submission).
 - `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -84,6 +86,29 @@ To end a live row (`pending` included) and relaunch its id:
      `agent-director spawn --instance-id <id> --reuse-finished --agent <agent> --cwd <dir>`
 
    A caller whose ids agent-director mints spawns fresh instead.
+
+## Unconfirmed Codex submission
+
+On a Codex row that was `pending` when `send-keys` read it, a plain
+text-and-Enter or Enter-only send checks for turn activity for up to 2 s
+after tmux accepts the keys. It confirms only when the same launch reports
+`working`, `ask_user` or `check_permission`; `waiting` alone is not
+confirmation. The check uses hook state, never terminal text, and is not
+delayed by the configured state settle time. It does not apply to
+`--no-enter`, `--key` (even `--key Enter`), or permission pane answers.
+
+`ErrSubmissionUnconfirmed` means the keys were sent but submission is
+unknown. Its `err_details` contain `keys_sent: true`,
+`submission_confirmed: false` and `row_state`, the last raw state read.
+That state can differ from the settled state `get` shows. A turn that
+finishes between checks can also produce this error; it does not prove the
+prompt is stuck. The error can arrive sooner if the row finishes, changes
+launch or cannot be read.
+
+Do not automatically repeat the text or send another Enter. Check
+hook-derived `get` or `status`; if submission remains unknown, escalate to
+the caller or a human. Pane text is not submission evidence. The check
+sends no extra keys and changes no row state.
 
 ## Transcript recovery
 

@@ -57,7 +57,9 @@ refused, as for any `pending` row (once the agent has exited with an end
 report, `pause` ends the row instead; see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
-`allow_pending`. After the first prompt the row moves
+`allow_pending` (see
+[Unconfirmed Codex submission](caller-contract.md#unconfirmed-codex-submission)).
+After the first prompt the row moves
 with Codex's own events: a turn's prompt and tools read `working`, its end
 (`Stop`, or Esc) reads `waiting`, and a permission request reads
 `check_permission`. No Codex tool reads `ask_user`. A session change in the

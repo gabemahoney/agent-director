@@ -59,6 +59,7 @@ export {
   ErrTmuxSessionConflict,
   ErrTmuxKillFailed,
   ErrSpawnNotInteractive,
+  ErrSubmissionUnconfirmed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,
@@ -123,6 +124,7 @@ export type {
   ClaimTooSoonDetails,
   PaneChangedDetails,
   PaneKeySentDetails,
+  SubmissionUnconfirmedDetails,
   DialogMaybeOpenDetails,
 } from "./types.js";
 

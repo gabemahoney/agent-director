@@ -36,6 +36,8 @@ func errorName(err error) string {
 		return "ErrTmuxSendKeys"
 	case errors.Is(err, ErrSpawnNotInteractive):
 		return "ErrSpawnNotInteractive"
+	case errors.Is(err, ErrSubmissionUnconfirmed):
+		return "ErrSubmissionUnconfirmed"
 	case errors.Is(err, ErrSendKeysWhileRelayed):
 		return "ErrSendKeysWhileRelayed"
 	case errors.Is(err, ErrSpawnNotResumable):
