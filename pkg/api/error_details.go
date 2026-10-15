@@ -152,9 +152,14 @@ type PaneKeySentDetails struct {
 // confirmed agent submission. RowState is the last raw state read, not a
 // synthetic state or proof that the prompt remains unsubmitted.
 type SubmissionUnconfirmedDetails struct {
-	KeysSent            bool   `json:"keys_sent"`
-	SubmissionConfirmed bool   `json:"submission_confirmed"`
-	RowState            string `json:"row_state"`
+	// KeysSent is true: tmux accepted the keys sent to the agent's pane.
+	KeysSent bool `json:"keys_sent"`
+
+	// SubmissionConfirmed is false: no same-launch turn activity was confirmed.
+	SubmissionConfirmed bool `json:"submission_confirmed"`
+
+	// RowState is the last raw state read, not proof of submission or its absence.
+	RowState string `json:"row_state"`
 }
 
 // PaneChangedDetails is ErrPaneChanged's err_details (b.146 rule 7): the

@@ -128,7 +128,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 
 ## send-keys
 
-Send text into the agent's own pane: `\r` stripped, `\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). On a pending Codex row, a plain text/Enter send checks for same-launch turn activity for up to 2 seconds; absent evidence gives ErrSubmissionUnconfirmed with keys_sent true and submission_confirmed false. Do not repeat text or Enter automatically after that error: check hook-derived get or status; if submission remains unknown, escalate to the caller or a human. With request_token: a pane answer, one key, no Enter. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Strip `\r`, keep `\n`, add Enter (empty text: Enter only). request_token: one key only. Pending Codex: ErrSubmissionUnconfirmed: keys sent, submission unknown; no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. tmux: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE: timeout may mean delivery), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
