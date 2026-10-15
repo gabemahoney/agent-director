@@ -1,0 +1,13 @@
+{
+  "source_commit": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+  "accepted_by": "User attestation in conversation",
+  "docker_groups": 16,
+  "docker_result": "all green",
+  "cursor_relay": "10/10",
+  "cursor_owned_launch": "5/5",
+  "tla": "Not applicable: no model inputs changed; no jobs",
+  "raw_receipts": "No new receipt path or job IDs supplied; not invented",
+  "task": "t2.jf1.r8.sr",
+  "epic": "t1.jf1.r8",
+  "scope": "Task2 integration run passed; Task3 separately authorized including mandatory deadline repair. Historical deadline cause not resolved by Docker acceptance."
+}
