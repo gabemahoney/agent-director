@@ -1,0 +1,97 @@
+{
+  "status": "success",
+  "tickets": [
+    {
+      "ticket_id": "t2.jf1.r8.dt",
+      "ticket_type": "t2",
+      "title": "Task 1: Ordered human/API prompt admission and finite cancellation",
+      "body": "## Context\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Outcome\n\nReplace busy follow-up refusal with bounded, conversation-bound FIFO after the current turn and outstanding decisions. Preserve complete Unicode/newline text, initial-prompt priority and one active turn. Give controls priority, cancel every affected submission explicitly within existing bounds, protect ordered lifecycle records and prevent transient replay. Keep /clear and /new visibly refused until Task 2.\n\n## Acceptance Criteria\n\n- Complete all reviewed source, behavioral, documentation, advice and quality scope below.\n- Final settled make test-sandbox passes; retain failed receipts and actual limitations.\n- Do not mark the Task done until its exact-commit required scheduler gate is accepted.\n\n## Execution boundary\n\nUser: \u201cmake test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.\u201d\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n## Run Integration After This Task\n\nInterface changed: Input admission, queued dispatch, cancellation and transcript correlation across the owned Cursor gateway.\n\n## Test Writer Lanes\n\nSuggested lanes: 1\n- Lane 1: Ordered admission/control/transcript testing plus quality, all shared cursorfix/PTTY/report/real-pane correlated submission evidence.\nShared fixtures or helpers: cursorfix Runtime/Scenario, request and report barriers, protected transcript correlation, newCursorPaneScenario, real tmux and process observers; Task 2 adds guarded store/history fixtures; Task 3 adds the shared public caller adapter and collector evidence.\nOutside lanes: Final full-unit suite only\n\n\n## Task 1 local validation complete; interface gate pending\n\nAll10Subtasks done. Final make test-sandbox PASS:68Go packages (61cached),13withouttests;429Bun0fail57files1659assertions. Final2022-file manifest independentlyverifiedunchanged. Initial failedfullreceipt retained; onlycausaltestobservation/refusalwordingcorrections, no productdeadlinechange. R1\u2013R5 sourcefindings fixedwithcausalcoverage. PMapproved localcommit+exactSHAhandoff, no mandatoryprecommitrepairs or currentignoredsourcefindings. Inheritedarchitecture normalization A2\u2013A6/B3\u2013B8/C2\u2013C5/D1\u2013D2 remainsdeferred; verifiedwholebase+everydelta notfreshpersonalwhole/cleandocclaim.\n\nEvidence: tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/. No modelinputs changed: TLA+ notapplicable, noformaljobs. Task1/E3remainACTIVE pendinguseracceptedexactrevisionDocker. Task2/3remainDEFINED/UNSTARTED. No integration/authenticatedacceptance claim. Two earlierread-only .claude skillfileaccess deviations disclosedinreports; no settings/credentials/editsreported.\n\n\n## Task 1 exact-commit interface gate pending\n\nExact source `e57d03e6879b3e9768c74daf7e7cd41fbc8afd53`, local only on feature/b.ftd. All10Subtasks done; Task1/E3 ACTIVE until accepted user scheduler results. Final make test-sandbox PASS68Go (61cached),13withouttests;429Bun0fail57files1659assertions. PMapproved with no mandatoryprecommitrepair; R1\u2013R5 causallycovered.\n\nIntegration TestWriter: **could not run: user scheduler only**. Complete16Docker/167expectedcase commands: tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/handoff/SCHEDULER-HANDOFF.md. Transfer7ignored postcommitmetadatafiles separately. Independentlyverified2703committedinputs/2022unitinputs andmetadatahashes. TLA+ not applicable: no model inputs changed. Zeroformaljobs, no localDocker/TLC/parser/schedulerexecution or currentauthacceptance. Task2/3DEFINED/UNSTARTED.\n\nInheritedarchitecture normalizationA2\u2013A6/B3\u2013B8/C2\u2013C5/D1\u2013D2 remainsdeferred; no currentignoredsourcefindings. Two earlieragentread-only .claude skillfileaccess deviations remainrecorded, no settings/credentials/editsreported. Large94MBfailedrawlog retainedlocallywithcommittedhashinventory, excludedfromcommit.\n\n\n## Task 1 interface gate accepted\n\nUser explicitly accepted source `e57d03e6879b3e9768c74daf7e7cd41fbc8afd53`: all16Docker groupsgreen, cursor-relay10/10, cursor-owned-launch5/5. No TLA+: no spec/tla change. This supersedes the pending-gate note. No rawreceiptpath/job IDs supplied; acceptance is userattestation, not independently rerun here. Record: tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/gate-passed/gate-results.json. Task1done atuserdirection; Task2maystart. E3remainsACTIVE; Task3unstarted. No .claude reads allowed, evenread-only.\n",
+      "tags": [],
+      "parent": "t1.jf1.r8",
+      "children": [
+        "t3.jf1.r8.dt.xt",
+        "t3.jf1.r8.dt.66",
+        "t3.jf1.r8.dt.xv",
+        "t3.jf1.r8.dt.w2",
+        "t3.jf1.r8.dt.k4",
+        "t3.jf1.r8.dt.cc",
+        "t3.jf1.r8.dt.c4",
+        "t3.jf1.r8.dt.p7",
+        "t3.jf1.r8.dt.x9",
+        "t3.jf1.r8.dt.1t"
+      ],
+      "up_dependencies": [],
+      "down_dependencies": [
+        "t2.jf1.r8.sr"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:48.710225",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8dt4b3gehj6oeu3v6xfhydq7fkah",
+      "priority": null
+    },
+    {
+      "ticket_id": "t2.jf1.r8.sr",
+      "ticket_type": "t2",
+      "title": "Task 2: Confirmed clear/new conversation rotation",
+      "body": "## Context\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Outcome\n\nBuild on accepted Task 1. Support /clear and /new as aliases: cancel old work/queue, provisionally hold new input, confirm a genuinely fresh identity and consistently publish runtime/row/current-life history before admitting eligible held work. Failed rotation visibly refuses held input. Preserve strict startup binding, durable request guards, known-retired event isolation and real-process termination. Outstanding ACP prompts require correlated terminal cancellation within the fixed bound; idle rotation must not wait for a nonexistent response.\n\n## Acceptance Criteria\n\n- Complete all reviewed source, behavioral, documentation, advice and quality scope below.\n- Final settled make test-sandbox passes; retain failed receipts and actual limitations.\n- Do not mark the Task done until its exact-commit required scheduler gate is accepted.\n\n## Execution boundary\n\nUser: \u201cmake test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.\u201d\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n## Run Integration After This Task\n\nInterface changed: Authenticated same-launch conversation rotation, runtime/row identity and required history publication.\n\n## Test Writer Lanes\n\nSuggested lanes: 1\n- Lane 1: Subtasks1-5 sharedrotationprotocol/reportbarriers/runtime/realpane/storefault/identityhistory\nShared fixtures or helpers: cursorfix Runtime/Scenario, request and report barriers, protected transcript correlation, newCursorPaneScenario, real tmux and process observers; Task 2 adds guarded store/history fixtures; Task 3 adds the shared public caller adapter and collector evidence.\nOutside lanes: Finalfullunit6\n",
+      "tags": [],
+      "parent": "t1.jf1.r8",
+      "children": [
+        "t3.jf1.r8.sr.77",
+        "t3.jf1.r8.sr.zy",
+        "t3.jf1.r8.sr.5x",
+        "t3.jf1.r8.sr.zg",
+        "t3.jf1.r8.sr.pp",
+        "t3.jf1.r8.sr.eg",
+        "t3.jf1.r8.sr.8z",
+        "t3.jf1.r8.sr.78",
+        "t3.jf1.r8.sr.e9",
+        "t3.jf1.r8.sr.66",
+        "t3.jf1.r8.sr.vh",
+        "t3.jf1.r8.sr.be"
+      ],
+      "up_dependencies": [
+        "t2.jf1.r8.dt"
+      ],
+      "down_dependencies": [
+        "t2.jf1.r8.a8"
+      ],
+      "ticket_status": "active",
+      "created_at": "2026-10-15T12:11:50.305399",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8sr7z8yrcxw6ie17jusxd5w7ottv",
+      "priority": null
+    },
+    {
+      "ticket_id": "t1.jf1.r8",
+      "ticket_type": "t1",
+      "title": "E3 \u2014 Take over the pane with ordered prompts and safe conversation controls",
+      "body": "## Outcome and scope\nA human and AD caller share one editable pane input controller: successive multiline prompts run in order and interruption or conversation rotation never misroutes queued work.\nMaps PRD AC-3/4/5/10/15; SR-0.2, SR-3, SR-4, SR-6.2; R1/R4 interaction acceptance.\n\n## Acceptance criteria / demo\n1. In real tmux attach/type, bracketed paste and two successive multiline send-keys submissions preserve Unicode/newlines as separate complete prompts, without lost, duplicated, glued or carried text. Attach/detach and CLI/MCP caller restart retain the conversation; inspect the same output through read-pane.\n2. While one ACP turn runs, mix human and automated follow-ups. One observable order and FIFO execution after the turn and outstanding decisions finish is shown in the transcript/protocol trace. Ordinary follow-up never cancels an active turn, and every queued submission is bound to launch and confirmed conversation at acceptance.\n3. Give control commands/interruption priority while preserving observable input order. Interrupt cancels the active turn, its decisions and every not-started prompt, visibly identifying each cancellation; it preserves identity and cannot automatically restart work. Repeat with permission and plan dialogs and verify existing pending/hash/dialog/pause guards.\n4. Typed /clear and /new cancel work/queue, request a fresh session and change row identity/history only after authoritative confirmation. During rotation hold new input from submission; a failed rotation visibly refuses it and sends it to neither old nor new session. Old completion/session/child events do not replace the confirmed main identity or end a continuing launch.\n5. /exit is a terminal command, not model text; /exit and pause visibly cancel the queue and report ended only after real termination. Kill/crash cannot auto-replay transient queue entries. Persist ordered protected transcript records of submissions, cancellations, updates and outcomes and preserve previous conversation history within the same life; persistence failure is visible.\n6. Demonstrate question attempts remain automatic denials, with no question-answer UI, while actual permission/plan choices retain their request identity and fallback behavior from E2. A dialog appearing between capture and key delivery retains the inherited, documented safeguard limit rather than an invented guarantee.\n7. Acceptance artifact includes actual terminal actions plus correlated session/prompt ids and exact sent text. Emitted JSON alone cannot satisfy attach/paste/control acceptance; synthetic protocol edge cases are separately labelled.\n\n## Implementation/test and doc owners\nExtend cursorfix terminal sequence builders and real-tmux newRealTmux/newClientWith/startSession helpers; add table-driven queue/control/failure races and stale-session conditional-write cases beside runtime tests. Own integration slug cursor-pane-controls. docs/usage.md owns input/takeover/commands; docs/permissions.md owns input guards; docs/caller-contract.md/operator-actions.md own failed controls and recovery; architecture owns controller ordering and atomic session rotation.\n## Definition of done and execution boundary\nThis is a draft capability Epic, not authorization to build now. Future implementation must leave the codebase working and all existing tests passing; preserve Claude/Codex behavior and the final t1.ssz.qi amendments. Use existing composition/classifier/store/API seams, machine-readable errors, conditional launch/life writes, parameterized SQL, protected paths and no secret or raw-label leakage. All public CLI/MCP/Go/TypeScript parameters remain in parity through pkg/api; no default agent, screen classification, unrelated-controller gate bypass or new public control API.\nApply docs/engineering-guide.md and docs/test-writing-guide.md within this Epic: behavioral tests for new behavior/functions and error paths, table-driven shared factories, no helper/meta-tests or copied suites; extend SR-10 helpers, isolate HOME/store/socket/processes with unique ids, and add sandboxguard to state/exec packages. pkg/api tests declare parallel or a serial reason; Bun remains sequential. New/changed recovery advice gets a literal-follow test. If persistence changes, follow docs/migration-guide.md: guarded one-transaction-per-hop migration plus current fresh DDL, authorized upgrade twice/reentry, rollback/refusal/data-preservation and fresh/migrated convergence tests.\nCreate this capability's shell-executable integration collector/cases in tickets/testplans using the existing guide convention and register its slug in test/docker-epics.txt; each case maps AC/SR and emits deterministic JSON evidence, uses isolated fixtures and /opt/driver/sql.sh. Future execution is through operator-scheduled sandbox/Docker jobs (and any applicable existing model checks), never host tests/binaries or local Docker/TLC. Completion evidence includes all existing tests green plus affected CLI/MCP/Bun/real-tmux cases, supported runtime/platform and timing where relevant; label captured versus synthetic evidence. No test or acceptance touches personal credentials.\nUpdate only the named existing doc owners below, current behavior once per owner, with links instead of duplication; no new user manual, no guide-file feature edits except SR-11.1's narrowly required CLI-only exception inventory/rationale maintenance, no .claude edits, and generated references only via existing descriptions/generation. Update docs/architecture.md for changed boundaries and require reuse of any new reusable component. Future commits use the Plan Bee id b.jf1 as conventional-commit scope. No release/parity claim from unrun or synthetic-only acceptance.\n\n\n## Task 1 exact-commit interface gate pending\n\nExact source `e57d03e6879b3e9768c74daf7e7cd41fbc8afd53`, local only on feature/b.ftd. All10Subtasks done; Task1/E3 ACTIVE until accepted user scheduler results. Final make test-sandbox PASS68Go (61cached),13withouttests;429Bun0fail57files1659assertions. PMapproved with no mandatoryprecommitrepair; R1\u2013R5 causallycovered.\n\nIntegration TestWriter: **could not run: user scheduler only**. Complete16Docker/167expectedcase commands: tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/handoff/SCHEDULER-HANDOFF.md. Transfer7ignored postcommitmetadatafiles separately. Independentlyverified2703committedinputs/2022unitinputs andmetadatahashes. TLA+ not applicable: no model inputs changed. Zeroformaljobs, no localDocker/TLC/parser/schedulerexecution or currentauthacceptance. Task2/3DEFINED/UNSTARTED.\n\nInheritedarchitecture normalizationA2\u2013A6/B3\u2013B8/C2\u2013C5/D1\u2013D2 remainsdeferred; no currentignoredsourcefindings. Two earlieragentread-only .claude skillfileaccess deviations remainrecorded, no settings/credentials/editsreported. Large94MBfailedrawlog retainedlocallywithcommittedhashinventory, excludedfromcommit.\n\n\n## Task 1 interface gate accepted\n\nUser explicitly accepted source `e57d03e6879b3e9768c74daf7e7cd41fbc8afd53`: all16Docker groupsgreen, cursor-relay10/10, cursor-owned-launch5/5. No TLA+: no spec/tla change. This supersedes the pending-gate note. No rawreceiptpath/job IDs supplied; acceptance is userattestation, not independently rerun here. Record: tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/gate-passed/gate-results.json. Task1done atuserdirection; Task2maystart. E3remainsACTIVE; Task3unstarted. No .claude reads allowed, evenread-only.\n",
+      "tags": [],
+      "parent": "b.jf1",
+      "children": [
+        "t2.jf1.r8.dt",
+        "t2.jf1.r8.sr",
+        "t2.jf1.r8.a8"
+      ],
+      "up_dependencies": [
+        "t1.jf1.3e",
+        "t1.jf1.c1"
+      ],
+      "down_dependencies": [
+        "t1.jf1.th"
+      ],
+      "ticket_status": "active",
+      "created_at": "2026-10-13T22:28:15.618830",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8ostmz5usn8fs47f5vhqnufykb5u",
+      "priority": null
+    }
+  ],
+  "not_found": [],
+  "errors": []
+}

@@ -1,0 +1,14 @@
+{
+  "source_sha": "e57d03e6879b3e9768c74daf7e7cd41fbc8afd53",
+  "acceptance": "Explicit user attestation in this session; no raw receipt path or job IDs supplied",
+  "result": "passed",
+  "docker_groups_passed": 16,
+  "cursor_relay": "10/10",
+  "cursor_owned_launch": "5/5",
+  "formal": "TLA+ not applicable: no spec/tla change",
+  "job_ids": null,
+  "local_heavy_execution": false,
+  "task": "t2.jf1.r8.dt",
+  "next_task": "t2.jf1.r8.sr",
+  "no_claude_reads": "Explicit user restriction reaffirmed; applies to root and every role"
+}
