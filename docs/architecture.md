@@ -16708,8 +16708,14 @@ for modern requests. Its historical time abstraction conservatively holds
 recorded modern hooks until phase 2, including ACK, without separately modeling
 runtime ACKed/cannot-check release. `NoRace` and original actions remain
 unchanged. Six separate [`fixed-r2/`](../spec/tla/codex/b.w21/fixed-r2/README.md)
-contexts are `NOT_RUN`, with four predicted PASS and required reachability
-and ACK-shortcut mutant failures. `TestCodexJobArtifacts` restricts jar copies to safe,
+cases now match all predictions: four PASS plus the required reachability
+and ACK-shortcut mutant failures. The full seeded case completed with
+6,289,976 distinct states, depth 43, and all 22 safety/temporal checks. Its
+initial time-budget attempt remains incomplete evidence; a separate resource
+overlay raises memory, time and disk budgets while retaining identical
+model/cfg/jar/runner bytes. Archived allowlisted scheduler metadata and current
+context hashes are verified without an independent image-time identity claim.
+`TestCodexJobArtifacts` restricts jar copies to safe,
 unique manifest-declared b.w21 contexts with exact canonical bytes and hashes;
 it also keeps every job runner equal to `jobs/lib/tlcjob.sh`.
 
@@ -20742,12 +20748,42 @@ each file's doc comments carry the detail.
     and `TestReadmeTimingValuesTable` check `docs/configuration.md`'s commented
     `[tmux]` example block and its timing table: one entry per key in
     `config.TmuxKeys()` order, at its default, with its unit and safe
-    minimum (or "none"). `TestReadmeTimingValuesClaudeCodeMinimum` checks
-    that the user docs' Claude Code minimum statements (the README's Prerequisites, `docs/install.md`'s Requirements and
-    the `no_exec_form` item, found through `operatorActionsItem`) state
-    one version. Key names come from `config.TmuxKey`, never spelled.
+    minimum (or "none"). `TestReadmeTimingValuesAgentMinimum` checks, for
+    each agent in `agentMinimums` (Claude Code and Codex), that the README's
+    Prerequisites and `docs/install.md`'s Requirements each state the
+    minimum exactly once (`` `claude` (Claude Code) X or later``) and the
+    same version, that no other user doc states it, and that
+    `docs/operator-actions.md`'s item for that agent's launch failure (the
+    `no_exec_form` item for Claude Code, the "another reason" item for
+    Codex, found through `operatorActionsItem`) links to Requirements and
+    does not repeat the version. It also pins the Claude Code minimum to
+    the verified minimum from `claudeCodeVerifiedMinimum` (below), so a
+    stated version that differs from it fails; the Codex minimum is not
+    pinned, because no verified-minimum source exists for it (the
+    `minimum` field of its `agentMinimums` entry is nil). Key names come
+    from `config.TmuxKey`, never spelled.
     Run it with `go test ./pkg/api/ -run TestReadmeTimingValues -count=1`
     (in the sandbox).
+  - `readme_claude_minimum_test.go` (b.xmn): holds the helper
+    `claudeCodeVerifiedMinimum(t)` and the idle-prompt limit test.
+    The helper parses `internal/spawn/claudeoptions.go` with `go/parser`
+    (comments kept), reads the doc comment of the `claudeOptionTable`
+    declaration and extracts the version from "verified independently at
+    minimum X.Y.Z"; the source exports no constant, so the comment is the
+    one place the minimum is recorded. It fails the calling test when the
+    declaration, its comment or the statement is missing, so a reworded
+    comment is not skipped silently and a raise of the minimum there fails
+    the tests until the docs follow. `TestReadmeTimingValuesAgentMinimum`
+    (above) uses it for the Claude Code minimum.
+    `TestReadmeClaudeCodeIdlePromptLimit` checks `docs/hooks.md`'s
+    idle-prompt Notification section keeps its pre-2.1.288 intro sentence,
+    the limit for the derived minimum through 2.1.287 (the Notification can
+    fire while a background subagent runs and the row reads `waiting` until
+    the subagent's next tool hook), the statement that 2.1.288 and later
+    wait, and not the old unconditional "waits until background subagents
+    finish" claim. Run it with
+    `go test ./pkg/api/ -run TestReadmeClaudeCode -count=1` (in the
+    sandbox).
 - **Recovery wording scan** (`pkg/api/recovery_wording_test.go`, Epic 17;
   SR-18.4, SR-18.9, SR-18.16):
   - `TestRecoveryWordingScan` runs `apitest.AssertMustNot` with

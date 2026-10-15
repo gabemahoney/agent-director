@@ -13,16 +13,19 @@ packages (37 cached), 420 Bun tests, zero failures and make exit 0.
 The [submitted fixed-model results](b.w21/fixed/README.md) record ten PASS,
 three expected failures and one unexpected `NoRace` failure: thirteen of
 fourteen predictions match at `9d025f8f`. Full logs, counts and immutable
-predictions are archived. The [round-2 handoff](b.w21/fixed-r2/README.md)
-corrects the seeded modern ACK hold in the model; six separate contexts
-are ready, all **NOT_RUN** (four expected PASS, one reachability FAIL,
-one `NoRace` mutant FAIL). No production runtime changed.
+predictions are archived. The [round-2 results](b.w21/fixed-r2/README.md) correct the seeded modern
+ACK hold in the model. All six cases match: four PASS, one reachability
+FAIL and one `NoRace` mutant FAIL. The initial case completed at 6,289,976
+distinct states, depth 43, with all 22 checks including temporal properties;
+its earlier time-budget attempt remains archived as incomplete. The rerun
+resource overlay preserves unchanged model/cfg/jar/runner bytes. No production
+runtime changed.
 The [integration evidence](../../../test/b.w21/integration/README.md) records
 all fifteen jobs PASS at unchanged source `9d025f8f`: 152 EPIC cases plus
 22 install-mode assertions/five scenarios. Actual network off is the User's
 statement; historical network-on commands remain preserved. New mixed-store
 API tests pass in targeted sandbox runs (118 API/store and eight artifact
-cases). The fresh full sandbox suite also passed: 67 Go packages (39 cached),
+cases). The historical round-2 full sandbox suite also passed: 67 Go packages (39 cached),
 420 Bun tests, zero failures and make exit 0.
 See [unit receipts and review limits](../../../test/b.w21/README.md).
 

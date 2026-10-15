@@ -140,8 +140,11 @@ The [submitted fixed-model results](fixed/README.md) now record thirteen
 prediction matches out of fourteen: ten PASS, three expected failures and an
 unexpected `NoRace` failure at 3,835 distinct states/depth 11. The seeded
 modern ACK hold was a model error; production remains identical to `9d025f8f`.
-The [round-2 handoff](fixed-r2/README.md) has six separate ready contexts,
-all **NOT_RUN**. Eleven omitted cases use focused `B21Spec` with no modern
+The [round-2 results](fixed-r2/README.md) record all six predictions matched:
+four PASS and the intended reachability and `NoRace` mutant failures. The
+initial case completed with 6,289,976 distinct states, depth 43, including
+all temporal checks; its earlier incomplete attempt and resource-only rerun
+are archived separately. Eleven omitted cases use focused `B21Spec` with no modern
 Ask/HX transitions. The twelfth, `w21_mutant_close_only`, uses full `Spec`
 but fails `RelayHoldOnlyCurrentLaunch` in `Init`, before any transition
 exercises the changed modern `RelayHolds` branch. Their receipts remain tied
@@ -151,7 +154,7 @@ The separate [integration evidence](../../../../test/b.w21/integration/README.md
 records all fifteen user jobs PASS at immutable source `9d025f8f`, with 152
 EPIC cases and 22 install-mode assertions across five scenarios. Full run logs
 preserve source/context identity. New mixed-store API tests pass targeted
-sandbox checks; the fresh full sandbox suite passed with 67 Go packages
+sandbox checks; the historical round-2 full sandbox suite passed with 67 Go packages
 (39 cached), 420 Bun tests, zero failures and make exit 0. The earlier
 full-suite PASS remains historical. Local sandbox units are
 explicitly authorized; the earlier separate-host requirement is superseded.
@@ -164,4 +167,8 @@ legacy requests, legacy requests without `agent_gone` (including already-stuck
 The legacy default window is 24 h + 2 s. Another current request can still
 hold keys after the obsolete row releases. The [caller contract](../../../../docs/caller-contract.md#permission-relay)
 and [architecture](../../../../docs/architecture.md#requests-recorded-before-v7)
-describe that scope; corrected round-2 model results remain pending.
+describe that scope. All six corrected round-2 outcomes match their predictions;
+fresh post-merge unit validation passed with 67 Go packages (39 cached),
+420 Bun tests and make exit 0. Its receipt is in the
+[unit handoff](../../../../test/b.w21/README.md); final review and commit
+remain with the calling agent.

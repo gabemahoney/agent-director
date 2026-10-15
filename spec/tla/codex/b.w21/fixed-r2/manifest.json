@@ -1,7 +1,7 @@
 {
   "bug": "b.w21",
   "round": "fixed-r2",
-  "observed": "NOT_RUN",
+  "observed": "ALL_EXPECTED",
   "rules": "model-modern-liveness-correction-with-ack-shortcut-mutant",
   "source_path": "spec/tla/codex/src/B146R5Cx.tla",
   "source_sha256": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
@@ -60,7 +60,7 @@
       "origin_case": "w21_fixed_initial",
       "livecheck": "time",
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Full Spec rerun of the failed mixed-store job, retaining all submitted safety/liveness checks.",
       "enabled_knobs": [
         "PreV7Old",
@@ -74,6 +74,14 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_initial.cfg": "e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000702-bf3dab",
+          "j20261015001930-15ca4e"
+        ],
+        "final_job_id": "j20261015001930-15ca4e",
+        "expected_matches": true
       }
     },
     {
@@ -84,7 +92,7 @@
       "origin_case": "w21_fixed_modern_full_control",
       "livecheck": "time",
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Full original modern-only Spec with historical time liveness abstraction; no legacy seed.",
       "enabled_knobs": [
         "PreV7ReadRepair",
@@ -97,6 +105,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_modern_full_control.cfg": "d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000702-e3dee4"
+        ],
+        "final_job_id": "j20261015000702-e3dee4",
+        "expected_matches": true
       }
     },
     {
@@ -107,7 +122,7 @@
       "origin_case": null,
       "livecheck": "time",
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "Real lifecycle/timeout-ack/bypass actions retain NoRace and the current acknowledged live hook hold.",
       "enabled_knobs": [
         "PreV7Old",
@@ -121,6 +136,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_mixed_acked_live_time.cfg": "006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000702-38ad71"
+        ],
+        "final_job_id": "j20261015000702-38ad71",
+        "expected_matches": true
       }
     },
     {
@@ -131,7 +153,7 @@
       "origin_case": null,
       "livecheck": "exact",
       "expected": "PASS",
-      "observed": "NOT_RUN",
+      "observed": "PASS",
       "purpose": "The same focused mixed-store safety check with exact process liveness.",
       "enabled_knobs": [
         "PreV7Old",
@@ -145,6 +167,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_mixed_acked_live_exact.cfg": "35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000702-4884e8"
+        ],
+        "final_job_id": "j20261015000702-4884e8",
+        "expected_matches": true
       }
     },
     {
@@ -155,7 +184,7 @@
       "origin_case": null,
       "livecheck": "time",
       "expected": "FAIL(Invariant_B21MixedAckedLiveUnreachable_is_violated)",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_B21MixedAckedLiveUnreachable_is_violated)",
       "purpose": "Required nonvacuity counterexample reaches released legacy plus current denied/acked/live hook at phase 1.",
       "enabled_knobs": [
         "PreV7Old",
@@ -169,6 +198,13 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_mixed_acked_live_probe.cfg": "420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000703-bb16b3"
+        ],
+        "final_job_id": "j20261015000703-bb16b3",
+        "expected_matches": true
       }
     },
     {
@@ -179,7 +215,7 @@
       "origin_case": null,
       "livecheck": "time",
       "expected": "FAIL(Invariant_NoRace_is_violated)",
-      "observed": "NOT_RUN",
+      "observed": "FAIL(Invariant_NoRace_is_violated)",
       "purpose": "Only the old modern RelayHolds predicate is restored; the original race detector must reject the bypass send.",
       "enabled_knobs": [
         "PreV7Old",
@@ -193,7 +229,43 @@
         "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
         "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
         "w21_r2_mutant_ack_shortcut.cfg": "be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3"
+      },
+      "evidence": {
+        "attempts": [
+          "j20261015000703-99fcf3"
+        ],
+        "final_job_id": "j20261015000703-99fcf3",
+        "expected_matches": true
       }
     }
-  ]
+  ],
+  "receipts": {
+    "file": "model-r2-receipts.json",
+    "sha256": "6d0ae0ac3ed2120384750fb3b8412e61aadf5dee29962a2a161701ec413785d4"
+  },
+  "resource_overlay": {
+    "job_id": "j20261015001930-15ca4e",
+    "case": "w21_r2_initial",
+    "context_dir": "/tmp/claude-1000/ad-codex/w21-r2-initial-big",
+    "sha256": {
+      "B146R5Cx.tla": "2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f",
+      "Dockerfile": "f822fc2cacddeda2704c60b4b8c6f5b157349fca6e755d9ff2af9f3dec755116",
+      "runs": "351288d83d62b68e08f5d15cc48003479e48271519951dce720a5b109e5687b7",
+      "tla2tools.jar": "32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81",
+      "tlcjob.sh": "00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284",
+      "w21_r2_initial.cfg": "e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d"
+    },
+    "files": {
+      "Dockerfile": {
+        "source": "/tmp/claude-1000/ad-codex/w21-r2-initial-big/Dockerfile",
+        "text": "# Scheduler only; user submits.\n# Expected PASS; observed NOT_RUN.\nFROM eclipse-temurin:21-jre\nWORKDIR /work\nCOPY . /work/\nENV XMX=16g DIRECT=4g BUDGET=10200 DISKCAP_MB=30000\nCMD [\"/work/tlcjob.sh\"]\n",
+        "sha256": "f822fc2cacddeda2704c60b4b8c6f5b157349fca6e755d9ff2af9f3dec755116"
+      },
+      "runs": {
+        "source": "/tmp/claude-1000/ad-codex/w21-r2-initial-big/runs",
+        "text": "# b.w21 r2 expected=PASS; observed=NOT_RUN\nB146R5Cx w21_r2_initial @10000\n",
+        "sha256": "351288d83d62b68e08f5d15cc48003479e48271519951dce720a5b109e5687b7"
+      }
+    }
+  }
 }

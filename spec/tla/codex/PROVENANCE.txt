@@ -9,11 +9,23 @@ Scope of historical results and current files
   fourteen submitted fixed jobs have ten PASS, three expected FAIL and one
   unexpected NoRace FAIL (13/14 predictions match), archived with original
   predictions and full logs. The model-only modern ACK correction has six
-  separate fixed-r2 jobs, all NOT_RUN. Production runtime remains identical
-  to 9d025f8f; integrations passed there, and the fresh full unit suite
-  passed (67 Go packages, 39 cached; 420 Bun tests; make exit 0). See b.w21/README.md, fixed/README.md and
-  fixed-r2/README.md. Every pin identifies current file bytes, not an assertion
-  that the corrected model was checked.
+  separate fixed-r2 cases, all matching: four PASS and two intended invariant
+  failures. Seven attempts are archived, including the incomplete initial
+  time-budget attempt and separate completed resource rerun (6,289,976 states,
+  depth 43, all 22 checks including temporal properties). The resource overlay
+  raises heap/direct memory, time and disk budgets without changing the model,
+  cfg, jar or runner. Current context hashes and allowlisted scheduler metadata
+  are verified; the scheduler tar hash is opaque, with no independent image-time
+  identity claim. Production runtime remains identical to 9d025f8f; all fifteen
+  integrations passed there. Historical round-2 units passed (67 Go packages,
+  39 cached; 420 Bun tests; make exit 0). Fresh units after merging main
+  728180eb also passed: 67 Go packages (39 cached), 12 without tests,
+  420 Bun tests across 57 files and make exit 0. All 714 test-file hashes
+  were unchanged during that run; the unit handoff preserves the exact
+  command, merge parents, source hashes and complete receipt references.
+  This final documentation-only receipt and pin refresh follows that run.
+  See b.w21/README.md, fixed/README.md and fixed-r2/README.md. Every pin
+  identifies current file bytes; execution claims belong to archived receipts.
 
 What this is
   Bee b.ssz's TLA+ check of the Codex design changes: the Codex session-end
@@ -125,12 +137,15 @@ b.w21 additions (separate from the historical b.ssz layout)
   b.w21/fixed/model-fixed-receipts.json
                           complete submitted fixed logs and prediction overlay;
                           immutable source/context bytes remain anchored to Git.
-  b.w21/fixed-r2/          six separate model-correction contexts, manifest,
-                          cfgs, generators, verifier and user commands; NOT_RUN.
+  b.w21/fixed-r2/          six frozen model-correction contexts, cfgs and commands;
+                          manifest ALL_EXPECTED with a separate resource overlay
+  b.w21/fixed-r2/model-r2-receipts.json
+                          seven full logs, user receipt, allowlisted metadata,
+                          frozen baseline manifest and resource file bytes
 
 Pins (sha256sum format, paths relative to spec/tla/codex/)
-4d5e84938cb92ad7a584ad7207009abf7273c7d7182466eddb5bf4157c3c5107  README.md
-ffa0d1e33e4e38e6c9ff87aa8dce3d06e6b7d34bd0d698af4fdd098f850b9216  b.w21/README.md
+facdc7569c3126631230f614b8f65acdb7bcf467d6abca080a6f23593fe3982e  README.md
+d598b6f2bd23b0a72568249bca509ed7eb9205522efa842bc55c326bbcedf865  b.w21/README.md
 4a32aa242f83aebb73fae8687775f7482b74e147e90c42a414b8c383e93eb8b7  b.w21/cfg/w21_current_launch_control.cfg
 79ff72074bcf256f73767b4e73202f7afeb2644b59c522d129454daca9b09912  b.w21/cfg/w21_expired_deny_live_red.cfg
 4c53c668af09c2b0929a0105f38b90547f372864670630e599dd99cb9e368462  b.w21/cfg/w21_expired_deny_red.cfg
@@ -140,7 +155,55 @@ d888a897dba6088418746c3f15e69250aa52bcc58553892b3335515409a82591  b.w21/cfg/w21_
 0662bf35a4803cb7b277fe7cc90c542de54f857cdbfd3a5e076bc113a536aa50  b.w21/cfg/w21_pane_write_probe.cfg
 e88015ef3ff408c9f0e7d5fd4fd28966c9a91a02739126982afb64ee9559e6ef  b.w21/cfg/w21_relaunch_probe.cfg
 d89beb1ae4a5e8a73b13f0d53ef8f60edd05700dfdf85808ead2d34b3fd195b3  b.w21/cfg/w21_relaunch_red.cfg
-2826f56e3a4630f3b7f9683ea78de074a9a4887cad1d28ef5ed7597eee0a6f6f  b.w21/fixed/README.md
+dd9d2e385cdc6ab86be37f4ed7bcdb23e8e6c8efaef50249e132cb3724d56a9b  b.w21/fixed-r2/README.md
+e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d  b.w21/fixed-r2/cfg/w21_r2_initial.cfg
+35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_exact.cfg
+420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_probe.cfg
+006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_time.cfg
+d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6  b.w21/fixed-r2/cfg/w21_r2_modern_full_control.cfg
+be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3  b.w21/fixed-r2/cfg/w21_r2_mutant_ack_shortcut.cfg
+2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_initial/B146R5Cx.tla
+a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_initial/Dockerfile
+452e2c0973514ec3e0aabebc7045cb2fd15d32bd7c0c3ca0cd5f7a4901def8e3  b.w21/fixed-r2/jobs/w21_r2_initial/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_initial/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_initial/tlcjob.sh
+e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d  b.w21/fixed-r2/jobs/w21_r2_initial/w21_r2_initial.cfg
+2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/B146R5Cx.tla
+a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/Dockerfile
+1d7a3266c2194e47a34c766f3ccfea3703e3a2c81036f54ed43b8cc0c48bbca6  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/tlcjob.sh
+35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/w21_r2_mixed_acked_live_exact.cfg
+2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/B146R5Cx.tla
+da1241f3397cf72e86fb49e7d8a3bb4988c803070c3c772436a75e5b56f0e340  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/Dockerfile
+780268c41b83383638c0c8582797b38321e419d24ec537043bb2d56213f781c4  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/tlcjob.sh
+420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/w21_r2_mixed_acked_live_probe.cfg
+2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/B146R5Cx.tla
+a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/Dockerfile
+910d86190afebe26ce17d700fb53645afddf126d19f9ac22c37ee783d7ae8fb9  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/tlcjob.sh
+006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/w21_r2_mixed_acked_live_time.cfg
+2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/B146R5Cx.tla
+a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/Dockerfile
+876b7c6447bca00781852d53359b7c2962e720180a5fa9b193556740ea0648ca  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/tlcjob.sh
+d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/w21_r2_modern_full_control.cfg
+15d24efa20e9d922180d048194bd571a4530c244315ca81fcaf3f1ea67f85cdf  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/B146R5Cx.tla
+75ec4deb029ae8396197429e8ec6f920f383a1b167d44d9fff359221a8035b24  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/Dockerfile
+91eb2fe8b88440efc604de80bfafe4c3f6076314e07eca2abe72562cccaa49e2  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/runs
+32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/tla2tools.jar
+00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/tlcjob.sh
+be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/w21_r2_mutant_ack_shortcut.cfg
+713741ce7c5609361ebb7835f17f2830be614280d99b705517f003628597d348  b.w21/fixed-r2/manifest.json
+f53fd19b98ce40bf5565e01d55791c4cf8b95dac48cc96862ab1aef65af69474  b.w21/fixed-r2/mkcontexts.py
+6d0ae0ac3ed2120384750fb3b8412e61aadf5dee29962a2a161701ec413785d4  b.w21/fixed-r2/model-r2-receipts.json
+27cbfbbeb56bdf3b941cad76ecdeb63f2fd9fde0859e5b74d2a03e47832991ab  b.w21/fixed-r2/scheduler-commands.txt
+4118460509968c2f149622034ad113fe626d78f84b8a6499987b6187936bbd3d  b.w21/fixed-r2/verifycontexts.py
+5aca36d6dbd1b4b6462ec04221cbae41810179e60a381133800d761cb201b82a  b.w21/fixed/README.md
 2752bb2de719bc577be6b77d18c9d31d7deb6bf87e18c77e8fa242e3037f841a  b.w21/fixed/cfg/w21_fixed_current_launch_control.cfg
 5e25933a518c9c8945808499d4401fc6d1fa80e7c8c75fd28312f5de73fbf24f  b.w21/fixed/cfg/w21_fixed_expired_deny.cfg
 edf54841d68f6b3dbca905eddd4b42bfb133b1055e4a16c5a09c916597122b77  b.w21/fixed/cfg/w21_fixed_expired_deny_live.cfg
@@ -244,53 +307,6 @@ daf2633d330751b964f52cab15d7af7f013a7f404b9641abdb8c85c53a4c6f03  b.w21/fixed/jo
 7ff902d9c633389019e6f60719f0c4c3283d14941410c1989b856e9a6e0bd4c3  b.w21/fixed/model-fixed-receipts.json
 626a2973ff3f4b834d68f3282794e0cb590b071884caa7a1f2ba1ef66a51996b  b.w21/fixed/scheduler-commands.txt
 de2e69810ef4533f5da8650b7ea653bbdfba092f7dfd9e3e8b85497581fceaba  b.w21/fixed/verifycontexts.py
-d2b25470adaae7512615a1d0aca20cd234aa79f2786569a0871326bca85dc1d9  b.w21/fixed-r2/README.md
-e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d  b.w21/fixed-r2/cfg/w21_r2_initial.cfg
-35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_exact.cfg
-420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_probe.cfg
-006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_time.cfg
-d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6  b.w21/fixed-r2/cfg/w21_r2_modern_full_control.cfg
-be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3  b.w21/fixed-r2/cfg/w21_r2_mutant_ack_shortcut.cfg
-2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_initial/B146R5Cx.tla
-a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_initial/Dockerfile
-452e2c0973514ec3e0aabebc7045cb2fd15d32bd7c0c3ca0cd5f7a4901def8e3  b.w21/fixed-r2/jobs/w21_r2_initial/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_initial/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_initial/tlcjob.sh
-e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d  b.w21/fixed-r2/jobs/w21_r2_initial/w21_r2_initial.cfg
-2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/B146R5Cx.tla
-a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/Dockerfile
-1d7a3266c2194e47a34c766f3ccfea3703e3a2c81036f54ed43b8cc0c48bbca6  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/tlcjob.sh
-35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_exact/w21_r2_mixed_acked_live_exact.cfg
-2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/B146R5Cx.tla
-da1241f3397cf72e86fb49e7d8a3bb4988c803070c3c772436a75e5b56f0e340  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/Dockerfile
-780268c41b83383638c0c8582797b38321e419d24ec537043bb2d56213f781c4  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/tlcjob.sh
-420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_probe/w21_r2_mixed_acked_live_probe.cfg
-2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/B146R5Cx.tla
-a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/Dockerfile
-910d86190afebe26ce17d700fb53645afddf126d19f9ac22c37ee783d7ae8fb9  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/tlcjob.sh
-006bd21395629244cd3391d732007d045d6e934b18dd9843e434e2c41054b643  b.w21/fixed-r2/jobs/w21_r2_mixed_acked_live_time/w21_r2_mixed_acked_live_time.cfg
-2b29c38b1ed884ea3c5eca5fd3c65613e087ff72e43088540cedc5845a508f1f  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/B146R5Cx.tla
-a9157ecbdd5bd506c8a7130fa7c2ff6b4345447ba1a8150ad2df0143d444deb8  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/Dockerfile
-876b7c6447bca00781852d53359b7c2962e720180a5fa9b193556740ea0648ca  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/tlcjob.sh
-d325d848fe03b5cc4959b83a8718cbdff84ff24085cfbb1bb9bcab1a91502cb6  b.w21/fixed-r2/jobs/w21_r2_modern_full_control/w21_r2_modern_full_control.cfg
-15d24efa20e9d922180d048194bd571a4530c244315ca81fcaf3f1ea67f85cdf  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/B146R5Cx.tla
-75ec4deb029ae8396197429e8ec6f920f383a1b167d44d9fff359221a8035b24  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/Dockerfile
-91eb2fe8b88440efc604de80bfafe4c3f6076314e07eca2abe72562cccaa49e2  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/runs
-32d64fbbc464559fc7192341b27b885fa4eb6b92d1648d2b49fb9cdcb7aacf81  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/tla2tools.jar
-00d1b53308095c164b4ea7fa8accfa9b904c3085f00aa60f5b7e52bc92fce284  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/tlcjob.sh
-be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3  b.w21/fixed-r2/jobs/w21_r2_mutant_ack_shortcut/w21_r2_mutant_ack_shortcut.cfg
-b58999c89c5cc9237b46d7fa706fcb71ffebe7347bf8d3680800e50823ee7066  b.w21/fixed-r2/manifest.json
-f53fd19b98ce40bf5565e01d55791c4cf8b95dac48cc96862ab1aef65af69474  b.w21/fixed-r2/mkcontexts.py
-27cbfbbeb56bdf3b941cad76ecdeb63f2fd9fde0859e5b74d2a03e47832991ab  b.w21/fixed-r2/scheduler-commands.txt
-73ec8d852c2c736cc2d1f6515e64d445b42a279db7ff7b7cac648f7351107f08  b.w21/fixed-r2/verifycontexts.py
 3901dee2cefba073cff3ef53c9b511af16d5d84b9836d2a92d64ca15a723e43e  b.w21/jobs/w21_current_launch_control/B146R5Cx.tla
 ccf4685a9bc884bb1a15241dc857787ce4b3154c72eae289e75742e8f5f5b7a1  b.w21/jobs/w21_current_launch_control/Dockerfile
 0270c4470a044b32a95c14afe6b679c1fed4b16741c3da72a6d0829924af2e5f  b.w21/jobs/w21_current_launch_control/runs

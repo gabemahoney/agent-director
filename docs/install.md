@@ -8,7 +8,7 @@
   [configuration](configuration.md)) names an executable file, or its program
   name (`claude`, `codex`) is on PATH. With neither, the install stops and names
   both.
-- For Claude Code: `claude` (Claude Code) 2.1.296 or later
+- For Claude Code: `claude` (Claude Code) 2.1.280 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.
 - For Codex: `codex` (Codex) 0.159.2 or later, the native Codex program, not a

@@ -6,13 +6,14 @@ All fourteen user-scheduler results at source
 manifest, receipt text, complete logs and SHA-256 hashes.
 [manifest.json](manifest.json) records **MISMATCH**: ten PASS results,
 three expected failures and one unexpected `NoRace` failure. Thirteen of
-fourteen predictions match. The corrected model is awaiting the separate
-[round-2 scheduler jobs](../fixed-r2/README.md); no corrected-model PASS is
-established.
+fourteen predictions match. The separate [round-2 results](../fixed-r2/README.md)
+establish four corrected-model PASS results and the two intended invariant
+failures; this original mismatch remains historical evidence.
 
 The submitted `cfg/`, `jobs/`, predictions and context hashes remain unchanged.
 [scheduler-commands.txt](scheduler-commands.txt) is the historical submission
-record; use the round-2 commands for the affected cases. The original nine
+record; the round-2 archive records the affected cases and resource rerun.
+The original nine
 [red contexts and receipts](../README.md) also remain frozen.
 
 ## Expected and observed outcomes
@@ -87,6 +88,6 @@ from scheduler completion; the `NoRace` failure is not a passing model result.
 All fifteen [integration run receipts](../../../../../test/b.w21/integration/README.md)
 PASS against the unchanged runtime and source/context identity at `9d025f8f`.
 The earlier full sandbox unit PASS (67 Go packages, 420 Bun tests) remains
-historical; new mixed-store targeted tests and the fresh full sandbox suite
-pass (67 Go packages, 39 cached; 420 Bun tests; zero failures; make exit 0). See the
+historical; mixed-store targeted tests and the historical round-2 full sandbox suite
+passed (67 Go packages, 39 cached; 420 Bun tests; zero failures; make exit 0). See the
 [overall evidence and review limits](../../../../../test/b.w21/README.md).

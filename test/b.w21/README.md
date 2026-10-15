@@ -1,4 +1,4 @@
-# b.w21: validation evidence and remaining model gate
+# b.w21: validation evidence and merge handoff
 
 The user approved local `make sandbox CMD=...` and `make test-sandbox` on
 gmahoney-dev, with `/usr/local/go/bin` in `PATH`. A separate host is not
@@ -21,7 +21,8 @@ local logs and original summaries remain under `dist/b.w21/`.
 | Lifecycle expectation correction | All 3 cases passed in a focused rerun. |
 | Advice expectation correction | All 9 cases passed in a focused rerun. |
 | Historical aggregate full suite before round 2 | **PASS**, exit 0. Go: 67 passing packages (37 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files. |
-| Round-2 full `make test-sandbox` | **PASS**, exit 0. Go: 67 passing packages (39 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files, 1,626 expect calls. |
+| Historical round-2 full `make test-sandbox` | **PASS**, exit 0. Go: 67 passing packages (39 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files, 1,626 expect calls. |
+| Post-merge full `make test-sandbox` | **PASS**, exit 0. Go: 67 passing packages (39 cached), zero failures, 12 without tests. Bun: 420 pass, zero fail, 57 files, 1,626 expect calls. |
 
 Red established the actual v6 migration and all eight already-stuck
 pending/waiting cases refusing with `ErrSendKeysWhileRelayed`. Four close-deny
@@ -65,7 +66,7 @@ all 32 new cases pass. Two prior attempts corrected fixture/assertion mistakes
 and remain archived; they were not runtime failures. `TestCodexJobArtifacts`
 now also requires the round-2 manifest and its declared contexts.
 
-The fresh [full-suite receipt](../../dist/b.w21/model-r2-unit-full/summary.json)
+The historical round-2 [full-suite receipt](../../dist/b.w21/model-r2-unit-full/summary.json)
 records `env PATH="/usr/local/go/bin:$PATH" make test-sandbox`, exit 0,
 from 23:25:35 to 23:29:12 UTC on 2026-10-14. Its SHA-256 is
 `f08b2931a4dcf238dac59d190bc7aa911a2fc6a165374af888a8d475528d4050`.
@@ -75,6 +76,18 @@ package results, so individual test and skip counts are unavailable. Bun
 emitted no skip lines; this is not an independent count of all skipped cases.
 The receipt predates this documentation-only receipt and pin refresh; current
 pins identify current file bytes, without attributing them to that run.
+
+The fresh [post-merge receipt](../../dist/b.w21/merge-main-unit/summary.json)
+records the same exact command, exit 0, in 216.812 seconds on 2026-10-15
+(01:13:54–01:17:31 UTC), with merge parents `b9f73c45` and `728180eb`.
+Its SHA-256 is
+`864ba033b6dbc6d951bcfa2c03dded22e43d3b5b5f036fe8b5f330d765619b65`.
+All 269 production Go files still match `9d025f8f`; all 714 test-file hashes
+were unchanged during the run. Main’s imported README tests match its bytes,
+and the b.w21 regressions remain intact. Individual Go test/skip counts are
+unavailable from nonverbose output; Bun emitted no skip lines. This receipt
+precedes the final documentation-only receipt and provenance refresh; its
+source hashes identify the tested bytes.
 
 ## Recovery contract and limit
 
@@ -103,13 +116,14 @@ the release tag `v0.11.1` retained.
 The nine [phase-1 model receipts](../../spec/tla/codex/b.w21/README.md)
 remain frozen. The [submitted fixed results](../../spec/tla/codex/b.w21/fixed/README.md)
 preserve the unexpected failure; original predictions, cfgs and contexts
-remain intact. The [round-2 handoff](../../spec/tla/codex/b.w21/fixed-r2/README.md)
-contains six ready jobs, all **NOT_RUN**, expected four PASS, one reachability
-probe failure and one `NoRace` mutant failure. Only the User submits:
-
-```sh
-bash spec/tla/codex/b.w21/fixed-r2/scheduler-commands.txt
-```
+remain intact. The [round-2 evidence](../../spec/tla/codex/b.w21/fixed-r2/README.md)
+records all six cases matching: four PASS, one intended reachability failure
+and one intended `NoRace` mutant failure. Seven attempts are archived with
+full logs and allowlisted scheduler metadata. The initial full-Spec attempt
+was incomplete at 2,000,377 distinct states; a separate resource-only rerun
+completed at 6,289,976 states, depth 43, with all 22 checks including temporal
+properties. Original contexts and commands remain frozen. No new model job
+is needed; the resource overlay and identity limits are documented there.
 
 The [integration evidence](integration/README.md) records **15 PASS** at the
 unchanged source: 152 EPIC cases and 22 install-mode assertions/five scenarios.
@@ -127,8 +141,12 @@ logs or independently verify scheduler final state/network policy.
 The prior runtime/code/test and handoff reviews found no actionable issues;
 those reviews and the old full-unit PASS predate the current model/test round.
 All nine red model outcomes, unit-red proof, fifteen integration passes
-and the round-2 full unit PASS are established. Corrected round-2 model
-receipts remain **PENDING**. The bug stays active pending that gate and review.
+and the historical round-2 full unit PASS are established. All six corrected
+round-2 model outcomes now match predictions. Main `728180eb` was merged
+without conflicts, retaining its minimum-version and idle-hook documentation
+and tests alongside the legacy recovery contract. The fresh post-merge
+`make test-sandbox` result is **PASS**, as recorded above. Final review and
+commit are owned by the calling agent. No push has been performed.
 
 Broad pre-existing documentation style work is deferred: internal/PRD
 references, the old unsupported-configuration note, duplicate recovery
