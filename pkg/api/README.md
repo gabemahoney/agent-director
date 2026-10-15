@@ -472,12 +472,22 @@ godoc.
 ## Permission relay
 
 `(*Client).Decide` records a verdict on a relayed permission request, waits
-at most 1 s for the agent's relay hook to confirm it, and returns a
+at most 1 s for relay acknowledgement, and returns a
 `DecideResult`, which embeds `RequestDelivery`: read `Delivery`
 (`delivered` or `not_confirmed`), not the recorded decision.
 `GetPermission` exposes subsequent delivery and `ConfirmBy`; see the
 [caller contract](../../docs/caller-contract.md#permission-relay) for
 confirmation handling.
+
+Cursor uses these same methods and fields for permissions and blocking plans.
+Its `HookAlive` is nil; `ConfirmBy` is finite and unchanged by recreating a
+client. `Delivery` `delivered` means durable relay acknowledgement, not Cursor
+receipt, execution or dialog closure.
+Cursor's once-only decisions, native choices, question denial and conservative
+unknown-origin holds are defined in
+[Cursor permissions](../../docs/permissions.md#cursor-spawns); uncertain
+answers and fallback follow the
+[caller contract](../../docs/caller-contract.md#permission-relay).
 
 `DecideParams.MaxWaitMs` bounds the whole call, its reads and its write,
 and has no default; pass at most your deadline minus 1 s. A bound reached
@@ -496,7 +506,7 @@ gone with an end report) or when `find-missing` marked it `missing` is closed in
 undecided one denied with `DecisionReason` `ended` or `find_missing`, and
 stays closed after `Resume`; `Get` and `List` no longer show it.
 `GetPermission` still reads its delivery, which is `delivered` only if its
-relay hook confirmed a verdict.
+relay acknowledged a verdict.
 
 `ErrRelayFallenBack` carries `RelayFallenBackDetails` from `api.ErrDetails`: the
 request, spawn state and other open requests. `SendKeys` can answer a pane
@@ -506,7 +516,7 @@ request using `RequestToken`, `As`, `Key` and `ExpectPaneSHA256`.
 `PaneAnswer` is `sent`, `outside` or `tool_ran`; `PaneAs` is the caller's claim.
 `Pause` accepts no pane hash and is held by the same permission checks as
 a plain `SendKeys`. These calls and `Decide` can return structured refusals;
-handling, dialog proof, Codex differences and stopping a held agent are in
+handling, dialog proof, agent differences and stopping a held agent are in
 [Permissions](../../docs/permissions.md) and the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
@@ -576,9 +586,9 @@ Common sentinels across verbs:
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id; see [Operator actions](../../docs/operator-actions.md#a-migration-write-failed-after-the-binary-swap) |
 | `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
 | `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
-| `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
-| `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
-| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by the agent's hooks; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
+| `ErrSendKeysWhileRelayed` | The Spawn's request relay may still answer (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
+| `ErrRelayFallenBack` | A permission request fell back (relay settled without acknowledgement, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
+| `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by valid agent evidence; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

@@ -1,0 +1,8 @@
+{
+  "complete_prior_inventory_files": 2409,
+  "changed_since_deadline_investigation": [
+    "pkg/api/decide_delivery_test.go"
+  ],
+  "preserved_original_artifacts": 73,
+  "all_preserved_hashes_match": true
+}

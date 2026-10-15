@@ -1,0 +1,210 @@
+{
+  "binary_diff_sha256": "c9bbd2208a50417a3a76e3b76afa50f310c047ddb3a976ba9ff69b1e5f8e2e46",
+  "branch": "feature/b.ftd",
+  "files": [
+    {
+      "bytes": 1534561,
+      "mode": "0o664",
+      "path": "docs/architecture.md",
+      "sha256": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+      "status": " M docs/architecture.md"
+    },
+    {
+      "bytes": 1826,
+      "mode": "0o664",
+      "path": "internal/testsupport/cursorfix/authorization.go",
+      "sha256": "598945911f39b88c279073d2d83559aa576bc0105ba0d4f74fde2e1c0764e7ca",
+      "status": " M internal/testsupport/cursorfix/authorization.go"
+    },
+    {
+      "bytes": 3407,
+      "mode": "0o664",
+      "path": "internal/testsupport/cursorfix/cursorfix.go",
+      "sha256": "95b2ba1608cde7e495343c558427d41a7840f37a38c210ca0be13497c742f3c8",
+      "status": " M internal/testsupport/cursorfix/cursorfix.go"
+    },
+    {
+      "bytes": 4208,
+      "mode": "0o664",
+      "path": "internal/testsupport/cursorfix/runtime.js",
+      "sha256": "cd011ae3fdd5c0f781ecda142dd5229e54cede1bbf150833f1e9fe84e5ecfab5",
+      "status": " M internal/testsupport/cursorfix/runtime.js"
+    },
+    {
+      "bytes": 1566,
+      "mode": "0o664",
+      "path": "internal/testsupport/cursorfix/testdata/provenance.json",
+      "sha256": "5ea83a637213df008ba46d9c5881b717ecdef7e38e6296e7beb9690ad8f6ada5",
+      "status": " M internal/testsupport/cursorfix/testdata/provenance.json"
+    },
+    {
+      "bytes": 2745,
+      "mode": "0o664",
+      "path": "internal/testsupport/cursorfix/testdata/questions.json",
+      "sha256": "7ec2e84fb588cffbc011eafba76647331ee583456c6a4e1634bc8e1d0b16f65c",
+      "status": "?? internal/testsupport/cursorfix/testdata/questions.json"
+    },
+    {
+      "bytes": 26840,
+      "mode": "0o664",
+      "path": "pkg/api/README.md",
+      "sha256": "60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80",
+      "status": " M pkg/api/README.md"
+    },
+    {
+      "bytes": 21978,
+      "mode": "0o664",
+      "path": "pkg/api/decide_delivery_test.go",
+      "sha256": "f6026cb62891a823b6e3c981af497ec2bf5404ceb666b22c03ead6f364314dd2",
+      "status": " M pkg/api/decide_delivery_test.go"
+    },
+    {
+      "bytes": 47378,
+      "mode": "0o664",
+      "path": "pkg/ts-bun-client/README.md",
+      "sha256": "ce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b",
+      "status": " M pkg/ts-bun-client/README.md"
+    },
+    {
+      "bytes": 1615,
+      "mode": "0o664",
+      "path": "test/docker-epics.txt",
+      "sha256": "9c8cbc1663ac2d3d0c8294973d136bbff5bfe7cedcd051f01cea0b22669dc41c",
+      "status": " M test/docker-epics.txt"
+    },
+    {
+      "bytes": 10597,
+      "mode": "0o664",
+      "path": "test/driver/cursor-owned-launch.sh",
+      "sha256": "12d01cb4dc588c4316cb9022b16fa12c9312e7818815a5f789ed81d6fec34121",
+      "status": " M test/driver/cursor-owned-launch.sh"
+    },
+    {
+      "bytes": 1595,
+      "mode": "0o664",
+      "path": "test/driver/cursor-pipe.c",
+      "sha256": "662ae3ed82a035fbac687014cac314304601c98efa129838542e79e1645dd424",
+      "status": "?? test/driver/cursor-pipe.c"
+    },
+    {
+      "bytes": 20920,
+      "mode": "0o664",
+      "path": "test/realtmux/cursor_launch_test.go",
+      "sha256": "7ca38c9854069570dec5f11ffd9169e90b990156ef2c6c3c00f70ea485be2144",
+      "status": " M test/realtmux/cursor_launch_test.go"
+    },
+    {
+      "bytes": 6077,
+      "mode": "0o664",
+      "path": "test/realtmux/cursor_relay_boundary_linux_test.go",
+      "sha256": "7d304493e37ef3f9c84ec3c5efed4697b4644e3549375604105c5cdd6058284f",
+      "status": "?? test/realtmux/cursor_relay_boundary_linux_test.go"
+    },
+    {
+      "bytes": 10294,
+      "mode": "0o664",
+      "path": "test/realtmux/cursor_relay_pane_test.go",
+      "sha256": "0e3a5557322164c375ec870c883ef52fd1b52aa264778515fc24a53f88e775f4",
+      "status": "?? test/realtmux/cursor_relay_pane_test.go"
+    },
+    {
+      "bytes": 16357,
+      "mode": "0o664",
+      "path": "test/realtmux/cursor_relay_test.go",
+      "sha256": "9881d7b610564b0be9b4ce09fb6a8ad8909a302511ae81537f522ea5d1403b8e",
+      "status": "?? test/realtmux/cursor_relay_test.go"
+    },
+    {
+      "bytes": 5152,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/COVERAGE.md",
+      "sha256": "92443ce08e474ddad441282dc6360933eed2cccf308c5a3b545c03890f84a6f3",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/COVERAGE.md"
+    },
+    {
+      "bytes": 8272,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/operator-acceptance.md",
+      "sha256": "ff08bf32447e68cd86124f901a053524b86d9e5bf8f40b0d958325eba569b4b8",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/operator-acceptance.md"
+    },
+    {
+      "bytes": 2309,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md",
+      "sha256": "0111a3fcc08e3012627e1731ea027cbe34f3eccde9ca96ea32561c23cbfd2c38",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md"
+    },
+    {
+      "bytes": 3876,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.01/t2.jf1.cr.01.md",
+      "sha256": "f6ca6144ea8cd0751b919891deca32fc5e4f698605b8b4c7c744d1cf1ab9a570",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.01/t2.jf1.cr.01.md"
+    },
+    {
+      "bytes": 3678,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.02/t2.jf1.cr.02.md",
+      "sha256": "1bc4785de90bf9ad0e348ed102129b16872bee91833e5bbe697b9596e34d2ba4",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.02/t2.jf1.cr.02.md"
+    },
+    {
+      "bytes": 2991,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.03/t2.jf1.cr.03.md",
+      "sha256": "47179603a5641795673b3ecaf6d2bd364817bcee1de5d442266f399d7d789295",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.03/t2.jf1.cr.03.md"
+    },
+    {
+      "bytes": 2983,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.04/t2.jf1.cr.04.md",
+      "sha256": "3c901d0f085378c3b43651c04299f93a80887852ec97f18e23876cd84ed05f24",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.04/t2.jf1.cr.04.md"
+    },
+    {
+      "bytes": 3373,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.05/t2.jf1.cr.05.md",
+      "sha256": "392487e2ed6b958aad94706702098675db7fb1fea4fb5290b2d75bef490e28f6",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.05/t2.jf1.cr.05.md"
+    },
+    {
+      "bytes": 4399,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.06/t2.jf1.cr.06.md",
+      "sha256": "0f4bdeeb700d89b24decb7df8600c01f5bf9870aa028d9b42bbad19f9fcfe1c0",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.06/t2.jf1.cr.06.md"
+    },
+    {
+      "bytes": 3225,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.07/t2.jf1.cr.07.md",
+      "sha256": "f4c59aec16ab5e39d87b0a3395e4450ea3a96fda1681b1212399e606645cb86f",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.07/t2.jf1.cr.07.md"
+    },
+    {
+      "bytes": 4079,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.08/t2.jf1.cr.08.md",
+      "sha256": "6dc7f5fcd815864faf0227b4b8926ac5b4326bb1ef705076f376b81a5ad9c2d1",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.08/t2.jf1.cr.08.md"
+    },
+    {
+      "bytes": 3111,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.09/t2.jf1.cr.09.md",
+      "sha256": "98ac35f0211e6ea646ae42f77033500203e4eb2d3d6e33a5a50df9cbcfc3403b",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.09/t2.jf1.cr.09.md"
+    },
+    {
+      "bytes": 3306,
+      "mode": "0o664",
+      "path": "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md",
+      "sha256": "2f2bb28aad50f09d0dff17e50ea924e1f4cb8baf29f8ee287d2a2735dc0056c7",
+      "status": "?? tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md"
+    }
+  ],
+  "head": "98e40efdef8bb18e773b6db2ea63fdf22534d96d"
+}

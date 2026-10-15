@@ -1,0 +1,52 @@
+[
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-after-hashes.json",
+    "bytes": 317480,
+    "sha256": "aaddda2d9341294cb7c655ac6a592f38ccda119e65e633ba12c3dbe99c011a78"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-before-hashes.json",
+    "bytes": 317480,
+    "sha256": "aaddda2d9341294cb7c655ac6a592f38ccda119e65e633ba12c3dbe99c011a78"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.log",
+    "bytes": 40515,
+    "sha256": "24d71877a55e71241727df4c64f6e622e1aab9e49d0f10b00d055501c3ef297e"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace",
+    "bytes": 984264,
+    "sha256": "d33ab1569ff885036a3c8eeb2c1b799b3c55c5eb333f88c8b17930790a02ad1d"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace.txt.gz",
+    "bytes": 2436417,
+    "sha256": "ec322064b142d551823e3aa8eb10915ad92a466ecdd39030f7722929000a84b6"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-investigation-report.txt",
+    "bytes": 12275,
+    "sha256": "d9c682b1bbc940919e2ef3fcb04cb8ef172244e546897c8174c3a2ddfa8b1d5a"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-measurement-summary.json",
+    "bytes": 9168,
+    "sha256": "21efd76f15cf8e22c9b45135e78ab713e15ba71f2f56e0ef2cf5aa33f0634b84"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.log",
+    "bytes": 494972,
+    "sha256": "0138c82e8c830829137921fae4fb6b88b39b0c6be00ef50f42a47ba983091e7d"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace",
+    "bytes": 25837894,
+    "sha256": "3bfce615a02676837f45c4f5fb75740172cc6638ec30cbdfc8693152b5e82bfa"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace.txt.gz",
+    "bytes": 180948586,
+    "sha256": "54164ec61f1c54b5641c99ab82af2850b7916358393bfe774c5b5dcf6a0e19f6"
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "docs/architecture.md": {
+    "sha256": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+    "bytes": 1534561,
+    "lines": 22218,
+    "fenced_blocks_identical_to_HEAD": true
+  },
+  "pkg/api/README.md": {
+    "sha256": "60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80",
+    "bytes": 26840,
+    "lines": 600,
+    "fenced_blocks_identical_to_HEAD": true
+  },
+  "pkg/ts-bun-client/README.md": {
+    "sha256": "ce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b",
+    "bytes": 47378,
+    "lines": 637,
+    "fenced_blocks_identical_to_HEAD": true
+  }
+}

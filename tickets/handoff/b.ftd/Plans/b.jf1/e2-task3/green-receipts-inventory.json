@@ -1,0 +1,104 @@
+[
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-after-full.json",
+    "mode": "0o664",
+    "bytes": 8132,
+    "sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-after-targeted.json",
+    "mode": "0o664",
+    "bytes": 8132,
+    "sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-before-diagnostics.json",
+    "mode": "0o664",
+    "bytes": 7888,
+    "sha256": "11ca4ea478105513af09026b54504d9bde39d519d8a8be177a91cd65809fa83a"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-before-full.json",
+    "mode": "0o664",
+    "bytes": 8132,
+    "sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-before-targeted.json",
+    "mode": "0o664",
+    "bytes": 8132,
+    "sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-counts.json",
+    "mode": "0o664",
+    "bytes": 13636,
+    "sha256": "7f90f36b041bbbea992d10cff15e3399b8441945842ffcfada13f76e0a568588"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-deadline-table.log",
+    "mode": "0o664",
+    "bytes": 151280,
+    "sha256": "f787fe06c199b468e42f9a18cea0ba4ae280681f297742f1940886ac8ab5ce76"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-doc-and-diff-checks.json",
+    "mode": "0o664",
+    "bytes": 453,
+    "sha256": "697298d4abbaa6c3cc9b5fc9e684401f5549bbcd2e1a1114d4a122326e447916"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-format.log",
+    "mode": "0o664",
+    "bytes": 3598,
+    "sha256": "245ace87ac91e5efe1afea71dae27b8368b6dc3965bf0c3785686dfdd31f61d7"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-full-exit.json",
+    "mode": "0o664",
+    "bytes": 159,
+    "sha256": "aa9083279b9bbd802911edff540bcbbbf18e8a9bd89be23672d795e300a5e7bf"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-full-unit.log",
+    "mode": "0o664",
+    "bytes": 48899,
+    "sha256": "e01d6d720bdbcba7faaead1f0dac655dd37872ab34ab10cfa13fcc1e0b8d3702"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-phase-observations.json",
+    "mode": "0o664",
+    "bytes": 1335,
+    "sha256": "ed89987f82ff49458ee64c125b4759bff3143a04e7cc5507393a446587052d91"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-prerun-full.json",
+    "mode": "0o664",
+    "bytes": 8132,
+    "sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-preservation-check.json",
+    "mode": "0o664",
+    "bytes": 208,
+    "sha256": "375625db5d355e908f28d005ee6920a18187b2cc3a267701d0cd5e371a3b432f"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-preserved-evidence.json",
+    "mode": "0o664",
+    "bytes": 16273,
+    "sha256": "e88b45566fa5235dec8590c4bda6f63c99d22928a4196eae6d0035891b142a0f"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-targeted-counts.json",
+    "mode": "0o664",
+    "bytes": 477,
+    "sha256": "02c70e144a3356a4276fd5881e628db673e06cc3463d8bcb197bc23cc4b6a9ed"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/green-test-report.txt",
+    "mode": "0o664",
+    "bytes": 8569,
+    "sha256": "10fb4728ce2c2bc757fb3005e12eafcd0f825323accf293ac70d5d393f49486a"
+  }
+]

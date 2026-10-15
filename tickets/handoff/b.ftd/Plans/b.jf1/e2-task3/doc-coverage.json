@@ -1,0 +1,271 @@
+{
+  "task": "t2.jf1.c1.3p",
+  "base_revision": "98e40efdef8bb18e773b6db2ea63fdf22534d96d",
+  "documents": [
+    {
+      "path": "pkg/api/README.md",
+      "old_sha256": "09ccd69aa2ac282d7504c17bf0df258fcfd0d89fab1a71d1ec7f7c973a2c1e11",
+      "sha256": "554be0d8c93238aa65530688688a392c49d8dd53f8e1a029b2e80edbc53e006c",
+      "bytes": 26947,
+      "lines": 601,
+      "changed_ranges": [
+        {
+          "kind": "replace",
+          "old": [
+            475,
+            475
+          ],
+          "new": [
+            475,
+            475
+          ]
+        },
+        {
+          "kind": "insert",
+          "old": [
+            481,
+            480
+          ],
+          "new": [
+            481,
+            491
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            499,
+            499
+          ],
+          "new": [
+            510,
+            510
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            509,
+            509
+          ],
+          "new": [
+            520,
+            520
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            579,
+            581
+          ],
+          "new": [
+            590,
+            592
+          ]
+        }
+      ],
+      "code_blocks_byte_identical": true,
+      "whole_read_personally": true
+    },
+    {
+      "path": "pkg/ts-bun-client/README.md",
+      "old_sha256": "df203a82fe65b86f63c6e32bd68ad90e0f6503b1079ac71e1f7bd5ea425eb2ae",
+      "sha256": "5fe58b9da28a48cd7d540b01acbd0cd8bedf628500129c2ba2c1d9e73c546570",
+      "bytes": 47467,
+      "lines": 637,
+      "changed_ranges": [
+        {
+          "kind": "replace",
+          "old": [
+            256,
+            257
+          ],
+          "new": [
+            256,
+            257
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            272,
+            273
+          ],
+          "new": [
+            272,
+            273
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            289,
+            290
+          ],
+          "new": [
+            289,
+            290
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            298,
+            298
+          ],
+          "new": [
+            298,
+            298
+          ]
+        },
+        {
+          "kind": "insert",
+          "old": [
+            308,
+            307
+          ],
+          "new": [
+            308,
+            317
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            315,
+            318
+          ],
+          "new": [
+            325,
+            328
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            575,
+            577
+          ],
+          "new": [
+            585,
+            587
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            584,
+            584
+          ],
+          "new": [
+            594,
+            594
+          ]
+        }
+      ],
+      "code_blocks_byte_identical": true,
+      "whole_read_personally": true
+    },
+    {
+      "path": "docs/architecture.md",
+      "old_sha256": "455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42",
+      "sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+      "bytes": 1534189,
+      "lines": 22213,
+      "changed_ranges": [
+        {
+          "kind": "replace",
+          "old": [
+            326,
+            326
+          ],
+          "new": [
+            326,
+            332
+          ]
+        },
+        {
+          "kind": "insert",
+          "old": [
+            336,
+            335
+          ],
+          "new": [
+            342,
+            376
+          ]
+        },
+        {
+          "kind": "replace",
+          "old": [
+            337,
+            339
+          ],
+          "new": [
+            378,
+            381
+          ]
+        },
+        {
+          "kind": "insert",
+          "old": [
+            16976,
+            16975
+          ],
+          "new": [
+            17018,
+            17028
+          ]
+        }
+      ],
+      "code_blocks_byte_identical": true,
+      "whole_read_personally": false
+    }
+  ],
+  "client_whole_review": "Both complete client READMEs read in sequential untruncated ranges, compared with all three doc guides; final small grammar/error-row deltas also read in full diff. No whole-repository or clean-document claim.",
+  "architecture_review": {
+    "status": "FULLREVIEWPENDING",
+    "personal_final_ranges": [
+      [
+        228,
+        405
+      ],
+      [
+        17011,
+        17078
+      ],
+      [
+        17632,
+        17666
+      ]
+    ],
+    "changed_paragraphs_reviewed": true,
+    "personal_whole_reread": false,
+    "prior_aggregate_evidence": "Task2 review-disposition.json records whole-base partitions A-D at 22122 lines SHA256 6fc3ba3747916d664c7f520f288521bfe319890c1b18d52385d7cf07f3ef7f5e plus reviewed corrections to 22160 lines SHA256 455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42. This is inherited evidence, not my personal whole reread or a current full-review closure. Root must dispatch fresh partitioned reviewers."
+  },
+  "inherited_deferred_findings": [
+    "Task2 A5-A8/B5-B11/C6-C11/D4-D5 broad architecture/history/implementation/test-catalog/reference/settings normalization remains deferred per review-disposition.json.",
+    "Both client READMEs retain extensive existing code examples despite general user-doc no-code rule, implementation/CLI details, duplicated error and recovery prose and historical older-binary guidance. API owner examples are established API documentation; a broad rewrite would exceed this contract-only task.",
+    "Root README still lists Claude/Codex prerequisites only; E5 installation/prerequisite scope explicitly deferred and file unchanged."
+  ],
+  "advice_pins": {
+    "new_commands": [],
+    "changed_commands": [],
+    "changed_code_blocks": [],
+    "new_recovery_sequences": [],
+    "changed_prose": "Declarative delivery, finite NULL-hook evidence, proof/hold semantics and canonical permission/caller links only. Existing pane examples and recovery procedures unchanged.",
+    "literal_sync_required": "No new executable advice or snippet changes; final TestWriter .56 still owns existing README symbol/link/example and complete sandbox checks. No literal test is claimed executed here.",
+    "untouched_owners": [
+      "docs/operator-actions.md",
+      "skills/install-agent-director",
+      "tickets/testplans/epic-12-install"
+    ]
+  },
+  "formal": {
+    "changed_spec_tla_files": [],
+    "jobs_scheduled": [],
+    "status": "not applicable: no changed model; design assessment and code refinement obligations distinguished"
+  },
+  "execution": "No repository artifacts/tests/builds/generators/formatters executed; host edits/read-only git metadata and bees own-status updates only. git diff --check PASS."
+}

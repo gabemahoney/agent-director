@@ -1,0 +1,42 @@
+E2 TASK3 FINAL FULL-UNIT TEST WRITER — NOT GREEN
+Task t2.jf1.c1.3p; subtask t3.jf1.c1.3p.56.
+
+RESULT / STATUS
+Full unit gate remains incomplete. Own subtask defined -> active; left ACTIVE, never marked done. No other ticket/status changes. No commits, staging, push, delegation or agent messages. First full run exposed a fixture cleanup race, repaired without changing behavior assertions. Required full rerun then exposed an independent existing API timing failure. No green full-suite claim; root must route the unresolved timing failure for investigation before PM/commit/gate.
+
+CURRENT ACTIONABLE FAILURE
+Run2: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s in pkg/api/decide_delivery_test.go:245. Actual Decide elapsed 1.58341753s; required <=1.5s (500ms max_wait_ms plus existing 1s allowance). Error/result assertions did not fail; the timing assertion did. Entire subtest reported11.03s, including setup/teardown and subsequent observation outside the timed call; do not equate that with Decide latency.
+Source/fixture cause is not established. Read-only inspection shows the test's injected sleep creates HoldWriteLock synchronously during the measured call for lockLater, and all table cells run parallel; neither observation proves the cause or excuses the failed bound. No clock, limit, source, API or assertion was changed, no timeout widened and no failure relabelled as passed. Per dispatch, stopped further repair/rerun and report for root to route a fresh Engineer/investigation. Do not use prior green targeted results or reruns to hide this failure.
+
+ACTUAL TEST-SIDE REPAIR
+First full run failed only TestCursorIndependentPaneVerifierRejectsChangedOwnership/respawned with TempDir RemoveAll directory-not-empty cleanup. Shared newCursorPaneScenario waited for peer/worker, but did not wait for the original gateway before Go removed temporary files. Added an explicit bounded pidGone wait for launch.Row.PanePID immediately after killing the fixture's private server; runtime/worker waits retained. This allows gateway final writes to finish before TempDir removal. No behavioral predicate was weakened, no production source changed. Targeted ownership test repeated10 times passed all40 leaf outcomes (4 distinct existing leaves), then full rerun passed test/realtmux147.821s. This supports the fixture repair; it is not a claim that every possible cleanup interleaving is proven.
+Only this writer's non-handoff change: test/realtmux/cursor_launch_test.go (cleanup comment and two lines). All other Task3 test/fixture/testplan/docs were inherited settled inputs.
+
+EXECUTION / COUNTS
+All repository execution used make sandbox or make test-sandbox, Docker sandbox only. No host Go/Bun/repository binaries/scripts executed.
+1) make test-sandbox, raw final-full-unit-run1.log, make exit2:
+Go67 passing packages =30 executed+37 cached;1 failed package(test/realtmux);13 no-test packages. Bun429pass0fail,57files,1659expects. No individual Go pass/skip totals are available from default output.
+2) Focused cleanup verification, raw final-cleanup-targeted.log, exit0:
+make sandbox CMD='gofmt -w test/realtmux/cursor_launch_test.go && go test ./test/realtmux -run "^TestCursorIndependentPaneVerifierRejectsChangedOwnership$" -count=10 -timeout=5m -json'
+Four existing leaves repeated10 times =40 pass outcomes,0fail0skip. Overlaps existing suite; never add these outcomes to suite totals.
+3) Required full rerun after actual fixture edit: make test-sandbox, raw final-full-unit-run2.log, make exit2:
+Go67 passing packages =4 executed+63 cached;1 failed package(pkg/api);13 no-test packages. test/realtmux PASS147.821s, test/install-sh PASS203.369s. Bun429pass0fail,57files,1659expects. No individual Go pass/skip totals available. Full suite includes existing README examples/links/symbol owners, real-tmux/install/smoke units; no overlapping targeted totals added. The test/tla package is unit-test infrastructure coverage, not actual TLC/model/parser verification. Run1 executed that unit package, Run2 cached it; zero formal jobs were run or claimed.
+All earlier behavior writer red/green receipts remain preserved and are described in behavior-report.txt. No new full run was attempted after run2's unresolved timing failure.
+
+TREE IDENTITY / IMMUTABILITY
+HEAD98e40efdef8bb18e773b6db2ea63fdf22534d96d, feature/b.ftd plus28 tracked-changed/untracked files. Snapshot includes all new questions.json/C helper/3relay files/13collector paths and all changed fixture/docs/registry/driver paths; each has mode/bytes/SHA256/git status plus HEAD and binary diff SHA256.
+Before-run1/prerun-run1/after-run1 manifests identical SHA2562bfe9a0a8f102d12ce064d9a6f26ce5e90f49c483b1f7e795487aacf0f64dfdf.
+After the sole cleanup edit, before-run2/prerun-run2/after-run2 manifests identical SHA25611ca4ea478105513af09026b54504d9bde39d519d8a8be177a91cd65809fa83a.
+Final tracked binary diff SHA2568d6c50e0c3293408a7f4d26c2b7d6086dcdb0a9296054c9876b6a4c7ae01834f. This identifies the stable FAILED tested tree, not a green one. Handoff evidence files are ignored and inventoried separately, not hidden behind git status.
+
+REVIEW / DOC FOLLOW-THROUGH
+Read Task/all7children/Epic/CLAUDE/test-writing guide including quality/testplan sections, complete behavior/doc/doc-corrections reports, both complete companion doc coverage JSONs, four complete doc review reports/disposition, formal/scheduler handoff. Reviewed entire new relay test files/shared cursorfix runtime/factory/provenance/questions, whole changed cursor_launch_test.go, shared driver/C helper/registry/all13collector paths, and relevant existing process/client/fixture helpers. Applied quality checklist: representative table surfaces/shared setup, no new harness or controller Cartesian matrices, raw partial-byte/independent committed evidence preserved, explicit scoped cleanup, no new mocks/meta-tests, bounded wait, unchanged detailed primary owners. No new test gaps requiring additions were identified in this final review. Focused .nz is already done; this is not a whole-repository review certificate.
+Verified final3doc hashes match correction report and every fenced block byte-identical to HEAD. No new executable recovery advice or snippets; no new mirror/literal tests. Existing operator/install-skill/install12/help pins unchanged. README existing suite checks included in both full invocations; API package's unrelated timing failure prevents an overall API-package pass in run2. Broad inherited documentation normalization debt remains explicitly deferred under existing disposition, not silently certified clean.
+Final docs: architecture22218lines1534561bytes SHA759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094; GoREADME600lines26840bytes SHA60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80; TSREADME637lines47378bytes SHAce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b.
+
+BOUNDARIES / LIMITS / NEXT
+No Docker TESTPLAN collectors/source-driver execution, real Cursor/authenticated testing, credential access/copy/login/logout, real AD stores, .claude edits, actual TLC/parser/Java/scheduler or new formal evidence. No spec/tla changes; zero formal jobs applicable. The registered16groups167expectedcases and10newcursor-relaycases remain AUTHORED/UNEXECUTED. Current authenticated predicates remain pending; load/resume/later-Epic/platform/group/renewal remain outside scope. Queue pressure repetitions remain one distinct test, not five new tests. Known physical queued/native refinement and capture-to-delivery races retain existing documented limits. No integration role was assigned and no integration pass claimed.
+Root next: investigate unresolved API max-wait timing with fresh Engineer as required; keep .56 active; then dispatch appropriate final test writer after any repair, obtain green full units before PM/local commit and exact-commit scheduler handoff. Epic not done. No user question or requested waiver.
+
+ARTIFACTS
+This report identical at /tmp/ftd-e2-task3-final-test-report.txt and tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/final-test-report.txt. Raw both full logs, focused log, counts, before/prerun/after manifests, doc-check JSON and inherited-evidence preservation inventory alongside. tickets/handoff is ignored: root must preserve/force-add intended artifacts; no staging here.

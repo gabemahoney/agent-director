@@ -1,0 +1,69 @@
+--- /tmp/ftd-e2-task3-reviewed-architecture-base.md
++++ docs/architecture.md
+@@ -12340,26 +12340,29 @@
+ **`ErrPermissionRequestNotFound` semantics.** The token names no retained
+ request: it never existed, cap eviction removed it, its spawn was deleted,
+ or reuse deleted the row's permission requests. A failed reuse restore
+ does not restore deleted requests. There is no separate deletion or eviction
+ signal; callers MUST handle these causes uniformly. The store
+ boundary translates `sql.ErrNoRows` into `ErrPermissionRequestNotFound`
+ (SR-7.4); `sql.ErrNoRows` must not leak to verb-layer callers.
+ 
+ **`decision_reason` cross-reference.** The verdict annotation surfaces in
+ `GetPermissionResult.DecisionReason` as the closed enum defined by the
+ [`decision_reason` canonical enum](#decision_reason-canonical-enum)
+ subsection below — `operator`, `timeout`, `find_missing`, `ended`, `pane`,
+-`pane_outside` or `tool_ran`. The field is `null` while undecided and on rows allowed by `decide`;
+-decided-but-unacked requests can still be open and carry a reason.
++`pane_outside` or `tool_ran`. The field is initially `null` while undecided
++and on rows allowed by `decide`; later validated Cursor proof can fill a missing
++reason with `tool_ran` while preserving the verdict, as specified in the
++[canonical enum's null semantics](#decision_reason-canonical-enum).
++Decided-but-unacked requests can still be open and carry a reason.
+ A `pane_outside` unknown claim also has a null decision with a reason.
+ 
+ **Concurrency contract.** The reads are lock-free at the application
+ layer: `get-permission` is safe under arbitrary concurrent relay hooks,
+ `decide` UPDATEs, and other `get-permission` calls against the same or
+ different rows. It relies on SQLite's read concurrency under the WAL
+ journal mode used by the store; no extra mutex and no busy-retry loop is
+ required, and its one write never waits for the write lock. The read
+ contract is pinned by `TestGetPermissionRequestByTokenConcurrentReads` in
+ `internal/store/permission_test.go`.
+ 
+ ### Cap-based GC
+@@ -15262,28 +15265,30 @@
+     unproven, so a plain `send-keys` without a pane hash is held
+     (`ErrDialogMaybeOpen`) and `get` lists it in `unproven_requests` until
+     someone looks; a caller that passes a hash without looking re-opens
+     the window;
+   - volatile bytes in the captured lines (a spinner, a clock) make the
+     hash check refuse, which is safe; the caller picks `n_lines`;
+   - a pane answer whose sender died leaves `pane_answer` `intent`, its key
+     possibly typed, and the request open until a retry with a fresh hash
+     or `record-pane-answer`;
+   - the PostToolUse close closes only allows, and only a request recorded
+     from v7 on; a deny at the dialog made outside agent-director needs
+     `record-pane-answer`.
+-- **The dialog hold (b.146 step 2c).** It holds plain `send-keys` without
+-  a pane hash, and `pause` (b.zdz), until a hook proves the request gone
+-  (see "The dialog hold" under [Permission relay](#permission-relay)),
+-  which costs:
++- **The dialog hold (b.146 step 2c).** For Claude and Codex, it holds plain
++  `send-keys` without a pane hash, and `pause` (b.zdz), until a hook proves
++  the request gone. Cursor's validated exact-request execution proof can
++  also prove a denied request gone while preserving its earlier verdict
++  and reason (see [The dialog hold](#the-dialog-hold-step-2c)).
++  The Claude/Codex hook-specific limits are:
+   - after an allow, the hold lasts until the tool has run (on a Codex row,
+     until an eligible main turn ends); after a deny of an eligible main request,
+     until that turn ends, even when no dialog is left; an
+     `Escape` to stop the agent right after a deny needs a caller that
+     looked and sends the pane's hash;
+   - a subagent's denied request (`agent_id` set) is proven only by the
+     agent's end: no `PostToolUse` follows a deny, the main agent's `Stop`
+     and idle prompt do not cover it, and `SubagentStop` (registered, for
+     subagent capture) proves no request gone. Until the Spawn ends, only a hashed send
+     gets through. On a Codex row this holds for a subagent's allowed request
+     too;
+   - when Claude's Stop and idle-prompt Notification are both lost, or

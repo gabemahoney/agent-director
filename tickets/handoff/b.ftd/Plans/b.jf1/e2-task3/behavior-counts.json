@@ -1,0 +1,424 @@
+[
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-ack-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 7
+      }
+    ],
+    "unique_leaf_names": 7,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-cleanup-correlation-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 11
+      }
+    ],
+    "unique_leaf_names": 6,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-pressure-static.log",
+    "leaf_outcomes": [
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 3,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-reviewed.log",
+    "leaf_outcomes": [
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 3,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-static-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 1
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-static.log",
+    "leaf_outcomes": [
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 3,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-completion-correlation.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 4
+      }
+    ],
+    "unique_leaf_names": 5,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-cursor-regression.log",
+    "leaf_outcomes": [
+      {
+        "package": "cursorhost",
+        "action": "pass",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 41
+      }
+    ],
+    "unique_leaf_names": 42,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-final-targeted.log",
+    "leaf_outcomes": [
+      {
+        "package": "cursorhost",
+        "action": "pass",
+        "count": 1
+      },
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 3
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 42
+      }
+    ],
+    "unique_leaf_names": 46,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-guards-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 7
+      }
+    ],
+    "unique_leaf_names": 8,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-observer-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 5
+      }
+    ],
+    "unique_leaf_names": 5,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-observer-offset.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 5
+      }
+    ],
+    "unique_leaf_names": 5,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-pane-question.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 3
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 6,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-pane-queue-corrected.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 7
+      }
+    ],
+    "unique_leaf_names": 7,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-proof-corrected.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 1
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-proof-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 4
+      }
+    ],
+    "unique_leaf_names": 5,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "cursorhost",
+        "action": "pass",
+        "count": 51
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 15
+      }
+    ],
+    "unique_leaf_names": 66,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-fourth.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 8
+      }
+    ],
+    "unique_leaf_names": 9,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-initial.log",
+    "leaf_outcomes": [],
+    "unique_leaf_names": 0,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-second.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 4
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 7,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-third.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 4
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 7,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-quality-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 8
+      }
+    ],
+    "unique_leaf_names": 9,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-question-provenance-final.log",
+    "leaf_outcomes": [
+      {
+        "package": "cursorhost",
+        "action": "pass",
+        "count": 45
+      },
+      {
+        "package": "driver-scripts",
+        "action": "pass",
+        "count": 3
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 4
+      }
+    ],
+    "unique_leaf_names": 52,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-barrier.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      },
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 2
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-block.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-exact-pressure.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 5
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-minimal.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "pass",
+        "count": 3
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-public.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  },
+  {
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-stop.log",
+    "leaf_outcomes": [
+      {
+        "package": "realtmux",
+        "action": "fail",
+        "count": 1
+      }
+    ],
+    "unique_leaf_names": 1,
+    "counts_do_not_add_across_receipts": true
+  }
+]

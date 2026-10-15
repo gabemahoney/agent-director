@@ -323,7 +323,13 @@ screen classification or another transcript format.
 `internal/testsupport/cursorfix` owns `runtime.js` at its package root, embedded
 by `cursorfix.go`. `New` and `NewWithWorker` produce a private executable
 Node stand-in, trace and independently observable accepting runtime/worker
-pid and release files. `Runtime.Frames` decodes the received-request trace.
+pid and release files. `Runtime.Frames` decodes complete incoming JSON lines;
+`Raw` records all incoming bytes before readline, including partial lines.
+`Sent`/`SentFrames` record scripted peer output; actual gateway admission
+separately establishes reception. An optional synchronous executable at
+`Observer` can read independently committed store state at the raw data callback,
+before line parsing. These are test observations, not production APIs or
+authenticated Cursor evidence.
 The fixture covers protocol interaction and controlled runtime/worker loss
 without Cursor authentication. `testdata/provenance.json` explicitly labels
 protocol 1, the pinned Node interpreter and the synthetic unauthenticated
@@ -333,10 +339,46 @@ and synthetic malformed/kind/ID/race/timing variants. Captured envelopes do not
 make the executing stand-in authenticated. A fixture pass proves the exercised AD
 behavior; it does not prove native Cursor/version/platform support.
 
+`SourceDerivedQuestions` reads the shared `testdata/questions.json` through the
+authorization fixture reader, substitutes the configured session and retains
+installed-source signatures with explicitly synthetic values. Public pane tests
+and the shell collector MUST reuse that data instead of copying question
+envelopes. `Authorizations` remains the captured permission/plan factory;
+`Permission` variants remain synthetic.
+
+`Scenario.PauseAfterRequests` flushes scripted outgoing requests, pauses reads
+and publishes `Paused` before blocking the event loop until `Release`.
+`AfterAnswers` and `WaitForRelease` control subsequent correlated updates;
+`CompleteBeforeAnswers` allows a normal turn outcome with requests still
+outstanding. Scripted session updates use `SessionID`. These seams provide
+controlled ordering, not load/resume, policy or ordinary-input queue support.
+
+Real-pane authors MUST extend `newCursorPaneScenario` in
+`test/realtmux/cursor_launch_test.go` for optional pre-launch `Script`, `Relay`
+and `Timeout`, preserving its existing string scenarios. Its cleanup stops
+only the private tmux server and waits for its owned runtime/worker before
+temporary files are removed. Public CLI/MCP/Go/Bun acceptance reuses the
+existing spawn, MCP and current Bun `Client` paths; it adds no client harness.
+
+Both registered `cursor-owned-launch` and `cursor-relay` collectors MUST reuse
+`test/driver/cursor-owned-launch.sh` for the isolated HOME, store/config,
+Cursor config/data, temporary directory, cwd, socket and transcript namespace,
+control sentinel and scoped helper cleanup. Store observations and faults,
+including independent raw-wire observers and lock owners, use
+`/opt/driver/sql.sh`. Its post-ack tmux wrapper forwards real calls and only
+blocks evidence after committed acknowledgement; it does not supply authority.
+The Linux-only `test/driver/cursor-pipe.c` is the collector's shared kernel-pipe
+pressure/retention helper: explicit fill/drain barriers surround 4096 labelled
+fixture control bytes, and exact retained-byte equality excludes additional
+response bytes. Those control bytes are not ACP traffic. Public Go tests use
+existing OS facilities against the same real pipe boundary. Neither seam
+fabricates process authentication or proves authenticated runtime support.
+
 **Must use:** tests requiring a Cursor protocol/runtime stand-in extend
-`cursorfix` and its one embedded `runtime.js`, read traffic with `Frames` and
-preserve the provenance record. Do not duplicate the executable or label
-scripted frames as captured Cursor evidence. Go tests reuse `apitest`,
+`cursorfix` and its one embedded `runtime.js`, use `Raw` for byte-level claims
+and `Frames` for complete messages, and preserve the provenance record. Do not
+duplicate the executable or label scripted frames as captured Cursor evidence.
+Go tests reuse `apitest`,
 `storefix`, `procfix`, `procstarttimefix`, `launchfix`, `tmuxfix` and real-tmux
 fixtures for their existing concerns. TypeScript tests reuse the existing
 `openClient`, `withTempHome`, fake-client and ts-helper fixtures; no second
@@ -12307,8 +12349,11 @@ boundary translates `sql.ErrNoRows` into `ErrPermissionRequestNotFound`
 `GetPermissionResult.DecisionReason` as the closed enum defined by the
 [`decision_reason` canonical enum](#decision_reason-canonical-enum)
 subsection below — `operator`, `timeout`, `find_missing`, `ended`, `pane`,
-`pane_outside` or `tool_ran`. The field is `null` while undecided and on rows allowed by `decide`;
-decided-but-unacked requests can still be open and carry a reason.
+`pane_outside` or `tool_ran`. The field is initially `null` while undecided
+and on rows allowed by `decide`; later validated Cursor proof can fill a missing
+reason with `tool_ran` while preserving the verdict, as specified in the
+[canonical enum's null semantics](#decision_reason-canonical-enum).
+Decided-but-unacked requests can still be open and carry a reason.
 A `pane_outside` unknown claim also has a null decision with a reason.
 
 **Concurrency contract.** The reads are lock-free at the application
@@ -15229,10 +15274,12 @@ the section that describes it in detail.
   - the PostToolUse close closes only allows, and only a request recorded
     from v7 on; a deny at the dialog made outside agent-director needs
     `record-pane-answer`.
-- **The dialog hold (b.146 step 2c).** It holds plain `send-keys` without
-  a pane hash, and `pause` (b.zdz), until a hook proves the request gone
-  (see "The dialog hold" under [Permission relay](#permission-relay)),
-  which costs:
+- **The dialog hold (b.146 step 2c).** For Claude and Codex, it holds plain
+  `send-keys` without a pane hash, and `pause` (b.zdz), until a hook proves
+  the request gone. Cursor's validated exact-request execution proof can
+  also prove a denied request gone while preserving its earlier verdict
+  and reason (see [The dialog hold](#the-dialog-hold-step-2c)).
+  The Claude/Codex hook-specific limits are:
   - after an allow, the hold lasts until the tool has run (on a Codex row,
     until an eligible main turn ends); after a deny of an eligible main request,
     until that turn ends, even when no dialog is left; an
@@ -16972,6 +17019,17 @@ An on-demand design check, taken before engineering when the design
 changes. It is not CI: no GitHub workflow or CI hook runs it, and it is not
 part of `all`, `test`, `test-sandbox` or any release target. No other target
 depends on it.
+
+Task gates schedule TLA+ only when that Task changes model files under
+`spec/tla/**`, and only for affected models/suites with an explicit reason.
+No changed model means no formal jobs, including baseline or parser jobs.
+Cursor controller assessment maps admission, acknowledgement, no-answer loss
+and conservative holds to `Hold36h`, `Hold36hCx` and `B146R5Cx`. Physical output
+queue residence, retirement and native-choice flags are not explicit model
+variables: abstract acknowledgement/exit separation does not prove their
+concrete implementation. Raw-byte, deadline and native-arbitration checks
+remain implementation refinement obligations. Historical model receipts are
+not current Cursor receipt, execution or authenticated acceptance evidence.
 
 `spec/tla/` holds bee b.zuj's TLA+ model of the Phase 1 LABEL design, its
 model-check suite and the runner. b.zuj owns the model and its results. The

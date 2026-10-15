@@ -1,0 +1,46 @@
+{
+  "architecture_base_sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+  "architecture_base_lines": 22213,
+  "fresh_personal_partitions": {
+    "a": [
+      1,
+      5554
+    ],
+    "b": [
+      5555,
+      11108
+    ],
+    "c": [
+      11109,
+      16661
+    ],
+    "d": [
+      16662,
+      22213
+    ]
+  },
+  "whole_small_docs": {
+    "a": "pkg/api/README.md all601lines",
+    "b": "pkg/ts-bun-client/README.md all637lines"
+  },
+  "mandatory_docs": [
+    "A1 publicHookAlivefieldnotprivateidentity/trimduplicatedfailuremachinery",
+    "B1 deniedCursorrequestmaygainvalidatedexecutionproof",
+    "B2 timeoutacknotdialogabsence",
+    "C1 initialNULLAPIallowreasoncanlaterfilltool_ran"
+  ],
+  "deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2"
+  ],
+  "deferral_reason": "Inherited broad implementation/testcatalog/history/rationale/performance/reference/recovery-duplication/established API examples normalization exceeds Task3 acceptance/clientcontract scope. All current factual contradictions and new-prose issues are mandatory. No clean-document claim.",
+  "source_repairs_required": [],
+  "formal_models_changed": false,
+  "formal_jobs": [],
+  "correction_order": "one batched DocWriter correction and exact delta/context review against fullyreviewed base; then final TestWriter .56 fullsandbox; PM; localcommit; userDocker-onlygate",
+  "mandatory_docs_resolved": true,
+  "resolution_report": "doc-corrections-report.txt",
+  "final_full_units": "green-test-report.txt"
+}

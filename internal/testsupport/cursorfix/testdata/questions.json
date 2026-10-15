@@ -1,0 +1,113 @@
+[
+  {
+    "name": "question-direct",
+    "provenance": "source-derived-signature; synthetic values",
+    "source": "R3-followup-source.json; Cursor 2026.10.12-d47ca18; no live question capture",
+    "method": "cursor/ask_question",
+    "id": "question-direct",
+    "params": {
+      "toolCallId": "AskQuestion",
+      "questions": [
+        {
+          "id": "q1",
+          "prompt": "Synthetic question 1",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "allowMultiple": false
+        },
+        {
+          "id": "q2",
+          "prompt": "Synthetic question 2",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "allowMultiple": false
+        }
+      ]
+    }
+  },
+  {
+    "name": "question-multiselect",
+    "provenance": "source-derived-signature; synthetic values",
+    "source": "R3-followup-source.json; Cursor 2026.10.12-d47ca18; no live question capture",
+    "method": "cursor/ask_question",
+    "id": "question-multiselect",
+    "params": {
+      "toolCallId": "AskQuestion",
+      "questions": [
+        {
+          "id": "q1",
+          "prompt": "Synthetic question 1",
+          "options": [
+            {
+              "id": "yes",
+              "label": "Yes"
+            },
+            {
+              "id": "no",
+              "label": "No"
+            }
+          ],
+          "allowMultiple": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "question-fallback",
+    "provenance": "source-derived-signature; synthetic values",
+    "source": "R3-followup-source.json; Cursor 2026.10.12-d47ca18; no live question capture",
+    "method": "session/request_permission",
+    "id": "question-fallback",
+    "params": {
+      "sessionId": "SOURCE_DERIVED_SESSION",
+      "toolCall": {
+        "toolCallId": "AskQuestion_q0",
+        "title": "Synthetic question?",
+        "kind": "other",
+        "status": "pending",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Synthetic question?"
+            }
+          }
+        ]
+      },
+      "options": [
+        {
+          "optionId": "yes",
+          "name": "Yes",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "no",
+          "name": "No",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "__ask_question_skip__",
+          "name": "Skip",
+          "kind": "reject_once"
+        }
+      ]
+    }
+  }
+]

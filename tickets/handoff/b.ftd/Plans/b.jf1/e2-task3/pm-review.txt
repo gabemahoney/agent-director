@@ -1,0 +1,47 @@
+Approve Task `t2.jf1.c1.3p` for local commit and the exact-revision external gate. No mandatory source, test or documentation correction identified. This is not approval to mark E2 complete.
+
+I read the Task, all seven completed Subtasks, Epic, Plan, Idea, approved PRD and relevant SRD requirements through Bees, reviewed the current changes and acceptance artifacts, and applied the code-review and doc-review skills. I made no edits, status changes, commits, test runs or delegations.
+
+Verified review identity:
+
+- HEAD: `98e40efdef8bb18e773b6db2ea63fdf22534d96d`.
+- All 29 changed/untracked entries match the green manifest’s bytes, modes and SHA256 values.
+- Manifest SHA256: `6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca`.
+- Tracked diff SHA256: `c9bbd2208a50417a3a76e3b76afa50f310c047ddb3a976ba9ff69b1e5f8e2e46`.
+- `git diff --check` passes.
+
+The work fits E2 and the requested acceptance-only Task. It adds shared fixture observations, public caller coverage, collector cases and contract corrections without changing production behavior, schemas, public APIs or models. Later-Epic capabilities remain outside scope.
+
+Acceptance review supports the following conclusions:
+
+- CLI, MCP, Go and Bun paths exercise real public dispatch against the actual gateway and private tmux. Received parameters are compared with independently recorded peer output; caller recreation preserves request deadlines and store routing.
+- Raw receiving-byte observations precede line parsing and use independent committed SQLite reads. They supplement the existing sender-boundary tests; they do not establish authenticated Cursor receipt. Failed/missing acknowledgements require zero additional bytes for allow, deny and timeout.
+- The queue test retains the actual kernel pipe through transport/runtime death and compares its contents exactly with the labelled 4096-byte pressure control. This detects partial output as well as complete responses. Both allow and deny are covered.
+- Concurrent permission/plan holds, normal turn completion, native fallback, stale hashes, claim/proof separation and unknown-origin execution proof receive substantive assertions. Existing detailed authority, arbitration, migration and malformed-schema owners remain primary.
+- Questions remain denied before approval under both settings and relay modes. Source-derived signatures and synthetic values are labelled honestly; no live denial or loaded-session claim is inferred.
+- All ten collector cases are registered and contain substantive AC/SR predicates. Their runtime behavior, including the C helper and crash-cut wrappers, still requires the external gate.
+
+The current full unit gate is green: `make test-sandbox` exited 0 with 68 passing Go packages—6 executed and 62 cached—and 429 Bun tests, zero failures, 57 files and 1,659 expectations. The 21 new public leaves are included within the 42-leaf Cursor selection; overlapping selections and repetitions must not be summed.
+
+The earlier Codex deadline failure remains unresolved: 1.58341753 seconds exceeded the unchanged 1.5-second ceiling. Subsequent targeted and full passes do not establish its cause or a fix. The permanent diagnostics delegate to the real store and preserve timing bounds, contention, concurrency and result assertions. I accept the coordinator’s bounded diagnostic disposition for this local commit, with the failed receipts and uncertainty retained. No further speculative repair or retry loop is warranted by this review.
+
+Documentation corrections A1, B1, B2 and C1 are complete. The aggregate whole-document review covers the immutable 22,213-line architecture base through four contiguous reviewer partitions, followed by reviewed delta/context coverage of the final 22,218-line document. Both client READMEs also have complete review evidence. I verified the final document hashes against that evidence; I do not claim a personal whole-architecture reread. No commands, fenced examples or recovery sequences changed.
+
+Ignored/deferred reviewer feedback remains explicit:
+
+- **A2–A6:** inherited architecture implementation detail, history/rationale, test catalogs, established Go examples and duplicated recovery material.
+- **B3–B8:** inherited TypeScript recovery/implementation/history and architecture catalogs, walkthroughs and duplicated operator procedures.
+- **C2–C5:** inherited architecture history, implementation/code detail, testing catalogs and duplicated caller/operator material.
+- **D1–D2:** inherited architecture implementation/test catalogs, history, rationale, performance and duplication.
+
+These are real documentation findings, deferred because broad normalization exceeds this Task’s acceptance and client-contract scope. No current factual correction is waived, and no clean-document claim is justified. No mandatory code-review finding was ignored.
+
+No unresolved disagreement between role agents or product question requires escalation. The bounded timing investigation, aggregate documentation review and decision not to extend models are documented coordinator decisions; none introduces an unauthorized product change. **TLA+ not applicable: no model inputs changed.** Request zero formal jobs.
+
+Remaining work before acceptance:
+
+1. Root commits the reviewed source and preserves the review reports and failed/passed receipts.
+2. A fresh Integration TestWriter pins the clean full source SHA and input inventory after commit. The provisional scheduler placeholder is not executable acceptance evidence.
+3. Operator runs the exact-revision Docker gate: **16 groups, 167 expected cases**, including the ten newly authored collector cases.
+4. Current authenticated E2 predicates receive explicit passed/failed/unobserved dispositions under the established isolated existing-login procedure. Historical E1 acceptance and R2 captures cannot substitute.
+5. Keep Task/Epic completion pending the required external acceptance. Load/resume, group/renewal and unmeasured platform claims remain outside this closure.

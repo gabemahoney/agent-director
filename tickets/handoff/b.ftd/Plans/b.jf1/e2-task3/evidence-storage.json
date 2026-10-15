@@ -1,0 +1,25 @@
+{
+  "large_diagnostics_kept_locally_not_committed": [
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace",
+      "bytes": 984264,
+      "sha256": "d33ab1569ff885036a3c8eeb2c1b799b3c55c5eb333f88c8b17930790a02ad1d"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace.txt.gz",
+      "bytes": 2436417,
+      "sha256": "ec322064b142d551823e3aa8eb10915ad92a466ecdd39030f7722929000a84b6"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace",
+      "bytes": 25837894,
+      "sha256": "3bfce615a02676837f45c4f5fb75740172cc6638ec30cbdfc8693152b5e82bfa"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace.txt.gz",
+      "bytes": 180948586,
+      "sha256": "54164ec61f1c54b5641c99ab82af2850b7916358393bfe774c5b5dcf6a0e19f6"
+    }
+  ],
+  "reason": "Preserve original diagnostic evidence in Bee directory without committing large raw traces. Hash inventories and reports committed. Provisional/postcommit scheduler handoff transferred separately."
+}

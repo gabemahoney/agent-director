@@ -1,12 +1,13 @@
 package cursorfix
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"testing"
 )
 
-//go:embed testdata/authorizations.json
+//go:embed testdata/authorizations.json testdata/questions.json
 var authorizationData embed.FS
 
 type Authorization struct {
@@ -16,8 +17,12 @@ type Authorization struct {
 
 // Authorizations returns sanitized captured envelopes with supplied fields intact.
 func Authorizations(t testing.TB) []Authorization {
+	return authorizationFixtures(t, "testdata/authorizations.json")
+}
+
+func authorizationFixtures(t testing.TB, path string) []Authorization {
 	t.Helper()
-	raw, err := authorizationData.ReadFile("testdata/authorizations.json")
+	raw, err := authorizationData.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,4 +41,15 @@ func Permission(session, tool, kind string) json.RawMessage {
 		{"optionId": "reject-once", "name": "Reject", "kind": "reject_once"},
 	}})
 	return raw
+}
+
+// SourceDerivedQuestions uses installed-source signatures and synthetic values, never live captures.
+func SourceDerivedQuestions(t testing.TB, session string) []Authorization {
+	t.Helper()
+	cases := authorizationFixtures(t, "testdata/questions.json")
+	encoded, _ := json.Marshal(session)
+	for i := range cases {
+		cases[i].Params = bytes.ReplaceAll(cases[i].Params, []byte(`"SOURCE_DERIVED_SESSION"`), encoded)
+	}
+	return cases
 }

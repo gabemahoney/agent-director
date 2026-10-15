@@ -1,0 +1,586 @@
+{
+  "task": "t2.jf1.c1.3p",
+  "correction_round": "A1/B1/B2/C1",
+  "status": "complete",
+  "architecture_review": {
+    "basis": "Fresh coordinator-transcribed A-D whole-base partitions plus this writer personal review of exact delta and context; not a personal whole 22k reread",
+    "base_sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+    "base_lines": 22213,
+    "base_bytes": 1534189,
+    "base_snapshot": "/tmp/ftd-e2-task3-reviewed-architecture-base.md",
+    "reports": [
+      {
+        "reviewer": "a",
+        "path": "/tmp/ftd-e2-task3-doc-review-a.txt",
+        "sha256": "81aef94730dfbcbf1873ec5f8fab7ac78974f33a631d35731f1ec8a8eb6c6175",
+        "architecture_base_lines_inclusive": [
+          1,
+          5554
+        ],
+        "complete_report_read": true,
+        "reported_truncation_repairs_complete": true,
+        "architecture_base_bytes_half_open": [
+          0,
+          449639
+        ],
+        "preserved_handoff_report": "doc-review-a.txt"
+      },
+      {
+        "reviewer": "b",
+        "path": "/tmp/ftd-e2-task3-doc-review-b.txt",
+        "sha256": "2dbbece23feed138b8423ae6779913ca37540aac2d2a68a96f94c0656520b26f",
+        "architecture_base_lines_inclusive": [
+          5555,
+          11108
+        ],
+        "complete_report_read": true,
+        "reported_truncation_repairs_complete": true,
+        "architecture_base_bytes_half_open": [
+          449639,
+          793889
+        ],
+        "preserved_handoff_report": "doc-review-b.txt"
+      },
+      {
+        "reviewer": "c",
+        "path": "/tmp/ftd-e2-task3-doc-review-c.txt",
+        "sha256": "9f0f272dcde9c9ba3d29f86829db128ea81e521073a13f80d5a3b9b250a63595",
+        "architecture_base_lines_inclusive": [
+          11109,
+          16661
+        ],
+        "complete_report_read": true,
+        "reported_truncation_repairs_complete": true,
+        "architecture_base_bytes_half_open": [
+          793889,
+          1178962
+        ],
+        "preserved_handoff_report": "doc-review-c.txt"
+      },
+      {
+        "reviewer": "d",
+        "path": "/tmp/ftd-e2-task3-doc-review-d.txt",
+        "sha256": "c40ad1b02e8ac90488877db2b90128f5b5383d40484ddb68d971fb641c679edb",
+        "architecture_base_lines_inclusive": [
+          16662,
+          22213
+        ],
+        "complete_report_read": true,
+        "reported_truncation_repairs_complete": true,
+        "architecture_base_bytes_half_open": [
+          1178962,
+          1534189
+        ],
+        "preserved_handoff_report": "doc-review-d.txt"
+      }
+    ],
+    "aggregate_base_line_coverage_inclusive": [
+      [
+        1,
+        22213
+      ]
+    ],
+    "aggregate_base_byte_coverage_half_open": [
+      [
+        0,
+        1534189
+      ]
+    ],
+    "personal_final_context_ranges_inclusive": [
+      [
+        12338,
+        12368
+      ],
+      [
+        12434,
+        12470
+      ],
+      [
+        15268,
+        15332
+      ]
+    ],
+    "whole_base_plus_delta_covered": true,
+    "personal_whole_reread": false,
+    "exact_delta_artifact": "doc-corrections-architecture-delta.patch"
+  },
+  "documents": [
+    {
+      "path": "pkg/api/README.md",
+      "base_snapshot": "/tmp/ftd-e2-task3-reviewed-go-base.md",
+      "base_sha256": "554be0d8c93238aa65530688688a392c49d8dd53f8e1a029b2e80edbc53e006c",
+      "sha256": "60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80",
+      "bytes": 26840,
+      "lines": 600,
+      "fenced_blocks_byte_identical": true,
+      "whole_final_read_personally": true,
+      "opcodes": [
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            0,
+            482
+          ],
+          "final_lines_half_open_zero_based": [
+            0,
+            482
+          ],
+          "base_bytes_half_open": [
+            0,
+            19739
+          ],
+          "final_bytes_half_open": [
+            0,
+            19739
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            482,
+            486
+          ],
+          "final_lines_half_open_zero_based": [
+            482,
+            485
+          ],
+          "base_bytes_half_open": [
+            19739,
+            20039
+          ],
+          "final_bytes_half_open": [
+            19739,
+            19932
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            486,
+            601
+          ],
+          "final_lines_half_open_zero_based": [
+            485,
+            600
+          ],
+          "base_bytes_half_open": [
+            20039,
+            26947
+          ],
+          "final_bytes_half_open": [
+            19932,
+            26840
+          ],
+          "coverage": "byte-identical reviewed base"
+        }
+      ],
+      "final_byte_coverage_half_open": [
+        [
+          0,
+          26840
+        ]
+      ],
+      "final_line_coverage_inclusive": [
+        [
+          1,
+          600
+        ]
+      ],
+      "fenced_blocks_byte_identical_to_HEAD": true
+    },
+    {
+      "path": "pkg/ts-bun-client/README.md",
+      "base_snapshot": "/tmp/ftd-e2-task3-reviewed-ts-base.md",
+      "base_sha256": "5fe58b9da28a48cd7d540b01acbd0cd8bedf628500129c2ba2c1d9e73c546570",
+      "sha256": "ce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b",
+      "bytes": 47378,
+      "lines": 637,
+      "fenced_blocks_byte_identical": true,
+      "whole_final_read_personally": true,
+      "opcodes": [
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            0,
+            256
+          ],
+          "final_lines_half_open_zero_based": [
+            0,
+            256
+          ],
+          "base_bytes_half_open": [
+            0,
+            11218
+          ],
+          "final_bytes_half_open": [
+            0,
+            11218
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            256,
+            258
+          ],
+          "final_lines_half_open_zero_based": [
+            256,
+            259
+          ],
+          "base_bytes_half_open": [
+            11218,
+            11420
+          ],
+          "final_bytes_half_open": [
+            11218,
+            11392
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            258,
+            309
+          ],
+          "final_lines_half_open_zero_based": [
+            259,
+            310
+          ],
+          "base_bytes_half_open": [
+            11420,
+            13765
+          ],
+          "final_bytes_half_open": [
+            11392,
+            13737
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            309,
+            312
+          ],
+          "final_lines_half_open_zero_based": [
+            310,
+            312
+          ],
+          "base_bytes_half_open": [
+            13765,
+            13989
+          ],
+          "final_bytes_half_open": [
+            13737,
+            13924
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            312,
+            586
+          ],
+          "final_lines_half_open_zero_based": [
+            312,
+            586
+          ],
+          "base_bytes_half_open": [
+            13989,
+            36615
+          ],
+          "final_bytes_half_open": [
+            13924,
+            36550
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            586,
+            587
+          ],
+          "final_lines_half_open_zero_based": [
+            586,
+            587
+          ],
+          "base_bytes_half_open": [
+            36615,
+            37517
+          ],
+          "final_bytes_half_open": [
+            36550,
+            37351
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            587,
+            594
+          ],
+          "final_lines_half_open_zero_based": [
+            587,
+            594
+          ],
+          "base_bytes_half_open": [
+            37517,
+            40191
+          ],
+          "final_bytes_half_open": [
+            37351,
+            40025
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            594,
+            595
+          ],
+          "final_lines_half_open_zero_based": [
+            594,
+            595
+          ],
+          "base_bytes_half_open": [
+            40191,
+            40996
+          ],
+          "final_bytes_half_open": [
+            40025,
+            40907
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            595,
+            637
+          ],
+          "final_lines_half_open_zero_based": [
+            595,
+            637
+          ],
+          "base_bytes_half_open": [
+            40996,
+            47467
+          ],
+          "final_bytes_half_open": [
+            40907,
+            47378
+          ],
+          "coverage": "byte-identical reviewed base"
+        }
+      ],
+      "final_byte_coverage_half_open": [
+        [
+          0,
+          47378
+        ]
+      ],
+      "final_line_coverage_inclusive": [
+        [
+          1,
+          637
+        ]
+      ],
+      "fenced_blocks_byte_identical_to_HEAD": true
+    },
+    {
+      "path": "docs/architecture.md",
+      "base_snapshot": "/tmp/ftd-e2-task3-reviewed-architecture-base.md",
+      "base_sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+      "sha256": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+      "bytes": 1534561,
+      "lines": 22218,
+      "fenced_blocks_byte_identical": true,
+      "whole_final_read_personally": false,
+      "opcodes": [
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            0,
+            12351
+          ],
+          "final_lines_half_open_zero_based": [
+            0,
+            12351
+          ],
+          "base_bytes_half_open": [
+            0,
+            871770
+          ],
+          "final_bytes_half_open": [
+            0,
+            871770
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            12351,
+            12353
+          ],
+          "final_lines_half_open_zero_based": [
+            12351,
+            12356
+          ],
+          "base_bytes_half_open": [
+            871770,
+            871936
+          ],
+          "final_bytes_half_open": [
+            871770,
+            872135
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            12353,
+            15273
+          ],
+          "final_lines_half_open_zero_based": [
+            12356,
+            15276
+          ],
+          "base_bytes_half_open": [
+            871936,
+            1095437
+          ],
+          "final_bytes_half_open": [
+            872135,
+            1095636
+          ],
+          "coverage": "byte-identical reviewed base"
+        },
+        {
+          "tag": "replace",
+          "base_lines_half_open_zero_based": [
+            15273,
+            15277
+          ],
+          "final_lines_half_open_zero_based": [
+            15276,
+            15282
+          ],
+          "base_bytes_half_open": [
+            1095437,
+            1095670
+          ],
+          "final_bytes_half_open": [
+            1095636,
+            1096042
+          ],
+          "coverage": "personal delta and context review"
+        },
+        {
+          "tag": "equal",
+          "base_lines_half_open_zero_based": [
+            15277,
+            22213
+          ],
+          "final_lines_half_open_zero_based": [
+            15282,
+            22218
+          ],
+          "base_bytes_half_open": [
+            1095670,
+            1534189
+          ],
+          "final_bytes_half_open": [
+            1096042,
+            1534561
+          ],
+          "coverage": "byte-identical reviewed base"
+        }
+      ],
+      "final_byte_coverage_half_open": [
+        [
+          0,
+          1534561
+        ]
+      ],
+      "final_line_coverage_inclusive": [
+        [
+          1,
+          22218
+        ]
+      ],
+      "fenced_blocks_byte_identical_to_HEAD": true
+    }
+  ],
+  "no_changed_fenced_blocks": true,
+  "new_commands": [],
+  "changed_commands": [],
+  "new_recovery_sequences": [],
+  "source_tests_models_changed_by_lane": [],
+  "formal_jobs": [],
+  "pending": "Final .56 full sandbox units, PM, local commit and exact-revision external Docker/current authenticated predicates remain parent-owned; no execution claimed",
+  "deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2"
+  ],
+  "clean_document_claim": false,
+  "statuses": {
+    "t3.jf1.c1.3p.a7": "done -> active -> done",
+    "t3.jf1.c1.3p.dc": "active -> done"
+  },
+  "personal_readme_final_ranges_inclusive": {
+    "pkg/api/README.md": [
+      [
+        1,
+        220
+      ],
+      [
+        221,
+        440
+      ],
+      [
+        441,
+        600
+      ]
+    ],
+    "pkg/ts-bun-client/README.md": [
+      [
+        1,
+        220
+      ],
+      [
+        221,
+        440
+      ],
+      [
+        441,
+        570
+      ],
+      [
+        571,
+        637
+      ]
+    ]
+  },
+  "audit_followthrough": [
+    "A1 equivalent nonexistent public process-field wording corrected in TypeScript README against current types.ts; only hook_alive is public",
+    "B1 architecture residual-cost summary explicitly scopes inherited hook-only limits to Claude/Codex and links exact-request Cursor proof; Codex-scoped and hook-side-scoped remaining occurrences unchanged"
+  ],
+  "verification": [
+    "git diff --check PASS",
+    "All fenced blocks byte-identical to correction base and HEAD in all three documents",
+    "Reviewed base hashes matched all four reviewers before editing",
+    "Complete final byte spans partitioned by equal/replace opcodes with no gap; equal spans remain byte-identical to reviewed base"
+  ]
+}

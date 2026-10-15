@@ -1,0 +1,10 @@
+{
+  "only_new_test_change": [
+    "pkg/api/decide_delivery_test.go"
+  ],
+  "docs_match_correction_report": true,
+  "fenced_blocks_identical_to_HEAD": true,
+  "current_manifest_paths": 29,
+  "baseline_manifest_paths": 28,
+  "review_basis": "Complete prior behavior/final/deadline/doc-corrections reports and companion coverage/disposition; focused personal review of the diagnostic diff and real delegate paths; no fresh whole-repository review claim"
+}

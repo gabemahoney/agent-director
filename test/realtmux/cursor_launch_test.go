@@ -24,7 +24,14 @@ func newCursorPane(t *testing.T, disableQuestions bool) (*spawnFix, cursorfix.Ru
 	t.Helper()
 	return newCursorPaneScenario(t, disableQuestions, "")
 }
-func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string) (*spawnFix, cursorfix.Runtime, spawned) {
+
+type cursorPaneOptions struct {
+	Script  *cursorfix.Scenario
+	Relay   string
+	Timeout int
+}
+
+func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
 	t.Helper()
 	f := newSpawnFix(t)
 	r := cursorfix.NewWithWorker(t, scenario == "independent-worker")
@@ -33,6 +40,13 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string)
 			t.Fatal(err)
 		}
 	}
+	var opts cursorPaneOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if opts.Script != nil {
+		r.Configure(t, *opts.Script)
+	}
 	bin := buildHookCLI(t, t.TempDir())
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "config.toml")
 	cfg, err := os.ReadFile(configPath)
@@ -40,6 +54,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string)
 		t.Fatal(err)
 	}
 	cfg = append(cfg, []byte("\n[defaults]\ndisable_ask_user = "+fmt.Sprint(disableQuestions)+"\n")...)
+	if opts.Timeout > 0 {
+		cfg = append(cfg, []byte(fmt.Sprintf("\n[relay]\ntimeout_seconds = %d\n", opts.Timeout))...)
+	}
 	cfg = append(cfg, []byte(fmt.Sprintf("\n[launch]\ncursor_path = %q\n", r.Program))...)
 	if err = os.WriteFile(configPath, cfg, 0600); err != nil {
 		t.Fatal(err)
@@ -55,6 +72,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string)
 	f.API = client
 	id := newInstanceID("cursor")
 	args := []string{"spawn", "--store-path", f.DBPath, "--agent", "cursor", "--instance-id", id, "--cwd", f.CWD, "--no-pre-trust"}
+	if opts.Relay != "" {
+		args = append(args, "--relay-mode", opts.Relay)
+	}
 	if scenario == "blocked-input" {
 		args = append(args, "--", strings.Repeat("\x01", 12*1024))
 	}
@@ -100,6 +120,33 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 			return err == nil && strings.Contains(pane.Pane, "Cursor ready")
 		}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 	}
+	// Wait for the gateway's final writes as well as the peer before removing files.
+	t.Cleanup(func() {
+		launch.rt.run(t, "kill-server")
+		gatewayPID := int(launch.Row.PanePID.(int64))
+		waitFor(t, "fixture gateway gone before temporary files", func() bool { return pidGone(gatewayPID) }, func() string { return procState(gatewayPID) })
+		for _, path := range []string{r.PID, r.WorkerPID} {
+			raw, e := os.ReadFile(path)
+			if os.IsNotExist(e) {
+				continue
+			}
+			if e != nil {
+				t.Error(e)
+				continue
+			}
+			pid := 0
+			if _, e = fmt.Sscan(string(raw), &pid); e != nil {
+				t.Error(e)
+				continue
+			}
+			if path == r.WorkerPID {
+				if e = os.WriteFile(r.WorkerRelease, nil, 0600); e != nil {
+					t.Error(e)
+				}
+			}
+			waitFor(t, "fixture process gone before temporary files", func() bool { return pidGone(pid) }, func() string { return procState(pid) })
+		}
+	})
 	return f, r, launch
 }
 

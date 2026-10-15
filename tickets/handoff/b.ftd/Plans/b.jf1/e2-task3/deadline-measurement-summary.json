@@ -1,0 +1,402 @@
+{
+  "exact": {
+    "leaves": {
+      "pass": 10,
+      "fail": 0,
+      "skip": 0
+    },
+    "leaf_elapsed_range_including_setup_teardown": [
+      0.52,
+      0.53
+    ],
+    "package": [
+      {
+        "Time": "2026-10-15T16:05:09.849772657Z",
+        "Action": "pass",
+        "Package": "github.com/gabemahoney/agent-director/pkg/api",
+        "Elapsed": 5.272
+      }
+    ]
+  },
+  "table": {
+    "leaves": {
+      "pass": 230,
+      "fail": 0,
+      "skip": 0
+    },
+    "leaf_elapsed_range_including_setup_teardown": [
+      0.1,
+      1.09
+    ],
+    "package": [
+      {
+        "Time": "2026-10-15T16:05:36.395811571Z",
+        "Action": "pass",
+        "Package": "github.com/gabemahoney/agent-director/pkg/api",
+        "Elapsed": 7.964
+      }
+    ]
+  },
+  "exact_trace": {
+    "callback_setup_spans": [
+      {
+        "goroutine": "108",
+        "callback_stat_to_first_sleep_ms": 0.13792
+      },
+      {
+        "goroutine": "229",
+        "callback_stat_to_first_sleep_ms": 0.110144
+      },
+      {
+        "goroutine": "233",
+        "callback_stat_to_first_sleep_ms": 0.119616
+      },
+      {
+        "goroutine": "177",
+        "callback_stat_to_first_sleep_ms": 0.107904
+      },
+      {
+        "goroutine": "266",
+        "callback_stat_to_first_sleep_ms": 0.117632
+      },
+      {
+        "goroutine": "280",
+        "callback_stat_to_first_sleep_ms": 0.11712
+      },
+      {
+        "goroutine": "290",
+        "callback_stat_to_first_sleep_ms": 0.114752
+      },
+      {
+        "goroutine": "270",
+        "callback_stat_to_first_sleep_ms": 0.107072
+      },
+      {
+        "goroutine": "299",
+        "callback_stat_to_first_sleep_ms": 0.108224
+      },
+      {
+        "goroutine": "289",
+        "callback_stat_to_first_sleep_ms": 0.103936
+      }
+    ],
+    "largest_15_block_or_preempt_spans_in_decide": [
+      {
+        "goroutine": "108",
+        "duration_ms": 51.059776,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "289",
+        "duration_ms": 51.043328,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "270",
+        "duration_ms": 51.034944,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "233",
+        "duration_ms": 50.953152,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "289",
+        "duration_ms": 50.457088,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "177",
+        "duration_ms": 50.41728,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "177",
+        "duration_ms": 50.320576,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "270",
+        "duration_ms": 50.318528,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "280",
+        "duration_ms": 50.25568,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "229",
+        "duration_ms": 50.247936,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "233",
+        "duration_ms": 50.243456,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "299",
+        "duration_ms": 50.24128,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "299",
+        "duration_ms": 50.237376,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "233",
+        "duration_ms": 50.228032,
+        "kind": "sleep"
+      },
+      {
+        "goroutine": "299",
+        "duration_ms": 50.219584,
+        "kind": "sleep"
+      }
+    ]
+  },
+  "table_trace": {
+    "callback_setup_spans": [
+      {
+        "goroutine": "257",
+        "callback_stat_to_first_sleep_ms": 0.119488
+      },
+      {
+        "goroutine": "242",
+        "callback_stat_to_first_sleep_ms": 0.136576
+      },
+      {
+        "goroutine": "247",
+        "callback_stat_to_first_sleep_ms": 0.279296
+      },
+      {
+        "goroutine": "252",
+        "callback_stat_to_first_sleep_ms": 0.548416
+      },
+      {
+        "goroutine": "620",
+        "callback_stat_to_first_sleep_ms": 0.300416
+      },
+      {
+        "goroutine": "610",
+        "callback_stat_to_first_sleep_ms": 0.139584
+      },
+      {
+        "goroutine": "615",
+        "callback_stat_to_first_sleep_ms": 0.09376
+      },
+      {
+        "goroutine": "625",
+        "callback_stat_to_first_sleep_ms": 0.119296
+      },
+      {
+        "goroutine": "802",
+        "callback_stat_to_first_sleep_ms": 0.31008
+      },
+      {
+        "goroutine": "807",
+        "callback_stat_to_first_sleep_ms": 0.2912
+      },
+      {
+        "goroutine": "817",
+        "callback_stat_to_first_sleep_ms": 0.112704
+      },
+      {
+        "goroutine": "812",
+        "callback_stat_to_first_sleep_ms": 0.107584
+      },
+      {
+        "goroutine": "986",
+        "callback_stat_to_first_sleep_ms": 0.162048
+      },
+      {
+        "goroutine": "996",
+        "callback_stat_to_first_sleep_ms": 0.106752
+      },
+      {
+        "goroutine": "991",
+        "callback_stat_to_first_sleep_ms": 0.13024
+      },
+      {
+        "goroutine": "981",
+        "callback_stat_to_first_sleep_ms": 0.126208
+      },
+      {
+        "goroutine": "1240",
+        "callback_stat_to_first_sleep_ms": 0.11776
+      },
+      {
+        "goroutine": "1198",
+        "callback_stat_to_first_sleep_ms": 0.172224
+      },
+      {
+        "goroutine": "1235",
+        "callback_stat_to_first_sleep_ms": 0.095744
+      },
+      {
+        "goroutine": "1193",
+        "callback_stat_to_first_sleep_ms": 0.105152
+      },
+      {
+        "goroutine": "1422",
+        "callback_stat_to_first_sleep_ms": 0.334208
+      },
+      {
+        "goroutine": "1417",
+        "callback_stat_to_first_sleep_ms": 0.155712
+      },
+      {
+        "goroutine": "1491",
+        "callback_stat_to_first_sleep_ms": 0.377984
+      },
+      {
+        "goroutine": "1496",
+        "callback_stat_to_first_sleep_ms": 0.118208
+      },
+      {
+        "goroutine": "1643",
+        "callback_stat_to_first_sleep_ms": 0.227136
+      },
+      {
+        "goroutine": "1648",
+        "callback_stat_to_first_sleep_ms": 0.627648
+      },
+      {
+        "goroutine": "1553",
+        "callback_stat_to_first_sleep_ms": 0.144384
+      },
+      {
+        "goroutine": "1638",
+        "callback_stat_to_first_sleep_ms": 0.11328
+      },
+      {
+        "goroutine": "1836",
+        "callback_stat_to_first_sleep_ms": 0.239744
+      },
+      {
+        "goroutine": "1831",
+        "callback_stat_to_first_sleep_ms": 0.281856
+      },
+      {
+        "goroutine": "1841",
+        "callback_stat_to_first_sleep_ms": 0.453568
+      },
+      {
+        "goroutine": "1846",
+        "callback_stat_to_first_sleep_ms": 0.115712
+      },
+      {
+        "goroutine": "2053",
+        "callback_stat_to_first_sleep_ms": 0.19232
+      },
+      {
+        "goroutine": "2043",
+        "callback_stat_to_first_sleep_ms": 0.244864
+      },
+      {
+        "goroutine": "2048",
+        "callback_stat_to_first_sleep_ms": 0.298496
+      },
+      {
+        "goroutine": "2038",
+        "callback_stat_to_first_sleep_ms": 0.110848
+      },
+      {
+        "goroutine": "2173",
+        "callback_stat_to_first_sleep_ms": 0.340864
+      },
+      {
+        "goroutine": "2226",
+        "callback_stat_to_first_sleep_ms": 0.62848
+      },
+      {
+        "goroutine": "2168",
+        "callback_stat_to_first_sleep_ms": 0.119168
+      },
+      {
+        "goroutine": "2231",
+        "callback_stat_to_first_sleep_ms": 0.110976
+      }
+    ],
+    "largest_15_block_or_preempt_spans_in_decide": [
+      {
+        "goroutine": "1196",
+        "duration_ms": 500.991808,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "144",
+        "duration_ms": 500.913536,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "1201",
+        "duration_ms": 500.881664,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "805",
+        "duration_ms": 500.867776,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "2036",
+        "duration_ms": 500.85792,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "1238",
+        "duration_ms": 500.800128,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "984",
+        "duration_ms": 500.751552,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "2046",
+        "duration_ms": 500.73728,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "2166",
+        "duration_ms": 500.68736,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "656",
+        "duration_ms": 500.685248,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "1646",
+        "duration_ms": 500.684544,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "1420",
+        "duration_ms": 500.63136,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "2229",
+        "duration_ms": 500.628607,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "352",
+        "duration_ms": 500.582592,
+        "kind": "store_or_scheduler"
+      },
+      {
+        "goroutine": "618",
+        "duration_ms": 500.5792,
+        "kind": "store_or_scheduler"
+      }
+    ]
+  }
+}

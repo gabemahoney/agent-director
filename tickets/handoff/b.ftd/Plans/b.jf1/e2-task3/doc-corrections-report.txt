@@ -1,0 +1,39 @@
+E2 TASK3 DOC WRITER — ONE BATCHED REVIEW CORRECTION REPORT
+Task t2.jf1.c1.3p; branch feature/b.ftd, HEAD 98e40efdef8bb18e773b6db2ea63fdf22534d96d plus settled Task3 working diff.
+
+RESULT / OWN STATUS CHANGES
+All mandatory current review corrections A1/B1/B2/C1 complete. No assigned work remains incomplete, no product/source issue or question. t3.jf1.c1.3p.a7 done -> active -> done; t3.jf1.c1.3p.dc active -> done. Only own Subtask statuses changed; no parent, Epic or other Subtask update. Whole architecture review AC closed on root-authorized fresh team whole-base review plus personally reviewed exact delta/context, explicitly not a personal 22k-line reread.
+
+CHANGES / SOURCE BASIS
+A1: Go README identifies actual public HookAlive=nil, finite ConfirmBy unchanged by caller recreation; keeps durable ack distinct from receipt/execution/closure and canonical owners; removes duplicated zero-relay-answer failure sentence. Full final TypeScript read found the same nonexistent public process-field claim; corrected its hook_alive wording against RequestDelivery in types.ts. No public PID/start/namespace fields invented, no conflation with internal persisted NULL identity.
+B1: TypeScript pause/error summaries no longer claim every denied subagent request holds until agent end; canonical dialog-hold owner supplies agent-specific rules. Audit restricted to the three touched doc owners found architecture residual-cost summary needed explicit Claude/Codex scope. It now scopes those hook-only limits and names validated exact-request Cursor execution proof, preserving earlier verdict/reason. Existing Codex-specific and hook-side-specific statements retain their scoped meaning. Verified requests.go execution 342-374, ProveCursorToolRan's COALESCE writes and cursor_trail_test operator/timeout/native denial cases; no source/test edit.
+B2: TypeScript ErrAlreadyDecided row keeps recorded decision/ack refusal; removes inference of absent pane dialog, uses request-relay acknowledgement and links canonical uncertain-answer handling. AckCursorDecision commits before enqueue; final guarded writer may retire response. No receipt or dialog-closure guarantee inferred.
+C1: architecture decision_reason cross-reference says initially NULL for API allow and links canonical enum null semantics: validated Cursor proof can fill missing reason tool_ran preserving verdict. Verified actual GetPermissionResult/RequestDelivery and ProveCursorToolRan; no broader rewrite.
+
+READ / REVIEW COVERAGE
+Read CLAUDE.md and all three doc guides, current Task and all seven Subtasks, COMPLETE behavior-report.txt, initial doc-report.txt/doc-coverage.json, all FOUR complete coordinator-transcribed final doc-review reports A-D and review-disposition.json. Initial oversized combined read was repaired with separate complete bounded reads. Actual public Go/TS result fields, ack/enqueue/final-writer/proof owners and denial-proof test assertions inspected read-only; no fresh whole-source/test-file review claim.
+Before edits all three current document hashes matched the reviewers' reported base exactly. Architecture base and preserved /tmp/ftd-e2-task3-reviewed-architecture-base.md both SHA256 b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf, 22213 lines, 1534189 bytes.
+Fresh whole-base coverage: reviewer A lines1-5554, B5555-11108, C11109-16661, D16662-22213 inclusive, contiguous with no gap. Each complete report affirms sequential personal reads and completion of any truncation repairs; reports/hashes retained unchanged. A also covered whole Go README601; B whole TS README637; D whole FORMAL-ASSESSMENT45. This writer relies explicitly on their fresh evidence, not inherited Task2 coverage, for whole-base closure.
+Personally reread FULL edited Go README1-600 and TS README1-637 in untruncated sequential ranges, plus final small paragraph edits, against the guides. Personally reviewed exact architecture changed paragraphs and context final12338-12368 and15268-15332, canonical enum12434-12470, source and exact delta. The companion JSON records every equal/replaced source/final line and byte span, base/final hashes and base partition byte ranges. Equal spans are byte-identical to the fully reviewed base; all new bytes are personally reviewed delta. Aggregate final architecture1-22218/all1534561bytes covered by whole-base plus delta, with no gap; NOT a personal whole-file reread.
+
+DEFERRED / LIMITATIONS
+Root disposition A2-A6/B3-B8/C2-C5/D1-D2 remains deferred inherited broad implementation/test-catalog/history/rationale/performance/reference/recovery-duplication/API-example normalization. New fixture inventory and formal policy paragraphs approved by reviewers A/D. No clean-document or broad debt-cleared claim. No current factual or new-prose issue knowingly waived. Root README/E5 installation prerequisites untouched. Audit followthrough above is within the same existing three doc owners and mandatory factual corrections; no scope expansion to manuals, guides, operator/install-skill/install12 pins, fixtures, tests or source.
+
+VERIFICATION / FINAL TEST WRITER HANDOFF
+Host documentation reads/edits, metadata comparisons, git diff --check PASS and bees own-status changes only. All fenced code blocks in all THREE documents are byte-identical both to correction base and HEAD. No new/changed commands, executable advice or recovery sequences; no new literal assertion needed. Final TestWriter .56 owns existing README symbol/link/example checks and full make test-sandbox after these docs settle. No repository artifacts, units, builds, generators, formatters, Docker TESTPLAN, TLC/parser/scheduler, live Cursor/auth, credentials or real AD-store execution/inspection by this lane; no .claude edit, delegation, agent messages, staging, commit or push.
+Current prior results remain 21 new public leaves, 42 targeted Cursor leaves passing; overlapping provenance selections not summed. Ten collector cases AUTHORED ONLY, 16 groups/167 expected cases pending Docker; current authenticated predicates pending. Full Task3 units NOT yet passed. Zero spec/tla changes, zero formal jobs; no historical theorem/count/evidence upgraded. Parent next steps: fresh .56 full sandbox writer, mandatory PM, local commit, exact-revision external Docker-only gate.
+
+FINAL DOCUMENT INVENTORY
+pkg/api/README.md: 600 lines, 26840 bytes, SHA256 60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80
+pkg/ts-bun-client/README.md: 637 lines, 47378 bytes, SHA256 ce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b
+docs/architecture.md: 22218 lines, 1534561 bytes, SHA256 759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094
+
+ARTIFACTS / FILES CHANGED
+Only product documentation changed: pkg/api/README.md, pkg/ts-bun-client/README.md, docs/architecture.md.
+Complete report: /tmp/ftd-e2-task3-doc-corrections-report.txt and identical handoff doc-corrections-report.txt.
+Complete coverage/rangemap: /tmp/ftd-e2-task3-doc-corrections-coverage.json and identical handoff doc-corrections-coverage.json.
+Exact architecture delta plus12lines context: /tmp/ftd-e2-task3-doc-corrections-architecture-delta.patch and identical handoff doc-corrections-architecture-delta.patch.
+All handoff companions under tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/. Original initial reports/coverage and four final reviews/disposition untouched. Handoff ignored by git; root must preserve/force-add intended evidence artifacts. Nothing staged here.
+
+DEVIATIONS / INCOMPLETE / QUESTIONS
+No deviation requiring user input. Same-fact audit followthrough corrected TS public hook-field wording and architecture Claude/Codex scope as described above. No assigned failure or incomplete work. No questions for calling agent.

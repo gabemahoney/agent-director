@@ -1,0 +1,18 @@
+{
+  "scope": "Existing TestDecideMaxWaitUnderHeldLock only; no new cases or harness",
+  "recorded_on_failure": [
+    "real call start/end and elapsed",
+    "each sleep callback enter and holder-ready timestamp",
+    "total actual time in real sleeps",
+    "each bounded real DecideStore operation start/end and requested maxWait, including DecideRelayRequest return"
+  ],
+  "delegation": "All five bounded DecideStore methods forward unchanged arguments and real results; three unbounded methods forwarded by embedded api.DecideStore",
+  "clock": "time.Now and time.Sleep unchanged; took remains whole actual Decide call with fixture callback included",
+  "guards": "500ms max_wait_ms, 1s allowance, table, parallelism, busy maxima, original decision/attempt/error/delivery checks unchanged",
+  "targeted": "23 existing leaves x3 =69 pass, no fail/skip; no failure-only phase lines emitted",
+  "original_failure": "Run2 Codex post-commit busy_596h31m23.647s: actual 1.58341753s vs 1.5s; cause UNRESOLVED; no claimed fixture/source/scheduling diagnosis or repair",
+  "no_new_runtime_trace": true,
+  "test_file_sha256": "f6026cb62891a823b6e3c981af497ec2bf5404ceb666b22c03ead6f364314dd2",
+  "full_suite": "make test-sandbox exit0; pkg/api PASS142.621s; no failure-only phase output",
+  "original_failure_cause_remains_unresolved": true
+}

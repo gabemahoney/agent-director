@@ -1,0 +1,18 @@
+{
+  "command": "make sandbox CMD='go test ./pkg/api -run \"^TestDecideMaxWaitUnderHeldLock$\" -count=3 -timeout=3m -json'",
+  "repetitions": 3,
+  "distinct_leaves": 23,
+  "leaf_outcomes": {
+    "pass": 69
+  },
+  "package_results": [
+    {
+      "Time": "2026-10-15T16:12:29.832022537Z",
+      "Action": "pass",
+      "Package": "github.com/gabemahoney/agent-director/pkg/api",
+      "Elapsed": 2.027
+    }
+  ],
+  "diagnostic_output": [],
+  "not_additive_to_full_suite": true
+}

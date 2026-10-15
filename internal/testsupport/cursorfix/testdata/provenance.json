@@ -12,6 +12,13 @@
   "authorization_fixtures": {
     "captured": "authorizations.json: extracted permission/plan envelopes from sanitized R2 and R2-mcp protocol.jsonl, Cursor 2026.10.12-d47ca18 ACP1; whitespace formatted only",
     "synthetic": "Permission factory variants, malformed requests, IDs, races and timing are synthetic; read/delete/fetch variants are not captured approvals",
-    "source_derived": "question signatures from sanitized R3-followup-source.json; no live question capture"
+    "source_derived": "questions.json / SourceDerivedQuestions: installed-source signatures from sanitized R3-followup-source.json; synthetic ids/prompts/option values, never live question capture"
+  },
+  "observations": {
+    "Frames": "complete gateway-to-peer JSON lines",
+    "Raw": "all gateway-to-peer bytes before readline, including partial lines",
+    "SentFrames": "scripted peer output; gateway admission separately establishes reception",
+    "Observer": "optional synchronous test executable, independent committed DB read before line parsing",
+    "backpressure": "explicit paused barrier plus 4096 labelled fixture bytes; exact retained-byte equality forbids any added response bytes; pressure bytes are not ACP traffic"
   }
 }

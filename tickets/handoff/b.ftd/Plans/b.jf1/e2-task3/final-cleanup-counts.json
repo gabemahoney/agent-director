@@ -1,0 +1,10 @@
+{
+  "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_launch_test.go && go test ./test/realtmux -run \"^TestCursorIndependentPaneVerifierRejectsChangedOwnership$\" -count=10 -timeout=5m -json'",
+  "exit_code": 0,
+  "raw_log_sha256": "452c5cd26680830694306913e24c0f64de3e4906f0a1f70aae8e2d5fb2006806",
+  "distinct_leaf_tests": 4,
+  "leaf_pass_outcomes": 40,
+  "failed_outcomes": 0,
+  "skipped_outcomes": 0,
+  "overlap": "four existing ownership leaves repeated ten times; not added to full-suite counts"
+}

@@ -7,7 +7,18 @@ if(process.argv[2]==='worker-server') {
 } else {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
 if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
-function send(frame) { console.log(JSON.stringify({jsonrpc:'2.0',...frame})); }
+function send(frame) {
+ const line=JSON.stringify({jsonrpc:'2.0',...frame});
+ if(SETTINGS.sent) fs.appendFileSync(SETTINGS.sent,line+'\n');
+ process.stdout.write(line+'\n');
+}
+// Observe raw chunks before readline can hide a partial response. The optional
+// observer is synchronous and opens its own committed store connection.
+process.stdin.on('data', chunk => {
+ if(SETTINGS.raw) fs.appendFileSync(SETTINGS.raw,chunk);
+ if(SETTINGS.observer && fs.existsSync(SETTINGS.observer))
+  require('child_process').execFileSync(SETTINGS.observer,[],{stdio:'ignore'});
+});
 const input = readline.createInterface({input:process.stdin});
 let pendingScenario = null;
 function scenario() {
@@ -36,11 +47,20 @@ input.on('line', async line => {
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
   if(scripted && scripted.requests.length) {
-   await new Promise(resolve=>{
+   const answers = new Promise(resolve=>{
+    if(scripted.pauseAfterRequests) { input.pause(); process.stdin.pause(); }
     pendingScenario={resolve,ids:new Set(scripted.requests.map(r=>JSON.stringify(r.id)))};
     for(const request of scripted.requests) send(request);
+    if(scripted.pauseAfterRequests) process.stdout.write('',()=>{
+     const cell=new Int32Array(new SharedArrayBuffer(4));
+     if(SETTINGS.paused) fs.writeFileSync(SETTINGS.paused,'paused');
+     while(!fs.existsSync(SETTINGS.release)) Atomics.wait(cell,0,0,10);
+    });
    });
+   if(!scripted.completeBeforeAnswers) await answers;
   }
+  if(scripted?.waitForRelease) while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
+  if(scripted?.afterAnswers) for(const update of scripted.afterAnswers) send(update);
   if(text==='HOLD') while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
   if(text==='DIE') process.exit(0);
   if(text==='DENY_FOREVER') {
@@ -56,7 +76,7 @@ input.on('line', async line => {
    send({id:'plan',method:'cursor/create_plan',params:{}});
   }
 
-  send({method:'session/update',params:{sessionId:'synthetic-session-1',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Synthetic reply: '+text}}}});
+  send({method:'session/update',params:{sessionId:scripted?.sessionId || 'synthetic-session-1',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Synthetic reply: '+text}}}});
   send({id:frame.id,result:{stopReason:'end_turn'}});
  }
 });

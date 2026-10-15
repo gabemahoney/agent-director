@@ -253,9 +253,10 @@ await client.pause({ instance_id: "<id>" });
 `expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
 `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or `ErrDialogMaybeOpen`,
 with the same `errDetails`, typing nothing and starting no wait, whenever
-that `sendKeys` would. It takes no pane hash, so it stays held until the
-agent's hooks prove each request gone (after a subagent's denied request, or on
-a Codex Spawn an allowed one, until the agent ends). Stopping a held spawn and handling these refusals are in the
+that `sendKeys` would. It takes no pane hash, so it stays held until
+valid agent evidence proves each request gone; see
+[The dialog hold](../../docs/permissions.md#the-dialog-hold).
+Stopping a held spawn and handling these refusals are in the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
 ### makeTemplate
@@ -269,8 +270,8 @@ await client.makeTemplate({ name: "dev", cwd: "/repos/widget", agent: "claude", 
 ### decide
 
 Answer a relayed permission request of a Spawn launched with
-`relay_mode: "on"`. `decide` records the verdict, waits at most 1 s for the
-agent's relay hook to confirm it, and resolves with the request's
+`relay_mode: "on"`. `decide` records the verdict, waits at most 1 s for
+relay acknowledgement, and resolves with the request's
 `delivery`.
 
 ```ts
@@ -286,8 +287,8 @@ if (result.delivery === "not_confirmed") {
 }
 ```
 
-`"delivered"`: the relay hook confirmed the verdict before handing it to
-the agent. `"not_confirmed"`: the relay hook has not confirmed the verdict;
+`"delivered"` means durable relay acknowledgement, not agent receipt,
+execution or dialog closure. `"not_confirmed"` means no acknowledgement yet;
 `getPermission` exposes subsequent delivery and `confirm_by`. See the
 [caller contract](../../docs/caller-contract.md#permission-relay) for
 confirmation handling. `decision`
@@ -295,7 +296,7 @@ is the verdict recorded, not the outcome: read `delivery`. `max_wait_ms`
 bounds the whole call, its reads and its write, and has no default; without
 it `decide` can wait up to the store's busy timeout. `decide` rejects,
 recording no verdict, with `ErrRelayFallenBack` when the request's relay
-hook is gone and took no verdict, with `ErrStoreBusy` when `max_wait_ms`
+settled without acknowledgement, with `ErrStoreBusy` when `max_wait_ms`
 ran out before the verdict was recorded, and with
 `ErrNoOpenPermissionRequest` when no open request has that token or the
 request is closed. Pane answers, retries and closed-request handling are
@@ -305,6 +306,15 @@ delivery fields, `pane_answer` and `pane_as` included, for requests that
 still await an answer only; a row can read `waiting`, `working` or
 `ask_user` while a request is still open, so follow the requests you track
 with `getPermission`.
+
+Cursor uses these same methods and fields for permissions and blocking plans.
+Its `hook_alive` is null; `confirm_by` is finite and unchanged by recreating
+a client. Without acknowledgement, no relay answer is sent, including a denial. Cursor's once-only decisions,
+native choices, question denial and conservative unknown-origin holds are
+defined in [Cursor permissions](../../docs/permissions.md#cursor-spawns);
+uncertain answers and fallback follow the
+[caller contract](../../docs/caller-contract.md#permission-relay).
+
 `decision_reason` is one of `"operator"`, `"timeout"`, `"find_missing"`,
 `"ended"`, `"pane"`, `"pane_outside"` and `"tool_ran"`. For a reason you
 do not know, read the recorded verdict from `decision` (`null` for a
@@ -312,10 +322,10 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `pane_answer`; never read a reason as a verdict.
 
 `proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, its
-tool ran (a Claude Spawn only); `"turn_end"`, the turn of the agent that asked
-ended after it was written, which a Codex main agent's Interrupt also proves; or
-`"agent_gone"`, the agent ended) say when and how the agent's
-hooks showed the request's dialog gone; `"delivered"` and a pane answer are
+tool ran (Claude, or validated exact matching Cursor shell execution);
+`"turn_end"`, an eligible main request's turn ended under the age and identity
+guards; or `"agent_gone"`, the agent ended) say when and how the request's
+dialog was proven gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
 every request not yet proven gone, each with `unproven_since`. A request
 that reads `"delivered"` or closed at the pane can remain unproven; its dialog
@@ -572,17 +582,17 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 
 | Error | When it fires |
 |---|---|
-| `ErrSendKeysWhileRelayed` | A `sendKeys` or `pause` while a relay hook may still answer a request. Nothing was sent. The message distinguishes an undecided request from a recorded verdict still being delivered; see the [caller contract](../../docs/caller-contract.md#permission-relay). |
-| `ErrRelayFallenBack` | A request's relay hook is gone and acked no verdict, with no pane answer recorded through agent-director: no answer from the relay reached the agent. Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token`, and by `pause`, while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Pane-answer handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay); the relevant API methods are `sendKeys` with `request_token` and `recordPaneAnswer`. For a request recorded by an older binary, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
-| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256`, or a `pause`, on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by the agent's hooks (a Claude agent's tool's PostToolUse, the main agent's end of turn after it (on a Codex Spawn, its `Stop` or Interrupt), or the agent's end), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry, escalation and pane-hash handling are owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A subagent's denied request holds until the agent ends, and on a Codex Spawn so does an allowed one. `pause` takes no hash; stopping a held Spawn is covered by [Caller contract](../../docs/caller-contract.md). |
+| `ErrSendKeysWhileRelayed` | A `sendKeys` or `pause` while the request relay may still answer. Nothing was sent. The message distinguishes an undecided request from a recorded verdict still being delivered; see the [caller contract](../../docs/caller-contract.md#permission-relay). |
+| `ErrRelayFallenBack` | The request's relay settled without acknowledgement and no pane answer is recorded through agent-director. Cursor uses finite `confirm_by` with null per-request hook process evidence; see [Cursor permissions](../../docs/permissions.md#cursor-spawns). Thrown by `decide` on that request, within seconds of the hook's end (after the request's `confirm_by` when agent-director cannot check the hook's process); no verdict was recorded, the caller's is kept as the request's `attempted_decision`. Thrown by a `sendKeys` without `request_token`, and by `pause`, while any request of the spawn is so; nothing was sent. `errDetails` is a `RelayFallenBackDetails`: the request's facts, the spawn's `state` and its other `open_requests`. Pane-answer handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay); the relevant API methods are `sendKeys` with `request_token` and `recordPaneAnswer`. For a request recorded by an older binary, `decide` throws it once the request's record is still open 2 s after its relay window ended (a call from 1 s before the window ends first waits for that instant, at most 3 s), and only while the spawn is still in `check_permission` with no other open request and none recorded after this one, otherwise `ErrNoOpenPermissionRequest`. |
+| `ErrDialogMaybeOpen` | A `sendKeys` without `request_token` and without `expect_pane_sha256`, or a `pause`, on a spawn with `relay_mode=on`, while a permission request of the spawn is not proven gone by valid agent evidence (see [The dialog hold](../../docs/permissions.md#the-dialog-hold)), whatever agent-director's records say of it (`"delivered"`, a pane answer, `recordPaneAnswer`); nothing was sent. `errDetails` is a `DialogMaybeOpenDetails`: the oldest such request with its facts and `unproven_since`, the spawn's `state` and its other `unproven_requests`. Retry, escalation and pane-hash handling are owned by [Permission relay](../../docs/caller-contract.md#permission-relay). `pause` takes no hash; stopping a held Spawn is covered by [Caller contract](../../docs/caller-contract.md). |
 | `ErrPaneChanged` | `sendKeys` or `recordPaneAnswer` with `expect_pane_sha256`: the agent's pane no longer has that hash; nothing was sent or recorded. `errDetails` (`PaneChangedDetails`) never carries the new hash; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay). |
 | `ErrPaneAnswerInProgress` | A pane answer or `recordPaneAnswer` while another sender still owns the request. Nothing was sent or recorded; `errDetails` is `PaneAnswerInProgressDetails`. |
 | `ErrClaimTooSoon` | `recordPaneAnswer` before the request's relay hook has been gone 2 s, or while it may still answer the request; nothing was recorded. `errDetails` is `ClaimTooSoonDetails`, with `not_before` (`null` only while the hook is seen running); retry handling is in [Permission relay](../../docs/caller-contract.md#permission-relay). |
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or `find-missing` or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request's relay hook confirmed a verdict recorded on it, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only if its relay hook confirmed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
-| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay hook denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the hook recorded that deny with its confirmation before returning it to the agent, so there is nothing to answer at the pane. It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay hook confirmed, or one already closed at the pane, throws it too. |
+| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or `find-missing` or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request relay acknowledged its recorded verdict, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only after relay acknowledgement). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
+| `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
 | `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and the bound ran out, during its reads or its write, before its verdict was recorded: another agent-director process held the store that long (or, for a request recorded by an older binary, `decide` would have had to wait past the bound for the end of its relay window). Nothing was recorded; retry handling is in [Caller contract](../../docs/caller-contract.md). Once the verdict is recorded, `decide` never throws it: a bound reached while it waits for the relay hook's confirmation resolves with `delivery` `"not_confirmed"`. Without `max_wait_ms`, `decide` never throws it. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout; nothing was sent or recorded; retry handling is in [Caller contract](../../docs/caller-contract.md). |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |
 | `ErrAmbiguousRequest` | `request_token` was empty and more than one open request exists for the spawn. |

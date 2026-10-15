@@ -1,0 +1,278 @@
+[
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/FORMAL-ASSESSMENT.md",
+    "bytes": 10481,
+    "mode": "0o664",
+    "sha256": "5f17c18842df0107c59df9a0652fa6015e44588bbdda2397d8d8a75f246cd24c"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/SCHEDULER-HANDOFF.md",
+    "bytes": 3746,
+    "mode": "0o664",
+    "sha256": "0847eadb3c9029ae5dfe03f3c530d614bb646f5d1491ed70a3c17cdd2f41c3a2"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-counts.json",
+    "bytes": 10574,
+    "mode": "0o664",
+    "sha256": "3827279c6ab6e727244ced3db80ae94f9946a17ace4955408473f380cf49d11b"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-inventory.json",
+    "bytes": 15757,
+    "mode": "0o664",
+    "sha256": "87d0fa33534518148a0505d810f3661c55cc8b1279b8ca0e90cbb90f97f9b0ad"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-ack-final.log",
+    "bytes": 11892,
+    "mode": "0o664",
+    "sha256": "6201b963300230f5080553172ed21d832a54e791f6ae47f247190d37e99e4516"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-cleanup-correlation-final.log",
+    "bytes": 15942,
+    "mode": "0o664",
+    "sha256": "44875debf7051c6845785639b8e7d90bd169320340c94252f3257b0871a5f14d"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-pressure-static.log",
+    "bytes": 8019,
+    "mode": "0o664",
+    "sha256": "38ad914432553edb82be8cb183a6962db9263c1836dfcd6a7ef08deed9d9e31c"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-reviewed.log",
+    "bytes": 8015,
+    "mode": "0o664",
+    "sha256": "ac6688c05f8199c2810d31702e1b0450436b6129a652328d964595aef89918e3"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-static-final.log",
+    "bytes": 5110,
+    "mode": "0o664",
+    "sha256": "50e22db4c0bbca3140bd64d137d94ca6416bbc75a0ba721abaf1a18541be5f0f"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-collector-static.log",
+    "bytes": 8019,
+    "mode": "0o664",
+    "sha256": "f0ec4a4b49d4f1442be2d8ec9cee2f02308a2e34646cf0da162ed812a7a69662"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-completion-correlation.log",
+    "bytes": 9511,
+    "mode": "0o664",
+    "sha256": "bd0239b00144e397e0343b7e732ad19bf6d3ea231e6b5942f7e685dd0d260594"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-cursor-regression.log",
+    "bytes": 51310,
+    "mode": "0o664",
+    "sha256": "c9dee913e3fee63f2297fbb32639355036d8250218ddd90f1278c72f0a64cdb0"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-final-targeted.log",
+    "bytes": 56522,
+    "mode": "0o664",
+    "sha256": "5df5429d00b73411ca2ef57f062bfe7bb8352f55b73ddbf216e649ce91a1fbd8"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-guards-final.log",
+    "bytes": 13302,
+    "mode": "0o664",
+    "sha256": "0571e2572c1dbf441df27dd9727f24523736cc347e4b0b077f4d9e58e2625688"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-observer-final.log",
+    "bytes": 9211,
+    "mode": "0o664",
+    "sha256": "d1c66ac05ba3e4778d4547fd1276b7ab3500109d310817c151e1b3dd11802da7"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-observer-offset.log",
+    "bytes": 9206,
+    "mode": "0o664",
+    "sha256": "934480d2aa8fcd4f6dcc15987bf2281c787639eef5fcd95d2b8fa942ab446546"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-pane-question.log",
+    "bytes": 12564,
+    "mode": "0o664",
+    "sha256": "61de5e5a4b59b482017557ac3dfc0997338591c73915c8d43b987b028800435b"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-pane-queue-corrected.log",
+    "bytes": 12472,
+    "mode": "0o664",
+    "sha256": "3d3fe273e0a2c9b87badcc8a7fd6d04e6bfefa39b2804ae89db692fdca925fcc"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-proof-corrected.log",
+    "bytes": 5306,
+    "mode": "0o664",
+    "sha256": "31bf98fcdfa356d9ad014b0e84b91d2f10a73540f0e2451731a91ae6ffb44206"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-proof-final.log",
+    "bytes": 11012,
+    "mode": "0o664",
+    "sha256": "46ae8fb72926e0886aba6bdc534f6d4bf68f8961603d788eab6ea4486c085cd7"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-final.log",
+    "bytes": 84634,
+    "mode": "0o664",
+    "sha256": "2c10256dd2fa5bdcc3db3e342cf4dd332b062e4003071722af1f878437d85c0b"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-fourth.log",
+    "bytes": 14145,
+    "mode": "0o664",
+    "sha256": "8468b91f186ed23003e277f4f67631e4767da1d1b0e908814acad9a1aee949d7"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-initial.log",
+    "bytes": 4360,
+    "mode": "0o664",
+    "sha256": "bf3615d0e7490972faec206e19fbc31a556fd9a2133641e0b38b50348d03b4ee"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-second.log",
+    "bytes": 17206,
+    "mode": "0o664",
+    "sha256": "146fa5f7c8968b5b0613433d617f57705ad5198e9ecc2b4f013e7f61635babab"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-public-third.log",
+    "bytes": 12832,
+    "mode": "0o664",
+    "sha256": "0605be691aa82d9d4e2cd61f7a0350cf57fb45c6e771f9035efdd8b460a1795e"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-quality-final.log",
+    "bytes": 30371,
+    "mode": "0o664",
+    "sha256": "52b6229d56ca80f839ad12b02a90f3433970718d7cb0da939cb1d563734fcbce"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-question-provenance-final.log",
+    "bytes": 70934,
+    "mode": "0o664",
+    "sha256": "509bb10123b01bd1c4481c2e1055305256ad8de21f5bc51a70510353a70dcc8c"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-barrier.log",
+    "bytes": 7209,
+    "mode": "0o664",
+    "sha256": "c6adf943292c11d83b1443082e90864a414deb0b26b8ef4c9fcfca0bb42888e3"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-block.log",
+    "bytes": 21687,
+    "mode": "0o664",
+    "sha256": "d23bce788e7d11eac82e5452462b0651638d3056b2a25ea220be5fe43e345883"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-exact-pressure.log",
+    "bytes": 8589,
+    "mode": "0o664",
+    "sha256": "2c690169dbfcd2d2c305a6d184e7e655d8c6ad8592525d1aef27dc53d47e3cec"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-minimal.log",
+    "bytes": 6906,
+    "mode": "0o664",
+    "sha256": "4e8bd9f8c8d5e61d126043f5dc3757cec5abaa4a521236c0a12c65dce6eba401"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-public.log",
+    "bytes": 5585,
+    "mode": "0o664",
+    "sha256": "7adf1ded49565fb45f411d8345620096e37449b85522fa2a2f965db97861ef2a"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-queue-stop.log",
+    "bytes": 5617,
+    "mode": "0o664",
+    "sha256": "5faba28e85c29541260b860f2dce215359f242dd90382a965ea115438c2974c5"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-receipts/ftd-task3-static-settled.log",
+    "bytes": 8012,
+    "mode": "0o664",
+    "sha256": "e4dcff4cd0d10c737fbe5945fe822918481b4f4983c4898b7fe7a9f99f45d6b7"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/behavior-report.txt",
+    "bytes": 18872,
+    "mode": "0o664",
+    "sha256": "359c957ce68da61862819c7942a9f8698029bab3436f89e92262d37893a876d9"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/check-collector-syntax.js",
+    "bytes": 680,
+    "mode": "0o664",
+    "sha256": "9c0d233a14b851df5f512941b2b3f5081933b98c7fe89a7823ab3b60a288eae4"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-corrections-architecture-delta.patch",
+    "bytes": 4269,
+    "mode": "0o664",
+    "sha256": "16234d1669085b1346769ba08175cc5c516afdb67e63dc63a6bd6fd29339fe70"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-corrections-coverage.json",
+    "bytes": 14836,
+    "mode": "0o664",
+    "sha256": "8b0dd732b6695a7354ee41aa11cfca1837cd2289d009b9ac775adc036f4de0b0"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-corrections-report.txt",
+    "bytes": 7747,
+    "mode": "0o664",
+    "sha256": "8bf10e5f2a3827183c4f85e924d85ce192c6e194f53f6ea5a6574397b5d67bda"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-coverage.json",
+    "bytes": 7029,
+    "mode": "0o664",
+    "sha256": "32a02828a46158e6d8ba52ed280b360e08435bb8ba7eb4d5fda09adb46d2cc2a"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-report.txt",
+    "bytes": 7396,
+    "mode": "0o664",
+    "sha256": "d3a61b4ac382666de0b4d37b327a6c3d63f467c7be26535e854d926c5fe4b6e8"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-a.txt",
+    "bytes": 4055,
+    "mode": "0o664",
+    "sha256": "81aef94730dfbcbf1873ec5f8fab7ac78974f33a631d35731f1ec8a8eb6c6175"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-b.txt",
+    "bytes": 4126,
+    "mode": "0o664",
+    "sha256": "2dbbece23feed138b8423ae6779913ca37540aac2d2a68a96f94c0656520b26f"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-c.txt",
+    "bytes": 3190,
+    "mode": "0o664",
+    "sha256": "9f0f272dcde9c9ba3d29f86829db128ea81e521073a13f80d5a3b9b250a63595"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-d.txt",
+    "bytes": 2465,
+    "mode": "0o664",
+    "sha256": "c40ad1b02e8ac90488877db2b90128f5b5383d40484ddb68d971fb641c679edb"
+  },
+  {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/review-disposition.json",
+    "bytes": 1384,
+    "mode": "0o664",
+    "sha256": "731a10a0a4c332dad119ca5546e95a22d606d1e7e50dde23c5789b014fc1aca7"
+  }
+]

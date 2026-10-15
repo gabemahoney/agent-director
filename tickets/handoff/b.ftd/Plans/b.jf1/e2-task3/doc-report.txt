@@ -1,0 +1,47 @@
+E2 TASK3 DOC WRITER INITIAL BATCH REPORT
+Task t2.jf1.c1.3p; base HEAD 98e40efdef8bb18e773b6db2ea63fdf22534d96d, feature/b.ftd.
+
+RESULT
+Client workflow contract correction complete. Architecture fixture/formal additions complete, but FULLREVIEWPENDING: this lane did not personally reread all 22213 architecture lines. Root must dispatch the fresh partitioned whole-file reviewers and resolve their current-scope findings before closing .dc. No unresolved product/source issue identified.
+
+OWN TICKET STATUSES
+t3.jf1.c1.3p.a7: defined -> active -> done.
+t3.jf1.c1.3p.dc: defined -> active; left ACTIVE because its whole-architecture reread AC remains incomplete.
+No Task/Epic/other Subtask status changes. No commit, staging, push, delegation or agent messages.
+
+CHANGES
+pkg/api/README.md: existing Decide/GetPermission/RequestDelivery contract now allows Cursor gateway-local acknowledgement without a hook process; finite persisted ConfirmBy, nil process/HookAlive, durable acknowledgement distinct from receipt/execution/closure, no-ack zero relay reply including deny. Generic error summaries refer to request-relay settlement and valid agent evidence. Canonical permissions/caller links own native choices, once-only mapping, questions, unknown-origin holds and uncertain-answer recovery.
+pkg/ts-bun-client/README.md: same finite/null evidence and acknowledgement distinctions; corrects Claude-only tool_ran statement to include validated exact matching Cursor shell execution, with main-turn eligibility/age/identity guard. Pause/error summaries use valid agent evidence and request relay rather than assuming a hook process. Existing types, method names and API remain unchanged.
+docs/architecture.md: Raw versus Frames, Sent/SentFrames, synchronous Observer; SourceDerivedQuestions/questions.json and provenance reuse; PauseAfterRequests/Paused/Release plus AfterAnswers/WaitForRelease/CompleteBeforeAnswers; configured session correlation; shared newCursorPaneScenario Script/Relay/Timeout and owned worker cleanup. Both collectors reuse cursor-owned-launch.sh, SQL wrapper, namespaces/sentinel/scoped helpers and real forwarded post-ack evidence wrapper. Linux cursor-pipe.c barrier/4096 labelled control/exact-retained-byte contract is test-only; no control bytes called ACP and no process/auth authority fabricated. Model-check section records changed-model-only scheduling and honest queue/native abstraction/refinement limits.
+No new user manual, guide edit, production/schema/generated/API change, command or recovery sequence. Root README review-only: prerequisites remain explicitly deferred to E5. Testplan/collector/handoff artifacts owned by TestWriter were not edited.
+
+READ / VERIFICATION
+Read CLAUDE and user/readme/architecture guides; Task and all seven Subtasks/Epic; approved PRD and SRD requirement body and current coordinator decisions; COMPLETE /tmp/ftd-e2-task3-behavior-report.txt; FORMAL-ASSESSMENT/SCHEDULER-HANDOFF/COVERAGE/operator-acceptance and prior Task2 disposition. Reviewed actual shared fixture runtime/factory/provenance, pane helper cleanup, shared shell driver, C helper, public test assertions/owners, current controller/store ack/final-writer/proof and public delivery/get-permission/decide descriptions. No claim of fresh complete production/test-file review.
+Both client READMEs read in full in sequential untruncated ranges against the guides; final small grammar/error-row deltas also read fully. Existing code blocks are byte-identical to base (host text comparison), so Go example and Bun snippet contracts are untouched. New links target existing canonical headings.
+No repository artifacts, tests, builds, generators or formatters executed. Only host reads/edits, read-only git/metadata and bees own-status updates. git diff --check PASS. Final TestWriter .56 owns full sandbox units and existing README examples/symbols/links/literal checks after documentation review settles.
+
+WHOLE ARCHITECTURE COVERAGE / INCOMPLETE WORK
+FULLREVIEWPENDING. Personally read final architecture content ranges 228-405, 17011-17078 and 17632-17666 (some originally read before the final one-line wrap, with exact delta mapping preserving coverage); all new paragraphs/context reviewed against source. This is partial coverage, not a personal whole-file reread and not an rg/diff substitute for it.
+Inherited aggregate evidence: Task2 four reviewers covered all22122 base lines SHA2566fc3ba3747916d664c7f520f288521bfe319890c1b18d52385d7cf07f3ef7f5e, followed by reviewed corrections to22160 lines SHA256455f4784414f9ab1cad35c9263b422ee68afead3af104fe6dc17a22ad534ef42. This report relies on that evidence only as background; no current full-review closure claimed. Fresh partitioned whole-file review remains root-owned. Exact hashes, ranges/opcodes and limits are in doc-coverage.json.
+
+DEFERRED INHERITED FINDINGS
+Task2 A5-A8/B5-B11/C6-C11/D4-D5 remain explicitly deferred: broad guide/history/implementation/test-catalog/reference/settings normalization. Whole client review also observes inherited long code examples against general user-doc no-code guidance, implementation/CLI detail, duplicated error/recovery prose and historical older-binary text. These are established broad normalization debt, not a clean-document claim; no new Task3 factual or prose-guide issue is knowingly deferred. Root README Cursor prerequisite/installation presentation remains E5. No unrelated cleanup performed.
+
+ADVICE / LITERAL HANDOFF
+No new/changed commands, executable snippets or recovery sequences. Every fenced block in all3docs byte-identical to base. Changes are declarative delivery/proof/finite-evidence semantics and existing canonical-owner links. Operator/install-skill/install12 recovery pins remain untouched. No literal test execution claimed. .56 should retain existing README symbol/link/example and full-suite owners; no new recovery-test behavior required by this lane.
+
+FORMAL / EXTERNAL GATES
+No changed spec/tla files; no formal jobs applicable/scheduled. TLA+ is a design check; queue/native implementation details remain refinement obligations, not formal theorems. No historical count/control/receipt edits. No Docker TESTPLAN/TLC/parser/scheduler/authenticated execution. The ten collector cases are authored only; 16groups/167cases are an expected pending inventory, never passes. Prior Task2 Docker acceptance is historical; current full units, external Docker and authenticated predicates remain outside this lane. No Cursor load/resume/platform/group parity claims.
+
+FILES / SHA256
+pkg/api/README.md: 601lines 26947bytes SHA256 554be0d8c93238aa65530688688a392c49d8dd53f8e1a029b2e80edbc53e006c
+pkg/ts-bun-client/README.md: 637lines 47467bytes SHA256 5fe58b9da28a48cd7d540b01acbd0cd8bedf628500129c2ba2c1d9e73c546570
+docs/architecture.md: 22213lines 1534189bytes SHA256 b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf
+
+ARTIFACTS
+/tmp/ftd-e2-task3-doc-report.txt identical to tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-report.txt.
+/tmp/ftd-e2-task3-doc-coverage.json identical to tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-coverage.json.
+tickets/handoff is ignored; root must explicitly preserve/force-add intended report and companion artifacts.
+
+QUESTIONS
+None. Required next action: root whole-file architecture reviewers, any batched correction, then .56 final sandbox validation/PM/local commit/external gate.

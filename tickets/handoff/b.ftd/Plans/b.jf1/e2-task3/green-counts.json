@@ -1,0 +1,385 @@
+{
+  "command": "make test-sandbox",
+  "exit": {
+    "command": "make test-sandbox",
+    "started_utc": "2026-10-15T16:13:00.005028+00:00",
+    "ended_utc": "2026-10-15T16:17:52.929885+00:00",
+    "exit_code": 0
+  },
+  "go": {
+    "passing_packages": 68,
+    "executed_passing_packages": 6,
+    "cached_passing_packages": 62,
+    "failed_packages": 0,
+    "no_test_packages": 13,
+    "package_results": [
+      {
+        "package": "github.com/gabemahoney/agent-director/cmd/agent-director",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/cmd/agent-director-admin",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/clisetup",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/config",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/cursorhost",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/hook",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/layout",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/mcp",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/oldnames",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/probe",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/spawn",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/store",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/testsupport/storefix",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/tmux",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/internal/trail",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/pkg/api",
+        "result": "142.621s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/pkg/api/apitest",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/pkg/api/errnames",
+        "result": "1.253s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/pkg/api/manifest",
+        "result": "1.450s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay",
+        "result": "1.222s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub",
+        "result": "0.002s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/driver-scripts",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/envelope-diff",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/fake-tmux",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/grounding-replay",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/install-sh",
+        "result": "257.188s",
+        "cached": false
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/realtmux",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/reboot-recovery",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/cigates",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/cmdinject",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/gitmount",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/prebuild",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/releaseversion",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/sandbox/requiresandbox",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/smoke/go",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/smoke/ts-helper",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/test/tla",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/tools/check-doccomments",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/tools/check-nondet",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/tools/gen-docs",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/tools/measure-exit",
+        "result": "(cached)",
+        "cached": true
+      },
+      {
+        "package": "github.com/gabemahoney/agent-director/tools/measure-exit/dryrun",
+        "result": "(cached)",
+        "cached": true
+      }
+    ],
+    "failures": [],
+    "no_test_package_names": [
+      "github.com/gabemahoney/agent-director/internal/adminapi",
+      "github.com/gabemahoney/agent-director/internal/testsupport/codexfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/cursorfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/cwdfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/dbpathfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/launchfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/procfix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix",
+      "github.com/gabemahoney/agent-director/internal/testsupport/procstat",
+      "github.com/gabemahoney/agent-director/internal/testsupport/writefailfix",
+      "github.com/gabemahoney/agent-director/internal/version",
+      "github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest"
+    ],
+    "individual_case_counts": "not available from default Go output; no fabricated totals"
+  },
+  "bun": {
+    "pass": 429,
+    "fail": 0,
+    "expect_calls": 1659,
+    "tests": 429,
+    "files": 57
+  },
+  "diagnostic_lines": [],
+  "source_tree_manifest_sha256": "6d3143e79eddb018c4950a6952b282b5ffd8d1106c95578f2adb4bfd6c9843ca",
+  "overlapping_targeted_totals_not_added": true
+}

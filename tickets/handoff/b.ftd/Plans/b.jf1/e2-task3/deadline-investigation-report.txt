@@ -1,0 +1,62 @@
+TASK3 DEADLINE INVESTIGATION — ORIGINAL FULL GATE STILL FAILED / CAUSE UNRESOLVED
+Task t2.jf1.c1.3p; final test writer subtask t3.jf1.c1.3p.56 remains ACTIVE.
+Diagnostic role only: no implementation subtask assigned, no Bees status changes, commits, staging, push, product/test/doc edits, delegation or full-suite execution.
+
+CONCLUSION
+No production bug has been demonstrated. The original run2 failure remains valid: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s measured Decide at 1.58341753s against the unchanged 1.5s assertion (500ms max_wait_ms + existing 1s allowance). Error/result assertions did not fail. Its 11.03s leaf time includes fixture setup and teardown, not just Decide. Do not describe this as fixed or green because targeted repetitions pass.
+
+The synchronous HoldWriteLock callback is a proven fixture action inside the timed call, but is NOT an established explanation of the original failure. New runtime traces measured that action at fractions of a millisecond in passing runs. Parallel scheduling, SQLite/file I/O, and shared trail emission remain distinct possible contributors; the original plain-text full-run receipt has no phase timings or trace to distinguish them. Do not speculatively change source, widen either limit, remove real contention, or subtract fixture time from the existing assertion.
+
+READS / CODE PATH
+Read /tmp/ftd-e2-task3-final-test-report.txt completely; inspected raw final-full-unit-run2.log (819 lines), its precise failure and surrounding package/Bun results; CLAUDE.md; engineering/test-writing guides and sandbox instructions; relevant architecture bounded writes/reads and deadline contract at lines2137-2185,2732-2753. Prior full architecture review retained per dispatch. No new product contract or formal-model change.
+
+1. Test at pkg/api/decide_delivery_test.go174ff runs all 23 existing leaves parallel (20 agent/busy/scenario cells plus 3 standalone leaves). Each store lives in its own fixture. There is no evidence of cross-cell database-lock sharing. Start at line229 precedes DecideWithSleep; took at232 precedes release, so release/cleanup overhead does not enter took. Only lockLater constructs the lock holder during measured Decide; other cells do it before start.
+2. Test sets view.Now=time.Now. Production newDecideCall at decide.go279-285 records one deadline using that monotonic clock; lockWait at327-331 returns max(deadline-now,0). Validation and PIDNamespace seam precede deadline construction but are immediate test fake operations. No fake clock advancing during the measured call.
+3. Every pre-verdict store read uses Within(...,lockWait()). Verdict writes use DecideRelayRequest(...,lockWait()). internal/store/lockwait.go boundedConn shares one deadline between acquiring the one pool connection (minimum connGrab1ms) and SQLite busy timeout, clipping at configured busy timeout. withConn sets a temporary PRAGMA and restores it before releasing the connection. maxWait conversion floors to milliseconds; no observed overflow or accidental maximum busy timeout inheritance in these runs.
+4. Store inWriteTx uses BEGIN IMMEDIATE, statement and COMMIT, or rollback; all on the owned connection. ctx is context.Background, not a cancellation deadline: contention is bounded via pool deadline and PRAGMA busy_timeout, while transaction execution, disk work and timeout restoration are synchronous. This code cannot prove a hard wall-clock upper bound under arbitrary OS/filesystem stalls.
+5. After commit, DecideRelayRequest synchronously calls emitDecisionCommitted (permission.go713ff). trail.Emit takes the singleton Writer mutex and performs file Write + Sync while holding it (trail.go160ff), ignoring its context argument. All pkg/api parallel tests share the TestMain-pinned trail singleton/path, even though DB fixtures are private. This is a concrete additional timing path, not proof of the original cause. No source fix is justified without a causal measurement/demonstration; changing audit durability would have separate contract implications.
+6. awaitAck at decide.go442-468 clips end to the absolute deadline, checks the fake hook before each read, passes max(end-now,0) to GetPermissionRequestWithin, and sleeps min(50ms,end-now). After committed verdict it preserves facts on read error and returns not_confirmed, never ErrStoreBusy/fallen_back. A 0ms remaining read can take the documented 1ms connGrab; nothing here authorizes raising the 1.5s assertion.
+7. At its first awaitAck sleep, test callback invokes HoldWriteLock synchronously. apitest/writelock.go opens the raw DB (seeds.go286ff), obtains a real SQL connection and executes BEGIN IMMEDIATE before sleeping. Context is background; helper initialization is unbounded fixture work inside measured Decide. After it returns, real time.Sleep(d) runs even if fixture work consumed some of d's original budget; next loop observes real time and exits. This explains how fixture setup CAN affect measurement, not how much it affected run2. Holder uses a separate connection and retains actual SQLite write contention until explicit release or1minute; cleanup is idempotent.
+
+TARGETED EXECUTION — ALL VIA make sandbox CMD, DOCKER UNIT CONTAINER
+No host Go/Bun/repository artifact execution. No full units or integration groups. No TLC, parser, scheduler, live Cursor, authenticated actions, real AD stores or credentials.
+
+Exact failed existing leaf:
+make sandbox CMD='go test ./pkg/api -run "^TestDecideMaxWaitUnderHeldLock$/^codex$/^lock_taken_after_the_commit$/^busy_596h31m23.647s$" -count=10 -timeout=3m -json -trace=tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace'
+Host stdout/stderr redirected to deadline-exact.log. make exit0; package5.272s; 10leaf PASS,0FAIL,0SKIP. Leaf elapsed0.52-0.53s includes setup/teardown. Repetitions are overlapping evidence, never additional distinct coverage.
+
+Whole existing logical table:
+make sandbox CMD='go test ./pkg/api -run "^TestDecideMaxWaitUnderHeldLock$" -count=10 -timeout=3m -json -trace=tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace'
+Host stdout/stderr redirected to deadline-table.log. make exit0; package7.964s;23existing leaves x10=230PASS,0FAIL,0SKIP. Leaf elapsed0.10-1.09s includes setup/teardown. Exact leaf repeated here overlaps previous run. Assertions,500ms parameter,1.5s ceiling, agent/busy matrix, decision/attempt/error/delivery guards unchanged.
+
+Existing Go runtime instrumentation decoded in sandbox, both exit0:
+make sandbox CMD='go tool trace -d=1 tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-exact.trace'
+make sandbox CMD='go tool trace -d=1 tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/deadline-table.trace'
+Decoded stdout/stderr saved as corresponding .trace.txt (then gzip -1 compressed to .trace.txt.gz without changing trace content). Decoding is diagnostic, not another test execution. Binary traces retained. No repo code changed to instrument.
+
+Host Python parsed JSON actions and decoded StateTransition stacks into deadline-measurement-summary.json. For each callback, first os.Stat transition in openRawStore (with test callback stack at line224) to first actual time.Sleep transition (line226) bounds the traced portion of holder initialization. Exact run10spans=0.103936-0.137920ms; table40spans=0.093760-0.628480ms. These spans exclude a few instructions before os.Stat and do not capture original run2. They independently confirm the seam's placement and show no slow initialization in these passing runs. Largest recorded exact-call blocked/preempt spans were ~51ms sleep; table includes ~501ms expected pre-verdict SQLite busy waits. Runtime trace changes scheduling/overhead; these are not uninstrumented call-latency benchmarks. Passing tests only establish took<=1.5s, not an exact took value per repetition.
+
+NEXT OWNER / BOUNDED CAUSAL PLAN
+Route fresh TestWriter diagnostic/fixture work, retaining .56 ACTIVE and original gate FAILED. No Engineer implementation ticket based on these results alone. Suggested bounded next measurement: at most3 repetitions of the existing 23leaf table with minimal diagnostic timestamps (test-side only, outside production), then a single instrumented full-unit rerun owned by final TestWriter if table still cannot reproduce the loaded failure. Record per-call start/end, callback enter/holder-ready, total real-sleep spans, and a test-local DecideStore wrapper timing delegated methods including successful verdict write return. Keep the same real stores and all existing guards. On failure emit phase timings (no secrets); optionally retain a pkg/api runtime trace in a diagnostic package run to attribute runnable delays, SQLite syscalls, shared trail mutex/fsync. Do not add stress jobs or synthetic sleeps to force a convenient explanation, or run full suites in this diagnostic pass.
+
+Conditional smallest fixture repair if holder initialization is measured as material: split lock-holder preparation from activation. Open/initialize its raw connection during setup before start; at first real sleep after commit execute BEGIN IMMEDIATE on that ready connection, signal/assert acquisition, then time.Sleep(d). Retain an independent committed decision check before activating the lock (current callback placement is after successful commit), retain lock until explicit release, and preserve bound/ceiling, delivered/not_confirmed, error, decision/attempt, legacy/gone/connHeld and both busy values. Reuse shared apitest lock helper lifecycle rather than a second harness. Merely moving activation before commit destroys this scenario. This repair removes known fixture initialization from the measured path, but cannot yet be claimed to fix run2, and does not address audit/filesystem/scheduler delays.
+
+If observed excess instead occurs in delegated successful verdict write/audit, obtain a concrete trace-backed product reproduction, then ask root to create a source implementation subtask with a focused fix proposal preserving audit durability. If runnable scheduling delay dominates, reducing deliberate test concurrency for this wall-clock-sensitive table may be appropriate, but do not claim that is established here. Do not broaden timeout, eliminate busy maxima, skip the case, or retry until green while discarding failures.
+
+TREE / EVIDENCE IDENTITY
+HEAD98e40efdef8bb18e773b6db2ea63fdf22534d96d; inherited settled Task3 dirty tree.
+Fresh before/after manifests over ALL2409 git tracked and nonignored untracked files are byte-identical: SHA256 aaddda2d9341294cb7c655ac6a592f38ccda119e65e633ba12c3dbe99c011a78. This includes all source/tests/docs/testplans. Inherited tracked binary diff unchanged SHA256 8d6c50e0c3293408a7f4d26c2b7d6086dcdb0a9296054c9876b6a4c7ae01834f.
+Fresh individual hashes:
+b5bfbff9db33f6c02d802c92f397cc7998e009cf1f8dc3771a450e4655eb4085  pkg/api/decide.go
+b7ffbc6be01f4e07a0e987873632817c6cf33a6e085036b795f6c7b09e59a8b7  pkg/api/decide_delivery_test.go
+431218d5726cb4ba0595e760796d1ed760f87d24d7f1e1591b3243852ddcf56d  pkg/api/apitest/writelock.go
+9ab74ebd49b9340ca2737bd6deaf98385224e04763ce0735c358a7fb44986c9f  pkg/api/apitest/seeds.go
+414bb78c51b2d9845b554f46abf08c42e6f1233438e3643022f33ab29537d948  internal/store/lockwait.go
+55c6faf6e4b5676d0b150d2e53d05bea90212305f7cb674cca95cadbb3ef4f78  internal/store/permission.go
+b7c444678a57fad0d2dea1f24c14e0aed56ead5d9189ed5c662b273b63223278  internal/trail/trail.go
+c0a8bbf5921c8950b83684b3708ebdeab60f10aceb17362178d2bbc18821072c  pkg/api/relay_delivery.go
+0684f73bbf51ee4860784f8278b00547a4afdff4a2b9319a3e4fbd59f84bf359  pkg/api/example_main_test.go
+759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094  docs/architecture.md
+
+Only new diagnostic report/receipts under ignored handoff plus /tmp report. Artifacts: deadline-before/after-hashes.json, deadline-exact.log/.trace/.trace.txt.gz, deadline-table.log/.trace/.trace.txt.gz, deadline-measurement-summary.json, deadline-investigation-artifact-hashes.json. Existing original final-full-unit-run2.log and final report retained untouched.
+No implementation completed or statuses changed. Questions for caller: none. Remaining work: causal measurement and appropriate repair/full gate, owned by caller's next dispatch. No green Task3 full-gate claim.

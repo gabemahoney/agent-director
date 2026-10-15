@@ -219,17 +219,36 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 					if tc.connHeld {
 						release = holdStoreConnection(t, s, release)
 					}
+					phases := make([]decidePhase, 0, 32)
+					observed := &deadlineStore{DecideStore: s, phases: &phases}
+					var realSleep time.Duration
 					sleep := func(d time.Duration) {
+						entered := time.Now()
 						if release == nil {
 							release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
 						}
+						ready := time.Now()
+						phases = append(phases, decidePhase{name: "sleep callback enter to holder ready", start: entered, end: ready})
+						sleepStart := time.Now()
 						time.Sleep(d)
+						sleepEnd := time.Now()
+						realSleep += sleepEnd.Sub(sleepStart)
+						phases = append(phases, decidePhase{name: "real sleep", start: sleepStart, end: sleepEnd, wait: d})
 					}
 
 					start := time.Now()
-					res, err := api.DecideWithSleep(s, view, sleep, api.DecideParams{InstanceID: e.id,
+					res, err := api.DecideWithSleep(observed, view, sleep, api.DecideParams{InstanceID: e.id,
 						RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(bound))})
-					took := time.Since(start)
+					end := time.Now()
+					took := end.Sub(start)
+					defer func() {
+						if t.Failed() {
+							t.Logf("decide phases: call start=%s end=%s elapsed=%v total real sleep=%v", start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), took, realSleep)
+							for _, phase := range phases {
+								t.Logf("decide phase %s: start=+%v end=+%v elapsed=%v requested wait=%v", phase.name, phase.start.Sub(start), phase.end.Sub(start), phase.end.Sub(phase.start), phase.wait)
+							}
+						}
+					}()
 					if release != nil {
 						release()
 					}
@@ -301,6 +320,52 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 			t.Errorf("request decision = %q; want none recorded", pr.Decision)
 		}
 	})
+}
+
+type decidePhase struct {
+	name       string
+	start, end time.Time
+	wait       time.Duration
+}
+
+// deadlineStore observes the bounded calls used by the deadline table, delegating
+// every operation to its real store. Unbounded methods are forwarded by embedding.
+type deadlineStore struct {
+	api.DecideStore
+	phases *[]decidePhase
+}
+
+func (s *deadlineStore) observe(name string, wait time.Duration) func() {
+	start := time.Now()
+	return func() {
+		end := time.Now()
+		*s.phases = append(*s.phases, decidePhase{name: name, start: start, end: end, wait: wait})
+	}
+}
+
+func (s *deadlineStore) GetSpawnWithin(id string, wait time.Duration) (api.Spawn, error) {
+	defer s.observe("GetSpawnWithin", wait)()
+	return s.DecideStore.GetSpawnWithin(id, wait)
+}
+
+func (s *deadlineStore) GetPermissionRequestWithin(id, token string, wait time.Duration) (api.PermissionRow, error) {
+	defer s.observe("GetPermissionRequestWithin", wait)()
+	return s.DecideStore.GetPermissionRequestWithin(id, token, wait)
+}
+
+func (s *deadlineStore) PermissionRequestsForSpawnWithin(id string, wait time.Duration) ([]api.PermissionRow, error) {
+	defer s.observe("PermissionRequestsForSpawnWithin", wait)()
+	return s.DecideStore.PermissionRequestsForSpawnWithin(id, wait)
+}
+
+func (s *deadlineStore) DecideRelayRequest(id, token, decision, reason, writer string, cutoff time.Time, wait time.Duration) (bool, error) {
+	defer s.observe("DecideRelayRequest (including verdict write return)", wait)()
+	return s.DecideStore.DecideRelayRequest(id, token, decision, reason, writer, cutoff, wait)
+}
+
+func (s *deadlineStore) RecordRefusedDecision(id, token, decision string, at, gone time.Time, wait time.Duration) error {
+	defer s.observe("RecordRefusedDecision", wait)()
+	return s.DecideStore.RecordRefusedDecision(id, token, decision, at, gone, wait)
 }
 
 // holdStoreConnection makes another call of this process hold s's one
