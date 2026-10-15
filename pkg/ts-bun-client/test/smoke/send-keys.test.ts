@@ -16,10 +16,10 @@ import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper, privateTmuxSocket, seedFallenBackRelayRow, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient,
   rejection } from "../internal/helper.js";
-import { ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, ErrSubmissionUnconfirmed, type AgentDirectorError, type DialogMaybeOpenDetails,
+import { ErrInvalidFlags, ErrDialogMaybeOpen, ErrInternal, ErrSpawnNotFound, type AgentDirectorError, type DialogMaybeOpenDetails,
   type PaneKeySentDetails } from "../../src/index.js";
 
-test("send-keys: manual pane hash sends text and Enter to the owned pane", async () => {
+test("send-keys: happy path — sends the text, then Enter, to the row's pane by id", async () => {
   await withTempHome(async (homeDir) => {
     const store = homeStore(homeDir);
     const id = "smoke-send-keys-id";
@@ -29,34 +29,12 @@ test("send-keys: manual pane hash sends text and Enter to the owned pane", async
 
     await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
       using client = await openClient(store);
-      const { pane_sha256 } = await client.readPane({ instance_id: id });
-      expect(await client.sendKeys({ instance_id: id, text: "hello smoke", expect_pane_sha256: pane_sha256 })).toEqual({});
+      expect(await client.sendKeys({ instance_id: id, text: "hello smoke" })).toEqual({});
     });
     expect(paneSends(logPath)).toEqual([
       ["send-keys", "-t", paneId, "-l", "--", "hello smoke"],
       ["send-keys", "-t", paneId, "Enter"],
     ]);
-  });
-}, 10_000);
-
-test("send-keys: an unready ordinary request refuses before input, including on retry", async () => {
-  await withTempHome(async (homeDir) => {
-    const store = homeStore(homeDir);
-    const id = "smoke-send-keys-unready";
-    const logPath = path.join(homeDir, "fake-tmux.log");
-    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
-    runHelper("seed-row-session", { store, id });
-    await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
-      using client = await openClient(store);
-      const params = { instance_id: id, text: "ordinary prompt", delivery_request_id: "caller-request" };
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const err = await rejection(client.sendKeys(params)) as AgentDirectorError;
-        expect(err).toBeInstanceOf(ErrSubmissionUnconfirmed);
-        expect(err.errDetails).toMatchObject({ outcome: "not_started", phase: "pre_input", bytes_attempted: 0,
-          enter_may_have_been_sent: false, keys_sent: false, submission_confirmed: false });
-      }
-    });
-    expect(paneSends(logPath)).toEqual([]);
   });
 }, 10_000);
 

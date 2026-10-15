@@ -28,7 +28,7 @@ const callTableKeys = "call-table keys"
 // the pane of r.Session carrying its label's token, on r's socket.
 func sendKeysCallTableInvoke(allowPending bool) func(*testing.T, *killEnv, killRow) (bool, error) {
 	return func(t *testing.T, e *killEnv, r killRow) (bool, error) {
-		_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: callTableKeys, AllowPending: allowPending, ExpectPaneSHA256: api.PaneSHA256("")})
+		_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: callTableKeys, AllowPending: allowPending})
 		typed := len(e.rec.SocketCallsOf(tmux.CallSendText)) > 0
 		if typed {
 			pane := labelledPane(t, r.Session, r.Session.Label.Token)
@@ -56,7 +56,7 @@ func callTableSendKeys() callTableVerb {
 		}}
 	cells := callTableLookupRefusals()
 	maps.Copy(cells, map[callTableOutcome]callTableCell{
-		ctOurs: {sent: true, calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}},
+		ctOurs: {sent: true, calls: paneSendCalls},
 		ctLeftover: {errName: "ErrTmuxSessionConflict", calls: []tmux.Call{tmux.CallLookup},
 			desc: func(_ *killEnv, r killRow) apitest.DescCase {
 				return apitest.DescPaneLeftover(apitest.PaneLeftover{Verb: apitest.PaneSendKeys, InstanceID: r.ID,
@@ -71,11 +71,11 @@ func callTableSendKeys() callTableVerb {
 		ctGoneEmptyServer:          gone,
 		ctGoneNoServer:             gone,
 		ctGoneNoSocket:             gone,
-		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallLookup},
+		ctActionRecognised: {errName: "ErrTmuxUnresponsive", sent: true, calls: withFollowUp(paneTextCalls),
 			desc: func(*killEnv, killRow) apitest.DescCase {
 				return apitest.DescUnrecognisedReply(tmux.CallSendText, "").AfterTextFailed()
 			}},
-		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText},
+		ctActionTimeout: {errName: "ErrTmuxUnresponsive", sent: true, calls: paneTextCalls,
 			desc: func(e *killEnv, _ killRow) apitest.DescCase {
 				return apitest.DescKeysTimeout(apitest.PaneSendKeys, tmux.CallSendText, e.cfg.EffectiveActionTimeout())
 			}},

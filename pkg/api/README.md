@@ -277,20 +277,13 @@ judged, never from an automatic flow. There is no flag to suppress CR
 stripping; it applies to every call.
 
 ```go
-result, err := c.SendKeys(api.SendKeysParams{
-    InstanceID:        "claude_2026-05-22T18-23-15",
-    Text:              "what is 2+2?",
-    DeliveryRequestID: "first-question",
+_, err := c.SendKeys(api.SendKeysParams{
+    InstanceID: "claude_2026-05-22T18-23-15",
+    Text:       "what is 2+2?",
 })
-if errors.Is(err, api.ErrSubmissionUnconfirmed) {
-    details := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
-    fmt.Println(details.Outcome)
-    return
-}
 if err != nil {
     log.Fatal(err)
 }
-fmt.Println(result.Outcome)
 ```
 
 On a supported native launch, ordinary nonempty text with Enter and no pane
@@ -346,10 +339,12 @@ arrive.
 supported launches; it does not make a startup dialog an ordinary composer.
 For fallback input to a pending Codex row, the bounded hook-state observation
 and its unconfirmed result are described in the caller contract.
-`ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
+Native `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
 `api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
 `EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
-`SubmissionConfirmed` and `RowState`. See
+`SubmissionConfirmed` and `RowState`. Fallback pending-Codex uncertainty has
+an empty `Outcome` and serializes only `keys_sent: true`,
+`submission_confirmed: false` and `row_state`. See
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 for their meaning and recovery.
 

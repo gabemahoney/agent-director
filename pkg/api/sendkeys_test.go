@@ -76,12 +76,8 @@ func TestSendKeysGuards(t *testing.T) {
 		api.ErrSpawnNotInteractive})
 	for _, state := range []string{store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 		for _, allow := range []bool{false, true} {
-			var want error
-			if state != store.StateWaiting {
-				want = api.ErrSubmissionUnconfirmed
-			}
 			cases = append(cases, guardCase{fmt.Sprintf("%s allow_pending=%v", state, allow), state, allow,
-				skRelayOff, want})
+				skRelayOff, nil})
 		}
 	}
 	cases = append(cases,
@@ -117,11 +113,6 @@ func TestSendKeysGuards(t *testing.T) {
 			}
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
-			}
-			if tc.want == api.ErrSubmissionUnconfirmed {
-				assertDeliveryError(t, err, "not_started", 0, false)
-				e.assertNothingSent(t)
-				return
 			}
 			e.assertNoTmuxCall(t)
 		})
@@ -249,14 +240,13 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	advAssertPaneAnswered(t, e, r, storefix.TestRequestTokenA, advPaneAnswer(t, e, r, storefix.TestRequestTokenA, now))
 	e.rec.Reset()
 	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"})
-	assertDeliveryError(t, err, "partial_input_unconfirmed", 0, false)
-	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2", NoEnter: true})
 	assertDialogMaybeOpen(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
 	e.assertNoTmuxCall(t)
 	proveGone(t, e, r.ID, turnEnd)
-	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"})
-	assertDeliveryError(t, err, "partial_input_unconfirmed", 0, false)
-	e.assertNothingSent(t)
+	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"}); err != nil {
+		t.Fatalf("plain SendKeys once the agent's Stop proved the request gone: %v", err)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "2")
 }
 
 // TestSendKeysRelayGuard pins the per-request guard on a relay-on
@@ -395,8 +385,10 @@ func TestSendKeysRelayGuard(t *testing.T) {
 				}
 				return
 			}
-			assertDeliveryError(t, err, "not_started", 0, false)
-			e.assertNothingSent(t)
+			if err != nil {
+				t.Fatalf("SendKeys: %v; want the guard released", err)
+			}
+			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
 		})
 	}
 }

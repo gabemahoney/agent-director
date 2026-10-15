@@ -118,7 +118,6 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 		outcome, rowState string
 		guard             string // "" is not-applicable
 		unusable          bool   // an unusable recorded name: no ad.provenance.disagree either
-		manual            bool
 	}{
 		{name: "unknown id", outcome: "ErrSpawnNotFound"},
 		{name: "finished row", seed: sktRow(killRowSpec{State: store.StateEnded, NoSession: true}), allow: true,
@@ -134,13 +133,13 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ErrRelayFallenBack", rowState: "check_permission", guard: "held"},
 		{name: "relay request not proven gone", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}, sktUnproven),
 			outcome: "ErrDialogMaybeOpen", rowState: "check_permission", guard: "held"},
-		{name: "relay released", manual: true, seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
+		{name: "relay released", seed: sktRow(killRowSpec{State: store.StateCheckPermission, RelayOn: true}),
 			outcome: "ok", rowState: "check_permission", guard: "released"},
-		{name: "ours, live row", manual: true, seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},
-		{name: "ours, pending row", manual: true, seed: sktPending(pendingOurs), allow: true, outcome: "ok", rowState: "pending"},
+		{name: "ours, live row", seed: sktRow(killRowSpec{}), outcome: "ok", rowState: "waiting"},
+		{name: "ours, pending row", seed: sktPending(pendingOurs), allow: true, outcome: "ok", rowState: "pending"},
 		{name: "pending Codex submission unconfirmed", seed: sktRow(codexSpec(store.StatePending, agentAlive, false)),
 			allow: true, outcome: "ErrSubmissionUnconfirmed", rowState: "pending"},
-		{name: "ours, pending row turned live by a SessionStart after the lookup: row_state the state read", manual: true,
+		{name: "ours, pending row turned live by a SessionStart after the lookup: row_state the state read",
 			seed: func(t *testing.T, e *killEnv) killRow {
 				r := e.seedPending(t, pendingFresh, pendingOurs)
 				e.sessionStartAfter(t, tmux.CallLookup, r, "sess-"+uuid.NewString()[:8])
@@ -161,15 +160,15 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
 		{name: "tmux unavailable", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnavailable, tmux.CallLookup)),
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
-		{name: "text call timed out", manual: true, seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
+		{name: "text call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "Enter call timed out", manual: true, seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendEnter)),
+		{name: "Enter call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendEnter)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "follow-up ours", manual: true, seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)),
+		{name: "follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "follow-up gone", manual: true, seed: sktRow(killRowSpec{}, sktSessionGoesAfterListing),
+		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterListing),
 			outcome: "ErrTmuxSendKeys", rowState: "waiting"},
-		{name: "follow-up different server", manual: true,
+		{name: "follow-up different server",
 			seed:    sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText), sktRebindAfterText),
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
 		{name: "unusable name, waiting", seed: func(t *testing.T, e *killEnv) killRow {
@@ -189,9 +188,6 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 				id = tc.seed(t, e).ID
 			}
 			p := api.SendKeysParams{InstanceID: id, Text: "hi", AllowPending: tc.allow}
-			if tc.manual {
-				p.ExpectPaneSHA256 = api.PaneSHA256("")
-			}
 
 			_, _, err := e.sendKeysClient(t, p)
 
@@ -255,7 +251,7 @@ func TestKeysVerbsTrailProvenanceDisagree(t *testing.T) {
 						ptrAssertOnlyDisagrees(t, mark, r.ID, false)
 						return
 					}
-					p := api.SendKeysParams{InstanceID: r.ID, Text: "hi", ExpectPaneSHA256: api.PaneSHA256("")}
+					p := api.SendKeysParams{InstanceID: r.ID, Text: "hi"}
 					if client {
 						_, _, _ = e.sendKeysClient(t, p)
 					} else {

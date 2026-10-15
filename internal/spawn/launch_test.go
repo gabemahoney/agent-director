@@ -40,7 +40,6 @@ type launchEnv struct {
 // path through e.cfg.Launch.ClaudePath).
 func newLaunchEnv(t *testing.T) *launchEnv {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
 	withStubExe(t, "/bin/agent-director")
 	t.Setenv(envInstanceID, "") // no parent leakage from the host shell
 	e := &launchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), pc: procfix.New(),

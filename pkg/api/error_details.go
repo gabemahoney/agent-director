@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -168,6 +169,20 @@ type SubmissionUnconfirmedDetails struct {
 
 	// RowState is the last raw state read, not proof of submission or its absence.
 	RowState string `json:"row_state"`
+}
+
+// MarshalJSON preserves the legacy pending-Codex three-field payload. Native
+// outcomes retain every required field, including zero bytes and false Enter.
+func (d SubmissionUnconfirmedDetails) MarshalJSON() ([]byte, error) {
+	if d.Outcome == "" {
+		return json.Marshal(struct {
+			KeysSent            bool   `json:"keys_sent"`
+			SubmissionConfirmed bool   `json:"submission_confirmed"`
+			RowState            string `json:"row_state"`
+		}{d.KeysSent, d.SubmissionConfirmed, d.RowState})
+	}
+	type nativeDetails SubmissionUnconfirmedDetails
+	return json.Marshal(nativeDetails(d))
 }
 
 // PaneChangedDetails is ErrPaneChanged's err_details (b.146 rule 7): the

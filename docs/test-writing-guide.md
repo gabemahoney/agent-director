@@ -385,11 +385,15 @@ build each case's old-layout install with the fixture in
 Run these tests only through `make sandbox CMD="…"`, as required by
 `CLAUDE.md`. A supported delivery test needs native evidence, not a hook-state
 transition or a tmux send returning nil. In `pkg/api`, reuse
-`newSubmissionEnv` and `deliveryBackend` from
+`newNativeSubmissionEnv` and `deliveryBackend` from
 `sendkeys_submission_fixture_test.go`: they keep real store and tmux ownership
 guards while replacing native readiness, terminal samples and proof I/O through
 `SendKeysEnv.Input`. Advance the fixture clock through its injected `Sleep`;
 do not add wall-clock sleeps or weaken readiness for a recorder. Test native
+behavior in dedicated feature tests using these explicit helpers. Keep the
+shared pane, relay, pending-submission and runnable-example fixtures on their
+established input contract; do not make their default helpers enable native
+delivery or change their assertions to accommodate it. Test native
 capability separately from readiness: an unsupported launch retains literal text
 and one Enter with no exact-proof result, while a supported launch lacking
 readiness attempts no input. Compatibility regressions in

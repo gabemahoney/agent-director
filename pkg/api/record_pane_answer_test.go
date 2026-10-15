@@ -75,7 +75,7 @@ func TestRecordPaneAnswerClaims(t *testing.T) {
 				}
 				_, err := p.recordPaneAnswer(p.outside(tok, "deny"))
 				assertOneSentinel(t, err, store.ErrAlreadyDecided)
-				p.assertDialogHoldsInput(t, "next", tok, store.StateCheckPermission)
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
 			})
 		}
 	}
@@ -243,7 +243,7 @@ func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 	if err != nil || res.Decision != nil || res.PaneAnswer != "outside" {
 		t.Fatalf("record-pane-answer = %+v, %v; want outside, decision null", res, err)
 	}
-	p.assertDialogHoldsInput(t, "hi", tok, store.StateCheckPermission)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tok, store.StateCheckPermission)
 	if n := p.prove(t, toolRan("toolu_01ANY")); n != 0 {
 		t.Fatalf("a PostToolUse proved %d; want none (the request has no tool_use_id)", n)
 	}
@@ -251,5 +251,8 @@ func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 		t.Fatalf("the agent's next Stop proved %d; want the request", n)
 	}
 	p.rec.Reset()
-	p.assertOrdinaryAfterRelay(t, "hi")
+	if err := p.sendKeys(p.plain("hi")); err != nil {
+		t.Fatalf("plain send-keys after the Stop: %v; want it typed", err)
+	}
+	p.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "hi")
 }

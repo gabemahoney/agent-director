@@ -299,7 +299,14 @@ func TestResumeTrailFailOpenChild(t *testing.T) {
 	if prefix == "" {
 		t.Skip("run only as TestResumeTrailFailOpen's child")
 	}
-	makeTrailUnwritable(t)
+	adDir := adConfigDir(apiTrailDir)
+	if err := os.MkdirAll(adDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(adDir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
 	if err := trail.Emit(context.Background(), "ad.test.resume_probe", map[string]any{}); err == nil {
 		t.Fatal("trail write succeeded; want it to fail")
 	}

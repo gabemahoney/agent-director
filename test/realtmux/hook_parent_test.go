@@ -55,10 +55,6 @@ const (
 // in "parent", the hook's stdout in "stdout" and its exit status in "exit".
 const hookStubScript = `#!/bin/bash
 # Stand-in claude for test/realtmux/hook_parent_test.go.
-if [ "${1:-}" = --version ]; then
-  echo '0.0.0 (realtmux test stand-in)'
-  exit 0
-fi
 dir="$AD_HOOKSTUB_DIR"
 case "$AD_HOOKSTUB_MODE" in
 direct|sh) ;;

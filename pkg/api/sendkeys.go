@@ -460,16 +460,15 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	if row.Identity.Token != "" {
-		backend := r.env.Input
-		if backend == nil {
-			backend = inputdelivery.Native{}
-		}
 		id := deliveryIdentity(row, r.s.StoreID())
-		r.input, err = backend.Open(id)
+		r.input, err = openInputDelivery(r.env.Input, id)
 		if err != nil {
 			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
 		}
+	}
+	if r.input != nil {
 		defer r.input.Close()
+		id := deliveryIdentity(row, r.s.StoreID())
 		r.automatic = supportsInput(r.input, id) && !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
 		if !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != "" {
 			// Even an unsupported launch must not replay an unresolved native

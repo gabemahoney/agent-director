@@ -460,12 +460,9 @@ export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
 /**
- * Native ordinary delivery lacks durable exact proof, or pending Codex fallback input has
- * no bounded hook-derived submission observation. Native errDetails distinguishes not_started,
- * partial_input_unconfirmed and submission_unconfirmed; fallback details carry keys_sent,
- * submission_confirmed and row_state. Uncertain input may still submit later; never replay
- * text or Enter automatically. Reuse a native delivery_request_id to observe the attempt
- * after state, relay and dialog guards pass.
+ * tmux accepted the pending Codex row's keys and Enter, but submission could not be confirmed.
+ * The keys were sent; do not repeat text or Enter automatically. Check hook-derived get
+ * or status; if submission remains unknown, escalate to the caller or a human.
  */
 export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
 /**

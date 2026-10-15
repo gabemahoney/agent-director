@@ -10,6 +10,7 @@ package api_test
 // pane_answer_fixture_test.go.
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -31,10 +32,12 @@ func (p *paEnv) codexState(t *testing.T) string {
 	return sp.State
 }
 
-// assertTyped checks the ordinary composer contract after the relay guard releases.
+// assertTyped fails unless a plain send-keys on p now types.
 func (p *paEnv) assertTyped(t *testing.T) {
 	t.Helper()
-	p.assertOrdinaryAfterRelay(t, "hi")
+	if run := p.sendKeysRun(p.plain("hi")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
+		t.Fatalf("plain send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
+	}
 }
 
 // TestCodexRequestRecordsNoToolUseID: the request a Codex relay hook records
@@ -72,7 +75,7 @@ func TestCodexInterruptProvesTurnEndAndMovesRowToWaiting(t *testing.T) {
 	tok := storefix.TestRequestTokenA
 	p := newCodexPAEnv(t)
 	r7Acked(t, p)
-	p.assertDialogHoldsInput(t, "hi", tok, store.StateCheckPermission)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tok, store.StateCheckPermission)
 
 	p.mainAgentStop(t)
 
@@ -128,7 +131,7 @@ func TestCodexEscapePaneAnswerOnFallenBackRequest(t *testing.T) {
 	if pr := p.request(t, tok); pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "deny" || pr.ProvenGone() {
 		t.Fatalf("request A = %+v; want pane_answer sent, deny, not proven gone", pr)
 	}
-	p.assertDialogHoldsInput(t, "hi", tok, store.StateCheckPermission)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tok, store.StateCheckPermission)
 
 	p.mainAgentStop(t)
 
@@ -232,7 +235,7 @@ func TestCodexEscWhilePollingSameSecondResidual(t *testing.T) {
 	if _, err := p.recordPaneAnswer(p.outside(tok, "deny")); err != nil {
 		t.Fatalf("record-pane-answer: %v", err)
 	}
-	p.assertDialogHoldsInput(t, "hi", tok, store.StateWaiting)
+	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tok, store.StateWaiting)
 
 	p.mainAgentStop(t) // the next turn's end
 

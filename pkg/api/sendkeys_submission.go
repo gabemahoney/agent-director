@@ -26,6 +26,15 @@ const (
 	inputDeliveryTimeout     = 60 * time.Second
 )
 
+// Default pane input needs no feature state until a native launch or attempt
+// exists. Explicit backends own their provisioning contract.
+func openInputDelivery(backend InputDeliveryBackend, id InputDeliveryIdentity) (InputDeliverySession, error) {
+	if backend == nil {
+		return (inputdelivery.Native{}).OpenExisting(id)
+	}
+	return backend.Open(id)
+}
+
 func deliveryIdentity(row Spawn, storeID string) inputdelivery.Identity {
 	return inputdelivery.Identity{StoreID: storeID, Token: row.Identity.Token, InstanceID: row.InstanceID, Socket: row.Identity.Socket, PaneID: row.Identity.PaneID, PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime, Agent: row.Agent, CWD: row.CWD}
 }
@@ -390,19 +399,22 @@ func confirmedDelivery(a *inputdelivery.Attempt) SendKeysResult {
 }
 
 func (r *sendKeysRun) recordManualInput() error {
-	return recordManualDelivery(r.input, deliveryIdentity(r.row, r.s.StoreID()), r.row)
+	if err := recordManualDelivery(r.input, deliveryIdentity(r.row, r.s.StoreID())); err != nil {
+		return deliveryNotStarted(r.row, err.Error())
+	}
+	return nil
 }
 
-func recordManualDelivery(session inputdelivery.Session, id inputdelivery.Identity, row Spawn) error {
+func recordManualDelivery(session inputdelivery.Session, id inputdelivery.Identity) error {
 	old, err := session.Load()
 	if err != nil {
-		return deliveryNotStarted(row, "delivery journal cannot be read")
+		return fmt.Errorf("delivery journal cannot be read")
 	}
 	// Operator recovery never erases an unresolved automatic request.
 	if old != nil && old.Phase != "submitted" && old.Phase != "not_started" {
 		old.ManualInterference = true
 		if err = session.Save(old); err != nil {
-			return deliveryNotStarted(row, "cannot persist manual input ownership")
+			return fmt.Errorf("cannot persist manual input ownership")
 		}
 		return nil
 	}
@@ -411,12 +423,12 @@ func recordManualDelivery(session inputdelivery.Session, id inputdelivery.Identi
 	}
 	a, err := inputdelivery.NewAttempt(id, "", nil)
 	if err != nil {
-		return deliveryNotStarted(row, "cannot allocate manual operation identity")
+		return fmt.Errorf("cannot allocate manual operation identity")
 	}
 	a.Phase = "manual_input"
 	a.ManualInterference = true
 	if err = session.Save(a); err != nil {
-		return deliveryNotStarted(row, "cannot persist manual input intent")
+		return fmt.Errorf("cannot persist manual input intent")
 	}
 	return nil
 }

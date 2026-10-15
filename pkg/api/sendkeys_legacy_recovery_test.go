@@ -6,6 +6,7 @@ package api_test
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -78,26 +79,21 @@ func legacyRecoverySend(e *killEnv, r killRow, now time.Time, token string) verb
 		if token != "" {
 			params.RequestToken, params.As, params.Key, params.Text = token, "allow", "1", ""
 			params.ExpectPaneSHA256 = api.PaneSHA256("startup dialog\n")
-		} else {
-			params.DeliveryRequestID = "legacy-" + newToken()
 		}
-		pollTime := now
-		return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Input: e.delivery(r.ID), Sleep: func(d time.Duration) { pollTime = pollTime.Add(d) }, Relay: api.RelayView{
+		return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: api.RelayView{
 			Procs: e.pc, PIDNamespace: func() (string, bool) { return relayNS, true },
-			Now: func() time.Time { return pollTime }, Window: legacyRecoveryWindow}}, params)
+			Now: func() time.Time { return now }, Window: legacyRecoveryWindow}}, params)
 	})
 }
 
 func legacyRecoveryAssertTyped(t *testing.T, e *killEnv, r killRow, run verbRun[api.SendKeysResult]) {
 	t.Helper()
-	if r.Spawn.State != store.StatePending && r.Spawn.State != store.StateWaiting {
-		assertDeliveryError(t, run.err, "not_started", 0, false)
-		e.assertNothingSent(t)
-		return
-	}
 	if run.err != nil {
 		t.Fatalf("b.w21 plain send must recover automatically: %v (ErrSendKeysWhileRelayed=%v ErrRelayFallenBack=%v)",
 			run.err, errors.Is(run.err, api.ErrSendKeysWhileRelayed), errors.Is(run.err, api.ErrRelayFallenBack))
+	}
+	if !slices.Equal(paKinds(run.calls), paneSendCalls) {
+		t.Fatalf("plain send calls = %v; want %v", paKinds(run.calls), paneSendCalls)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "continue")
 }

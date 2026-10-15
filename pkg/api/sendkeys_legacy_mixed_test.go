@@ -59,10 +59,7 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 					sendKeys := func(params api.SendKeysParams) verbRun[api.SendKeysResult] {
 						params.AllowPending = state == store.StatePending
 						return runVerb(e, func() (api.SendKeysResult, error) {
-							pollTime := p.now
-							pollView := view
-							pollView.Now = func() time.Time { return pollTime }
-							return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: pollView, Input: e.delivery(r.ID), Sleep: func(d time.Duration) { pollTime = pollTime.Add(d) }}, params)
+							return api.SendKeys(e.store, e.rec, api.SendKeysEnv{Relay: view}, params)
 						})
 					}
 					// The legacy row alone releases plain keys before its 24-hour window ends.
@@ -113,7 +110,6 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 					var calls []tmux.Call
 					switch send {
 					case "plain":
-						params.DeliveryRequestID = "after-modern-hook"
 						want = api.ErrDialogMaybeOpen
 					case "valid_hash":
 						params.ExpectPaneSHA256 = p.hash()

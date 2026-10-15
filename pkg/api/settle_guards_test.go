@@ -65,7 +65,7 @@ func TestSettleGuardSendKeysState(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{})
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StatePending, e.clock.Now())
-	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1", ExpectPaneSHA256: api.PaneSHA256("")}); err != nil {
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1"}); err != nil {
 		t.Fatalf("SendKeys on a raw waiting row reading pending: %v; want delivered", err)
 	}
 	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")

@@ -13,7 +13,7 @@ import (
 func TestSendKeysPersistedProofReconcilesAndAllowsManualInput(t *testing.T) {
 	// Serial: native journal paths use HOME, which this test isolates.
 	t.Setenv("HOME", t.TempDir())
-	e := newSubmissionEnv(t)
+	e := newNativeSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 	payload := "use <>&\n\"quoted\" \\ / café 🌍 ☺"
 	raw := []byte(" \t" + `{ "type" : "response_item", "payload": { "type": "message", "role": "user", "id": "native-proof", "content": [{ "type": "input_text", "text": "use <>&\n\"quoted\" \\ \/ café 🌍 \u263a" }], "internal_chat_message_metadata_passthrough": { "content_item_kinds": ["user.text"] } } }` + " \t")

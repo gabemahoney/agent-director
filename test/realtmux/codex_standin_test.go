@@ -78,7 +78,6 @@ fi
 // stand-in of hook_parent_test.go, and answers the on-demand requests of
 // codexStubTail.
 const codexStubScript = "#!/bin/bash\n# Stand-in codex for test/realtmux/codex_launch_test.go.\n" +
-	"if [ \"${1:-}\" = --version ]; then echo 'codex-cli 0.0.0 (realtmux test stand-in)'; exit 0; fi\n" +
 	codexSharedBlock + codexStubTail
 
 // codexRecord is one launch's directory of the stand-in.

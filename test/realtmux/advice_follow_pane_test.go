@@ -139,7 +139,7 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyTextRealTmux(t *tes
 		if err != nil {
 			t.Fatalf("read-pane: %s; want the agent's pane", describe(err))
 		}
-		p := api.SendKeysParams{InstanceID: id, Text: text, ExpectPaneSHA256: read.PaneSHA256}
+		p := api.SendKeysParams{InstanceID: id, Text: text}
 		if strings.Contains(read.Pane, text) {
 			p.Text = ""
 		}
@@ -180,13 +180,9 @@ func advPaneFollowRealTmux(t *testing.T, cases []advPaneKeysCase, follow func(t 
 		t.Run(tc.name, func(t *testing.T) {
 			f, r, c, arm := advPaneCatRow(t)
 			text := paneMarker(t)
-			read, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.InstanceID})
-			if err != nil {
-				t.Fatalf("read-pane before manual transport: %s", describe(err))
-			}
 			arm(tc.call, tc.how)
 
-			_, err = c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: text, ExpectPaneSHA256: read.PaneSHA256})
+			_, err := c.SendKeys(api.SendKeysParams{InstanceID: r.InstanceID, Text: text})
 			advPaneAssertAdvice(t, err, tc.advice)
 
 			follow(t, c, r.InstanceID, text)

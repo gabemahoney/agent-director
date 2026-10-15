@@ -73,9 +73,10 @@ native ordinary input, use a fresh supported launch with an empty composer;
 `resume` does not provide that contract. Do not delete or edit input journals
 to bypass an unresolved attempt.
 
-A manual `send-keys` or `pause` can also return `ErrSubmissionUnconfirmed`
+A manual `send-keys` can also return `ErrSubmissionUnconfirmed`
 with `outcome: "not_started"` when it cannot own the input writer or read or
-save its journal. That call sent nothing. Let any active writer finish, then
+save its journal. `pause` returns `ErrInternal` for these failures. That call
+sent nothing. Let any active writer finish, then
 re-issue the call. For a persistent refusal, check access to the private
 [delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
 as the agents' user. Preserve its evidence; never clear it to force input.

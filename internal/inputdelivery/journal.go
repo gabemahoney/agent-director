@@ -102,6 +102,25 @@ func launchDir(storeID, token string) (string, error) {
 	return filepath.Join(home, ".config", "agent-director", "input", storeID, token), nil
 }
 
+// OpenExisting acquires ownership only when native launch state already exists.
+// Absence is a capability miss, while unreadable or corrupt existing state must
+// fail closed so an unresolved native attempt can never fall back to replay.
+func (n Native) OpenExisting(id Identity) (Session, error) {
+	if !hexID.MatchString(id.StoreID) || !hexID.MatchString(id.Token) {
+		return nil, nil
+	}
+	dir, err := launchDir(id.StoreID, id.Token)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = os.Stat(dir); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return n.Open(id)
+}
+
 func (Native) Open(id Identity) (Session, error) {
 	dir, err := launchDir(id.StoreID, id.Token)
 	if err != nil {

@@ -20,14 +20,9 @@ func init() {
 		SeedID:   "smoke-send-keys-id",
 		SentText: smokeSentText,
 		Happy: func(c *api.Client, id string, _ context.Context) (any, error) {
-			read, err := c.ReadPane(api.ReadPaneParams{InstanceID: id})
-			if err != nil {
-				return nil, err
-			}
 			return c.SendKeys(api.SendKeysParams{
-				InstanceID:       id,
-				Text:             smokeSentText,
-				ExpectPaneSHA256: read.PaneSHA256,
+				InstanceID: id,
+				Text:       smokeSentText,
 			})
 		},
 		Error: func(c *api.Client, _ context.Context) error {

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -16,7 +17,7 @@ func TestPauseRecordsManualInterferenceOnlyBeforeInput(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{"relay refusal", "missing pane", "lock held", "journal fails", "success"} {
 		t.Run(mode, func(t *testing.T) {
-			e := newSubmissionEnv(t)
+			e := newNativeSubmissionEnv(t)
 			spec := codexSpec(store.StateWaiting, agentAlive, false)
 			spec.RelayOn = mode == "relay refusal"
 			r := e.seedRow(t, spec)
@@ -58,11 +59,43 @@ func TestPauseRecordsManualInterferenceOnlyBeforeInput(t *testing.T) {
 			if err == nil || !reflect.DeepEqual(e.b.current, owner) {
 				t.Fatalf("refused pause changed ownership: %+v %v", e.b.current, err)
 			}
+			if mode == "lock held" || mode == "journal fails" {
+				assertOneName(t, err, "ErrInternal")
+			}
 			for _, c := range e.rec.SocketCalls()[before:] {
 				if c.Call == tmux.CallSendText || c.Call == tmux.CallSendKey || c.Call == tmux.CallSendEnter {
 					t.Fatalf("refused pause sent input: %+v", c)
 				}
 			}
+		})
+	}
+}
+
+func TestPauseEstablishedGuardsPrecedeNativeJournal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		state string
+		relay bool
+		want  string
+	}{
+		{"working", store.StateWorking, false, "ErrSpawnNotPausable"},
+		{"pending", store.StatePending, false, "ErrSpawnNotPausable"},
+		{"relay refusal", store.StateWaiting, true, "ErrSendKeysWhileRelayed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newNativeSubmissionEnv(t)
+			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay})
+			if tc.relay {
+				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
+			}
+			backend := &unavailableDeliveryBackend{}
+			_, err := api.Pause(context.Background(), e.store, e.rec, api.PauseEnv{Input: backend, Relay: e.env.Relay}, 0, pauseParams(r))
+			assertOneName(t, err, tc.want)
+			if backend.opened {
+				t.Fatal("pause opened native journal before its established guard")
+			}
+			e.assertNoTmuxCall(t)
 		})
 	}
 }

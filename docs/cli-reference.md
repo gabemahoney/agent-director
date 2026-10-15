@@ -128,7 +128,7 @@ Return a row in full (id, parent, state, cwd, session name, tmux socket, args, r
 
 ## send-keys
 
-State, relay and dialog guards precede delivery and proof reconciliation; ended/missing rows are refused. Supported native ordinary input uses readiness, 512-byte UTF-8 chunks/drain, one Enter and exact transcript proof. Without native capability, established pane input sends literal text plus one Enter without exact transcript proof; pending Codex input retains bounded hook observation. ErrSubmissionUnconfirmed: native not_started/partial_input_unconfirmed/submission_unconfirmed or unconfirmed pending-Codex hook observation; never replay text or Enter automatically. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Strip `\r`, keep `\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -461,7 +461,7 @@ Return an agent's subagent records and whether they are tracked.
 
 ## pause
 
-Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof of exit (see find-missing). Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrSubmissionUnconfirmed: input lock/journal failure. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof of exit (see find-missing). Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Parameters
 
@@ -475,7 +475,6 @@ _None._
 
 - `ErrSpawnNotFound`
 - `ErrSpawnNotPausable`
-- `ErrSubmissionUnconfirmed`
 - `ErrSendKeysWhileRelayed`
 - `ErrRelayFallenBack`
 - `ErrDialogMaybeOpen`

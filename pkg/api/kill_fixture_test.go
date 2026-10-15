@@ -111,7 +111,6 @@ type killEnv struct {
 	storeID       string
 	defaultSocket string
 	rows, nextPID int
-	deliveries    map[string]*deliveryBackend
 }
 
 // newKillEnv builds a killEnv over a fresh store, with TMUX unset and

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -18,6 +19,7 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 		for _, mode := range []string{"supported", "unsupported version", "custom bindings", "unsafe args"} {
 			t.Run(agent+"/"+mode, func(t *testing.T) {
 				root := t.TempDir()
+				t.Setenv("HOME", root)
 				version := "codex-cli 0.159.2"
 				if agent == "claude" {
 					version = "2.1.280 (Claude Code)"
@@ -60,6 +62,15 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if mode == "unsupported version" || mode == "unsafe args" {
+					if !reflect.DeepEqual(cmd, []string{program}) || !reflect.DeepEqual(gotEnv, env) {
+						t.Fatalf("compatibility launch changed command/environment: %q %+v", cmd, gotEnv)
+					}
+					if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "input")); !os.IsNotExist(err) {
+						t.Fatalf("compatibility launch allocated native state: %v", err)
+					}
+					return
+				}
 				data, err := os.ReadFile(filepath.Join(dir, "launch.json"))
 				if err != nil {
 					t.Fatal(err)
@@ -99,8 +110,6 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 							t.Fatal("custom bindings enabled automatic input")
 						}
 					}
-				} else if m.Version != "" || len(cmd) != 1 {
-					t.Fatalf("unsupported launch enabled diagnostics: %q %+v", cmd, m)
 				}
 				if _, _, err := Prepare(id, []string{program}, env, true); err == nil {
 					t.Fatal("reused stale launch diagnostic directory")

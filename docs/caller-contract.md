@@ -27,7 +27,7 @@ error:
   `ErrTmuxUnresponsive` later.
 - `ErrSubmissionUnconfirmed`: for automatic `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
-  `send-keys` or `pause`, follow [Manual input ownership](#manual-input-ownership).
+  `send-keys`, follow [Manual input ownership](#manual-input-ownership).
 - `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -179,12 +179,15 @@ after a crash.
 Empty text (Enter only), `no_enter`, `key`, pane-hash sends and permission
 pane answers remain separate manual operations. They return an empty success
 object and make no transcript-confirmation claim. They serialize with ordinary
-delivery. Manual `send-keys` and `pause` can return `ErrSubmissionUnconfirmed`
+delivery. Manual `send-keys` can return `ErrSubmissionUnconfirmed`
 with `outcome: "not_started"`, `keys_sent: false` and
 `enter_may_have_been_sent: false` when exclusive input ownership is unavailable
 or its delivery journal cannot be read or saved. That call attempted no input;
 re-issue it after the stated condition clears. If another request still owns
 the writer, let it settle first; a persistent journal refusal needs an operator.
+For `pause`, the same ownership or journal failures return `ErrInternal`
+before any input is attempted. State, relay and recorded-name guards run
+before it acquires input ownership.
 
 After Enter-only or pane-hash text sends with Enter to a `pending` Codex row,
 bounded hook observation can instead return `ErrSubmissionUnconfirmed` with

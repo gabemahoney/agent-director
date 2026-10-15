@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -408,18 +407,6 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	// types, so pause is held as one (b.zdz): send-keys' relay guard, with no
 	// request token and no expect_pane_sha256, whose refusal on a recorded
 	// verdict advises retryLater, as the refused call is pause.
-	var session InputDeliverySession
-	if row.Identity.Token != "" {
-		backend := env.Input
-		if backend == nil {
-			backend = inputdelivery.Native{}
-		}
-		session, err = backend.Open(deliveryIdentity(row, r.s.StoreID()))
-		if err != nil {
-			return false, deliveryNotStarted(row, "exclusive input writer unavailable")
-		}
-		defer session.Close()
-	}
 	guard, err := relayGuard(r.s, newRelayJudge(env.Relay), env.IntentHold, row, SendKeysParams{}, retryLater)
 	if err != nil {
 		return false, err
@@ -436,6 +423,16 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
+	var session InputDeliverySession
+	if row.Identity.Token != "" {
+		session, err = openInputDelivery(env.Input, deliveryIdentity(row, r.s.StoreID()))
+		if err != nil {
+			return false, fmt.Errorf("pause: exclusive input writer or delivery journal unavailable; no input attempted")
+		}
+		if session != nil {
+			defer session.Close()
+		}
+	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t
 	if row.Agent == store.AgentCodex {
@@ -449,7 +446,7 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	if session != nil {
 		owned := row
 		owned.Identity = r.adoption.Identity
-		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID()), owned); err != nil {
+		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID())); err != nil {
 			return false, err
 		}
 	}
@@ -543,6 +540,9 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //
 // CLI: agent-director pause
 //
+// Input writer or delivery journal failures return ErrInternal before any
+// input is attempted by this pause call.
+//
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrSpawnNotPausable]: the row's state is not waiting.
@@ -567,8 +567,6 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     requests. The way past it is above: SendKeys `/exit` with the judged
 //     pane's ExpectPaneSHA256, or Kill.
 //   - [ErrPauseTimeout]: the Spawn did not reach ended within the timeout.
-//   - [ErrSubmissionUnconfirmed]: the input writer lock or delivery journal
-//     was unavailable; no input was attempted by this pause call.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there; `/exit` was
 //     not sent or, when the Enter call failed after it, may be typed but not
 //     submitted.

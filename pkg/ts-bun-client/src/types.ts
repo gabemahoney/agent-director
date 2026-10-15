@@ -571,12 +571,6 @@ export interface GetResult {
  * `expect_pane_sha256`, takes no `text`, and sends exactly one key with no Enter.
  */
 export interface SendKeysParams {
-  /**
-   * Own a native ordinary attempt; reuse to observe without replay after state, relay and
-   * dialog guards pass. Choose a fresh id for an intentional identical native turn.
-   * Fallback pane input has no native request deduplication guarantee.
-   */
-  delivery_request_id?: string;
   /** Id of the Spawn whose pane will receive the keys. */
   instance_id: string;
   /**
@@ -590,7 +584,7 @@ export interface SendKeysParams {
    * When true, also allows a pending row: a launch (spawn, reuse or resume)
    * whose agent has not reported in yet. Keys are delivered only to a
    * session started by the row's current launch. ended and missing rows are
-   * still rejected, including requests to reconcile stored or late proof.
+   * still rejected.
    */
   allow_pending?: boolean;
   /** Type `text` with no Enter after it (plain calls; a pane answer never presses Enter). */
@@ -620,14 +614,9 @@ export interface SendKeysParams {
   as?: "allow" | "deny";
 }
 
-/** Supported native ordinary sends return exact proof; fallback pane input and manual operations return an empty object. */
-export interface SendKeysResult {
-  request_id?: string;
-  outcome?: "submitted";
-  session_id?: string;
-  record_id?: string;
-  record_sha256?: string;
-}
+/** Successful sendKeys calls return an empty object. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface SendKeysResult {}
 
 /** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
@@ -849,16 +838,9 @@ export interface PaneKeySentDetails {
   request_token: string;
 }
 
-/** ErrSubmissionUnconfirmed's errDetails; queue/hook activity never proves submission. */
+/** ErrSubmissionUnconfirmed's errDetails; submission remains unknown despite keys_sent. */
 export interface SubmissionUnconfirmedDetails {
-  request_id?: string;
-  outcome: "not_started" | "partial_input_unconfirmed" | "submission_unconfirmed";
-  phase: string;
-  bytes_attempted: number;
-  enter_may_have_been_sent: boolean;
-  last_queue?: number;
-  reason: string;
-  keys_sent: boolean;
+  keys_sent: true;
   submission_confirmed: false;
   row_state: string;
 }

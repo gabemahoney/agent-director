@@ -93,14 +93,14 @@ func (s *deliverySession) Confirm(a *api.InputDeliveryAttempt) (*api.InputDelive
 	return &api.InputDeliveryProof{SessionID: a.NativeSessionID, RecordID: "new-user-record", RawSHA256: "record-hash"}, nil
 }
 
-type submissionStore struct {
+type nativeSubmissionStore struct {
 	api.SendKeysStore
 	sent bool
 	read func(api.Spawn) (api.Spawn, error)
 	get  func(api.Spawn) api.Spawn
 }
 
-func (s *submissionStore) GetSpawn(id string) (api.Spawn, error) {
+func (s *nativeSubmissionStore) GetSpawn(id string) (api.Spawn, error) {
 	row, err := s.SendKeysStore.GetSpawn(id)
 	if err == nil && s.get != nil {
 		row = s.get(row)
@@ -108,7 +108,7 @@ func (s *submissionStore) GetSpawn(id string) (api.Spawn, error) {
 	return row, err
 }
 
-func (s *submissionStore) GetSpawnWithin(id string, wait time.Duration) (api.Spawn, error) {
+func (s *nativeSubmissionStore) GetSpawnWithin(id string, wait time.Duration) (api.Spawn, error) {
 	row, err := s.SendKeysStore.GetSpawnWithin(id, wait)
 	if err == nil && s.sent && s.read != nil {
 		return s.read(row)
@@ -116,19 +116,19 @@ func (s *submissionStore) GetSpawnWithin(id string, wait time.Duration) (api.Spa
 	return row, err
 }
 
-type submissionEnv struct {
+type nativeSubmissionEnv struct {
 	*killEnv
-	s     *submissionStore
+	s     *nativeSubmissionStore
 	b     *deliveryBackend
 	env   api.SendKeysEnv
 	slept time.Duration
 }
 
-func newSubmissionEnv(t *testing.T) *submissionEnv {
+func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 	t.Helper()
-	e := &submissionEnv{killEnv: newKillEnv(t), b: &deliveryBackend{}}
+	e := &nativeSubmissionEnv{killEnv: newKillEnv(t), b: &deliveryBackend{}}
 	e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: time.Nanosecond, Action: time.Nanosecond})
-	e.s = &submissionStore{SendKeysStore: e.store}
+	e.s = &nativeSubmissionStore{SendKeysStore: e.store}
 	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
 		if c.Key == "Enter" {
 			e.s.sent = true
@@ -137,7 +137,7 @@ func newSubmissionEnv(t *testing.T) *submissionEnv {
 	e.env = api.SendKeysEnv{Input: e.b, Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}, Sleep: func(d time.Duration) { e.slept += d; e.clock.Advance(d) }}
 	return e
 }
-func (e *submissionEnv) send(p api.SendKeysParams) (api.SendKeysResult, error) {
+func (e *nativeSubmissionEnv) send(p api.SendKeysParams) (api.SendKeysResult, error) {
 	return api.SendKeys(e.s, e.rec, e.env, p)
 }
 

@@ -30,7 +30,7 @@ func (v paneVerb) actions() []keysAction {
 		return []keysAction{{tmux.CallSendKey, pauseClearCalls}, {tmux.CallSendText, pauseTextCalls},
 			{tmux.CallSendEnter, pauseSendCalls}}
 	}
-	return []keysAction{{tmux.CallSendText, []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText}}, {tmux.CallSendEnter, []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}}}
+	return []keysAction{{tmux.CallSendText, paneTextCalls}, {tmux.CallSendEnter, paneSendCalls}}
 }
 
 // assertTyped fails unless v's keys reached r's agent pane up to action, the

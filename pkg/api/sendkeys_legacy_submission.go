@@ -38,7 +38,9 @@ func (r *sendKeysRun) confirmLegacySubmission(sent Spawn) error {
 		if remaining <= 0 {
 			break
 		}
-		r.sleepInput(min(submissionPollInterval, remaining))
+		if attempt < int(timeout/submissionPollInterval) {
+			r.sleepInput(min(submissionPollInterval, remaining))
+		}
 	}
 	return legacySubmissionUnconfirmed(sent.InstanceID, state, "no turn activity was observed within 2 seconds")
 }

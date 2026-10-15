@@ -7123,10 +7123,11 @@ no permission request token enters the native protocol, where supported, in
 native transcript proof, or `ErrSubmissionUnconfirmed` with honest delivery
 details. Launches without native capability retain literal text and one Enter
 with no exact transcript-confirmation claim. Other sends retain manual
-transport semantics and return an empty success result; launches with an
-identity token participate in the same writer lock and journal.
-Manual sends and `pause` can also return `ErrSubmissionUnconfirmed` with
-`not_started` when writer ownership or durable manual intent is unavailable. No
+transport semantics and return an empty success result; launches with existing
+native state participate in the same writer lock and journal.
+Manual sends can also return `ErrSubmissionUnconfirmed` with
+`not_started` when writer ownership or durable manual intent is unavailable.
+`pause` returns `ErrInternal` for those failures before attempting input. No
 missing evidence causes a text, Enter or editing-key retry. Caller handling
 is in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
 
@@ -7278,7 +7279,7 @@ a recorded session name that is empty, holds a control character, or
 holds a character tmux stores differently (`.`, `:`, invalid UTF-8) →
 `ErrInternal` (`unusableNameError`, SR-3.2), no tmux call, nothing sent;
 removing the row is a human's decision (docs/operator-actions.md). Next resolve
-the row's socket, acquire the native writer lock when a launch token exists,
+the row's socket, acquire the native writer lock when native launch state exists,
 select capability and reconcile any ordinary request. These steps cannot mask
 the existing state, relay or dialog refusals. Native framing validation follows
 reconciliation on supported launches. Only then perform the one lookup.
@@ -7298,14 +7299,21 @@ pending Codex row for up to 2 s after a successful fallback send with Enter;
 only hook-derived `working`, `ask_user` or `check_permission` state satisfies
 that observation. A changed launch, finished row, read failure or timeout
 returns `ErrSubmissionUnconfirmed` with `KeysSent=true`,
-`SubmissionConfirmed=false` and `RowState`. It never resends text or Enter.
+`SubmissionConfirmed=false` and `RowState`. Its JSON contains exactly
+`keys_sent`, `submission_confirmed` and `row_state`; native-only fields are
+absent. The two-second observation uses at most twenty 100 ms sleeps. It never
+resends text or Enter.
 
 `ComposeLaunch` sets `CreateRequest.OrdinaryInputSafe` from
 `inputdelivery.SafeArgs`; relaunches do not acquire a fresh-composer contract.
 `CreateAndLabel` calls `inputdelivery.Prepare` before starting tmux. It
-allocates a fresh launch directory, resolves the same executable it probes
-with a bounded `--version`, and provisions native diagnostics only for
-Codex 0.159.2 or Claude Code 2.1.280. The safe argument allowlist admits only
+first checks safe fresh-launch arguments and valid store/token identity, then
+resolves and probes the executable with a bounded `--version`. Unsupported
+arguments, identities, unavailable executables and unsupported versions return
+the original command and environment without allocating native state. Only
+Codex 0.159.2 or Claude Code 2.1.280 allocate a fresh launch directory and
+receive native diagnostics; the launched executable is the one probed.
+The safe argument allowlist admits only
 model, permission-mode and effort values, no-alt-screen and
 dangerously-skip-permissions. Claude's config directory must be absolute and
 have no custom `keybindings.json`. Its effective home comes from the launch
@@ -7350,8 +7358,13 @@ and observation. The lock is `<launch-dir>.lock`, shared by automatic and
 manual `send-keys`, permission pane answers and `pause`. Lock release after
 a crash never clears its durable attempt. Writers outside agent-director
 are excluded by the protocol's caller precondition, not by this lock.
+The default API backend uses `Native.OpenExisting`: an absent launch directory
+is a capability miss and allocates no state. Existing unreadable or corrupt
+state fails closed, retaining unresolved native ownership rather than allowing
+a fallback resend. Explicit injected backends use their `Open` contract.
 Failure to acquire the lock or read/save manual intent returns
-`ErrSubmissionUnconfirmed` with `not_started`, before that call attempts input.
+`ErrSubmissionUnconfirmed` with `not_started` for `send-keys`, or `ErrInternal`
+for `pause`, before that call attempts input.
 
 Delivery validates normalized text (CR stripped, LF preserved), UTF-8,
 ordinary framing and the 1 MiB limit. It repeatedly checks current launch
@@ -7431,6 +7444,13 @@ optional native record ID and raw record SHA-256. Refusals use
 attempted bytes, Enter uncertainty and queue/reason facts. These are
 conservative observations, not synthetic row states. Public recovery belongs
 to [Ordinary text submission](caller-contract.md#ordinary-text-submission).
+Go and CLI expose optional request IDs and proof fields. The published
+TypeScript `SendKeysParams` and `SendKeysResult` retain their existing
+declaration surface, and `SubmissionUnconfirmedDetails` describes only the
+three-field pending-Codex fallback payload with `keys_sent: true`. Native
+runtime error facts travel through the existing
+`AgentDirectorError.errDetails: Readonly<Record<string, unknown>> | null`;
+there is no additional TypeScript export or module for native delivery.
 
 ### `read-pane`
 
@@ -15570,10 +15590,8 @@ for process exit and `decide` for relay delivery or legacy settlement:
    `ask_user`, `check_permission`) → `ErrSpawnNotPausable`, no tmux call.
    `/exit` is never typed in these states, where the slash would be read
    as input text.
-4. **`waiting` row: writer ownership, then the relay guard (b.zdz).**
-   A launch token requires the shared input writer lock, held through this
-   call's input phase; failure is `ErrSubmissionUnconfirmed` with `not_started`
-   and no input. `C-u`, `/exit` and Enter
+4. **`waiting` row: the relay guard (b.zdz).**
+   `C-u`, `/exit` and Enter
    are what a plain `send-keys` without `expect_pane_sha256` types, so
    `pause` is held as one: `relayGuard(s, newRelayJudge(env.Relay),
    env.IntentHold, row, SendKeysParams{}, retryLater)`, with the relay
@@ -15600,8 +15618,11 @@ for process exit and `decide` for relay delivery or legacy settlement:
    (`unusableNameError`, SR-3.2), no tmux call, `/exit` not sent and no
    wait; removing the row is a human's decision (docs/operator-actions.md).
    A finished row never reaches this check (step 2).
-6. **`waiting` row: the tmux phase.** The row's socket (an unusable socket
-   directory → `ErrTmuxNotAvailable`), one lookup by the row's current
+6. **`waiting` row: the tmux phase.** Resolve the row's socket (an unusable socket
+   directory → `ErrTmuxNotAvailable`), then acquire the shared input writer
+   lock only if native launch state exists. Failure returns `ErrInternal`
+   with no input. Hold that lock through this call's input phase. Then one
+   lookup by the row's current
    label and, on Ours, one pane listing; then `C-u`, a key send
    (`SendKeyPane`, or `SendKeyPaneRepeat` with 127 presses on a Codex row;
    see "Why `C-u` first" and "The Codex line clear" below), and `/exit` and a separate
@@ -15612,7 +15633,7 @@ for process exit and `decide` for relay delivery or legacy settlement:
    result. After the pane is resolved, `recordManualDelivery` durably marks
    manual interference immediately before the first `C-u`. Refusals before
    that point do not disable automatic delivery. A journal read/save failure
-   returns `ErrSubmissionUnconfirmed` with `not_started` and no input.
+   returns `ErrInternal` and no input.
    An unresolved ordinary attempt is preserved, never erased by pause.
    Outcomes, with `/exit` not sent on every refusal:
    - the agent's pane not found, Leftover, or conflicting labels →

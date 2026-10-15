@@ -75,15 +75,8 @@ test.each([
   }
 });
 
-test("ErrSubmissionUnconfirmed preserves request ownership and unresolved delivery details through both factories", () => {
+test("ErrSubmissionUnconfirmed preserves accepted-keys and unknown-submission details through both factories", () => {
   const details = {
-    request_id: "request-1",
-    outcome: "submission_unconfirmed",
-    phase: "enter_attempted",
-    bytes_attempted: 512,
-    enter_may_have_been_sent: true,
-    last_queue: 0,
-    reason: "no exact launch-bound post-watermark user record",
     keys_sent: true,
     submission_confirmed: false,
     row_state: "pending",

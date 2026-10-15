@@ -1,7 +1,9 @@
 # agent-director
 
-TypeScript/Bun client for the agent-director CLI. Shares the Go API
-surface 1:1. The `Client` discovers the system-installed
+TypeScript/Bun client for the agent-director CLI. Shares the Go API's verbs
+and CLI semantics; native request and proof fields have the declaration and
+runtime limitations described under [sendKeys](#sendkeys).
+The `Client` discovers the system-installed
 `agent-director` CLI binary at construction time and drives it as a
 subprocess per verb call — no FFI, no network hop, no bundled binary.
 
@@ -172,20 +174,20 @@ the pane" below). Pass it only for a pane a person or an LLM judged, never
 from an automatic flow.
 
 ```ts
-const result = await client.sendKeys({
+await client.sendKeys({
   instance_id: "<id>",
   text: "what is 2+2?",
-  delivery_request_id: "first-question",
 });
 ```
 
 On a supported native launch, ordinary nonempty text with Enter and no pane
-hash returns `SendKeysResult`
-with `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
-`record_id` when the native record supplies it. It confirms the exact
-normalized text in the launch's native transcript. `delivery_request_id`
-owns one attempt: the same ID and text retrieve confirmation or reconcile
-without replay; a new ID allows an intentional identical turn. Launches without
+hash returns runtime proof fields
+`outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
+`record_id` when the native record supplies it. They confirm the exact
+normalized text in the launch's native transcript. The published
+`SendKeysParams` and `SendKeysResult` declarations do not expose native request
+IDs or proof fields; use the Go API or CLI for explicit delivery request IDs.
+Launches without
 native capability retain literal text and one Enter, return an empty object on
 success and make no exact transcript-confirmation claim. Manual
 operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
@@ -210,11 +212,13 @@ only a session an earlier launch left behind is found, gets
 `allow_pending` preserves native readiness and transcript requirements on
 supported launches; it does not make a startup dialog an ordinary composer.
 For fallback input to a pending Codex row, the bounded hook-state observation
-and its unconfirmed result are described in the caller contract. The
-`ErrSubmissionUnconfirmed` class exposes `SubmissionUnconfirmedDetails`
-through `errDetails`, including `outcome`, `request_id`, `phase`,
-`bytes_attempted`, `enter_may_have_been_sent`, optional `last_queue`, `reason`,
-`keys_sent`, `submission_confirmed` and `row_state`; see
+and its unconfirmed result are described in the caller contract.
+`SubmissionUnconfirmedDetails` describes that fallback payload only:
+`keys_sent: true`, `submission_confirmed: false` and `row_state`. Native
+uncertainty adds `outcome`, `request_id`, `phase`, `bytes_attempted`,
+`enter_may_have_been_sent`, optional `last_queue` and `reason` at runtime.
+Read these through `AgentDirectorError.errDetails`, whose type is
+`Readonly<Record<string, unknown>> | null`, and check their values; see
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 for the fields and recovery.
 
@@ -276,7 +280,7 @@ but `waiting` throws `ErrSpawnNotPausable`. On a Codex Spawn
 await client.pause({ instance_id: "<id>" });
 ```
 
-For `ErrSubmissionUnconfirmed` from `pause`, see
+For input ownership or journal failures (`ErrInternal` before any input), see
 [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
 `pause` is held like a `sendKeys` without `request_token` and without
@@ -492,7 +496,9 @@ carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
 `ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
 (`DialogMaybeOpenDetails`) and `ErrSubmissionUnconfirmed`
-(`SubmissionUnconfirmedDetails`). So does the `ErrInternal` of a
+(`SubmissionUnconfirmedDetails`, for fallback pending-Codex uncertainty).
+Native submission facts remain available through the generic `errDetails`
+record. So does the `ErrInternal` of a
 pane answer whose key was sent but not recorded (`PaneKeySentDetails`:
 `key_sent` `true` and `request_token`). Read facts from `errDetails`, never
 from `errDescription`.
@@ -577,7 +583,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
 | `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
-| `ErrSubmissionUnconfirmed` | `errDetails` is `SubmissionUnconfirmedDetails`. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys` and `pause`. |
+| `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes fallback pending-Codex uncertainty; native outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |

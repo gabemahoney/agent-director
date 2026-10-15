@@ -16,7 +16,7 @@ func TestSendKeysUnresolvedOwnerBlocksDifferentRequests(t *testing.T) {
 		for _, reopened := range []bool{false, true} {
 			for _, request := range []string{"fresh ID", "different payload", "fresh ID and payload"} {
 				t.Run(testName(partial, reopened, request), func(t *testing.T) {
-					e := newSubmissionEnv(t)
+					e := newNativeSubmissionEnv(t)
 					r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 					e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
 					if partial {
@@ -72,7 +72,7 @@ func testName(partial, reopened bool, request string) string {
 	return phase + "/" + backend + "/" + request
 }
 
-func TestSendKeysPassiveReconciliationNeedsSameLaunchOnly(t *testing.T) {
+func TestSendKeysPassiveReconciliationPreservesGuardsAndLaunch(t *testing.T) {
 	t.Parallel()
 	for _, stored := range []bool{false, true} {
 		for _, state := range []string{store.StateEnded, store.StateMissing, "gone pane", "changed token", "changed life", "changed session"} {
@@ -81,7 +81,7 @@ func TestSendKeysPassiveReconciliationNeedsSameLaunchOnly(t *testing.T) {
 				name = "stored proof/" + state
 			}
 			t.Run(name, func(t *testing.T) {
-				e := newSubmissionEnv(t)
+				e := newNativeSubmissionEnv(t)
 				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 				p := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, DeliveryRequestID: "original"}
 				if !stored {
@@ -119,7 +119,12 @@ func TestSendKeysPassiveReconciliationNeedsSameLaunchOnly(t *testing.T) {
 				before := len(e.rec.SocketCalls())
 				result, err := e.send(p)
 				changed := state == "changed token" || state == "changed life" || state == "changed session"
-				if changed {
+				if state == store.StateEnded || state == store.StateMissing {
+					assertOneName(t, err, "ErrSpawnNotInteractive")
+					if result.Outcome == "submitted" {
+						t.Fatalf("finished row bypassed the interactive guard: %+v", result)
+					}
+				} else if changed {
 					if err == nil || result.Outcome == "submitted" {
 						t.Fatalf("foreign launch reconciled: %+v %v", result, err)
 					}

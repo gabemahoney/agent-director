@@ -36,6 +36,22 @@ func SafeArgs(args []string) bool {
 // Prepare provisions fresh native diagnostics for the exact launch. Unsupported
 // binaries still launch and retain the established pane input contract.
 func Prepare(id Identity, command []string, env map[string]string, safe bool) ([]string, map[string]string, error) {
+	if len(command) == 0 {
+		return nil, nil, fmt.Errorf("missing agent command")
+	}
+	// Unsupported and resumed launches keep their original input contract and
+	// do not allocate native state or require a native launch identity.
+	if !safe || (id.Agent != "claude" && id.Agent != "codex") || !hexID.MatchString(id.StoreID) || !hexID.MatchString(id.Token) {
+		return command, env, nil
+	}
+	program, err := resolveProgram(command[0], env)
+	if err != nil {
+		return command, env, nil
+	}
+	version := probeVersion(id.Agent, program, env)
+	if version == "" {
+		return command, env, nil
+	}
 	dir, err := launchDir(id.StoreID, id.Token)
 	if err != nil {
 		return nil, nil, err
@@ -46,24 +62,14 @@ func Prepare(id Identity, command []string, env map[string]string, safe bool) ([
 	if err = os.Mkdir(dir, 0700); err != nil {
 		return nil, nil, fmt.Errorf("allocate fresh input launch: %w", err)
 	}
-	m := manifest{Agent: id.Agent, CWD: id.CWD, Socket: id.Socket, Token: id.Token, InstanceID: id.InstanceID, Created: time.Now(), Safe: safe}
+	m := manifest{Agent: id.Agent, CWD: id.CWD, Socket: id.Socket, Token: id.Token, InstanceID: id.InstanceID, Created: time.Now(), Safe: true, Version: version}
 	envs := make(map[string]string, len(env)+1)
 	for k, v := range env {
 		envs[k] = v
 	}
 	cmd := append([]string(nil), command...)
-	if len(cmd) == 0 {
-		return nil, nil, fmt.Errorf("missing agent command")
-	}
-	if m.Safe {
-		program, err := resolveProgram(cmd[0], envs)
-		if err == nil {
-			// The queried executable is also the one tmux will launch, even
-			// when its server inherited a different PATH.
-			cmd[0] = program
-			m.Version = probeVersion(id.Agent, program, envs)
-		}
-	}
+	// Probe and launch use the same executable, even if tmux has another PATH.
+	cmd[0] = program
 	if m.Safe && m.Version != "" {
 		if id.Agent == "codex" {
 			logDir, _ := json.Marshal(dir)
@@ -173,7 +179,7 @@ func probeVersion(agent, program string, env map[string]string) string {
 	}
 	var output versionOutput
 	version.Stdout = &output
-	if version.Run() == nil {
+	if runVersionProbe(version) == nil {
 		switch {
 		case agent == "codex" && strings.TrimSpace(output.String()) == "codex-cli 0.159.2":
 			return "0.159.2"

@@ -3,7 +3,6 @@ package api_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -14,9 +13,9 @@ func TestSendKeysUnsafeFramingBeforeInput(t *testing.T) {
 	t.Parallel()
 	for _, text := range []string{"hello\x1b[A", "hello\x00world", "hello\tworld", " /exit", "\n!shell", "hello\xff"} {
 		t.Run(text, func(t *testing.T) {
-			e := newKillEnv(t)
+			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, killRowSpec{State: store.StateWaiting})
-			_, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: text})
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text})
 			if err == nil || !strings.Contains(err.Error(), "no input was attempted") {
 				t.Errorf("unsafe framing was not refused before input: %v", err)
 			}
@@ -27,11 +26,10 @@ func TestSendKeysUnsafeFramingBeforeInput(t *testing.T) {
 
 func TestSendKeysUnreadyLaunchNeverReceivesInput(t *testing.T) {
 	t.Parallel()
-	e := newKillEnv(t)
+	e := newNativeSubmissionEnv(t)
 	r := e.seedRow(t, killRowSpec{State: store.StateWaiting})
-	_, err := api.SendKeys(e.store, e.rec, api.SendKeysEnv{
-		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now}, Sleep: func(d time.Duration) { e.clock.Advance(d) },
-	}, api.SendKeysParams{InstanceID: r.ID, Text: "first ordinary prompt"})
+	e.b.ready = func() (bool, error) { return false, nil }
+	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "first ordinary prompt"})
 	if err == nil || !strings.Contains(err.Error(), "no input was attempted") {
 		t.Fatalf("unready launch accepted ordinary input: %v", err)
 	}

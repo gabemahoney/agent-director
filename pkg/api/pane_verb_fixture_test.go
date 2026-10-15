@@ -145,26 +145,9 @@ func (e *killEnv) sendKeys(p api.SendKeysParams) (api.SendKeysResult, error) {
 // The pid namespace reader is unset, so every relay hook is judged "can't
 // tell" (by its confirm_by), as before relay hooks were judged by process.
 func (e *killEnv) sendKeysAt(window time.Duration, now time.Time, p api.SendKeysParams) (api.SendKeysResult, error) {
-	pollTime := now
 	return api.SendKeys(e.store, e.rec, api.SendKeysEnv{
-		Input: e.delivery(p.InstanceID),
-		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return pollTime }, Window: window},
-		Sleep: func(d time.Duration) { pollTime = pollTime.Add(d) },
+		Relay: api.RelayView{Procs: e.pc, Now: func() time.Time { return now }, Window: window},
 	}, p)
-}
-
-func (e *killEnv) delivery(id string) *deliveryBackend {
-	key := id
-	if row, err := e.st.GetSpawn(id); err == nil {
-		key += "/" + row.Identity.Token
-	}
-	if e.deliveries == nil {
-		e.deliveries = map[string]*deliveryBackend{}
-	}
-	if e.deliveries[key] == nil {
-		e.deliveries[key] = &deliveryBackend{}
-	}
-	return e.deliveries[key]
 }
 
 // RecordHookGone delegates.
@@ -200,9 +183,9 @@ func (e *killEnv) sendKeysClient(t *testing.T, p api.SendKeysParams, settings ..
 // skaText is the text the shared tables send (LF kept, no CR).
 const skaText = "run the tests\nthen report"
 
-// skaParams exercises operator-controlled delivery against the fixture's empty pane.
+// skaParams is send-keys on r with skaText.
 func skaParams(r killRow) api.SendKeysParams {
-	return api.SendKeysParams{InstanceID: r.ID, Text: skaText, ExpectPaneSHA256: api.PaneSHA256("")}
+	return api.SendKeysParams{InstanceID: r.ID, Text: skaText}
 }
 
 // rppLines is the n_lines the shared tables read with (not the default), with ANSI on.
@@ -675,17 +658,7 @@ func (e *killEnv) assertEnterSent(t *testing.T, socket, paneID string) {
 // typed into paneID on socket (assertTextSent), then one Enter to paneID.
 func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	t.Helper()
-	for _, c := range e.rec.SocketCallsOf(tmux.CallSendKey) {
-		if c.Key == "Enter" {
-			assertOrdinaryWrites(t, e, killRow{Socket: socket, Spawn: api.Spawn{Identity: api.LaunchIdentity{PaneID: paneID}}}, text)
-			return
-		}
-	}
-	calls := paneSendCalls
-	if len(e.rec.SocketCallsOf(tmux.CallCapture)) == 1 {
-		calls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}
-	}
-	e.assertPaneCalls(t, calls...)
+	e.assertPaneCalls(t, paneSendCalls...)
 	e.assertTextSent(t, socket, paneID, text)
 	e.assertEnterSent(t, socket, paneID)
 }

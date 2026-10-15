@@ -579,7 +579,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "State, relay and dialog guards precede delivery and proof reconciliation; ended/missing rows are refused. Supported native ordinary input uses readiness, 512-byte UTF-8 chunks/drain, one Enter and exact transcript proof. Without native capability, established pane input sends literal text plus one Enter without exact transcript proof; pending Codex input retains bounded hook observation. ErrSubmissionUnconfirmed: native not_started/partial_input_unconfirmed/submission_unconfirmed or unconfirmed pending-Codex hook observation; never replay text or Enter automatically. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Strip `\\r`, keep `\\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1242,7 +1242,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. " + missingNotProofShort + " Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrSubmissionUnconfirmed: input lock/journal failure. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. " + missingNotProofShort + " Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1260,7 +1260,6 @@ var Verbs = []VerbDef{
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
 			"ErrSpawnNotPausable",
-			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",
 			"ErrRelayFallenBack",
 			"ErrDialogMaybeOpen",

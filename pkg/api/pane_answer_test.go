@@ -243,7 +243,7 @@ func TestPaneAnswerSendsOneKeyAfterItsIntent(t *testing.T) {
 					committed[0]["decision_reason"] != store.DecisionReasonPane {
 					t.Errorf("ad.row_mutation.committed = %v; want one, writer send_keys, decision %s, reason pane", committed, tc.as)
 				}
-				p.assertDialogHoldsInput(t, "next", tok, store.StateCheckPermission)
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
 			})
 		}
 	}
@@ -289,10 +289,6 @@ func TestPaneAnswerSenderDiesBetweenIntentAndSent(t *testing.T) {
 		t.Errorf("record-pane-answer while the sender runs = %v; want ErrPaneAnswerInProgress", err)
 	}
 	err := p.sendKeys(p.plain("hi"))
-	assertDeliveryError(t, err, "partial_input_unconfirmed", 0, false)
-	manual := p.plain("hi")
-	manual.NoEnter = true
-	err = p.sendKeys(manual)
 	if d := assertFallenBackDetails(t, err, tok, store.StateCheckPermission); d["pane_answer"] != "intent" || d["pane_as"] != "allow" {
 		t.Errorf("plain send-keys' err_details = %v; want pane_answer intent, pane_as allow", d)
 	}

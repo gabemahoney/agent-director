@@ -18,7 +18,7 @@ func TestSendKeysPlainLaunchRetainsEstablishedInput(t *testing.T) {
 	t.Parallel()
 	for _, state := range []string{store.StateWaiting, store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
 		t.Run(state, func(t *testing.T) {
-			e := newSubmissionEnv(t)
+			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, killRowSpec{State: state})
 			e.env.Input = nil // No native launch manifest: the pane is an ordinary stand-in.
 			for _, p := range []api.SendKeysParams{
@@ -67,7 +67,7 @@ func TestSendKeysEstablishedGuardsPrecedeNativeJournal(t *testing.T) {
 		{"relay fallen back", store.StateCheckPermission, skRelayFallenBack, api.ErrRelayFallenBack},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := newSubmissionEnv(t)
+			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, killRowSpec{State: tc.state, RelayOn: tc.relay != skRelayOff})
 			if tc.relay != skRelayOff {
 				storefix.SeedOpenPermissionRequests(t, e.st, r.ID, []string{storefix.TestRequestTokenA})
@@ -119,11 +119,30 @@ type capabilityDeliverySession struct {
 
 func (s *capabilityDeliverySession) Supports(api.InputDeliveryIdentity) bool { return s.supported }
 
+func TestSendKeysUnsupportedNativeCapabilityKeepsEstablishedInput(t *testing.T) {
+	t.Parallel()
+	e := newNativeSubmissionEnv(t)
+	r := e.seedRow(t, killRowSpec{State: store.StateWaiting})
+	e.env.Input = &capabilityDeliveryBackend{deliveryBackend: e.b, supported: false}
+	e.b.ready = func() (bool, error) { t.Fatal("unsupported launch polled native readiness"); return false, nil }
+	e.b.queue = func() (int, error) { t.Fatal("unsupported launch polled native queue"); return 0, nil }
+	e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) {
+		t.Fatal("unsupported launch read native proof")
+		return nil, nil
+	}
+	payload := strings.Repeat("界", 300)
+	result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: payload})
+	if err != nil || result != (api.SendKeysResult{}) || e.b.current != nil {
+		t.Fatalf("unsupported native result=%+v err=%v attempt=%+v", result, err, e.b.current)
+	}
+	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, payload)
+}
+
 func TestSendKeysCapabilityLossNeverReplaysNativeAttempt(t *testing.T) {
 	t.Parallel()
 	for _, partial := range []bool{false, true} {
 		t.Run(map[bool]string{false: "after Enter", true: "partial text"}[partial], func(t *testing.T) {
-			e := newSubmissionEnv(t)
+			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 			e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
 			if partial {
@@ -160,7 +179,7 @@ func TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck(t *testing.T) {
 	t.Parallel()
 	for _, state := range []string{store.StatePending, store.StateWorking, store.StateEnded} {
 		t.Run(state, func(t *testing.T) {
-			e := newSubmissionEnv(t)
+			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 			e.env.Input = nil
 			e.rec.AfterCall(tmux.CallSendEnter, func(_ tmuxfix.SocketCall, _ error) { e.s.sent = true })
