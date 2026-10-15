@@ -1,0 +1,19 @@
+{
+  "task": "t2.jf1.c1.cz",
+  "source_revision": "dac5fa5f57ed75a687be87332f8314f745bee7e4",
+  "result": "passed",
+  "basis": "User accepted all15 Docker groups/157cases. Docker-only gate under Gabe superseding rule.",
+  "docker": {
+    "groups_passed": 15,
+    "cases_passed": 157,
+    "failures": 0,
+    "receipt_location": "gmahoney-dev:tickets/Ideas/b.ftd/e2t2-docker-jobs.txt",
+    "receipt_access": "Not copied locally: file absent on this host; read-only SSH failed host-key verification. Acceptance relies on explicit user attestation; no host-key bypass attempted."
+  },
+  "tla": {
+    "required": false,
+    "reason": "Task2 changes no spec/tla/** files; independently checked source commit against f97b3fcb",
+    "run": "cancelled as redundant per user; no Task2 formal verdict claimed"
+  },
+  "new_gate_rule": "TLA+ is a design check, not a code test. A Task gate schedules TLA+ only when that Task changes a model under spec/tla/**, then only affected models and suites. Future handoffs explain applicability and selection."
+}
