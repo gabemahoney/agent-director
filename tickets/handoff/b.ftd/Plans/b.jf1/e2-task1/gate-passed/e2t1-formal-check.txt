@@ -1,0 +1,47 @@
+MATCH hx_eq_Sns PARSE-OK PARSE-OK 5
+MATCH rx_eq_live PARSE-OK PARSE-OK 9
+MATCH r5x_time PARSE-OK PARSE-OK 6
+MATCH hx_eq_Sns PASS (distinct = 11387737) PASS 11387737
+MATCH rx_eq_live PASS (distinct = 109518) PASS 109518
+MATCH hx_S PASS PASS 17228946
+MATCH hx_C_endnow FAIL CxNoEndedWhileRunning FAIL(Invariant_CxNoEndedWhileRunning_is_violated) 403
+MATCH hx_C_pause FAIL PauseSeesEnd FAIL(Temporal_property_PauseSeesEnd_was_violated) 161495
+MATCH hx_P PASS PASS 1397160
+MATCH hx_L PASS PASS 6619160
+MATCH rx_safe PASS PASS 64027
+MATCH rx_keys PASS PASS 67511
+MATCH rx_live PASS PASS 35589
+MATCH rx_C_intnoend FAIL KeysSettle FAIL(Temporal_property_KeysSettle_was_violated) 80
+MATCH rx_C_subproof FAIL KeysSafe FAIL(Invariant_KeysSafe_is_violated) 336
+MATCH rx_C_subint FAIL KeysSafe FAIL(Invariant_KeysSafe_is_violated) 208
+MATCH rx_lim_rowsettles FAIL RowSettles FAIL(Temporal_property_RowSettles_was_violated) 3112
+MATCH hx_V_followed FAIL NotCxFollowed FAIL(Invariant_NotCxFollowed_is_violated) 23671
+MATCH hx_V_fmended FAIL NotCxFMEnded FAIL(Invariant_NotCxFMEnded_is_violated) 7109
+MATCH hx_V_pauseended FAIL NotCxPauseEnded FAIL(Invariant_NotCxPauseEnded_is_violated) 23504
+MATCH rx_V_subheld FAIL NeverSubAllowHeld FAIL(Invariant_NeverSubAllowHeld_is_violated) 864
+MATCH r5x_time PASS PASS 296382
+MATCH r5x_t PASS PASS 2122224
+MATCH r5x_eq PASS(=833740) PASS 833740
+MATCH hx_S5 PASS PASS 45361001
+MATCH hx_V_endlive FAIL NotCxEndLive FAIL(Invariant_NotCxEndLive_is_violated) 400
+MATCH hx_V_missing FAIL NotCxMissing FAIL(Invariant_NotCxMissing_is_violated) 1835
+MATCH rx_V_intproof FAIL NeverHit FAIL(Invariant_NeverHit_is_violated) 60
+MATCH rx_claude_keys PASS PASS 239820
+MATCH rx_eq_live_g PASS (distinct = 109518) PASS 109518
+MATCH r5x_eq_g PASS (distinct = 833740) PASS 833740
+MATCH rx_safe_k0 PASS (distinct = 64027) PASS 64027
+MATCH rx_keys_k0 PASS (distinct = 67511) PASS 67511
+MATCH rx_live_k0 PASS (distinct = 35589) PASS 35589
+MATCH r5x_time_k0 PASS (distinct = 296382) PASS 296382
+MATCH r5x_t_k0 PASS (distinct = 2122224) PASS 2122224
+MATCH rx_safe_rv PASS PASS 404248
+MATCH rx_keys_rv PASS PASS 424284
+MATCH rx_live_rv PASS PASS 144196
+MATCH rx_V_review FAIL NeverHit FAIL(Invariant_NeverHit_is_violated) 71
+MATCH r5x_time_rv PASS PASS 658632
+MATCH r5x_t_rv PASS PASS 4722108
+MATCH r5x_lim_rowsettles_rv FAIL RowSettles FAIL(Temporal_property_RowSettles_was_violated) 28840
+MATCH r5x_V_review FAIL NeverHit FAIL(Invariant_NeverHit_is_violated) 609
+MATCH rx_U_null_safe PASS PASS 2999
+MATCH rx_U_null_control FAIL KeysSafe FAIL(Invariant_KeysSafe_is_violated) 270
+FORMAL-RECEIPT MATCH revision=4e12100cc590c0c53e70c2e0ada336e116e713b5

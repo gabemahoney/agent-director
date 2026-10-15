@@ -1,0 +1,5 @@
+docker 15/15 succeeded
+default exit=0 CI-VERDICT PASS (92/92 runs ok, 392 min, tier full)
+launch exit=0 CI-VERDICT PASS (9/9 runs ok, 32 min, tier full)
+subagent exit=0 CI-VERDICT PASS (11/11 runs ok, 48 min, tier full)
+formal check exit=0 FORMAL-RECEIPT MATCH revision=4e12100cc590c0c53e70c2e0ada336e116e713b5

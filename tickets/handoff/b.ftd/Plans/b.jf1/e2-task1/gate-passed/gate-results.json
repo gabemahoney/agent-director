@@ -1,0 +1,45 @@
+{
+  "task": "t2.jf1.c1.xi",
+  "epic": "t1.jf1.c1",
+  "revision": "4e12100cc590c0c53e70c2e0ada336e116e713b5",
+  "result": "passed",
+  "accepted_by": "user",
+  "receipt_directory": "/home/horde/ad-codex/project/tickets/Ideas/b.ftd/e2t1-gate",
+  "docker": {
+    "groups": 15,
+    "cases": 157,
+    "failures": 0
+  },
+  "tla_full": {
+    "default": "PASS 92/92",
+    "launch": "PASS 9/9",
+    "subagent": "PASS 11/11",
+    "sx_eq_Sns_distinct": 11387737,
+    "exact_count_matched": true
+  },
+  "codex_overlay": {
+    "receipt_match_rows": 46,
+    "parse_rows": 3,
+    "checks": 43,
+    "rx_U_null_safe": {
+      "verdict": "PASS KeysSafe",
+      "distinct": 2999
+    },
+    "rx_U_null_control": {
+      "verdict": "FAIL KeysSafe",
+      "distinct": 270,
+      "trace_job": "j20261015055602-ca8898"
+    },
+    "historical_equivalence_counts": "all matched"
+  },
+  "receipt_sha256": {
+    "docker-summary.txt": "ef79bacc056d42e5f06928393b3624fb98ec83b16df585d0ec9de9ae0ff761a1",
+    "e2t1-docker-jobs.txt": "8d6857a833ac03ed280fffc8585cfe85d378776b312fb44905427d67a5499a55",
+    "e2t1-formal-check.txt": "ecd0791e9e64d646ab0af1b2c992107b60e507e6ea11d4da49c936a247e5f5d9",
+    "e2t1-formal-jobs.txt": "740d4c915a3fa45fad7e9f93b91ae9b5c144cc7ac0a50ed9bd4c74fab7a2f5e8",
+    "e2t1-formal-manifest.json": "4c84f6077967ef105a060449f8f05602573815097bd36288afef121bcd21d2cf",
+    "e2t1-summary.txt": "b6fe70aaf820f6801bcdd2b6a51e24f5f5aa3f109a32e1e899298a0c19c5d412",
+    "formal-check.txt": "ecd0791e9e64d646ab0af1b2c992107b60e507e6ea11d4da49c936a247e5f5d9"
+  },
+  "verification": "Copied local operator receipts and checked all46MATCH rows; raw scheduler logs/counts operator-attested, no heavy execution here."
+}

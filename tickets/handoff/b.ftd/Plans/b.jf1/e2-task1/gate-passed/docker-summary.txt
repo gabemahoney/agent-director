@@ -1,0 +1,15 @@
+epic-03-spawn succeeded
+epic-04-interact succeeded
+epic-05-stop succeeded
+epic-06-discover succeeded
+epic-07-templates succeeded
+epic-08-recovery succeeded
+epic-09-resume succeeded
+epic-10-relay succeeded
+epic-11-mcp succeeded
+epic-12-install succeeded
+epic-13-agents succeeded
+harness-smoke succeeded
+installsh-preflight-gates succeeded
+template-overwrite succeeded
+cursor-owned-launch succeeded
