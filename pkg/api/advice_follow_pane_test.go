@@ -162,7 +162,7 @@ const (
 
 // advSendKeysEmptyTextManifest is what send-keys' manifest text (help, MCP
 // tools/list) says empty text does, which "send-keys with empty text" relies on.
-const advSendKeysEmptyTextManifest = "(empty text: Enter only)"
+const advSendKeysEmptyTextManifest = "key/no_enter/empty text/pane hashes: manual."
 
 // pause's line clear (C-u) failing before /exit (b.9o4): its descriptions
 // name the key send, word for word at the default 2 s action timeout, and
@@ -231,6 +231,7 @@ func TestAdviceFollow_E2_SendKeysTextTimeoutReadPaneThenEmptyText(t *testing.T) 
 				t.Fatalf("read-pane: %v; want the agent's pane", err)
 			}
 			p := skaParams(r)
+			p.ExpectPaneSHA256 = read.PaneSHA256
 			if strings.Contains(read.Pane, skaText) {
 				p.Text = ""
 			}
@@ -523,10 +524,8 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 			assertDialogMaybeOpen(t, send(), tok, row.State)
 			e.assertNoTmuxCall(t)
 			proveGone(t, e, r.ID, turnEnd) // the agent's next Stop
-			if err := send(); err != nil {
-				t.Fatalf("send-keys retried later: %v; want delivery", err)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "1")
+			assertDeliveryError(t, send(), "not_started", 0, false)
+			e.assertNothingSent(t)
 		})
 	}
 }
@@ -578,11 +577,9 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 				if pr := p.request(t, tok); pr.AwaitsAnswer() {
 					t.Errorf("request A = %+v; want it closed", pr)
 				}
-				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
+				p.assertDialogHoldsInput(t, "next", tok, store.StateCheckPermission)
 				p.prove(t, turnEnd)
-				if err := p.sendKeys(p.plain("next")); err != nil {
-					t.Errorf("plain send-keys once the main agent's Stop proved it gone: %v; want it typed", err)
-				}
+				p.assertOrdinaryAfterRelay(t, "next")
 			})
 		}
 	}

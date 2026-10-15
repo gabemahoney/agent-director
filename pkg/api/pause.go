@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -74,6 +75,7 @@ type PauseStore interface {
 // (SendKeysEnv), so pause's relay guard is evaluated exactly as send-keys'
 // is. The Client builds it from its own readers, clock and configuration.
 type PauseEnv struct {
+	Input InputDeliveryBackend
 	// Relay judges the Spawn's relay hooks: its start-time reader (which also
 	// judges the lookup's server and an adopted pane, SR-3.3, SR-3.6), its own
 	// pid namespace, its clock and the relay window.
@@ -406,6 +408,18 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	// types, so pause is held as one (b.zdz): send-keys' relay guard, with no
 	// request token and no expect_pane_sha256, whose refusal on a recorded
 	// verdict advises retryLater, as the refused call is pause.
+	var session InputDeliverySession
+	if row.Identity.Token != "" {
+		backend := env.Input
+		if backend == nil {
+			backend = inputdelivery.Native{}
+		}
+		session, err = backend.Open(deliveryIdentity(row, r.s.StoreID()))
+		if err != nil {
+			return false, deliveryNotStarted(row, "exclusive input writer unavailable")
+		}
+		defer session.Close()
+	}
 	guard, err := relayGuard(r.s, newRelayJudge(env.Relay), env.IntentHold, row, SendKeysParams{}, retryLater)
 	if err != nil {
 		return false, err
@@ -428,7 +442,18 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 		r.clearPresses = codexLineClearPresses
 		r.codex, r.launch = true, launchOf(row)
 	}
-	if err := r.deliver("/exit"); err != nil {
+	paneID, launch, err := r.targetPane()
+	if err != nil {
+		return false, err
+	}
+	if session != nil {
+		owned := row
+		owned.Identity = r.adoption.Identity
+		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID()), owned); err != nil {
+			return false, err
+		}
+	}
+	if err := r.typeText(paneID, launch, "/exit", true); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -542,6 +567,8 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     requests. The way past it is above: SendKeys `/exit` with the judged
 //     pane's ExpectPaneSHA256, or Kill.
 //   - [ErrPauseTimeout]: the Spawn did not reach ended within the timeout.
+//   - [ErrSubmissionUnconfirmed]: the input writer lock or delivery journal
+//     was unavailable; no input was attempted by this pause call.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there; `/exit` was
 //     not sent or, when the Enter call failed after it, may be typed but not
 //     submitted.

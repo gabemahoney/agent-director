@@ -124,7 +124,7 @@ func TestSendKeysPendingDelivered(t *testing.T) {
 				if err := skpSend(e, r.ID); err != nil {
 					t.Fatalf("second SendKeys: %v", err)
 				}
-				e.assertDelivered(t, r.Socket, pane, skpText)
+				e.assertNothingSent(t)
 				if again := e.adoption(t, r.ID); again != after {
 					t.Errorf("adoption after the second call = %+v; want no further write %+v", again, after)
 				}
@@ -247,6 +247,13 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 
 				err := skpSend(e, r.ID)
 
+				if id.name == "no launch token" || id.name == "malformed launch token" {
+					assertDeliveryError(t, err, "not_started", 0, false)
+				} else {
+					assertOneName(t, err, "ErrSpawnNotInteractive")
+					apitest.AssertDescription(t, err.Error(), apitest.DescSendKeysPendingNoLaunch(r.ID))
+				}
+				_, err = e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, NoEnter: true, AllowPending: true})
 				assertOneName(t, err, "ErrSpawnNotInteractive")
 				apitest.AssertDescription(t, err.Error(), apitest.DescSendKeysPendingNoLaunch(r.ID))
 				e.assertNoTmuxCall(t)

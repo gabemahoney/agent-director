@@ -21,12 +21,13 @@ error:
   a tmux server, a
   repeated `kill` can get `ErrTmuxUnresponsive` or `ErrTmuxNotAvailable`: wait
   and check again.
-- `send-keys` returning `ErrTmuxUnresponsive` with "may have been delivered" or
+- A manual `send-keys` returning `ErrTmuxUnresponsive` with "may have been delivered" or
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
-- `send-keys` returning `ErrSubmissionUnconfirmed`: follow
-  [Unconfirmed Codex submission](#unconfirmed-codex-submission).
+- `ErrSubmissionUnconfirmed`: for automatic `send-keys`, follow
+  [Ordinary text submission](#ordinary-text-submission); for manual
+  `send-keys` or `pause`, follow [Manual input ownership](#manual-input-ownership).
 - `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -87,28 +88,93 @@ To end a live row (`pending` included) and relaunch its id:
 
    A caller whose ids agent-director mints spawns fresh instead.
 
-## Unconfirmed Codex submission
+## Ordinary text submission
 
-On a Codex row that was `pending` when `send-keys` read it, a plain
-text-and-Enter or Enter-only send checks for turn activity for up to 2 s
-after tmux accepts the keys. It confirms only when the same launch reports
-`working`, `ask_user` or `check_permission`; `waiting` alone is not
-confirmation. The check uses hook state, never terminal text, and is not
-delayed by the configured state settle time. It does not apply to
-`--no-enter`, `--key` (even `--key Enter`), or permission pane answers.
+A nonempty `text` with Enter, without `key`, `request_token` or
+`expect_pane_sha256`, uses confirmed ordinary delivery. CR bytes are removed;
+LF newlines are preserved. Success returns `outcome: "submitted"`,
+`request_id`, `session_id`, `record_sha256` and, when supplied by the native
+record, `record_id`: an exact new user record in this launch's native
+transcript proves the normalized text was submitted. Hook activity, a quiet input queue and pane text do not prove it.
+This proves submission, not completion of the agent's turn.
 
-`ErrSubmissionUnconfirmed` means the keys were sent but submission is
-unknown. Its `err_details` contain `keys_sent: true`,
-`submission_confirmed: false` and `row_state`, the last raw state read.
-That state can differ from the settled state `get` shows. A turn that
-finishes between checks can also produce this error; it does not prove the
-prompt is stuck. The error can arrive sooner if the row finishes, changes
-launch or cannot be read.
+Automatic delivery supports Linux with exactly Codex 0.159.2 or Claude Code
+2.1.280, on fresh launches with an ordinary empty composer. For new input, the row must be
+`waiting`, or `pending` with `allow_pending`. A resumed conversation,
+positional startup prompt, alternate mode or unsupported agent argument is
+outside this contract. Accepted extra arguments are `--model`/`-m`,
+`--permission-mode`, `--effort` (each with a value), `--no-alt-screen` and
+`--dangerously-skip-permissions`. The launch's keybinding requirements and
+generated settings are in [Ordinary delivery launch settings](settings.md#ordinary-delivery-launch-settings).
+Other versions and platforms can still launch agents; use operator-controlled
+manual input for those launches.
 
-Do not automatically repeat the text or send another Enter. Check
-hook-derived `get` or `status`; if submission remains unknown, escalate to
-the caller or a human. Pane text is not submission evidence. The check
-sends no extra keys and changes no row state.
+Claude's local configuration checks are best effort: they do not verify the
+effective `editorMode` or managed or remote policy. Automatic Claude input
+remains enabled when those checks pass, but Vim settings or policy may still
+remap or consume input. If Enter is attempted and no exact matching transcript
+record appears, agent-director reports `ErrSubmissionUnconfirmed` with
+`outcome: "submission_unconfirmed"`. It makes no submission claim without
+that proof and never retries text or Enter.
+
+Text must be valid UTF-8, at most 1 MiB after CR removal, with non-whitespace
+content. Apart from LF, control characters and Unicode line/paragraph
+separators are refused. A first non-whitespace `/` or `!` requires an
+operator-controlled pane operation. Readiness is bounded by 12 s; input
+delivery by 60 s, followed by up to 12 s for transcript confirmation. Set a
+client timeout long enough to receive the result. A client timeout does not
+cancel a submission.
+
+Supply `delivery_request_id` to identify one attempt within a launch. Repeat
+the same ID and normalized text to retrieve stored confirmation or observe
+late proof without replaying input. Reusing an ID for different text or a
+different pane/process identity is refused. Use a fresh ID for an intentional
+identical turn. If omitted, an immediate repeat of the most recent confirmed
+identical text returns its existing result; this is not a general deduplication
+of every earlier turn. Observing an existing request works after the row becomes
+`ended` or `missing`, or its pane disappears, provided its exact launch and
+native session identity still match. This observation sends no input. An
+unresolved attempt blocks new automatic input even with a new ID. If a different
+request discovers late proof for its predecessor,
+it reports `not_started`; re-issue the new request only after the predecessor
+has settled.
+
+`ErrSubmissionUnconfirmed` carries these `err_details`:
+
+| Field | Meaning |
+|---|---|
+| `outcome` | `not_started`: this request attempted no input; `partial_input_unconfirmed`: text or manual input may be present, with no automatic Enter attempted; `submission_unconfirmed`: Enter may have been sent and submission remains unknown. |
+| `request_id`, `phase` | The owned attempt, when allocated, and its last delivery phase. An earlier unresolved attempt can be reported instead of the requested new input. |
+| `bytes_attempted`, `enter_may_have_been_sent`, `keys_sent` | Conservative input-attempt facts, not byte receipts. `keys_sent` means input was attempted and may have reached the pane. |
+| `last_queue` | Optional last terminal queue sample; zero is not submission evidence. |
+| `submission_confirmed`, `row_state`, `reason` | Confirmation is false; state and reason describe the observation, not proof of failure. |
+
+A `not_started` request can be re-issued after its stated condition clears.
+For partial or unconfirmed input, never automatically repeat text, Enter or
+editing keys: input may still submit later. Re-issue the same request only to
+observe proof; if it remains unresolved, escalate to a human using
+[Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
+Agent-director never retries text or Enter on missing evidence, including
+after a crash.
+
+## Manual input ownership
+
+Empty text (Enter only), `no_enter`, `key`, pane-hash sends and permission
+pane answers remain separate manual operations. They return an empty success
+object and make no transcript-confirmation claim. They serialize with ordinary
+delivery. Manual `send-keys` and `pause` can return `ErrSubmissionUnconfirmed`
+with `outcome: "not_started"`, `keys_sent: false` and
+`enter_may_have_been_sent: false` when exclusive input ownership is unavailable
+or its delivery journal cannot be read or saved. That call attempted no input;
+re-issue it after the stated condition clears. If another request still owns
+the writer, let it settle first; a persistent journal refusal needs an operator.
+See [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
+
+Manual input, including `pause`, changes the composer contract and prevents
+further new automatic input on that launch. A state, permission or pane refusal
+from `pause` does not change that contract. Manual input does not clear an
+unresolved attempt. Direct terminal writers must also be excluded during an
+automatic request; agent-director's lock cannot serialize them.
 
 ## Transcript recovery
 

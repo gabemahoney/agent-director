@@ -58,11 +58,12 @@ func TestAdviceFollow_D1_UnreportedReadPaneThenSendKeys(t *testing.T) {
 
 	e.setPaneTexts(r.Socket)
 	pane := r.Spawn.Identity.PaneID
-	if got, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID}); err != nil || got.Pane != paneText(r.Socket, pane) {
+	got, err := c.ReadPane(api.ReadPaneParams{InstanceID: r.ID})
+	if err != nil || got.Pane != paneText(r.Socket, pane) {
 		t.Fatalf("ReadPane = %q, %v; want the row's pane %q", got.Pane, err, paneText(r.Socket, pane))
 	}
 	e.rec.Reset()
-	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, ExpectPaneSHA256: got.PaneSHA256}); err != nil {
 		t.Fatalf("SendKeys with allow_pending: %v", err)
 	}
 	e.assertDelivered(t, r.Socket, pane, skpText)

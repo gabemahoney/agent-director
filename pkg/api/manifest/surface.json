@@ -482,7 +482,7 @@
     },
     {
       "name": "send-keys",
-      "description": "Strip `\\r`, keep `\\n`, add Enter (empty text: Enter only). request_token: one key only. Pending Codex: ErrSubmissionUnconfirmed: keys sent, submission unknown; no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. tmux: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE: timeout may mean delivery), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Ordinary: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact transcript proof. ErrSubmissionUnconfirmed: not_started/partial_input_unconfirmed/submission_unconfirmed; no replay. key/no_enter/empty text/pane hashes: manual. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -505,9 +505,18 @@
           "allowed_values": null
         },
         {
+          "name": "delivery_request_id",
+          "type": "string",
+          "description": "Owns one ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay. A fresh id permits an intentional identical turn. Omitted ids conservatively reuse the last confirmed identical payload. Unresolved input blocks new automatic writes. Exclusive with manual key, no_enter, pane hash and permission answers.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
           "name": "allow_pending",
           "type": "bool",
-          "description": "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected.",
+          "description": "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected for new input (ErrSpawnNotInteractive); an existing ordinary request can return stored or late proof without input.",
           "required": false,
           "nullable": false,
           "allow_empty": false,
@@ -572,7 +581,48 @@
           ]
         }
       ],
-      "result_fields": [],
+      "result_fields": [
+        {
+          "name": "request_id",
+          "type": "string",
+          "description": "Ordinary delivery attempt identity; absent on manual operations.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "outcome",
+          "type": "string",
+          "description": "submitted only with exact native transcript proof; absent on manual operations.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "description": "Native session that recorded the ordinary prompt.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "record_id",
+          "type": "string",
+          "description": "Native user record id when provided by the pinned schema.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        },
+        {
+          "name": "record_sha256",
+          "type": "string",
+          "description": "SHA-256 of the exact structured user record.",
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": null
+        }
+      ],
       "error_names": [
         "ErrInvalidFlags",
         "ErrSpawnNotFound",
@@ -1604,7 +1654,7 @@
     },
     {
       "name": "pause",
-      "description": "Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof of exit (see find-missing). Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
+      "description": "Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. `missing` is not proof of exit (see find-missing). Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrSubmissionUnconfirmed: input lock/journal failure. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).",
       "callable": true,
       "handle_free": false,
       "params": [
@@ -1622,6 +1672,7 @@
       "error_names": [
         "ErrSpawnNotFound",
         "ErrSpawnNotPausable",
+        "ErrSubmissionUnconfirmed",
         "ErrSendKeysWhileRelayed",
         "ErrRelayFallenBack",
         "ErrDialogMaybeOpen",

@@ -115,6 +115,7 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 
 	return ComposedRelaunch{
 		Create: CreateRequest{
+			Agent:      r.Agent,
 			Socket:     in.Socket,
 			Name:       r.TmuxSessionName,
 			CWD:        r.CWD,

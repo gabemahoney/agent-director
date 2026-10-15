@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -527,6 +528,19 @@ const trailFailOpenChildEnv = "AD_TRAIL_FAIL_OPEN_CHILD"
 // trailFailOpenLinePrefix marks the child's result lines in its output.
 const trailFailOpenLinePrefix = "TFO|"
 
+// Native delivery journals remain writable while creation of the trail is refused.
+func makeTrailUnwritable(t *testing.T) {
+	t.Helper()
+	adDir := adConfigDir(apiTrailDir)
+	if err := os.MkdirAll(filepath.Join(adDir, "input"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(adDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(adDir, 0700) })
+}
+
 // trailFailOpenRuns runs kill's, the opt-in's, send-keys' and pause's
 // fail-open calls, ids under prefix, checking their records when working.
 func trailFailOpenRuns(t *testing.T, prefix string, working bool) []string {
@@ -570,14 +584,7 @@ func TestTrailFailOpenChild(t *testing.T) {
 	if prefix == "" {
 		t.Skip("run only as TestTrailFailOpen's child")
 	}
-	adDir := adConfigDir(apiTrailDir)
-	if err := os.MkdirAll(adDir, 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.Chmod(adDir, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(adDir, 0o700) })
+	makeTrailUnwritable(t)
 	if err := trail.Emit(context.Background(), "ad.test.fail_open_probe", map[string]any{}); err == nil {
 		t.Fatal("trail write succeeded; want it to fail")
 	}

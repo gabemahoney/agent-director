@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
@@ -82,6 +83,11 @@ var (
 // rule 8, decision 7 A). A pane answer needs As, Key and ExpectPaneSHA256,
 // takes no Text, and sends exactly one key with no Enter after it.
 type SendKeysParams struct {
+	// DeliveryRequestID owns one ordinary text attempt for this launch. Retry
+	// the same ID and normalized text to observe it without replay. Use a new
+	// ID for an intentional identical turn. Omitted IDs conservatively reuse
+	// the most recent confirmed attempt with identical normalized text.
+	DeliveryRequestID string `json:"delivery_request_id"`
 	// InstanceID identifies the Spawn whose pane will receive the keys.
 	InstanceID string `json:"instance_id"`
 	// Text is the string to deliver to the agent's own pane on a plain call.
@@ -95,7 +101,8 @@ type SendKeysParams struct {
 	// AllowPending also allows a pending row: a launch (spawn, reuse or
 	// resume) whose agent has not reported in yet. Keys are delivered only to
 	// a session started by the row's current launch. ended and missing rows
-	// are still rejected (SR-18.14).
+	// are still rejected for new input (SR-18.14). An existing ordinary
+	// request can return stored or late proof without sending input.
 	AllowPending bool `json:"allow_pending"`
 	// NoEnter types Text with no Enter after it (plain calls; a pane answer
 	// never presses Enter).
@@ -124,15 +131,23 @@ type SendKeysParams struct {
 	As string `json:"as"`
 }
 
-// SendKeysResult is the typed return shape. Empty struct today; reserved
-// so future fields (e.g. truncated_count, dropped_cr_count) can be added
-// without breaking the wire shape.
-type SendKeysResult struct{}
+// SendKeysResult carries native proof for an ordinary request. Manual pane
+// operations return an empty object and make no transcript-confirmation claim.
+type SendKeysResult struct {
+	RequestID    string `json:"request_id,omitempty"`
+	Outcome      string `json:"outcome,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	RecordID     string `json:"record_id,omitempty"`
+	RecordSHA256 string `json:"record_sha256,omitempty"`
+}
 
 // SendKeysEnv is what SendKeys judges and records the relay with besides its
 // store and tmux surface (b.146 rules 7, 8 and 14). The Client builds it from
 // its own readers, clock and configuration.
 type SendKeysEnv struct {
+	// Input supplies native readiness, terminal facts, and the durable launch
+	// journal. Nil uses the platform implementation.
+	Input InputDeliveryBackend
 	// Relay judges the Spawn's relay hooks and a pane answer's sender: its
 	// start-time reader (which also judges the lookup's server and an adopted
 	// pane, SR-3.3, SR-3.6), its own pid namespace, its clock and the relay
@@ -211,15 +226,21 @@ type sendKeysGuard struct {
 //   - A pane answer (request_token; b.146 rule 8): exactly one key, never
 //     followed by Enter. See below.
 //
-// After a plain text/Enter send on a pending Codex row, a bounded read-only
-// check looks for same-launch turn activity in the hook-driven raw state.
-// SessionStart's waiting alone does not confirm submission. Absent evidence
-// gives ErrSubmissionUnconfirmed with keys_sent true; it never resends keys
-// or changes the row's state. A quick turn may finish between reads, so an
-// unconfirmed result means unknown, not a proven submission failure.
+// Ordinary nonempty text with Enter and no pane hash uses native delivery:
+// a fresh version-supported readiness gate, UTF-8 writes of at most 512 bytes,
+// two empty terminal-queue samples 40 ms apart between writes, exactly one
+// Enter, and an exact launch-bound post-watermark transcript user record.
+// Hooks and empty queues never prove submission. Durable per-launch ownership
+// blocks automatic replay after partial delivery, missing proof or a crash.
+// delivery_request_id makes retries observation-only and allows deliberate
+// identical turns with fresh ids. Unsupported framing, versions and non-fresh
+// composers return not_started before input. Manual operations below retain
+// their separate contract and serialize with ordinary delivery.
 //
-// State precondition: the row must be in a live interactive state (waiting,
-// working, ask_user or check_permission). A finished row (ended or missing)
+// State precondition: new input requires a live interactive state (waiting,
+// working, ask_user or check_permission). An existing ordinary request can
+// return stored or late transcript proof even after the row ends or goes
+// missing, without sending input. New input on a finished row (ended or missing)
 // is refused with ErrSpawnNotInteractive, with or without AllowPending, and
 // with no tmux call; so is a pending row (a launch whose agent has not
 // reported in yet) without AllowPending. With AllowPending, a pending row
@@ -315,7 +336,7 @@ type sendKeysGuard struct {
 // after a sent key is ErrInternal, saying the key was sent, with err_details
 // PaneKeySentDetails (key_sent true).
 //
-// A failed text, Enter or key call: a timeout is ErrTmuxUnresponsive saying
+// On a manual operation, a failed text, Enter or key call: a timeout is ErrTmuxUnresponsive saying
 // the keys may have been delivered, with no further call; any other failure
 // makes one follow-up lookup, whose Gone or Leftover gives ErrTmuxSendKeys and
 // whose other outcomes give ErrTmuxUnresponsive, or ErrTmuxNotAvailable for a
@@ -331,10 +352,11 @@ type sendKeysGuard struct {
 // refusals still end "retry later"; so do a key's and a no_enter text's.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, one capture, the text
+// Manual calls are at most one lookup, one pane listing, one capture, the text
 // or key call, the Enter call and, only after an action failure other than a
 // timeout, one follow-up lookup (SR-13.2). SendKeys never writes the row's
-// state.
+// state. Ordinary delivery revalidates ownership and guards before every write
+// and queue sample, within bounded readiness, drain and confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
@@ -377,11 +399,14 @@ type sendKeysFacts struct {
 // named key and the capture), its environment and the facts the call keeps.
 type sendKeysRun struct {
 	keysRun
-	s     SendKeysStore
-	t     SendKeysTmux
-	env   SendKeysEnv
-	j     relayJudge
-	facts sendKeysFacts
+	s              SendKeysStore
+	t              SendKeysTmux
+	env            SendKeysEnv
+	j              relayJudge
+	facts          sendKeysFacts
+	input          InputDeliverySession
+	automatic      bool
+	deliveryResult SendKeysResult
 }
 
 // sendKeys is the inner implementation shared by the pure SendKeys entry point
@@ -395,7 +420,7 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 		facts: sendKeysFacts{Guard: guardNotApplicable, Caller: callerIdentity()}}
 	err := r.run(params)
 	r.emitDisagree("send-keys", params.InstanceID, r.facts.Caller)
-	return r.facts, SendKeysResult{}, err
+	return r.facts, r.deliveryResult, err
 }
 
 // run is the send-keys flow; the returned error is SendKeys'.
@@ -410,8 +435,42 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	r.facts.RowState = row.State
 
-	if err := sendKeysStateGuard(row, params); err != nil {
-		return err
+	r.automatic = !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
+	if !r.automatic {
+		if err := sendKeysStateGuard(row, params); err != nil {
+			return err
+		}
+	}
+	if r.automatic {
+		if _, err := inputdelivery.Chunks(plan.text); err != nil {
+			return deliveryNotStarted(row, err.Error())
+		}
+	}
+	if row.Identity.Token != "" {
+		backend := r.env.Input
+		if backend == nil {
+			backend = inputdelivery.Native{}
+		}
+		r.input, err = backend.Open(deliveryIdentity(row, r.s.StoreID()))
+		if err != nil {
+			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
+		}
+		defer r.input.Close()
+	} else if r.automatic {
+		return deliveryNotStarted(row, "launch has no native input identity")
+	}
+	// Observing a durable attempt needs no live composer, relay permission or
+	// pane. Keep this under the writer lock, before guards for new input.
+	if r.automatic {
+		handled, err := r.reconcileOrdinary(row, deliveryIdentity(row, r.s.StoreID()), plan.text, params.DeliveryRequestID)
+		if err != nil || handled {
+			return err
+		}
+	}
+	if r.automatic {
+		if err := sendKeysStateGuard(row, params); err != nil {
+			return err
+		}
 	}
 
 	guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, row, params)
@@ -445,9 +504,6 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 	}
 	err = r.send(plan, params)
 	r.facts.keysFacts = r.found
-	if err == nil && row.Agent == store.AgentCodex && row.State == store.StatePending && plan.enter {
-		return r.confirmSubmission(row)
-	}
 	return err
 }
 
@@ -459,6 +515,9 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	if err != nil {
 		return err
 	}
+	if r.automatic {
+		return r.deliverOrdinary(paneID, launch, plan, params)
+	}
 	if plan.answer {
 		return r.paneAnswer(paneID, launch, plan, params)
 	}
@@ -469,6 +528,11 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	}
 	if plan.key != nil {
 		return r.sendKey(paneID, launch, *plan.key)
+	}
+	if r.input != nil {
+		if err := r.recordManualInput(); err != nil {
+			return err
+		}
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
 }
@@ -502,6 +566,11 @@ func (r *sendKeysRun) paneMatches(paneID string, launch tmux.Launch, plan sendKe
 // (SendKeysPane). A failed call is mapped in the "keys may have reached the
 // pane" mode (sendFailed), its retry sentence "retry later".
 func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) error {
+	if r.input != nil {
+		if err := r.recordManualInput(); err != nil {
+			return err
+		}
+	}
 	r.found.Sent = true
 	call, err := tmux.CallSendKey, error(nil)
 	if k.name != "" {
@@ -747,7 +816,7 @@ func isInteractiveState(state string) bool {
 //     named key or one character; a malformed hash; a negative NLines);
 //     nothing was read or sent.
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
-//   - [ErrSpawnNotInteractive]: the row is finished or otherwise not in a
+//   - [ErrSpawnNotInteractive]: new input's row is finished or otherwise not in a
 //     live interactive state, or pending without AllowPending, or pending
 //     with no launch start or launch token recorded, or pending and the
 //     lookup found only a session an earlier launch left behind; nothing was
@@ -796,11 +865,10 @@ func isInteractiveState(state string) bool {
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
-//   - [ErrSubmissionUnconfirmed]: tmux accepted the pending Codex row's
-//     plain text and Enter, but the bounded hook-state check could not
-//     confirm submission. The keys were sent; never repeat text or Enter
-//     automatically. Check hook-derived get or status and escalate to the
-//     caller or a human if submission remains unknown.
+//   - [ErrSubmissionUnconfirmed]: ordinary delivery could not establish exact
+//     native proof. Details distinguish no input, partial text and possible
+//     Enter delivery. Never replay uncertain text or Enter; passively observe
+//     the original delivery_request_id or use operator-controlled recovery.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs.

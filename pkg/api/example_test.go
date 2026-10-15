@@ -4,6 +4,7 @@
 package api_test
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -156,10 +156,7 @@ func ExampleClient_List() {
 	// list-working-example working
 }
 
-// ExampleClient_SendKeys demonstrates delivering text to a Spawn's own pane
-// (SR-7.1): the Recorder holds the row's own labelled session, so send-keys
-// makes one lookup and one pane listing, then sends the text and Enter by the
-// row's pane id (apitest.TestPaneID, "%42").
+// ExampleClient_SendKeys handles ordinary delivery's machine-readable uncertainty.
 func ExampleClient_SendKeys() {
 	c, _, path, rec, cleanup := exampleClient()
 	defer cleanup()
@@ -169,32 +166,24 @@ func ExampleClient_SendKeys() {
 	}
 	rec.SeedRowSession(exampleTB{}, path, "claude_2026-05-22T18-23-15")
 	// README:start ExampleClient_SendKeys
-	_, err := c.SendKeys(api.SendKeysParams{
-		InstanceID: "claude_2026-05-22T18-23-15",
-		Text:       "what is 2+2?",
+	result, err := c.SendKeys(api.SendKeysParams{
+		InstanceID:        "claude_2026-05-22T18-23-15",
+		Text:              "what is 2+2?",
+		DeliveryRequestID: "first-question",
 	})
+	if errors.Is(err, api.ErrSubmissionUnconfirmed) {
+		details := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
+		fmt.Println(details.Outcome)
+		return
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Println(result.Outcome)
 	// README:end
 
-	// The Recorder shows every tmux call: both sends target the pane id.
-	for _, call := range rec.SocketCalls() {
-		switch call.Call {
-		case tmux.CallSendText:
-			fmt.Printf("%s %q to pane %s\n", call.Call, call.Text, call.Target)
-		case tmux.CallSendEnter:
-			fmt.Printf("%s to pane %s\n", call.Call, call.Target)
-		default:
-			fmt.Println(call.Call)
-		}
-	}
-
 	// Output:
-	// lookup
-	// pane listing
-	// text send "what is 2+2?" to pane %42
-	// Enter send to pane %42
+	// not_started
 }
 
 // ExampleClient_Kill demonstrates ending a live Spawn's agent (SR-6.1): the

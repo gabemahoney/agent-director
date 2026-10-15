@@ -72,6 +72,12 @@ type errorCase struct {
 // zeroPaneHash is a well-formed expect_pane_sha256 (64 hex digits) no pane has.
 var zeroPaneHash = strings.Repeat("0", 64)
 
+func seedEndedSendKeys(t *testing.T) (string, map[string]any) {
+	t.Helper()
+	_, dbPath := apitest.SeedErrSpawnNotInteractive(t)
+	return filepath.Dir(dbPath), nil
+}
+
 // errorCases is the authoritative per-verb error-path fixture table: the rows
 // below, then the spawn, kill, read-pane, send-keys, pause and resume rows
 // that need a private fake-tmux socket (spawnTmuxErrorCases,
@@ -251,27 +257,38 @@ var errorCases = append(append(append(append(append([]errorCase{
 	},
 
 	// ── send-keys / ErrSpawnNotInteractive ────────────────────────────────
-	// Most representative send-keys error: state check fires before any
-	// tmux interaction, so fake-tmux is not reached.
+	// Manual text's state check fires before any tmux interaction.
 	{
 		verb:    "send-keys",
 		errName: "ErrSpawnNotInteractive",
-		seed: func(t *testing.T) (string, map[string]any) {
-			t.Helper()
-			_, dbPath := apitest.SeedErrSpawnNotInteractive(t)
-			return filepath.Dir(dbPath), nil
-		},
+		seed:    seedEndedSendKeys,
 		params: func(_ map[string]any) map[string]any {
 			return map[string]any{
 				"instance_id": "id-err-ni-1",
 				"text":        "hello",
+				"no_enter":    true,
 			}
 		},
 		cliArgv: func(_ map[string]any) []string {
 			return []string{"send-keys",
 				"--instance-id", "id-err-ni-1",
 				"--text", "hello",
+				"--no-enter",
 			}
+		},
+	},
+
+	// Ordinary input without a native launch identity reports the same
+	// unconfirmed outcome and conservative details through both surfaces.
+	{
+		verb:    "send-keys",
+		errName: "ErrSubmissionUnconfirmed",
+		seed:    seedEndedSendKeys,
+		params: func(_ map[string]any) map[string]any {
+			return map[string]any{"instance_id": "id-err-ni-1", "text": "hello"}
+		},
+		cliArgv: func(_ map[string]any) []string {
+			return []string{"send-keys", "--instance-id", "id-err-ni-1", "--text", "hello"}
 		},
 	},
 

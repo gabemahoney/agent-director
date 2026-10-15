@@ -48,6 +48,34 @@ tmux -u -S '<socket>' kill-pane -t '<pane id>'
 # 5. List again (step 1): the id is gone (`no such session` or `no server running` also mean gone).
 ```
 
+## Unresolved ordinary input
+
+For `send-keys` with `partial_input_unconfirmed` or `submission_unconfirmed`,
+the original input may still submit later. Keep other writers away. First
+re-issue the original text with its `delivery_request_id` to observe any late
+transcript proof; this does not replay input. The outcome fields and supported
+launches are in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
+
+If still unresolved, inspect the exact labelled session read-only using steps
+1 to 3 above. A visible draft helps a human choose a recovery action; it is
+not proof that a turn was or was not submitted. Do not blindly send another
+Enter or paste the text again. Continue through direct operator control only
+after judging the agent's state, or end the owned session and verify its
+process has stopped before starting a fresh conversation. Ending a session
+does not undo a turn or its effects.
+
+Manual input does not reset automatic delivery eligibility. To return to
+automatic ordinary input, use a fresh supported launch with an empty composer;
+`resume` does not provide that contract. Do not delete or edit input journals
+to bypass an unresolved attempt.
+
+A manual `send-keys` or `pause` can also return `ErrSubmissionUnconfirmed`
+with `outcome: "not_started"` when it cannot own the input writer or read or
+save its journal. That call sent nothing. Let any active writer finish, then
+re-issue the call. For a persistent refusal, check access to the private
+[delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
+as the agents' user. Preserve its evidence; never clear it to force input.
+
 ## A finished row's own old session
 
 `resume` or `spawn --reuse-finished` refuses with `ErrTmuxSessionConflict`

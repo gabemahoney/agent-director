@@ -632,11 +632,11 @@ func TestKillHasSRDErrorNames(t *testing.T) {
 }
 
 // TestPauseHasSRDErrorNames pins pause's to exactly SR-1.7's seven names and
-// the three relay refusals of the plain send-keys it is held as (b.zdz).
+// the relay refusals and the shared input writer refusal.
 func TestPauseHasSRDErrorNames(t *testing.T) {
 	assertErrorNames(t, "pause", "Pause", true, "ErrPauseTimeout", "ErrSpawnNotFound", "ErrSpawnNotPausable",
 		"ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
-		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen")
+		"ErrSendKeysWhileRelayed", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrSubmissionUnconfirmed")
 }
 
 // TestReadPaneHasInteractErrorNames pins read-pane's to exactly SR-1.7's five

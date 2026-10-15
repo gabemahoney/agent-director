@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -24,13 +26,14 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	typed := func(text string) []string { return []string{"-l", "--", text} }
 	enter := []string{"Enter"}
+	emptyPaneHash := fmt.Sprintf("%x", sha256.Sum256(nil))
 	for _, tc := range []struct {
 		name, state string
 		args        []string   // send-keys' flags after --instance-id
 		sends       [][]string // each send-keys call's arguments after its -t target
 	}{
-		{"live row", store.StateWaiting, []string{"--text", "hello world"}, [][]string{typed("hello world"), enter}},
-		{"pending row with allow pending", store.StatePending, []string{"--text", "hello world", "--allow-pending"},
+		{"live manual row", store.StateWaiting, []string{"--text", "hello world", "--expect-pane-sha256", emptyPaneHash}, [][]string{typed("hello world"), enter}},
+		{"pending manual row with allow pending", store.StatePending, []string{"--text", "hello world", "--allow-pending", "--expect-pane-sha256", emptyPaneHash},
 			[][]string{typed("hello world"), enter}},
 		{"empty text presses Enter only", store.StateWaiting, []string{"--text", ""}, [][]string{enter}},
 		{"no enter types the text alone", store.StateWaiting, []string{"--text", "hi", "--no-enter"}, [][]string{typed("hi")}},
@@ -40,15 +43,27 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			home, id, socket := seedRowOnSocket(t, tc.state)
 			faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
+			args := slices.Clone(tc.args)
+			if i := slices.Index(args, "--expect-pane-sha256"); i >= 0 {
+				stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "read-pane", "--instance-id", id)
+				var read struct {
+					PaneSHA256 string `json:"pane_sha256"`
+				}
+				if code != 0 || json.Unmarshal([]byte(stdout), &read) != nil || read.PaneSHA256 == "" {
+					t.Fatalf("read-pane: %d %q %q", code, stdout, stderr)
+				}
+				args[i+1] = read.PaneSHA256
+			}
+			mark := len(fakeTmuxInvocations(t, home))
 
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--instance-id", id}, tc.args...)...)
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, append([]string{"send-keys", "--instance-id", id}, args...)...)
 
 			if code != 0 || stderr != "" || stdout != "{}\n" {
 				t.Fatalf("send-keys exit = %d, stdout = %q, stderr = %q; want 0, {} and empty", code, stdout, stderr)
 			}
 			target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
 			var invs [][]string
-			for _, argv := range fakeTmuxInvocations(t, home) {
+			for _, argv := range fakeTmuxInvocations(t, home)[mark:] {
 				if !slices.Equal(argv, append(slices.Clone(target), typed("")...)) { // an empty text call, if made, types ""
 					invs = append(invs, argv)
 				}
@@ -57,8 +72,15 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 			for _, s := range tc.sends {
 				want = append(want, append(slices.Clone(target), s...))
 			}
-			if len(invs) != 2+len(want) || !slices.Contains(invs[0], "list-sessions") || !slices.Contains(invs[1], "list-panes") ||
-				!slices.EqualFunc(invs[2:], want, slices.Equal) {
+			prefix := 2
+			if slices.Contains(tc.args, "--expect-pane-sha256") {
+				prefix++
+				if len(invs) < prefix || !slices.Contains(invs[2], "capture-pane") {
+					t.Fatalf("manual hash did not capture the owned pane: %q", invs)
+				}
+			}
+			if len(invs) != prefix+len(want) || !slices.Contains(invs[0], "list-sessions") || !slices.Contains(invs[1], "list-panes") ||
+				!slices.EqualFunc(invs[prefix:], want, slices.Equal) {
 				t.Errorf("fake-tmux invocations = %q; want the lookup, the pane listing and %q", invs, want)
 			}
 			allowPending := slices.Contains(tc.args, "--allow-pending")
@@ -67,6 +89,29 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 				t.Errorf("ad.send_keys.called = %v; want one, ok, row_state %s, allow_pending %v", sk, tc.state, allowPending)
 			}
 		})
+	}
+}
+
+func TestSendKeysCLIUnreadyRequest(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	home, id, socket := seedRowOnSocket(t, store.StateWaiting)
+	faketmuxfix.Tables{}.Write(t, socket, fakeTable(ownSession(t, home, id, "")))
+	stdout, stderr, code := runSpawnCLI(t, home, fakeDir, "send-keys", "--instance-id", id, "--text", "first prompt", "--delivery-request-id", "caller-request")
+	assertOnlyEnvelope(t, stdout, stderr, code, "ErrSubmissionUnconfirmed")
+	var envelope struct {
+		Details api.SubmissionUnconfirmedDetails `json:"err_details"`
+	}
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	d := envelope.Details
+	if d.Outcome != "not_started" || d.KeysSent || d.BytesAttempted != 0 || d.EnterMayHaveBeenSent || d.Reason == "" {
+		t.Fatalf("unready details=%+v", d)
+	}
+	for _, argv := range fakeTmuxInvocations(t, home) {
+		if slices.Contains(argv, "send-keys") {
+			t.Fatalf("unready launch received input: %q", argv)
+		}
 	}
 }
 

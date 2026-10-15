@@ -21,7 +21,7 @@ import (
 
 const (
 	relaunchToken   = "0123456789abcdef"
-	relaunchStoreID = "store-relaunch-1"
+	relaunchStoreID = "fedcba9876543210"
 )
 
 // relaunchEnv is one resume launch under test: a per-test TMUX_TMPDIR (TMUX
@@ -255,6 +255,7 @@ func TestRelaunchCodexStoredReplay(t *testing.T) {
 // goes through e.cfg.Launch.ClaudePath.
 func newRelaunchEnv(t *testing.T) *relaunchEnv {
 	t.Helper()
+	t.Setenv("HOME", t.TempDir())
 	withStubExe(t, "/bin/agent-director")
 	return &relaunchEnv{t: t, socket: isolateTmux(t), rec: tmuxfix.NewRecorder(), cfg: config.Default(),
 		row: store.Spawn{

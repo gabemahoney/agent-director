@@ -257,22 +257,33 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 				case "read-pane":
 					_, err = e.readPaneClient(t, api.ReadPaneParams{InstanceID: r.ID}, sc.config...)
 				case "send-keys":
-					_, _, err = e.sendKeysClient(t, api.SendKeysParams{InstanceID: r.ID, Text: "hello"}, sc.config...)
+					_, _, err = e.sendKeysClient(t, api.SendKeysParams{InstanceID: r.ID, Text: "hello", ExpectPaneSHA256: api.PaneSHA256("")}, sc.config...)
 				default:
 					_, _, err = e.pauseClient(t, pauseParams(r), sc.config...)
 				}
 				elapsed, want := e.clock.Now().Sub(start), pc.want(sc.q, sc.a)
+				if pc.verb == "send-keys" {
+					want += sc.a
+				}
 				if elapsed != want {
 					t.Errorf("virtual time = %v; want %v", elapsed, want)
 				}
-				if ceiling := ceilings[pc.verb](sc.q, sc.a); elapsed > ceiling {
+				ceiling := ceilings[pc.verb](sc.q, sc.a)
+				if pc.verb == "send-keys" {
+					ceiling += sc.a
+				}
+				if elapsed > ceiling {
 					t.Errorf("virtual time = %v; above the ceiling %v", elapsed, ceiling)
 				}
 				if !errors.Is(err, api.ErrTmuxUnresponsive) {
 					t.Fatalf("%s = %v; want ErrTmuxUnresponsive", pc.verb, err)
 				}
 				apitest.AssertDescription(t, err.Error(), pc.desc(sc.a), r.Token, r.StoreID)
-				e.assertPaneCalls(t, pc.calls...)
+				calls := pc.calls
+				if pc.verb == "send-keys" {
+					calls = append(append([]tmux.Call{}, calls[:2]...), append([]tmux.Call{tmux.CallCapture}, calls[2:]...)...)
+				}
+				e.assertPaneCalls(t, calls...)
 				switch pc.verb {
 				case "read-pane":
 					e.assertCaptured(t, pane, api.DefaultReadPaneLines, false)

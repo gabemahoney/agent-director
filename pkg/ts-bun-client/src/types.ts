@@ -571,6 +571,8 @@ export interface GetResult {
  * `expect_pane_sha256`, takes no `text`, and sends exactly one key with no Enter.
  */
 export interface SendKeysParams {
+  /** Own an ordinary attempt; reuse to observe without replay, choose a fresh id for an intentional identical turn. */
+  delivery_request_id?: string;
   /** Id of the Spawn whose pane will receive the keys. */
   instance_id: string;
   /**
@@ -584,7 +586,8 @@ export interface SendKeysParams {
    * When true, also allows a pending row: a launch (spawn, reuse or resume)
    * whose agent has not reported in yet. Keys are delivered only to a
    * session started by the row's current launch. ended and missing rows are
-   * still rejected.
+   * still rejected for new input. An existing ordinary request can return
+   * stored or late proof without sending input.
    */
   allow_pending?: boolean;
   /** Type `text` with no Enter after it (plain calls; a pane answer never presses Enter). */
@@ -614,9 +617,14 @@ export interface SendKeysParams {
   as?: "allow" | "deny";
 }
 
-/** Successful sendKeys calls return an empty object. */
-// eslint-disable-next-line @typescript-eslint/no-empty-object-type
-export interface SendKeysResult {}
+/** Ordinary sends return exact native proof; manual operations return an empty object. */
+export interface SendKeysResult {
+  request_id?: string;
+  outcome?: "submitted";
+  session_id?: string;
+  record_id?: string;
+  record_sha256?: string;
+}
 
 /** Parameters for capturing the agent's pane. */
 export interface ReadPaneParams {
@@ -838,9 +846,16 @@ export interface PaneKeySentDetails {
   request_token: string;
 }
 
-/** ErrSubmissionUnconfirmed's errDetails; submission remains unknown despite keys_sent. */
+/** ErrSubmissionUnconfirmed's errDetails; queue/hook activity never proves submission. */
 export interface SubmissionUnconfirmedDetails {
-  keys_sent: true;
+  request_id?: string;
+  outcome: "not_started" | "partial_input_unconfirmed" | "submission_unconfirmed";
+  phase: string;
+  bytes_attempted: number;
+  enter_may_have_been_sent: boolean;
+  last_queue?: number;
+  reason: string;
+  keys_sent: boolean;
   submission_confirmed: false;
   row_state: string;
 }

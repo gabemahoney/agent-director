@@ -3,6 +3,7 @@ package spawn
 import (
 	"errors"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
@@ -30,14 +31,16 @@ type LaunchTmux interface {
 // STORE). StoreID is the writing store's (*store.Store).StoreID(); the step
 // never invents or defaults one.
 type CreateRequest struct {
-	Socket     string
-	Name       string
-	CWD        string
-	Env        map[string]string
-	Command    []string
-	Token      string
-	InstanceID string
-	StoreID    string
+	Agent             string
+	OrdinaryInputSafe bool
+	Socket            string
+	Name              string
+	CWD               string
+	Env               map[string]string
+	Command           []string
+	Token             string
+	InstanceID        string
+	StoreID           string
 }
 
 // CreateKind classifies the outcome of one create-and-label step. The zero
@@ -107,6 +110,13 @@ type CreateOutcome struct {
 // one label by id and one kill: the worst case costs C + 2A (SR-13.2). Every
 // create and label by id carries req.StoreID as the label's last field.
 func CreateAndLabel(t LaunchTmux, req CreateRequest) CreateOutcome {
+	if req.Agent != "" {
+		command, env, err := inputdelivery.Prepare(inputdelivery.Identity{StoreID: req.StoreID, Token: req.Token, InstanceID: req.InstanceID, Socket: req.Socket, CWD: req.CWD, Agent: req.Agent}, req.Command, req.Env, req.OrdinaryInputSafe)
+		if err != nil {
+			return CreateOutcome{Kind: CreateFailed, Cause: asCallError(tmux.CallCreate, err)}
+		}
+		req.Command, req.Env = command, env
+	}
 	reply, err := t.NewSession(req.Socket, req.Name, req.CWD, req.Env, req.Command, req.Token, req.InstanceID, req.StoreID)
 	if err != nil {
 		ce := asCallError(tmux.CallCreate, err)

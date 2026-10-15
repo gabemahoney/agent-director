@@ -30,7 +30,7 @@ type paneCall struct {
 }
 
 // paneVerb opens the production client (open) and calls verb on instanceID:
-// read-pane; send-keys of text with allow_pending (a live row ignores it); or
+// read-pane; manual send-keys of text without Enter and with allow_pending; or
 // pause, typing /exit, with a cancelled context so its wait ends at once:
 // that wait's context.Canceled means /exit and Enter went through, and is
 // returned as success.
@@ -43,7 +43,7 @@ func (f *killFix) paneVerb(t testing.TB, verb apitest.PaneVerb, instanceID, text
 		res, err := c.ReadPane(api.ReadPaneParams{InstanceID: instanceID})
 		return paneCall{Pane: res.Pane, Err: err}
 	case apitest.PaneSendKeys:
-		_, err := c.SendKeys(api.SendKeysParams{InstanceID: instanceID, Text: text, AllowPending: true})
+		_, err := c.SendKeys(api.SendKeysParams{InstanceID: instanceID, Text: text, AllowPending: true, NoEnter: true})
 		return paneCall{Err: err}
 	case apitest.PanePause:
 		ctx, cancel := context.WithCancel(context.Background())

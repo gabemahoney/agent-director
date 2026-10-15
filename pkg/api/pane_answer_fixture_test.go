@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -196,14 +198,78 @@ func (p *paEnv) view() api.RelayView {
 
 // sendKeys runs the exported api.SendKeys with p.sks and p's environment.
 func (p *paEnv) sendKeys(params api.SendKeysParams) error {
-	_, err := api.SendKeys(p.sks, p.rec, api.SendKeysEnv{Relay: p.view(),
-		Self: func() api.ProcessIdentity { return p.self }, IntentHold: p.hold}, params)
+	view := p.view()
+	var pollOffset time.Duration
+	view.Now = func() time.Time { return p.now.Add(pollOffset) }
+	_, err := api.SendKeys(p.sks, p.rec, api.SendKeysEnv{Relay: view, Input: p.delivery(params.InstanceID),
+		Sleep: func(d time.Duration) { pollOffset += d },
+		Self:  func() api.ProcessIdentity { return p.self }, IntentHold: p.hold}, params)
 	return err
 }
 
 // sendKeysRun is sendKeys with the tmux calls it made.
 func (p *paEnv) sendKeysRun(params api.SendKeysParams) verbRun[struct{}] {
 	return runVerb(p.killEnv, func() (struct{}, error) { return struct{}{}, p.sendKeys(params) })
+}
+
+func (p *paEnv) assertDialogHoldsInput(t *testing.T, text, token, state string, others ...string) verbRun[struct{}] {
+	t.Helper()
+	params := p.plain(text)
+	params.DeliveryRequestID = uuid.NewString()
+	ordinary := p.sendKeysRun(params)
+	prior := p.delivery(p.r.ID).current
+	if prior != nil && prior.ManualInterference {
+		assertDeliveryError(t, ordinary.err, "partial_input_unconfirmed", prior.BytesAttempted, prior.EnterAttempted)
+	} else {
+		assertDialogMaybeOpen(t, ordinary.err, token, state, others...)
+	}
+	params.NoEnter, params.DeliveryRequestID = true, ""
+	manual := p.sendKeysRun(params)
+	assertDialogMaybeOpen(t, manual.err, token, state, others...)
+	if len(ordinary.calls) != 0 || len(manual.calls) != 0 {
+		t.Fatal("held ordinary or manual input touched tmux")
+	}
+	return manual
+}
+
+func (p *paEnv) assertOrdinaryAfterRelay(t *testing.T, text string) {
+	t.Helper()
+	row, err := p.st.GetSpawn(p.r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := p.delivery(p.r.ID).current
+	manual := previous != nil && previous.ManualInterference
+	run := p.sendKeysRun(p.plain(text))
+	if manual || row.State != store.StateWaiting && row.State != store.StatePending {
+		outcome := "not_started"
+		if manual {
+			outcome = "partial_input_unconfirmed"
+		}
+		assertDeliveryError(t, run.err, outcome, 0, false)
+		for _, c := range run.calls {
+			if c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey {
+				t.Fatalf("blocked composer received %+v", c)
+			}
+		}
+		return
+	}
+	if run.err != nil {
+		t.Fatal(run.err)
+	}
+	var typed string
+	enters := 0
+	for _, c := range run.calls {
+		if c.Call == tmux.CallSendText {
+			typed += c.Text
+		}
+		if c.Call == tmux.CallSendKey && c.Key == "Enter" {
+			enters++
+		}
+	}
+	if typed != text || enters != 1 {
+		t.Fatalf("ordinary text=%q Enter=%d; want %q, one Enter", typed, enters, text)
+	}
 }
 
 // plain is a plain send-keys of text on p's row.

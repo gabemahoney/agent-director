@@ -277,16 +277,35 @@ judged, never from an automatic flow. There is no flag to suppress CR
 stripping; it applies to every call.
 
 ```go
-_, err := c.SendKeys(api.SendKeysParams{
-    InstanceID: "claude_2026-05-22T18-23-15",
-    Text:       "what is 2+2?",
+result, err := c.SendKeys(api.SendKeysParams{
+    InstanceID:        "claude_2026-05-22T18-23-15",
+    Text:              "what is 2+2?",
+    DeliveryRequestID: "first-question",
 })
+if errors.Is(err, api.ErrSubmissionUnconfirmed) {
+    details := api.ErrDetails(err).(api.SubmissionUnconfirmedDetails)
+    fmt.Println(details.Outcome)
+    return
+}
 if err != nil {
     log.Fatal(err)
 }
+fmt.Println(result.Outcome)
 ```
 
-Returns `SendKeysResult` (empty struct, reserved for future fields).
+Ordinary nonempty text with Enter and no pane hash returns `SendKeysResult`
+with `Outcome: "submitted"`, `RequestID`, `SessionID`, `RecordSHA256` and
+`RecordID` when the native record supplies it. The result confirms the exact
+normalized text in the launch's native transcript. `DeliveryRequestID` owns
+one attempt: the same ID and text retrieve confirmation or reconcile without
+replay; a new ID allows an intentional identical turn. Manual operations
+(`NoEnter`, `Key`, empty text, pane hashes and permission answers) return an
+empty result on success; input-ownership refusals, including those from
+`Pause`, are in [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+Supported launches, omitted-ID behavior, structured outcomes
+and recovery are in
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+
 Most-likely sentinel errors: `ErrSpawnNotFound`, `ErrSpawnNotInteractive`,
 `ErrSubmissionUnconfirmed`, `ErrInvalidFlags`, `ErrSendKeysWhileRelayed`,
 `ErrRelayFallenBack`, `ErrDialogMaybeOpen`, `ErrPaneChanged`, `ErrTmuxSendKeys`,
@@ -304,12 +323,13 @@ See `(*Client).SendKeys` godoc.
 
 #### `AllowPending` — reaching a `pending` launch
 
-By default `SendKeys` rejects a `pending` row with
+By default `SendKeys` rejects new input to a `pending` row with
 `ErrSpawnNotInteractive`. `AllowPending: true` also allows a `pending`
 row: a launch (spawn, reuse or resume) whose agent has not reported in
 yet, for example to dismiss a prompt the agent shows before it reports
 in. Keys are delivered only to a session started by the row's current
-launch. `ended` and `missing` rows are still rejected, with no tmux call.
+launch. New input to `ended` and `missing` rows is rejected, with no tmux
+call; observing an existing delivery request can still return its confirmation.
 
 A `pending` row is refused with `ErrSpawnNotInteractive` and nothing sent
 when its launch start or launch token is not recorded (before any tmux
@@ -318,11 +338,13 @@ behind (not this launch's session). The keys reach the agent's pane, but
 the caller cannot be sure the prompt it saw is still showing when they
 arrive.
 
-On an initially pending Codex row, a plain text-and-Enter or Enter-only
-send also checks for same-launch turn activity for up to 2 s.
+`AllowPending` preserves the ordinary-delivery readiness and transcript
+requirements; it does not make a startup dialog an ordinary composer.
 `ErrSubmissionUnconfirmed` carries `SubmissionUnconfirmedDetails` through
-`api.ErrDetails(err)`: `KeysSent`, `SubmissionConfirmed` and `RowState`.
-See [Unconfirmed Codex submission](../../docs/caller-contract.md#unconfirmed-codex-submission)
+`api.ErrDetails(err)`: `RequestID`, `Outcome`, `Phase`, `BytesAttempted`,
+`EnterMayHaveBeenSent`, optional `LastQueue`, `Reason`, `KeysSent`,
+`SubmissionConfirmed` and `RowState`. See
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 for their meaning and recovery.
 
 `LivenessNote` `unreported` means an alive agent has not reported since
@@ -339,8 +361,9 @@ func SendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 ```
 
 `SendKeysEnv` supplies a `RelayView`, the pane sender's `Self` identity,
-`IntentHold` and an optional `Sleep` for submission checks (nil uses
-`time.Sleep`). Most callers use the Client method, which supplies these.
+`IntentHold`, optional `Input` (`InputDeliveryBackend`, nil uses native
+delivery), and optional `Sleep` for readiness, drain and submission checks
+(nil uses `time.Sleep`). Most callers use the Client method, which supplies these.
 Custom `SendKeysStore` implementations must provide `GetSpawnWithin`,
 bounding connection and lock waits by the supplied duration.
 See their godoc for each field's contract.
@@ -583,7 +606,7 @@ Common sentinels across verbs:
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
 | `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id; see [Operator actions](../../docs/operator-actions.md#a-migration-write-failed-after-the-binary-swap) |
 | `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
-| `ErrSpawnNotInteractive` | State is not a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found |
+| `ErrSpawnNotInteractive` | New input requires a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found. Observing an existing delivery request can retrieve stored or late confirmation after the row becomes `ended` or `missing`; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) |
 | `ErrSendKeysWhileRelayed` | A relay hook of the Spawn may still answer its request (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
 | `ErrRelayFallenBack` | A permission request fell back (its relay hook is gone, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
 | `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by the agent's hooks; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |

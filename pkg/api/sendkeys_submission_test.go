@@ -1,415 +1,358 @@
 package api_test
 
-// Pending Codex submission uses raw same-launch turn activity, never pane text.
-
 import (
-	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// submissionStore injects hook/read races only after the keys have been sent.
-type submissionStore struct {
-	api.SendKeysStore
-	sent  bool
-	reads int
-	read  func(int, api.Spawn) (api.Spawn, error)
-	waits []time.Duration
-}
-
-func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
-	s.waits = append(s.waits, maxWait)
-	row, err := s.SendKeysStore.GetSpawnWithin(id, maxWait)
-	if err != nil || !s.sent {
-		return row, err
-	}
-	s.reads++
-	if s.read != nil {
-		return s.read(s.reads, row)
-	}
-	return row, nil
-}
-
-// submissionEnv extends the shared real-store fixture with an advancing poll clock.
-type submissionEnv struct {
-	*killEnv
-	s     *submissionStore
-	env   api.SendKeysEnv
-	slept time.Duration
-	waits int
-}
-
-func newSubmissionEnv(t *testing.T) *submissionEnv {
-	t.Helper()
-	e := &submissionEnv{killEnv: newKillEnv(t)}
-	e.s = &submissionStore{SendKeysStore: e.store}
-	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { e.s.sent = true })
-	e.env = api.SendKeysEnv{
-		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()},
-		Sleep: func(d time.Duration) {
-			e.waits++
-			e.slept += d
-			if d <= 0 || d > 100*time.Millisecond || e.waits > 20 {
-				t.Fatalf("submission wait %d = %v; want at most twenty positive waits <= 100ms", e.waits, d)
+func TestSendKeysChunkDrainExactSubmission(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"codex", "claude"} {
+		t.Run(agent, func(t *testing.T) {
+			e := newSubmissionEnv(t)
+			spec := codexSpec(store.StatePending, agentAlive, false)
+			spec.Opts = append(spec.Opts, apitest.WithAgent(agent))
+			r := e.seedRow(t, spec)
+			payload := strings.Repeat("a", 511) + "🌍\r\n" + strings.Repeat("界", 6000)
+			normalized := strings.ReplaceAll(payload, "\r", "")
+			var readyAt time.Time
+			readyPolls, zeroSamples := 0, 0
+			e.b.ready = func() (bool, error) { readyPolls++; readyAt = e.clock.Now(); return readyPolls >= 3, nil }
+			e.b.queue = func() (int, error) { zeroSamples++; return 0, nil }
+			var lastWrite time.Time
+			e.rec.AfterCall(tmux.CallSendText, func(c tmuxfix.SocketCall, _ error) {
+				if e.b.current == nil || e.b.current.BytesAttempted < len(c.Text) || e.b.current.Phase != "text_attempted" {
+					t.Fatal("text reached transport before durable intent")
+				}
+				if zeroSamples < 2 && !lastWrite.IsZero() || !lastWrite.IsZero() && e.clock.Now().Sub(lastWrite) < 40*time.Millisecond {
+					t.Fatal("next chunk sent before two spaced empty queue samples")
+				}
+				if !utf8.ValidString(c.Text) || e.clock.Now().Before(readyAt) || readyPolls < 3 {
+					t.Fatal("input before readiness or split UTF-8")
+				}
+				zeroSamples, lastWrite = 0, e.clock.Now()
+			})
+			e.rec.AfterCall(tmux.CallSendKey, func(tmuxfix.SocketCall, error) {
+				if !e.b.current.EnterAttempted || e.b.current.Phase != "enter_attempted" || e.b.current.BytesAttempted != len(normalized) || zeroSamples < 2 {
+					t.Fatal("Enter preceded durable intent or final drain")
+				}
+			})
+			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: payload, AllowPending: true, DeliveryRequestID: "request-1"})
+			if err != nil || result.Outcome != "submitted" || result.RequestID != "request-1" || result.RecordID != "new-user-record" || result.RecordSHA256 != "record-hash" {
+				t.Fatalf("result=%+v err=%v", result, err)
 			}
-			e.clock.Advance(d)
-		},
+			assertOrdinaryWrites(t, e.killEnv, r, normalized)
+		})
 	}
-	return e
 }
-
-func (e *submissionEnv) send(p api.SendKeysParams) error {
-	_, err := api.SendKeys(e.s, e.rec, e.env, p)
-	return err
+func TestSendKeysReadinessRefusesBeforeInput(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"missing marker", "unsupported launch", "initial backlog", "terminal query fails"} {
+		t.Run(mode, func(t *testing.T) {
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			switch mode {
+			case "missing marker":
+				e.b.ready = func() (bool, error) { return false, nil }
+			case "unsupported launch":
+				e.b.ready = func() (bool, error) { return false, fmt.Errorf("unsupported version") }
+			case "initial backlog":
+				e.b.queue = func() (int, error) { return 1, nil }
+			case "terminal query fails":
+				e.b.queue = func() (int, error) { return 0, fmt.Errorf("ioctl failed") }
+			}
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+			assertDeliveryError(t, err, "not_started", 0, false)
+			e.assertNothingSent(t)
+			if e.b.current != nil {
+				t.Fatal("attempt allocated before readiness")
+			}
+			if mode == "missing marker" && e.slept != 12*time.Second {
+				t.Fatalf("readiness bound=%v", e.slept)
+			}
+		})
+	}
 }
-
-func assertSubmissionUnconfirmed(t *testing.T, err error, state string) {
-	t.Helper()
-	assertOneName(t, err, "ErrSubmissionUnconfirmed")
-	want := api.SubmissionUnconfirmedDetails{KeysSent: true, SubmissionConfirmed: false, RowState: state}
-	if got := api.ErrDetails(err); got != want {
-		t.Errorf("details = %+v; want %+v", got, want)
+func TestSendKeysUncertainTransportNeverReplays(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"text timeout", "drain timeout", "queue failure", "Enter timeout", "no evidence", "ambiguous evidence", "Enter intent save fails"} {
+		t.Run(mode, func(t *testing.T) {
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
+			switch mode {
+			case "text timeout":
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSendText)
+			case "drain timeout", "queue failure":
+				e.b.queue = func() (int, error) {
+					if len(e.rec.SocketCallsOf(tmux.CallSendText)) == 0 {
+						return 0, nil
+					}
+					if mode == "queue failure" {
+						return 0, fmt.Errorf("ioctl")
+					}
+					return 128, nil
+				}
+			case "Enter timeout":
+				e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, tmux.CallSendKey)
+			case "ambiguous evidence":
+				e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) {
+					return nil, fmt.Errorf("two matching records")
+				}
+			case "Enter intent save fails":
+				e.b.save = func(a *api.InputDeliveryAttempt) error {
+					if a.EnterAttempted {
+						return fmt.Errorf("fsync")
+					}
+					return nil
+				}
+			}
+			p := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, DeliveryRequestID: "same-request"}
+			_, err := e.send(p)
+			enter := mode == "Enter timeout" || mode == "no evidence" || mode == "ambiguous evidence" || mode == "Enter intent save fails"
+			outcome := "partial_input_unconfirmed"
+			if enter {
+				outcome = "submission_unconfirmed"
+			}
+			d := assertDeliveryError(t, err, outcome, len(skpText), enter)
+			if d.RequestID != p.DeliveryRequestID || !strings.Contains(err.Error(), "do not automatically replay text or Enter") {
+				t.Fatalf("missing retry contract: %+v %v", d, err)
+			}
+			texts, enters := len(e.rec.SocketCallsOf(tmux.CallSendText)), len(ordinaryEnters(e.killEnv))
+			wantEnters := 0
+			if enter && mode != "Enter intent save fails" {
+				wantEnters = 1
+			}
+			if texts != 1 || enters != wantEnters {
+				t.Fatalf("initial attempt sent text=%d Enter=%d; want text=1 Enter=%d", texts, enters, wantEnters)
+			}
+			_, retryErr := e.send(p)
+			if retryErr == nil || len(e.rec.SocketCallsOf(tmux.CallSendText)) != texts || len(ordinaryEnters(e.killEnv)) != enters {
+				t.Fatalf("retry replayed uncertain input: %v", retryErr)
+			}
+			if mode == "Enter intent save fails" && enters != 0 {
+				t.Fatal("Enter sent without durable intent")
+			}
+		})
 	}
-	b, marshalErr := json.Marshal(api.ErrDetails(err))
-	if marshalErr != nil {
-		t.Fatal(marshalErr)
+}
+func TestSendKeysHookActivityCannotProveSubmission(t *testing.T) {
+	t.Parallel()
+	for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission, store.StateEnded} {
+		t.Run(state, func(t *testing.T) {
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			e.s.read = func(row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
+			e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
+			_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+			assertDeliveryError(t, err, "submission_unconfirmed", len(skpText), true)
+			assertOrdinaryWrites(t, e.killEnv, r, skpText)
+		})
 	}
-	var got map[string]any
-	if err := json.Unmarshal(b, &got); err != nil {
+}
+func TestSendKeysRequestReconciliation(t *testing.T) {
+	t.Parallel()
+	e := newSubmissionEnv(t)
+	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+	p := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true, DeliveryRequestID: "original"}
+	e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
+	_, err := e.send(p)
+	assertDeliveryError(t, err, "submission_unconfirmed", len(skpText), true)
+	e.b.confirm = nil
+	result, err := e.send(p)
+	if err != nil || result.RequestID != "original" || result.Outcome != "submitted" {
+		t.Fatalf("late proof=%+v %v", result, err)
+	}
+	_, err = e.send(p)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]any{"keys_sent": true, "submission_confirmed": false, "row_state": state}; !reflect.DeepEqual(got, want) {
-		t.Errorf("wire details = %s; want %+v", b, want)
+	assertOrdinaryWrites(t, e.killEnv, r, skpText)
+	p.DeliveryRequestID = "intentional-repeat"
+	if _, err = e.send(p); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.rec.SocketCallsOf(tmux.CallSendText)) != 2 || len(ordinaryEnters(e.killEnv)) != 2 {
+		t.Fatal("new ID did not submit the intentional repeat")
+	}
+	p.DeliveryRequestID = "original"
+	if result, err = e.send(p); err != nil || result.RequestID != "original" {
+		t.Fatalf("historical retry=%+v %v", result, err)
+	}
+	p.Text = "different text"
+	_, err = e.send(p)
+	assertDeliveryError(t, err, "not_started", 0, false)
+	if len(ordinaryEnters(e.killEnv)) != 2 {
+		t.Fatal("request collision submitted new input")
 	}
 }
-
-func TestSendKeysCodexSubmissionUnconfirmed(t *testing.T) {
-	t.Parallel()
-	for _, state := range []string{store.StatePending, store.StateWaiting} {
-		for _, text := range []string{skpText, ""} {
-			t.Run(state+"/text="+text, func(t *testing.T) {
-				t.Parallel()
-				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-				before := e.columns(t, r.ID)
-				e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
-
-				err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: text, AllowPending: true})
-
-				assertSubmissionUnconfirmed(t, err, state)
-				if e.slept != 2*time.Second {
-					t.Errorf("wait = %v; want 2s", e.slept)
-				}
-				if e.s.reads != 20 {
-					t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
-				}
-				if text == "" {
-					e.assertEnterOnly(t, r.Socket, r.Spawn.Identity.PaneID)
-				} else {
-					e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
-				}
-				e.assertNoCalls(t, tmux.CallCapture)
-				e.assertRowUnchanged(t, r.ID, before)
-			})
-		}
-	}
-}
-
-func TestSendKeysCodexSubmissionActivity(t *testing.T) {
-	t.Parallel()
-	for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
-		for _, delay := range []int{0, 2} {
-			t.Run(fmt.Sprintf("%s/after %d waits", state, delay), func(t *testing.T) {
-				t.Parallel()
-				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-				e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
-					row.State = store.StateWaiting
-					if n > delay {
-						row.State = state
-					}
-					return row, nil
-				}
-				if err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}); err != nil {
-					t.Fatalf("same-launch activity did not confirm: %v", err)
-				}
-				if e.waits != delay {
-					t.Errorf("waits = %d; want %d", e.waits, delay)
-				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
-				e.assertNoCalls(t, tmux.CallCapture)
-			})
-		}
-	}
-}
-
-func TestSendKeysCodexSubmissionEvidenceLost(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name, state string
-		change      func(*api.Spawn)
-		err         error
-		failAt      int
-	}{
-		{name: "ended", state: store.StateEnded},
-		{name: "missing", state: store.StateMissing},
-		{name: "new life working", state: store.StateWorking, change: func(row *api.Spawn) { row.LifeNumber++ }},
-		{name: "new token working", state: store.StateWorking, change: func(row *api.Spawn) { row.Identity.Token = newToken() }},
-		{name: "read failed", state: store.StatePending, err: fmt.Errorf("read evidence: %w", api.ErrStoreBusy)},
-		{name: "row deleted", state: store.StatePending, err: api.ErrSpawnNotFound},
-		{name: "read failed after waiting", state: store.StateWaiting, err: api.ErrStoreBusy, failAt: 2},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			e := newSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-			e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
-				row.State = tc.state
-				if tc.change != nil {
-					tc.change(&row)
-				}
-				if tc.failAt > n {
-					return row, nil
-				}
-				return row, tc.err
-			}
-			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-			assertSubmissionUnconfirmed(t, err, tc.state)
-			wantWaits := max(0, tc.failAt-1)
-			if e.waits != wantWaits {
-				t.Errorf("waits = %d; want %d before evidence was lost", e.waits, wantWaits)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
-		})
-	}
-}
-
-func TestSendKeysCodexSubmissionBoundedClock(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []string{"fixed clock", "deadline reached during wait", "deadline passed during wait"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Parallel()
-			e := newSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-			sleep := e.env.Sleep
-			if mode == "fixed clock" {
-				now := e.clock.Now()
-				e.env.Relay.Now = func() time.Time { return now }
-			} else {
-				extra := 3 * time.Second
-				if mode == "deadline reached during wait" {
-					extra = 2*time.Second - 100*time.Millisecond
-				}
-				e.env.Sleep = func(d time.Duration) { sleep(d); e.clock.Advance(extra) }
-				e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
-					if n > 1 {
-						row.State = store.StateWorking
-					}
-					return row, nil
-				}
-			}
-			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-			assertSubmissionUnconfirmed(t, err, store.StatePending)
-			if mode == "fixed clock" && (e.s.reads > 21 || e.waits > 20) {
-				t.Errorf("reads/waits = %d/%d; want bounded by 21/20", e.s.reads, e.waits)
-			}
-			if mode != "fixed clock" && (e.waits != 1 || e.s.reads != 1) {
-				t.Errorf("reads/waits = %d/%d; want 1/1, no read at or after the deadline", e.s.reads, e.waits)
-			}
-		})
-	}
-}
-
-func TestSendKeysCodexSubmissionRemainingReadBudget(t *testing.T) {
+func TestSendKeysConcurrentWriterRefuses(t *testing.T) {
 	t.Parallel()
 	e := newSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-	e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
-		e.clock.Advance(650 * time.Millisecond)
-		return row, nil
+	held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	e.b.ready = func() (bool, error) { close(held); <-release; return true, nil }
+	p := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}
+	go func() { _, err := e.send(p); done <- err }()
+	<-held
+	_, err := e.send(p)
+	close(release)
+	firstErr := <-done
+	assertDeliveryError(t, err, "not_started", 0, false)
+	if firstErr != nil {
+		t.Fatal(firstErr)
 	}
-	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-	assertSubmissionUnconfirmed(t, err, store.StatePending)
-	want := []time.Duration{2 * time.Second, 1250 * time.Millisecond, 500 * time.Millisecond}
-	if !reflect.DeepEqual(e.s.waits, want) {
-		t.Errorf("submission read budgets = %v; want %v including time spent reading and sleeping", e.s.waits, want)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	assertOrdinaryWrites(t, e.killEnv, r, skpText)
 }
 
-func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
+func TestSendKeysManualInterferenceBlocksAutomaticInput(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name     string
-		readTime time.Duration
-		confirm  bool
-	}{
-		{"just before deadline", 2*time.Second - time.Nanosecond, true},
-		{"at deadline", 2 * time.Second, false},
-		{"after deadline", 2*time.Second + time.Nanosecond, false},
-	}
-	for _, state := range []string{store.StateWorking, store.StateAskUser, store.StateCheckPermission} {
-		for _, tc := range cases {
-			t.Run(state+"/"+tc.name, func(t *testing.T) {
-				t.Parallel()
-				e := newSubmissionEnv(t)
-				r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-				e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
-					e.clock.Advance(tc.readTime)
-					row.State = state
-					return row, nil
-				}
-
-				err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-
-				if tc.confirm {
-					if err != nil {
-						t.Fatalf("activity read before deadline did not confirm: %v", err)
-					}
-				} else {
-					assertSubmissionUnconfirmed(t, err, state)
-				}
-				if e.s.reads != 1 || e.waits != 0 {
-					t.Errorf("submission reads/waits = %d/%d; want 1/0", e.s.reads, e.waits)
-				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
-			})
-		}
-	}
-}
-
-func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
-	t.Parallel()
-	e := newSubmissionEnv(t)
-	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-	before := e.columns(t, r.ID)
-	free, held, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	var once sync.Once
-	holderStarted := false
-	release := func() { once.Do(func() { close(free) }) }
-	watchdog := time.AfterFunc(5*time.Second, release)
-	t.Cleanup(func() { watchdog.Stop(); release() })
-	e.s.read = func(_ int, row api.Spawn) (api.Spawn, error) {
-		e.clock.Advance(1850 * time.Millisecond)
-		return row, nil
-	}
-	sleep := e.env.Sleep
-	e.env.Sleep = func(d time.Duration) {
-		sleep(d)
-		if holderStarted {
-			return
-		}
-		holderStarted = true
-		// The transaction's precondition holds the real store connection without writing.
-		go func() {
-			_, _, _, err := e.st.AckRelayDecision(r.ID, "absent-request", e.clock.Now(), store.DefaultLockWait, func() error {
-				close(held)
-				<-free
-				return nil
-			})
-			done <- err
-		}()
-		select {
-		case <-held:
-		case err := <-done:
-			t.Fatalf("hold store connection: %v", err)
-		}
-	}
-
-	start := time.Now()
-	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-	elapsed := time.Since(start)
-	release()
-	if holderStarted {
-		if holdErr := <-done; holdErr != nil {
-			t.Fatalf("release store connection: %v", holdErr)
-		}
-	}
-	assertSubmissionUnconfirmed(t, err, store.StatePending)
-	if !strings.Contains(err.Error(), "ErrStoreBusy") {
-		t.Errorf("err = %v; want the bounded connection wait to explain the unconfirmed submission", err)
-	}
-	if elapsed > time.Second {
-		t.Errorf("submission check took %v; want the remaining 50ms wait with scheduling allowance", elapsed)
-	}
-	if want := []time.Duration{2 * time.Second, 50 * time.Millisecond}; !reflect.DeepEqual(e.s.waits, want) {
-		t.Errorf("submission read budgets = %v; want %v", e.s.waits, want)
-	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
-	e.assertNoCalls(t, tmux.CallCapture)
-	e.assertRowUnchanged(t, r.ID, before)
-}
-
-func TestSendKeysSubmissionApplicability(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name   string
-		spec   killRowSpec
-		params api.SendKeysParams
-	}{
-		{"pending Claude", killRowSpec{State: store.StatePending}, api.SendKeysParams{Text: skpText}},
-		{"waiting Codex", codexSpec(store.StateWaiting, agentAlive, false), api.SendKeysParams{Text: skpText}},
-		{"working Codex", codexSpec(store.StateWorking, agentAlive, false), api.SendKeysParams{Text: skpText}},
-		{"pending Codex no_enter", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Text: skpText, NoEnter: true}},
-		{"pending Codex named key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "Enter"}},
-		{"pending Codex character key", codexSpec(store.StatePending, agentAlive, false), api.SendKeysParams{Key: "x"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, unresolved := range []bool{false, true} {
+		t.Run(fmt.Sprint(unresolved), func(t *testing.T) {
 			e := newSubmissionEnv(t)
-			r := e.seedRow(t, tc.spec)
-			p := tc.params
-			p.InstanceID, p.AllowPending = r.ID, true
-			if err := e.send(p); err != nil {
+			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			p := api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true}
+			if unresolved {
+				e.b.confirm = func(*api.InputDeliveryAttempt) (*api.InputDeliveryProof, error) { return nil, nil }
+				_, err := e.send(p)
+				assertDeliveryError(t, err, "submission_unconfirmed", len(skpText), true)
+			}
+			request := ""
+			if e.b.current != nil {
+				request = e.b.current.RequestID
+			}
+			if _, err := e.send(api.SendKeysParams{InstanceID: r.ID, Key: "Escape", AllowPending: true}); err != nil {
 				t.Fatal(err)
 			}
-			if e.s.reads != 0 || e.waits != 0 {
-				t.Errorf("submission reads/waits = %d/%d; want none", e.s.reads, e.waits)
+			if !e.b.current.ManualInterference || request != "" && e.b.current.RequestID != request {
+				t.Fatal("manual input erased the unresolved owner")
+			}
+			texts, enters := len(e.rec.SocketCallsOf(tmux.CallSendText)), len(ordinaryEnters(e.killEnv))
+			if _, err := e.send(p); err == nil {
+				t.Fatal("automatic input resumed after manual interference")
+			}
+			if texts != len(e.rec.SocketCallsOf(tmux.CallSendText)) || enters != len(ordinaryEnters(e.killEnv)) {
+				t.Fatal("manual composer was replayed")
 			}
 		})
 	}
 }
 
-func TestSendKeysCodexSubmissionTmuxFailurePrecedence(t *testing.T) {
+func TestSendKeysLostLaunchStopsBeforeEnter(t *testing.T) {
 	t.Parallel()
-	for _, call := range []tmux.Call{tmux.CallSendText, tmux.CallSendEnter} {
-		t.Run(string(call), func(t *testing.T) {
-			t.Parallel()
-			e := newSubmissionEnv(t)
-			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, call)
-			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-			assertOneName(t, err, "ErrTmuxUnresponsive")
-			if e.s.reads != 0 || e.waits != 0 || api.ErrDetails(err) != nil {
-				t.Errorf("submission reads/waits/details = %d/%d/%+v; want none after tmux failure", e.s.reads, e.waits, api.ErrDetails(err))
-			}
-		})
-	}
-}
-
-// E10: "check hook-derived get or status" after keys were accepted.
-func TestAdviceFollow_E10_SubmissionUnconfirmedInspectGet(t *testing.T) {
-	t.Parallel()
-	adviceAssertManifest(t, "send-keys", "", "no auto-retry text/Enter; see hook-derived get/status, escalate if unknown.")
 	e := newSubmissionEnv(t)
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
-	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
-	assertSubmissionUnconfirmed(t, err, store.StatePending)
-	adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "check hook-derived get or status; if submission remains unknown, escalate to the caller or a human")
-	row, err := api.Get(e.st, e.env.Relay, r.ID)
-	if err != nil || row.State != store.StatePending {
-		t.Fatalf("Get after unconfirmed = %+v, %v; want pending, no error", row, err)
+	e.rec.RemoveSessionAfter(tmux.CallSendText, r.Socket, r.Session.ID)
+	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: strings.Repeat("x", 1024), AllowPending: true})
+	assertDeliveryError(t, err, "partial_input_unconfirmed", 512, false)
+	if len(e.rec.SocketCallsOf(tmux.CallSendText)) != 1 || len(ordinaryEnters(e.killEnv)) != 0 {
+		t.Fatal("input continued after launch ownership was lost")
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+}
+
+func TestSendKeysDrainResetsOnBacklog(t *testing.T) {
+	t.Parallel()
+	for _, queueDuration := range []time.Duration{0, 75 * time.Millisecond} {
+		t.Run(queueDuration.String(), func(t *testing.T) {
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			// Initial-empty check, then a drain reset before each subsequent chunk/Enter.
+			samples := []int{0, 0, 7, 0, 0, 0, 7, 0, 0}
+			type sample struct {
+				start, end time.Time
+				queue      int
+			}
+			var calls []sample
+			index := 0
+			e.b.queue = func() (int, error) {
+				if index >= len(samples) {
+					t.Fatal("unexpected extra queue sample")
+				}
+				q := samples[index]
+				index++
+				start := e.clock.Now()
+				e.clock.Advance(queueDuration)
+				calls = append(calls, sample{start, e.clock.Now(), q})
+				return q, nil
+			}
+			assertDrain := func(first, second int) {
+				t.Helper()
+				if len(calls) <= second || calls[first].queue != 0 || calls[second].queue != 0 || calls[second].start.Sub(calls[first].end) < 40*time.Millisecond {
+					t.Fatalf("qualifying zeros were not separated after completed sample: %+v", calls)
+				}
+			}
+			e.rec.AfterCall(tmux.CallSendText, func(_ tmuxfix.SocketCall, _ error) {
+				if len(e.rec.SocketCallsOf(tmux.CallSendText)) == 2 {
+					if index != 5 {
+						t.Fatalf("second chunk before backlog reset/drain: %d samples", index)
+					}
+					assertDrain(3, 4)
+				}
+			})
+			e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
+				if c.Key == "Enter" && index != len(samples) {
+					t.Fatal("nonempty queue did not reset the drain samples")
+				}
+				if c.Key == "Enter" {
+					assertDrain(7, 8)
+				}
+			})
+			payload := strings.Repeat("x", 513)
+			if _, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: payload, AllowPending: true}); err != nil {
+				t.Fatal(err)
+			}
+			assertOrdinaryWrites(t, e.killEnv, r, payload)
+		})
+	}
+}
+
+func TestSendKeysReadinessWithFixedClockIsBounded(t *testing.T) {
+	t.Parallel()
+	e := newSubmissionEnv(t)
+	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+	now := e.clock.Now()
+	e.env.Relay.Now = func() time.Time { return now }
+	polls := 0
+	e.b.ready = func() (bool, error) { polls++; return false, nil }
+	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+	assertDeliveryError(t, err, "not_started", 0, false)
+	if polls > 121 || e.slept > 12100*time.Millisecond {
+		t.Fatalf("unbounded readiness: polls=%d sleep=%v", polls, e.slept)
+	}
+	e.assertNothingSent(t)
+}
+
+func TestSendKeysSlowQueueCannotSupplyDrainSpacing(t *testing.T) {
+	t.Parallel()
+	e := newSubmissionEnv(t)
+	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+	// The injected clock advances inside Queue, but not between its calls.
+	// Slow samples therefore cannot qualify as the required spaced zeros.
+	e.env.Sleep = func(time.Duration) {}
+	var lastEnd time.Time
+	samples := 0
+	e.b.queue = func() (int, error) {
+		start := e.clock.Now()
+		if samples > 1 && start.Sub(lastEnd) >= 40*time.Millisecond {
+			t.Fatal("fixture unexpectedly supplied the required spacing")
+		}
+		e.clock.Advance(75 * time.Millisecond)
+		lastEnd = e.clock.Now()
+		samples++
+		return 0, nil
+	}
+	_, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+	assertDeliveryError(t, err, "partial_input_unconfirmed", len(skpText), false)
+	if len(e.rec.SocketCallsOf(tmux.CallSendText)) != 1 || len(ordinaryEnters(e.killEnv)) != 0 {
+		t.Fatal("slow queue calls satisfied spacing or caused replay")
+	}
 }

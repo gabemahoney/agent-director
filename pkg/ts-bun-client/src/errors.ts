@@ -460,9 +460,9 @@ export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
 /**
- * tmux accepted the pending Codex row's keys and Enter, but submission could not be confirmed.
- * The keys were sent; do not repeat text or Enter automatically. Check hook-derived get
- * or status; if submission remains unknown, escalate to the caller or a human.
+ * Ordinary delivery lacks durable exact native proof. errDetails distinguishes not_started,
+ * partial_input_unconfirmed and submission_unconfirmed. Uncertain input may still submit
+ * later; reuse delivery_request_id to observe without replaying text or Enter.
  */
 export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
 /**

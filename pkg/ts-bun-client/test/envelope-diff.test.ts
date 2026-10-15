@@ -491,7 +491,7 @@ describe("list-subagents", () => {
 
 describe("send-keys", () => {
   test(
-    "success path: the row's own session, lookup + pane listing + text then Enter by pane id on both sides",
+    "manual no_enter: lookup + pane listing + text by pane id on both sides",
     async () => {
       const id = "id-sk-1";
       // Both store copies record this private socket; each run reads its own
@@ -518,7 +518,7 @@ describe("send-keys", () => {
 
       try {
         const cli = runCli(
-          ["send-keys", "--instance-id", id, "--text", "hello"],
+          ["send-keys", "--instance-id", id, "--text", "hello", "--no-enter"],
           { ...cliEnv(homeA), FAKE_TMUX_TABLES: tablesCli, FAKE_TMUX_LOG: logCli }
         );
         expect(cli.exitCode).toBe(0);
@@ -532,6 +532,7 @@ describe("send-keys", () => {
           return await client.sendKeys({
             instance_id: id,
             text: "hello",
+            no_enter: true,
           });
         });
 
@@ -539,7 +540,7 @@ describe("send-keys", () => {
           ignorePaths: loadIgnorePathsForVerb("send-keys"),
         });
 
-        // Each run: one lookup, one pane listing, then the text and Enter by
+        // Each run: one lookup, one pane listing, then manual text by
         // pane id, all on the row's socket (SR-7.2, SR-3.7).
         for (const log of [logCli, logClient]) {
           const calls = fakeTmuxCalls(log);
@@ -547,10 +548,8 @@ describe("send-keys", () => {
             ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
             ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
-            ["-u", "-S", socket, "send-keys"],
           ]);
           expect(calls[2].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
-          expect(calls[3].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
         }
       } finally {
         cleanup();

@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -96,11 +97,13 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	return ComposedLaunch{
 		PreTrust: carried,
 		Create: CreateRequest{
-			Name:       r.TmuxSessionName,
-			CWD:        r.CWD,
-			Env:        composeEnv(r),
-			Command:    command,
-			InstanceID: r.InstanceID,
+			Agent:             r.Agent,
+			OrdinaryInputSafe: inputdelivery.SafeArgs(r.AgentArgs),
+			Name:              r.TmuxSessionName,
+			CWD:               r.CWD,
+			Env:               composeEnv(r),
+			Command:           command,
+			InstanceID:        r.InstanceID,
 		},
 		Row: store.Spawn{
 			InstanceID:      r.InstanceID,

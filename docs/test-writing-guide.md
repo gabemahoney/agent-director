@@ -380,6 +380,27 @@ build each case's old-layout install with the fixture in
 `test/install-sh/testdata/claude-mcp/`; `INDEX.tsv` marks each `synthetic` or
 `captured`, and a real capture replaces a synthetic one with no test change.
 
+## Ordinary input delivery tests
+
+Run these tests only through `make sandbox CMD="…"`, as required by
+`CLAUDE.md`. A supported delivery test needs native evidence, not a hook-state
+transition or a tmux send returning nil. In `pkg/api`, reuse
+`newSubmissionEnv` and `deliveryBackend` from
+`sendkeys_submission_fixture_test.go`: they keep real store and tmux ownership
+guards while replacing native readiness, terminal samples and proof I/O through
+`SendKeysEnv.Input`. Advance the fixture clock through its injected `Sleep`;
+do not add wall-clock sleeps or weaken readiness for a recorder. Tests of manual
+transport should explicitly choose a manual operation.
+
+Native adapter tests in `internal/inputdelivery` use private temporary launch
+manifests and native JSONL records. Reuse `evidenceSession`, `claudeRecord`,
+`writeEvidence` and the Codex record fixtures. Check exact new content and
+session/process provenance, prefix watermarks, late evidence and durable
+reconciliation. Include an older identical record in a newly discovered Codex
+path so a descriptor discovered after input cannot masquerade as fresh proof.
+For unresolved delivery, assert conservative outcome fields and absence of
+replayed text or Enter. An empty queue never suffices for a submitted result.
+
 ## Synthetic-regression test convention
 
 Synthetic-regression tests re-anchor known failure-classes so they can

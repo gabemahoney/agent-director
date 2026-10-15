@@ -62,6 +62,9 @@ func seedSendKeys(t *testing.T) (string, map[string]any) {
 	t.Helper()
 	dir, ctx := seedPaneRow(t, sendKeysID)
 	ctx["text"] = sendKeysText
+	ctx[ctxCapture] = readPaneText
+	sum := sha256.Sum256([]byte(readPaneText))
+	ctx["hash"] = hex.EncodeToString(sum[:])
 	return dir, ctx
 }
 

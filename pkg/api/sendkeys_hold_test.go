@@ -92,7 +92,7 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 						t.Fatalf("GetSpawn: %v", err)
 					}
 
-					held := p.sendKeysRun(p.plain("hi"))
+					held := p.assertDialogHoldsInput(t, "hi", tok, row.State)
 
 					d := assertDialogMaybeOpen(t, held.err, tok, row.State)
 					if len(held.calls) != 0 {
@@ -114,10 +114,7 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 					if n := p.prove(t, pf.proof); n != 1 {
 						t.Fatalf("%s proved %d; want request A", pf.name, n)
 					}
-					run := p.sendKeysRun(p.plain("hi"))
-					if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-						t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
-					}
+					p.assertOrdinaryAfterRelay(t, "hi")
 					if pr := p.request(t, tok); pr.ProvenGoneHow != pf.proof.How {
 						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, pf.proof.How)
 					}
@@ -146,11 +143,11 @@ func TestDialogMaybeOpenNamesTheOldest(t *testing.T) {
 	}
 	p.prove(t, toolRan("toolu_01C"))
 
-	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokA, store.StateCheckPermission, tokB)
+	p.assertDialogHoldsInput(t, "hi", tokA, store.StateCheckPermission, tokB)
 	adviceAssertPhrase(t, p.sendKeys(p.plain("hi")), "1 other request(s) of the spawn are not proven gone")
 
 	p.prove(t, toolRan(paToolUseID))
-	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokB, store.StateCheckPermission)
+	p.assertDialogHoldsInput(t, "hi", tokB, store.StateCheckPermission)
 }
 
 // TestPlainSendKeysHashPassesTheHold (b.146 step 2c rule 3): a plain send-keys
@@ -227,8 +224,14 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 				return e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "go"})
 			})
 
-			if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-				t.Errorf("send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
+			if state != store.StateWaiting {
+				assertDeliveryError(t, run.err, "not_started", 0, false)
+				e.assertNothingSent(t)
+			} else {
+				if run.err != nil {
+					t.Fatal(run.err)
+				}
+				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, "go")
 			}
 		})
 	}
@@ -237,8 +240,8 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 		p := newPAEnv(t)
 		r7Acked(t, p)
 		p.prove(t, turnEnd)
-		if run := p.sendKeysRun(p.plain("go")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
-			t.Errorf("send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
-		}
+		run := p.sendKeysRun(p.plain("go"))
+		assertDeliveryError(t, run.err, "not_started", 0, false)
+		p.assertNothingSent(t)
 	})
 }

@@ -58,7 +58,7 @@ report, `pause` ends the row instead; see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
 `allow_pending` (see
-[Unconfirmed Codex submission](caller-contract.md#unconfirmed-codex-submission)).
+[Ordinary text submission](caller-contract.md#ordinary-text-submission)).
 After the first prompt the row moves
 with Codex's own events: a turn's prompt and tools read `working`, its end
 (`Stop`, or Esc) reads `waiting`, and a permission request reads
@@ -570,6 +570,13 @@ its next `resume` continues that new session. Agent-director adds no in-session
 picker and does not control the agent's own picker; its resume guarantee applies
 to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)
 for refusals and recovery.
+
+Continue a resumed conversation through operator-controlled
+[manual input](caller-contract.md#manual-input-ownership). The automatic
+[ordinary text submission](caller-contract.md#ordinary-text-submission)
+path requires a fresh supported launch with an empty composer; `allow_pending`
+does not extend it to resumed conversations.
+
 `resume` replays stored `agent_args` except recognized session selectors and
 their values, and Claude's `-p` / `--print`, so those options cannot replace
 the latest session or request print mode. A value or prompt that spells a

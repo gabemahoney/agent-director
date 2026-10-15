@@ -172,22 +172,44 @@ the pane" below). Pass it only for a pane a person or an LLM judged, never
 from an automatic flow.
 
 ```ts
-await client.sendKeys({ instance_id: "<id>", text: "what is 2+2?" });
+const result = await client.sendKeys({
+  instance_id: "<id>",
+  text: "what is 2+2?",
+  delivery_request_id: "first-question",
+});
 ```
+
+Ordinary nonempty text with Enter and no pane hash returns `SendKeysResult`
+with `outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
+`record_id` when the native record supplies it. It confirms the exact
+normalized text in the launch's native transcript. `delivery_request_id`
+owns one attempt: the same ID and text retrieve confirmation or reconcile
+without replay; a new ID allows an intentional identical turn. Manual
+operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
+return an empty object on success; their input-ownership refusals are in
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+Supported launches, omitted-ID behavior, structured
+outcomes and recovery are in
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
+cancel submission.
 
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
 reuse or resume) whose agent has not reported in yet, for example to dismiss a
 prompt the agent shows before it reports in. Keys are delivered only to a
-session started by the row's current launch. `ended` and `missing` rows are
-still rejected. A `pending` row whose launch start or launch token is not recorded, or where
+session started by the row's current launch. New input to `ended` and `missing`
+rows is rejected; observing an existing delivery request can still return its
+confirmation. A `pending` row whose launch start or launch token is not recorded, or where
 only a session an earlier launch left behind is found, gets
 `ErrSpawnNotInteractive` and nothing is sent.
 
-On an initially pending Codex row, a plain text-and-Enter or Enter-only
-send also checks for same-launch turn activity for up to 2 s. The
+`allow_pending` preserves the ordinary-delivery readiness and transcript
+requirements; it does not make a startup dialog an ordinary composer. The
 `ErrSubmissionUnconfirmed` class exposes `SubmissionUnconfirmedDetails`
-through `errDetails`; see
-[Unconfirmed Codex submission](../../docs/caller-contract.md#unconfirmed-codex-submission)
+through `errDetails`, including `outcome`, `request_id`, `phase`,
+`bytes_attempted`, `enter_may_have_been_sent`, optional `last_queue`, `reason`,
+`keys_sent`, `submission_confirmed` and `row_state`; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
 for the fields and recovery.
 
 `liveness_note: "unreported"` means an alive agent has not reported since
@@ -247,6 +269,9 @@ but `waiting` throws `ErrSpawnNotPausable`. On a Codex Spawn
 ```ts
 await client.pause({ instance_id: "<id>" });
 ```
+
+For `ErrSubmissionUnconfirmed` from `pause`, see
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
 `pause` is held like a `sendKeys` without `request_token` and without
 `expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
@@ -545,8 +570,8 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | Error | When it fires |
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
-| `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
-| `ErrSubmissionUnconfirmed` | A plain text-and-Enter or Enter-only send to an initially pending Codex row was accepted by tmux, but turn activity was not confirmed. `errDetails` is `SubmissionUnconfirmedDetails`; see [Unconfirmed Codex submission](../../docs/caller-contract.md#unconfirmed-codex-submission). |
+| `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows new input to a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. Observing an existing delivery request can retrieve stored or late confirmation after the row becomes `ended` or `missing`; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
+| `ErrSubmissionUnconfirmed` | `errDetails` is `SubmissionUnconfirmedDetails`. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys` and `pause`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |

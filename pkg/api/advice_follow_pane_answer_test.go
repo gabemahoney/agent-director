@@ -169,11 +169,9 @@ func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	if _, err := p.recordPaneAnswer(params); err != nil {
 		t.Fatalf("record-pane-answer: %v; want the request closed", err)
 	}
-	assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
+	p.assertDialogHoldsInput(t, "next", tok, store.StateCheckPermission)
 	p.prove(t, toolRan(paToolUseID))
-	if err := p.sendKeys(p.plain("next")); err != nil {
-		t.Errorf("plain send-keys once the tool's PostToolUse proved it gone: %v; want it typed", err)
-	}
+	p.assertOrdinaryAfterRelay(t, "next")
 }
 
 // TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill: E13 pause's "past ErrDialogMaybeOpen: answer any dialog,

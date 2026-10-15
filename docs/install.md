@@ -43,6 +43,12 @@
   unset or empty: see [configuration](configuration.md).)
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
 
+Automatic ordinary text delivery has narrower requirements: Linux, the exact
+agent versions above and a fresh supported launch. See
+[Ordinary text submission](caller-contract.md#ordinary-text-submission).
+On macOS, later agent versions or other launches, use operator-controlled
+[manual input](caller-contract.md#manual-input-ownership).
+
 ## Install from a release
 
 This installs agent-director and its operator tool `agent-director-admin`:
