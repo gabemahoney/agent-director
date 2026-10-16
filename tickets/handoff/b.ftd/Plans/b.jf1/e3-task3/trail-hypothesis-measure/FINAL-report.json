@@ -1,0 +1,167 @@
+{
+  "ticket_ids": [
+    "t2.jf1.r8.a8"
+  ],
+  "statuses_set": [],
+  "phase": "PART1 trail hypothesis measurement only",
+  "head": "a62f424747aee01e920d5404e0532bc2a577a092",
+  "result": "Measured approximately 950ms post-COMMIT trail calls are mostly caller deadline waits while the event is queued or waiting on writer mutex. Same-call outer COMMIT guard is already exited before post-COMMIT trail emission. Original COMMIT failure remains unreproduced; no repair justified from this measurement alone.",
+  "source_changes": [],
+  "test_changes": [],
+  "documentation_changes": [],
+  "commits": [],
+  "evidence_files": [
+    "REPORT.md",
+    "measurement-summary.json",
+    "tests-provenance.json",
+    "runner.log",
+    "run.sh",
+    "build-snapshot.py",
+    "parse.py",
+    "analyze-cutoff.py",
+    "baseline/records.jsonl",
+    "load/records.jsonl",
+    "load/joined.jsonl",
+    "load/cutoff-partitions.json",
+    "load/correlations.json"
+  ],
+  "instrumentation": {
+    "location": "_snapshot/head only",
+    "snapshot": "git archive HEAD go.mod go.sum internal pkg cmd; no .claude access",
+    "trace": "Per-process prefaulted shared mmap file: process PID plus event ID, request token, original deadline mapped to monotonic epoch, event name, queue depth, caller return reason; caller and worker independent records. COMMIT and publication correlate by exact PID and deadline. Binary records copied without stderr/logger/file Write/Sync on measured paths. Go fields/records allocate normally; trace modifies scheduling and cannot be treated as zero overhead.",
+    "capacity_per_process": 32768,
+    "largest_observed_records": 351,
+    "stages": [
+      "caller entry",
+      "enqueue accepted",
+      "caller select return reason completed/context",
+      "worker entry",
+      "writer mutex acquired",
+      "layout check complete",
+      "encode complete",
+      "ensureOpen complete",
+      "Write complete",
+      "Sync complete",
+      "worker completion"
+    ],
+    "test_provenance": "542 snapshot test files byte-identical to exact HEAD"
+  },
+  "execution": {
+    "entry": "make sandbox CMD=env -i ... bash run.sh",
+    "HOME": "/home/sandbox fresh container canonical HOME",
+    "TMPDIR": "unset",
+    "umask": "022",
+    "environment": "env -i; only PATH HOME GIT_CONFIG_GLOBAL GOPATH GOCACHE sandbox marker GOMAXPROCS FTD_MEASURE_DIR",
+    "targets": "^(TestDecideKeepsDurableOrigin|TestRepairCheckPermission)$",
+    "baseline": "1 process count=1 parallel=192 GOMAXPROCS=4",
+    "load": "32 simultaneous processes count=1 parallel=192 GOMAXPROCS=192",
+    "cpu_max": "max 100000 (no CPU quota imposed)",
+    "load_difference_from_prior": "Same target/32-process/parallel192 high-load shape, smaller count=1 batch. Prior workers each used scratch HOME/TMPDIR; this run follows canonical HOME=/home/sandbox and TMPDIR unset. Processes append the same fresh container trail file. Cannot retrospectively partition prior exact 950ms sample."
+  },
+  "outcomes": {
+    "baseline": {
+      "pass": 1
+    },
+    "baseline_leaves": {
+      "pass": 36
+    },
+    "load": {
+      "pass": 32
+    },
+    "load_leaves": {
+      "pass": 1152
+    },
+    "guard_unconfirmed_count": 0,
+    "native_commit_error_count": 0,
+    "bounded_trail_count": 416,
+    "context_pending_count": 400,
+    "caller_completed_count": 16,
+    "worker_completed_joined_count": 373,
+    "worker_censored_count": 43,
+    "all_bounded_commit_and_publication_before_emit": 416
+  },
+  "same_sample_partition": {
+    "joined_n": 373,
+    "censored_n": 43,
+    "phase_at_cutoff": {
+      "sync": 1,
+      "mutex": 38,
+      "queue": 318,
+      "completed": 16
+    },
+    "aggregate_ms": {
+      "enqueue": 1.3612300000000004,
+      "queue": 315298.32640599995,
+      "mutex": 37848.124354999985,
+      "layout": 0.16322000000000003,
+      "encode": 0.20165999999999998,
+      "open": 0.00089,
+      "write": 3.9212959999999994,
+      "sync": 603.99118,
+      "worker_final": 0.25795,
+      "completion_or_scheduling": 0.09682
+    },
+    "aggregate_percent": {
+      "enqueue": 0.0003847929894176387,
+      "queue": 89.12864510490006,
+      "mutex": 10.69892150070964,
+      "layout": 4.613908871590179e-05,
+      "encode": 5.700532183830874e-05,
+      "open": 2.5158552234501034e-07,
+      "write": 0.0011084733735161792,
+      "sync": 0.17073644551919004,
+      "worker_final": 7.29173994257252e-05,
+      "completion_or_scheduling": 2.73691126667909e-05
+    },
+    "over900ms_joined_n": 358,
+    "over900ms_phase_at_cutoff": {
+      "sync": 1,
+      "mutex": 37,
+      "queue": 318,
+      "completed": 2
+    }
+  },
+  "source_reachability": [
+    {
+      "file": "pkg/api/decide.go",
+      "lines": "208-235,885-924",
+      "finding": "Package Decide/decide helper establishes context then calls decideWithin. Client.Decide also owns context and deferred ad.decide.called. Original target tests invoke package-level helper through existing test export, so this sample observes post-COMMIT row trail and no Client ad.decide.called event."
+    },
+    {
+      "file": "internal/store/permission.go",
+      "lines": "693-715",
+      "finding": "DecideRelayRequest first waits for s.inWriteTx to return. Only nil transaction error reaches emitDecisionCommittedContext at line713. Emission is outside inWriteTx, withConn and runConnectionOperation."
+    },
+    {
+      "file": "internal/store/lockwait.go",
+      "lines": "147-156,235-258",
+      "finding": "COMMIT native error creates unconfirmed directly. On successful COMMIT, callback returns, and withConnOperation publishes op.err/op.completed under op.mu before cleanup.finish. No row trail runs inside this worker."
+    },
+    {
+      "file": "internal/store/connection_cleanup.go",
+      "lines": "88-105",
+      "finding": "Outer guard returns published op.err when completed; only unpublished op with commitStarted yields outer unconfirmed. It has already returned before caller reaches row trail; later context expiry in that trail cannot reenter or retroactively change the same guard result."
+    },
+    {
+      "file": "internal/trail/deadline.go",
+      "lines": "41-74,77-99",
+      "finding": "Cancelable Emit enqueues to one FIFO64 worker, then waits done or context. Writer worker and synchronous Background emits share w.mu; many original fixture/setup/repair emits use Background and compete for mutex. Deadline return is ErrPending with job retained."
+    }
+  ],
+  "limitations": [
+    "Original failure did not reproduce; this is not a COMMIT fix or causal RED/GREEN.",
+    "Measured native Write/Sync intervals are wall-clock elapsed including scheduler delay; they do not isolate pure kernel/storage service time.",
+    "43 accepted bounded jobs have no completed worker record before test process exit; queue versus active mutex/I/O for those jobs is censored. No crash-durability receipt is claimed.",
+    "373 joined-event phase percentages integrate only each caller entry through caller return; eventual queue delays after cutoff are not attributed to caller wait.",
+    "mmap instrumentation avoids blocking logging but changes timing; source archives/tests untouched, no assertions or deadlines changed.",
+    "Different global I/O load could affect another operation indirectly. No evidence proves that indirect effect caused any historical original COMMIT failure."
+  ],
+  "deviations": [
+    "No canonical source repair, ticket status update, tests/doc edits or commit performed, per dispatch.",
+    "Prior scratch HOME/TMPDIR setup deliberately not repeated because current dispatch requires canonical HOME and unset TMPDIR. This limits direct historical attribution."
+  ],
+  "incomplete_work": [
+    "Historical COMMIT failure root cause and deterministic same-error reproduction remain unknown; root coordinates independent fault test."
+  ],
+  "questions_for_calling_agent": []
+}

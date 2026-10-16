@@ -1,0 +1,75 @@
+--- pkg/api/decide_delivery_test.go
++++ _snapshot/decide_delivery_test.fault.go
+@@ -12,7 +12,10 @@
+ 	"context"
+ 	"errors"
+ 	"strings"
++	"sync"
+ 	"sync/atomic"
++
++	"github.com/gabemahoney/agent-director/internal/trail"
+ 	"testing"
+ 	"time"
+ 
+@@ -589,8 +592,53 @@
+ 			no := false
+ 			now := time.Now()
+ 			s, path := apitest.SeedDecideFixtureAgent(t, "on", agent, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash", ToolInput: "{}", MainTurnEndEligible: &no, SettledAt: now.Add(time.Hour)})
++			// t2.jf1.r8.a8: real trail mutex fault, after original seed and before original Decide.
++			gate := &trailEncodingGate{entered: make(chan struct{}), release: make(chan struct{})}
++			var releaseOnce sync.Once
++			release := func() { releaseOnce.Do(func() { close(gate.release) }) }
++			holderDone := make(chan error, 1)
++			go func() {
++				holderDone <- trail.Emit(context.Background(), "ad.test.original_slow_trail_holder", map[string]any{"gate": gate})
++			}()
++			select {
++			case <-gate.entered:
++			case <-time.After(5 * time.Second):
++				release()
++				t.Fatal("fault holder did not acquire real trail mutex")
++			}
++			faultStarted := time.Now()
++			pastBudget := time.NewTimer(1100 * time.Millisecond)
++			defer pastBudget.Stop()
++			// Release after the original Decide returns AND the original one-second budget has passed.
++			defer func() {
++				<-pastBudget.C
++				t.Logf("FAULT release after Decide return: held=%s pending=%+v", time.Since(faultStarted), trail.Default().Status())
++				release()
++				select {
++				case holderErr := <-holderDone:
++					if holderErr != nil {
++						t.Errorf("fault holder Emit: %v", holderErr)
++					}
++				case <-time.After(5 * time.Second):
++					t.Error("fault holder did not finish after release")
++				}
++				drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
++				defer drainCancel()
++				if drainErr := trail.Default().Close(drainCtx); drainErr != nil {
++					t.Errorf("fault queue drain: %v", drainErr)
++				}
++				t.Logf("FAULT drained: %+v", trail.Default().Status())
++			}()
++			// Cleanup safety only: never used to make the original assertion pass.
++			watchdog := time.AfterFunc(8*time.Second, release)
++			defer watchdog.Stop()
+ 			zero := int64(0)
+ 			res, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(time.Duration) { t.Fatal("zero wait slept") }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &zero})
++			errorText := "<nil>"
++			if err != nil {
++				errorText = err.Error()
++			}
++			t.Logf("FAULT actual elapsed=%s error=%q historical_exact_match=%t delivery=%q result=%+v pending=%+v", time.Since(faultStarted), errorText, errorText == "store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded", res.Delivery, res, trail.Default().Status())
+ 			if err != nil || res.Delivery != api.DeliveryNotConfirmed {
+ 				t.Fatalf("decide %+v %v", res, err)
+ 			}
+@@ -600,6 +648,7 @@
+ 			}
+ 			defer reopened.Close()
+ 			request := rowA(t, reopened)
++			t.Logf("FAULT independent reopen: decision=%q main_turn_end_eligible=%t agent_id=%q proven_gone=%t row=%+v", request.Decision, request.MainTurnEndEligible, request.AgentID, request.ProvenGone(), request)
+ 			if request.MainTurnEndEligible || request.AgentID != "" || request.Decision != "deny" || request.ProvenGone() {
+ 				t.Fatalf("decision upgraded origin/proof %+v", request)
+ 			}

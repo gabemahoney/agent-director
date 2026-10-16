@@ -1,0 +1,26 @@
+{
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "start": "2026-10-16T05:29:54.688332+00:00",
+  "SANDBOX_FLAGS": "-e HOME=/home/sandbox -e GIT_CONFIG_GLOBAL=/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/trail-hypothesis-full/gitconfig",
+  "container_HOME": "/home/sandbox",
+  "container_TMPDIR": "unset (not supplied)",
+  "umask": "022",
+  "removed_environment_names": [
+    "AGENT_DIRECTOR_*",
+    "TMPDIR",
+    "TMUX",
+    "TMUX_PANE",
+    "inherited GIT_CONFIG_GLOBAL",
+    "GOFLAGS",
+    "MAKEFLAGS",
+    "MFLAGS",
+    "MAKEOVERRIDES",
+    "CMD"
+  ],
+  "note": "No GOFLAGS, overlays, instrumentation, retries, or additional targets. Suite exit codes determined from canonical output and combined exit.",
+  "end": "2026-10-16T05:33:33.350524+00:00",
+  "make_exit": 0
+}

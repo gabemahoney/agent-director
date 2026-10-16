@@ -1,0 +1,51 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "ticket_status_updates": [],
+  "head": "a62f424747aee01e920d5404e0532bc2a577a092",
+  "command": "make test-sandbox",
+  "runs": 1,
+  "result": "passed",
+  "make_exit": 0,
+  "go_exit": 0,
+  "bun_exit": 0,
+  "suite_exit_evidence": "Both commands run unconditionally and make exits zero only if both return zero, per Makefile lines 648-654. No per-suite wrapper instrumentation was added.",
+  "go_package_counts": {
+    "cached": 64,
+    "executed": 4,
+    "no_test_files": 13,
+    "failed": 0
+  },
+  "bun_tests": {
+    "pass": 430,
+    "fail": 0,
+    "expect_calls": 1662,
+    "files": 57
+  },
+  "original_historical_error": "store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded",
+  "original_failure_observed": false,
+  "historical_error_literal_present_in_output": false,
+  "canonical_inputs_hashed": 1195,
+  "canonical_inputs_changed": [],
+  "canonical_source_test_doc_edits": false,
+  "integration_suites_run": false,
+  "product_red_claimed": false,
+  "source_fix_claimed": false,
+  "fix_green_claimed": false,
+  "caveats": [
+    "Cached Go packages were reused; this was not a cache-disabled fresh execution of every Go package.",
+    "Nonverbose Go output does not inventory individual executed/skipped tests.",
+    "Historical COMMIT failure remains unreproduced; passing suite provides no causal RED or evidence-backed source fix."
+  ],
+  "start": "2026-10-16T05:29:54.688332+00:00",
+  "end": "2026-10-16T05:33:33.350524+00:00",
+  "files": [
+    "full.log",
+    "gitconfig",
+    "input-manifest.json",
+    "run.json",
+    "make.exit",
+    "package-inventory.json",
+    "RESULT.json",
+    "artifact-sha256.json"
+  ]
+}

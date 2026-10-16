@@ -1,0 +1,23 @@
+{
+  "head": "a62f424747aee01e920d5404e0532bc2a577a092",
+  "original_sha256": {
+    "pkg/api/decide_delivery_test.go": "9cd00bd86993a0bae81a5d84fdc8dc975b10990aee86874efb4e103588d4c5e4",
+    "pkg/api/decide_trail_deadline_test.go": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+    "internal/store/permission.go": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194"
+  },
+  "selected_leaf": "^TestDecideKeepsDurableOrigin$/^cursor$",
+  "canonical_changes": false,
+  "original_assertions_unchanged": true,
+  "original_decide_call_unchanged": true,
+  "original_max_wait_ms": 0,
+  "injection": "trailEncodingGate MarshalJSON blocks actual trail Writer.mu after SeedDecideFixtureAgent and before original DecideWithSleep; release after return and >=1.1s held",
+  "canonical_sha256_after": {
+    "pkg/api/decide_delivery_test.go": "9cd00bd86993a0bae81a5d84fdc8dc975b10990aee86874efb4e103588d4c5e4",
+    "pkg/api/decide_trail_deadline_test.go": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+    "internal/store/permission.go": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194"
+  },
+  "canonical_inputs_unchanged": true,
+  "fault_snapshot_sha256": "92ba98ddaf8d43abf5bac1133c7c26c4236dff6599edb8e8da8fbcd8903ca723"
+}

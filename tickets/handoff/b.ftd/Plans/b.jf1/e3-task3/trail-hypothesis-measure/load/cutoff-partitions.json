@@ -1,0 +1,7089 @@
+[
+  {
+    "pid": 17845,
+    "id": 133,
+    "caller_ms": 987.176148,
+    "reason": 5,
+    "phase_at_cutoff": "sync",
+    "overlap_ms": {
+      "enqueue": 0.00433,
+      "queue": 0.00143,
+      "mutex": 944.647254,
+      "layout": 0.00594,
+      "encode": 0.00933,
+      "open": 5e-05,
+      "write": 0.00932,
+      "sync": 42.498494,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 144,
+    "caller_ms": 985.996159,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00276,
+      "queue": 933.420931,
+      "mutex": 52.572468,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 155,
+    "caller_ms": 982.426321,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0029,
+      "queue": 982.423421,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 165,
+    "caller_ms": 979.656243,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0022,
+      "queue": 979.654043,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 181,
+    "caller_ms": 959.343935,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00358,
+      "queue": 959.340355,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 187,
+    "caller_ms": 963.354583,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00408,
+      "queue": 963.350503,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 194,
+    "caller_ms": 955.543107,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00232,
+      "queue": 955.540787,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 205,
+    "caller_ms": 925.358286,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00271,
+      "queue": 925.355576,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 216,
+    "caller_ms": 950.3639,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00383,
+      "queue": 950.36007,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 222,
+    "caller_ms": 944.934744,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00245,
+      "queue": 944.932294,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 242,
+    "caller_ms": 956.311807,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0036,
+      "queue": 956.308207,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17845,
+    "id": 258,
+    "caller_ms": 955.419118,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00338,
+      "queue": 955.415738,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 131,
+    "caller_ms": 921.806458,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00716,
+      "queue": 0.00101,
+      "mutex": 875.786626,
+      "layout": 0.00673,
+      "encode": 0.01069,
+      "open": 0.00015,
+      "write": 0.00985,
+      "sync": 45.956122,
+      "worker_final": 0.02038,
+      "completion_or_scheduling": 0.00774
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 154,
+    "caller_ms": 979.648453,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00283,
+      "queue": 660.201767,
+      "mutex": 319.443856,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 164,
+    "caller_ms": 973.301287,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00277,
+      "queue": 973.298517,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 173,
+    "caller_ms": 964.756521,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00656,
+      "queue": 964.749961,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 182,
+    "caller_ms": 938.092538,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0054,
+      "queue": 938.087138,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 189,
+    "caller_ms": 955.495147,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00152,
+      "queue": 955.493627,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 195,
+    "caller_ms": 957.602377,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0017,
+      "queue": 957.600677,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 201,
+    "caller_ms": 956.344787,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00148,
+      "queue": 956.343307,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 210,
+    "caller_ms": 933.6602,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00178,
+      "queue": 933.65842,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 226,
+    "caller_ms": 944.352524,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00392,
+      "queue": 944.348604,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17970,
+    "id": 237,
+    "caller_ms": 946.538663,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00303,
+      "queue": 946.535633,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 48,
+    "caller_ms": 993.135614,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00623,
+      "queue": 0.00123,
+      "mutex": 993.128154,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 157,
+    "caller_ms": 976.741145,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00717,
+      "queue": 0.00072,
+      "mutex": 976.733255,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 166,
+    "caller_ms": 969.273679,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00284,
+      "queue": 969.270839,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 172,
+    "caller_ms": 965.603771,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00405,
+      "queue": 965.599721,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 178,
+    "caller_ms": 968.42965,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00167,
+      "queue": 968.42798,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 188,
+    "caller_ms": 955.446137,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00211,
+      "queue": 955.444027,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 196,
+    "caller_ms": 956.331626,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0022,
+      "queue": 956.329426,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 211,
+    "caller_ms": 954.632638,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00382,
+      "queue": 954.628818,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 220,
+    "caller_ms": 946.874812,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00329,
+      "queue": 946.871522,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 226,
+    "caller_ms": 950.1757,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00265,
+      "queue": 950.17305,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18079,
+    "id": 232,
+    "caller_ms": 916.251682,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00421,
+      "queue": 916.247472,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 147,
+    "caller_ms": 955.952447,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00542,
+      "queue": 0.00088,
+      "mutex": 955.946147,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 156,
+    "caller_ms": 968.2482,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00296,
+      "queue": 968.24524,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 164,
+    "caller_ms": 956.732547,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00296,
+      "queue": 956.729587,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 170,
+    "caller_ms": 960.851494,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00283,
+      "queue": 960.848664,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 179,
+    "caller_ms": 955.650877,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00256,
+      "queue": 955.648317,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 189,
+    "caller_ms": 950.77935,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.01241,
+      "queue": 950.76694,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 199,
+    "caller_ms": 943.789254,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00521,
+      "queue": 943.784044,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 210,
+    "caller_ms": 928.442964,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00724,
+      "queue": 928.435724,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 216,
+    "caller_ms": 951.70668,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00364,
+      "queue": 951.70304,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18091,
+    "id": 227,
+    "caller_ms": 951.11582,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00304,
+      "queue": 951.11278,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 122,
+    "caller_ms": 722.50598,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00504,
+      "queue": 0.00107,
+      "mutex": 701.358383,
+      "layout": 0.00924,
+      "encode": 0.00786,
+      "open": 3e-05,
+      "write": 0.00794,
+      "sync": 21.100697,
+      "worker_final": 0.01177,
+      "completion_or_scheduling": 0.00395
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 136,
+    "caller_ms": 968.33495,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00195,
+      "queue": 520.578403,
+      "mutex": 447.754597,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 168,
+    "caller_ms": 982.051761,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00196,
+      "queue": 982.049801,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 176,
+    "caller_ms": 979.389423,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00705,
+      "queue": 979.382373,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 186,
+    "caller_ms": 972.843296,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00193,
+      "queue": 972.841366,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 194,
+    "caller_ms": 965.480061,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00133,
+      "queue": 965.478731,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 201,
+    "caller_ms": 962.987313,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00273,
+      "queue": 962.984583,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 207,
+    "caller_ms": 952.785859,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00599,
+      "queue": 952.779869,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 219,
+    "caller_ms": 956.973327,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00186,
+      "queue": 956.971467,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 233,
+    "caller_ms": 954.016438,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00243,
+      "queue": 954.014008,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 245,
+    "caller_ms": 923.761267,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00408,
+      "queue": 923.757187,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 252,
+    "caller_ms": 952.33504,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00532,
+      "queue": 952.32972,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17730,
+    "id": 262,
+    "caller_ms": 926.661285,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00405,
+      "queue": 926.657235,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 120,
+    "caller_ms": 685.080792,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00525,
+      "queue": 0.00077,
+      "mutex": 653.381781,
+      "layout": 0.00678,
+      "encode": 0.00725,
+      "open": 3e-05,
+      "write": 0.0117,
+      "sync": 31.646421,
+      "worker_final": 0.01174,
+      "completion_or_scheduling": 0.00907
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 133,
+    "caller_ms": 975.625265,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00204,
+      "queue": 550.365344,
+      "mutex": 425.257881,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 148,
+    "caller_ms": 985.687529,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00198,
+      "queue": 985.685549,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 169,
+    "caller_ms": 970.845678,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00129,
+      "queue": 970.844388,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 176,
+    "caller_ms": 967.88053,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00155,
+      "queue": 967.87898,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 185,
+    "caller_ms": 968.22475,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00132,
+      "queue": 968.22343,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 196,
+    "caller_ms": 958.050236,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00331,
+      "queue": 958.046926,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 202,
+    "caller_ms": 956.395077,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00241,
+      "queue": 956.392667,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 211,
+    "caller_ms": 934.13852,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00404,
+      "queue": 934.13448,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 220,
+    "caller_ms": 935.804019,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00237,
+      "queue": 935.801649,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 237,
+    "caller_ms": 940.324557,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0064,
+      "queue": 940.318157,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 247,
+    "caller_ms": 944.746123,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00346,
+      "queue": 944.742663,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17894,
+    "id": 255,
+    "caller_ms": 924.817277,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00289,
+      "queue": 924.814387,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 126,
+    "caller_ms": 982.558161,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.007,
+      "queue": 0.00086,
+      "mutex": 982.550301,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 158,
+    "caller_ms": 956.347056,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00321,
+      "queue": 418.121675,
+      "mutex": 538.222171,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 176,
+    "caller_ms": 946.842002,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00376,
+      "queue": 946.838242,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 185,
+    "caller_ms": 944.311404,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00373,
+      "queue": 944.307674,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 193,
+    "caller_ms": 951.82721,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00444,
+      "queue": 951.82277,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 210,
+    "caller_ms": 922.453437,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00282,
+      "queue": 922.450617,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 207,
+    "caller_ms": 948.752421,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00345,
+      "queue": 948.748971,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 220,
+    "caller_ms": 951.32116,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00396,
+      "queue": 951.3172,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 232,
+    "caller_ms": 950.4928,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00258,
+      "queue": 950.49022,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 240,
+    "caller_ms": 952.430909,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0016,
+      "queue": 952.429309,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 250,
+    "caller_ms": 945.461133,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00308,
+      "queue": 945.458053,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18804,
+    "id": 252,
+    "caller_ms": 941.043356,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00259,
+      "queue": 941.040766,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 136,
+    "caller_ms": 879.897024,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.01311,
+      "queue": 0.00168,
+      "mutex": 834.706672,
+      "layout": 0.00576,
+      "encode": 0.00836,
+      "open": 2e-05,
+      "write": 0.006239,
+      "sync": 45.129493,
+      "worker_final": 0.01977,
+      "completion_or_scheduling": 0.00592
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 162,
+    "caller_ms": 979.625493,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.002,
+      "queue": 601.784513,
+      "mutex": 377.83898,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 168,
+    "caller_ms": 973.912596,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00179,
+      "queue": 973.910806,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 179,
+    "caller_ms": 966.225721,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00168,
+      "queue": 966.224041,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 186,
+    "caller_ms": 968.16397,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00253,
+      "queue": 968.16144,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 192,
+    "caller_ms": 965.041741,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0013,
+      "queue": 965.040441,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 211,
+    "caller_ms": 927.199565,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00313,
+      "queue": 927.196435,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 217,
+    "caller_ms": 928.261854,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00254,
+      "queue": 928.259314,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 227,
+    "caller_ms": 950.29415,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00196,
+      "queue": 950.29219,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 229,
+    "caller_ms": 949.759571,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0009,
+      "queue": 949.758671,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 246,
+    "caller_ms": 926.118246,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00329,
+      "queue": 926.114956,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 250,
+    "caller_ms": 956.283177,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00493,
+      "queue": 956.278247,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17892,
+    "id": 262,
+    "caller_ms": 932.707821,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00297,
+      "queue": 932.704851,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 155,
+    "caller_ms": 969.136989,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.0045,
+      "queue": 0.00124,
+      "mutex": 969.131249,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 163,
+    "caller_ms": 968.76244,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00273,
+      "queue": 968.75971,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 173,
+    "caller_ms": 968.07256,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00264,
+      "queue": 968.06992,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 179,
+    "caller_ms": 961.009634,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00173,
+      "queue": 961.007904,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 187,
+    "caller_ms": 938.019968,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00893,
+      "queue": 938.011038,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 193,
+    "caller_ms": 955.607877,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00133,
+      "queue": 955.606547,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 199,
+    "caller_ms": 957.682327,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00351,
+      "queue": 957.678817,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 210,
+    "caller_ms": 950.8767,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00266,
+      "queue": 950.87404,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 216,
+    "caller_ms": 935.30993,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00398,
+      "queue": 935.30595,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17878,
+    "id": 228,
+    "caller_ms": 943.640355,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00493,
+      "queue": 943.635425,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 141,
+    "caller_ms": 980.471412,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00507,
+      "queue": 0.00094,
+      "mutex": 980.465402,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 161,
+    "caller_ms": 972.804976,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00407,
+      "queue": 925.437095,
+      "mutex": 47.363811,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 169,
+    "caller_ms": 956.312797,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00385,
+      "queue": 956.308947,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 175,
+    "caller_ms": 960.692984,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00219,
+      "queue": 960.690794,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 193,
+    "caller_ms": 954.259708,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0041,
+      "queue": 954.255608,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 199,
+    "caller_ms": 950.417,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00243,
+      "queue": 950.41457,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 212,
+    "caller_ms": 955.385648,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00352,
+      "queue": 955.382128,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 222,
+    "caller_ms": 956.026007,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00493,
+      "queue": 956.021077,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 236,
+    "caller_ms": 948.573981,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00132,
+      "queue": 948.572661,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18057,
+    "id": 233,
+    "caller_ms": 948.648071,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00266,
+      "queue": 948.645411,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 156,
+    "caller_ms": 967.81444,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00484,
+      "queue": 0.00077,
+      "mutex": 967.80883,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 164,
+    "caller_ms": 965.909151,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00339,
+      "queue": 965.905761,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 170,
+    "caller_ms": 950.79168,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00249,
+      "queue": 950.78919,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 178,
+    "caller_ms": 963.394803,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00362,
+      "queue": 963.391183,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 185,
+    "caller_ms": 940.372917,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00398,
+      "queue": 940.368937,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 192,
+    "caller_ms": 950.67739,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00277,
+      "queue": 950.67462,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 209,
+    "caller_ms": 945.951083,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00057,
+      "queue": 945.950513,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 207,
+    "caller_ms": 946.005243,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00465,
+      "queue": 946.000593,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 217,
+    "caller_ms": 944.369344,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00374,
+      "queue": 944.365604,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17974,
+    "id": 223,
+    "caller_ms": 950.218631,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00484,
+      "queue": 950.213791,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 126,
+    "caller_ms": 795.629185,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.0054,
+      "queue": 0.00137,
+      "mutex": 750.847012,
+      "layout": 0.0239,
+      "encode": 0.01816,
+      "open": 6e-05,
+      "write": 0.01646,
+      "sync": 44.705663,
+      "worker_final": 0.00619,
+      "completion_or_scheduling": 0.00497
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 139,
+    "caller_ms": 988.501247,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00414,
+      "queue": 692.349628,
+      "mutex": 296.147479,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 157,
+    "caller_ms": 979.145643,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00231,
+      "queue": 979.143333,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 170,
+    "caller_ms": 966.135731,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00289,
+      "queue": 966.132841,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 179,
+    "caller_ms": 955.384187,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0134,
+      "queue": 955.370787,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 194,
+    "caller_ms": 949.683691,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00363,
+      "queue": 949.680061,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 202,
+    "caller_ms": 951.54115,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00312,
+      "queue": 951.53803,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 213,
+    "caller_ms": 949.524991,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00327,
+      "queue": 949.521721,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 219,
+    "caller_ms": 943.619685,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00392,
+      "queue": 943.615765,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 232,
+    "caller_ms": 951.70424,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0031,
+      "queue": 951.70114,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 240,
+    "caller_ms": 950.72513,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00412,
+      "queue": 950.72101,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 247,
+    "caller_ms": 953.843538,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00356,
+      "queue": 953.839978,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18077,
+    "id": 261,
+    "caller_ms": 929.236774,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00492,
+      "queue": 929.231854,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 151,
+    "caller_ms": 964.749691,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.0339,
+      "queue": 0.00238,
+      "mutex": 964.713411,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 159,
+    "caller_ms": 961.343454,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00226,
+      "queue": 961.341194,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 170,
+    "caller_ms": 950.45876,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00328,
+      "queue": 950.45548,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 176,
+    "caller_ms": 952.28178,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00188,
+      "queue": 952.2799,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 184,
+    "caller_ms": 926.497425,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00347,
+      "queue": 926.493955,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 196,
+    "caller_ms": 951.14374,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00363,
+      "queue": 951.14011,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 202,
+    "caller_ms": 945.291734,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00314,
+      "queue": 945.288594,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 208,
+    "caller_ms": 923.752967,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0038,
+      "queue": 923.749167,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 216,
+    "caller_ms": 941.441286,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00325,
+      "queue": 941.438036,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 230,
+    "caller_ms": 951.914329,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00285,
+      "queue": 951.911479,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 238,
+    "caller_ms": 956.042237,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00332,
+      "queue": 956.038917,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 245,
+    "caller_ms": 950.09486,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00334,
+      "queue": 950.09152,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18314,
+    "id": 257,
+    "caller_ms": 959.728614,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00268,
+      "queue": 959.725934,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 125,
+    "caller_ms": 756.724829,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00772,
+      "queue": 0.00185,
+      "mutex": 715.883044,
+      "layout": 0.00726,
+      "encode": 0.00953,
+      "open": 6e-05,
+      "write": 0.00591,
+      "sync": 40.791565,
+      "worker_final": 0.01454,
+      "completion_or_scheduling": 0.00335
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 146,
+    "caller_ms": 985.828259,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00943,
+      "queue": 523.217981,
+      "mutex": 462.600848,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 156,
+    "caller_ms": 984.883959,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00163,
+      "queue": 984.882329,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 168,
+    "caller_ms": 971.160168,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00274,
+      "queue": 971.157428,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 175,
+    "caller_ms": 965.505231,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00132,
+      "queue": 965.503911,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 183,
+    "caller_ms": 966.51273,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00136,
+      "queue": 966.51137,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 195,
+    "caller_ms": 933.22325,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0012,
+      "queue": 933.22205,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 198,
+    "caller_ms": 956.997376,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0016,
+      "queue": 956.995776,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 204,
+    "caller_ms": 957.021137,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00182,
+      "queue": 957.019317,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 218,
+    "caller_ms": 952.562589,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00266,
+      "queue": 952.559929,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17968,
+    "id": 226,
+    "caller_ms": 950.56172,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00276,
+      "queue": 950.55896,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 135,
+    "caller_ms": 773.901968,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00547,
+      "queue": 0.00077,
+      "mutex": 733.028803,
+      "layout": 0.01919,
+      "encode": 0.01891,
+      "open": 7e-05,
+      "write": 0.0106,
+      "sync": 40.793905,
+      "worker_final": 0.01899,
+      "completion_or_scheduling": 0.00526
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 159,
+    "caller_ms": 984.38371,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00261,
+      "queue": 460.1956,
+      "mutex": 524.1855,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 166,
+    "caller_ms": 982.427441,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0024,
+      "queue": 982.425041,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 175,
+    "caller_ms": 977.167635,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00163,
+      "queue": 977.166005,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 185,
+    "caller_ms": 972.906507,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00131,
+      "queue": 972.905197,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 187,
+    "caller_ms": 972.938327,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00234,
+      "queue": 972.935987,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 199,
+    "caller_ms": 966.85056,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00173,
+      "queue": 966.84883,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 209,
+    "caller_ms": 955.929897,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00166,
+      "queue": 955.928237,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 216,
+    "caller_ms": 957.441387,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00295,
+      "queue": 957.438437,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 234,
+    "caller_ms": 950.140901,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0028,
+      "queue": 950.138101,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17692,
+    "id": 241,
+    "caller_ms": 950.63369,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00165,
+      "queue": 950.63204,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 64,
+    "caller_ms": 703.574401,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00482,
+      "queue": 0.0013,
+      "mutex": 692.265118,
+      "layout": 0.005,
+      "encode": 0.01204,
+      "open": 3e-05,
+      "write": 0.68457,
+      "sync": 10.586403,
+      "worker_final": 0.01062,
+      "completion_or_scheduling": 0.0045
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 156,
+    "caller_ms": 955.127897,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00286,
+      "queue": 0.00122,
+      "mutex": 955.123817,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 166,
+    "caller_ms": 956.469757,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00308,
+      "queue": 956.466677,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 173,
+    "caller_ms": 950.9438,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0031,
+      "queue": 950.9407,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 181,
+    "caller_ms": 954.385468,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00405,
+      "queue": 954.381418,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 193,
+    "caller_ms": 926.899555,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00411,
+      "queue": 926.895445,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 205,
+    "caller_ms": 941.919705,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00375,
+      "queue": 941.915955,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 207,
+    "caller_ms": 941.905755,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00355,
+      "queue": 941.902205,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 214,
+    "caller_ms": 934.97627,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00318,
+      "queue": 934.97309,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 221,
+    "caller_ms": 954.929338,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00138,
+      "queue": 954.927958,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 228,
+    "caller_ms": 951.747919,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00324,
+      "queue": 951.744679,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18742,
+    "id": 237,
+    "caller_ms": 946.787033,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00399,
+      "queue": 946.783043,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 143,
+    "caller_ms": 986.658949,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00569,
+      "queue": 0.00111,
+      "mutex": 986.652149,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 158,
+    "caller_ms": 977.152624,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00303,
+      "queue": 977.149594,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 168,
+    "caller_ms": 972.911376,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00192,
+      "queue": 972.909456,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 174,
+    "caller_ms": 969.118209,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00096,
+      "queue": 969.117249,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 183,
+    "caller_ms": 966.85601,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00176,
+      "queue": 966.85425,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 191,
+    "caller_ms": 960.104274,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00142,
+      "queue": 960.102854,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 197,
+    "caller_ms": 960.569864,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00423,
+      "queue": 960.565634,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 205,
+    "caller_ms": 961.474594,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00217,
+      "queue": 961.472424,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 212,
+    "caller_ms": 926.200905,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00294,
+      "queue": 926.197965,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 221,
+    "caller_ms": 927.191015,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00344,
+      "queue": 927.187575,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 230,
+    "caller_ms": 950.63401,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00374,
+      "queue": 950.63027,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17898,
+    "id": 236,
+    "caller_ms": 945.366734,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00189,
+      "queue": 945.364844,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 131,
+    "caller_ms": 670.283132,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00836,
+      "queue": 0.00101,
+      "mutex": 644.129728,
+      "layout": 0.00334,
+      "encode": 0.00675,
+      "open": 2e-05,
+      "write": 0.00886,
+      "sync": 26.105324,
+      "worker_final": 0.01527,
+      "completion_or_scheduling": 0.00447
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 139,
+    "caller_ms": 965.372851,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00255,
+      "queue": 623.09579,
+      "mutex": 342.274511,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 145,
+    "caller_ms": 968.712449,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00175,
+      "queue": 968.710699,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 180,
+    "caller_ms": 978.611263,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00413,
+      "queue": 978.607133,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 189,
+    "caller_ms": 973.515346,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00219,
+      "queue": 973.513156,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 200,
+    "caller_ms": 964.394842,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00326,
+      "queue": 964.391582,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 206,
+    "caller_ms": 959.592115,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00343,
+      "queue": 959.588685,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 215,
+    "caller_ms": 961.149514,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00216,
+      "queue": 961.147354,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 231,
+    "caller_ms": 955.015698,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00359,
+      "queue": 955.012108,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 241,
+    "caller_ms": 945.367014,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00328,
+      "queue": 945.363734,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 251,
+    "caller_ms": 951.41322,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00348,
+      "queue": 951.40974,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 257,
+    "caller_ms": 954.933568,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00364,
+      "queue": 954.929928,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17675,
+    "id": 274,
+    "caller_ms": 955.057608,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00376,
+      "queue": 955.053848,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 141,
+    "caller_ms": 977.033184,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00638,
+      "queue": 0.00108,
+      "mutex": 977.025724,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 153,
+    "caller_ms": 966.056181,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00409,
+      "queue": 966.052091,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 160,
+    "caller_ms": 967.99356,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0026,
+      "queue": 967.99096,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 169,
+    "caller_ms": 961.398904,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00652,
+      "queue": 961.392384,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 180,
+    "caller_ms": 951.30399,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0032,
+      "queue": 951.30079,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 188,
+    "caller_ms": 951.01752,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00355,
+      "queue": 951.01397,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 200,
+    "caller_ms": 941.863526,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00417,
+      "queue": 941.859356,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 211,
+    "caller_ms": 947.349622,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00387,
+      "queue": 947.345752,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 229,
+    "caller_ms": 954.174178,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00259,
+      "queue": 954.171588,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18454,
+    "id": 235,
+    "caller_ms": 956.539847,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00255,
+      "queue": 956.537297,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 51,
+    "caller_ms": 722.785549,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00536,
+      "queue": 0.00199,
+      "mutex": 704.132171,
+      "layout": 0.00568,
+      "encode": 0.01744,
+      "open": 5e-05,
+      "write": 0.00453,
+      "sync": 18.592068,
+      "worker_final": 0.02201,
+      "completion_or_scheduling": 0.00425
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 155,
+    "caller_ms": 960.748284,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00312,
+      "queue": 0.00133,
+      "mutex": 960.743834,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 165,
+    "caller_ms": 957.505757,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00992,
+      "queue": 957.495837,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 174,
+    "caller_ms": 951.74456,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00291,
+      "queue": 951.74165,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 181,
+    "caller_ms": 937.807558,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00315,
+      "queue": 937.804408,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 188,
+    "caller_ms": 949.738361,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00231,
+      "queue": 949.736051,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 200,
+    "caller_ms": 951.65159,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00291,
+      "queue": 951.64868,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 207,
+    "caller_ms": 948.079112,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00311,
+      "queue": 948.076002,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 217,
+    "caller_ms": 948.235802,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00326,
+      "queue": 948.232542,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 227,
+    "caller_ms": 959.119895,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00345,
+      "queue": 959.116445,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 233,
+    "caller_ms": 950.91085,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00183,
+      "queue": 950.90902,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18747,
+    "id": 247,
+    "caller_ms": 949.837831,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00305,
+      "queue": 949.834781,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 142,
+    "caller_ms": 977.049335,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00544,
+      "queue": 0.00094,
+      "mutex": 977.042955,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 157,
+    "caller_ms": 981.409911,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0073,
+      "queue": 981.402611,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 164,
+    "caller_ms": 980.120082,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00145,
+      "queue": 980.118632,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 170,
+    "caller_ms": 976.948525,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00104,
+      "queue": 976.947485,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 180,
+    "caller_ms": 968.15881,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0042,
+      "queue": 968.15461,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 186,
+    "caller_ms": 968.601349,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00209,
+      "queue": 968.599259,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 194,
+    "caller_ms": 961.361804,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0031,
+      "queue": 961.358704,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 200,
+    "caller_ms": 955.646657,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00372,
+      "queue": 955.642937,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 215,
+    "caller_ms": 951.22352,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00329,
+      "queue": 951.22023,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 221,
+    "caller_ms": 954.290768,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00244,
+      "queue": 954.288328,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17913,
+    "id": 227,
+    "caller_ms": 950.94168,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00166,
+      "queue": 950.94002,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 129,
+    "caller_ms": 838.627398,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00974,
+      "queue": 0.00133,
+      "mutex": 795.535505,
+      "layout": 0.00417,
+      "encode": 0.01748,
+      "open": 3e-05,
+      "write": 0.00854,
+      "sync": 43.044563,
+      "worker_final": 0.00201,
+      "completion_or_scheduling": 0.00403
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 139,
+    "caller_ms": 987.126629,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00148,
+      "queue": 774.238308,
+      "mutex": 212.886841,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 150,
+    "caller_ms": 985.858429,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00142,
+      "queue": 985.857009,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 160,
+    "caller_ms": 985.172299,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00286,
+      "queue": 985.169439,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 173,
+    "caller_ms": 972.600147,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00262,
+      "queue": 972.597527,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 180,
+    "caller_ms": 956.164537,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00344,
+      "queue": 956.161097,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 196,
+    "caller_ms": 957.318877,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00437,
+      "queue": 957.314507,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 204,
+    "caller_ms": 956.690926,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00269,
+      "queue": 956.688236,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 212,
+    "caller_ms": 950.710641,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00156,
+      "queue": 950.709081,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 221,
+    "caller_ms": 954.997118,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00658,
+      "queue": 954.990538,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17958,
+    "id": 232,
+    "caller_ms": 950.49934,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00441,
+      "queue": 950.49493,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 123,
+    "caller_ms": 746.442905,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00646,
+      "queue": 0.00098,
+      "mutex": 705.54678,
+      "layout": 0.01638,
+      "encode": 0.0116,
+      "open": 0.00014,
+      "write": 0.00883,
+      "sync": 40.820755,
+      "worker_final": 0.02507,
+      "completion_or_scheduling": 0.00591
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 143,
+    "caller_ms": 979.086453,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00277,
+      "queue": 510.212759,
+      "mutex": 468.870924,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 153,
+    "caller_ms": 985.799379,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00127,
+      "queue": 985.798109,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 161,
+    "caller_ms": 979.277383,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00289,
+      "queue": 979.274493,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 170,
+    "caller_ms": 957.461376,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00312,
+      "queue": 957.458256,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 178,
+    "caller_ms": 968.65764,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00202,
+      "queue": 968.65562,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 198,
+    "caller_ms": 951.13168,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00301,
+      "queue": 951.12867,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 205,
+    "caller_ms": 952.00954,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00351,
+      "queue": 952.00603,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 211,
+    "caller_ms": 955.066878,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00291,
+      "queue": 955.063968,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 221,
+    "caller_ms": 951.08537,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00306,
+      "queue": 951.08231,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17961,
+    "id": 237,
+    "caller_ms": 946.204213,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00346,
+      "queue": 946.200753,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 55,
+    "caller_ms": 833.903232,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.02226,
+      "queue": 0.00331,
+      "mutex": 833.877662,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 146,
+    "caller_ms": 987.755847,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00307,
+      "queue": 0.00146,
+      "mutex": 987.751317,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 167,
+    "caller_ms": 970.490338,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00229,
+      "queue": 757.873498,
+      "mutex": 212.61455,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 174,
+    "caller_ms": 967.521521,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00176,
+      "queue": 967.519761,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 183,
+    "caller_ms": 933.43016,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00288,
+      "queue": 933.42728,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 199,
+    "caller_ms": 955.664208,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00277,
+      "queue": 955.661438,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 211,
+    "caller_ms": 934.60441,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00249,
+      "queue": 934.60192,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 213,
+    "caller_ms": 933.83226,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00189,
+      "queue": 933.83037,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 220,
+    "caller_ms": 947.168643,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00212,
+      "queue": 947.166523,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 226,
+    "caller_ms": 940.515407,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00302,
+      "queue": 940.512387,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 238,
+    "caller_ms": 951.06619,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00376,
+      "queue": 951.06243,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17917,
+    "id": 246,
+    "caller_ms": 951.52522,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00284,
+      "queue": 951.52238,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 141,
+    "caller_ms": 979.166203,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.01395,
+      "queue": 0.00113,
+      "mutex": 979.151123,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 152,
+    "caller_ms": 968.02229,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00295,
+      "queue": 968.01934,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 160,
+    "caller_ms": 965.690301,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0029,
+      "queue": 965.687401,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 172,
+    "caller_ms": 954.825548,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00288,
+      "queue": 954.822668,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 183,
+    "caller_ms": 954.641408,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00311,
+      "queue": 954.638298,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 195,
+    "caller_ms": 928.850764,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00355,
+      "queue": 928.847214,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 197,
+    "caller_ms": 946.950492,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00578,
+      "queue": 946.944712,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 205,
+    "caller_ms": 916.030582,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0043,
+      "queue": 916.026282,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 212,
+    "caller_ms": 926.767015,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00344,
+      "queue": 926.763575,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 239,
+    "caller_ms": 932.619941,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00732,
+      "queue": 932.612621,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 240,
+    "caller_ms": 932.730331,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00585,
+      "queue": 932.724481,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 246,
+    "caller_ms": 944.003224,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00267,
+      "queue": 944.000554,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18802,
+    "id": 252,
+    "caller_ms": 950.75596,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00435,
+      "queue": 950.75161,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 151,
+    "caller_ms": 964.314522,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00825,
+      "queue": 0.00091,
+      "mutex": 964.305362,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 170,
+    "caller_ms": 950.94863,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00479,
+      "queue": 950.94384,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 176,
+    "caller_ms": 949.536701,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00322,
+      "queue": 949.533481,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 184,
+    "caller_ms": 950.92817,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00314,
+      "queue": 950.92503,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 190,
+    "caller_ms": 945.044714,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00373,
+      "queue": 945.040984,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 202,
+    "caller_ms": 955.956487,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00349,
+      "queue": 955.952997,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 211,
+    "caller_ms": 948.364091,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00243,
+      "queue": 948.361661,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 220,
+    "caller_ms": 953.885548,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00503,
+      "queue": 953.880518,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 227,
+    "caller_ms": 951.989259,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0143,
+      "queue": 951.974959,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 234,
+    "caller_ms": 951.750809,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.003,
+      "queue": 951.747809,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 242,
+    "caller_ms": 951.26542,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00365,
+      "queue": 951.26177,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18579,
+    "id": 251,
+    "caller_ms": 941.332046,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0027,
+      "queue": 941.329346,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 100,
+    "caller_ms": 732.062853,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00686,
+      "queue": 0.00128,
+      "mutex": 716.197093,
+      "layout": 0.00403,
+      "encode": 0.006,
+      "open": 3e-05,
+      "write": 0.0092,
+      "sync": 15.80455,
+      "worker_final": 0.02997,
+      "completion_or_scheduling": 0.00384
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 136,
+    "caller_ms": 968.695059,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00291,
+      "queue": 339.025143,
+      "mutex": 629.667006,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 155,
+    "caller_ms": 987.599688,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00262,
+      "queue": 987.597068,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 189,
+    "caller_ms": 960.416374,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00234,
+      "queue": 960.414034,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 202,
+    "caller_ms": 961.300324,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00383,
+      "queue": 961.296494,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 208,
+    "caller_ms": 952.4247,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00309,
+      "queue": 952.42161,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 215,
+    "caller_ms": 954.623588,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00325,
+      "queue": 954.620338,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 227,
+    "caller_ms": 944.943084,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00372,
+      "queue": 944.939364,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 233,
+    "caller_ms": 947.163692,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00609,
+      "queue": 947.157602,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 239,
+    "caller_ms": 951.19997,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00339,
+      "queue": 951.19658,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 246,
+    "caller_ms": 947.531652,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00388,
+      "queue": 947.527772,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17700,
+    "id": 253,
+    "caller_ms": 946.799052,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00325,
+      "queue": 946.795802,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 131,
+    "caller_ms": 910.313085,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00571,
+      "queue": 0.00155,
+      "mutex": 860.592785,
+      "layout": 0.01633,
+      "encode": 0.02309,
+      "open": 3e-05,
+      "write": 3.079198,
+      "sync": 46.566872,
+      "worker_final": 0.01159,
+      "completion_or_scheduling": 0.01593
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 145,
+    "caller_ms": 980.047573,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00268,
+      "queue": 804.59456,
+      "mutex": 175.450333,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 156,
+    "caller_ms": 981.975641,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00189,
+      "queue": 981.973751,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 179,
+    "caller_ms": 956.971947,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00367,
+      "queue": 956.968277,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 195,
+    "caller_ms": 955.905007,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.004,
+      "queue": 955.901007,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 198,
+    "caller_ms": 945.292834,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00351,
+      "queue": 945.289324,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 213,
+    "caller_ms": 954.825088,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00285,
+      "queue": 954.822238,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 222,
+    "caller_ms": 925.461906,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00307,
+      "queue": 925.458836,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 230,
+    "caller_ms": 946.955123,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00275,
+      "queue": 946.952373,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 244,
+    "caller_ms": 951.20305,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00242,
+      "queue": 951.20063,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 245,
+    "caller_ms": 951.20435,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00306,
+      "queue": 951.20129,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18446,
+    "id": 253,
+    "caller_ms": 950.62926,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00699,
+      "queue": 950.62227,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 144,
+    "caller_ms": 984.77898,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00654,
+      "queue": 0.00101,
+      "mutex": 984.77143,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 166,
+    "caller_ms": 964.929291,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00286,
+      "queue": 904.512218,
+      "mutex": 60.414213,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 176,
+    "caller_ms": 957.229727,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00337,
+      "queue": 957.226357,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 184,
+    "caller_ms": 955.622067,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0032,
+      "queue": 955.618867,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 192,
+    "caller_ms": 952.481859,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00311,
+      "queue": 952.478749,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 198,
+    "caller_ms": 954.527268,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00381,
+      "queue": 954.523458,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 204,
+    "caller_ms": 947.446682,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00399,
+      "queue": 947.442692,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 213,
+    "caller_ms": 946.430183,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00234,
+      "queue": 946.427843,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 227,
+    "caller_ms": 954.854928,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00283,
+      "queue": 954.852098,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 233,
+    "caller_ms": 947.598962,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0033,
+      "queue": 947.595662,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18185,
+    "id": 247,
+    "caller_ms": 933.006281,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00278,
+      "queue": 933.003501,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 123,
+    "caller_ms": 899.709791,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00528,
+      "queue": 0.00116,
+      "mutex": 854.570509,
+      "layout": 0.01661,
+      "encode": 0.01098,
+      "open": 6e-05,
+      "write": 0.011649,
+      "sync": 45.062723,
+      "worker_final": 0.02228,
+      "completion_or_scheduling": 0.00854
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 156,
+    "caller_ms": 965.724791,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00331,
+      "queue": 400.179096,
+      "mutex": 565.542385,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 164,
+    "caller_ms": 933.67894,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00299,
+      "queue": 933.67595,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 180,
+    "caller_ms": 950.78115,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00353,
+      "queue": 950.77762,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 188,
+    "caller_ms": 950.83565,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00313,
+      "queue": 950.83252,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 195,
+    "caller_ms": 944.695574,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00327,
+      "queue": 944.692304,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 207,
+    "caller_ms": 947.519082,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00323,
+      "queue": 947.515852,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 223,
+    "caller_ms": 954.402408,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00413,
+      "queue": 954.398278,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 236,
+    "caller_ms": 952.171509,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00039,
+      "queue": 952.171119,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 235,
+    "caller_ms": 952.201009,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00321,
+      "queue": 952.197799,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 242,
+    "caller_ms": 951.19782,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00442,
+      "queue": 951.1934,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 18293,
+    "id": 248,
+    "caller_ms": 948.961832,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00282,
+      "queue": 948.959012,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 149,
+    "caller_ms": 982.160381,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00579,
+      "queue": 0.00109,
+      "mutex": 982.153501,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 158,
+    "caller_ms": 979.366593,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00294,
+      "queue": 979.363653,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 166,
+    "caller_ms": 973.162406,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00163,
+      "queue": 973.160776,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 173,
+    "caller_ms": 971.176878,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00213,
+      "queue": 971.174748,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 179,
+    "caller_ms": 952.10572,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00222,
+      "queue": 952.1035,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 185,
+    "caller_ms": 965.724851,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00137,
+      "queue": 965.723481,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 192,
+    "caller_ms": 964.676251,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00183,
+      "queue": 964.674421,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 200,
+    "caller_ms": 957.059516,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00162,
+      "queue": 957.057896,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 216,
+    "caller_ms": 949.233321,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.003,
+      "queue": 949.230321,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 214,
+    "caller_ms": 950.42454,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00743,
+      "queue": 950.41711,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17886,
+    "id": 235,
+    "caller_ms": 921.257168,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00334,
+      "queue": 921.253828,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 130,
+    "caller_ms": 862.870704,
+    "reason": 1,
+    "phase_at_cutoff": "completed",
+    "overlap_ms": {
+      "enqueue": 0.00522,
+      "queue": 0.00099,
+      "mutex": 818.017092,
+      "layout": 0.00688,
+      "encode": 0.00619,
+      "open": 3e-05,
+      "write": 0.0279,
+      "sync": 44.785562,
+      "worker_final": 0.01575,
+      "completion_or_scheduling": 0.00509
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 150,
+    "caller_ms": 976.595405,
+    "reason": 5,
+    "phase_at_cutoff": "mutex",
+    "overlap_ms": {
+      "enqueue": 0.00525,
+      "queue": 667.276133,
+      "mutex": 309.314022,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 166,
+    "caller_ms": 966.77375,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00353,
+      "queue": 966.77022,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 174,
+    "caller_ms": 968.56379,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00262,
+      "queue": 968.56117,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 180,
+    "caller_ms": 961.500644,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00155,
+      "queue": 961.499094,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 190,
+    "caller_ms": 956.253686,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00242,
+      "queue": 956.251266,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 196,
+    "caller_ms": 957.445467,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00229,
+      "queue": 957.443177,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 202,
+    "caller_ms": 956.479146,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00847,
+      "queue": 956.470676,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 214,
+    "caller_ms": 954.001929,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00292,
+      "queue": 953.999009,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 223,
+    "caller_ms": 954.284768,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00297,
+      "queue": 954.281798,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 236,
+    "caller_ms": 947.141752,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00368,
+      "queue": 947.138072,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 239,
+    "caller_ms": 927.187184,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.00283,
+      "queue": 927.184354,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  },
+  {
+    "pid": 17949,
+    "id": 250,
+    "caller_ms": 935.796129,
+    "reason": 5,
+    "phase_at_cutoff": "queue",
+    "overlap_ms": {
+      "enqueue": 0.0029,
+      "queue": 935.793229,
+      "mutex": 0.0,
+      "layout": 0.0,
+      "encode": 0.0,
+      "open": 0.0,
+      "write": 0.0,
+      "sync": 0.0,
+      "worker_final": 0.0,
+      "completion_or_scheduling": 0.0
+    }
+  }
+]

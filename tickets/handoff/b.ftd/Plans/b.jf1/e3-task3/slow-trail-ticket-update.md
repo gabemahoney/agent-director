@@ -1,0 +1,9 @@
+
+
+## Direct slow-trail hypothesis tested: negative result
+
+The requested real fault was injected in original TestDecideKeepsDurableOrigin/cursor, after its unchanged seed and before its unchanged max_wait_ms=0 Decide call. Actual Writer.mu stayed held beyond the one-second allowance until after Decide returned. Original assertions PASS: Decide1.00079228s, error nil, deliverynot_confirmed; independent reopenedDB has committeddeny/origin and proofunchanged before release1.10010628s. Audit pending1 then drains0failures/rejections. Exact historical COMMIT error did NOT occur. No precommit SQL fault was substituted, no assertions/deadlines/retries changed.
+
+Partitioned load sample reproduces callerp50952.364ms for416postCOMMITemits,400contextErrPending. For373completedworkerjoins, caller time89.129%queue,10.699%writer mutex,0.171%Sync;43worker completions censored. Eventual workerSyncmedian30.8ms; queue/mutex can outlive caller. All416actualCOMMIT and SQL result publications precede trail entry; outer guard already returned before rowtrail, so this direct same-transaction mechanism cannot cause its historical COMMIT error. Source and fault-method review has no findings. Indirect resource impact remains unproven; original historical cause UNKNOWN, no source repair/causalREDGREEN claimed.
+
+One subsequent bare make test-sandbox PASS:68Go packages(64cached/4executed),13withouttests;API fresh141.887s;430BunPASS0FAIL;1195canonical inputs unchanged. Source/test implementation unchanged. Local evidence commit records original-slow-trail/{RESULT.json,fault.patch,overlay.json,_snapshot/decide_delivery_test.fault.go,run.log,provenance.json,source-review.json}, trail-hypothesis-measure/{REPORT.md,FINAL-report.json} and trail-hypothesis-full/RESULT.json. Task3/Epic3 stayactive; mandatory historical deadline rootcause/repair remains unresolved. No scheduler groups,TLA,live acceptance orEpic4 work.

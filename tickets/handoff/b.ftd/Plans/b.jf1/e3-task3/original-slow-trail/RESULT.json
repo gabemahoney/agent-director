@@ -1,0 +1,54 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "ticket_status_updates": [],
+  "head": "a62f424747aee01e920d5404e0532bc2a577a092",
+  "result": "NEGATIVE: post-COMMIT slow-trail hypothesis did not reproduce the historical error",
+  "test": "TestDecideKeepsDurableOrigin/cursor",
+  "test_exit_code": 0,
+  "original_call_max_wait_assertions_unchanged": true,
+  "injection_point": "After original SeedDecideFixtureAgent returns, before zero := int64(0) and original api.DecideWithSleep call",
+  "fault_action": "trail.Emit(context.Background(), holder event with reused trailEncodingGate) acquires real process-singleton Writer.mu and blocks in MarshalJSON until release. Release occurs only after actual Decide has returned and 1100ms timer has fired. 8s release watchdog provides cleanup safety; it did not fire.",
+  "actual_elapsed": "1.00079228s",
+  "literal_error": "<nil>",
+  "historical_error": "store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded",
+  "historical_exact_match": false,
+  "delivery": "not_confirmed",
+  "independent_reopened_database": {
+    "decision": "deny",
+    "main_turn_end_eligible": false,
+    "agent_id": "",
+    "proven_gone": false,
+    "observed_before_mutex_release": true
+  },
+  "held_duration_at_release": "1.10010628s",
+  "audit_status_before_release": {
+    "Pending": 1,
+    "Failed": 0,
+    "Rejected": 0,
+    "LastError": ""
+  },
+  "audit_status_after_bounded_drain": {
+    "Pending": 0,
+    "Failed": 0,
+    "Rejected": 0,
+    "LastError": ""
+  },
+  "source_location_reason": "internal/store/permission.go: DecideRelayRequest calls emitDecisionCommittedContext after inWriteTx returns; blocked post-COMMIT reporting therefore does not itself retain the store runConnectionOperation guard.",
+  "canonical_changes": false,
+  "canonical_hashes_before_after_equal": true,
+  "runs": 1,
+  "full_unit_suite_run": false,
+  "integration_suites_run": false,
+  "product_red_claimed": false,
+  "fix_green_claimed": false,
+  "incomplete": "Historical COMMIT failure remains unreproduced; this negative experiment supplies no evidence-backed source fix. No precommit SQL fault was substituted.",
+  "artifacts": [
+    "run.log",
+    "provenance.json",
+    "fault.patch",
+    "overlay.json",
+    "_snapshot/decide_delivery_test.original.go",
+    "_snapshot/decide_delivery_test.fault.go",
+    "_snapshot/decide_trail_deadline_test.go"
+  ]
+}

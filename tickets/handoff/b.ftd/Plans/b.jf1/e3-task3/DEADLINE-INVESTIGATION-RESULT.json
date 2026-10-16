@@ -70,5 +70,52 @@
     "report": "dryrun-final-validation/REPORT.md"
   },
   "additional_HEAD_fresh_API_run": "Final make test-sandbox includes one further unpaired HEAD API run; all original targets PASS. It is excluded from the balanced 12420-per-revision comparison.",
-  "disposition": "Task3 remains active and blocked on historical COMMIT causal capture. Local commit contains the independently proven harness fix and diagnostic results; it does not claim to fix the historical deadline error or fulfill its required RED/GREEN."
+  "disposition": "Task3 remains active on historical COMMIT cause. Requested direct slow-post-COMMIT-trail experiment is negative: original test succeeds with writer stalled. No evidence-backed source fix/causal RED-GREEN. Diagnostic evidence is committed separately, not a product fix.",
+  "slow_trail_hypothesis_experiment": {
+    "candidate_head": "a62f424747aee01e920d5404e0532bc2a577a092",
+    "original_test": "TestDecideKeepsDurableOrigin/cursor",
+    "original_call_assertions_budget_unchanged": true,
+    "fault": "Real Writer.mu held until after actual Decide returns and past1100ms, after original seed",
+    "test_result": "PASS",
+    "actual_decide_seconds": 1.00079228,
+    "error": null,
+    "delivery": "not_confirmed",
+    "independent_durable_decision": "deny, origin/proof unchanged, observed before mutex release",
+    "historical_exact_error_reproduced": false,
+    "publication_boundary": "SQL COMMIT -> op.completed publication -> inWriteTx returns -> trail.Emit waits done/context -> written,nil. Same transaction guard has returned before trail entry.",
+    "report": "original-slow-trail/RESULT.json",
+    "review": "original-slow-trail/source-review.json"
+  },
+  "slow_trail_stage_measurement": {
+    "bounded_emits": 416,
+    "caller_p50_ms": 952.364,
+    "context_pending": 400,
+    "completed_before_deadline": 16,
+    "joined_worker_records": 373,
+    "censored_worker_records": 43,
+    "joined_caller_time_percent": {
+      "queue": 89.12864510490006,
+      "mutex": 10.69892150070964,
+      "Sync": 0.17073644551919004
+    },
+    "worker_eventual_Sync_median_ms": 30.8,
+    "all_416_COMMIT_and_publication_before_trail": true,
+    "outer_unconfirmed_guard_events": 0,
+    "limits": "Different shared canonical HOME load, observer overhead;43 censored worker completions. This sample partitions reproduced950ms behavior, not retrospective historical calls. Indirect shared-resource impact on another transaction remains unproven.",
+    "report": "trail-hypothesis-measure/FINAL-report.json"
+  },
+  "slow_trail_full_make_test_sandbox": {
+    "source_head": "a62f424747aee01e920d5404e0532bc2a577a092",
+    "make_exit": 0,
+    "Go_exit": 0,
+    "Bun_exit": 0,
+    "Go_cached": 64,
+    "Go_executed": 4,
+    "Go_no_tests": 13,
+    "API_executed_fresh_seconds": 141.887,
+    "Bun_pass": 430,
+    "Bun_fail": 0,
+    "canonical_input_hashes_unchanged": 1195,
+    "report": "trail-hypothesis-full/RESULT.json"
+  }
 }
