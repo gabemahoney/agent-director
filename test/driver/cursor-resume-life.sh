@@ -165,7 +165,7 @@ rl_default_bun() {
 rl_replay() {
  rl_fixture
  relay_scenario questions
- jq --arg session "$session" --arg root "$case_dir/native" '{loadSupport:true,waitForLoad:true,nativeConfigRoot:$root,beforeLoadReply:(.requests|map(.params.sessionId=$session)) + [{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"user_message_chunk",content:{type:"text",text:"historic resume user"}}}},{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"historic resume agent"}}}},{id:"historic-plan",method:"cursor/create_plan",params:{sessionId:$session}}]}' "$case_dir/scenario" > "$case_dir/scenario-next"
+ jq --arg session "$session" --arg root "$case_dir/native" '{loadSupport:true,waitForLoad:true,nativeConfigRoot:$root,beforeLoadReply:((.requests|map(.params.sessionId=$session)) + [{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"user_message_chunk",content:{type:"text",text:"historic resume user"}}}},{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"historic resume agent"}}}},{id:"historic-plan",method:"cursor/create_plan",params:{sessionId:$session}}])}' "$case_dir/scenario" > "$case_dir/scenario-next"
  mv "$case_dir/scenario-next" "$case_dir/scenario"
  rl_resume MCP
  check replay.denials wait_until rl_replay_denied
