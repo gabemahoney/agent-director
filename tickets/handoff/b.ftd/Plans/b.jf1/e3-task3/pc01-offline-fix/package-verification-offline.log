@@ -1,0 +1,145 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=none \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 CACHED
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 0.170 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#5 0.170 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#5 0.170 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#5 1.171 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#5 1.171 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#5 1.171 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#5 3.171 Ign:1 http://deb.debian.org/debian bookworm InRelease
+#5 3.171 Ign:2 http://deb.debian.org/debian bookworm-updates InRelease
+#5 3.171 Ign:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#5 7.172 Err:1 http://deb.debian.org/debian bookworm InRelease
+#5 7.172   Temporary failure resolving 'deb.debian.org'
+#5 7.172 Err:2 http://deb.debian.org/debian bookworm-updates InRelease
+#5 7.172   Temporary failure resolving 'deb.debian.org'
+#5 7.172 Err:3 http://deb.debian.org/debian-security bookworm-security InRelease
+#5 7.172   Temporary failure resolving 'deb.debian.org'
+#5 7.175 Reading package lists...
+#5 7.186 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm/InRelease  Temporary failure resolving 'deb.debian.org'
+#5 7.186 W: Failed to fetch http://deb.debian.org/debian/dists/bookworm-updates/InRelease  Temporary failure resolving 'deb.debian.org'
+#5 7.186 W: Failed to fetch http://deb.debian.org/debian-security/dists/bookworm-security/InRelease  Temporary failure resolving 'deb.debian.org'
+#5 7.186 W: Some index files failed to download. They have been ignored, or old ones used instead.
+#5 7.194 Reading package lists...
+#5 7.204 Building dependency tree...
+#5 7.205 Reading state information...
+#5 7.205 Package ca-certificates is not available, but is referred to by another package.
+#5 7.205 This may mean that the package is missing, has been obsoleted, or
+#5 7.205 is only available from another source
+#5 7.205 
+#5 7.205 Package xz-utils is not available, but is referred to by another package.
+#5 7.205 This may mean that the package is missing, has been obsoleted, or
+#5 7.205 is only available from another source
+#5 7.205 
+#5 7.205 E: Unable to locate package build-essential
+#5 7.205 E: Package 'ca-certificates' has no installation candidate
+#5 7.205 E: Unable to locate package curl
+#5 7.205 E: Unable to locate package git
+#5 7.205 E: Unable to locate package jq
+#5 7.205 E: Unable to locate package make
+#5 7.205 E: Unable to locate package procps
+#5 7.205 E: Unable to locate package sqlite3
+#5 7.205 E: Unable to locate package tmux
+#5 7.205 E: Unable to locate package unzip
+#5 7.205 E: Package 'xz-utils' has no installation candidate
+#5 ERROR: process "/bin/sh -c apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case \"$arch\" in         amd64) node_arch=\"x64\";   node_sha256=\"${NODE_SHA256_AMD64}\" ;;         arm64) node_arch=\"arm64\"; node_sha256=\"${NODE_SHA256_ARM64}\" ;;         *) echo \"ERROR: no pinned NODE_SHA256 for arch=$arch\" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz \"https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz\"  && echo \"${node_sha256}  /tmp/node.tar.xz\" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case \"$arch\" in         amd64) go_sha256=\"${GO_SHA256_AMD64}\" ;;         arm64) go_sha256=\"${GO_SHA256_ARM64}\" ;;         *) echo \"ERROR: no pinned GO_SHA256 for arch=$arch\" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz \"https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz\"  && echo \"${go_sha256}  /tmp/go.tgz\" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo \"${BUN_INSTALL_SHA256}  /tmp/bun-install.sh\" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh \"bun-v${BUN_VERSION}\"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox" did not complete successfully: exit code: 100
+------
+ > [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox:
+7.205 E: Package 'ca-certificates' has no installation candidate
+7.205 E: Unable to locate package curl
+7.205 E: Unable to locate package git
+7.205 E: Unable to locate package jq
+7.205 E: Unable to locate package make
+7.205 E: Unable to locate package procps
+7.205 E: Unable to locate package sqlite3
+7.205 E: Unable to locate package tmux
+7.205 E: Unable to locate package unzip
+7.205 E: Package 'xz-utils' has no installation candidate
+------
+Dockerfile:83
+--------------------
+  82 |     
+  83 | >>> RUN apt-get update \
+  84 | >>>  && apt-get install -y --no-install-recommends \
+  85 | >>>         build-essential \
+  86 | >>>         ca-certificates \
+  87 | >>>         curl \
+  88 | >>>         git \
+  89 | >>>         jq \
+  90 | >>>         make \
+  91 | >>>         procps \
+  92 | >>>         sqlite3 \
+  93 | >>>         tmux \
+  94 | >>>         unzip \
+  95 | >>>         xz-utils \
+  96 | >>>  && rm -rf /var/lib/apt/lists/* \
+  97 | >>>  # ── Node.js (SHA-pinned tarball per arch; no curl|bash) ──────────────────
+  98 | >>>  && arch=$(dpkg --print-architecture) \
+  99 | >>>  && case "$arch" in \
+ 100 | >>>         amd64) node_arch="x64";   node_sha256="${NODE_SHA256_AMD64}" ;; \
+ 101 | >>>         arm64) node_arch="arm64"; node_sha256="${NODE_SHA256_ARM64}" ;; \
+ 102 | >>>         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;; \
+ 103 | >>>     esac \
+ 104 | >>>  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" \
+ 105 | >>>  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c - \
+ 106 | >>>  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz \
+ 107 | >>>  && rm /tmp/node.tar.xz \
+ 108 | >>>  && node --version \
+ 109 | >>>  # ── Go toolchain (SHA-pinned per arch; reuses $arch from above) ──────────
+ 110 | >>>  && case "$arch" in \
+ 111 | >>>         amd64) go_sha256="${GO_SHA256_AMD64}" ;; \
+ 112 | >>>         arm64) go_sha256="${GO_SHA256_ARM64}" ;; \
+ 113 | >>>         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;; \
+ 114 | >>>     esac \
+ 115 | >>>  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \
+ 116 | >>>  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c - \
+ 117 | >>>  && tar -C /usr/local -xzf /tmp/go.tgz \
+ 118 | >>>  && rm /tmp/go.tgz \
+ 119 | >>>  && ln -s /usr/local/go/bin/go /usr/local/bin/go \
+ 120 | >>>  && go version \
+ 121 | >>>  # ── Bun runtime (installer SHA-verified before execution) ───────────────
+ 122 | >>>  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install \
+ 123 | >>>  && echo "${BUN_INSTALL_SHA256}  /tmp/bun-install.sh" | sha256sum -c - \
+ 124 | >>>  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" \
+ 125 | >>>  && rm /tmp/bun-install.sh \
+ 126 | >>>  && ln -s /opt/bun/bin/bun /usr/local/bin/bun \
+ 127 | >>>  && bun --version \
+ 128 | >>>  # Non-root user with a real /etc/passwd home that has NEITHER ~/.agent-director
+ 129 | >>>  # nor ~/.config/agent-director.
+ 130 | >>>  # uid 1000 matches the host user the podman leg maps in (--userns=keep-id).
+ 131 | >>>  && useradd --create-home --shell /bin/bash --uid 1000 sandbox \
+ 132 | >>>  # Pre-create the HOME cache dirs and make the HOME tree group-writable by
+ 133 | >>>  # group 0 (root group). The docker leg runs the container as an arbitrary host
+ 134 | >>>  # uid that is not 1000, so it cannot write this uid-1000-owned HOME by user
+ 135 | >>>  # perms; the Makefile pairs its `--user` with `--group-add 0`, and these gid-0
+ 136 | >>>  # write bits then let that process populate GOPATH/GOCACHE/bun cache. (The
+ 137 | >>>  # podman leg maps to uid 1000 via keep-id and owns HOME outright, so it does
+ 138 | >>>  # not rely on this.) Engine-agnostic: no host or engine specifics are baked in;
+ 139 | >>>  # the bind-mounted caches are host-owned at runtime.
+ 140 | >>>  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache \
+ 141 | >>>  && chgrp -R 0 /home/sandbox \
+ 142 | >>>  && chmod -R g=u /home/sandbox
+ 143 |     
+--------------------
+ERROR: failed to build: failed to solve: process "/bin/sh -c apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case \"$arch\" in         amd64) node_arch=\"x64\";   node_sha256=\"${NODE_SHA256_AMD64}\" ;;         arm64) node_arch=\"arm64\"; node_sha256=\"${NODE_SHA256_ARM64}\" ;;         *) echo \"ERROR: no pinned NODE_SHA256 for arch=$arch\" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz \"https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz\"  && echo \"${node_sha256}  /tmp/node.tar.xz\" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case \"$arch\" in         amd64) go_sha256=\"${GO_SHA256_AMD64}\" ;;         arm64) go_sha256=\"${GO_SHA256_ARM64}\" ;;         *) echo \"ERROR: no pinned GO_SHA256 for arch=$arch\" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz \"https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz\"  && echo \"${go_sha256}  /tmp/go.tgz\" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo \"${BUN_INSTALL_SHA256}  /tmp/bun-install.sh\" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh \"bun-v${BUN_VERSION}\"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox" did not complete successfully: exit code: 100
+make: *** [Makefile:455: _sandbox-build] Error 1

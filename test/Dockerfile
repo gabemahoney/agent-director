@@ -125,6 +125,28 @@ RUN arch=$(dpkg --print-architecture) \
  && chmod 0755 /opt/previous-release /opt/previous-release/install.sh /opt/previous-release/agent-director /opt/previous-release/agent-director-admin \
  && chmod 0644 /opt/previous-release/TAG
 
+# pc.01 runs with networking disabled. Resolve build/consumer dependencies and
+# build the actual public tarball here, including declaration emission. Keep a
+# complete input manifest so a stale image cannot validate newer mounted source.
+COPY pkg/ts-bun-client/package.json pkg/ts-bun-client/bun.lock pkg/ts-bun-client/bunfig.toml pkg/ts-bun-client/build.ts pkg/ts-bun-client/tsconfig.json pkg/ts-bun-client/tsconfig.typecheck.json pkg/ts-bun-client/version-floor.json pkg/ts-bun-client/README.md /opt/cursor-pane-bun/source/pkg/ts-bun-client/
+COPY pkg/ts-bun-client/src /opt/cursor-pane-bun/source/pkg/ts-bun-client/src
+COPY pkg/api/errnames/catalog.json /opt/cursor-pane-bun/source/pkg/api/errnames/catalog.json
+RUN cd /opt/cursor-pane-bun/source/pkg/ts-bun-client \
+ && { printf '%s\0' package.json bun.lock bunfig.toml build.ts tsconfig.json tsconfig.typecheck.json version-floor.json README.md ../api/errnames/catalog.json; find src -type f -print0; } \
+      | sort -z | xargs -0 sha256sum > /opt/cursor-pane-bun/source-sha256 \
+ && bun install --frozen-lockfile --no-progress \
+ && bun run build \
+ && mkdir /opt/cursor-pane-bun/pack /opt/cursor-pane-bun/consumer \
+ && bun pm pack --destination /opt/cursor-pane-bun/pack \
+ && cd /opt/cursor-pane-bun/consumer \
+ && printf '{"name":"pane-controls-consumer","type":"module"}\n' > package.json \
+ && set -- /opt/cursor-pane-bun/pack/*.tgz \
+ && test "$#" = 1 && test -f "$1" \
+ && bun add "$1" --no-progress \
+ && test -s node_modules/agent-director/dist/index.js \
+ && test -s node_modules/agent-director/dist/index.d.ts \
+ && chmod -R a+rX /opt/cursor-pane-bun
+
 # Pre-built binary + driver assets are produced by the host Makefile.
 COPY bin/agent-director /usr/local/bin/agent-director
 # The operator tool agent-director-admin (b.vqr), from the same `make build`

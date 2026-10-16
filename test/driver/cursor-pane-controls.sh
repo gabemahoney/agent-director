@@ -13,7 +13,7 @@ pc_export_evidence() {
  # retention; the standard driver's short details field is not a raw archive.
  artifact_dir="/tmp/cursor-pane-controls-artifacts/$id"
  mkdir -m 700 -p "$artifact_dir"
- for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 inspection.json public.json held-ids refused-ids; do
+ for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json held-ids refused-ids; do
   if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$artifact_dir/$name"; chmod 600 "$artifact_dir/$name"; fi
  done
  if [[ -n ${path:-} && -f $path ]]; then cp "$path" "$artifact_dir/protected.jsonl"; chmod 600 "$artifact_dir/protected.jsonl"; fi
@@ -75,15 +75,18 @@ pc_correlate() {
  node "$SOURCE_DIR/test/driver/cursor-pane-records.cjs" "$path" "$case_dir/trace.jsonl" "$case_dir/raw" "$case_dir/want.json" "$initial" "$id"
 }
 pc_install_bun() {
- check_id=installed.package.build
- mkdir -m 700 "$case_dir/pkg" "$case_dir/consumer" "$case_dir/pack"
- # Copy package inputs only; no writes to the read-only source mount or shared dist.
- for entry in package.json bun.lock bunfig.toml build.ts tsconfig.json tsconfig.typecheck.json version-floor.json README.md src; do cp -R "$SOURCE_DIR/pkg/ts-bun-client/$entry" "$case_dir/pkg/"; done
- (cd "$case_dir/pkg"; bun install --frozen-lockfile --no-progress >&2; bun run build >&2; bun pm pack --destination "$case_dir/pack" >&2)
- printf '{"name":"pane-controls-consumer","type":"module"}\n' > "$case_dir/consumer/package.json"
- mapfile -t tarballs < <(find "$case_dir/pack" -maxdepth 1 -name '*.tgz')
+ check_id=installed.package.provenance
+ # Image build performed the real frozen install, canonical build (with tsc),
+ # pack and tarball install. Compare all inputs, including added/removed src
+ # files, before using its consumer; no package manager runs while offline.
+ (cd "$SOURCE_DIR/pkg/ts-bun-client"; { printf '%s\0' package.json bun.lock bunfig.toml build.ts tsconfig.json tsconfig.typecheck.json version-floor.json README.md ../api/errnames/catalog.json; find src -type f -print0; } | sort -z | xargs -0 sha256sum) > "$case_dir/source-sha256"
+ check installed.current-source cmp /opt/cursor-pane-bun/source-sha256 "$case_dir/source-sha256"
+ mkdir -m 700 "$case_dir/consumer"
+ cp -R /opt/cursor-pane-bun/consumer/. "$case_dir/consumer/"
+ check installed.javascript test -s "$case_dir/consumer/node_modules/agent-director/dist/index.js"
+ check installed.declarations test -s "$case_dir/consumer/node_modules/agent-director/dist/index.d.ts"
+ mapfile -t tarballs < <(find /opt/cursor-pane-bun/pack -maxdepth 1 -name '*.tgz')
  check installed.one-tarball test "${#tarballs[@]}" = 1
- (cd "$case_dir/consumer"; bun add "${tarballs[0]}" --no-progress >&2)
  cp "$SOURCE_DIR/test/driver/cursor-pane-public.mjs" "$case_dir/consumer/caller.mjs"
  export PC_INSTALLED_CALLER="$case_dir/consumer/caller.mjs"
  sha256sum "${tarballs[0]}" "$(command -v agent-director)" > "$case_dir/artifact-sha256"
