@@ -136,7 +136,7 @@ func TestRepairCheckPermission(t *testing.T) {
 					case "deny":
 						timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenA)
 					case "decide":
-						if _, _, err := e.decideWith(t, e.s, "allow", ptr(int64(0)), nil); err != nil {
+						if _, _, err := e.decideWith(t, e.s, "allow", ptr(int64(5000)), nil); err != nil {
 							t.Fatalf("decide: %v", err)
 						}
 					case "mark":

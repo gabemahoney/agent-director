@@ -1,0 +1,42 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "Apiary Doc Writer, batched full-suite findings rework",
+  "result": "complete",
+  "ticket_status_updates": [],
+  "commits": [],
+  "files_changed": [
+    "docs/test-writing-guide.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/DRAFT-BUG-DECIDE-COMMIT-DEADLINE.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs-rework/SRD-DECISIONS.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs-rework/doc-writer-report.json"
+  ],
+  "srd_append": {
+    "ticket_id": "t1.ftd.hj",
+    "command": "bees append-ticket-body --ticket-id t1.ftd.hj --chunk-file tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs-rework/SRD-DECISIONS.md",
+    "result": "success; appended addendum read back via show-ticket; status remains defined"
+  },
+  "changes": [
+    "Draft retains all four historical error excerpts and historical UNKNOWN branches/root cause, while recording the distinct new operation_guard observation with its verbatim full.log excerpt.",
+    "Draft distinguishes 9.99s whole-test duration from unmeasured Decide call timing and records failed full-suite totals separately from targeted repair success.",
+    "Draft and test guide narrow preservation claims: only the later fresh semantic recovery call uses the new 5000ms helper budget; initial 100ms call, 1100ms wall bound, absolute-context/stale-relative/precommit assertions and durable allow/token inspection remain unchanged. No whole-file preservation claim remains for that file.",
+    "Test guide, draft and SRD addendum explain the per-input real-admission barrier, retained first successful claims and whole-batch emission with capacity/FIFO/cancellation/no-replay assertions preserved.",
+    "Existing caller-contract and architecture diagnostic branch documentation reviewed; no further change required for test-only fixture repairs."
+  ],
+  "verification": [
+    "Read CLAUDE.md and referenced user/readme/architecture/bug documentation guides without opening any .claude path or link.",
+    "Read commit-closeout-full and commit-closeout-fixture-repair reports, exact source diffs and decideWith helper implementation.",
+    "Verified the new excerpt verbatim against commit-closeout-full/full.log and verified the exact repair patch path exists.",
+    "Read back the appended SRD addendum and unchanged defined ticket status.",
+    "git diff --check passed."
+  ],
+  "historical_receipts": "unchanged",
+  "draft": "Unfiled plain Markdown; no bug ticket created.",
+  "deviations": [],
+  "incomplete_work": [],
+  "questions": [],
+  "limitations": [
+    "No source/test edits, test execution, heavy Docker, live account/tool access, real AD store access, ticket status changes or commit by this worker.",
+    "Fresh full sandbox and complete 17-group acceptance validation remain with the caller; targeted repair success does not satisfy those gates.",
+    "Aggregate investigation JSON metadata remains owned by caller."
+  ]
+}

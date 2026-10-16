@@ -1,0 +1,68 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "sole cancellation barrier repair and full unit owner",
+  "ticket_status_updates": [],
+  "commits": [],
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "run_count": 1,
+  "result": "passed",
+  "make_exit": 0,
+  "go_exit": 0,
+  "go_exit_evidence": "Inferred from uninstrumented Go package records and canonical recipe result; no wrapper inserted.",
+  "go_packages": {
+    "total_package_records": 81,
+    "passed": 68,
+    "failed": 0,
+    "no_test_files": 13,
+    "cached_passed": 62,
+    "fresh_passed": 6
+  },
+  "bun_exit": 0,
+  "bun_summary": {
+    "pass": 430,
+    "fail": 0,
+    "expect_calls": 1662,
+    "files": 57,
+    "runtime_seconds": 14.61
+  },
+  "failures": [],
+  "input_hashes_unchanged": true,
+  "input_changes": [],
+  "hash_proof": {
+    "input_manifest_before_sha256": "01eee7d1f71e50cff21055fc871bd8d5e7b91a6e4eaaf154ee0b2912a84818f0",
+    "input_manifest_after_sha256": "01eee7d1f71e50cff21055fc871bd8d5e7b91a6e4eaaf154ee0b2912a84818f0",
+    "full_log_sha256": "bc21be2dc6ba50a67df54aff692c8770b9b876c078d58dca7eabbfeded74d049",
+    "frozen_historical_matches": 5,
+    "changed_absolute_deadline_current_sha256": "94a7144e0cadc1b23574145ac49f23c0a6e032b6fbe548b22db59bad113fc1f4"
+  },
+  "raw_log_mode": "0o600",
+  "canonical_input_count": 3502,
+  "canonical_new_untracked_test_included": true,
+  "actual_go_source_count": 1053,
+  "historical_snapshot_go_paths_excluded_from_compiled_inventory": 20,
+  "files_changed": [
+    "internal/cursorhost/session_capacity_linux_test.go",
+    "evidence artifacts under commit-closeout-cancel-barrier-full"
+  ],
+  "targeted": {
+    "exit": 0,
+    "leaves": 6,
+    "package_elapsed_seconds": 8.483,
+    "command": "make sandbox CMD=umask 022; unset TMPDIR; gofmt -w internal/cursorhost/session_capacity_linux_test.go; git diff --check; go test ./internal/cursorhost -run ^TestCursorWaitingMailboxByteBoundaries$ -count=1 -v -timeout 90s"
+  },
+  "minimal_delta": "Added encoding/json import and bounded exact peer-receipt barrier for session/cancel with params.sessionId synthetic-session-1; immediately release HOLD; unchanged recovery wait; moved intact each-byte-reservation-cancelled wait after recovery. Prior real-admission refill barrier retained. No source/docs edits or deadline changes.",
+  "deviations": [
+    "Initial host source/evidence/metadata reads preceded sandbox-only inspection. No repository test or built binary ran on host. No .claude paths read/copied/hashed."
+  ],
+  "integration": "not dispatched; not run",
+  "incomplete_work": [],
+  "questions": [],
+  "limitations": [
+    "No historical COMMIT root cause or repair claim.",
+    "Nonverbose Go output reports package outcomes, not individual passing/skipped test counts.",
+    "Cached Go packages are identified explicitly; no cache-forcing option was used."
+  ]
+}

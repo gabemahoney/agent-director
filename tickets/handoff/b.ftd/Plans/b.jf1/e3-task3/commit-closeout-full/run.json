@@ -1,0 +1,31 @@
+{
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "start": "2026-10-16T05:53:50.222661+00:00",
+  "SANDBOX_FLAGS": "--env-file /home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-full/container.env",
+  "container_HOME": "/home/sandbox",
+  "container_TMPDIR": "unset",
+  "umask": "022",
+  "removed_environment_names": [
+    "TMUX",
+    "GIT_CONFIG_GLOBAL",
+    "TMPDIR",
+    "AGENT_DIRECTOR_AGENT",
+    "MAKEFLAGS",
+    "AGENT_DIRECTOR_LABEL_HOST",
+    "TMUX_PANE",
+    "AGENT_DIRECTOR_RELAY_MODE",
+    "AGENT_DIRECTOR_INSTANCE_ID",
+    "AGENT_DIRECTOR_LABEL_TASK"
+  ],
+  "canonical_input_count": 3504,
+  "canonical_go_file_count": 1100,
+  "new_untracked_test_included": true,
+  "note": "Bare make test-sandbox; no CMD, GOFLAGS, overlays, instrumentation, or retries.",
+  "pid": 3320529,
+  "end": "2026-10-16T05:58:00.675102+00:00",
+  "make_exit": 2
+}

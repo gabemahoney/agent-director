@@ -1,0 +1,11 @@
+
+
+### E3 Task3 closeout fixture barriers and recovery budget — implementer addendum (2026-10-15)
+
+Cursor mailbox refill tests wait for each real admission under the existing three-second fixture bound, retain its first successful claim, and emit only after the complete exact batch is admitted. Protected turn_outcome persistence precedes Stop reportWaiting and enableQueue, so it cannot serve as an admission barrier. Capacity, FIFO, cancellation, explicit refused-text resubmission and no-replay assertions remain unchanged. This is a test barrier repair, with no production behavior change.
+
+Only the later deliberate fresh-recovery call in TestDecideAbsoluteContextSurvivesParkedPhase changes from a direct 500 ms call to the existing decideWith helper with an explicit 5000 ms semantic budget and injected acknowledgement clock advancement. Its initial 100 ms Decide call, 1100 ms wall bound, absolute-context/stale-relative/precommit assertions, and durable allow/token readback remain byte-for-byte unchanged. The whole file is no longer unchanged; the exact one-line delta and historical before snapshot are retained. The two existing repair/durable-origin semantic fixtures also retain their explicit 5000 ms budgets. Product deadlines, including the fixed one-second zero-wait allowance, are unchanged; no retry or unbounded wait is added.
+
+The preserved closeout full run failed with 66 passing Go packages, two failing Go packages and 13 without tests; Bun passed 430 with zero failures. Its new fresh-recovery failure explicitly identifies branch=operation_guard for that call only. Exact Decide call timing was not measured: 9.99 s is the whole-test duration. The four historical branches and root cause remain UNKNOWN; the new observation proves neither their branch nor a timing root cause or product contract violation. The residual draft remains unfiled.
+
+Evidence: tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-full/test-writer-report.json and full.log preserve the failed full receipt; commit-closeout-fixture-repair/test-writer-report.json records targeted Cursor/API/store success, exact patches and preservation hashes. Targeted success is not a full-suite receipt. A fresh full sandbox and the user's complete 17-group acceptance gate remain closeout requirements. This addendum changes no ticket status or requirement.

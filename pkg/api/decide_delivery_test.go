@@ -589,8 +589,8 @@ func TestDecideKeepsDurableOrigin(t *testing.T) {
 			no := false
 			now := time.Now()
 			s, path := apitest.SeedDecideFixtureAgent(t, "on", agent, store.RelayRequest{RequestToken: storefix.TestRequestTokenA, ToolName: "Bash", ToolInput: "{}", MainTurnEndEligible: &no, SettledAt: now.Add(time.Hour)})
-			zero := int64(0)
-			res, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(time.Duration) { t.Fatal("zero wait slept") }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &zero})
+			setupBudget := int64(5000)
+			res, err := api.DecideWithSleep(s, api.RelayView{Now: func() time.Time { return now }}, func(d time.Duration) { now = now.Add(d) }, api.DecideParams{InstanceID: "id-d-1", RequestToken: storefix.TestRequestTokenA, Decision: "deny", MaxWaitMs: &setupBudget})
 			if err != nil || res.Delivery != api.DeliveryNotConfirmed {
 				t.Fatalf("decide %+v %v", res, err)
 			}

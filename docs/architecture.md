@@ -2335,7 +2335,11 @@ still the one it read, so it knows the row has not changed since. As built:
     ordinary I/O errors returned within the original bound retain their
     classification despite earlier cancellation. A COMMIT error is an
     unconfirmed internal outcome, not busy or proof of rollback; the durable
-    request must be read before retry.
+    request must be read before retry. Unconfirmed diagnostics distinguish
+    `branch=commit_exec` (COMMIT ExecContext returned an error) from
+    `branch=operation_guard` (caller return before result publication after
+    COMMIT started). Neither proves rollback or non-commit; both preserve
+    cause wrapping, internal-error classification and inspect-before-retry advice.
     Successful COMMIT remains authoritative despite later cleanup/reporting
     expiry.
 

@@ -1,0 +1,58 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "readonly cancellation capacity diagnosis",
+  "ticket_status_updates": [],
+  "commits": [],
+  "files_changed": ["tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-cancel-triage/engineer-report.json"],
+  "verdict": "Fixture ordering creates avoidable deadline pressure. The single failure does not establish a product cancellation bug; no product source fix or deadline increase is justified by this evidence.",
+  "observed_failure": {
+    "artifact": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-repaired-full/failed-assertion.log",
+    "test": "TestCursorWaitingMailboxByteBoundaries/aggregate/+1",
+    "assertion": "session_capacity_linux_test.go:172 cancelled active recovers: session ended Cursor ACP operation timed out",
+    "pane_evidence": "All eight waiting entries show cancellation, followed by Synthetic reply: HOLD and Cursor turn complete, followed by terminal teardown; recovery message is absent.",
+    "implication": "The peer did complete and the controller processed completion before the observed failure. A missing cancel acknowledgement is not supported. Recovery/reporting retained the original cancellation deadline. No timestamped per-event trace survives in the provided aggregate failure artifact, so allocation of elapsed time among test polling, fsync, hooks and scheduling remains unproved."
+  },
+  "source_evidence": [
+    {"file": "internal/cursorhost/session_capacity_linux_test.go", "lines": "99-101,103-117,125-169", "finding": "HOLD is active while eight individually legal MiB entries fill aggregate capacity; +1 is refused. After interrupt, the test repeatedly rereads/parses the protected transcript until all queued cancellation records exist, and only then writes Release."},
+    {"file": "internal/cursorhost/session_fixture_linux_test.go", "lines": "120-138,148-170", "finding": "c.wait polls at 1ms; c.records opens store state, reads the whole transcript and JSON-decodes every record, including all retained 8MiB accepted texts and custom record decoding. This work is performed repeatedly during the cancellation budget."},
+    {"file": "internal/testsupport/cursorfix/runtime.js", "lines": "30-32,53-71,86-89", "finding": "Every incoming complete ACP frame is appended synchronously to trace before method handling. HOLD asynchronously waits only on Release. There is no session/cancel branch, acknowledgement or automatic HOLD cancellation. After Release, HOLD sends an update and end_turn response."},
+    {"file": "internal/testsupport/cursorfix/cursorfix.go", "lines": "35-38,45-62,64-77", "finding": "Runtime.Frames reads the received-frame trace and parses complete newline-terminated frames. This existing fixture interface is a trustworthy peer-receipt barrier without terminal polling or product changes."},
+    {"file": "internal/cursorhost/protocol.go", "lines": "18,302-304", "finding": "cancelWait is three seconds. notify enqueues a notification through p.send; enqueue alone does not prove peer receipt."},
+    {"file": "internal/cursorhost/session.go", "lines": "294-308,313-344,354-372,569-585,639-645", "finding": "First control fixes cancellation deadline from input.at before enqueueing session/cancel. input_control and submission_cancel_requested records precede serial queued cancellations. Each protected record is awaited with the same deadline supervised; expiry returns Cursor ACP operation timed out. Queued cancellations precede handling the peer completion."},
+    {"file": "internal/cursorhost/transcript_linux.go", "lines": "83-118", "finding": "Each record verifies protected identity, marshals and writes its own JSON line, and synchronously Syncs it. Serial cancellation persistence therefore consumes part of the fixed cancellation deadline by design."},
+    {"file": "internal/cursorhost/session.go", "lines": "1117-1142,675-700", "finding": "Completion records turn_outcome and reports Stop while cancellation deadline remains set; idleControl performs recovery reporting before stopping deadline and displaying recovery. The observed turn-complete message does not prove recovery finished."},
+    {"file": "docs/architecture.md", "lines": "165-172", "finding": "Architecture explicitly requires first-control three-second deadline to supervise cancellation, slow protected records, reporting and finalization. Keeping this contract is necessary."}
+  ],
+  "proposed_test_only_change": {
+    "file": "internal/cursorhost/session_capacity_linux_test.go",
+    "location": "159-172",
+    "steps": [
+      "Keep all pre-interrupt acceptance, byte-boundary, explicit refusal, exact FIFO text/order and active-only peer receipt checks unchanged.",
+      "After i.emit(terminalInput{interrupt: true}), use c.wait with a predicate iterating c.e.runtime.Frames(t). Match frame method exactly session/cancel, decode params.sessionId, and require synthetic-session-1. Add encoding/json import if using json.Unmarshal. This fixture trace contains only initialize, session/new, active HOLD prompt and the cancel notification, not the 8MiB protected accepted text.",
+      "Immediately after that peer-receipt barrier, write c.e.runtime.Release exactly as the current test does.",
+      "Wait for the existing fixture human-pane recovery message using its current predicate and finite budget.",
+      "Move the existing each-byte-reservation-cancelled wait intact after recovery and before resubmission/refill. Product loop ordering ensures those dispositions precede recovery; moving this observation avoids repeatedly parsing 8MiB during the product cancellation budget.",
+      "Keep all subsequent resubmission, refill capacity, FIFO, exact-once cancellation, started=false, visible disposition and raw-byte no-replay assertions unchanged."
+    ],
+    "barrier_reasoning": "Peer receipt establishes the cancel notification was issued and consumed by the fixture before Release can let HOLD finish normally. Product control already disabled admission and retired queue epochs before enqueueing that notification. The fixture intentionally does not acknowledge session/cancel; its eventual correlated end_turn is accepted by product cancellation logic. No new fixture hook is needed.",
+    "rejected_shortcut": "Writing Release immediately after i.emit is weaker: mailbox insertion returns before controller handling or peer receipt, permitting HOLD normal completion to race actual cancellation. Do not use unguarded early Release.",
+    "alternative": "An input_control protected record proves controller control handling and notify enqueue have happened, but not peer receipt. Existing Runtime.Frames provides the stronger barrier with much cheaper reads than the large transcript. Do not poll the terminal for AD state or identity."
+  },
+  "retained_assertions": [
+    "Individual and aggregate -1/0/+1 byte boundaries and capacity refusal reason/count",
+    "Exact accepted text, order and IDs; active HOLD alone reaches peer before cancellation",
+    "Every queued reservation cancelled exactly once with started=false and visible disposition",
+    "Recovery and explicit resubmission of the exact refused text only after space is available",
+    "Same byte capacity can refill and drain through ACP in FIFO order",
+    "Cancelled accepted texts absent from final peer prompts and raw received bytes"
+  ],
+  "validation_recommendation": "A test-writer may implement the ordering-only change and run only TestCursorWaitingMailboxByteBoundaries first in make sandbox CMD with a finite package timeout. If it still fails, preserve timestamped protected records and synthetic received/sent frame artifacts before considering any product diagnosis. No full run or broad retry was performed by this lane.",
+  "tests_run": [],
+  "deviations": [
+    "Initial pwd and rg file enumeration were host metadata-only reads before switching subsequent shell reads to make sandbox CMD. No repo test or built binary ran on host.",
+    "One sandbox read command failed because rg is absent from the image; subsequent searches used grep and sed. No tests ran.",
+    "No Bees callable tool was available in this lane; dispatch supplied task state and expressly prohibited status changes. No ticket status was touched."
+  ],
+  "incomplete_work": ["Proposed test change intentionally not applied; this lane was dispatched readonly.", "No reproduction or timestamped event-budget measurement was requested or performed."],
+  "questions": []
+}

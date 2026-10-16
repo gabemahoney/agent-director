@@ -1,0 +1,52 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "role": "Independent unchanged GREEN verification",
+  "status_updates": [],
+  "result": "passed",
+  "commands": {
+    "entrypoint": "make sandbox CMD='<exact contents in sandbox-command.sh>'",
+    "store": "go test ./internal/store -run '^(TestDecisionUnconfirmedCommitBranch|TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry)$' -count=1 -v -timeout 60s",
+    "api": "go test ./pkg/api -run '^(TestRepairCheckPermission|TestDecideKeepsDurableOrigin)$' -count=1 -v -timeout 90s"
+  },
+  "results": {
+    "exit_code": 0,
+    "store_elapsed_seconds": 1.029,
+    "api_elapsed_seconds": 0.389,
+    "branch_tests": "Both commit_exec and operation_guard passed unchanged, including original cause, no ErrStoreBusy, preserved advice, opposite-marker exclusion, cleanup/reuse and durable allow checks.",
+    "deadline_boundaries": "All five existing SQLite-boundary leaves passed.",
+    "advice_follow": "Existing inspect-before-retry follow test passed.",
+    "api_setup": "Both API functions passed, including Claude/Codex/Cursor durable-origin leaves and all repair leaves; only previously frozen setup budgets changed to 5000ms with injected-clock ack advance."
+  },
+  "hash_proof": {
+    "before": "All three frozen test files and all three preserved deadline regressions match RED manifests.",
+    "after": "All six files rechecked after successful targeted execution and still match.",
+    "branch_test_sha256": "04ad7df1ac6c62fa656526e817e5853f928aebbb3093b7c7a03031bdaf1aab29",
+    "manifests": [
+      "../commit-branch-red/tests.sha256",
+      "../commit-branch-red/preserved-regressions.sha256"
+    ],
+    "logs": [
+      "frozen-tests-check.log",
+      "preserved-regressions-check.log",
+      "frozen-tests-after-check.log",
+      "preserved-regressions-after-check.log"
+    ]
+  },
+  "environment": {
+    "HOME": "/home/sandbox",
+    "umask": "022",
+    "TMPDIR": "unset",
+    "stripped": "AGENT_DIRECTOR_* except AGENT_DIRECTOR_TEST_SANDBOX; TMUX, TMUX_PANE, GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_GLOBAL": "fresh container-local /tmp/commit-branch-green.XXXXXX/gitconfig"
+  },
+  "files_changed": "Evidence artifacts only under this directory; no source/test/doc edits.",
+  "deviations": [
+    "Initial invocation mistakenly passed the Makefile's forwarding variable recursively as CMD. No tests started; stopped the container and reran with literal CMD. Initial wrapper log retained in attempt-01-wrapper-no-tests.log."
+  ],
+  "full_suite": "not run, per dispatch; deferred to fresh sole full Test Writer after docs and residual draft settle",
+  "integration": "not dispatched; no integration suite run",
+  "incomplete_work": [],
+  "questions": [],
+  "limitations": "Diagnostic labels only. No historical COMMIT failure root cause or repair claimed. No statuses or commits."
+}

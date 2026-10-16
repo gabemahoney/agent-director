@@ -1,0 +1,33 @@
+{
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "prepared": "2026-10-16T06:06:26.460Z",
+  "SANDBOX_FLAGS": "--env-file /home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-repaired-full/container.env",
+  "container_HOME": "/home/sandbox",
+  "container_TMPDIR": "unset",
+  "umask": "022",
+  "canonical_input_count": 3502,
+  "compiled_go_source_count": 1053,
+  "package_count": 81,
+  "new_untracked_test_included": true,
+  "note": "One bare make test-sandbox; no CMD override, GOFLAGS, instrumentation, overlays or retries.",
+  "start": "2026-10-16T06:06:37.954Z",
+  "end": "2026-10-16T06:10:19.643Z",
+  "make_exit": 2,
+  "removed_environment_names": [
+    "AGENT_DIRECTOR_AGENT",
+    "AGENT_DIRECTOR_INSTANCE_ID",
+    "AGENT_DIRECTOR_LABEL_HOST",
+    "AGENT_DIRECTOR_LABEL_TASK",
+    "AGENT_DIRECTOR_RELAY_MODE",
+    "GIT_CONFIG_GLOBAL",
+    "MAKEFLAGS",
+    "TMPDIR",
+    "TMUX",
+    "TMUX_PANE"
+  ],
+  "time_provenance": "UTC filesystem mtimes of the launcher start/end receipts; original shell strings incorrectly suffixed local wall times with Z and are retained only as raw artifacts."
+}

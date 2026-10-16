@@ -54,7 +54,7 @@ func TestDecideAbsoluteContextSurvivesParkedPhase(t *testing.T) {
 	// caller-contract: "Retry only as a new, deliberate call with a fresh budget."
 	// The parked call held no competing lock. Deliberately start a fresh operation,
 	// then inspect its durable request through the public recovery verb.
-	if _, err := api.Decide(e.s, e.view(), api.DecideParams{InstanceID: e.id, RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(500))}); err != nil {
+	if _, _, err := e.decideWith(t, e.s, "allow", ptr(int64(5000)), nil); err != nil {
 		t.Fatalf("deliberate fresh-budget decision: %v", err)
 	}
 	got := e.getPermission(t, e.s)

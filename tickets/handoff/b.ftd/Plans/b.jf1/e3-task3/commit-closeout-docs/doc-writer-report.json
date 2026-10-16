@@ -1,0 +1,31 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "Apiary Doc Writer",
+  "ticket_status_updates": [],
+  "files_changed": [
+    "docs/caller-contract.md",
+    "docs/architecture.md",
+    "docs/test-writing-guide.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/DRAFT-BUG-DECIDE-COMMIT-DEADLINE.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs/SRD-DECISIONS.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs/doc-writer-report.json"
+  ],
+  "srd_append": {
+    "ticket_id": "t1.ftd.hj",
+    "command": "bees append-ticket-body --ticket-id t1.ftd.hj --chunk-file tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-docs/SRD-DECISIONS.md",
+    "result": "success; exact appended chunk verified via show-ticket; status remains defined"
+  },
+  "verification": [
+    "Read the three documentation guides referenced by CLAUDE.md and bug-writing-guide.md; followed no prohibited links.",
+    "Reviewed source branch strings, settled Engineer RED/GREEN reports and setup-budget source.",
+    "Both complete historical error excerpt blocks programmatically matched raw logs verbatim; all four full subtest names retained.",
+    "Read balanced measurement result, direct slow-trail result and trail phase report; historical root cause/branch UNKNOWN retained.",
+    "git diff --check passed; docs-only review completed."
+  ],
+  "interpretation": "Diagnostic RED/GREEN proves future branch distinction, not a historical root-cause fix. Finite 5000ms semantic fixtures retain assertions and simulated clock advance without changing product deadline policy or dedicated deadline tests. Whole-subtest durations are not Decide call durations.",
+  "draft": "Unfiled plain Markdown for user to file; no actual bug ticket or status created.",
+  "deviations": [],
+  "incomplete_work": [],
+  "questions": [],
+  "limitations": "No source/test edits, test execution, full sandbox, acceptance group, live tool/account work or commit by this documentation worker. Final full validation remains with caller/Test Writer."
+}

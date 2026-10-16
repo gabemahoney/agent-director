@@ -1,0 +1,213 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+make: *** [Makefile:735: sandbox] Error 137
+=== RUN   TestDecisionUnconfirmedCommitBranch
+=== RUN   TestDecisionUnconfirmedCommitBranch/commit_exec
+=== RUN   TestDecisionUnconfirmedCommitBranch/operation_guard
+--- PASS: TestDecisionUnconfirmedCommitBranch (0.05s)
+    --- PASS: TestDecisionUnconfirmedCommitBranch/commit_exec (0.02s)
+    --- PASS: TestDecisionUnconfirmedCommitBranch/operation_guard (0.02s)
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response
+--- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries (0.85s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL (0.17s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking (0.17s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback (0.17s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore (0.17s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response (0.17s)
+=== RUN   TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+=== PAUSE TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+=== CONT  TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+--- PASS: TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry (0.13s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	1.029s
+=== RUN   TestDecideKeepsDurableOrigin
+=== PAUSE TestDecideKeepsDurableOrigin
+=== RUN   TestRepairCheckPermission
+=== PAUSE TestRepairCheckPermission
+=== CONT  TestDecideKeepsDurableOrigin
+=== RUN   TestDecideKeepsDurableOrigin/claude
+=== PAUSE TestDecideKeepsDurableOrigin/claude
+=== RUN   TestDecideKeepsDurableOrigin/codex
+=== CONT  TestRepairCheckPermission
+=== RUN   TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification
+=== PAUSE TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification
+=== RUN   TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered
+=== PAUSE TestDecideKeepsDurableOrigin/codex
+=== PAUSE TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered
+=== RUN   TestDecideKeepsDurableOrigin/cursor
+=== PAUSE TestDecideKeepsDurableOrigin/cursor
+=== RUN   TestRepairCheckPermission/delivered,_no_idle_Notification
+=== CONT  TestDecideKeepsDurableOrigin/cursor
+=== CONT  TestDecideKeepsDurableOrigin/claude
+=== CONT  TestDecideKeepsDurableOrigin/codex
+=== PAUSE TestRepairCheckPermission/delivered,_no_idle_Notification
+=== RUN   TestRepairCheckPermission/delivered,_its_hook_still_running
+=== PAUSE TestRepairCheckPermission/delivered,_its_hook_still_running
+=== RUN   TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== PAUSE TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== RUN   TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by
+=== PAUSE TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by
+=== RUN   TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone
+=== RUN   TestRepairCheckPermission/undecided,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/undecided,_its_hook_gone
+=== RUN   TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== RUN   TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== RUN   TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== RUN   TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== RUN   TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== PAUSE TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== RUN   TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== PAUSE TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== RUN   TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered
+=== PAUSE TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered
+=== RUN   TestRepairCheckPermission/codex/delivered,_no_idle_Notification
+=== PAUSE TestRepairCheckPermission/codex/delivered,_no_idle_Notification
+=== RUN   TestRepairCheckPermission/codex/delivered,_its_hook_still_running
+=== PAUSE TestRepairCheckPermission/codex/delivered,_its_hook_still_running
+=== RUN   TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== PAUSE TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== RUN   TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by
+=== PAUSE TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by
+=== RUN   TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/undecided,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/undecided,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== PAUSE TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== RUN   TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== PAUSE TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== RUN   TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== PAUSE TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== RUN   TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== PAUSE TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== CONT  TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification
+=== CONT  TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered
+=== CONT  TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/undecided,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== CONT  TestRepairCheckPermission/codex/delivered,_its_hook_still_running
+=== CONT  TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== CONT  TestRepairCheckPermission/codex/delivered,_no_idle_Notification
+=== CONT  TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone
+=== CONT  TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by
+=== CONT  TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== CONT  TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered
+=== CONT  TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== CONT  TestRepairCheckPermission/undecided,_its_hook_gone
+=== CONT  TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by
+=== CONT  TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/delivered,_its_hook_still_running
+=== CONT  TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered
+=== CONT  TestRepairCheckPermission/delivered,_no_idle_Notification
+=== CONT  TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== CONT  TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered
+=== CONT  TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running
+=== CONT  TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone
+=== CONT  TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by
+--- PASS: TestDecideKeepsDurableOrigin (0.00s)
+    --- PASS: TestDecideKeepsDurableOrigin/claude (0.19s)
+    --- PASS: TestDecideKeepsDurableOrigin/codex (0.23s)
+    --- PASS: TestDecideKeepsDurableOrigin/cursor (0.29s)
+--- PASS: TestRepairCheckPermission (0.00s)
+    --- PASS: TestRepairCheckPermission/codex/delivered,_its_hook_still_running (0.19s)
+    --- PASS: TestRepairCheckPermission/codex/undecided,_its_hook_gone (0.20s)
+    --- PASS: TestRepairCheckPermission/undecided,_its_hook_gone (0.20s)
+    --- PASS: TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by (0.21s)
+    --- PASS: TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running (0.23s)
+    --- PASS: TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered (0.25s)
+    --- PASS: TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by (0.24s)
+    --- PASS: TestRepairCheckPermission/delivered,_its_hook_still_running (0.24s)
+    --- PASS: TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running (0.25s)
+    --- PASS: TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone (0.25s)
+    --- PASS: TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone (0.26s)
+    --- PASS: TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone (0.26s)
+    --- PASS: TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone (0.26s)
+    --- PASS: TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone (0.26s)
+    --- PASS: TestRepairCheckPermission/codex/delivered,_no_idle_Notification (0.27s)
+    --- PASS: TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification (0.27s)
+    --- PASS: TestRepairCheckPermission/delivered,_no_idle_Notification (0.27s)
+    --- PASS: TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone (0.27s)
+    --- PASS: TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by (0.27s)
+    --- PASS: TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by (0.27s)
+    --- PASS: TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone (0.27s)
+    --- PASS: TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered (0.28s)
+    --- PASS: TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone (0.28s)
+    --- PASS: TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone (0.30s)
+    --- PASS: TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone (0.31s)
+    --- PASS: TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered (0.35s)
+    --- PASS: TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered (0.36s)
+    --- PASS: TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered (0.36s)
+    --- PASS: TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered (0.37s)
+    --- PASS: TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered (0.37s)
+    --- PASS: TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered (0.37s)
+    --- PASS: TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered (0.38s)
+    --- PASS: TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered (0.38s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	0.389s

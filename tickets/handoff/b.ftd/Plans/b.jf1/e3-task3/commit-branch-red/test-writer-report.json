@@ -1,0 +1,28 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "status_updates": [],
+  "source_changed": false,
+  "test_files": ["internal/store/commit_branch_test.go", "pkg/api/find_missing_repair_test.go", "pkg/api/decide_delivery_test.go"],
+  "red": {
+    "command": "make sandbox CMD='<sanitized environment>; go test ./internal/store -run ^TestDecisionUnconfirmedCommitBranch$ -count=1 -v -timeout 30s'",
+    "log": "red.log",
+    "result": "Exactly two failures, both missing distinct branch markers; all other assertions and cleanup passed",
+    "commit_exec": "Actual native COMMIT completes; afterCommit immediately returns context.DeadlineExceeded with outer 5-second context still live when result is received. Original cause preserved; not ErrStoreBusy.",
+    "operation_guard": "Actual native COMMIT completes; afterCommit closes reached then holds on release without inspecting context. Caller cancels context after reached. DefaultLockWait avoids manufacturing an absolute deadline so the guard observes cancellation. Caller returns context.Canceled while native response is still held. Original cause preserved; not ErrStoreBusy.",
+    "cleanup": "Every path cancels/releases, joins caller, waits for pool lease cleanup and operation admission, checks restored busy_timeout, transaction reuse, and independently reads durable allow verdict.",
+    "original_attempt": "attempt-01-fixture-deadline.log retained. Initial guard fixture passed 5-second maxWait, which made the operation absolute-deadline-bound and intentionally delayed cancellation return beyond the 2-second watchdog. Fixed fixture before claiming causal RED. No source edit required."
+  },
+  "setup_budget": {
+    "command": "make sandbox CMD='<sanitized environment>; go test ./pkg/api -run ^(TestRepairCheckPermission|TestDecideKeepsDurableOrigin)$ -count=1 -v -timeout 90s'",
+    "log": "setup-budget.log",
+    "result": "passed, package elapsed 0.400s",
+    "rationale": "These tests assert later repair behavior and persistent origin/proof semantics, not zero execution budget. Only their setup verdicts now request 5000ms. Repair reuses decideWith's simulated ack sleep advancing e.now; its one-second logical ack wait remains before settled+one-hour. Durable origin advances its private clock only by simulated ack sleep, avoiding frozen-clock infinite polling and real sleeps; retains nil error, not_confirmed, reopened durable-origin and proof assertions for Claude/Codex/Cursor. No retries or product policy changes."
+  },
+  "evidence": ["source-before.sha256", "source-after.sha256", "tests.sha256", "preserved-regressions.sha256", "_snapshot/"],
+  "preserved": "deadline_boundary_test.go, decide_absolute_deadline_test.go and decide_trail_deadline_test.go unchanged; no dedicated zero/deadline test edits",
+  "limitations": "Internal store tests assert unnamed unconfirmed errors and absence of ErrStoreBusy. Public ErrInternal catalog mapping lives in pkg/api/errnames and cannot be imported into package store tests without a cycle; no new public classification test was added in this stage.",
+  "full_suite": "not run, per dispatch",
+  "integration": "not dispatched",
+  "questions": []
+}

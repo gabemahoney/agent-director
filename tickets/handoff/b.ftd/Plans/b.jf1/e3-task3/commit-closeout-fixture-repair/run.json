@@ -1,0 +1,19 @@
+{
+  "start": "2026-10-16T06:02:09.524331+00:00",
+  "removed_environment_names": [
+    "TMUX",
+    "GIT_CONFIG_GLOBAL",
+    "TMPDIR",
+    "AGENT_DIRECTOR_AGENT",
+    "MAKEFLAGS",
+    "AGENT_DIRECTOR_LABEL_HOST",
+    "TMUX_PANE",
+    "AGENT_DIRECTOR_RELAY_MODE",
+    "AGENT_DIRECTOR_INSTANCE_ID",
+    "AGENT_DIRECTOR_LABEL_TASK"
+  ],
+  "entrypoint": "make sandbox CMD=<literal sandbox-command.sh>",
+  "full_suite": false,
+  "exit_code": 0,
+  "end": "2026-10-16T06:02:25.978316+00:00"
+}

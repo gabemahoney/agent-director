@@ -448,9 +448,13 @@ notices; neither a successful decision nor process exit confirms audit
 durability.
 
 An `ErrInternal` reporting an unconfirmed commit is different from a
-precommit refusal: the verdict may already be recorded. Inspect the durable
-request with `get-permission` and its `request_token` before deciding whether
-to retry. Do not infer that nothing was written, resend an uncertain approval,
+precommit refusal: the verdict may already be recorded. The diagnostic marker
+`branch=commit_exec` means COMMIT execution returned an error;
+`branch=operation_guard` means the caller returned before the operation result
+was published after COMMIT started. Neither marker proves rollback or that
+COMMIT did not happen. These markers are advice text, not error classifications.
+Inspect the durable request with `get-permission` and its `request_token`
+before deciding whether to retry. Do not infer that nothing was written, resend an uncertain approval,
 or automatically replay the call. Cancellation does not undo an already
 committed verdict. After a confirmed commit, later deadline exhaustion keeps
 the verdict and returns the available delivery facts; follow `not_confirmed`

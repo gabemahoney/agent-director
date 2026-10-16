@@ -1,0 +1,48 @@
+[
+  {
+    "file": "internal/store/commit_branch_test.go",
+    "expected": "04ad7df1ac6c62fa656526e817e5853f928aebbb3093b7c7a03031bdaf1aab29",
+    "actual": "04ad7df1ac6c62fa656526e817e5853f928aebbb3093b7c7a03031bdaf1aab29",
+    "matches": true,
+    "expected_exception": false
+  },
+  {
+    "file": "pkg/api/find_missing_repair_test.go",
+    "expected": "f6089ae6b25fb948a43fe3dc01123250438ea8b85252eb86395e516204fbbc0c",
+    "actual": "f6089ae6b25fb948a43fe3dc01123250438ea8b85252eb86395e516204fbbc0c",
+    "matches": true,
+    "expected_exception": false
+  },
+  {
+    "file": "pkg/api/decide_delivery_test.go",
+    "expected": "cb2258cf07ed5e30846d4021e791f4823a878da425144db765358a4d28230f17",
+    "actual": "cb2258cf07ed5e30846d4021e791f4823a878da425144db765358a4d28230f17",
+    "matches": true,
+    "expected_exception": false
+  },
+  {
+    "file": "internal/store/deadline_boundary_test.go",
+    "expected": "fcf8f8c66e33399b3bdc416ac04e9aa09c13d13f6716d2e59c26d4c0427bf69a",
+    "actual": "fcf8f8c66e33399b3bdc416ac04e9aa09c13d13f6716d2e59c26d4c0427bf69a",
+    "matches": true,
+    "expected_exception": false
+  },
+  {
+    "file": "pkg/api/decide_absolute_deadline_test.go",
+    "expected": "312e70cbe2bcd78933e387ced4a13a5fccd2ce54be875d4464b917a0601d23cb",
+    "actual": "94a7144e0cadc1b23574145ac49f23c0a6e032b6fbe548b22db59bad113fc1f4",
+    "matches": false,
+    "expected_exception": true
+  },
+  {
+    "file": "pkg/api/decide_trail_deadline_test.go",
+    "expected": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "actual": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "matches": true,
+    "expected_exception": false
+  },
+  {
+    "absolute_deadline_only_change": "one later semantic recovery call; entire remainder byte-for-byte identical",
+    "before_matches_historical_manifest": true
+  }
+]

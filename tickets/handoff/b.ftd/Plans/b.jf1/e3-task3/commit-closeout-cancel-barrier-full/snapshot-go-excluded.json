@@ -1,0 +1,22 @@
+[
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/cmd/agent-director/main.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/cursorhost/requests.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/connection_cleanup.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/cursor_permission.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/cursor_prompt.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/cursor_rotation.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/lockwait.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/permission.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/relay_writes.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/sqlite_connector.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/store/store.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/trail/deadline.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/internal/trail/trail.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/pkg/api/client.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before/pkg/api/decide.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/_before/internal/store/cursor_prompt.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/_before/internal/store/cursor_rotation.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/_before/internal/store/lockwait.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/_before/internal/store/sqlite_connector.go",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/original-slow-trail/_snapshot/decide_delivery_test.fault.go"
+]

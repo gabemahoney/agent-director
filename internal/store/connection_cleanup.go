@@ -100,7 +100,7 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 			cause = returnCtx.Err()
 		}
 		if op.commitStarted {
-			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying: %w", cause)
+			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): %w", cause)
 		}
 		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, cause)
 	}

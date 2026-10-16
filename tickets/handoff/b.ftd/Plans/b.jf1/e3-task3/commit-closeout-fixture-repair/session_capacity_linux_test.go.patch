@@ -1,0 +1,21 @@
+--- internal/cursorhost/session_capacity_linux_test.go.before
++++ internal/cursorhost/session_capacity_linux_test.go
+@@ -200,11 +200,13 @@
+ 				}
+ 				acceptedBeforeRefill := rotationRecordCount(c, t, "submission_accepted")
+ 				var consumed []terminalInput
+-				for _, text := range refill {
+-					if !i.admit() {
+-						t.Fatal("waiting refill lacked consumption-time authority")
+-					}
+-					consumed = append(consumed, terminalInput{text: text, accepted: true})
++				for n, text := range refill {
++					input := terminalInput{text: text}
++					c.wait(t, fmt.Sprintf("refill consumption authority %d", n+1), func() bool {
++						input.accepted = i.admit()
++						return input.accepted
++					})
++					consumed = append(consumed, input)
+ 				}
+ 				for _, input := range consumed {
+ 					i.emit(input)

@@ -4,6 +4,7 @@ package cursorhost
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -157,6 +158,27 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 					})
 				}
 				i.emit(terminalInput{interrupt: true})
+				c.wait(t, "peer receives active cancellation", func() bool {
+					for _, frame := range c.e.runtime.Frames(t) {
+						if string(frame["method"]) != `"session/cancel"` {
+							continue
+						}
+						var params struct {
+							SessionID string `json:"sessionId"`
+						}
+						if err := json.Unmarshal(frame["params"], &params); err != nil {
+							t.Fatal(err)
+						}
+						if params.SessionID == "synthetic-session-1" {
+							return true
+						}
+					}
+					return false
+				})
+				if err := os.WriteFile(c.e.runtime.Release, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				c.wait(t, "cancelled active recovers", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
 				c.wait(t, "each byte reservation cancelled", func() bool {
 					n := 0
 					for _, r := range c.records(t) {
@@ -166,10 +188,6 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 					}
 					return n == len(ids)
 				})
-				if err := os.WriteFile(c.e.runtime.Release, nil, 0600); err != nil {
-					t.Fatal(err)
-				}
-				c.wait(t, "cancelled active recovers", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
 				expected := []string{"HOLD"}
 				if scope == "aggregate" && delta == 1 {
 					// Follow the capacity advice: after space is available, explicitly
@@ -200,11 +218,13 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 				}
 				acceptedBeforeRefill := rotationRecordCount(c, t, "submission_accepted")
 				var consumed []terminalInput
-				for _, text := range refill {
-					if !i.admit() {
-						t.Fatal("waiting refill lacked consumption-time authority")
-					}
-					consumed = append(consumed, terminalInput{text: text, accepted: true})
+				for n, text := range refill {
+					input := terminalInput{text: text}
+					c.wait(t, fmt.Sprintf("refill consumption authority %d", n+1), func() bool {
+						input.accepted = i.admit()
+						return input.accepted
+					})
+					consumed = append(consumed, input)
 				}
 				for _, input := range consumed {
 					i.emit(input)

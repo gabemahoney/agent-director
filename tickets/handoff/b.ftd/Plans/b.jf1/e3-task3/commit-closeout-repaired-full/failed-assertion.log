@@ -1,0 +1,27 @@
+--- FAIL: TestCursorWaitingMailboxByteBoundaries (9.97s)
+    --- FAIL: TestCursorWaitingMailboxByteBoundaries/aggregate/+1 (3.85s)
+        session_capacity_linux_test.go:172: cancelled active recovers: session ended Cursor ACP operation timed out; pane=[?2004hCursor gateway: starting a fresh conversation
+            Cursor ready
+            > Cursor submission 1 accepted
+            Cursor submission 2 accepted
+            Cursor submission 3 accepted
+            Cursor submission 4 accepted
+            Cursor submission 5 accepted
+            Cursor submission 6 accepted
+            Cursor submission 7 accepted
+            Cursor submission 8 accepted
+            Cursor input refused while starting or busy (capacity); nothing sent
+            Cancellation requested
+            Cursor submission 1 cancelled before dispatch: interruption or shutdown
+            Cursor submission 2 cancelled before dispatch: interruption or shutdown
+            Cursor submission 3 cancelled before dispatch: interruption or shutdown
+            Cursor submission 4 cancelled before dispatch: interruption or shutdown
+            Cursor submission 5 cancelled before dispatch: interruption or shutdown
+            Cursor submission 6 cancelled before dispatch: interruption or shutdown
+            Cursor submission 7 cancelled before dispatch: interruption or shutdown
+            Cursor submission 8 cancelled before dispatch: interruption or shutdown
+            Synthetic reply: HOLD
+            Cursor turn complete
+            > [?2004l
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/cursorhost	80.734s

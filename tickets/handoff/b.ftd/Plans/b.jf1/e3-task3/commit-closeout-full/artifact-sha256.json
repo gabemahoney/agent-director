@@ -1,0 +1,67 @@
+[
+  {
+    "path": "RESULT.json",
+    "sha256": "4d9e1443f575a1c1fd1e8b802c807f8e841b2501f47be56b9a1c5cc4779fca01",
+    "bytes": 2408
+  },
+  {
+    "path": "container.env",
+    "sha256": "fa02176b43a7b0b3f5aed2073edc07d1eeb28ecb24fea1371b33008c6cdf9384",
+    "bytes": 117
+  },
+  {
+    "path": "frozen-after.json",
+    "sha256": "dc24a0c7c60f87b8fa477cc6cc3134b6e38e7b8d8923619b55bdfda899ec4975",
+    "bytes": 1610
+  },
+  {
+    "path": "frozen-before.json",
+    "sha256": "dc24a0c7c60f87b8fa477cc6cc3134b6e38e7b8d8923619b55bdfda899ec4975",
+    "bytes": 1610
+  },
+  {
+    "path": "full.log",
+    "sha256": "22ac8f22df720342649bdc6d8358f4f2940a76eeb3086da9feb90341dbdf949e",
+    "bytes": 64241
+  },
+  {
+    "path": "gitconfig",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  {
+    "path": "go-source-path-inventory.json",
+    "sha256": "dde815e6f0879e8f264e9934d917e7f3542585f2fc32c7d5d284bd3ca5a83a44",
+    "bytes": 51142
+  },
+  {
+    "path": "ignored-go-paths.json",
+    "sha256": "d685611348ada5ac07dee95c6b4086f17c63f8adfa20fd83671fd5266acf56cc",
+    "bytes": 1189781
+  },
+  {
+    "path": "input-manifest-after.json",
+    "sha256": "f05c603f40f017007c903411df40b5003136d0858b0d6f10b85710f03e33271e",
+    "bytes": 703085
+  },
+  {
+    "path": "input-manifest-before.json",
+    "sha256": "f05c603f40f017007c903411df40b5003136d0858b0d6f10b85710f03e33271e",
+    "bytes": 703085
+  },
+  {
+    "path": "package-inventory.json",
+    "sha256": "0492dc5ae4113185a8a1a396b4fcdcf1f9ede057e54bb9720f208a74c32c1895",
+    "bytes": 13963
+  },
+  {
+    "path": "run.json",
+    "sha256": "cea9100f7e2c212cedad42ce6ab5ba5dfed1341679ef91d6a29c72c7a310088d",
+    "bytes": 964
+  },
+  {
+    "path": "test-writer-report.json",
+    "sha256": "ed35e829ba9802dd398ffb029fb4c168b1dddd1451652ed7885ad600c7943d09",
+    "bytes": 3027
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "sole settled repaired full unit owner",
+  "ticket_status_updates": [],
+  "commits": [],
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "run_count": 1,
+  "result": "failed",
+  "make_exit": 2,
+  "go_exit": 1,
+  "go_exit_evidence": "Inferred from uninstrumented Go package records and canonical recipe result; no wrapper inserted.",
+  "go_packages": {
+    "total_package_records": 81,
+    "passed": 67,
+    "failed": 1,
+    "no_test_files": 13,
+    "cached_passed": 61,
+    "fresh_passed": 6
+  },
+  "bun_exit": 0,
+  "bun_summary": {
+    "pass": 430,
+    "fail": 0,
+    "expect_calls": 1662,
+    "files": 57,
+    "runtime_seconds": 14.42
+  },
+  "failures": [
+    {
+      "test_line": "--- FAIL: TestCursorWaitingMailboxByteBoundaries (9.97s)",
+      "following": [
+        "    --- FAIL: TestCursorWaitingMailboxByteBoundaries/aggregate/+1 (3.85s)",
+        "        session_capacity_linux_test.go:172: cancelled active recovers: session ended Cursor ACP operation timed out; pane=\u001b[?2004hCursor gateway: starting a fresh conversation\r",
+        "            Cursor ready\r",
+        "            > Cursor submission 1 accepted\r",
+        "            Cursor submission 2 accepted\r",
+        "            Cursor submission 3 accepted\r",
+        "            Cursor submission 4 accepted\r",
+        "            Cursor submission 5 accepted\r"
+      ]
+    },
+    {
+      "test_line": "    --- FAIL: TestCursorWaitingMailboxByteBoundaries/aggregate/+1 (3.85s)",
+      "following": [
+        "        session_capacity_linux_test.go:172: cancelled active recovers: session ended Cursor ACP operation timed out; pane=\u001b[?2004hCursor gateway: starting a fresh conversation\r",
+        "            Cursor ready\r",
+        "            > Cursor submission 1 accepted\r",
+        "            Cursor submission 2 accepted\r",
+        "            Cursor submission 3 accepted\r",
+        "            Cursor submission 4 accepted\r",
+        "            Cursor submission 5 accepted\r",
+        "            Cursor submission 6 accepted\r"
+      ]
+    }
+  ],
+  "input_hashes_unchanged": true,
+  "input_changes": [],
+  "hash_proof": {
+    "input_manifest_before_sha256": "400e34af37c6092fd95110f468231316e218c5873f6519e480ab5ff237d9f9be",
+    "input_manifest_after_sha256": "400e34af37c6092fd95110f468231316e218c5873f6519e480ab5ff237d9f9be",
+    "full_log_sha256": "e464946413e21fca12db055cc5c6618f2019725121038a26069e6098f4a12744",
+    "frozen_historical_matches": 5,
+    "changed_absolute_deadline_current_sha256": "94a7144e0cadc1b23574145ac49f23c0a6e032b6fbe548b22db59bad113fc1f4"
+  },
+  "raw_log_mode": "0o600",
+  "canonical_input_count": 3502,
+  "canonical_new_untracked_test_included": true,
+  "actual_go_source_count": 1053,
+  "historical_snapshot_go_paths_excluded_from_compiled_inventory": 20,
+  "files_changed": "Evidence artifacts only under commit-closeout-repaired-full; no source/test/doc edits.",
+  "deviations": [
+    "Initial host pwd metadata command preceded sandbox-only metadata inspection. No tests or built binaries ran on host.",
+    "One metadata-only sandbox command ended 127 because rg is unavailable in container; switched to sed. No suite ran in that command."
+  ],
+  "integration": "not dispatched; not run",
+  "incomplete_work": [
+    "Full suite failed; evidence preserved without retry or fix."
+  ],
+  "questions": [],
+  "limitations": [
+    "No historical COMMIT root cause or repair claim.",
+    "Nonverbose Go output reports package outcomes, not individual passing/skipped test counts.",
+    "Cached Go packages are identified explicitly; no cache-forcing option was used."
+  ]
+}

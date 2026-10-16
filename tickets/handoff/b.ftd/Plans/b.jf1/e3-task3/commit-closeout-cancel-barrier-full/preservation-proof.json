@@ -1,0 +1,7 @@
+{
+  "cancellation_wait_body_unchanged": true,
+  "refill_and_final_assertions_unchanged": true,
+  "diff_check": "passed",
+  "before_sha256": "6c958ed44df9bd9ff21878d66392ff2449af6d282e2e0ce9d219aeeed7ba71c0",
+  "after_sha256": "1d6dc02c58c107a6326a3eed0e8be507067994ec7913f261bbfe8723b6a6eb02"
+}

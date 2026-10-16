@@ -251,7 +251,7 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 			return fmt.Errorf("%w: before commit: %w", ErrStoreBusy, err)
 		}
 		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying: %w", err)
+			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=commit_exec): %w", err)
 		}
 		cleanup.rollback = false
 		return nil

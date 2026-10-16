@@ -1,0 +1,80 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "role": "sole settled full unit owner",
+  "status_updates": [],
+  "result": "failed",
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "run_count": 1,
+  "make_exit": 2,
+  "go_exit": 1,
+  "go_exit_evidence": "Go emitted final FAIL and failed package records; recipe uses || rc=1. No instrumentation added.",
+  "go_packages": {
+    "total_package_records": 81,
+    "passed": 66,
+    "failed": 2,
+    "no_test_files": 13,
+    "cached_passed": 52,
+    "executed_passed": 14
+  },
+  "api_runtime_seconds": "175.242s",
+  "store_runtime_seconds": "120.172s",
+  "bun_exit": 0,
+  "bun_summary": {
+    "pass": 430,
+    "fail": 0,
+    "expect_calls": 1662,
+    "files": 57,
+    "runtime_seconds": 16.0
+  },
+  "failures": [
+    {
+      "test": "TestCursorWaitingMailboxByteBoundaries/aggregate/+1",
+      "package": "internal/cursorhost",
+      "location": "session_capacity_linux_test.go:205",
+      "message": "waiting refill lacked consumption-time authority",
+      "top_level_seconds": 12.86,
+      "leaf_seconds": 5.54
+    },
+    {
+      "test": "TestDecideAbsoluteContextSurvivesParkedPhase",
+      "package": "pkg/api",
+      "location": "decide_absolute_deadline_test.go:58",
+      "message": "deliberate fresh-budget decision: store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): context deadline exceeded",
+      "top_level_seconds": 9.99
+    }
+  ],
+  "input_hashes_unchanged": true,
+  "input_changes": [],
+  "frozen_and_preserved_match_red_after": true,
+  "canonical_new_test_included": true,
+  "canonical_go_candidates": 1080,
+  "tracked_snapshot_go_excluded_from_compiled_sources": 20,
+  "ignored_go_path_count": 9451,
+  "raw_log_mode": "0o600",
+  "files_changed": "Evidence artifacts only under commit-closeout-full; no source/test/doc edits.",
+  "deviations": [],
+  "integration": "not dispatched; not run",
+  "incomplete_work": "Full unit gate failed; actual failures retained without retries or targeted reruns. No canonical fixes authorized in this dispatch.",
+  "questions": [],
+  "limitations": [
+    "No historical COMMIT root cause or repair claim. New failure explicitly identifies operation_guard; historical failures remain unknown.",
+    "Nonverbose Go output does not inventory individual passing/skipped tests.",
+    "Package durations are package timings; reported test durations are not Decide call timings."
+  ],
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "hash_proof": {
+    "branch_test_sha256": "04ad7df1ac6c62fa656526e817e5853f928aebbb3093b7c7a03031bdaf1aab29",
+    "manifests": [
+      "input-manifest-before.json",
+      "input-manifest-after.json",
+      "frozen-before.json",
+      "frozen-after.json"
+    ],
+    "input_manifest_before_sha256": "f05c603f40f017007c903411df40b5003136d0858b0d6f10b85710f03e33271e",
+    "input_manifest_after_sha256": "f05c603f40f017007c903411df40b5003136d0858b0d6f10b85710f03e33271e",
+    "full_log_sha256": "22ac8f22df720342649bdc6d8358f4f2940a76eeb3086da9feb90341dbdf949e"
+  }
+}

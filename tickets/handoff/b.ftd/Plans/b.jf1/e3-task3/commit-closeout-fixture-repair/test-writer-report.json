@@ -1,0 +1,38 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "status_updates": [],
+  "commits": [],
+  "result": "passed",
+  "files_changed": [
+    "internal/cursorhost/session_capacity_linux_test.go",
+    "pkg/api/decide_absolute_deadline_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/commit-closeout-fixture-repair",
+  "cursor_repair": {
+    "cause": "turn_outcome persistence precedes Stop reportWaiting, which resets admission while its durable hook commits; enableQueue follows. An immediate refill claim can fail, including between earlier successful claims.",
+    "change": "Each exact terminalInput waits under existing c.wait 3-second bound for its first successful i.admit claim and is retained; all inputs are emitted only after the complete batch is admitted. No successful probe is discarded, no claim reset, no prompt resubmission.",
+    "preserved": "All byte capacities, FIFO, refused-text explicit resubmission, no replay, cancellation and whole-batch emission assertions unchanged."
+  },
+  "api_repair": {
+    "cause": "Later recovery verifies durable permission semantics; old 500ms real-sleep call used a frozen injected clock and could exhaust operation guard under full-suite pressure.",
+    "change": "Only later recovery call now uses e.decideWith explicit 5000ms semantic setup budget and injected acknowledgement clock advancement.",
+    "preserved": "Initial 100ms api.Decide call, 1100ms wall bound, original absolute-context/stale-relative assertions and successful durable allow/token readback byte-for-byte unchanged."
+  },
+  "tests": {
+    "entrypoint": "make sandbox CMD=<literal sandbox-command.sh>",
+    "exit_code": 0,
+    "cursorhost": "passed 6 leaves, 8.867s",
+    "api": "passed parked-phase, deferred-audit FIFO, durable-origin and permission-repair assertions, 0.914s",
+    "store": "passed both commit branches, 5 absolute-deadline leaves and inspect-before-retry advice, 1.042s",
+    "full_suite": "not run, per dispatch",
+    "integration": "not dispatched; not run"
+  },
+  "preservation": {
+    "unchanged_frozen_files": 5,
+    "absolute_deadline": "Historical whole-file receipt intentionally no longer matches. Exact one-line old/new delta in decide_absolute_deadline_test.go.patch; before snapshot matches historical SHA. No receipt rewritten.",
+    "after_run_hash_check": "passed"
+  },
+  "deviations": [],
+  "incomplete_work": [],
+  "questions": []
+}

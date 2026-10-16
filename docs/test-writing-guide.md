@@ -9,6 +9,8 @@ How to write unit and integration tests in this repo. The overarching goal: keep
 - **Test behavior, not implementation.** Verify what a function produces or causes, not how it works internally.
 - **Parametrize over duplicate.** If three or more tests share the same shape with different inputs, collapse them with your test framework's parameterization primitive.
 - **Share setup.** Repeated boilerplate at the top of every test belongs in a fixture or helper, not in each test body.
+- **Give semantic setup a finite budget.** Repair, durable-origin and deliberate fresh-recovery calls use an explicit 5000 ms decision budget because they check repair or persisted facts. Advance an injected clock for simulated acknowledgement waits. In the parked-phase deadline test, only the later semantic recovery call uses this budget; the initial 100 ms call, 1100 ms wall bound and stale-relative/precommit assertions remain unchanged. Keep zero-wait, SQL, cleanup and trail deadline assertions at their promised bounds; do not add retries or hide setup errors. Product deadline policy is unchanged.
+- **Wait for the authority an assertion needs.** A persisted Cursor `turn_outcome` precedes Stop reporting and queue re-enablement; it does not establish refill admission. Wait for each real admission under the existing three-second fixture bound, retain its first successful claim, and emit only after the complete exact batch is admitted. Keep byte-capacity, FIFO, cancellation and no-replay assertions intact; never discard a successful probe or resubmit a prompt to establish readiness.
 - **Factories over inline data.** Build test data through small factory functions with sensible defaults — let each test override only what it cares about.
 - **Mock sparingly.** More than ~3 mocks in a single test usually means you're testing implementation. Prefer real filesystems, real data structures, and real function calls; mock only at true external boundaries (network, third-party services, expensive operations, error injection).
 - **No meta-tests.** Don't test fixtures or helpers. If they break, every real test using them will fail — that's your signal.
@@ -608,4 +610,3 @@ exactly what was checked, not just that something exited 0.
 4. Verify locally: `make test-docker EPIC=<slug>` exits 0 with one
    `{"status":"pass"}` line per case.
 5. The orchestrator audits the output and signals "continue".
-

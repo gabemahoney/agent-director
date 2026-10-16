@@ -38,10 +38,6 @@
     "repair_unbounded_max": 1685.185
   },
   "root_cause": "UNPROVEN; historical identical error text can arise from actual ExecContext COMMIT failure or outer operation return guard before result publication. Successful phase durations do not assign a cause to the historical failures.",
-  "required_outcome_incomplete": [
-    "Causal reproduction of original COMMIT failure",
-    "Evidence-backed deadline fix and unchanged-assertion RED/GREEN"
-  ],
   "reports": [
     "deadline-measurement/FINAL-report.json",
     "deadline-fullcontext/FINAL-report.json",
@@ -70,7 +66,7 @@
     "report": "dryrun-final-validation/REPORT.md"
   },
   "additional_HEAD_fresh_API_run": "Final make test-sandbox includes one further unpaired HEAD API run; all original targets PASS. It is excluded from the balanced 12420-per-revision comparison.",
-  "disposition": "Task3 remains active on historical COMMIT cause. Requested direct slow-post-COMMIT-trail experiment is negative: original test succeeds with writer stalled. No evidence-backed source fix/causal RED-GREEN. Diagnostic evidence is committed separately, not a product fix.",
+  "disposition": "User explicitly defers unexplained historical cause to an unfiled residual bug draft and authorizes diagnostic/test-setup closeout. Historical root cause remains unknown; no historical causal fix claimed. Task3/Epic3 remain active pending required scheduler gate and live acceptance. Latest closeout validation is recorded separately.",
   "slow_trail_hypothesis_experiment": {
     "candidate_head": "a62f424747aee01e920d5404e0532bc2a577a092",
     "original_test": "TestDecideKeepsDurableOrigin/cursor",
@@ -117,5 +113,39 @@
     "Bun_fail": 0,
     "canonical_input_hashes_unchanged": 1195,
     "report": "trail-hypothesis-full/RESULT.json"
+  },
+  "historical_unresolved": [
+    "Causal reproduction of original COMMIT failure",
+    "Evidence-backed deadline fix and unchanged-assertion RED/GREEN"
+  ],
+  "user_authorized_closeout": {
+    "scope": "Distinguish COMMIT exec failure and outer guard branches with red/green tests; explicit finite setupbudgets without productdeadlinechange; unfiled residualbugdraft; fullsandbox and localcommit for17groupusergate",
+    "error_detail": [
+      "branch=commit_exec",
+      "branch=operation_guard"
+    ],
+    "causal_regressions": "Exactly two RED missingmarker failures on old source; unchanged tests GREEN after two fmt strings",
+    "setup_budget_ms": 5000,
+    "setup_only_tests": [
+      "TestRepairCheckPermission setup Decide",
+      "TestDecideKeepsDurableOrigin semantic fixture",
+      "TestDecideAbsoluteContextSurvivesParkedPhase later deliberate recovery only"
+    ],
+    "product_deadline_policy": "unchanged: MaxWaitMs=0 one-second work allowance; original parked-phase 100ms call and1100ms wall assertion byte-for-byte unchanged. Later semantic recovery changes500ms real-sleep to5000ms simulated ack helper; historical whole-file hash no longer matches and is not rewritten.",
+    "residual_draft": "DRAFT-BUG-DECIDE-COMMIT-DEADLINE.md",
+    "draft_filed": false,
+    "red_report": "commit-branch-red/test-writer-report.json",
+    "green_report": "commit-branch-green/test-writer-report.json",
+    "first_full_validation": {
+      "report": "commit-closeout-full/test-writer-report.json",
+      "result": "FAIL:66Go packages pass2fail;430Bun pass0fail",
+      "new_observation": "Later recovery call in TestDecideAbsoluteContextSurvivesParkedPhase identifies branch=operation_guard. No per-call phase timings/durable state captured for this occurrence; historical four errors remain branch UNKNOWN."
+    },
+    "fixture_repair": {
+      "report": "commit-closeout-fixture-repair/test-writer-report.json",
+      "targeted_result": "PASS:Cursor6leaves8.867s;API0.914s;store1.042s",
+      "cursor": "Wait for each exact refill admission using existing bounded authority barrier, retain first success and emit batch; turn_outcome precedes restored input authority; all capacity/FIFO/cancellation/no replay assertions unchanged",
+      "api": "Only later semantic recovery explicit5000ms plus injected ackclock; initial actual deadline assertions unchanged"
+    }
   }
 }

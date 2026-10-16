@@ -1,0 +1,28 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "head": "cfba67ae2a26f5de5a13f65bc58dbebda89bb244",
+  "status_updates": [],
+  "source_files_changed": ["internal/store/lockwait.go", "internal/store/connection_cleanup.go"],
+  "change": "Two existing fmt.Errorf strings now distinguish branch=commit_exec from branch=operation_guard. Common unconfirmed-outcome prefix, read-before-retry advice and %w cause wrapping are preserved. No control-flow, context, retry, cleanup, admission, publication, schema or error-catalog changes.",
+  "messages": {
+    "commit_exec": "store: commit outcome unconfirmed; read the request before retrying (branch=commit_exec): %w",
+    "operation_guard": "store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): %w"
+  },
+  "targeted_green": {
+    "command": "make sandbox CMD='<sanitized environment, HOME=/home/sandbox, TMPDIR unset, umask 022, run-local GIT_CONFIG_GLOBAL>; go test ./internal/store -run ^(TestDecisionUnconfirmedCommitBranch|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecisionAbsoluteDeadlineAtSQLiteBoundaries)$ -count=1 -v -timeout 60s'",
+    "exit_code": 0,
+    "package_elapsed_seconds": 1.027,
+    "log": "green.log",
+    "result": "Both frozen branch leaves, inspect-before-retry advice/recovery and all five existing SQLite deadline-boundary leaves passed."
+  },
+  "unchanged": {
+    "frozen_tests": "All three canonical test files match commit-branch-red/tests.sha256; frozen-tests-check.log",
+    "deadline_files": "All three preserved regression files match commit-branch-red/preserved-regressions.sha256; preserved-regressions-check.log"
+  },
+  "source_evidence": ["source-after.sha256", "_snapshot/internal/store/lockwait.go", "_snapshot/internal/store/connection_cleanup.go"],
+  "diff_check": "passed",
+  "deviations": [],
+  "incomplete_work": [],
+  "questions": [],
+  "limitations": "Diagnostic observability change only; historical COMMIT failure cause remains unknown. No historical root-cause repair claimed. No tests/docs edited, ticket statuses changed, full suite/integration run or commit made."
+}
