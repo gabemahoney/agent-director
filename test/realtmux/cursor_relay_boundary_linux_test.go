@@ -46,9 +46,33 @@ func TestCursorRelayLockCannotExtendApprovalDeadline(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer conn.Close()
-	if _, e = conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); e != nil {
+	approval := row.SettledAt.Add(-4 * time.Second)
+	setupCtx, stopSetup := context.WithDeadline(context.Background(), approval)
+	defer stopSetup()
+	if _, e = conn.ExecContext(setupCtx, "PRAGMA busy_timeout = 0"); e != nil {
 		t.Fatal(e)
 	}
+	for {
+		_, e = conn.ExecContext(setupCtx, "BEGIN IMMEDIATE")
+		if e == nil {
+			break
+		}
+		if !strings.Contains(e.Error(), "SQLITE_BUSY") {
+			t.Fatalf("holder setup before immutable %v: %v", approval, e)
+		}
+		timer := time.NewTimer(time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-setupCtx.Done():
+			timer.Stop()
+			t.Fatalf("holder not acquired before immutable approval %v: %v", approval, setupCtx.Err())
+		}
+	}
+	holderReady := time.Now()
+	if !holderReady.Before(approval) {
+		t.Fatalf("holderReady=%v not before original approval=%v", holderReady, approval)
+	}
+	t.Logf("holderReady=%v originalApproval=%v", holderReady, approval)
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
 	if _, e = conn.ExecContext(context.Background(), "DROP TRIGGER reject_ack"); e != nil {
 		t.Fatal(e)

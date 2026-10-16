@@ -1,0 +1,144 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{
+  "inputs": 2323,
+  "changed": [
+    "cmd/agent-director/main.go",
+    "internal/cursorhost/requests.go",
+    "internal/store/connection_cleanup.go",
+    "internal/store/cursor_permission.go",
+    "internal/store/lockwait.go",
+    "internal/store/relay_writes.go",
+    "internal/store/store.go"
+  ],
+  "added_inputs": [
+    {
+      "path": "internal/store/sqlite_connector.go",
+      "after": {
+        "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+        "bytes": 1851,
+        "mode": 436
+      }
+    }
+  ],
+  "tests_and_docs_changed": [],
+  "protected": {
+    "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "bytes": 4036,
+    "mode": 436
+  },
+  "preserved_no_match": {
+    "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+    "bytes": 39402,
+    "mode": 436
+  },
+  "receipts": {
+    "targeted-01": {
+      "passed_leaves": 69,
+      "failures": [],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t4.726s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t1.770s",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t0.958s"
+      ]
+    },
+    "targeted-02-race": {
+      "passed_leaves": 168,
+      "failures": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/cursorhost [build failed]",
+        "    deadline_boundary_test.go:184: setup failure: written=false err=ErrStoreBusy: connection operation: context canceled; want cause=fixture: setup I/O failure busy=false",
+        "--- FAIL: TestDecisionSetupPragmaFailureBeforeBegin (0.29s)",
+        "    --- FAIL: TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context (0.06s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t20.831s",
+        "FAIL"
+      ],
+      "packages": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/cursorhost [build failed]",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t20.831s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.447s"
+      ]
+    },
+    "targeted-03-cursor-race": {
+      "passed_leaves": 71,
+      "failures": [],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t17.677s"
+      ]
+    },
+    "targeted-04-outcomes-race": {
+      "passed_leaves": 40,
+      "failures": [
+        "    deadline_boundary_test.go:191: setup=0 BEGIN=0 COMMIT=0; want 1/0/0",
+        "    deadline_boundary_test.go:195: failed setup connection reused: opens=1; want replacement connection",
+        "--- FAIL: TestDecisionSetupPragmaFailureBeforeBegin (0.33s)",
+        "    --- FAIL: TestDecisionSetupPragmaFailureBeforeBegin/deadline (0.21s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t6.818s",
+        "FAIL"
+      ],
+      "packages": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t6.818s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t2.959s"
+      ]
+    },
+    "targeted-05-final": {
+      "passed_leaves": 78,
+      "failures": [],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t8.781s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.646s",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t3.246s"
+      ]
+    },
+    "targeted-07-connector": {
+      "passed_leaves": 78,
+      "failures": [],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t8.775s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.623s",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t3.194s"
+      ]
+    },
+    "targeted-08-zero-initialization": {
+      "passed_leaves": 55,
+      "failures": [],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t5.378s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.325s"
+      ]
+    }
+  }
+}

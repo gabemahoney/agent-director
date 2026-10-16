@@ -1,0 +1,385 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+func (s *stmt) exec(ctx context.Context, args []driver.NamedValue) (r driver.Result, err error) {
+	var pstmt uintptr
+	var done int32
+	if ctx != nil {
+		if ctxDone := ctx.Done(); ctxDone != nil {
+			select {
+			case <-ctxDone:
+				return nil, ctx.Err()
+			default:
+			}
+			defer interruptOnDone(ctx, s.c, &done)()
+		}
+	}
+
+	defer func() {
+		if pstmt != 0 {
+			// ensure stmt finalized.
+			e := s.c.finalize(pstmt)
+
+			if err == nil && e != nil {
+				// prioritize original
+				// returned error.
+				err = e
+			}
+		}
+
+		if ctx != nil && atomic.LoadInt32(&done) != 0 {
+			r, err = nil, ctx.Err()
+		}
+func (s *stmt) query(ctx context.Context, args []driver.NamedValue) (r driver.Rows, err error) {
+	var pstmt uintptr
+	var done int32
+	if ctx != nil {
+		if ctxDone := ctx.Done(); ctxDone != nil {
+			select {
+			case <-ctxDone:
+				return nil, ctx.Err()
+			default:
+			}
+			defer interruptOnDone(ctx, s.c, &done)()
+		}
+	}
+
+	var allocs []uintptr
+
+	defer func() {
+		if pstmt != 0 {
+			// ensure stmt finalized.
+			e := s.c.finalize(pstmt)
+
+			if err == nil && e != nil {
+				// prioritize original
+				// returned error.
+				err = e
+			}
+		}
+
+		if ctx != nil && atomic.LoadInt32(&done) != 0 {
+			r, err = nil, ctx.Err()
+		} else if r == nil && err == nil {
+			r, err = newRows(s.c, pstmt, allocs, true)
+		}
+	}()
+func interruptOnDone(
+	ctx context.Context,
+	c *conn,
+	done *int32,
+) func() {
+	if done == nil {
+		var d int32
+		done = &d
+	}
+
+	donech := make(chan struct{})
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			// don't call interrupt if we were already done: it indicates that this
+			// call to exec is no longer running and we would be interrupting
+			// nothing, or even possibly an unrelated later call to exec.
+			if atomic.AddInt32(done, 1) == 1 {
+				c.interrupt(c.db)
+			}
+		case <-donech:
+		}
+	}()
+
+	// the caller is expected to defer this function
+	return func() {
+		// set the done flag so that a context cancellation right after the caller
+		// returns doesn't trigger a call to interrupt for some other statement.
+		atomic.AddInt32(done, 1)
+		close(donech)
+	}
+}
+
+type conn struct {
+	db  uintptr // *sqlite3.Xsqlite3
+	tls *libc.TLS
+
+	// Context handling can cause conn.Close and conn.interrupt to be invoked
+	// concurrently.
+	sync.Mutex
+
+	writeTimeFormat string
+	beginMode       string
+}
+
+func newConn(dsn string) (*conn, error) {
+	var query, vfsName string
+
+	// Parse the query parameters from the dsn and them from the dsn if not prefixed by file:
+	// https://github.com/mattn/go-sqlite3/blob/3392062c729d77820afc1f5cae3427f0de39e954/sqlite3.go#L1046
+	// https://github.com/mattn/go-sqlite3/blob/3392062c729d77820afc1f5cae3427f0de39e954/sqlite3.go#L1383
+	pos := strings.IndexRune(dsn, '?')
+	if pos >= 1 {
+		query = dsn[pos+1:]
+		var err error
+		vfsName, err = getVFSName(query)
+		if err != nil {
+			return nil, err
+		}
+
+		if !strings.HasPrefix(dsn, "file:") {
+			dsn = dsn[:pos]
+		}
+	}
+
+	c := &conn{tls: libc.NewTLS()}
+	db, err := c.openV2(
+		dsn,
+		vfsName,
+		sqlite3.SQLITE_OPEN_READWRITE|sqlite3.SQLITE_OPEN_CREATE|
+			sqlite3.SQLITE_OPEN_FULLMUTEX|
+			sqlite3.SQLITE_OPEN_URI,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	c.db = db
+	if err = c.extendedResultCodes(true); err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	if err = applyQueryParams(c, query); err != nil {
+		c.Close()
+		return nil, err
+	}
+
+	return c, nil
+}
+
+func getVFSName(query string) (r string, err error) {
+func applyQueryParams(c *conn, query string) error {
+	q, err := url.ParseQuery(query)
+	if err != nil {
+		return err
+	}
+
+	for _, v := range q["_pragma"] {
+		cmd := "pragma " + v
+		_, err := c.exec(context.Background(), cmd, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	if v := q.Get("_time_format"); v != "" {
+		f, ok := writeTimeFormats[v]
+		if !ok {
+			return fmt.Errorf("unknown _time_format %q", v)
+		}
+		c.writeTimeFormat = f
+	}
+
+	if v := q.Get("_txlock"); v != "" {
+		lower := strings.ToLower(v)
+		if lower != "deferred" && lower != "immediate" && lower != "exclusive" {
+			return fmt.Errorf("unknown _txlock %q", v)
+		}
+		c.beginMode = v
+	}
+
+	return nil
+}
+
+// C documentation
+//
+//	const void *sqlite3_column_blob(sqlite3_stmt*, int iCol);
+func (c *conn) columnBlob(pstmt uintptr, iCol int) (v []byte, err error) {
+	p := sqlite3.Xsqlite3_column_blob(c.tls, pstmt, int32(iCol))
+	len, err := c.columnBytes(pstmt, iCol)
+	if err != nil {
+		return nil, err
+	}
+
+	if p == 0 || len == 0 {
+		return nil, nil
+	}
+
+	v = make([]byte, len)
+	copy(v, (*libc.RawMem)(unsafe.Pointer(p))[:len:len])
+	return v, nil
+}
+
+// C documentation
+//
+//	int sqlite3_column_bytes(sqlite3_stmt*, int iCol);
+func (c *conn) step(pstmt uintptr) (int, error) {
+	for {
+		switch rc := sqlite3.Xsqlite3_step(c.tls, pstmt); rc {
+		case sqliteLockedSharedcache:
+			if err := c.retry(pstmt); err != nil {
+				return sqlite3.SQLITE_LOCKED, err
+			}
+		case
+			sqlite3.SQLITE_DONE,
+			sqlite3.SQLITE_ROW:
+
+			return int(rc), nil
+		default:
+			return int(rc), c.errstr(rc)
+		}
+	}
+}
+
+func (c *conn) retry(pstmt uintptr) error {
+	mu := mutexAlloc(c.tls)
+	(*mutex)(unsafe.Pointer(mu)).Lock()
+	rc := sqlite3.Xsqlite3_unlock_notify(
+		c.tls,
+		c.db,
+func (c *conn) Close() (err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p: err %v", c, err)
+		}()
+	}
+	c.Lock() // Defend against race with .interrupt invoked by context handling.
+
+	defer c.Unlock()
+
+	if c.db != 0 {
+		if err := c.closeV2(c.db); err != nil {
+			return err
+		}
+
+		c.db = 0
+	}
+
+	if c.tls != nil {
+		c.tls.Close()
+		c.tls = nil
+	}
+	return nil
+}
+
+// C documentation
+//
+//	int sqlite3_close_v2(sqlite3*);
+func (c *conn) closeV2(db uintptr) error {
+	if rc := sqlite3.Xsqlite3_close_v2(c.tls, db); rc != sqlite3.SQLITE_OK {
+		return c.errstr(rc)
+	}
+
+	return nil
+}
+
+func (c *conn) ResetSession(ctx context.Context) error {
+	if c.db == 0 {
+		return driver.ErrBadConn
+	}
+	return nil
+}
+
+func (c *conn) IsValid() bool {
+	return c.db != 0
+func (c *conn) exec(ctx context.Context, query string, args []driver.NamedValue) (r driver.Result, err error) {
+	s, err := c.prepare(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err2 := s.Close(); err2 != nil && err == nil {
+			err = err2
+		}
+	}()
+
+	return s.(*stmt).exec(ctx, args)
+}
+
+// Prepare returns a prepared statement, bound to this connection.
+func (c *conn) Prepare(query string) (ds driver.Stmt, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, query %q: (driver.Stmt %p, err %v)", c, query, ds, err)
+		}()
+	}
+	return c.prepare(context.Background(), query)
+}
+
+func (c *conn) prepare(ctx context.Context, query string) (s driver.Stmt, err error) {
+	//TODO use ctx
+	return newStmt(c, query)
+}
+
+// Queryer is an optional interface that may be implemented by a Conn.
+//
+// If a Conn does not implement Queryer, the sql package's DB.Query will first
+// prepare a query, execute the statement, and then close the statement.
+//
+// Query may return ErrSkip.
+//
+// Deprecated: Drivers should implement QueryerContext instead.
+func (c *conn) Query(query string, args []driver.Value) (dr driver.Rows, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, query %q, args %v: (driver.Rows %p, err %v)", c, query, args, dr, err)
+		}()
+	}
+	return c.query(context.Background(), query, toNamedValues(args))
+}
+
+func (c *conn) query(ctx context.Context, query string, args []driver.NamedValue) (r driver.Rows, err error) {
+	s, err := c.prepare(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() {
+		if err2 := s.Close(); err2 != nil && err == nil {
+			err = err2
+		}
+	}()
+
+	return s.(*stmt).query(ctx, args)
+}
+
+// Serialize returns a serialization of the main database. For an ordinary on-disk
+// database file, the serialization is just a copy of the disk file. For an in-memory
+// database or a "TEMP" database, the serialization is the same sequence of bytes
+// which would be written to disk if that database where backed up to disk.
+func (c *conn) Serialize() (v []byte, err error) {
+	pLen := c.tls.Alloc(8)
+	defer c.tls.Free(8)
+
+	zSchema := sqlite3.Xsqlite3_db_name(c.tls, c.db, 0)

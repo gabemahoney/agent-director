@@ -34,3 +34,4 @@ installsh-preflight-gates
 template-overwrite
 cursor-owned-launch
 cursor-relay
+cursor-pane-controls

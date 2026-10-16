@@ -1,0 +1,32 @@
+{
+  "final-tests/04-full-test-sandbox.log": {
+    "sha256": "a56fa6630731a1c275d860d78997a9c55c11bc0c4cb9ce7539121d07359dbe25",
+    "bytes": 64919,
+    "failures": [
+      "--- FAIL: TestRelayWritePrecondition (0.45s)",
+      "    --- FAIL: TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait (0.17s)",
+      "--- FAIL: TestCursorRotationIndependentEvidenceAndGateAreMandatory (0.35s)",
+      "    --- FAIL: TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence (0.07s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t112.025s",
+      "--- FAIL: TestAdviceFollow_F9_DecideStoreBusyRetry (2.90s)",
+      "--- FAIL: TestDecideReportsDelivery (0.06s)",
+      "    --- FAIL: TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait (4.29s)",
+      "    --- FAIL: TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait (5.29s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t174.216s",
+      "FAIL"
+    ]
+  },
+  "contract-final-tests/04-full-test-sandbox.log": {
+    "sha256": "d32382354cac639a2ac9ff31cbb697ade92290f2af9341ff5968bef84d10a7a4",
+    "bytes": 63609,
+    "failures": [
+      "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.40s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (1.53s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s",
+      "FAIL"
+    ]
+  }
+}

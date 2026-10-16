@@ -1,0 +1,25 @@
+{
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "files": 2321,
+  "changed_from_prior_final": [
+    "pkg/api/decide_delivery_test.go",
+    "pkg/api/export_test.go",
+    "pkg/api/decide_policy_test.go"
+  ],
+  "sources": {
+    "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "internal/store/lockwait.go": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+    "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+    "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+    "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7"
+  },
+  "protected_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+  "test_files": 761,
+  "mode": "working bytes and executable/symlink Git mode plus index mode; tracked and nonignored untracked files",
+  "exclusions": ".claude filtered before stat/content/blob reads; all handoff metadata and ignored generated artifacts excluded",
+  "drift_during_full": []
+}

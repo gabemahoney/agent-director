@@ -1,0 +1,76 @@
+{
+  "guide": "docs/test-writing-guide.md: Pre-Submit Checklist and Red Flags",
+  "method": "All Task3 changed source diffs/new source, deadline/store/trail/API/public tests, collector helpers/five cases/coverage/operator instructions and full named reports reviewed as one coverage set. Existing Task1/2 owners preserved and independently hash-bound; no claim of a fresh manual review of every unchanged test.",
+  "findings": [
+    {
+      "id": "Q1",
+      "disposition": "closed by advice work",
+      "issue": "Store COMMIT-response phase test alone did not execute public recovery advice.",
+      "resolution": "External store_test public Decide/GetPermission composition reuses internal Store test-only real SQLite driver boundary; no production seam. Real COMMIT succeeds then response expires, actual classifier returns ErrInternal and exact inspection phrase, fresh independent public reader sees allow, two reads preserve facts, exactly one verdict UPDATE/COMMIT. Distinct API recovery boundary complements SQL phase owner."
+    }
+  ],
+  "mandatory_unresolved": [
+    {
+      "test": "TestAdviceFollow_F9_DecideStoreBusyRetry",
+      "assertion": "decide_delivery_test.go:469: decide retried: ErrStoreBusy: store: get permission: context deadline exceeded; want the verdict recorded",
+      "facts": "Fresh third 100ms-budget call refused in a precommit read after holder release. Top-level 2.90s. Original budget/assertion/parallelism/source unchanged.",
+      "assessment": "Unresolved. Real absolute context/cleanup/scheduling interacts with unchanged unconditional retry-success test. Receipt does not prove a production deadline overrun or locate elapsed time by phase. Engineer/test contract assessment required, never dismissal or unchanged retry."
+    },
+    {
+      "test": "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+      "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+      "facts": "Subtest 4.29s. New original real 300ms context coexists with injected relay clock/sleep.",
+      "assessment": "Unresolved. Actual delivery/commit fields match; exact injected sleep differs. Source awaitAck exits at expired real context before injected sleep. Receipt does not locate elapsed time by phase. Preserve 300ms/assertions and assess source/test clock compatibility."
+    },
+    {
+      "test": "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+      "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+      "facts": "Subtest 5.29s. Same real-context versus injected-clock interaction.",
+      "assessment": "Unresolved; same source/test clock compatibility assessment, no timeout enlargement, assertion relaxation or parallelism reduction."
+    }
+  ],
+  "ownership": {
+    "causal_deadline": "pkg/api/decide_trail_deadline_test.go retained byte-identically; old exact64a RED/new GREEN with unchanged 500ms/1.5s assertions",
+    "sql_cleanup": "internal/store/deadline_boundary_test.go owns phase matrix/setup context classification/safe reuse-discard/quarantine/original deadline/zero wait",
+    "audit": "internal/trail/deadline_test.go owns 1 active+64 queue/rejection/status/FIFO/drain/failure; API Client test owns deferred audit return and commit/called order",
+    "public": "Two cursor_pane_controls files parameterize four genuine callers and representative distinct faults. Task1 controls and Task2 exhaustive rotation matrices are retained, not copied.",
+    "shipped": "Five authored collector compositions add installed Bun tarball/build/declaration/consumer evidence. They are static authored only.",
+    "authenticated": "O1-O6 and actual human/authenticated runtime predicates remain pending; synthetic received bytes/frames/source-derived questions never relabeled authenticated."
+  },
+  "checklist": {
+    "parameterization": "Five SQL phases, three setup errors, four callers, three controls and four representative faults parameterized. All new Go files below 500 lines; existing larger files already feature grouped/parameterized.",
+    "fixtures": "Existing relayEnv/parked decorator, apitest.SeedDecideFixtureAgent/procfix, deadlineBoundary/execHookConnector, cursorfix/newCursorPaneScenario/public adapter/owned-launch/sql reused. No copied controller/retry/queue implementation, helper-only tests, parallel exhaustive fault matrix, or newly unused helper found.",
+    "isolation": "Per-test real SQLite; test singleton holders serial with reasons; public fixtures serial for HOME/PATH/tmux environment; independent tests parallel. Bun execution remains sequential. Finite contexts/event channels/process waits and owned cleanup retained.",
+    "preservation": "Entry manifest binds all unchanged guards: Task1 R1-R5/E2 bounded pending/hash/dialog/answer gates, frame/request minima, postwait authority, independent permission/plan/unknown holds, question denial, ack before bytes and native pause/exact owned death. No deadline/SQL timeout/assertion relaxation, parallelism reduction, retry-until-green, or concurrent send atomicity promise.",
+    "evidence": "Received raw bytes versus complete frames and source-derived versus received traffic are distinct; P1 startup/P2 completed publication/P3 partial-byte corrections reviewed. No audit fsync/crash durability claim; cleanup quarantines leases and original deadline/one-second zero-work semantics agree with docs. Native uninterruptible/descheduling limits remain explicit.",
+    "formal": "No actual spec/tla input change; zero formal/parser/TLC/Java jobs."
+  },
+  "doc_consistency": "Five edited product docs remain unchanged from entry. Canonical changed recovery is caller-contract Permission relay. Architecture final 9593447 retained; inherited whole-base four partitions plus five verified deltas is aggregate coverage, not a fresh whole-file read or clean-document claim; deferred A2-A6/B3-B8/C2-C5/D1-D2 and inherited guide normalization remain deferred.",
+  "collector_gate": {
+    "groups": 17,
+    "expected_cases": 172,
+    "executed": false,
+    "installed_dependency_network_prerequisite": true,
+    "raw_archive_mount_required": true,
+    "makefile_extra_args_variable": false
+  },
+  "historical09": "Both historical failure causes remain UNKNOWN. Controlled regression does not reconstruct them.",
+  "post_full_observer_corrections": [
+    {
+      "test": "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+      "failure": "relay_writes_test.go:125: table_info(permission_requests): database is locked (5) (SQLITE_BUSY)",
+      "correction": "Await safe lease through the same one-connection pool before unchanged zero-wait raw request dump. Original bounded write and refusal/no-write/free-lock assertions unchanged."
+    },
+    {
+      "test": "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence",
+      "failure": "cursor_rotation_test.go:241: atomic independent visibility row=\"\" runtime=\"\" path=\"\" life=0 archives=0 err=database is locked (5) (SQLITE_BUSY)",
+      "correction": "Ordinary same-Store bounded read synchronizes quarantine/disposal completion before unchanged independent atomic raw snapshot. Original 20ms expiry, expired-after-evidence verifier and refusal/identity/archive assertions unchanged."
+    }
+  ],
+  "post_full_targeted_receipt": {
+    "log": "06-cleanup-observer-targeted.log",
+    "exit": 0,
+    "passed_leaves": 19
+  },
+  "final_result": "Incomplete: three actual full-suite API failures require assessment; no final quality/full pass claim."
+}

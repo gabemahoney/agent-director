@@ -84,11 +84,13 @@ func (s *Store) InsertCursorRequest(b CursorRuntime, req RelayRequest, cap int, 
 // AckCursorDecision reuses first-writer decision/timeout/ack contracts in one
 // authenticated transaction. Both allow and deny require this committed ack.
 // at is sampled after lock/evidence checks; the finite deadline is immutable.
-func (s *Store) AckCursorDecision(b CursorRuntime, token string, timeout bool, until, allowUntil time.Time, maxWait time.Duration, check CursorCheck) (decision string, acked bool, err error) {
+func (s *Store) AckCursorDecision(b CursorRuntime, token string, timeout bool, until, allowUntil time.Time, maxWait time.Duration, check CursorCheck) (string, bool, error) {
+	var decision string
+	var acked bool
 	var timeoutID int64
 	var timeoutName string
 	var timeoutWritten bool
-	err = s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
 			return e
 		}
@@ -138,7 +140,7 @@ func (s *Store) AckCursorDecision(b CursorRuntime, token string, timeout bool, u
 	if timeoutWritten {
 		emitDecisionCommitted(b.InstanceID, token, timeoutID, timeoutName, "deny", DecisionReasonTimeout, WriterProcessCursorHost)
 	}
-	return
+	return decision, acked, nil
 }
 
 // ClaimCursorPaneAnswer is the durable native arbiter. An external claim made

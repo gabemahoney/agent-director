@@ -1,0 +1,351 @@
+{
+  "role": "apiary_test_writer_e3_task3_public",
+  "result": "D1 independently GREEN; genuine four-surface public mixed-input/recreation and representative adversarial public compositions settled GREEN under race detector.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.yt": "done -> active -> done (D1 revalidation)",
+    "t3.jf1.r8.a8.wn": "defined -> active -> done",
+    "t3.jf1.r8.a8.8u": "defined -> active -> done"
+  },
+  "status_scope": "Only own .yt/.wn/.8u; no Task/Epic/other Subtask changes.",
+  "files_changed": [
+    "internal/store/deadline_boundary_test.go",
+    "test/realtmux/cursor_pane_controls_test.go",
+    "test/realtmux/cursor_pane_controls_boundary_linux_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/public",
+  "commands": [
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/deadline_boundary_test.go && timeout 90s go test -race -timeout 75s -count=1 -v ./internal/store ./pkg/api -run \"^(TestDecisionSetupPragmaFailureBeforeBegin|TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestDecisionLateAcquisitionRetainsOriginalSQLDeadline|TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance|TestDecideMaxWaitWithBlockedTrail)$\"'",
+      "log": "01-d1-boundaries.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go && timeout 180s go test -timeout 160s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublicMixedInputAndRecreation$\"'",
+      "log": "02-public-mixed.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go && timeout 180s go test -timeout 160s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublicMixedInputAndRecreation$\"'",
+      "log": "03-public-mixed-typed-observer.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go && timeout 180s go test -timeout 160s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublicMixedInputAndRecreation$\"'",
+      "log": "04-public-mixed-request-correlation.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go && timeout 180s go test -timeout 160s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublicMixedInputAndRecreation$\"'",
+      "log": "05-public-mixed-ready-boundary.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go && timeout 90s go test -timeout 75s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublicMixedInputAndRecreation$\"'",
+      "log": "06-public-mixed-attribution.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_boundary_linux_test.go && timeout 150s go test -timeout 130s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublic(MixedQueueRetirement|IndependentHoldsAcrossRecreation|FailureInspection)$\"'",
+      "log": "07-public-adversarial.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go test/realtmux/cursor_pane_controls_boundary_linux_test.go && timeout 150s go test -timeout 130s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublic(MixedInputAndRecreation|MixedQueueRetirement|IndependentHoldsAcrossRecreation|FailureInspection)$\"'",
+      "log": "08-public-mcp-errors-terminal-evidence.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_boundary_linux_test.go && timeout 120s go test -race -timeout 100s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublic\"'",
+      "log": "09-final-public-race.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='timeout 90s go vet ./internal/store ./test/realtmux && git diff --check && go version && bun --version && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/public/finalize.mjs'",
+      "log": "10-vet-integrity.log",
+      "purpose": "Vet and final integrity/evidence; no tests"
+    }
+  ],
+  "receipts": {
+    "06-public-mixed-attribution.log": {
+      "sha256": "9a9db1a6cf2c490adef532cfd48342bb8d73978e66246e10b3cc1bc80535a854",
+      "passed_leaves": 4,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/CLI",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/MCP",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Go",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/test/realtmux\t6.310s"
+      ],
+      "failure_lines": []
+    },
+    "04-public-mixed-request-correlation.log": {
+      "sha256": "09cfe4c314a7f46d225ccdd523fe19f444923baebdacf6884f4a92be0c748202",
+      "passed_leaves": 1,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+      ],
+      "packages": [],
+      "failure_lines": [
+        "    cursor_pane_controls_test.go:229: timed out after 10s waiting for: public multiline outcome",
+        "    cursor_pane_controls_test.go:229: timed out after 10s waiting for: public multiline outcome",
+        "    cursor_pane_controls_test.go:229: timed out after 10s waiting for: public multiline outcome",
+        "--- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation (34.59s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/CLI (11.04s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/MCP (11.00s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/Go (11.01s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/test/realtmux\t34.600s",
+        "FAIL"
+      ]
+    },
+    "07-public-adversarial.log": {
+      "sha256": "1bbb61f928bc417abeab6edeee7b918a6f662ad888cf3e76f3aa3a95855b6837",
+      "passed_leaves": 6,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit",
+        "TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation",
+        "TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication",
+        "TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission"
+      ],
+      "packages": [],
+      "failure_lines": [
+        "    cursor_pane_controls_test.go:118: tools/call failed: \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":8,\\\"error\\\":{\\\"code\\\":-32000,\\\"message\\\":\\\"ErrSpawnNotPausable: spawn cursor-8aa3fa90-97e9-4a1e-a5c9-b7d1da27e2f6 state=check_permission\\\",\\\"data\\\":{\\\"err_name\\\":\\\"ErrSpawnNotPausable\\\",\\\"err_description\\\":\\\"ErrSpawnNotPausable: spawn cursor-8aa3fa90-97e9-4a1e-a5c9-b7d1da27e2f6 state=check_perm\" (stderr \"\")",
+        "--- FAIL: TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation (1.15s)",
+        "    cursor_pane_controls_boundary_linux_test.go:284: failed input gained durable execution/end: instance=cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 fault=terminal loss runtime=pid 7127: absent gateway=pid 7115: absent row={ParentID:<nil> State:waiting CWD:/tmp/TestCursorPaneControlsPublicFailureInspectionCLIterminal_loss770946542/003 TmuxSessionName:003-cursor-9 AgentArgs:[] RelayMode:off JSONLPath:/tmp/TestCursorPaneControlsPublicFailureInspectionCLIterminal_loss770946542/001/.config/agent-director/cursor-transcripts/32adb4f44d91c9aa5f95b4fd5dc904d0.jsonl SessionID:synthetic-session-1 Labels:{} StartedAt:2026-10-16 00:10:07 LastSeenAt:2026-10-16 00:10:07 EndedAt:<nil> PID:7115 ProcStarttime:440018946 LivenessUnverifiedSince:<nil> LivenessNote:<nil> ExtraEnv:{} RowVersion:2 LaunchStartedAt:<nil> LifeNumber:0 NoPreTrust:1 LaunchToken:1237508e880629af TmuxSocket:/tmp/rt1423306493/tmux-1000/default TmuxServerPID:7114 TmuxServerStarted:1792109407 TmuxServerStarttime:440018945 PaneID:%0 PanePID:7115 PaneStarttime:440018946 LaunchOwnerPID:<nil> LaunchOwnerStarttime:<nil> LaunchOwnerPIDNS:<nil> IdleSince:<nil> Agent:cursor EndReportedAt:<nil> SubagentTracking:0} records=[{Sequence:1 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:launch Session: Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:2 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:session_start Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:3 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:input_control Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:4 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:session_end Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}}] raw={\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"clientCapabilities\":{\"fs\":{\"readTextFile\":false,\"writeTextFile\":false},\"terminal\":false},\"clientInfo\":{\"name\":\"agent-director\",\"version\":\"0.0.0-dev\"},\"protocolVersion\":1}}",
+        "--- FAIL: TestCursorPaneControlsPublicFailureInspection (3.94s)",
+        "    --- FAIL: TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss (0.91s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/test/realtmux\t8.829s",
+        "FAIL"
+      ]
+    },
+    "10-vet-integrity.log": {
+      "sha256": "e5cdcf92209e86fa6c0f90350adb7c62bb2545f558a2931498c657d926ddda76",
+      "passed_leaves": 0,
+      "leaves": [],
+      "packages": [],
+      "failure_lines": []
+    },
+    "05-public-mixed-ready-boundary.log": {
+      "sha256": "44b97427ed6e99caac1fd7fd19eab4bb82153073507ef4e884073d7db76478f3",
+      "passed_leaves": 4,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/CLI",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/MCP",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Go",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/test/realtmux\t6.301s"
+      ],
+      "failure_lines": []
+    },
+    "02-public-mixed.log": {
+      "sha256": "0a6948c3fb944221aa5c5b5ef63e9e31dbe320b02241ed174de66e0055675cb6",
+      "passed_leaves": 0,
+      "leaves": [],
+      "packages": [],
+      "failure_lines": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/test/realtmux [build failed]",
+        "FAIL",
+        "test/realtmux/cursor_pane_controls_test.go:308:46: cannot use current.SessionID (variable of type any) as string value in argument to strings.Contains: need type assertion",
+        "test/realtmux/cursor_pane_controls_test.go:308:106: cannot use old.SessionID (variable of type any) as string value in argument to strings.Contains: need type assertion",
+        "test/realtmux/cursor_pane_controls_test.go:315:44: cannot use current.LifeNumber (variable of type any) as int64 value in argument to s.ListSessionHistory: need type assertion"
+      ]
+    },
+    "09-final-public-race.log": {
+      "sha256": "0a8a9d5559cd15ac748b97613c7de4c1c18da36e72276fc8f335f7b0f4adb4c3",
+      "passed_leaves": 13,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit",
+        "TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation",
+        "TestCursorPaneControlsPublicDisconnectBeforeObservingSend",
+        "TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation",
+        "TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication",
+        "TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss",
+        "TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/CLI",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/MCP",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Go",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/test/realtmux\t18.918s"
+      ],
+      "failure_lines": []
+    },
+    "03-public-mixed-typed-observer.log": {
+      "sha256": "b10040061d264fb63755359f0369e9b32e02d05352dc23d972f443349cd29255",
+      "passed_leaves": 0,
+      "leaves": [],
+      "packages": [],
+      "failure_lines": [
+        "    cursor_pane_controls_test.go:291: missing submission/request/outcome correlation for {Text:第一 🐝",
+        "    cursor_pane_controls_test.go:291: missing submission/request/outcome correlation for {Text:第一 🐝",
+        "    cursor_pane_controls_test.go:229: timed out after 10s waiting for: public multiline outcome",
+        "    cursor_pane_controls_test.go:291: missing submission/request/outcome correlation for {Text:第一 🐝",
+        "--- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation (15.17s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/CLI (1.39s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/MCP (1.32s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/Go (11.10s)",
+        "    --- FAIL: TestCursorPaneControlsPublicMixedInputAndRecreation/Bun (1.35s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/test/realtmux\t15.176s",
+        "FAIL"
+      ]
+    },
+    "01-d1-boundaries.log": {
+      "sha256": "56f71f07ec5c46ae13b97cd03a9823f5991181280bc2fd9bc76f4680286e5752",
+      "passed_leaves": 14,
+      "leaves": [
+        "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+        "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+        "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestDecideMaxWaitWithBlockedTrail"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/store\t3.302s",
+        "github.com/gabemahoney/agent-director/pkg/api\t1.597s"
+      ],
+      "failure_lines": []
+    },
+    "08-public-mcp-errors-terminal-evidence.log": {
+      "sha256": "0d8b9eb26949af8b78952cdc40eaa9df011b36907d0b5ec7dda93b080e51ce39",
+      "passed_leaves": 12,
+      "leaves": [
+        "TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new",
+        "TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit",
+        "TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation",
+        "TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation",
+        "TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication",
+        "TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss",
+        "TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/CLI",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/MCP",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Go",
+        "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/test/realtmux\t14.972s"
+      ],
+      "failure_lines": []
+    }
+  },
+  "d1_case_verification": {
+    "case": "TestDecisionSetupPragmaFailureBeforeBegin",
+    "boundary": "Existing deadlineBoundary/execHookConnector over the real SQLite driver; hook returns wrapped context.Canceled, context.DeadlineExceeded, or ordinary setup I/O error while context canceled at actual PRAGMA busy_timeout = 0.",
+    "assertions": "One setup, zero BEGIN/COMMIT; both context failures preserve underlying error and ErrStoreBusy. Ordinary I/O error preserves ordinary classification despite expired context. Original bounded return; independent SQLite no decision; replacement connection has restored busy_timeout and supports BEGIN/ROLLBACK; opens=2 proves failed connection discarded. Existing actual postcommit uncertainty case rerun unchanged.",
+    "race": "01-d1-boundaries.log",
+    "unchanged_causal_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "causal_observations": [
+      "    decide_trail_deadline_test.go:103: independent connection observed committed allow at +12.629972ms with trail mutex still held",
+      "    decide_trail_deadline_test.go:123: decide finished after 500.299348ms; reporting released at +500.312748ms"
+    ],
+    "historical09_cause": "Unknown; no claim to reconstruct it."
+  },
+  "public_boundary_proof": {
+    "CLI": "Built production agent-director invoked with real argv and explicit --store-path for send-keys/get/read-pane/pause/find-missing. Each call exits; replacement caller uses same live gateway.",
+    "MCP": "Actual built agent-director serve --stdio, JSON-RPC initialize/tools/call; process stop/wait and replacement process while active/queued or rotation provisional. Reads genuine error responses without turning expected refusal into helper failure.",
+    "Go": "Actual api.New Client.SendKeys/Get/ReadPane/GetPermission/Pause; Client.Close then new Client with same explicit store. No fake API implementation.",
+    "Bun": "Bun.build of package public src/index.ts export using same target/entrypoint as package build; imported generated JavaScript in a real Bun subprocess. Actual Client.create/sendKeys/get/readPane/getPermission/pause uses production CLI subprocess serialization and default client timeouts. Process killed/waited and new Bun process creates fresh client. This is built public-export coverage, not an npm-packed/installed tarball test.",
+    "transport_vs_admission": "Successful send-keys only proves tmux transport. Tests separately await protected submission_accepted, verify actual ACP session/prompt, correlate unique submission/request IDs to submission_started and turn_outcome, and inspect independent SQLite/process evidence. Waiting for turn_outcome alone was correctly replaced by committed waiting + explicit completion notice before the next idle prompt.",
+    "recreation": "Gateway pane PID/starttime, runtime PID, launch token, session and queue survive caller replacement; held active turn not canceled by follow-ups; mixed terminal/public exact Unicode/multiline FIFO five prompts and outcomes per caller. Same-ID default-store decoy unchanged.",
+    "rotation": "Each caller sends /clear and /new; independent current-life history and public get agree; life/token/path/inode unchanged; old identity remains history. No load/reuse/switch/older-history migration.",
+    "controls": "MCP mixed accepted queue + native interrupt; Bun mixed accepted queue + /new; CLI mixed accepted queue + /exit. Every queued ID cancelled exactly once, visible via actual public read-pane, never later started/outcome/raw prompt; unrelated tmux sentinel survives. Actual eligible pause finishes the surviving launch.",
+    "independent_holds": "Captured permission+plan envelopes and source-derived question attempts through synthetic ACP. MCP public request identity and unknown-origin proof eligibility survive actual caller restart, denial of all questions, terminal cancel, completion, and new session; public pause refuses and guarded input has no raw prompt bytes.",
+    "disconnected_send": "Separate actual MCP caller writes tools/call then never consumes its response. Independent transcript proves queued admission; caller process dies, replacement inspects without retrying; original queue dispatches/completes exactly once. This proves an unobserved caller outcome, not a forced partial network write.",
+    "failures": "MCP rejected rotation and Bun archive write failure: process replacement during unconfirmed session/new preserves old identity; provisional inputs individually refused, no accepted/dispatched/raw bytes, no fabricated end/history. CLI terminal loss inspects then process-only find-missing reconciles dead launch; any durable end record requires real owned runtime death. Go protected-file permission failure admits no prompt and cannot claim ended. All accepting owned processes stop; unrelated sentinels survive."
+  },
+  "coverage_existing_vs_new": {
+    "retained": [
+      "internal/cursorhost/session_controls_linux_test.go: FIFOExactTextAndLifecycle; ControlsRetireQueuedSubmissions; queued holds/authority loss; saturation/report barriers; partial/zero-byte retirement.",
+      "internal/cursorhost/session_rotation_linux_test.go and session_rotation_boundary_linux_test.go: alias active/idle matrix; every proof/hold before promotion; failure/reused/malformed identity; stale callbacks/traffic; capacity; cancellation deadlines; publication/sync phases and retired input.",
+      "test/realtmux/cursor_relay_test.go, cursor_relay_pane_test.go, cursor_relay_boundary_linux_test.go: captured schema kinds, real four-surface decisions, unknown provenance, question-policy matrix, acknowledgement-before-byte and finite answer/cancel boundaries.",
+      "test/realtmux/cursor_failure_linux_test.go, cursor_blocked_linux_test.go, cursor_queue_linux_test.go: focused persistence matrix, blocked transport uncertainty, exact owned shutdown/unrelated workers, working-pause refusal.",
+      "pkg/api/sendkeys_pending_test.go, pane_answer_test.go, sendkeys_hold_test.go, pause_relay_test.go and existing public CLI/MCP/Bun counterpart tests own pending/hash/dialog/answer guards.",
+      "test/realtmux/cursor_launch_test.go: actual Bun default spawn timing with unfinished generation and actual client.close/recreation, startup no model text, independent pane identity guards."
+    ],
+    "new": "Two shared-adapter public files add only cross-boundary compositions and caller-loss/recreation, public mixed-input ordering/correlation, current-life inspection and representative failure observations; no second internal exhaustive fault matrix.",
+    "traceability": {
+      "SR-0.2": "protected transcript + terminal/public interactivity and native commands",
+      "SR-0.3": "actual pane/runtime identity, exact-owned death and unrelated sentinels",
+      "SR-3.1–3.3": "mixed terminal/send-keys, exact Unicode/multiline FIFO, controls, caller continuity",
+      "SR-4.1–4.2": "independent authoritative row, process and permission identity",
+      "SR-6.2": "current-life confirmed rotation/history only"
+    },
+    "corrected_mapping": "SR-0.4 does not exist and is not claimed.",
+    "final_public_race_leaves": 13
+  },
+  "failures_and_causes": [
+    {
+      "log": "02-public-mixed.log",
+      "cause": "Test compile only: independent readRow fields are dynamically typed; explicit type assertions added."
+    },
+    {
+      "log": "03-public-mixed-typed-observer.log",
+      "cause": "Test decoder mismatch: transcript request IDs are strings, numeric wire IDs raw; fixed record decoder. Go also demonstrated that turn_outcome precedes committed waiting/readiness."
+    },
+    {
+      "log": "04-public-mixed-request-correlation.log",
+      "cause": "Test synchronization error: sending next idle prompt after outcome record alone permits legitimate consumption-time refusal during Stop publication. Replaced with independent committed waiting plus explicit completion notice; no retry or timeout change."
+    },
+    {
+      "log": "07-public-adversarial.log",
+      "cause": "Test helper treated expected MCP error as fatal. Adapter now reads actual error envelope. Terminal loss assertion incorrectly forbade a durable session_end even when owned runtime gone was true; now checks actual runtime_gone/process evidence and process-only public reconciliation."
+    }
+  ],
+  "source_findings": [],
+  "source_integrity": "source-integrity.json: all eight settled source hashes and exact causal regression verified; all old non-Go-test paths match old manifest except Engineer-authorized source changes; other Go tests match independent 700-test baseline except owned deadline boundary test.",
+  "deviations": [
+    "Two initial discovery reads used proposed filenames absent in the workspace; no changes or repository execution resulted.",
+    "Run04 began shortly before run03 process result was collected; their real-pane packages used separate container/process HOME/socket/temp namespaces. Final settled public runs were sequential; no retries of an unchanged failed case.",
+    "Bun coverage builds the public export into a temporary bundle rather than invoking full declaration/package packing; installed/shipped artifact collector evidence remains the next .wc writer."
+  ],
+  "limitations": [
+    "Synthetic ACP runtime throughout; actual tmux/CLI/MCP/Go/Bun, not real authenticated Cursor or actual human attach/paste acceptance.",
+    "Terminal text is used only by explicit test read-pane inspection/notice assertions; AD does not classify screen state/identity/liveness.",
+    "Literal text and Enter remain separate operations. No arbitrary concurrent-send atomicity promise.",
+    "Unobserved MCP response is caller-side uncertainty; no claim that the response had not reached its OS pipe.",
+    "Protected pending/failure evidence does not invent completion, crash durability or replay; audit pending remains memory-resident as documented by deadline lane.",
+    "Native uninterruptible calls and descheduling limits unchanged; no timeout widening."
+  ],
+  "next_collector_writer": {
+    "tickets": [
+      "t3.jf1.r8.a8.wc",
+      "t3.jf1.r8.a8.ky"
+    ],
+    "remaining": "Author/register unused cursor-pane-controls collector and exact actual-terminal operator acceptance instructions. Reuse these five public test owners and the retained Task1/2 focused owners; build/installed package evidence and actual human/authenticated acceptance remain separate. Do not execute collectors or scheduler jobs locally. No collector files written in this pass.",
+    "later": "One settled docs .48/.ro pass after collector/instructions; advice .6f; quality .yj; sole full make test-sandbox .zj; exact-revision user scheduler gate."
+  },
+  "full_suite": "Not run; .zj exclusively owns final settled make test-sandbox.",
+  "integration": "Not run; not dispatched for integration. No local Docker groups/collector bodies or scheduler submissions.",
+  "formal": "No spec/tla input changes; no TLA/TLC/Java/parser/formal jobs.",
+  "environment": {
+    "go": "go version go1.22.10 linux/amd64",
+    "bun": "1.3.13",
+    "tmux": "tmux 3.3a",
+    "execution": "make sandbox only; isolated fixture HOME/explicit store/private tmux socket and exact owned process cleanup"
+  },
+  "boundaries": "No .claude access, real AD stores, credentials/login/logout/live Cursor, source/product docs edits, host repo tests/build/scripts, commits/pushes, delegation, or outbound messages. Only assigned tests and evidence. Bees CLI only workspace ticket reads and own Subtask status changes.",
+  "incomplete_work": [],
+  "questions_for_caller": []
+}

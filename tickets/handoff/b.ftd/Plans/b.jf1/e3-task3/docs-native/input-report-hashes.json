@@ -1,0 +1,17 @@
+{
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/full-failure-assessment/FINAL-report.json": "bad562074f3e197e162843f580a5d31cdee51e91a92f87ecc2f781e1326d0d9e",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/FINAL-report.json": "93f838a8c208d9ede2659563478d9a560154fa4a847556a43757a09b624cc602",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/FINAL-report.json": "977eaecb44b3fb35d40cab3c91002674030c33feae68d8e0c2759c6fa3f48759",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-ownership-code-review.json": "238f7aeb285abf14778f3cc594f37c79405d51808c212c2231a5ead758f43597",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/FINAL-report.json": "ff83e2dccc8fb0bbc2b9bb9d4c40c8b8ce375c845ec5e2f4c62c7ce79a4f4e07",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-code-review.json": "a0629a8c504f71792bdaf42548f1271ef8fa11121202fe9941c3ff0af341db35",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/FINAL-report.json": "033da750b146dab42cc89fc7655ea7a11a39116c13f2db8a9627073894677215",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/SRD-NATIVE-OWNERSHIP-DECISIONS.md": "bc6b48c445a5dfcf9e48e764398ebc669e87b42cbe388531583b6ce34064a54b",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/SRD-LAZY-REPLACEMENT-DECISIONS.md": "65e34e0fe3d120e797e70963f981abdd3d87967991dddaeaa4199aba0bf6549a",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/FINAL-report.json": "c591d956a3bfa12379caa7b26325ca0e239ff509c26b6c95277cf2853d515a1e",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/architecture-review-provenance.json": "8300349536a90c954a37128e507c0819a95d7f4300e7367970ff78e7068fffd9",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs-no-match/FINAL-report.json": "bddf424cc2c824db8636075655b8aea7d369c7d3c278903d0d48688e2cd3a9fb",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/settled-full/FINAL-report.json": "faa1a0c71d2a17c890b519ff3e348bed794d5f6845e90b41cc18e4756cf2d365",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/archive-layout-correction.json": "52e885c6d1cc99bdc868f67ec5f2aed91c40fa90b1d0475bdc5bd336fbc2e5fb",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/accidental-full-cancellation.json": "379b214581568d64fd41046893d414a10d20307064cab8fc03710c4f9eeefb59"
+}

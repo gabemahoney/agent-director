@@ -1,0 +1,53 @@
+{
+  "reviewer": "apiary_product_manager_e3_task3_initial",
+  "verdict": "Repair three acceptance issues before one doc pass; no additional production defect",
+  "mandatory_findings": [
+    {
+      "id": "P1",
+      "path": "test/driver/cursor-pane-controls.sh:25",
+      "issue": "pc_start observes waiting before readiness/inputenable; decoy initialization is not event synchronization.",
+      "repair": "Bounded explicit startup readiness observation reusing existingrealpanefixture pattern."
+    },
+    {
+      "id": "P2",
+      "paths": [
+        "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md:40",
+        "test/realtmux/cursor_pane_controls_test.go:358"
+      ],
+      "issue": "Changed session+waiting precedes rotation_published/inputMailbox.publish; nextalias maycoalesce.",
+      "repair": "Observe completedpublication notice/event before nextcontrol, retainhistory/identitychecks andbounds."
+    },
+    {
+      "id": "P3",
+      "paths": [
+        "t2.jf1.pc.04:51",
+        "t2.jf1.pc.05:50",
+        "t2.jf1.pc.02"
+      ],
+      "issue": "Decodedframecounts do not prove zero wire; partialpromptbytes missed.",
+      "repair": "Raw-byte checks afterownedtermination alongsideframes/protectedrecords; rawguardwindow proofwithoutmatrixduplication."
+    }
+  ],
+  "docs_implications": [
+    "caller-contract precommit exhaustion ErrStoreBusy neednotanotherholder; unconfirmedCOMMIT inspectdurablerequestbefore retry",
+    "architecture originalcontext zerowait cancellableSQLretry/leasequarantine",
+    "trailworker64queue+1active/statuspendingfailedreject/boundeddrain notfsyncorcrashdurability;legacy syncdistinct",
+    "require reuseactualpublicadapter+collectorhelpers no testcatalog;verifywholebase+everydelta throughcurrentb2dc75"
+  ],
+  "handoff": "ConcreteDocker-equivalent rawartifactbindmount required, Makefilehasnoextraargsvar;networklockeddepsprereq",
+  "ignored_deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2",
+    "Inheritedhooks/permissionsguide-scope/recoverydebt"
+  ],
+  "product_questions": [],
+  "limitations": [
+    "No fullsuite orcollectorpass",
+    "Authenticated O1-O6pending",
+    "Historical09causeunknown",
+    "No spec/tla changes zeroformaljobs"
+  ],
+  "scope": "Readonly static andreceiptreview, no changes/execution"
+}

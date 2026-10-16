@@ -1,0 +1,11 @@
+{
+  "unchanged_during_corrected_run": true,
+  "changed_after_first_focused_failure": [
+    "internal/store/advice_follow_decision_test.go"
+  ],
+  "files": 2322,
+  "protected": {
+    "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "mode": 436
+  }
+}

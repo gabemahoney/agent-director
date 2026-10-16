@@ -1,0 +1,10 @@
+{
+  "Replace": {
+    "/work/internal/store/sqlite_connector.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/sqlite_connector.go",
+    "/work/internal/store/lockwait.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/lockwait.go",
+    "/work/internal/store/cursor_prompt.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_prompt.go",
+    "/work/internal/store/cursor_rotation.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_rotation.go",
+    "/work/internal/store/sqlite_lazy_native_test.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/excluded-n1-tests.txt",
+    "/work/internal/store/sqlite_lazy_context_test.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/excluded-n1-tests.txt"
+  }
+}

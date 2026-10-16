@@ -1,0 +1,50 @@
+{
+  "epic": "t1.jf1.r8",
+  "criteria": "E3 AC1–7; SR-0.4 does not exist",
+  "inventory": "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md",
+  "registered_slug": "cursor-pane-controls",
+  "case_order": [
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md"
+  ],
+  "expected_groups": 17,
+  "expected_total_cases": 172,
+  "new_expected_cases": 5,
+  "execution_status": "NOT RUN — collector authored/static only",
+  "provenance": {
+    "captured": "authorization bodies from cursorfix/testdata/authorizations.json rebound to synthetic connection",
+    "source_derived": "direct synthetic question schema",
+    "scripted": "cursorfix ACP runtime; terminal input via actual tmux",
+    "actual_after_scheduler_only": "shipped image CLI/MCP and canonical built/packed/installed Bun consumer",
+    "authenticated_human": "PENDING"
+  },
+  "retained_public_owner": "test/realtmux/cursor_pane_controls_test.go and cursor_pane_controls_boundary_linux_test.go: 13 leaves retained from prior writer",
+  "Go": "Actual pkg/api public-client boundary already covered by public unit owner; no redundant Go shell build harness",
+  "deadline": "unchanged pkg/api/decide_trail_deadline_test.go causal mutex RED/GREEN plus real SQLite/cleanup/context/trail queue focused owners; no shell mutex imitation",
+  "raw_collector_artifact_mount": "/tmp/cursor-pane-controls-artifacts (scheduler must retain before --rm; shortened driver details is not raw receipt)",
+  "acceptance_repairs": {
+    "P1": "All five cases use explicit bounded startup ready notice before case input; decoy setup is not a barrier.",
+    "P2": "Two confirmed controls each require next publication record plus incremented completed-publication pane notice, changed authoritative session and waiting. Existing peer-ID/history/life/token/path/inode assertions retained.",
+    "P3": "Cases02/04/05 compare all received raw bytes against complete-frame trace after owned runtime and gateway termination, alongside original frame/protected-record checks. Case02 additionally compares the guard snapshot and permits exactly one matching native cancel after it."
+  },
+  "public_revalidation": {
+    "race_passed_leaves": 13,
+    "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix/01-public-race.log",
+    "raw_completeness": "Strict received-raw/trace equality after death, plus forbidden complete prompt checks; not full-text search alone."
+  },
+  "negative_control": {
+    "kind": "one-off offline assertion evidence, not a helper test or fake gateway",
+    "partial_bytes": "one extra { byte",
+    "decoded_counts": "unchanged",
+    "raw_cmp_and_buffer_equality": "reject"
+  },
+  "limits": [
+    "Collector bodies/helpers were never executed, even in sandbox.",
+    "Exact byte/trace equality is strict for these fixed source-derived wire encodings; no canonicalization hides bytes.",
+    "Raw observer proves received bytes; unread pipe bytes are not observed.",
+    "Authenticated actual-human O1–O6 acceptance remains pending."
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task3_no_match",
+  "verdict": "No findings",
+  "source_sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+  "scope": "permission.go no-match fix only; source/report read-only inspection",
+  "assessment": "sql.ErrNoRows triggers rollback/quarantine without COMMIT; outer mapping preserves ErrStoreBusy on precommit expiry. Guarded atomicity, connection isolation, ordinary errors, potentially written COMMIT uncertainty and race-aware follow-up reads remain intact.",
+  "limits": "No edits/tests/lint/build/status changes; independent regression and full-suite pending. Historical09 causes unknown. No model changes."
+}

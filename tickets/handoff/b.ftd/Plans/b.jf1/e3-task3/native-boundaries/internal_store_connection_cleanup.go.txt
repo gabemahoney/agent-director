@@ -1,0 +1,88 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"fmt"
+	"sync"
+)
+
+type connectionCleanup struct {
+	conn          *sql.Conn
+	busyTimeoutMs int
+	rollback      bool
+	restore       bool
+	discard       bool
+}
+
+type connectionCleanupJob struct {
+	ctx     context.Context
+	cleanup *connectionCleanup
+	done    chan struct{}
+}
+
+// Each pool has one connection. Cleanup keeps that connection leased, so
+// another operation cannot create additional cleanup work until it finishes.
+// The lane has at most one worker, exits when drained, and is shared by all
+// context-scoped handles. No worker is created per timeout or SQL statement.
+type connectionCleanupLane struct {
+	mu      sync.Mutex
+	running bool
+	jobs    []connectionCleanupJob
+}
+
+func (s *Store) releaseConn(ctx context.Context, cleanup *connectionCleanup) {
+	job := connectionCleanupJob{ctx: ctx, cleanup: cleanup, done: make(chan struct{})}
+	lane := s.cleanup
+	lane.mu.Lock()
+	lane.jobs = append(lane.jobs, job)
+	if !lane.running {
+		lane.running = true
+		go lane.run()
+	}
+	lane.mu.Unlock()
+	select {
+	case <-job.done:
+	case <-ctx.Done():
+		// Still leased: neither the transaction nor the shorter PRAGMA can
+		// escape to another caller while noncancelable disposal finishes.
+	}
+}
+
+func (lane *connectionCleanupLane) run() {
+	for {
+		lane.mu.Lock()
+		if len(lane.jobs) == 0 {
+			lane.running = false
+			lane.mu.Unlock()
+			return
+		}
+		job := lane.jobs[0]
+		lane.jobs[0] = connectionCleanupJob{}
+		lane.jobs = lane.jobs[1:]
+		lane.mu.Unlock()
+		job.cleanup.finish(job.ctx)
+		close(job.done)
+	}
+}
+
+func (c *connectionCleanup) finish(ctx context.Context) {
+	if ctx.Err() != nil {
+		c.discard = true
+	}
+	if c.rollback && !c.discard {
+		if _, err := c.conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+			c.discard = true
+		}
+	}
+	if c.restore && !c.discard {
+		if _, err := c.conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", c.busyTimeoutMs)); err != nil {
+			c.discard = true
+		}
+	}
+	if c.discard || ctx.Err() != nil {
+		_ = c.conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	_ = c.conn.Close()
+}

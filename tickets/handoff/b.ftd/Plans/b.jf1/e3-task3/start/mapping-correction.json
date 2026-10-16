@@ -1,0 +1,16 @@
+{
+  "invalid_reference": "SR-0.4 does not exist",
+  "correct_mapping": [
+    "SR-0.2 interactive terminal/transcript",
+    "SR-0.3 pane identity/coupled lifetime",
+    "SR-3.1\u20133.3 human/mixed input/local controls",
+    "SR-4.1\u20134.2 state/identity/liveness",
+    "SR-6.2 current-life history; E4 resume work excluded"
+  ],
+  "tickets_updated": [
+    "t3.jf1.r8.a8.wn",
+    "t3.jf1.r8.a8.wc"
+  ],
+  "planning_context_updated": true,
+  "historical_snapshots": "Retained as historical, superseded by this correction."
+}

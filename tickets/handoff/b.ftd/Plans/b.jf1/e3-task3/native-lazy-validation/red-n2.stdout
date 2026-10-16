@@ -1,0 +1,4 @@
+=== RUN   TestCursorPromptLateCountCannotPublishEligibility
+--- PASS: TestCursorPromptLateCountCannotPublishEligibility (0.59s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	1.601s

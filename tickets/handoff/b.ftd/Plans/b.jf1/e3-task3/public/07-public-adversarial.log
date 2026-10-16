@@ -1,0 +1,74 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 DONE 0.0s
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+realtmux: tmux 3.3a at /usr/bin/tmux
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt
+    cursor_pane_controls_boundary_linux_test.go:129: instance=cursor-08b93bc6-478a-4cce-99bb-f9bdeb449584 control=interrupt accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new
+    cursor_pane_controls_boundary_linux_test.go:129: instance=cursor-bc518ef5-5ddb-421a-9e75-260130a711f5 control=/new accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit
+    cursor_pane_controls_boundary_linux_test.go:129: instance=cursor-566a63ba-966f-4324-b2c8-480b4d008d56 control=/exit accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+--- PASS: TestCursorPaneControlsPublicMixedQueueRetirement (3.73s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt (1.30s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new (1.39s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit (1.04s)
+=== RUN   TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation
+    cursor_pane_controls_test.go:118: tools/call failed: "{\"jsonrpc\":\"2.0\",\"id\":8,\"error\":{\"code\":-32000,\"message\":\"ErrSpawnNotPausable: spawn cursor-8aa3fa90-97e9-4a1e-a5c9-b7d1da27e2f6 state=check_permission\",\"data\":{\"err_name\":\"ErrSpawnNotPausable\",\"err_description\":\"ErrSpawnNotPausable: spawn cursor-8aa3fa90-97e9-4a1e-a5c9-b7d1da27e2f6 state=check_perm" (stderr "")
+--- FAIL: TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation (1.15s)
+=== RUN   TestCursorPaneControlsPublicFailureInspection
+=== RUN   TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation
+    cursor_pane_controls_boundary_linux_test.go:298: instance=cursor-5f49b443-a3b2-47fb-8838-f294a3f4e249 surface=MCP fault=rejected rotation state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+=== RUN   TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication
+    cursor_pane_controls_boundary_linux_test.go:298: instance=cursor-78dacbfe-a84a-4e91-bff1-0a7c03f7b14e surface=Bun fault=failed rotation publication state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+=== RUN   TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss
+    cursor_pane_controls_boundary_linux_test.go:284: failed input gained durable execution/end: instance=cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 fault=terminal loss runtime=pid 7127: absent gateway=pid 7115: absent row={ParentID:<nil> State:waiting CWD:/tmp/TestCursorPaneControlsPublicFailureInspectionCLIterminal_loss770946542/003 TmuxSessionName:003-cursor-9 AgentArgs:[] RelayMode:off JSONLPath:/tmp/TestCursorPaneControlsPublicFailureInspectionCLIterminal_loss770946542/001/.config/agent-director/cursor-transcripts/32adb4f44d91c9aa5f95b4fd5dc904d0.jsonl SessionID:synthetic-session-1 Labels:{} StartedAt:2026-10-16 00:10:07 LastSeenAt:2026-10-16 00:10:07 EndedAt:<nil> PID:7115 ProcStarttime:440018946 LivenessUnverifiedSince:<nil> LivenessNote:<nil> ExtraEnv:{} RowVersion:2 LaunchStartedAt:<nil> LifeNumber:0 NoPreTrust:1 LaunchToken:1237508e880629af TmuxSocket:/tmp/rt1423306493/tmux-1000/default TmuxServerPID:7114 TmuxServerStarted:1792109407 TmuxServerStarttime:440018945 PaneID:%0 PanePID:7115 PaneStarttime:440018946 LaunchOwnerPID:<nil> LaunchOwnerStarttime:<nil> LaunchOwnerPIDNS:<nil> IdleSince:<nil> Agent:cursor EndReportedAt:<nil> SubagentTracking:0} records=[{Sequence:1 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:launch Session: Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:2 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:session_start Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:3 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:input_control Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}} {Sequence:4 Life:0 Connection:2c4e37505a24e5cf7cef6c269357e89c Kind:session_end Session:synthetic-session-1 Instance:cursor-942caa44-cbf2-45fe-83da-43a6e5b9a877 Launch:1237508e880629af Data:{ID: Text: Request:}}] raw={"id":1,"jsonrpc":"2.0","method":"initialize","params":{"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"agent-director","version":"0.0.0-dev"},"protocolVersion":1}}
+        {"id":2,"jsonrpc":"2.0","method":"session/new","params":{"cwd":"/tmp/TestCursorPaneControlsPublicFailureInspectionCLIterminal_loss770946542/003","mcpServers":[]}}
+=== RUN   TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission
+    cursor_pane_controls_boundary_linux_test.go:298: instance=cursor-35d66602-b9d5-4d3b-90be-18b023153c60 surface=Go fault=protected transcript permission state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+--- FAIL: TestCursorPaneControlsPublicFailureInspection (3.94s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation (0.97s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication (1.11s)
+    --- FAIL: TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss (0.91s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission (0.94s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/test/realtmux	8.829s
+FAIL
+make: *** [Makefile:735: sandbox] Error 1

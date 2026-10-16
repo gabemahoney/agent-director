@@ -1,0 +1,42 @@
+[
+  {
+    "path": "docs/caller-contract.md",
+    "before_sha256": "b1e00b9463ff9fd822bbadc29bcd2fc0591650915d5c92cc9ce129b5a1861d65",
+    "sha256": "6e15d1029a6c84dade3790a6b0a1eb8f47305cb3f0662b2c84a2f452e999d288",
+    "lines": 494,
+    "bytes": 30293,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/permissions.md",
+    "before_sha256": "9506c23a2910c0e4f043e819c4c32f2fb1587c8c4a764093acc23090b2ba015a",
+    "sha256": "a61f634e5c39f55139f20282497db27b48283e40b03be180c8f835ac4ea000a0",
+    "lines": 1479,
+    "bytes": 87524,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "pkg/api/README.md",
+    "before_sha256": "60a7b64ad830e4375dcea786accf3ffce60ab4b111c745e33b305c4ea44fcd80",
+    "sha256": "8d3438090d91292f0c5155bda34b7ac5136eb58628ff9d03337656d06c2641a5",
+    "lines": 600,
+    "bytes": 26858,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "pkg/ts-bun-client/README.md",
+    "before_sha256": "ce4f497da83976cda86477adb47faa6456673e735d086bcb1edd846da7d25c3b",
+    "sha256": "70fbfb86c84961c55a718daa476a75bbd0414968301f4bb2c8f4070fd6688e09",
+    "lines": 637,
+    "bytes": 47204,
+    "fenced_blocks_unchanged": true
+  },
+  {
+    "path": "docs/architecture.md",
+    "before_sha256": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+    "sha256": "9593447ca9fe0640268803d42c07f5cbe9e5865be306c2a9b91388307ca7b509",
+    "lines": 22461,
+    "bytes": 1551455,
+    "fenced_blocks_unchanged": true
+  }
+]

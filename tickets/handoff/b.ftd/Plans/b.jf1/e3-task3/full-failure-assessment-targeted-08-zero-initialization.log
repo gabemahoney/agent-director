@@ -1,0 +1,207 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestOpenersSetBusyTimeout
+=== RUN   TestOpenersSetBusyTimeout/OpenOrInit
+=== RUN   TestOpenersSetBusyTimeout/Open
+=== RUN   TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout
+=== RUN   TestOpenersSetBusyTimeout/OpenWithBusyTimeout
+=== RUN   TestOpenersSetBusyTimeout/largest
+=== RUN   TestOpenersSetBusyTimeout/OpenWithBusyTimeout_above_the_largest
+=== RUN   TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_above_the_largest
+=== RUN   TestOpenersSetBusyTimeout/OpenWithBusyTimeout_0
+=== RUN   TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_0
+=== RUN   TestOpenersSetBusyTimeout/OpenWithBusyTimeout_negative
+=== RUN   TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_negative
+--- PASS: TestOpenersSetBusyTimeout (0.41s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenOrInit (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/Open (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenWithBusyTimeout (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/largest (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenWithBusyTimeout_above_the_largest (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_above_the_largest (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenWithBusyTimeout_0 (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_0 (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenWithBusyTimeout_negative (0.04s)
+    --- PASS: TestOpenersSetBusyTimeout/OpenOrInitWithBusyTimeout_negative (0.04s)
+=== RUN   TestDecisionCleanupQuarantinesNoncancelableClose
+--- PASS: TestDecisionCleanupQuarantinesNoncancelableClose (0.21s)
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s
+--- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait (0.18s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s (0.09s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s (0.09s)
+=== RUN   TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance
+--- PASS: TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance (0.23s)
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait
+--- PASS: TestBoundedCallsUnderAHeldLockOrConnection (3.33s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write (0.26s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait (0.08s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row (0.28s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request (0.23s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests (0.23s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait (0.08s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	5.378s
+=== RUN   TestClientDecideBoundsDeferredAuditAndPreservesFIFO
+    decide_absolute_deadline_test.go:121: Client.Decide including deferred audit returned at 500.349376ms while writer held
+--- PASS: TestClientDecideBoundsDeferredAuditAndPreservesFIFO (0.58s)
+=== RUN   TestDecideMaxWaitUnderHeldLock
+=== PAUSE TestDecideMaxWaitUnderHeldLock
+=== RUN   TestDecideMaxWaitWithBlockedTrail
+    decide_trail_deadline_test.go:103: independent connection observed committed allow at +12.124682ms with trail mutex still held
+    decide_trail_deadline_test.go:123: decide finished after 500.564265ms; reporting released at +500.587085ms
+--- PASS: TestDecideMaxWaitWithBlockedTrail (0.57s)
+=== CONT  TestDecideMaxWaitUnderHeldLock
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== PAUSE TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== RUN   TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== PAUSE TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== RUN   TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== PAUSE TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== CONT  TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+--- PASS: TestDecideMaxWaitUnderHeldLock (0.00s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms (0.44s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (0.60s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout (0.67s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s (0.96s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s (1.00s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s (1.02s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (1.03s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (1.04s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s (1.04s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s (1.04s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s (1.06s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s (1.07s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s (1.07s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (1.07s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s (1.07s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (1.08s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s (1.08s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s (1.08s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s (1.10s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s (1.10s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s (1.10s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s (1.12s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s (1.15s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	3.325s

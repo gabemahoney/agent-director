@@ -1,0 +1,40 @@
+{
+  "reason": "Source-only snapshot .go files were discovered by accidental go test ./...; _before directories keep evidence out of package selection, original before paths remain symlinks for exact report references. No product or test input bytes changed.",
+  "records": [
+    {
+      "original_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before",
+      "archive_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/_before",
+      "compatibility_symlink": "_before",
+      "files": 4,
+      "unchanged_sha256": {
+        "internal/store/lockwait.go": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+        "internal/store/cursor_prompt.go": "2031e304a71c319777ec6d151684c24daddac388519c482296b9dcf0bd855ac0",
+        "internal/store/sqlite_connector.go": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+        "internal/store/cursor_rotation.go": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d"
+      }
+    },
+    {
+      "original_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/before",
+      "archive_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/_before",
+      "compatibility_symlink": "_before",
+      "files": 15,
+      "unchanged_sha256": {
+        "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+        "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+        "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+        "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+        "internal/store/relay_writes.go": "65d929871daa5aadd685e13381b5241c9630ec986fec1f610e72c528d3ba58e6",
+        "internal/store/lockwait.go": "723c4ec77dca158d0d8871dd0e9cdee3bd1f4e298794d751da92e246e7926e22",
+        "internal/store/cursor_prompt.go": "30259961264d9b3d5b9417da754525d2f2e6a43a1a5a7d6a1eaf8c0c4549a19c",
+        "internal/store/sqlite_connector.go": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+        "internal/store/store.go": "d625550192fd4959e9042443b7b7d84d19767f0bb9735914452720501a411fbe",
+        "internal/store/cursor_rotation.go": "a8716b101b10095ff541aa52bf9540432828929c15fd5d6f4b5e8d90d8825d8b",
+        "internal/store/connection_cleanup.go": "95f55a315ac6567047af3f98f5c8a3190b854daad43de432215293431a2a2612",
+        "internal/store/cursor_permission.go": "d8941cc66650f5030c66d6c927892ea5d92d607e01a6fa174a4c69ee054d2bda",
+        "internal/store/permission.go": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+        "internal/cursorhost/requests.go": "76af7ffd7299bbbea8f13bfe2deed19d8a411481822d042073e808c35c0ccd0d",
+        "cmd/agent-director/main.go": "826e86b9b22ce0448cec2a3d46a6298e30e81ab32d5608bb7318e1afa43db685"
+      }
+    }
+  ]
+}

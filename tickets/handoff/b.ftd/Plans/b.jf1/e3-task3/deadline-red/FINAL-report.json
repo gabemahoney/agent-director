@@ -1,0 +1,120 @@
+{
+  "role": "apiary_test_writer_e3_task3_deadline_red",
+  "result": "expected old-production deadline RED established before source repair",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.gf": "active -> done (expected-failure milestone)"
+  },
+  "status_scope": "Only .gf; no Task, Epic or other Subtask status changes.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "pinned_old_production_revision": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+  "tested_tree": "Fresh /tmp copy inside make sandbox, populated from exact pinned Git blobs excluding .claude and tickets before blob access; overlay only the new _test.go. Copy removed after run.",
+  "production_manifest": "old-production-receipt.json#production_manifest",
+  "production_manifest_count": 1333,
+  "production_manifest_sha256": "486d0da7a7abc87f878591c57aa99c8a4e3e4c024fb403fd25c453c688e78a7c",
+  "critical_old_source_sha256": {
+    "pkg/api/decide.go": "b5bfbff9db33f6c02d802c92f397cc7998e009cf1f8dc3771a450e4655eb4085",
+    "internal/store/lockwait.go": "414bb78c51b2d9845b554f46abf08c42e6f1233438e3643022f33ab29537d948",
+    "internal/store/permission.go": "55c6faf6e4b5676d0b150d2e53d05bea90212305f7cb674cca95cadbb3ef4f78",
+    "internal/trail/trail.go": "b7c444678a57fad0d2dea1f24c14e0aed56ead5d9189ed5c662b273b63223278",
+    "internal/trail/envelope.go": "b5c5cca3974fe285492c66c192efcf944f6d2f30dca9d83b146057d0dd642cca"
+  },
+  "production_unchanged_in_test_copy_after": true,
+  "workspace_production_drift_from_old": [],
+  "workspace_source_untouched": true,
+  "test_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+  "unchanged_regression_ready_for_green": true,
+  "changed_test_files": [
+    "pkg/api/decide_trail_deadline_test.go"
+  ],
+  "reused_fixtures": [
+    "newRelayEnv / relayEnvHook / relayEnv.view / relayEnv.request",
+    "storefix.TestRequestTokenA",
+    "pkg/api TestMain isolated HOME and singleton"
+  ],
+  "commands": [
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.gf --status active",
+      "result": "success"
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide_trail_deadline_test.go && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/run-red.mjs'",
+      "outer_exit": 0,
+      "actual_go_test_exit": 1,
+      "explanation": "Evidence runner requires a genuine deadline assertion failure; expected RED makes the evidence runner succeed.",
+      "log": "00-sandbox-receipt.log",
+      "inner_argv": [
+        "timeout",
+        "60s",
+        "go",
+        "test",
+        "-timeout",
+        "45s",
+        "-count=1",
+        "-v",
+        "./pkg/api",
+        "-run",
+        "^TestDecideMaxWaitWithBlockedTrail$"
+      ]
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/finalize.mjs'",
+      "purpose": "Evidence assembly and current source integrity check; no tests.",
+      "attempts": [
+        {
+          "log": "02-final-integrity.log",
+          "outer_exit": 2,
+          "disposition": "Evidence generator syntax error only; corrected bracket. No test/source change and no additional test run."
+        },
+        {
+          "log": "03-final-integrity.log",
+          "outer_exit": 0
+        }
+      ]
+    },
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.gf --status done",
+      "result": "expected-failure milestone completed"
+    }
+  ],
+  "raw_test_receipt": "01-old-production-red.log",
+  "actual_assertions": [
+    "    decide_trail_deadline_test.go:92: decide has not returned after 1.500842204s; want within 1.5s while the real trail mutex remains held",
+    "    decide_trail_deadline_test.go:125: decide returned after 1.505624411s; want within 1.5s"
+  ],
+  "request_bound_ms": 500,
+  "elapsed_assertion_ms": 1500,
+  "causal_control": "trail.Emit calls the test JSON Marshaler while holding the real process singleton mutex. The Marshaler signals entry and waits for an explicit release channel. No fake writer, reflection, unsafe mutation, copied Decide algorithm, production instrumentation or source seam. This controls real mutex contention, not filesystem Write/Sync latency.",
+  "public_operation": "api.Decide delegates to actual SQLite Store.DecideRelayRequest and actual trail.Emit; an independent Store connection observes committed allow before the blocked reporter is released.",
+  "observed": {
+    "independent_commit_elapsed": "4.480057ms",
+    "deadline_assertion_elapsed": "1.500842204s",
+    "operation_finished_elapsed": "1.505624411s",
+    "returned_result": "not_confirmed, nil error; persisted allow, no attempted decision",
+    "finite_cleanup": true
+  },
+  "synchronization": "Entry channel proves actual mutex ownership before api.Decide starts. Independent SQL connection observes commit. A ticker only observes persisted state; no sleep chooses the race. Holder releases after the unchanged 1.5s assertion and every wait has a finite cleanup bound; outer timeout 60s, Go timeout 45s.",
+  "existing_parallel_coverage": "Existing TestDecideMaxWaitUnderHeldLock and all helpers/parallel cases untouched. New singleton-lock test declares Serial and cannot overlap parallel tests.",
+  "next_writer_scope": "Independent .yt owns unchanged regression GREEN plus distinct precommit SQL, cleanup, stale absolute deadline and connection reuse/discard cases after Engineer repair. Existing request_proof_test.go beforeEachExec/execHookConnector/execHookConn and cursor_trail_export_test.go demonstrate a test-only real SQLite driver boundary; reuse/extend narrowly if needed. The current proof deliberately isolates postcommit trail contention, and does not prove SQL/cleanup deadline behavior.",
+  "technical_seam_requests": [],
+  "evidence_limits": [
+    "Historical 09 causes remain unknown. This controlled reachable mutex overrun does not reconstruct or identify either 5.700691482s/2.484155549s historical cause.",
+    "No repaired-source GREEN claim; production repair has not started in this lane.",
+    "No real slow-filesystem test; actual mutex ownership is controlled through JSON encoding on the real writer."
+  ],
+  "deviations": [],
+  "integration": "Not run; not dispatched for integration. No Docker TESTPLAN groups or collectors.",
+  "full_suite": "Not run; .zj exclusively owns the settled full suite.",
+  "formal": "No spec/tla changes and no formal/TLC/Java/parser jobs.",
+  "boundaries": "Source/docs untouched. No .claude read/access, real AD stores, credentials, login/logout, live Cursor, host repo scripts/build/tests/artifacts, scheduler submissions, pushes, commits or delegation. All Go formatting, repository script and test execution used make sandbox. Bees CLI used only for own Subtask status.",
+  "incomplete_work": [],
+  "questions_for_caller": [],
+  "file_sha256": {
+    "pkg/api/decide_trail_deadline_test.go": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/run-red.mjs": "c1a00992c98267d769e013fac7a397cbc736dacbbfb85f1f7ee43b5c52fc135b",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/finalize.mjs": "ecbba0a67d4476c41e8661dce2a254f6a83725f4c19c9315766530376ad537d8",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/00-sandbox-receipt.log": "34f60906cc4c67b6d9a1f45d2fd26d07399a4ae5d69ec64f95bbaff355da11ec",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/01-old-production-red.log": "4bcca11983b95c8a8caa3a1c949f258da99467a5abfe59541b1127933bdbc5ae",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/old-production-receipt.json": "6df7958d2e4cfc072321660a9717723899faf0894dc2d4c31aa489df48bf91a5"
+  }
+}

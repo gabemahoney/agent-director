@@ -1,0 +1,30 @@
+{
+  "owner": "t3.jf1.r8.a8.6f",
+  "status": "PENDING literal-follow behavior validation; documentation authoring is complete, not advice execution",
+  "new_or_changed_commands": [],
+  "sequences": [
+    {
+      "id": "precommit_exhaustion_retry",
+      "exact_prose": "- `ErrStoreBusy`: the bound ran out before the verdict could commit.\n  This can include store acquisition or SQL work; it does not establish\n  that another process or call held the store. Retry only as a new,\n  deliberate call with a fresh budget.",
+      "literal_follow_scope": "Observe actual precommit refusal/no durable verdict, then deliberately make a new decision call with a fresh budget and inspect the real request. Preserve first-writer wins and independent holds. Reuse existing API/store boundary fixtures and public owners; no inferred competing holder or automatic retry.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay"
+    },
+    {
+      "id": "original_deadline_and_zero_wait",
+      "exact_prose": "The positive `--max-wait-ms` bound covers SQL, cleanup and reporting under\nthe same original deadline. Once it expires, no new SQL starts, even if the\nstore is free. Zero permits immediately available work within a fixed\none-second allowance, with no lock retries; it does not mean zero execution\ntime. Keep the one-second reply margin above. These bounds depend on the\nhost scheduling AD and on interruptible database and filesystem operations.",
+      "literal_follow_scope": "Use the actual existing bounded APIs, original deadline and zero-wait cases; do not renew an expired positive budget or widen the original assertions. Separate cooperative cancellation from uninterruptible-native/descheduling limits. This adds no command or configuration.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay"
+    },
+    {
+      "id": "unconfirmed_commit_inspect_before_retry",
+      "exact_prose": "An `ErrInternal` reporting an unconfirmed commit is different from a\nprecommit refusal: the verdict may already be recorded. Inspect the durable\nrequest with `get-permission` and its `request_token` before deciding whether\nto retry. Do not infer that nothing was written, resend an uncertain approval,\nor automatically replay the call. Cancellation does not undo an already\ncommitted verdict. After a confirmed commit, later deadline exhaustion keeps\nthe verdict and returns the available delivery facts; follow `not_confirmed`\nas above. A decision or delivery response is not a receipt that its audit\nevents have reached durable storage.",
+      "literal_follow_scope": "Create real uncertain COMMIT response through existing actual SQLite boundary, inspect the actual durable request using the existing public get-permission/GetPermission owner, and make no replay of the committed allow. Follow the retained not_confirmed polling sequence where relevant; delayed audit reporting must not undo verdict or become a durability claim. Existing standalone Store-level commit uncertainty plus invented serialized errors is not by itself literal execution of caller recovery.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay"
+    }
+  ],
+  "unchanged_sequences": "Existing request-token inspection, not_confirmed polling, live-row cleanup, pane fallback and Task1/2 rotation failure advice remain their existing owners. Changed permission/API summaries link the canonical caller contract.",
+  "boundary": "Follow advice literally with isolated existing behavioral/public fixtures; no doc parsing/metatests, manufactured recovery commands, credentials/live Cursor or collector execution."
+}

@@ -1,0 +1,187 @@
+{
+  "role": "apiary_test_writer_e3_task3_acceptance_fix",
+  "result": "P1/P2/P3 acceptance repairs complete. Targeted genuine public tests: 13 race leaves passed. Collector: authored/static only, never executed.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.wn": "done -> active -> done",
+    "t3.jf1.r8.a8.wc": "done -> active -> done (authoring only)",
+    "t3.jf1.r8.a8.8u": "done -> active -> done (related raw-proof repair)"
+  },
+  "status_scope": "Only .wn/.wc/.8u. No parent, .gf/.ir/.yt or other status changes.",
+  "files_changed": [
+    "test/driver/cursor-pane-controls.sh",
+    "test/realtmux/cursor_pane_controls_test.go",
+    "test/realtmux/cursor_pane_controls_boundary_linux_test.go",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-check.mjs"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix",
+  "repair_mapping": {
+    "P1": {
+      "files": [
+        "test/driver/cursor-pane-controls.sh"
+      ],
+      "repair": "pc_start waits through existing 20s wait_until on explicit read-pane Cursor ready notice, matching newCursorPaneScenario; waiting/elapsed decoy work cannot select readiness.",
+      "runtime": "Existing real-pane startup pattern exercised by all public leaves; collector change is static only."
+    },
+    "P2": {
+      "files": [
+        "test/realtmux/cursor_pane_controls_test.go",
+        "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md"
+      ],
+      "repair": "Per-control baseline/increment for rotation_published and explicit Cursor fresh conversation published notices. Source emits the notice after inputs.publish and rotating=false. No prior notice can satisfy the second control.",
+      "preserved": "Changed current session/waiting, independent current-life history, public current/prior session, stable life/token/path/inode; collector actual peer reply ID still checked.",
+      "runtime": "CLI/MCP/Go/Bun mixed/recreation leaves passed race; collector static only."
+    },
+    "P3": {
+      "files": [
+        "test/driver/cursor-pane-controls.sh",
+        "test/realtmux/cursor_pane_controls_boundary_linux_test.go",
+        "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+        "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+        "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md"
+      ],
+      "repair": "Raw observer precedes readline. After owned termination cmp/Buffer equality covers every received byte against complete trace; existing frame/protected checks constrain allowed prompts. Guard02 preserves the actual raw baseline, requires immediate unchanged bytes, and after death accepts only one complete session-matched notification cancel, no permission response or prompt prefix. Raw snapshot exported with artifacts.",
+      "public_gap": "Prior assertPaneNoPromptBytes searched only full encoded text. Added raw/trace equality; independent-holds composition now explicitly exits and observes exact owned death before final raw assertion.",
+      "negative_control": "One-byte { partial suffix leaves decoded complete frames unchanged and contains no session/prompt string, yet cmp/Buffer equality reject it. No collector/helper imported or executed."
+    }
+  },
+  "commands": [
+    {
+      "command": "make sandbox CMD='gofmt -w test/realtmux/cursor_pane_controls_test.go test/realtmux/cursor_pane_controls_boundary_linux_test.go && timeout 120s go test -race -timeout 100s -count=1 -v ./test/realtmux -run \"^TestCursorPaneControlsPublic\"'",
+      "log": "01-public-race.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix/prepare-integrity.mjs && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-check.mjs tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix/repair-inputs.json && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix/raw-negative-control.mjs && git diff --check'",
+      "logs": [
+        "02-static-integrity-negative-control.log",
+        "03-corrected-static-integrity-negative-control.log"
+      ],
+      "exits": [
+        2,
+        0
+      ],
+      "correction": "Evidence checker initially compared the already-authorized collector registry change with pre-collector production. Added the existing collector report hash to the accepted baseline; no source/test assertions changed or tests retried."
+    },
+    {
+      "command": "make sandbox CMD='timeout 90s go vet ./test/realtmux && go version && bun --version && tmux -V && git diff --check'",
+      "log": "04-vet-environment.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/acceptance-review-fix/finalize.mjs && git diff --check'",
+      "purpose": "Final evidence assembly only; no test/helper/case execution"
+    }
+  ],
+  "receipts": {
+    "02-static-integrity-negative-control.log": {
+      "sha256": "13d1cdc6b0444e275074ab7b13aa79e613ff8577d384505d48d8bd57dbf440bc",
+      "result": "failed evidence setup; corrected in 03"
+    },
+    "01-public-race.log": {
+      "sha256": "0803d5142013cd2823e8ad3b475158a3498abb64de02b6451d4e0d22070fb4fb",
+      "result": "passed"
+    },
+    "03-corrected-static-integrity-negative-control.log": {
+      "sha256": "28fc223e805d53e6727b5c97f8b39488927b9ad1a913b952a1af5a257615d316",
+      "result": "passed"
+    },
+    "04-vet-environment.log": {
+      "sha256": "45742447ccb09501a48dd40a4385a8e6d6b40c0f7de123783c065085bedfc115",
+      "result": "passed"
+    }
+  },
+  "public_race": {
+    "passed_leaves": 13,
+    "leaves": [
+      "TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt",
+      "TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new",
+      "TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit",
+      "TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation",
+      "TestCursorPaneControlsPublicDisconnectBeforeObservingSend",
+      "TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation",
+      "TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication",
+      "TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss",
+      "TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission",
+      "TestCursorPaneControlsPublicMixedInputAndRecreation/CLI",
+      "TestCursorPaneControlsPublicMixedInputAndRecreation/MCP",
+      "TestCursorPaneControlsPublicMixedInputAndRecreation/Go",
+      "TestCursorPaneControlsPublicMixedInputAndRecreation/Bun"
+    ],
+    "packages": [
+      "github.com/gabemahoney/agent-director/test/realtmux\t27.501s"
+    ],
+    "failures": []
+  },
+  "static_coverage": {
+    "cases": 5,
+    "groups": 17,
+    "total_cases": 172,
+    "body_execution": false,
+    "helper_execution": false,
+    "bash_n": true,
+    "node_parse": true,
+    "inline_node_parse": true,
+    "metadata_and_integrity": true
+  },
+  "source_integrity": {
+    "all_eight_settled_sources_unchanged": true,
+    "old_paths_checked": 1333,
+    "accepted_prior_registry_hash": "6879fe9811c9a0d6a74f7deb360e8d8758d062c96b4b903f1cb7a695afd7535c",
+    "all_other_tests_preserved": true,
+    "prior_go_tests_verified": 700,
+    "current_test_files_hashed": 759,
+    "causal_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "manifests": [
+      "repair-inputs.json",
+      "source-test-integrity.json"
+    ]
+  },
+  "source_bound_replay_zeroWire_truth": {
+    "bounds": "Existing source budgets, public/client defaults, 3s failure observation bounds and 20s collector event bounds unchanged. No retry of failed tests, widening, assertion removal or source changes.",
+    "replay": "Original exact admitted/dispatched/outcome IDs, FIFO, public recreation, hold/refusal, no-replay, owned death and unrelated sentinel assertions retained.",
+    "zeroWire": "Received raw bytes, complete trace and protected records are separate observations; exact byte equality rejects arbitrary partial prefixes. Collector runtime remains unproved until user scheduler receipts. No claim about unread pipe bytes.",
+    "historical09": "Cause remains UNKNOWN. Preserved causal regression unchanged; this pass did not rerun it or claim it reconstructs historical09."
+  },
+  "remaining_findings": [],
+  "doc_implications": [
+    "One settled .48/.ro doc pass remains; use PM initial review plus source reports for pre-BEGIN ErrStoreBusy, original absolute-context SQL/cleanup, bounded audit queue/status/drain versus durability.",
+    "Coverage inventory now states readiness/publication observation boundaries and exact received raw-byte proof versus decoded frame counts; these are explicit test observations, never AD screen classification.",
+    "Future Integration Writer must provide concrete Docker-equivalent invocation retaining a writable /tmp/cursor-pane-controls-artifacts mount, including raw-before-guard. Makefile has fixed mounts and no extra-arguments variable; do not invent one.",
+    "Installed Bun locked dependency network prerequisite and pending actual-human/authenticated O1–O6 provenance unchanged."
+  ],
+  "deviations": [
+    "Initial discovery listed /tmp names/globs and read existing /tmp/ftd-e3-orchestrator-state.json despite workspace-scoped discovery instruction; subsequent discovery/evidence remained workspace-scoped. No real AD store or credential accessed.",
+    "First bees read used comma-separated IDs and failed; corrected to space-separated IDs before status updates.",
+    "First integrity evidence attempt rejected the prior authorized registry hash; retained failed log and corrected evidence baseline from existing collector report. No test retry or source change."
+  ],
+  "environment": {
+    "go": "go1.22.10 linux/amd64",
+    "bun": "1.3.13",
+    "tmux": "3.3a",
+    "execution": "make sandbox only; isolated fixture HOME/store/socket/processes"
+  },
+  "full_suite": "Not run; .zj solely owns final settled make test-sandbox.",
+  "integration": "Not run; not integration dispatch. No collector body/helper execution or scheduler submission.",
+  "formal": "No spec/tla changes; no formal/TLA/TLC/Java/parser jobs.",
+  "boundaries": "No .claude access, real AD stores, credentials/login/logout/live Cursor, production/product-doc edits, host repo execution, full suite, collector/helper body execution, commit/push, delegation or outbound messages.",
+  "incomplete_work": [],
+  "questions_for_caller": [],
+  "file_sha256": {
+    "test/driver/cursor-pane-controls.sh": "5f3089790b19853b96e6503a0e10d3ffb5e78a5e76e557e085c54d6a38a5ad38",
+    "test/realtmux/cursor_pane_controls_test.go": "d9138830b4454c7d7c489fedf8e05315c51355855ff660644983b1e26d571c06",
+    "test/realtmux/cursor_pane_controls_boundary_linux_test.go": "a27f3b0f6df5334117ee20de40b6b271664e08ddffdda1142a6d71a16e73940b",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md": "eaa421b12e65b5565d84ddbf8d77fe240cd9415abf95ef68b7e1fae874a33bfd",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md": "62c7e60aadd71a00e8dffb1e4c74d8662d5d6dcef1154417dba021298f84548e",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md": "79aac18926975972db7d60121c7aeb0866661cb48fb79c7a6b58f0bfdc6fd213",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md": "f5d61449a9bc21d5e724143b22d7aec82f817fa1f0f639dd9b3f8902ca0c870c",
+    "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md": "dccb05965bafdaa47037fe319948ab9231245b4ae838bf93a3867e0315fcc014",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-check.mjs": "023370c4d12c1743ed8398ca1ec187cd2675a2cb80dd2d007a2d78ce46d2d149"
+  }
+}

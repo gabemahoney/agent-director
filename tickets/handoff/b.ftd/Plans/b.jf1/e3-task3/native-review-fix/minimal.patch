@@ -1,0 +1,81 @@
+--- before/internal/store/sqlite_connector.go
++++ after/internal/store/sqlite_connector.go
+@@ -18,6 +18,23 @@
+ 
+ type connectionInitializationContextKey struct{}
+ 
++// database/sql's replacement opener uses its own cancelable pool context,
++// never the context of the caller waiting in DB.Conn. Refuse that opener
++// before any native work. ErrBadConn makes database/sql retry acquisition
++// on the waiting caller, whose marked context and operation slot own the
++// physical open through initialization and disposal. Synchronous legacy
++// pool calls use noncancelable contexts and keep their existing behavior.
++type callerOwnedConnector struct{ driver.Connector }
++
++func (c callerOwnedConnector) Connect(ctx context.Context) (driver.Conn, error) {
++	if ctx.Done() != nil {
++		if _, owned := ctx.Value(connectionInitializationContextKey{}).(context.Context); !owned {
++			return nil, driver.ErrBadConn
++		}
++	}
++	return c.Connector.Connect(ctx)
++}
++
+ func (c sqliteConnector) Driver() driver.Driver { return c.driver }
+ 
+ func (c sqliteConnector) Connect(ctx context.Context) (driver.Conn, error) {
+@@ -60,5 +77,5 @@
+ 	if err := registered.Close(); err != nil {
+ 		return nil, err
+ 	}
+-	return sql.OpenDB(sqliteConnector{driver: drv, path: path, busyTimeoutMs: busyTimeoutMs}), nil
++	return sql.OpenDB(callerOwnedConnector{sqliteConnector{driver: drv, path: path, busyTimeoutMs: busyTimeoutMs}}), nil
+ }
+--- before/internal/store/lockwait.go
++++ after/internal/store/lockwait.go
+@@ -84,18 +84,20 @@
+ // the store would) and never below 0, which makes SQLite answer busy at once.
+ // A connection not taken by the deadline is an error wrapping ErrStoreBusy.
+ func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (*sql.Conn, int, error) {
++	// Explicit acquisition carries its own provenance; database/sql's pool
++	// replacement opener must never borrow another operation's context.
++	acquireCtx := context.WithValue(ctx, connectionInitializationContextKey{}, ctx)
+ 	if maxWait < 0 {
+-		conn, err := s.db.Conn(ctx)
++		conn, err := s.db.Conn(acquireCtx)
+ 		if err != nil {
+ 			return nil, 0, fmt.Errorf("store: connection: %w", err)
+ 		}
+ 		return conn, s.busyTimeoutMs, nil
+ 	}
+ 	deadline, _ := ctx.Deadline()
+-	acquireCtx := ctx
+ 	if maxWait == 0 {
+ 		var cancel context.CancelFunc
+-		acquireCtx, cancel = context.WithTimeout(context.WithValue(ctx, connectionInitializationContextKey{}, ctx), connGrab)
++		acquireCtx, cancel = context.WithTimeout(acquireCtx, connGrab)
+ 		defer cancel()
+ 	}
+ 	conn, err := s.db.Conn(acquireCtx)
+--- before/internal/store/cursor_prompt.go
++++ after/internal/store/cursor_prompt.go
+@@ -27,5 +27,8 @@
+ 		eligible = held == 0
+ 		return nil
+ 	})
+-	return eligible && err == nil, err
++	if err != nil {
++		return false, err
++	}
++	return eligible, nil
+ }
+--- before/internal/store/cursor_rotation.go
++++ after/internal/store/cursor_rotation.go
+@@ -105,6 +105,7 @@
+ // unchanged outgoing snapshot. Neither result grants runtime authority. Both
+ // false means the current binding/history is unknown, not an outgoing proof.
+ func (s *Store) ReconcileCursorRotation(ctx context.Context, previous CursorRuntime, examined Spawn, next, path string) (committed, unchanged bool, err error) {
++	ctx = context.WithValue(ctx, connectionInitializationContextKey{}, ctx)
+ 	args := cursorBindingArgs(previous)
+ 	args = append(args, path, examined.Identity.Token, examined.LifeNumber, examined.Identity.Socket, examined.Identity.ServerPID, examined.Identity.ServerStart, examined.Identity.ServerStarttime, examined.Identity.PaneID, examined.Identity.PanePID, examined.Identity.PaneStarttime)
+ 	args = append(args, next, next, previous.SessionID, previous.Life, path, previous.SessionID, previous.SessionID)

@@ -1,0 +1,68 @@
+{
+  "files": {
+    "internal/store/connection_cleanup.go": {
+      "sha256": "95f55a315ac6567047af3f98f5c8a3190b854daad43de432215293431a2a2612",
+      "mode": "664"
+    },
+    "internal/store/sqlite_connector.go": {
+      "sha256": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+      "mode": "664"
+    },
+    "internal/trail/deadline.go": {
+      "sha256": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+      "mode": "664"
+    },
+    "cmd/agent-director/main.go": {
+      "sha256": "826e86b9b22ce0448cec2a3d46a6298e30e81ab32d5608bb7318e1afa43db685",
+      "mode": "664"
+    },
+    "internal/cursorhost/requests.go": {
+      "sha256": "76af7ffd7299bbbea8f13bfe2deed19d8a411481822d042073e808c35c0ccd0d",
+      "mode": "664"
+    },
+    "internal/store/cursor_permission.go": {
+      "sha256": "d8941cc66650f5030c66d6c927892ea5d92d607e01a6fa174a4c69ee054d2bda",
+      "mode": "664"
+    },
+    "internal/store/cursor_prompt.go": {
+      "sha256": "30259961264d9b3d5b9417da754525d2f2e6a43a1a5a7d6a1eaf8c0c4549a19c",
+      "mode": "664"
+    },
+    "internal/store/cursor_rotation.go": {
+      "sha256": "a8716b101b10095ff541aa52bf9540432828929c15fd5d6f4b5e8d90d8825d8b",
+      "mode": "664"
+    },
+    "internal/store/lockwait.go": {
+      "sha256": "723c4ec77dca158d0d8871dd0e9cdee3bd1f4e298794d751da92e246e7926e22",
+      "mode": "664"
+    },
+    "internal/store/permission.go": {
+      "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+      "mode": "664"
+    },
+    "internal/store/relay_writes.go": {
+      "sha256": "65d929871daa5aadd685e13381b5241c9630ec986fec1f610e72c528d3ba58e6",
+      "mode": "664"
+    },
+    "internal/store/store.go": {
+      "sha256": "d625550192fd4959e9042443b7b7d84d19767f0bb9735914452720501a411fbe",
+      "mode": "664"
+    },
+    "internal/trail/trail.go": {
+      "sha256": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+      "mode": "664"
+    },
+    "pkg/api/client.go": {
+      "sha256": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+      "mode": "664"
+    },
+    "pkg/api/decide.go": {
+      "sha256": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+      "mode": "664"
+    }
+  },
+  "protected": {
+    "path": "pkg/api/decide_trail_deadline_test.go",
+    "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88"
+  }
+}

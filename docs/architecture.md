@@ -331,6 +331,15 @@ life, server/pane identity and pid/start, current confirmed session,
 runtime/connection/pipes/fds, nonretirement and nonterminal row state.
 `CursorCheck` independently runs `VerifyRuntime` and `VerifyPane` after the lock; time is checked after potentially
 slow evidence. The immediate-parent hook gate remains unchanged.
+Gateway callbacks capture the exact launch binding before dispatch through
+`checkFor`; a later rotation cannot change an outstanding operation's evidence.
+Bounded callbacks may outlive the caller while native work is quarantined.
+Their inputs must stay immutable and their captured outputs must only be read
+after a successful helper return. `CheckCursorPrompt` returns `false, err`
+before reading captured eligibility on failure; relay/Cursor ack and timeout
+helpers likewise return zero outputs on error. `RecordHookGone` clones its
+request-id slice before dispatch. None of these ownership rules replaces the
+authenticated authority checks or derives permission from pane text.
 
 Admission fixes a finite millisecond `SettledAt`: configured relay window plus
 four seconds. The approval deadline is settlement minus that reserve. Relay-off
@@ -492,10 +501,18 @@ production terminal defaults and expose actual controller boundaries; the
 transcript opener retains protected file creation. Use these seams for causal
 ordering and complete large submissions instead of copied controllers, alternate
 runtimes or per-rune stress. They do not supply production authority.
-Public CLI/MCP/Go/Bun acceptance reuses the
-existing spawn, MCP and current Bun `Client` paths; it adds no client harness.
+Public CLI/MCP/Go/Bun pane compositions MUST reuse `newPaneCaller`/`paneCaller` in
+`test/realtmux/cursor_pane_controls_test.go` with `newCursorPaneScenario`.
+This adapter invokes the production CLI, stdio MCP server, Go Client and
+the built Bun public export; replacement callers keep the same owned gateway
+and explicit store. It owns caller transport and observation, not admission
+or controller logic. Successful send transport, protected admission,
+correlated prompt/outcome, committed state and process death remain separate
+observations. Text and Enter remain separate operations; the adapter does
+not promise arbitrary concurrent-call atomicity or installed-package coverage.
 
-Both registered `cursor-owned-launch` and `cursor-relay` collectors MUST reuse
+The registered `cursor-owned-launch`, `cursor-relay` and `cursor-pane-controls`
+collectors MUST reuse
 `test/driver/cursor-owned-launch.sh` for the isolated HOME, store/config,
 Cursor config/data, temporary directory, cwd, socket and transcript namespace,
 control sentinel and scoped helper cleanup. Store observations and faults,
@@ -508,6 +525,24 @@ fixture control bytes, and exact retained-byte equality excludes additional
 response bytes. Those control bytes are not ACP traffic. Public Go tests use
 existing OS facilities against the same real pipe boundary. Neither seam
 fabricates process authentication or proves authenticated runtime support.
+
+`cursor-pane-controls` extends those shared owners through
+`test/driver/cursor-pane-controls.sh`: bounded explicit startup/publication
+observations, caller recreation and scoped artifact retention.
+`cursor-pane-public.mjs` owns actual MCP/Bun caller subprocesses; the shell
+helper invokes the CLI directly.
+`cursor-pane-records.cjs` owns protected-record, complete-frame and raw-byte
+correlation. Future collector work MUST reuse these helpers and the existing
+SQL helper rather than duplicate caller serialization, store access or
+cleanup. Received raw bytes before readline and complete frames are different
+evidence: zero-byte claims require raw observations, including partial prefixes,
+and final observations after owned termination. A synthetic ACP peer with real
+tmux and public callers remains synthetic runtime evidence. Installed Bun
+coverage builds and packs the canonical package into a local consumer and
+requires its locked build dependencies; authored steps alone prove no pass.
+Actual human/authenticated observations and runtime/platform provenance remain
+separate acceptance obligations in the testplans, not properties supplied by
+these helpers.
 
 **Must use:** tests requiring a Cursor protocol/runtime stand-in extend
 `cursorfix` and its one embedded `runtime.js`, use `Raw` for byte-level claims
@@ -1285,7 +1320,10 @@ store (`help`, `version`, the no-verb run, `trail-emit`) are unaffected, and
 require an existing store and authenticated runtime binding. The TS client's `createIfMissing: false`
 forwards the flag (see [Client lifecycle](#client-lifecycle)).
 
-**`Close`.** Releases store and tmux resources. Idempotent: a second call
+**`Close`.** Marks the Client closed under its mutex, then releases the
+mutex before closing the store. New verb calls observe `ErrClientClosed`
+without waiting behind database cleanup. It does not stop an agent or drain
+the process trail writer. Idempotent: a second call
 returns `nil` without double-closing the underlying `*store.Store`. After
 `Close` returns, any subsequent verb method call on the client returns the
 sentinel `ErrClientClosed` (detectable via `errors.Is`).
@@ -2273,24 +2311,62 @@ still the one it read, so it knows the row has not changed since. As built:
     store write whose caller must keep a deadline whatever `[store]
     busy_timeout_ms` is runs through `inWriteTx(maxWait, fn)`
     (`internal/store/lockwait.go`): one `BEGIN IMMEDIATE` transaction on
-    the store's one connection, taken through `boundedConn(maxWait)`. Under
-    a bound (`maxWait` 0 or more) the wait for that connection and the wait
-    for the write lock share one deadline, `maxWait` from the call's start:
-    the pool has one connection, so a wait for it is a wait for any other
-    call of this process using the store, and `boundedConn` waits for it
-    only until the deadline (at least `connGrab`, 1 ms, so a call with no
-    wait left can still take a free connection: `database/sql` refuses an
-    already-expired context even then). What is left of `maxWait`, cut at
-    the store's own busy timeout and never below 0, becomes the
-    connection's busy timeout for that transaction only, and is put back
-    before the connection returns to the pool (a failed put-back discards
-    the connection, so no later statement inherits the shorter wait).
-    `DefaultLockWait` (any negative wait) waits for the connection without
-    a bound and for the lock up to the store's busy timeout, as every other
-    store call does; 0 takes the lock only if it is free at once. A
-    connection or a lock not taken in time returns an error wrapping
-    `store.ErrStoreBusy` having run nothing; `fn` runs every statement on
-    the connection it is given. Its users: the relay hook's first write
+    the store's one connection, taken through `boundedConnContext`.
+    **Must use:** `Store.WithContext(ctx)` scopes an immutable per-call
+    handle to the original caller context, sharing the pool and cleanup lane;
+    it does not own the pool and must not be closed independently. Duration
+    methods intersect their local allowance with this context through
+    `operationContext`; a later relative wait cannot renew an expired
+    original deadline. Acquisition, setup PRAGMA, BEGIN, queries, COMMIT,
+    rollback and timeout restoration retain the operation context.
+    Deadline-bounded SQL disables SQLite's busy handler (`busy_timeout = 0`);
+    `retryBusy` supplies cancellable Go retries for reads and BEGIN, capped
+    by both the available busy allowance and the context. Callbacks use only
+    their leased connection, never the one-connection pool.
+
+    Zero wait retains `connGrab` (1 ms) for acquisition and zero SQLite lock
+    allowance without retries. Immediately available execution and cleanup
+    get one fixed `immediateWorkBudget` (1 s), intersected with any enclosing
+    original deadline. An expired positive call cannot start SQL through a
+    renewed zero-wait allowance. `DefaultLockWait` (negative) retains the
+    store's configured waits unless an enclosing context cuts them shorter.
+    Setup context cancellation before BEGIN and precommit exhaustion wrap
+    `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
+    ordinary I/O errors returned within the original bound retain their
+    classification despite earlier cancellation. A COMMIT error is an
+    unconfirmed internal outcome, not busy or proof of rollback; the durable
+    request must be read before retry.
+    Successful COMMIT remains authoritative despite later cleanup/reporting
+    expiry.
+
+    **Must use:** cancelable `withConn` calls run through
+    `runConnectionOperation` and the shared per-pool `connectionCleanupLane`
+    (`internal/store/connection_cleanup.go`). Admission takes one operation
+    slot before creating a worker or acquiring/opening a native connection.
+    Waiting callers create no worker or job queue. The admitted worker owns
+    acquisition, initialization, callback, rows and direct `cleanup.finish`
+    through rollback/restoration or `Raw(driver.ErrBadConn)` disposal and
+    lease release, even after its caller returns. Repeated timeouts cannot
+    accumulate workers behind blocked native work. Contextless default-wait
+    calls remain synchronous and use `releaseConn`'s existing cleanup lane;
+    they do not acquire the cancelable operation slot.
+
+    SQL receives cancellation immediately. If cancellation arrives before an
+    absolute deadline, the reporting wait can observe a cooperative driver's
+    actual result only until that SAME original deadline, with no extra grace.
+    At expiry, synchronized abandonment prevents a late precommit callback
+    from starting COMMIT. If COMMIT already started and its outcome has not
+    been published, timeout is unconfirmed, never `ErrStoreBusy`. SQL's result
+    is published before cleanup, so confirmed COMMIT remains success when
+    cleanup alone exceeds the deadline. Expired cleanup discards without a
+    fresh Background rollback; a failed restoration or open transaction never
+    reaches another borrower. Already-entered native opening, step, row
+    finalization or Close can remain uninterruptible: the worker quarantines
+    that work and retains its slot/lease until disposal completes. Caller
+    return does not require that native work to finish, but process
+    descheduling still prevents a hard real-time wall-clock guarantee.
+
+    Its users: the relay hook's first write
     (`InsertRelayRequest`), ack (`AckRelayDecision`) and timeout deny
     (`DenyRelayTimeout`), the last two with a `check func() error`
     precondition run inside the transaction once the lock is taken and
@@ -2312,8 +2388,8 @@ still the one it read, so it knows the row has not changed since. As built:
     taken, and runs it before the statement (the verb's rule-7 or rule-13
     checks and its capture and hash comparison of the pane); a non-nil
     error rolls back, writing nothing, and is returned as it is. A bounded
-    read runs through `readWithin` (`withConn` with the same shared
-    deadline; a wait cut by it, for the connection or for a lock, wraps
+    read runs through `readWithin` (`withConn` with the same original
+    deadline; precommit acquisition or SQL exhaustion wraps
     `ErrStoreBusy`): `GetPermissionRequestWithin`, `GetSpawnWithin` and
     `PermissionRequestsForSpawnWithin`, which `decide` uses for every read
     before its verdict under a `max_wait_ms` bound and for its reads while
@@ -2813,11 +2889,55 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    v7 → v8 settle-state hop remain separate steps in the authorized chain
    to v11; their columns are not folded together.
 
-**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
-and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
-a silent downgrade fails `Open` rather than yielding a half-broken Store.
+**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. WAL is set once at
+fresh-database initialization and otherwise verified from the persistent
+header; opening a connection does not run a journal-mode-setting PRAGMA.
+Foreign keys and the journal mode are verified after open; a silent downgrade
+fails `Open` rather than yielding a half-broken Store.
 
-**Busy timeout (b.c7f).** The DSN also sets every connection's
+**Must use: caller-owned connection initialization.** `openContextSQLite`
+(`internal/store/sqlite_connector.go`) wraps the registered SQLite driver
+with `sqliteConnector` and `callerOwnedConnector`; future production openers
+must reuse this path. Driver DSN PRAGMAs run with Background and must not be
+used for initialization. `sqliteConnector` opens the path without those
+parameters, checks the actual caller context after native Open and before
+each `ExecContext` initialization of configured `busy_timeout` and
+`foreign_keys = 1`. Every physical replacement gets both settings. Expired
+or failed initialization closes on the owning caller/worker before any
+borrower SQL; native Open or disposal can still block under that ownership.
+
+Explicit `boundedConnContext` acquisition carries an immutable private
+context marker and keeps the eager path. It preserves the distinction
+between zero-wait 1 ms admission and its fixed 1 s SQL-work allowance, cut
+by the original enclosing deadline; it never renews an expired positive
+budget. `ReconcileCursorRotation` also marks its explicit context acquisition
+and retains its established synchronous context behavior.
+
+The pool's background replacement opener has no borrowing caller context.
+`callerOwnedConnector` returns a successful, unopened `lazySQLiteConn` for
+unmarked cancelable acquisition, with no native I/O or synthetic
+`ErrBadConn`. This lets multiple legitimate waiters receive pool capacity
+without consuming the pool's finite retry allowance. The logical connection
+stores no caller context and uses no mutable latest/foreign caller marker,
+additional worker or queue. A fresh replacement can skip `ResetSession`;
+therefore actual borrower `ExecContext`, `QueryContext`, `PrepareContext`,
+`BeginTx`, `Ping` and `ResetSession` initialize with that method's context.
+Bounded borrowers execute on their admitted operation worker and retain its
+slot/lease through initialization and disposal. Legacy borrowers remain
+synchronous. Context-aware methods check cancellation before borrower SQL;
+Exec/Query retain `ErrSkip` statement fallbacks, and prepare/begin retain
+the standard context/transaction-option fallback behavior. Returned native
+statements, rows and transactions keep their normal interfaces.
+
+`Raw` exposes the logical wrapper without opening it; production Raw use is
+only `driver.ErrBadConn` disposal, never a concrete native type assertion.
+Discarding/closing an unopened replacement performs no native I/O. An
+unopened connection is valid, failed initialization is invalid, and opened
+Close/reset/validation forward to the native connection where supported.
+Mandatory contextless driver Prepare/Begin use Background only for their
+explicit contextless callers; the replacement opener invokes neither.
+
+**Busy timeout (b.c7f).** The connector sets every physical connection's
 `busy_timeout` (`openDB`): on `SQLITE_BUSY` a statement retries for up to
 that many milliseconds while another connection, often another
 agent-director process, holds the lock, then fails with SQLite's
@@ -2908,10 +3028,9 @@ the production callers (`pkg/api`, and `runHook` via `internal/config`'s
 **Empty path.** `Open` and `OpenOrInit` refuse an empty path with an error
 wrapping the unexported `errEmptyPath` (`store: resolve path: empty
 database path`) and open or create nothing (`resolvePath`, b.8up).
-Otherwise the SQLite driver would take the whole DSN, PRAGMAs included, as
-a file name in the cwd, and `OpenOrInit` would create that file and its
-`.initlock` there with no PRAGMAs applied. The production callers never
-pass one: `EffectiveDbPath` gives the default for an empty `db_path`.
+The connector is never handed an empty database path. The production
+callers never pass one: `EffectiveDbPath` gives the default for an empty
+`db_path`.
 
 **No usable home.** With `HOME` unset or empty, `os.UserHomeDir()` fails and
 none of the three resolves `~/`: `pkg/api` returns an error,
@@ -10845,8 +10964,16 @@ store transaction: both are written or neither is.
 
 1. Argument checks: an empty token is `ErrMissingRequestToken`, a decision
    other than allow or deny `ErrInvalidDecision`, a negative `max_wait_ms`
-   `ErrInvalidFlags`. Then `newDecideCall` starts the call's clock: the
-   bound's deadline is now plus `max_wait_ms`. Under a bound every read
+   `ErrInvalidFlags`. Entry creates one real `decideContext`, independent
+   of the injectable relay judge clock used by `newDecideCall`. A positive
+   `max_wait_ms` fixes its deadline at entry; zero fixes the one-second
+   immediate-work allowance there. `Client.Decide` includes caller identity
+   and its deferred `ad.decide.called` emission in this original context.
+   The real Store receives `WithContext(ctx)`; a `DecideStore` decorator
+   can implement `WithDecideContext(context.Context) DecideStore` to return
+   its own wrapper around the scoped delegate without losing observations.
+   Arbitrary custom stores must cooperate with their duration/context bounds;
+   AD cannot force cancellation into one that ignores them. Under a bound every read
    before the verdict commits goes through a bounded read (`getSpawn`,
    `readRequest` and `readAllRequests` call `GetSpawnWithin`,
    `GetPermissionRequestWithin` and `PermissionRequestsForSpawnWithin` with
@@ -10901,12 +11028,22 @@ store transaction: both are written or neither is.
    deliverability cutoff). Its wait, for the store's connection and its
    write lock, is `lockWait()`: what is left of the bound, never below 0,
    or `DefaultLockWait` (the store's own waits) without one. A connection
-   or lock not taken in time is `ErrStoreBusy` under a bound, with nothing
-   recorded; without one, `writeError` reports it as an unnamed store
+   or lock not taken in time, or precommit SQL/context exhaustion, is
+   `ErrStoreBusy` under a bound, with no verdict committed by this call.
+   An expired original context cannot start fresh SQL through `lockWait()`
+   returning zero. A COMMIT error reports an unconfirmed internal outcome:
+   inspect the durable request before retry, without assuming rollback.
+   Without a bound, `writeError` reports store busy as an unnamed store
    error (`ErrInternal`), as before decision 9 B, so a caller that passes
-   no bound meets no new error name (problem 5 (a)). A write that matched
-   nothing is named by `notWritten` (absent, decided or closed meanwhile,
-   Spawn finished meanwhile, a pane answer recorded meanwhile).
+   no bound meets no new error name (problem 5 (a)). A guarded UPDATE that
+   matches nothing returns `sql.ErrNoRows` through `inWriteTx`, causing
+   rollback without COMMIT. `DecideRelayRequest` maps that sentinel to
+   `(false, nil)` only when the helper has not also classified precommit
+   expiry as `ErrStoreBusy`; expired cleanup retains the shared quarantine
+   path. A timely no-match is named by `notWritten` through follow-up reads
+   (absent, decided or closed meanwhile, Spawn finished meanwhile, a pane
+   answer recorded meanwhile). Potentially written verdicts still attempt
+   COMMIT and retain unconfirmed-outcome handling on a COMMIT error.
 6. `awaitAck`: at most `decideAckWait` (1 s) and never past the bound, on
    the call's own clock. Before each read it judges the hook (from the
    identity it read), then reads through `GetPermissionRequestWithin` with
@@ -10920,7 +11057,12 @@ store transaction: both are written or neither is.
 and catalogued with package `store`; `decide` is the one verb that lists
 it. It covers a wait for the store's write lock (another process or
 connection held it) and a wait for the store's one connection (another
-call of the same process held it), both cut by the same bound. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag is
+call of the same process held it), plus precommit SQL/setup deadline
+exhaustion without any competing holder. SQL and cleanup use the original
+context through the [bounded store path](#internalstore), and audit waiting
+uses the [bounded trail worker](#reusable-writer). Successful commit is not
+undone by later cancellation; verdict/delivery results do not certify trail
+durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag is
 "no bound") and MCP's and the TS client's `max_wait_ms` reach
 `DecideParams.MaxWaitMs`; the CLI refuses a negative value itself.
 
@@ -12807,8 +12949,11 @@ cat ~/.config/agent-director/ad-trail.jsonl <caller-trail>.jsonl \
 
 ### Fail-soft semantics
 
-Trail writes never block verb execution. On any write or sync failure the
-writer attempts one `ad.trail_meta.emit_failed` envelope (carrying
+Trail failures do not change fail-open verb outcomes. A cancelable emission
+bounds the caller's wait through the worker described below; legacy
+Background-context emission still waits synchronously on the writer mutex
+and file I/O. On any write or sync failure the writer attempts one
+`ad.trail_meta.emit_failed` envelope (carrying
 `original_event` and `error_class`). If that also fails, one line is
 written to the operational logger. The original error is always returned
 to the caller so verbs can fail-open (SR-A-3.2).
@@ -12832,6 +12977,52 @@ process-singleton `Writer` handles serialization, `tool_input` stripping,
 fd management, and fail-soft meta events. Future event types add a new
 `event` string and call `Emit`; do NOT introduce a parallel writer or
 write directly to the trail file from application code.
+
+**Must use: bounded reporting.** Callers with an operation context pass that
+original context to `Emit`, never a fresh Background context or a goroutine
+per event. `Writer.emitWithin` (`internal/trail/deadline.go`) owns one worker,
+at most 64 queued events and one active event. Accepted bounded events are
+processed FIFO through the existing serialized write/fsync path; this keeps
+the decision's `ad.row_mutation.committed` before the same Client call's
+`ad.decide.called`. Concurrent legacy synchronous emissions share the mutex
+but have no cross-caller chronological ordering guarantee. The fields map is
+copied and `tool_input` stripped at admission and again at serialization;
+nested values must remain immutable until delivery.
+
+`ErrPending` means accepted but write/fsync not confirmed before context
+expiry. The same worker retains ownership without replacement workers for
+blocked I/O. Pending events are memory-resident and can be lost on process
+exit/crash. `ErrQueueFull` and `ErrClosed` reject admission; no event durability
+is implied. Timely observed write/fsync errors remain errors.
+`Writer.Status()` exposes `Pending`, `Failed`, `Rejected` and `LastError`
+without waiting for file I/O, including when a fail-open caller discarded its
+error. Rejections are counted immediately and the same worker attempts an
+aggregate `ad.trail_meta.emit_failed` with `error_class` `admission_rejected`
+after successful writing resumes; that best-effort record cannot guarantee
+loss reporting when output remains unavailable.
+
+Owners that close a writer MUST use `Writer.Close(ctx)` to stop admission,
+drain accepted FIFO work and close the file/worker. Expired close returns
+`ErrPending`; draining continues on the same worker and can be awaited again.
+Completed drain reports observed failures/rejections rather than certifying
+them as successful fsync. This writer lifecycle is separate from
+`api.Client.Close`, which releases its store and does not drain the process
+trail singleton. A decision/delivery result is authoritative about the verdict
+and available acknowledgement facts, not a trail durability receipt.
+
+The CLI's `main` closes the process singleton once after `run` returns, using
+a separate fixed 500 ms audit-drain context inside the existing 1 s reply
+reserve, then exits with the verb's original exit code. The verb's SQL and
+reporting retain their original context; teardown grants no extra operation
+budget and emits no duplicate `ad.decide.called`. Pending/failed drain writes
+an explicit `agent-director: audit shutdown:` stderr diagnostic and preserves
+fail-open verdict semantics. If that drain expires, accepted memory-resident
+events may be lost even at normal process exit; neither a successful verdict
+nor teardown is a blanket fsync/crash-durability guarantee. Embedded API and
+MCP hosts retain process-lifetime ownership of the singleton rather than
+closing it for each Client. The Bun subprocess client scans stderr lines for
+the error JSON envelope among notices; an audit diagnostic after that
+envelope does not replace its structured error or verdict exit code.
 
 ## Resume
 

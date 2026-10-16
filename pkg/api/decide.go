@@ -116,14 +116,15 @@ type DecideParams struct {
 	// counted from the call's start: the reads before the verdict, and the
 	// verdict write, wait for the store (its one connection, when another
 	// call of this process holds it, and its locks) at most what is left of
-	// it (none when nothing is left: the write then goes ahead only if the
-	// lock is free at once), and when one is not taken in that time Decide
+	// it (a zero wait permits an immediately available write, with no lock
+	// retry; an expired overall deadline permits no new SQL). If acquisition fails, Decide
 	// returns ErrStoreBusy having recorded nothing. A required wait for a
 	// request with no recorded settle instant must fit within the bound too.
 	// The wait of at most 1 s
 	// for the relay hook's ack ends at the bound too, with not_confirmed. A
 	// caller with a deadline passes at most its deadline minus 1 s. nil: no
-	// bound, the store's waits apply as before. Negative: ErrInvalidFlags.
+	// bound, the store's waits apply as before. Zero allows uncontended work
+	// within the existing one second return allowance. Negative: ErrInvalidFlags.
 	MaxWaitMs *int64 `json:"max_wait_ms,omitempty"`
 }
 
@@ -212,6 +213,26 @@ func Decide(s DecideStore, v RelayView, params DecideParams) (DecideResult, erro
 // Client.Decide the Client's own sleep, so a test runs decide's waits on its
 // own clock.
 func decide(s DecideStore, v RelayView, sleep func(time.Duration), params DecideParams) (DecideResult, error) {
+	ctx, cancel := decideContext(params)
+	defer cancel()
+	return decideWithin(ctx, s, v, sleep, params)
+}
+
+// decideContext starts the real operation budget independently of the relay
+// judge's injectable clock. A zero wait forbids lock waits but permits an
+// uncontended operation within the existing one second return allowance.
+func decideContext(params DecideParams) (context.Context, context.CancelFunc) {
+	if params.MaxWaitMs == nil || *params.MaxWaitMs < 0 {
+		return context.WithCancel(context.Background())
+	}
+	budget := time.Duration(*params.MaxWaitMs) * time.Millisecond
+	if budget == 0 {
+		budget = time.Second
+	}
+	return context.WithTimeout(context.Background(), budget)
+}
+
+func decideWithin(ctx context.Context, s DecideStore, v RelayView, sleep func(time.Duration), params DecideParams) (DecideResult, error) {
 	if params.RequestToken == "" {
 		return DecideResult{}, fmt.Errorf("%w: request_token is required", ErrMissingRequestToken)
 	}
@@ -221,7 +242,17 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 	if params.MaxWaitMs != nil && *params.MaxWaitMs < 0 {
 		return DecideResult{}, fmt.Errorf("%w: decide: max_wait_ms %d must not be negative", ErrInvalidFlags, *params.MaxWaitMs)
 	}
+	// Decorators can preserve their observations around a context-scoped
+	// delegate. Do not unwrap a decorator through a promoted Store method.
+	if contextual, ok := s.(interface {
+		WithDecideContext(context.Context) DecideStore
+	}); ok {
+		s = contextual.WithDecideContext(ctx)
+	} else if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithContext(ctx)
+	}
 	c := newDecideCall(s, v, sleep, params)
+	c.ctx = ctx
 
 	row, err := c.getSpawn()
 	if err != nil {
@@ -251,7 +282,7 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 	if c.j.delivery(pr, verdict, c.j.now()).Delivery == DeliveryFallenBack {
 		return DecideResult{}, c.refuseFallenBack(row, pr, verdict)
 	}
-	written, err := s.DecideRelayRequest(params.InstanceID, params.RequestToken, params.Decision,
+	written, err := c.s.DecideRelayRequest(params.InstanceID, params.RequestToken, params.Decision,
 		c.dbReason(), store.WriterProcessDecide, time.Time{}, c.lockWait())
 	if err != nil {
 		return DecideResult{}, c.writeError(err)
@@ -265,6 +296,7 @@ func decide(s DecideStore, v RelayView, sleep func(time.Duration), params Decide
 // decideCall is one decide call's state: its store, judge, sleep, params and
 // bound.
 type decideCall struct {
+	ctx   context.Context
 	s     DecideStore
 	j     relayJudge
 	sleep func(time.Duration)
@@ -328,7 +360,13 @@ func (c *decideCall) lockWait() time.Duration {
 	if !c.bounded {
 		return store.DefaultLockWait
 	}
-	return max(c.deadline.Sub(c.j.now()), 0)
+	left := max(c.deadline.Sub(c.j.now()), 0)
+	if c.ctx != nil {
+		if end, ok := c.ctx.Deadline(); ok {
+			left = min(left, max(time.Until(end), 0))
+		}
+	}
+	return left
 }
 
 // writeError names a failed verdict write. A lock not taken in time is
@@ -446,6 +484,10 @@ func (c *decideCall) awaitAck(pr PermissionRow) DecideResult {
 	}
 	var verdict hookVerdict
 	for {
+		if c.ctx != nil && c.ctx.Err() != nil {
+			verdict = c.j.hook(pr)
+			break
+		}
 		verdict = c.j.hook(pr)
 		left := max(end.Sub(c.j.now()), 0)
 		if read, err := c.s.GetPermissionRequestWithin(c.p.InstanceID, c.p.RequestToken, left); err == nil {
@@ -458,7 +500,14 @@ func (c *decideCall) awaitAck(pr PermissionRow) DecideResult {
 		if !now.Before(end) {
 			break
 		}
-		c.sleep(min(decideAckPoll, end.Sub(now)))
+		wait := min(decideAckPoll, end.Sub(now))
+		if c.bounded {
+			wait = min(wait, c.lockWait())
+		}
+		if wait <= 0 {
+			break
+		}
+		c.sleep(wait)
 	}
 	d := c.j.delivery(pr, verdict, c.j.now())
 	if d.Delivery != DeliveryDelivered {
@@ -516,7 +565,7 @@ func (c *decideCall) refusePreV7() error {
 	pr, err := c.readRequest()
 	if err == nil && pr.AwaitsAnswer() && RelayRequestUndeliverable(pr.CreatedAt, window, now) {
 		if settled := relayHookSettledAt(pr.CreatedAt, window); now.Before(settled) {
-			if c.bounded && c.deadline.Before(settled) {
+			if c.bounded && (c.deadline.Before(settled) || c.lockWait() < settled.Sub(now)) {
 				return fmt.Errorf("%w: %s request %s has no recorded settle instant and its relay hook may still answer it until %s, after the call's max_wait_ms bound; nothing was recorded",
 					store.ErrStoreBusy, c.p.InstanceID, c.p.RequestToken, settled.UTC().Format(time.RFC3339))
 			}
@@ -833,6 +882,8 @@ func decideOutcome(err error) string {
 // Nondeterminism: the delivery facts depend on the clock and on whether the
 // relay hook acks within the wait.
 func (c *Client) Decide(params DecideParams) (DecideResult, error) {
+	ctx, cancel := decideContext(params)
+	defer cancel()
 	if err := c.checkClosed(); err != nil {
 		return DecideResult{}, err
 	}
@@ -846,7 +897,7 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 		// Emit exactly one ad.decide.called per invocation, on every return
 		// path including ErrAlreadyDecided no-ops (SR-A-2.4). Fail-open per
 		// SR-A-3.2: a trail-emit failure is silently discarded.
-		_ = trail.Emit(context.Background(), "ad.decide.called", map[string]any{
+		_ = trail.Emit(ctx, "ad.decide.called", map[string]any{
 			"instance_id":               params.InstanceID,
 			"request_token":             params.RequestToken,
 			"submitted_decision":        params.Decision,
@@ -865,6 +916,6 @@ func (c *Client) Decide(params DecideParams) (DecideResult, error) {
 	// reader, pid namespace and the configured effective relay window
 	// (EffectiveTimeoutSeconds, the single source for the non-positive →
 	// default fallback). decide's waits sleep through the Client's own sleep.
-	result, callErr = decide(c.st, c.relayView(), c.sleep, params)
+	result, callErr = decideWithin(ctx, c.st, c.relayView(), c.sleep, params)
 	return result, callErr
 }

@@ -1,0 +1,44 @@
+{
+  "status": "PENDING — instructions only",
+  "source_revision": "__FINAL_FULL_SHA__",
+  "final_handoff_owner": "fresh post-commit Integration Test Writer after root commit",
+  "predicates": {
+    "O1 actual attach/detach": {
+      "status": "PENDING",
+      "evidence": null
+    },
+    "O2 actual typing/bracketed Unicode multiline paste": {
+      "status": "PENDING",
+      "evidence": null
+    },
+    "O3 successive public multiline/mixed follow-ups/caller replacement": {
+      "status": "PENDING",
+      "evidence": null
+    },
+    "O4 actual independent permission/plan/question and interrupt": {
+      "status": "PENDING",
+      "evidence": null
+    },
+    "O5 confirmed clear/new current-life history": {
+      "status": "PENDING",
+      "evidence": null
+    },
+    "O6 actual exit/eligible pause/exact owned death": {
+      "status": "PENDING",
+      "evidence": null
+    }
+  },
+  "unknown_provenance": [
+    "final source/binary/image/package revisions and hashes",
+    "actual Cursor build",
+    "negotiated ACP protocol",
+    "runtime/platform versions",
+    "scheduler job/run/receipt IDs",
+    "real permission/plan/question availability"
+  ],
+  "required_artifact_root": "~/ad-codex/ftd/<final-full-sha>/<run>/acceptance/O<N>/",
+  "instructions": "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md",
+  "existing_login_only": true,
+  "missing_login_action": "stop without workaround",
+  "synthetic_does_not_close_actual_acceptance": true
+}

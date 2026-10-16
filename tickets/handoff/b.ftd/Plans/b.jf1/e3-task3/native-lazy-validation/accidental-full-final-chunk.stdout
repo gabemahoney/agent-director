@@ -1,0 +1,14 @@
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	94.148s
+ok  	github.com/gabemahoney/agent-director/internal/hook	95.257s
+ok  	github.com/gabemahoney/agent-director/internal/layout	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/mcp	14.445s
+ok  	github.com/gabemahoney/agent-director/internal/oldnames	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/probe	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/spawn	3.122s
+ok  	github.com/gabemahoney/agent-director/internal/store	122.552s
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/storefix	8.599s
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix	1.191s
+ok  	github.com/gabemahoney/agent-director/internal/tmux	2.194s
+ok  	github.com/gabemahoney/agent-director/internal/trail	(cached)
+make: *** [Makefile:649: test-sandbox] Terminated

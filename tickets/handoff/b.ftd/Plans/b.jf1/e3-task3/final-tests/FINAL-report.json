@@ -1,0 +1,467 @@
+{
+  "role": "apiary_test_writer_e3_task3_final",
+  "result": "Full suite FAILED. Two Store observer lifecycle fixes targeted GREEN; three unchanged API leaves require Engineer assessment. No full-suite pass claim.",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.6f": "defined -> active -> done; scoped advice receipt passed, unchanged F9 later failed full suite",
+    "t3.jf1.r8.a8.yj": "defined -> active -> done -> active; reopened for new full-suite findings",
+    "t3.jf1.r8.a8.zj": "defined -> active; incomplete"
+  },
+  "status_scope": "Only own .6f/.yj/.zj; no Task/Epic changes.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "files_changed": [
+    "internal/store/advice_follow_decision_test.go",
+    "internal/store/deadline_boundary_test.go",
+    "pkg/api/decide_absolute_deadline_test.go",
+    "internal/store/relay_writes_test.go",
+    "internal/store/cursor_rotation_test.go"
+  ],
+  "tested_tree": {
+    "manifest_before_entry": "input-manifest-before.json",
+    "manifest_immediately_before_full": "input-manifest-pre-full.json",
+    "manifest_after_full": "input-manifest-first-full-after.json",
+    "file_count": 2320,
+    "full_input_drift": [],
+    "source_and_docs_unchanged_by_this_role": true,
+    "protected_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "all_eight_settled_sources": "integrity-after.json",
+    "architecture_sha256": "9593447ca9fe0640268803d42c07f5cbe9e5865be306c2a9b91388307ca7b509",
+    "exclusions": ".claude excluded by path before file/blob reads/hashes; ignored generated artifacts and tickets/handoff evidence metadata excluded. Includes all tracked and nonignored untracked source/test/doc/build/registry/testplan inputs.",
+    "current_tree_after_observer_fixes": "input-manifest-after.json",
+    "post_full_changes": [
+      "internal/store/cursor_rotation_test.go",
+      "internal/store/relay_writes_test.go"
+    ],
+    "current_tree_full_suite_passed": false
+  },
+  "advice_inventory_mapping": [
+    {
+      "id": "precommit_exhaustion_retry",
+      "exact_prose": "- `ErrStoreBusy`: the bound ran out before the verdict could commit.\n  This can include store acquisition or SQL work; it does not establish\n  that another process or call held the store. Retry only as a new,\n  deliberate call with a fresh budget.",
+      "literal_follow_scope": "Observe actual precommit refusal/no durable verdict, then deliberately make a new decision call with a fresh budget and inspect the real request. Preserve first-writer wins and independent holds. Reuse existing API/store boundary fixtures and public owners; no inferred competing holder or automatic retry.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay",
+      "status": "Scoped behavioral owner passed in 01; full suite contains unchanged F9 failure requiring assessment.",
+      "primary": "pkg/api/decide_absolute_deadline_test.go:TestDecideAbsoluteContextSurvivesParkedPhase",
+      "behavior": "Actual public Decide receives expired original context through parked decorator and real Store, returns ErrStoreBusy with no durable verdict/attempt and no competing holder. New explicit 500ms-budget call succeeds; actual public GetPermission verifies committed allow. Existing F9 retains condition-held refusal and fresh-call success.",
+      "phrase_source": "Canonical caller-contract prose recorded word-for-word in docs inventory; no new doc parser/metatest. Runtime ErrStoreBusy classification checked.",
+      "supporting": [
+        "pkg/api/decide_delivery_test.go:TestAdviceFollow_F9_DecideStoreBusyRetry"
+      ]
+    },
+    {
+      "id": "original_deadline_and_zero_wait",
+      "exact_prose": "The positive `--max-wait-ms` bound covers SQL, cleanup and reporting under\nthe same original deadline. Once it expires, no new SQL starts, even if the\nstore is free. Zero permits immediately available work within a fixed\none-second allowance, with no lock retries; it does not mean zero execution\ntime. Keep the one-second reply margin above. These bounds depend on the\nhost scheduling AD and on interruptible database and filesystem operations.",
+      "literal_follow_scope": "Use the actual existing bounded APIs, original deadline and zero-wait cases; do not renew an expired positive budget or widen the original assertions. Separate cooperative cancellation from uninterruptible-native/descheduling limits. This adds no command or configuration.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay",
+      "status": "Scoped behavioral owner passed in 01; full suite contains unchanged F9 failure requiring assessment.",
+      "primary": "internal/store/deadline_boundary_test.go:TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait; TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+      "behavior": "Expired original contexts run zero SQL even after lease becomes free, for positive and zero local wait. Zero-lock-wait real SQL exceeds 1ms acquisition allowance and commits within original 500ms context; existing original budget/SQL/cleanup/trail/API tests retain their assertions.",
+      "phrase_source": "Canonical caller-contract original-deadline/zero-wait paragraph in inventory; this semantic explanation adds no recovery command.",
+      "supporting": [
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries",
+        "TestDecideMaxWaitUnderHeldLock",
+        "TestDecideMaxWaitWithBlockedTrail"
+      ]
+    },
+    {
+      "id": "unconfirmed_commit_inspect_before_retry",
+      "exact_prose": "An `ErrInternal` reporting an unconfirmed commit is different from a\nprecommit refusal: the verdict may already be recorded. Inspect the durable\nrequest with `get-permission` and its `request_token` before deciding whether\nto retry. Do not infer that nothing was written, resend an uncertain approval,\nor automatically replay the call. Cancellation does not undo an already\ncommitted verdict. After a confirmed commit, later deadline exhaustion keeps\nthe verdict and returns the available delivery facts; follow `not_confirmed`\nas above. A decision or delivery response is not a receipt that its audit\nevents have reached durable storage.",
+      "literal_follow_scope": "Create real uncertain COMMIT response through existing actual SQLite boundary, inspect the actual durable request using the existing public get-permission/GetPermission owner, and make no replay of the committed allow. Follow the retained not_confirmed polling sequence where relevant; delayed audit reporting must not undo verdict or become a durability claim. Existing standalone Store-level commit uncertainty plus invented serialized errors is not by itself literal execution of caller recovery.",
+      "path": "docs/caller-contract.md",
+      "heading": "Permission relay",
+      "status": "Scoped behavioral owner passed in 01; full suite contains unchanged F9 failure requiring assessment.",
+      "primary": "internal/store/advice_follow_decision_test.go:TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry",
+      "behavior": "Actual api.Decide and real SQLite COMMIT; injected response expires after commit. Production errnames.Classify returns ErrInternal, never ErrStoreBusy, with exact inspection phrase. Fresh independent Store feeds actual public api.GetPermission by request_token; committed allow and not_confirmed delivery observed before deciding whether to retry. No replay: two public reads retain request facts and exactly one actual UPDATE/COMMIT remains.",
+      "phrase_source": "Actual failure pins \"commit outcome unconfirmed; read the request before retrying\". Canonical caller-contract expects durable get-permission inspection before retry and no uncertain approval resend.",
+      "supporting": [
+        "pkg/api/decide_delivery_test.go:TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission (three late-ack/gone/unknown polling outcomes retained)",
+        "pkg/api/decide_absolute_deadline_test.go:TestClientDecideBoundsDeferredAuditAndPreservesFIFO (confirmed commit/reporting distinction)"
+      ]
+    }
+  ],
+  "quality": {
+    "report": "quality-review.json",
+    "mandatory_unresolved": [
+      {
+        "test": "TestAdviceFollow_F9_DecideStoreBusyRetry",
+        "assertion": "decide_delivery_test.go:469: decide retried: ErrStoreBusy: store: get permission: context deadline exceeded; want the verdict recorded",
+        "facts": "Fresh third 100ms-budget call refused in a precommit read after holder release. Top-level 2.90s. Original budget/assertion/parallelism/source unchanged.",
+        "assessment": "Unresolved. Real absolute context/cleanup/scheduling interacts with unchanged unconditional retry-success test. Receipt does not prove a production deadline overrun or locate elapsed time by phase. Engineer/test contract assessment required, never dismissal or unchanged retry."
+      },
+      {
+        "test": "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+        "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+        "facts": "Subtest 4.29s. New original real 300ms context coexists with injected relay clock/sleep.",
+        "assessment": "Unresolved. Actual delivery/commit fields match; exact injected sleep differs. Source awaitAck exits at expired real context before injected sleep. Receipt does not locate elapsed time by phase. Preserve 300ms/assertions and assess source/test clock compatibility."
+      },
+      {
+        "test": "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+        "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+        "facts": "Subtest 5.29s. Same real-context versus injected-clock interaction.",
+        "assessment": "Unresolved; same source/test clock compatibility assessment, no timeout enlargement, assertion relaxation or parallelism reduction."
+      }
+    ],
+    "vet": "02-quality-vet.log before observer fixes; 07-final-quality.log after fixes; both exit 0"
+  },
+  "commands": [
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/advice_follow_decision_test.go internal/store/deadline_boundary_test.go pkg/api/decide_absolute_deadline_test.go && go test -race -timeout 150s -count=1 -v ./internal/store ./pkg/api -run \"^(TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecideAbsoluteContextSurvivesParkedPhase|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance|TestAdviceFollow_F9_DecideStoreBusyRetry|TestAdviceFollow_F8_DecideNotConfirmedAskGetPermission)$\"'",
+      "log": "01-advice-targeted.log",
+      "exit": 0,
+      "passed_leaves": 9,
+      "scope": "Four Store leaves and five API leaves; parents not double-counted."
+    },
+    {
+      "command": "make sandbox CMD='go vet ./internal/store ./internal/trail ./pkg/api ./test/realtmux && git diff --check && go version && bun --version && tmux -V'",
+      "log": "02-quality-vet.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-tests/evidence.mjs pre-full'",
+      "log": "03-pre-full-integrity.log",
+      "exit": 0
+    },
+    {
+      "command": "make test-sandbox",
+      "log": "04-full-test-sandbox.log",
+      "exit_file": "04-full-test-sandbox.exit",
+      "exit": 2,
+      "configured": true,
+      "phases": [
+        "locked Bun dependencies",
+        "canonical package build",
+        "go test -timeout 30m ./...",
+        "bun test"
+      ],
+      "runs": 1,
+      "parallelism": "Default unchanged; no -p/-parallel reduction; Bun sequential."
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-tests/evidence.mjs first-full-after'",
+      "log": "05-first-full-integrity.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/relay_writes_test.go internal/store/cursor_rotation_test.go && go test -race -timeout 150s -count=1 -v ./internal/store -run \"^(TestRelayWritePrecondition|TestCursorRotationIndependentEvidenceAndGateAreMandatory|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionAbsoluteDeadlineAtSQLiteBoundaries)$\"'",
+      "log": "06-cleanup-observer-targeted.log",
+      "exit": 0,
+      "passed_leaves": 19,
+      "purpose": "Necessary correction of two raw test observations after actual failure; unchanged API failures not rerun."
+    },
+    {
+      "command": "make sandbox CMD='go vet ./internal/store ./pkg/api && git diff --check'",
+      "log": "07-final-quality.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-tests/evidence.mjs after && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-tests/report.mjs && git diff --check'",
+      "log": "08-final-integrity-report.log",
+      "purpose": "Evidence assembly only; no tests."
+    }
+  ],
+  "full_suite": {
+    "result": "failed",
+    "runs": 1,
+    "exit": 2,
+    "go": {
+      "passed_packages": 29,
+      "cached_packages": 37,
+      "without_test_files": 13,
+      "failed_packages": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t112.025s",
+        "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t174.216s"
+      ],
+      "exact_package_lines": [
+        "?   \tgithub.com/gabemahoney/agent-director/internal/adminapi\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/codexfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/cursorfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/cwdfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/dbpathfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/launchfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procstat\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/writefailfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/version\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest\t[no test files]",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t52.586s",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director-admin\t10.100s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/clisetup\t0.192s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/config\t2.569s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t101.181s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t98.429s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/layout\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/mcp\t15.655s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/oldnames\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/probe\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/spawn\t3.018s",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t112.025s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/sandboxguard\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/storefix\t8.899s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/tmuxfix\t0.906s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/tmux\t2.234s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/trail\t0.280s",
+        "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t174.216s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/apitest\t1.505s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/errnames\t3.072s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/manifest\t3.307s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay\t5.242s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub\t0.002s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/driver-scripts\t4.453s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/envelope-diff\t8.729s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/fake-tmux\t4.902s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/grounding-replay\t0.800s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/install-sh\t228.199s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t183.193s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/reboot-recovery\t4.969s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/cigates\t2.958s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/cmdinject\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/gitmount\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/prebuild\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/releaseversion\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/requiresandbox\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/smoke/go\t3.706s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/smoke/ts-helper\t5.135s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/tla\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/check-doccomments\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/check-nondet\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/gen-docs\t0.296s",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/measure-exit\t18.752s",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/measure-exit/dryrun\t(cached)"
+      ],
+      "counting": "Package results only; default go test is not verbose and no unsupported Go leaf total is inferred."
+    },
+    "bun": {
+      "passed": 429,
+      "failed": 0,
+      "expect_calls": 1660,
+      "tests": 429,
+      "files": 57,
+      "elapsed": "15.77s"
+    },
+    "all_failure_lines_seen": [
+      "--- FAIL: TestRelayWritePrecondition (0.45s)",
+      "    --- FAIL: TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait (0.17s)",
+      "--- FAIL: TestCursorRotationIndependentEvidenceAndGateAreMandatory (0.35s)",
+      "    --- FAIL: TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence (0.07s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t112.025s",
+      "--- FAIL: TestAdviceFollow_F9_DecideStoreBusyRetry (2.90s)",
+      "--- FAIL: TestDecideReportsDelivery (0.06s)",
+      "    --- FAIL: TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait (4.29s)",
+      "    --- FAIL: TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait (5.29s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t174.216s",
+      "FAIL"
+    ],
+    "first_failing_assertion": "relay_writes_test.go:125: table_info(permission_requests): database is locked (5) (SQLITE_BUSY)",
+    "failed_attempts": [
+      {
+        "log": "04-full-test-sandbox.log",
+        "exit": 2,
+        "failed_packages": [
+          "internal/store",
+          "pkg/api"
+        ],
+        "failed_leaves": 5,
+        "dispositions": "Two raw Store observation races corrected and targeted GREEN; three API leaves unresolved. No unchanged full rerun."
+      }
+    ],
+    "rerun_after_pass": false,
+    "unresolved_api_failures": [
+      {
+        "test": "TestAdviceFollow_F9_DecideStoreBusyRetry",
+        "assertion": "decide_delivery_test.go:469: decide retried: ErrStoreBusy: store: get permission: context deadline exceeded; want the verdict recorded",
+        "facts": "Fresh third 100ms-budget call refused in a precommit read after holder release. Top-level 2.90s. Original budget/assertion/parallelism/source unchanged.",
+        "assessment": "Unresolved. Real absolute context/cleanup/scheduling interacts with unchanged unconditional retry-success test. Receipt does not prove a production deadline overrun or locate elapsed time by phase. Engineer/test contract assessment required, never dismissal or unchanged retry."
+      },
+      {
+        "test": "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+        "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+        "facts": "Subtest 4.29s. New original real 300ms context coexists with injected relay clock/sleep.",
+        "assessment": "Unresolved. Actual delivery/commit fields match; exact injected sleep differs. Source awaitAck exits at expired real context before injected sleep. Receipt does not locate elapsed time by phase. Preserve 300ms/assertions and assess source/test clock compatibility."
+      },
+      {
+        "test": "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+        "assertion": "decide_delivery_test.go:87: not_confirmed, hook_alive true, correct confirm_by after simulated wait 0s; want simulated wait 300ms",
+        "facts": "Subtest 5.29s. Same real-context versus injected-clock interaction.",
+        "assessment": "Unresolved; same source/test clock compatibility assessment, no timeout enlargement, assertion relaxation or parallelism reduction."
+      }
+    ],
+    "corrected_test_observations": [
+      {
+        "test": "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+        "failure": "relay_writes_test.go:125: table_info(permission_requests): database is locked (5) (SQLITE_BUSY)",
+        "correction": "Await safe lease through the same one-connection pool before unchanged zero-wait raw request dump. Original bounded write and refusal/no-write/free-lock assertions unchanged."
+      },
+      {
+        "test": "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence",
+        "failure": "cursor_rotation_test.go:241: atomic independent visibility row=\"\" runtime=\"\" path=\"\" life=0 archives=0 err=database is locked (5) (SQLITE_BUSY)",
+        "correction": "Ordinary same-Store bounded read synchronizes quarantine/disposal completion before unchanged independent atomic raw snapshot. Original 20ms expiry, expired-after-evidence verifier and refusal/identity/archive assertions unchanged."
+      }
+    ],
+    "observer_causal_basis": "New source intentionally returns canceled operations before connection disposal finishes; both failed raw SQL helpers use a fresh connection with no busy allowance and no lifecycle synchronization. Existing real-driver Close barrier test proves a lease stays quarantined until disposal finishes. Receipt proves raw SQLITE_BUSY, not the exact SQLite internal lock instruction; source path plus deterministic lease-barrier test supports the observation ordering repair. No raw-reader SQL timeout increase or retry loop introduced.",
+    "new_full_run": "Required after API issues are resolved and all work settles; no second full run undertaken while these failures remain unresolved."
+  },
+  "historical_failed_receipts": {
+    "retained": true,
+    "claims": "Existing raw failed receipts are preserved in their original evidence directories. Invalid empty manifest pipelines are not trusted. Both historical run09 causes remain UNKNOWN; new causal regression proves its controlled boundary only.",
+    "reports": [
+      {
+        "path": "deadline-red/FINAL-report.json",
+        "sha256": "b4a80499dcd1751f7b909039d7a4aad02ffd88dbef4033ba68a7b2f749275cd2"
+      },
+      {
+        "path": "deadline-engineer/FINAL-report.json",
+        "sha256": "b9f80e5c51090b86f7d0ea58edfb75495e0ff0a1c12a21f596f811c7ac41a66d"
+      },
+      {
+        "path": "deadline-code-review.json",
+        "sha256": "77fb3afe21ff5e2349cf1e0ed7604d3ffdbd676ee3ec1ed8535a00a447bdb090"
+      },
+      {
+        "path": "deadline-green/FINAL-report.json",
+        "sha256": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775"
+      },
+      {
+        "path": "deadline-review-fix/FINAL-report.json",
+        "sha256": "ac4752ffdc66fd6ddad5690e011f0a8e345b5994cc26d344a85fb17fcdff5c4a"
+      },
+      {
+        "path": "public/FINAL-report.json",
+        "sha256": "cb09003843ba658e18e91432f185dd7273e6d2bba70af75de4098347a012571b"
+      },
+      {
+        "path": "collector/FINAL-report.json",
+        "sha256": "a3c994f15bc985636297fd8cd96efa10bd94eeee331b3081bac15feccb2b234d"
+      },
+      {
+        "path": "PM-initial-review.json",
+        "sha256": "bed412f1bcaf3fcb29a09a9836fd9d6f7aad28747b60e06f2b5eb10e10e3800c"
+      },
+      {
+        "path": "acceptance-review-fix/FINAL-report.json",
+        "sha256": "72a3de4f5de511670787b032d2f34350af3b9ba2ca784f2e34a9f523567e8dc3"
+      },
+      {
+        "path": "docs/FINAL-report.json",
+        "sha256": "c591d956a3bfa12379caa7b26325ca0e239ff509c26b6c95277cf2853d515a1e"
+      },
+      {
+        "path": "docs/postdoc-advice-inventory.json",
+        "sha256": "a63c671a2d6899c4f590c3f83ebceacddf8bcd33724b2cdc4b2675606c9e6952"
+      }
+    ],
+    "dispositions": [
+      {
+        "report": "deadline-engineer/FINAL-report.json",
+        "failure": "Real initial zero-wait source regression used 1ms SQL budget; Engineer repaired fixed work budget before settled tests."
+      },
+      {
+        "report": "deadline-green/FINAL-report.json",
+        "failures": [
+          "Cross-package _test.go export compile failure; instrumentation kept in Store package.",
+          "Late-acquisition observer incorrectly covered fresh verification context; synchronized cleanup then removed observer."
+        ]
+      },
+      {
+        "report": "public/FINAL-report.json",
+        "failures": [
+          "Dynamic observer field type compile error.",
+          "Transcript request-ID decoder mismatch.",
+          "Premature turn_outcome-based readiness; fixed committed waiting plus explicit completion notice.",
+          "Expected MCP error helper handling and terminal-loss end evidence assertion."
+        ]
+      },
+      {
+        "report": "deadline-review-fix/FINAL-report.json",
+        "failure": "Empty-input hash pipeline INVALID due unavailable rg/no pipefail; corrected actual independent byte verification."
+      },
+      {
+        "report": "acceptance-review-fix/FINAL-report.json",
+        "failure": "Evidence baseline omitted already authorized registry change; corrected against existing collector hash."
+      },
+      {
+        "report": "docs/FINAL-report.json",
+        "failure": "Evidence manifest key mismatch; corrected to settled_source_sha256; tests not rerun."
+      }
+    ]
+  },
+  "environment": {
+    "go": "go1.22.10 linux/amd64",
+    "bun": "1.3.13",
+    "tmux": "3.3a",
+    "execution": "make sandbox/make test-sandbox; isolated container HOME and per-test temporary stores/sockets/owned processes"
+  },
+  "deviations": [
+    "Public recovery owner lives in internal/store external store_test package so it can reuse the test-only actual SQLite driver boundary; pkg/api dependency imports cannot see Store _test.go exports. No production seam/code change.",
+    "Read-only discovery initially tried proposed request_proof/real_store/decide fixture filenames absent in workspace; corrected to existing proper package fixtures. No test/build failure from those lookups.",
+    "One apply_patch evidence-generator amendment failed context verification and made no changes; applied smaller corrected patches."
+  ],
+  "limits": [
+    "No local Docker TESTPLAN groups/collector/helper body execution; five collector cases remain authored/static only, including network-dependent locked Bun build/install.",
+    "All O1-O6 actual human/authenticated terminal acceptance remains pending; synthetic ACP and actual tmux/public clients are separately labeled.",
+    "No arbitrary concurrent SendKeys text+Enter atomicity promise.",
+    "Pending audit is memory resident, not fsync/crash durable; cooperative SQL/context and native uninterruptible/descheduling limits retained.",
+    "Whole architecture coverage is inherited verified four base partitions plus all five deltas, not fresh personal whole-file read or clean-document certification; inherited debt deferred.",
+    "Historical run09 causes remain unknown."
+  ],
+  "next_handoff": {
+    "owner": "Root routes three API leaves for Engineer assessment; resume final Test Writer after necessary correction",
+    "required": "Preserve budgets/assertions/parallel cases; retain complete 04 failure receipt and exact manifests. Do not retry unchanged until green. Once corrected, finish quality and full suite, then final PM/local commit/fresh Integration Writer exact-SHA 17-group/172-case scheduler handoff with concrete writable raw mount.",
+    "integration_execution_here": false,
+    "task_epic_done_here": false
+  },
+  "formal": "No spec/tla input changes; zero TLA/TLC/Java/parser/scheduler jobs.",
+  "boundaries": "No .claude access, real AD stores/credentials/login/logout/live Cursor, production/docs edits, host repo format/build/script/test execution, commits/pushes, scheduler submissions, delegation or outbound messages. Only own test/evidence files and own Subtask statuses.",
+  "incomplete_work": [
+    "Engineer/test contract assessment of unchanged F9 100ms fresh retry and both exact 300ms simulated-wait failures.",
+    "Complete reopened .yj and .zj; settle tree and perform required full make test-sandbox after necessary corrections.",
+    "No final PM/commit/exact-SHA scheduler closure is authorized by this failed suite receipt."
+  ],
+  "questions_for_caller": [],
+  "receipt_sha256": {
+    "01-advice-targeted.log": "1f04e28497476913c8cc8d5cac14181034d8e1316ebcbe427ad2a9ad56218bd3",
+    "02-quality-vet.log": "e0db9fcb837d0a5583f96488029486b8b879e9528ce21f562ca0b52c55851ddc",
+    "03-pre-full-integrity.log": "3c407a7a440c9010f784d647f40553dc071e83d919299c8d891f14c423f584ab",
+    "04-full-test-sandbox.log": "a56fa6630731a1c275d860d78997a9c55c11bc0c4cb9ce7539121d07359dbe25",
+    "04-full-test-sandbox.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "05-first-full-integrity.log": "9d6e48f327b16ae26b987be6c9ad2a1ed8f157915003a1daf59eb5622710d520",
+    "06-cleanup-observer-targeted.log": "75b2cf5543df0e92fef443a98dfff5c63b63a098bd0da5c91b60e986c2574c11",
+    "07-final-quality.log": "245ace87ac91e5efe1afea71dae27b8368b6dc3965bf0c3785686dfdd31f61d7",
+    "input-manifest-before.json": "79522f8c82a0169deb4c91ed74022e04a534068d6b9b86ba359a780f1fdf1656",
+    "input-manifest-pre-full.json": "62dfc45f1f83a9c3857dc2a2b44cd13f870e3dd3dd374ce6d0313eb1856f3a82",
+    "input-manifest-first-full-after.json": "62dfc45f1f83a9c3857dc2a2b44cd13f870e3dd3dd374ce6d0313eb1856f3a82",
+    "input-manifest-after.json": "f4dc07f95ed4453fff0278a0fa1f40ba1febfca41860a2384853035f4a4fb297",
+    "quality-review.json": "715795b53870ed21e0aa61a32d389480a64e277ad433a6e3e4b5f4209c07ab9e",
+    "integrity-after.json": "2c357e498983dbd070a82d5621332c649b47d3d474cf73d8123764445bb158e9"
+  }
+}

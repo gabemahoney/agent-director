@@ -1,0 +1,67 @@
+{
+  "command": [
+    "go",
+    "test",
+    "-race",
+    "-count=1",
+    "-timeout",
+    "60s",
+    "-overlay",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/red-n2-overlay.json",
+    "./internal/store",
+    "-run",
+    "TestCursorPromptLateCount",
+    "-v"
+  ],
+  "status": 0,
+  "signal": null,
+  "verified_before": [
+    {
+      "path": "internal/store/sqlite_connector.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/sqlite_connector.go",
+      "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+      "mode": "664"
+    },
+    {
+      "path": "internal/store/lockwait.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/lockwait.go",
+      "sha256": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+      "mode": "664"
+    },
+    {
+      "path": "internal/store/cursor_prompt.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_prompt.go",
+      "sha256": "2031e304a71c319777ec6d151684c24daddac388519c482296b9dcf0bd855ac0",
+      "mode": "664"
+    },
+    {
+      "path": "internal/store/cursor_rotation.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_rotation.go",
+      "sha256": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+      "mode": "664"
+    }
+  ],
+  "replacements": {
+    "/work/internal/store/sqlite_connector.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/sqlite_connector.go",
+    "/work/internal/store/lockwait.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/lockwait.go",
+    "/work/internal/store/cursor_prompt.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_prompt.go",
+    "/work/internal/store/cursor_rotation.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_rotation.go",
+    "/work/internal/store/sqlite_lazy_native_test.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/excluded-n1-tests.txt",
+    "/work/internal/store/sqlite_lazy_context_test.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/excluded-n1-tests.txt"
+  },
+  "environment": {
+    "HOME": "/tmp/native-lazy-home-XJRrcB",
+    "GOMODCACHE": "/go/pkg/mod",
+    "GOCACHE": "/home/sandbox/.cache/go-build",
+    "sandbox": "1"
+  },
+  "changed_inputs": [],
+  "stdout": {
+    "sha256": "1f1e11b3eb84e54cd75cef1848e697bfb5c62e135453cd1b1a7916445d624b04",
+    "mode": "644"
+  },
+  "stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mode": "644"
+  }
+}

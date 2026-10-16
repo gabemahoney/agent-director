@@ -1,0 +1,93 @@
+{
+  "role": "apiary_doc_writer_e3_task3_O5_final_fix",
+  "result": "Mandatory PM finding O5 corrected; instructions-only outcome interpretation.",
+  "tickets": {
+    "t3.jf1.r8.a8.48": "done -> active -> done (completed after evidence verification)"
+  },
+  "status_scope": "Only own .48; Task/Epic remain active and other Subtasks unchanged.",
+  "files_changed": [
+    "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/O5-doc-fix/ (new evidence only)"
+  ],
+  "correction": "Record authoritative current row/runtime binding/current-life history; distinguish prepublication failure, committed publication followed by reporting failure, and uncertain publication; no inferred rollback or forced old identity restoration; preserve held-input refusal and no automatic replay evidence.",
+  "old_document": {
+    "sha256": "db6c83852f6da784d84cb27fdc748f613c213e055e6fd25baf67b97144cf4d76",
+    "bytes": 10584,
+    "mode": 436,
+    "git_mode": "100644",
+    "index_mode": null,
+    "snapshot": "operator-acceptance-before.txt"
+  },
+  "new_document": {
+    "sha256": "0c92e8746eb16478b1133da5688d9309fde83035153b3624c7b38ceaf2337155",
+    "bytes": 10999,
+    "mode": 436,
+    "git_mode": "100644",
+    "index_mode": null
+  },
+  "patch": {
+    "path": "operator-acceptance.patch",
+    "sha256": "b541edb327e64b15349a61ebaa78c847ee8f0d08394d609f90c56aca9252ce2d"
+  },
+  "input_integrity": {
+    "tested_manifest": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-native-full/input-manifest-after.json",
+    "tested_manifest_sha256": "3216131b3a5f0b61f085bd1e8cbb85fcfc3e9ce4e54c6f445d01fc1197efc558",
+    "original_inputs": 2330,
+    "unchanged_inputs": 2329,
+    "changed_inputs": [
+      "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md"
+    ],
+    "document_mode_unchanged": true,
+    "source_tests_other_docs_unchanged": true,
+    "architecture": {
+      "sha256": "027a6e33aed5b2546102a82e0c5b8946b265461528adc4302f1dfc84aa5446df",
+      "bytes": 1557414,
+      "mode": 436,
+      "git_mode": "100644",
+      "index_mode": "100644"
+    },
+    "protected_trail": {
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "bytes": 4036,
+      "mode": 436,
+      "git_mode": "100644",
+      "index_mode": null
+    }
+  },
+  "reviewed_basis": [
+    "CLAUDE.md",
+    "docs/user-docs-guide.md",
+    "docs/readme-guide.md",
+    "docs/architecture-docs-guide.md",
+    "Task t2.jf1.r8.a8 and Subtask t3.jf1.r8.a8.48",
+    "PM-final-review.json (full)",
+    "docs-native/FINAL-report.json (full)",
+    "final-native-full/FINAL-report.json (full; narrowed rereads after combined output truncation)",
+    "docs/caller-contract.md rotation contract",
+    "internal/cursorhost/report.go publication observation and reporting failure",
+    "internal/cursorhost/session.go held_input_refused and rotation_failed recording"
+  ],
+  "verification": {
+    "scope": "Evidence-only byte/mode/Git-index verification through make sandbox; scoped git diff --check",
+    "fenced_blocks_unchanged": true,
+    "outside_O5_unchanged": true,
+    "command_delta": "NONE",
+    "changed_test_assertions": [],
+    "new_test_pass_claim": false
+  },
+  "provenance": "Original full suite receipt and tested manifest left unchanged. Earlier full PASS belongs to original 2330-input manifest, not these new documentation bytes. Coordinator must bind approved doc-only overlay (2329 unchanged + one new document) to final commit.",
+  "limitations": [
+    "No tests/full/lint/build/live acceptance executed. PM explicitly waives unchanged unit rerun for this instructions-only correction.",
+    "O1-O6 actual terminal acceptance remains PENDING and separately authorized; existing isolation/provenance requirements unchanged; screens are not source authority.",
+    "Original old64a causal trail RED proven; extra native causal RED gaps retained; historical09 cause UNKNOWN.",
+    "No spec/tla changes; zero formal/scheduler jobs.",
+    "Inherited architecture whole-base plus reviewed deltas is not fresh whole-file certification."
+  ],
+  "deviations": [
+    "Read-only combined output truncation resolved by narrower report reads; no source/test mutation. Initial absent-path rg returned exit1."
+  ],
+  "incomplete_work": [
+    "Caller narrow read-only review, local commit and exact-SHA scheduler handoff remain."
+  ],
+  "questions_for_caller": []
+}

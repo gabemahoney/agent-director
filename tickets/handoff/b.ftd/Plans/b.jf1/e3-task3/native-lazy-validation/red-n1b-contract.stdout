@@ -1,0 +1,7 @@
+=== RUN   TestProductionLazyReplacementMultipleLegitimateWaiters
+    sqlite_lazy_native_test.go:303: actual native replacement borrower=legacy0
+    sqlite_lazy_native_test.go:312: background pool handoff returned synthetic acquisition failure: driver: bad connection
+--- FAIL: TestProductionLazyReplacementMultipleLegitimateWaiters (0.56s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/store	0.581s
+FAIL

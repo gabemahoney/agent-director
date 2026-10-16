@@ -1,0 +1,78 @@
+{
+  "full-failure-assessment/FINAL-report.json": {
+    "sha256": "bad562074f3e197e162843f580a5d31cdee51e91a92f87ecc2f781e1326d0d9e",
+    "bytes": 27639
+  },
+  "full-failure-assessment/targeted-results.json": {
+    "sha256": "e69a2c5966e9b7d4d5ba31dcf2244b7258c5008d0aa9d06e56c859222c308086",
+    "bytes": 47762
+  },
+  "full-failure-assessment/integrity.json": {
+    "sha256": "94391db734ea03f4a67f9d5eff1d0ef20e13ab036935aa9380893d4523775d68",
+    "bytes": 3783
+  },
+  "settled-full/FINAL-report.json": {
+    "sha256": "faa1a0c71d2a17c890b519ff3e348bed794d5f6845e90b41cc18e4756cf2d365",
+    "bytes": 27225
+  },
+  "settled-full/testing-subtasks.json": {
+    "sha256": "92388a80997f1b8c486ff9687f44b5e882edf4e281daeec81b3c3d57b7878ca3",
+    "bytes": 34745
+  },
+  "settled-full/02-full-test-sandbox.stdout.log": {
+    "sha256": "62eed3b8614147160abc55cdaff2483effe7c9f21a0e2d4878d658801c6ae179",
+    "bytes": 30967
+  },
+  "settled-full/02-full-test-sandbox.stderr.log": {
+    "sha256": "273facb85d56e0c8823a6c8812fcd6cef5e99e95f55593ff0ac3d550b86cf410",
+    "bytes": 38922
+  },
+  "api-deadline-assessment/FINAL-report.json": {
+    "sha256": "d9d71aa5612e9323e608975918c768250119c1c89015adf494cac3df687e5fd9",
+    "bytes": 15275
+  },
+  "contract-final-tests/FINAL-report.json": {
+    "sha256": "5c198691cd208bb5083116c6d1ba6dc4605726e862f5cb988d1f62dc92cb7e0d",
+    "bytes": 43950
+  },
+  "no-match-validation/FINAL-report.json": {
+    "sha256": "4e06383ef49c5157545534f2ae885c1e7e3adc9fca6327c9484b4f1095c6911a",
+    "bytes": 20727
+  },
+  "docs-no-match/FINAL-report.json": {
+    "sha256": "bddf424cc2c824db8636075655b8aea7d369c7d3c278903d0d48688e2cd3a9fb",
+    "bytes": 10362
+  },
+  "deadline-red/FINAL-report.json": {
+    "sha256": "b4a80499dcd1751f7b909039d7a4aad02ffd88dbef4033ba68a7b2f749275cd2",
+    "bytes": 7696
+  },
+  "deadline-green/FINAL-report.json": {
+    "sha256": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775",
+    "bytes": 29397
+  },
+  "deadline-engineer/FINAL-report.json": {
+    "sha256": "b9f80e5c51090b86f7d0ea58edfb75495e0ff0a1c12a21f596f811c7ac41a66d",
+    "bytes": 20789
+  },
+  "public/FINAL-report.json": {
+    "sha256": "cb09003843ba658e18e91432f185dd7273e6d2bba70af75de4098347a012571b",
+    "bytes": 28147
+  },
+  "collector/FINAL-report.json": {
+    "sha256": "a3c994f15bc985636297fd8cd96efa10bd94eeee331b3081bac15feccb2b234d",
+    "bytes": 11571
+  },
+  "PM-initial-review.json": {
+    "sha256": "bed412f1bcaf3fcb29a09a9836fd9d6f7aad28747b60e06f2b5eb10e10e3800c",
+    "bytes": 2296
+  },
+  "deadline-code-review.json": {
+    "sha256": "77fb3afe21ff5e2349cf1e0ed7604d3ffdbd676ee3ec1ed8535a00a447bdb090",
+    "bytes": 759
+  },
+  "no-match-code-review.json": {
+    "sha256": "fb01ded21f00f87787b35a4d8535f3306ad622efe266d98d1a055eda4748a96d",
+    "bytes": 686
+  }
+}

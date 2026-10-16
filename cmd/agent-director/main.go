@@ -813,5 +813,15 @@ func run() int {
 }
 
 func main() {
-	os.Exit(run())
+	code := run()
+	// Verb deadlines end at the result. Process teardown has a separate,
+	// fixed allowance within the CLI's existing one-second return reserve:
+	// accepted memory-resident audit events must get a chance to reach fsync
+	// before os.Exit kills the worker. An expired drain is still unconfirmed.
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	if err := trail.Default().Close(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "agent-director: audit shutdown:", err)
+	}
+	cancel()
+	os.Exit(code)
 }

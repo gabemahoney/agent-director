@@ -217,8 +217,10 @@ const ackRelayDecisionSQL = `UPDATE permission_requests
 // (absent, undecided, already acked, or answered at the pane). Only an acked
 // decision may be written to Claude Code. It emits no trail event: the hook's
 // ad.resume.observed records the delivery.
-func (s *Store) AckRelayDecision(instanceID, requestToken string, at time.Time, maxWait time.Duration, check func() error) (decision, reason string, acked bool, err error) {
-	err = s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+func (s *Store) AckRelayDecision(instanceID, requestToken string, at time.Time, maxWait time.Duration, check func() error) (string, string, bool, error) {
+	var decision, reason string
+	var acked bool
+	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		if check != nil {
 			if err := check(); err != nil {
 				return err
@@ -262,12 +264,13 @@ const denyRelayTimeoutSQL = `UPDATE permission_requests
 // denied is false, with no error, when the request was not undecided (a
 // verdict landed first, which the hook then acks instead) or is gone. A
 // written deny emits ad.row_mutation.committed (writer hook), fail-open.
-func (s *Store) DenyRelayTimeout(instanceID, requestToken string, at time.Time, maxWait time.Duration, check func() error) (denied bool, err error) {
+func (s *Store) DenyRelayTimeout(instanceID, requestToken string, at time.Time, maxWait time.Duration, check func() error) (bool, error) {
+	var denied bool
 	var (
 		requestID int64
 		toolName  string
 	)
-	err = s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		if check != nil {
 			if err := check(); err != nil {
 				return err
@@ -339,6 +342,8 @@ const recordHookGoneSQL = `UPDATE permission_requests
 // an error wrapping ErrStoreBusy, having written nothing, and the reader
 // skips the write.
 func (s *Store) RecordHookGone(at time.Time, maxWait time.Duration, requestIDs ...int64) (map[int64]time.Time, error) {
+	// The operation may retain its input while a native call is quarantined.
+	requestIDs = append([]int64(nil), requestIDs...)
 	out := make(map[int64]time.Time, len(requestIDs))
 	if len(requestIDs) == 0 {
 		return out, nil

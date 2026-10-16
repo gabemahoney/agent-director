@@ -1,0 +1,423 @@
+{
+  "role": "apiary_test_writer_e3_task3_deadline_green",
+  "result": "Retained old-code RED regression independently GREEN unchanged; distinct real SQLite, cleanup, absolute-context, Client audit and bounded trail lifecycle cases pass, including race verification. No source findings.",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.yt": "defined -> active -> done"
+  },
+  "status_scope": "Only .yt; no parent Task/Epic/other Subtask changes.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "files_changed": [
+    "internal/store/deadline_boundary_test.go",
+    "internal/trail/deadline_test.go",
+    "pkg/api/decide_absolute_deadline_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-green",
+  "retained_old_to_new_proof": {
+    "old_revision": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+    "old_report": "../deadline-red/FINAL-report.json",
+    "old_actual_assertions": [
+      "    decide_trail_deadline_test.go:92: decide has not returned after 1.500842204s; want within 1.5s while the real trail mutex remains held",
+      "    decide_trail_deadline_test.go:125: decide returned after 1.505624411s; want within 1.5s"
+    ],
+    "old_independent_commit": "4.480057ms",
+    "unchanged_test_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "new_receipt": "01-unchanged-green.log",
+    "observations": [
+      "    decide_trail_deadline_test.go:103: independent connection observed committed allow at +5.327616ms with trail mutex still held",
+      "    decide_trail_deadline_test.go:123: decide finished after 500.081538ms; reporting released at +500.084358ms"
+    ],
+    "original_request_ms": 500,
+    "original_assertion_ms": 1500,
+    "unchanged": true
+  },
+  "integrity": {
+    "engineer_final_source_sha256": {
+      "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+      "internal/store/lockwait.go": "9042cd64c394df390ccc2ddf28bfe8e21563d2586c376972254094be5cf45ac4",
+      "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+      "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+      "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+      "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+      "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+      "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+      "pkg/api/decide_trail_deadline_test.go": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88"
+    },
+    "all_engineer_hashes_verified": true,
+    "old_production_manifest_count": 1333,
+    "old_production_paths_changed_only_by_engineer": [
+      "internal/store/lockwait.go",
+      "internal/store/permission.go",
+      "internal/store/store.go",
+      "internal/trail/trail.go",
+      "pkg/api/client.go",
+      "pkg/api/decide.go"
+    ],
+    "new_production_files_from_engineer": [
+      "internal/store/connection_cleanup.go",
+      "internal/trail/deadline.go"
+    ],
+    "new_test_sha256": {
+      "internal/store/deadline_boundary_test.go": "953822d09f83aa889bac78465339f01824ddf9b1af9256eea4679f8b5a6a7a01",
+      "internal/trail/deadline_test.go": "311fb9702cdb57dc6d20a0d11fe0aa743ffa65a082ff4db951a953fad96f73e0",
+      "pkg/api/decide_absolute_deadline_test.go": "352952c6d6fcd7f9b67b31635c9ae425ab94b4585323a6c89605375f267ddded"
+    },
+    "source_edits_by_this_lane": [],
+    "spec_tla_changes": []
+  },
+  "commands": [
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.yt --status active",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='sha256sum -c tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/final-source-sha256.txt && timeout 90s go test -timeout 75s -count=1 -v ./pkg/api -run \"^TestDecideMaxWaitWithBlockedTrail$\"'",
+      "log": "01-unchanged-green.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/deadline_boundary_test.go internal/trail/deadline_test.go && timeout 90s go test -timeout 75s -count=1 -v ./internal/store ./internal/trail -run \"^(TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestBoundedWriter)\"'",
+      "log": "02-driver-trail-boundaries.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide_absolute_deadline_test.go && timeout 90s go test -timeout 75s -count=1 -v ./pkg/api -run \"^(TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'",
+      "log": "03-api-context-client.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide_absolute_deadline_test.go && timeout 90s go test -timeout 75s -count=1 -v ./pkg/api -run \"^(TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'",
+      "log": "04-api-context-client.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/deadline_boundary_test.go && timeout 90s go test -race -timeout 75s -count=1 -v ./internal/store ./internal/trail ./pkg/api -run \"^(TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestDecisionLateAcquisitionRetainsOriginalSQLDeadline|TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance|TestBoundedWriter.*|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO|TestDecideMaxWaitWithBlockedTrail)$\"'",
+      "log": "05-all-new-boundaries-race.log",
+      "exit": 2
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/deadline_boundary_test.go && timeout 90s go test -race -timeout 75s -count=1 -v ./internal/store ./internal/trail ./pkg/api -run \"^(TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestDecisionLateAcquisitionRetainsOriginalSQLDeadline|TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance|TestBoundedWriter.*|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO|TestDecideMaxWaitWithBlockedTrail)$\"'",
+      "log": "06-corrected-boundaries-race.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide_absolute_deadline_test.go && timeout 180s go test -timeout 150s -count=1 -v ./pkg/api ./internal/store ./internal/hook -run \"^(TestDecideMaxWaitUnderHeldLock|TestClientDecideBoundsDeferredAuditAndPreservesFIFO|TestDecideRelayRequestGuards|TestBoundedCallsUnderAHeldLockOrConnection|TestRelayWritePrecondition|TestRelayAckAndTimeoutDeny|TestCursorTrail.*|TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds|TestExplicitFalseUnknownClosePreservesOtherHolds|TestRelayAnswerOnlyAfterItsAck|TestRelayPrintsNothingWithoutAck|TestRelayNoAckInsideTheReserve|TestRelayAckKeepsItsReserve)$\"'",
+      "log": "07-preserved-guards-parallel-ack.log",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='timeout 90s go vet ./internal/store ./internal/trail ./pkg/api && sha256sum -c tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/final-source-sha256.txt && git diff --check && go version && bun --version'",
+      "log": "08-vet-final-integrity.log",
+      "exit": 0
+    },
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.yt --status done",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-green/report.mjs'",
+      "log": "09-report-integrity.log",
+      "purpose": "Evidence assembly only"
+    }
+  ],
+  "failed_attempts": [
+    {
+      "log": "03-api-context-client.log",
+      "kind": "test compile error",
+      "cause": "A store _test.go export is unavailable when store is imported as a normal dependency from api tests.",
+      "correction": "Removed cross-package driver instrumentation; API parked-phase test retains real context-scoped Store and independent request assertion. SQL observation remains in Store package.",
+      "next": "04-api-context-client.log"
+    },
+    {
+      "log": "05-all-new-boundaries-race.log",
+      "kind": "test observer scope error; no race",
+      "cause": "Late-acquisition observer also inspected the subsequent independent verification query, whose fresh verification context intentionally has a later deadline.",
+      "correction": "Acquire ordinary pool lease to synchronize cleanup completion, then remove driver observer before verification. Production call assertions and bounds unchanged.",
+      "next": "06-corrected-boundaries-race.log"
+    }
+  ],
+  "coverage": {
+    "sqlite": "5 phase cases: cancelable precommit UPDATE RETURNING; BEGIN phase parking; rollback cancellation following precommit failure; PRAGMA restoration cancellation after actual COMMIT; delayed/lost COMMIT response after real SQLite commit. Each receives context deadline no later than original, bounds caller return, and checks independent durable decision. Precommit expiry attempts no COMMIT; COMMIT uncertainty is internal/unconfirmed, never ErrStoreBusy.",
+    "cleanup": "Actual first driver Close blocked by barrier after cancellation/disposal. Caller returns; second public Store read refuses while pool lease is quarantined; no second connection opens. Release permits a fresh safe connection with restored PRAGMA and no transaction, verified by real BEGIN/ROLLBACK and independent read. Timely zero-wait success also proves one connection reused safely.",
+    "budgets": "Expired original contexts with zero and positive local wait run zero SQL. Actual pool wait observed through WaitCount, released with 75ms remaining, then real precommit SQL cancels at original deadline. Zero wait permits 30ms uncontended real SQL after 1ms acquisition allowance, intersecting original context. API phase wrapper explicitly forwards WithDecideContext to real Store.WithContext and parks past original expiration.",
+    "trail": "Real local writer JSON-encoding barrier: 1 in-flight + 64 accepted pending; next rejected QueueFull; canceled Close explicit Pending; subsequent admission Closed. Release drains exactly 65 FIFO events and aggregate meta for 2 rejections, strips tool_input, closes worker/file. Real open failure increments Failed/LastError and Close exposes failure.",
+    "client": "Real Client.Decide with held singleton writer includes deferred called event inside unchanged 500ms/1.5s assertion; independent Store observes committed allow. Exactly two pending committed/called events; release and same-worker sentinel prove physical FIFO records exactly once. Client.Close and closed-client refusal complete while reporter remains held.",
+    "preservation": "Original parallel TestDecideMaxWaitUnderHeldLock all 23 leaves unchanged. Actual precommit unknown/permission holds, acknowledgement before answer output, no output without ack, ack reserve, and Task2 independent unknown/permission/plan rotation preservation pass in selected existing tests.",
+    "negative_controls": "Expired contexts produce no SQL; precommit cancellation produces no verdict/no COMMIT; postcommit uncertain response retains independently committed allow; quarantined connection cannot be borrowed; capacity overflow and stopped writer reject without writing event; failing actual output path is observable; no copied production transaction/retry/queue implementation or helper meta-tests.",
+    "race": "06-corrected-boundaries-race.log: all new boundary tests plus retained regression pass with -race, default scheduling/parallelism. Final Client audit assertion strengthened to exact 2 records and passed in 07."
+  },
+  "receipts": {
+    "01-unchanged-green.log": {
+      "sha256": "ac59ad63c96928c94671a4ae89d4507c83bf387e7e584202ba12cb95a0a74b73",
+      "passed_leaves": 1,
+      "leaves": [
+        "TestDecideMaxWaitWithBlockedTrail"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/pkg/api\t0.535s"
+      ],
+      "failures": []
+    },
+    "02-driver-trail-boundaries.log": {
+      "sha256": "43ff6aa03b855fae3e5b79035aafe9fcc7b86def5994abfdb469071d1a3114f8",
+      "passed_leaves": 10,
+      "leaves": [
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestBoundedWriterPendingCapacityFIFOAndDrain",
+        "TestBoundedWriterFailureIsObservableAndCloses"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/store\t1.129s",
+        "github.com/gabemahoney/agent-director/internal/trail\t0.072s"
+      ],
+      "failures": []
+    },
+    "07-preserved-guards-parallel-ack.log": {
+      "sha256": "d9c7056f6c3d3219c8d49b609824698d67ce248b349b0258ca839447a3324fda",
+      "passed_leaves": 119,
+      "leaves": [
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+        "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestRelayAckAndTimeoutDeny/ack,_undecided:_nothing_to_ack",
+        "TestRelayAckAndTimeoutDeny/ack_an_allow",
+        "TestRelayAckAndTimeoutDeny/ack_a_deny_with_its_reason",
+        "TestRelayAckAndTimeoutDeny/ack,_a_pane_answer_begun",
+        "TestRelayAckAndTimeoutDeny/ack_a_verdict_the_mark_closed",
+        "TestRelayAckAndTimeoutDeny/ack_the_mark's_deny",
+        "TestRelayAckAndTimeoutDeny/timeout_deny,_undecided",
+        "TestRelayAckAndTimeoutDeny/timeout_deny,_a_verdict_landed_first",
+        "TestRelayAckAndTimeoutDeny/timeout_deny,_a_pane_answer_begun",
+        "TestRelayAckAndTimeoutDeny/timeout_deny,_the_mark's_deny_first",
+        "TestDecideRelayRequestGuards/undecided",
+        "TestDecideRelayRequestGuards/undecided,_the_legacy_cutoff_after_created_at",
+        "TestDecideRelayRequestGuards/decided",
+        "TestDecideRelayRequestGuards/its_hook's_timeout_deny_delivered",
+        "TestDecideRelayRequestGuards/a_pane_answer_begun",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait",
+        "TestRelayWritePrecondition/ack/lock_held_past_the_wait",
+        "TestRelayWritePrecondition/ack/precondition_fails",
+        "TestRelayWritePrecondition/ack/precondition_holds",
+        "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+        "TestRelayWritePrecondition/timeout_deny/precondition_fails",
+        "TestRelayWritePrecondition/timeout_deny/precondition_holds",
+        "TestExplicitFalseUnknownClosePreservesOtherHolds",
+        "TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds",
+        "TestCursorTrailAdmissionRefusalIsSilent/collision_after_state_update",
+        "TestCursorTrailAdmissionRefusalIsSilent/stale_binding",
+        "TestCursorTrailAdmissionRefusalIsSilent/deadline",
+        "TestCursorTrailAdmissionRefusalIsSilent/invalid_request",
+        "TestCursorTrailNativeRefusalIsSilent/mismatch",
+        "TestCursorTrailNativeRefusalIsSilent/intent",
+        "TestCursorTrailNativeRefusalIsSilent/outside",
+        "TestCursorTrailNativeRefusalIsSilent/stale_binding",
+        "TestCursorTrailNativeRefusalIsSilent/deadline",
+        "TestCursorTrailNativeRefusalIsSilent/missing",
+        "TestCursorTrailNativeRefusalIsSilent/delivered",
+        "TestCursorTrailNativeRefusalIsSilent/closed",
+        "TestCursorTrailNativeRefusalIsSilent/proven",
+        "TestCursorTrailProofRefusalIsSilent/wrong_token",
+        "TestCursorTrailProofRefusalIsSilent/wrong_tool",
+        "TestCursorTrailProofRefusalIsSilent/independent_token_tool_mismatch",
+        "TestCursorTrailProofRefusalIsSilent/closed",
+        "TestCursorTrailProofRefusalIsSilent/stale_binding",
+        "TestCursorTrailRollbackIsSilent/native/update",
+        "TestCursorTrailRollbackIsSilent/native/commit",
+        "TestCursorTrailRollbackIsSilent/proof/update",
+        "TestCursorTrailRollbackIsSilent/proof/commit",
+        "TestCursorTrailFailureDoesNotUndoCommit",
+        "TestCursorTrailAdmissionAndTimeout",
+        "TestCursorTrailNativeClaim/direct_allow",
+        "TestCursorTrailNativeClaim/direct_deny",
+        "TestCursorTrailNativeClaim/consume_sent",
+        "TestCursorTrailProofFinalValuesAndDuplicate/undecided",
+        "TestCursorTrailProofFinalValuesAndDuplicate/API_allow",
+        "TestCursorTrailProofFinalValuesAndDuplicate/operator_deny",
+        "TestCursorTrailProofFinalValuesAndDuplicate/timeout_deny",
+        "TestCursorTrailProofFinalValuesAndDuplicate/native_pane",
+        "TestCursorTrailProofFinalValuesAndDuplicate/outside_unknown",
+        "TestCursorTrailProofFinalValuesAndDuplicate/incomplete_proof",
+        "TestCursorTrailAcknowledgementAddsNoMutation/allow",
+        "TestCursorTrailAcknowledgementAddsNoMutation/deny",
+        "TestRelayPrintsNothingWithoutAck/ack_fails",
+        "TestRelayPrintsNothingWithoutAck/ack_cut_by_a_held_lock",
+        "TestRelayPrintsNothingWithoutAck/ack_matches_nothing",
+        "TestRelayPrintsNothingWithoutAck/reads_keep_failing",
+        "TestRelayPrintsNothingWithoutAck/request_deleted",
+        "TestRelayPrintsNothingWithoutAck/timeout_deny_fails",
+        "TestRelayPrintsNothingWithoutAck/timeout_deny_cut_by_a_held_lock",
+        "TestRelayPrintsNothingWithoutAck/timeout_deny_loses_to_a_verdict,_acked",
+        "TestRelayPrintsNothingWithoutAck/timeout_deny",
+        "TestRelayPrintsNothingWithoutAck/verdict_acked",
+        "TestRelayNoAckInsideTheReserve/verdict_read_with_2.5_s_left",
+        "TestRelayNoAckInsideTheReserve/verdict_read_with_1.9_s_left",
+        "TestRelayNoAckInsideTheReserve/poll's_end:_the_deny_may_wait_1_s",
+        "TestRelayNoAckInsideTheReserve/poll's_end_found_with_1.5_s_left",
+        "TestRelayAckKeepsItsReserve/verdict,_default_busy_timeout",
+        "TestRelayAckKeepsItsReserve/verdict,_largest_busy_timeout",
+        "TestRelayAckKeepsItsReserve/timeout_deny,_largest_busy_timeout",
+        "TestRelayAckKeepsItsReserve/timeout_deny,_default_busy_timeout",
+        "TestRelayAnswerOnlyAfterItsAck/allow_verdict",
+        "TestRelayAnswerOnlyAfterItsAck/deny_verdict",
+        "TestRelayAnswerOnlyAfterItsAck/timeout_deny"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/pkg/api\t1.211s",
+        "github.com/gabemahoney/agent-director/internal/store\t4.347s",
+        "github.com/gabemahoney/agent-director/internal/hook\t2.176s"
+      ],
+      "failures": []
+    },
+    "05-all-new-boundaries-race.log": {
+      "sha256": "0e5f65ffeab96f8269b4fac70997fcc8e7aea45b977ac5709babe9e66b091117",
+      "passed_leaves": 14,
+      "leaves": [
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestBoundedWriterPendingCapacityFIFOAndDrain",
+        "TestBoundedWriterFailureIsObservableAndCloses",
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitWithBlockedTrail",
+        "TestDecideAbsoluteContextSurvivesParkedPhase"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/trail\t1.138s",
+        "github.com/gabemahoney/agent-director/pkg/api\t2.351s"
+      ],
+      "failures": [
+        "    deadline_boundary_test.go:274: late acquisition renewed SQL deadline: 2026-10-15 23:56:36.352309876 +0000 UTC m=+3.853999003",
+        "    deadline_boundary_test.go:274: late acquisition renewed SQL deadline: 2026-10-15 23:56:36.352309876 +0000 UTC m=+3.853999003",
+        "    deadline_boundary_test.go:274: late acquisition renewed SQL deadline: 2026-10-15 23:56:36.352309876 +0000 UTC m=+3.853999003",
+        "--- FAIL: TestDecisionLateAcquisitionRetainsOriginalSQLDeadline (0.26s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t1.974s",
+        "FAIL"
+      ]
+    },
+    "06-corrected-boundaries-race.log": {
+      "sha256": "eb051c1e45ad93885492592f1f5de610d0f3c9ed2a51d6dd429da559e47dfe25",
+      "passed_leaves": 15,
+      "leaves": [
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestBoundedWriterPendingCapacityFIFOAndDrain",
+        "TestBoundedWriterFailureIsObservableAndCloses",
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitWithBlockedTrail",
+        "TestDecideAbsoluteContextSurvivesParkedPhase"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/internal/store\t2.823s",
+        "github.com/gabemahoney/agent-director/internal/trail\t1.087s",
+        "github.com/gabemahoney/agent-director/pkg/api\t2.355s"
+      ],
+      "failures": []
+    },
+    "04-api-context-client.log": {
+      "sha256": "365e2dabbab3e4d4cde640b21af2daa8060b2006c6990ed584ba4f9604f159dd",
+      "passed_leaves": 2,
+      "leaves": [
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideAbsoluteContextSurvivesParkedPhase"
+      ],
+      "packages": [
+        "github.com/gabemahoney/agent-director/pkg/api\t0.662s"
+      ],
+      "failures": []
+    },
+    "08-vet-final-integrity.log": {
+      "sha256": "9b47ed77e149af47d700be9a21972b47a3b433d1ce5f42c82da093b86fdc5efc",
+      "passed_leaves": 0,
+      "leaves": [],
+      "packages": [],
+      "failures": []
+    },
+    "03-api-context-client.log": {
+      "sha256": "eb55c83868bc1c3ed9335a017245f09a098d40280cdef3eff68148749a06323b",
+      "passed_leaves": 0,
+      "leaves": [],
+      "packages": [],
+      "failures": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api [build failed]",
+        "FAIL",
+        "pkg/api/decide_absolute_deadline_test.go:42:8: undefined: store.BeforeCursorTrailExecForTest"
+      ]
+    }
+  },
+  "source_findings": [],
+  "deviations": [
+    "Initial discovery mistakenly listed /tmp filenames and read already-known /tmp orchestrator metadata; subsequent discovery remained workspace scoped. No real AD store or credential files were accessed.",
+    "One read-only bees list-tickets --help invocation failed because that subcommand does not exist; authoritative ticket reads used show-ticket --ids."
+  ],
+  "environment": "make sandbox; docker isolated sandbox user HOME; Go go1.22.10 linux/amd64; Bun 1.3.13; package TestMain isolation and per-test temporary SQLite paths; no real AD store or credential access.",
+  "evidence_limits": [
+    "Historical09 deadline causes remain unknown; controlled RED/GREEN does not reconstruct them.",
+    "Native uninterruptible execution or process descheduling cannot be forced to honor wall clock; cooperative QueryContext/ExecContext boundaries and noncancelable Close quarantine tested explicitly.",
+    "COMMIT-response injection delays/errors only after real SQLite COMMIT succeeded; this proves uncertain response classification with independent durable authority, not a real slow filesystem fsync.",
+    "Accepted audit pending is memory-resident, not crash durable. No crash durability claim.",
+    "Client closed-state was observed during blocked reporting; native driver Close quarantine was exercised independently through Store. No claim that native Client.Close was delayed in that case."
+  ],
+  "full_suite": "Not run; .zj sole owner after public/docs/advice/quality settle.",
+  "integration": "Not run; not dispatched for integration. No local Docker TESTPLAN groups/collectors.",
+  "formal": "No spec/tla changes, no TLA/TLC/Java/parser/scheduler jobs.",
+  "boundaries": "No .claude access; no real AD stores, credentials/login/logout/live Cursor, repository host scripts/build/test execution, source/docs edits, commits/pushes, delegation or midflight messages. Tests/format/vet/evidence scripts only make sandbox. Initial discovery mistakenly listed /tmp names and read the already-known /tmp orchestrator metadata path; no credential or real AD store files accessed. All subsequent discovery/read activity workspace scoped.",
+  "incomplete_work": [],
+  "questions_for_caller": []
+}

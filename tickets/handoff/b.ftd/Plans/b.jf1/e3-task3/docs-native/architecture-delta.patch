@@ -1,0 +1,171 @@
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -331,6 +331,15 @@
+ runtime/connection/pipes/fds, nonretirement and nonterminal row state.
+ `CursorCheck` independently runs `VerifyRuntime` and `VerifyPane` after the lock; time is checked after potentially
+ slow evidence. The immediate-parent hook gate remains unchanged.
++Gateway callbacks capture the exact launch binding before dispatch through
++`checkFor`; a later rotation cannot change an outstanding operation's evidence.
++Bounded callbacks may outlive the caller while native work is quarantined.
++Their inputs must stay immutable and their captured outputs must only be read
++after a successful helper return. `CheckCursorPrompt` returns `false, err`
++before reading captured eligibility on failure; relay/Cursor ack and timeout
++helpers likewise return zero outputs on error. `RecordHookGone` clones its
++request-id slice before dispatch. None of these ownership rules replaces the
++authenticated authority checks or derives permission from pane text.
+ 
+ Admission fixes a finite millisecond `SettledAt`: configured relay window plus
+ four seconds. The approval deadline is settlement minus that reserve. Relay-off
+@@ -2323,23 +2332,39 @@
+     store's configured waits unless an enclosing context cuts them shorter.
+     Setup context cancellation before BEGIN and precommit exhaustion wrap
+     `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
+-    ordinary I/O errors retain their classification even if context expiry
+-    coincides. A COMMIT error is an unconfirmed internal outcome, not busy
+-    or proof of rollback; the durable request must be read before retry.
+-    Successful COMMIT remains authoritative despite later cleanup/reporting
+-    expiry.
+-
+-    **Must use:** `releaseConn` and the shared `connectionCleanupLane`
+-    (`internal/store/connection_cleanup.go`) keep the connection leased until
+-    rollback/restoration succeeds or `Raw(driver.ErrBadConn)` disposal
+-    finishes. Expired cleanup discards without starting a fresh Background
+-    rollback. A failed restoration or open transaction never reaches another
+-    borrower. The one-connection pool bounds outstanding cleanup; one worker
+-    drains the lane and exits, without a worker per statement or timeout.
+-    Callers wait only until their operation context expires; noncancelable
+-    driver Close can continue in quarantine. Cancellation requires driver
+-    cooperation and cannot force a descheduled process or uninterruptible
+-    native/kernel operation to return on a hard wall-clock bound.
++    ordinary I/O errors returned within the original bound retain their
++    classification despite earlier cancellation. A COMMIT error is an
++    unconfirmed internal outcome, not busy or proof of rollback; the durable
++    request must be read before retry.
++    Successful COMMIT remains authoritative despite later cleanup/reporting
++    expiry.
++
++    **Must use:** cancelable `withConn` calls run through
++    `runConnectionOperation` and the shared per-pool `connectionCleanupLane`
++    (`internal/store/connection_cleanup.go`). Admission takes one operation
++    slot before creating a worker or acquiring/opening a native connection.
++    Waiting callers create no worker or job queue. The admitted worker owns
++    acquisition, initialization, callback, rows and direct `cleanup.finish`
++    through rollback/restoration or `Raw(driver.ErrBadConn)` disposal and
++    lease release, even after its caller returns. Repeated timeouts cannot
++    accumulate workers behind blocked native work. Contextless default-wait
++    calls remain synchronous and use `releaseConn`'s existing cleanup lane;
++    they do not acquire the cancelable operation slot.
++
++    SQL receives cancellation immediately. If cancellation arrives before an
++    absolute deadline, the reporting wait can observe a cooperative driver's
++    actual result only until that SAME original deadline, with no extra grace.
++    At expiry, synchronized abandonment prevents a late precommit callback
++    from starting COMMIT. If COMMIT already started and its outcome has not
++    been published, timeout is unconfirmed, never `ErrStoreBusy`. SQL's result
++    is published before cleanup, so confirmed COMMIT remains success when
++    cleanup alone exceeds the deadline. Expired cleanup discards without a
++    fresh Background rollback; a failed restoration or open transaction never
++    reaches another borrower. Already-entered native opening, step, row
++    finalization or Close can remain uninterruptible: the worker quarantines
++    that work and retains its slot/lease until disposal completes. Caller
++    return does not require that native work to finish, but process
++    descheduling still prevents a hard real-time wall-clock guarantee.
+ 
+     Its users: the relay hook's first write
+     (`InsertRelayRequest`), ack (`AckRelayDecision`) and timeout deny
+@@ -2864,11 +2889,55 @@
+    v7 → v8 settle-state hop remain separate steps in the authorized chain
+    to v11; their columns are not folded together.
+ 
+-**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. `journal_mode=WAL`
+-and `foreign_keys=ON` are applied via DSN PRAGMAs and verified after open;
+-a silent downgrade fails `Open` rather than yielding a half-broken Store.
+-
+-**Busy timeout (b.c7f).** The DSN also sets every connection's
++**Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. WAL is set once at
++fresh-database initialization and otherwise verified from the persistent
++header; opening a connection does not run a journal-mode-setting PRAGMA.
++Foreign keys and the journal mode are verified after open; a silent downgrade
++fails `Open` rather than yielding a half-broken Store.
++
++**Must use: caller-owned connection initialization.** `openContextSQLite`
++(`internal/store/sqlite_connector.go`) wraps the registered SQLite driver
++with `sqliteConnector` and `callerOwnedConnector`; future production openers
++must reuse this path. Driver DSN PRAGMAs run with Background and must not be
++used for initialization. `sqliteConnector` opens the path without those
++parameters, checks the actual caller context after native Open and before
++each `ExecContext` initialization of configured `busy_timeout` and
++`foreign_keys = 1`. Every physical replacement gets both settings. Expired
++or failed initialization closes on the owning caller/worker before any
++borrower SQL; native Open or disposal can still block under that ownership.
++
++Explicit `boundedConnContext` acquisition carries an immutable private
++context marker and keeps the eager path. It preserves the distinction
++between zero-wait 1 ms admission and its fixed 1 s SQL-work allowance, cut
++by the original enclosing deadline; it never renews an expired positive
++budget. `ReconcileCursorRotation` also marks its explicit context acquisition
++and retains its established synchronous context behavior.
++
++The pool's background replacement opener has no borrowing caller context.
++`callerOwnedConnector` returns a successful, unopened `lazySQLiteConn` for
++unmarked cancelable acquisition, with no native I/O or synthetic
++`ErrBadConn`. This lets multiple legitimate waiters receive pool capacity
++without consuming the pool's finite retry allowance. The logical connection
++stores no caller context and uses no mutable latest/foreign caller marker,
++additional worker or queue. A fresh replacement can skip `ResetSession`;
++therefore actual borrower `ExecContext`, `QueryContext`, `PrepareContext`,
++`BeginTx`, `Ping` and `ResetSession` initialize with that method's context.
++Bounded borrowers execute on their admitted operation worker and retain its
++slot/lease through initialization and disposal. Legacy borrowers remain
++synchronous. Context-aware methods check cancellation before borrower SQL;
++Exec/Query retain `ErrSkip` statement fallbacks, and prepare/begin retain
++the standard context/transaction-option fallback behavior. Returned native
++statements, rows and transactions keep their normal interfaces.
++
++`Raw` exposes the logical wrapper without opening it; production Raw use is
++only `driver.ErrBadConn` disposal, never a concrete native type assertion.
++Discarding/closing an unopened replacement performs no native I/O. An
++unopened connection is valid, failed initialization is invalid, and opened
++Close/reset/validation forward to the native connection where supported.
++Mandatory contextless driver Prepare/Begin use Background only for their
++explicit contextless callers; the replacement opener invokes neither.
++
++**Busy timeout (b.c7f).** The connector sets every physical connection's
+ `busy_timeout` (`openDB`): on `SQLITE_BUSY` a statement retries for up to
+ that many milliseconds while another connection, often another
+ agent-director process, holds the lock, then fails with SQLite's
+@@ -2959,10 +3028,9 @@
+ **Empty path.** `Open` and `OpenOrInit` refuse an empty path with an error
+ wrapping the unexported `errEmptyPath` (`store: resolve path: empty
+ database path`) and open or create nothing (`resolvePath`, b.8up).
+-Otherwise the SQLite driver would take the whole DSN, PRAGMAs included, as
+-a file name in the cwd, and `OpenOrInit` would create that file and its
+-`.initlock` there with no PRAGMAs applied. The production callers never
+-pass one: `EffectiveDbPath` gives the default for an empty `db_path`.
++The connector is never handed an empty database path. The production
++callers never pass one: `EffectiveDbPath` gives the default for an empty
++`db_path`.
+ 
+ **No usable home.** With `HOME` unset or empty, `os.UserHomeDir()` fails and
+ none of the three resolves `~/`: `pkg/api` returns an error,
+@@ -12942,6 +13010,20 @@
+ trail singleton. A decision/delivery result is authoritative about the verdict
+ and available acknowledgement facts, not a trail durability receipt.
+ 
++The CLI's `main` closes the process singleton once after `run` returns, using
++a separate fixed 500 ms audit-drain context inside the existing 1 s reply
++reserve, then exits with the verb's original exit code. The verb's SQL and
++reporting retain their original context; teardown grants no extra operation
++budget and emits no duplicate `ad.decide.called`. Pending/failed drain writes
++an explicit `agent-director: audit shutdown:` stderr diagnostic and preserves
++fail-open verdict semantics. If that drain expires, accepted memory-resident
++events may be lost even at normal process exit; neither a successful verdict
++nor teardown is a blanket fsync/crash-durability guarantee. Embedded API and
++MCP hosts retain process-lifetime ownership of the singleton rather than
++closing it for each Client. The Bun subprocess client scans stderr lines for
++the error JSON envelope among notices; an audit diagnostic after that
++envelope does not replace its structured error or verdict exit code.
++
+ ## Resume
+ 
+ Relaunching a finished (`ended` or `missing`) row: `claude --resume <id>`

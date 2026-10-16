@@ -1,0 +1,198 @@
+{
+  "role": "apiary_engineer_e3_task3_deadline",
+  "evidence_generation": {"command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/finalize.mjs'", "exit_code": 0, "log": "14-report-integrity.log"},
+  "administrative_failures": ["Initial four read-only bees show-ticket calls omitted --ids and returned required-argument errors; corrected immediately with bees show-ticket --ids for Task/.ir/.gf/.yt. No mutations occurred.", "One source-comment apply_patch verification failed on a mismatched comment context; tool made no changes, then the corrected patch applied. No execution or test failure resulted."],
+  "result": "Source repair complete; retained regression GREEN unchanged, targeted decision/store/Cursor audit/CLI checks and race checks pass; independent .yt remains required.",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.ir": "defined -> active -> done"
+  },
+  "status_scope": "Only own .ir status changed. No Task/Epic/.yt status changes.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "old_production_revision": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+  "old_red_evidence": "../deadline-red/FINAL-report.json",
+  "source_files_changed": [
+    "internal/store/store.go",
+    "internal/store/lockwait.go",
+    "internal/store/permission.go",
+    "internal/store/connection_cleanup.go",
+    "internal/trail/trail.go",
+    "internal/trail/deadline.go",
+    "pkg/api/client.go",
+    "pkg/api/decide.go"
+  ],
+  "not_owned_untouched": [
+    "pkg/api/decide_trail_deadline_test.go (preexisting untracked from .gf)",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/context.md (preexisting coordinator change)"
+  ],
+  "commands": [
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/store.go internal/store/lockwait.go internal/store/permission.go pkg/api/decide.go internal/trail/trail.go internal/trail/deadline.go && timeout 90s go test -timeout 75s -count=1 -v ./pkg/api -run \"^TestDecideMaxWaitWithBlockedTrail$\"'",
+      "log": "01-initial-green-test-output.log",
+      "exit_code": 0,
+      "purpose": "Initial repair; raw test output retained from tools, image/setup transcript not copied into this receipt."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide.go internal/trail/trail.go && timeout 180s go test -timeout 150s -count=1 -v ./pkg/api -run \"^TestDecideMaxWaitUnderHeldLock$\"'",
+      "log": "02-existing-deadline.log",
+      "exit_code": 0,
+      "purpose": "Existing unchanged 23 leaf cases."
+    },
+    {
+      "command": "make sandbox CMD='timeout 180s go test -timeout 150s -count=1 -v ./internal/store -run \"^(TestDecideRelayRequestGuards|TestBoundedCallsUnderAHeldLockOrConnection|TestRelayWritePrecondition|TestRecordHookGoneAndRefusedDecision|TestRecordRefusedDecisionOnlyWhileAwaiting|TestRelayAckAndTimeoutDeny)$\"'",
+      "log": "03-store-deadline-guards.log",
+      "exit_code": 2,
+      "purpose": "Genuine failure: zero lock-wait operation inherited 1ms acquisition allowance as entire SQL budget; uncontended hook_gone_at COMMIT exceeded it. Retained; source fixed before next run."
+    },
+    {
+      "command": "make sandbox CMD='timeout 90s go test -timeout 75s -count=1 -v ./internal/trail'",
+      "log": "04-trail.log",
+      "exit_code": 0,
+      "purpose": "Affected trail package only."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide.go internal/store/lockwait.go && timeout 180s go test -timeout 150s -count=1 -v ./internal/store -run \"^(TestDecideRelayRequestGuards|TestBoundedCallsUnderAHeldLockOrConnection|TestRelayWritePrecondition|TestRecordHookGoneAndRefusedDecision|TestRecordRefusedDecisionOnlyWhileAwaiting|TestRelayAckAndTimeoutDeny)$\"'",
+      "log": "05-store-zero-budget-fix.log",
+      "exit_code": 0,
+      "purpose": "Revalidation after actual zero-budget source correction, not unchanged retry."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/client.go pkg/api/decide.go internal/trail/deadline.go && timeout 180s go test -timeout 150s -count=1 -v ./pkg/api -run \"^(TestDecide|TestClientDecide|TestClientClose)\"'",
+      "log": "06-api-decision-cases.log",
+      "exit_code": 0,
+      "purpose": "Expanded affected decision cases after sleep/Client-close changes."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/store.go internal/store/lockwait.go internal/store/connection_cleanup.go && timeout 180s go test -timeout 150s -count=1 -v ./internal/store -run \"^(TestDecideRelayRequestGuards|TestBoundedCallsUnderAHeldLockOrConnection|TestRelayWritePrecondition|TestRecordHookGoneAndRefusedDecision|TestRecordRefusedDecisionOnlyWhileAwaiting|TestRelayAckAndTimeoutDeny|TestCursorTrail|TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds)\"'",
+      "log": "07-cleanup-worker-store-guards.log",
+      "exit_code": 0,
+      "purpose": "Revalidation after introducing connection-cleanup quarantine; includes affected Cursor trail/rollback/guard coverage."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/trail/trail.go internal/trail/deadline.go && timeout 180s go test -timeout 150s -count=1 -v ./pkg/api -run \"^(TestDecide|TestClientDecide|TestAllVerbsReturnErrClientClosedAfterClose)\"'",
+      "log": "08-final-api-decision-cases.log",
+      "exit_code": 0,
+      "purpose": "Decision and client closed-state coverage after cleanup worker/reporting changes."
+    },
+    {
+      "command": "make sandbox CMD='timeout 180s go test -race -timeout 150s -count=1 -v ./pkg/api ./internal/store -run \"^(TestDecideMaxWaitWithBlockedTrail|TestBoundedCallsUnderAHeldLockOrConnection)$\"'",
+      "log": "09-race-workers.log",
+      "exit_code": 0,
+      "purpose": "Race checks for introduced shared workers. Later source changes only callback-state plumbing, comments and rejection classification."
+    },
+    {
+      "command": "make sandbox CMD='timeout 120s go test -timeout 100s -count=1 -v ./internal/trail ./cmd/agent-director -run \"^(TestEmit|TestPathResolution|TestDefault|TestWriterWithoutAbsolutePathWritesNothing|TestMalformedTsSubstitutedWithWarning|TestEmitsShareOneFdAndFillTs|TestReadOnlyDirEmitReturnsError|TestDecideCalledEmitsTrailLine)\"'",
+      "log": "10-trail-cli.log",
+      "exit_code": 0,
+      "purpose": "Actual CLI Client.Decide audit cases, including errors and successful result."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide.go internal/store/lockwait.go internal/store/connection_cleanup.go internal/trail/trail.go && timeout 90s go test -timeout 75s ./internal/store ./pkg/api ./internal/trail -run \"^$\" && git diff --check && sha256sum internal/store/store.go internal/store/lockwait.go internal/store/permission.go internal/store/connection_cleanup.go internal/trail/trail.go internal/trail/deadline.go pkg/api/decide.go pkg/api/client.go pkg/api/decide_trail_deadline_test.go > tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/final-source-sha256.txt'",
+      "log": "11-final-compile-integrity.log",
+      "exit_code": 0,
+      "purpose": "Compile-only verification after replacing implicit cleanup context value with explicit callback state, plus comments."
+    },
+    {
+      "command": "make sandbox CMD='timeout 120s go test -timeout 100s -count=1 -v ./pkg/api ./internal/store -run \"^(TestDecideMaxWaitWithBlockedTrail|TestBoundedCallsUnderAHeldLockOrConnection)$\" && sha256sum -c tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/final-source-sha256.txt'",
+      "log": "12-final-bound-regression-integrity.log",
+      "exit_code": 0,
+      "purpose": "Final callback plumbing behavior and exact before/after integrity."
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/trail/deadline.go && timeout 120s go test -timeout 100s -count=1 -v ./pkg/api ./internal/store -run \"^(TestDecideMaxWaitWithBlockedTrail|TestBoundedCallsUnderAHeldLockOrConnection)$\" && sha256sum internal/store/store.go internal/store/lockwait.go internal/store/permission.go internal/store/connection_cleanup.go internal/trail/trail.go internal/trail/deadline.go pkg/api/decide.go pkg/api/client.go pkg/api/decide_trail_deadline_test.go > tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/final-source-sha256.txt && git diff --check'",
+      "log": "13-final-regression-rejection-accounting.log",
+      "exit_code": 0,
+      "purpose": "Final exact-source run after making rejection meta distinguish admission rejection (queue/closed) accurately."
+    }
+  ],
+  "status_commands": [
+    "bees update-ticket --ids t3.jf1.r8.a8.ir --status active",
+    "bees update-ticket --ids t3.jf1.r8.a8.ir --status done"
+  ],
+  "technical_decisions_for_srd": [
+    "api.Decide and Client.Decide start one real context at entry, independently of the injectable relay judge clock. Client includes identity and deferred ad.decide.called within that context; cleanup no longer holds Client's closed-state mutex. Real Store receives an immutable WithContext-scoped handle sharing the existing pool and cleanup lane. Positive max_wait_ms is a hard SQL/reporting context deadline and never extended by subsequent relative waits.",
+    "All bounded store methods intersect their local duration with the original context; acquisition, PRAGMA, BEGIN, query, COMMIT, rollback and restoration use this context. Bounded SQLite busy_timeout is zero. Pure reads and BEGIN use cancellable Go retries, capped both by the context and the original available busy allowance, so a stale positive SQLite busy handler cannot continue after the context.",
+    "Each Store pool has exactly one connection. Connection cleanup owns its lease until rollback/restoration succeeds or Raw(driver.ErrBadConn) disposal completes. One shared cleanup lane has at most one active worker, with queue size constrained by that one-connection pool. It exits on drain. Callers wait for cleanup only until the same context; expired cleanup never starts a background-context rollback. An open transaction or shortened timeout is never returned to another caller.",
+    "COMMIT success remains success despite expiry in later cleanup/reporting/ack reads. Precommit expiration is ErrStoreBusy with no commit attempted. A COMMIT error is an internal unconfirmed-outcome error instructing a durable request read before retry; it is not ErrStoreBusy and does not assert nothing was recorded.",
+    "Cancelable trail.Emit uses one writer worker plus 64 queued events (one additional in-flight event maximum). It preserves FIFO among accepted bounded events, including row_mutation.committed before the same Client call's decide.called. It writes through the existing mutex/file/fsync path, strips tool_input at admission and serialization, and does not spawn replacement workers for blocked I/O.",
+    "Trail Emit returns ErrPending when accepted work outlives the caller context, ErrQueueFull/ErrClosed when admission fails, and actual write/fsync errors when observed in time. Writer.Status exposes Pending, Failed, Rejected and LastError even when existing fail-open callers discard errors. Rejections receive a best-effort aggregate admission_rejected meta event on the same worker once writing resumes. Writer.Close(ctx) stops admission, drains FIFO and closes the worker/file; an expired Close remains explicitly pending.",
+    "Zero-wait compatibility: connection acquisition still gets only the preexisting 1ms connGrab; SQLite lock allowance is zero, without retries. Immediately available SQL gets one fixed 1s execution/cleanup budget, always intersected with an enclosing original context. API MaxWaitMs=0 fixes that allowance once at call entry. A positive call whose absolute deadline has actually expired cannot start fresh SQL, even if its lock happens to be free; permitting unbounded execution afterward would contradict the mandatory overall deadline. Source comments make this distinction explicit."
+  ],
+  "compatibility": {
+    "public_signatures": "Existing DecideStore, DecideParams, DecideResult and public callers remain source-compatible. No schema, CLI/MCP flags, response controls or E4 features added.",
+    "optional_store_decorator": "A decorator may implement WithDecideContext(context.Context) api.DecideStore and return itself wrapping its real delegate.WithContext(ctx). Existing deadlineStore embeds DecideStore, so it still compiles and its phase observations remain intact; it is not automatically unwrapped or bypassed. It does not get a magically forwarded original context unless the test author implements this optional extension. Production *store.Store is scoped directly.",
+    "generic_store_limits": "Arbitrary user-provided DecideStore implementations must honor their own bounded methods. AD cannot force cancellation into a custom implementation that ignores its durations/context."
+  },
+  "failed_receipts": [
+    {
+      "log": "03-store-deadline-guards.log",
+      "failure": "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait",
+      "assertion": "the same call once freed = store: commit: context deadline exceeded; want it to go ahead",
+      "cause": "Source regression: 1ms acquisition allowance incorrectly governed entire immediate transaction.",
+      "repair": "Separate fixed immediate-work execution budget from immediate connection/SQLite lock allowance; do not extend enclosing call deadline.",
+      "next_receipt": "05-store-zero-budget-fix.log"
+    }
+  ],
+  "evidence_limits": [
+    "Historical run09's two Decide overruns remain causally unknown. Neither the controlled trail-mutex RED/GREEN nor passing current focused cases identifies either historical cause.",
+    "Context cancellation cannot guarantee wall-clock execution while the process is descheduled or while native SQL/filesystem work is inside an uninterruptible kernel call. SQL drivers must cooperate with ExecContext/QueryContext cancellation. Noncancelable connection disposal is quarantined on a bounded worker; it cannot make an unsafe pooled connection available.",
+    "Accepted pending audit events are memory-resident, not crash durable. Process exit/crash before drain can lose them. Pending/failed/rejected status must not be described as a successful fsync. Existing fail-open decision results remain authoritative verdict/delivery facts, not audit durability receipts.",
+    "FIFO guarantees apply to accepted worker events. Concurrent legacy Background-context emissions retain synchronous behavior and are serialized by the same writer mutex; they do not have a cross-caller chronological ordering guarantee.",
+    "Trail admission copies the fields map, not arbitrary nested values. Bounded callers must keep nested values immutable until delivery; current decision fields are scalar.",
+    "Slow SQL/rollback/restoration/driver-close boundaries and overflow/drain behavior require the independent .yt test additions. Engineer did not write tests or production test seams."
+  ],
+  "testwriter_handoff": [
+    "Revalidate the unchanged .gf regression at final-source-sha256.txt; final source and the exact retained test hash are recorded. Keep the original 500ms request, 1.5s assertion, parallel cases and barrier controls.",
+    "Add distinct real-driver-boundary cases for slow precommit SQL, late acquisition, delayed COMMIT uncertainty, rollback/restoration cancellation, noncancelable driver Close/discard quarantine, and subsequent safe connection reuse. Reuse the existing request_proof_test.go/execHookConnector/execHookConn boundary without replacing production algorithms.",
+    "Adapt a test-only decorator via optional WithDecideContext(ctx) if original-context identity/deadline must be inspected across delegated API phases; existing phase wrapper remains compatible but intentionally does not silently acquire new methods.",
+    "Validate Client.Decide's deferred called event under the same held writer, FIFO commit/called order after release, accepted ErrPending, queue saturation/rejection accounting/meta, write failure counters, finite Close(ctx), drain and worker closure. Use local writers when closing; do not close the shared test singleton.",
+    "Cover zero wait and positive absolute-expiry distinction explicitly, including uncontended success and held-connection/held-lock refusal. Observe committed authority independently and never assume COMMIT error means rollback.",
+    "Do not claim historical09 cause, broaden assertions, change the retained regression, run full suite or local Docker groups."
+  ],
+  "deviations": [
+    "Initial first-green receipt preserves raw test-process tool output but not a standalone copy of sandbox image-build/setup output; later command receipts contain complete redirected stdout/stderr.",
+    "No test or product documentation edits. Technical SRD/docs reconciliation is a handoff to existing .48/.ro owners, not performed by this source lane."
+  ],
+  "incomplete_work": [],
+  "questions_for_caller": [],
+  "followup_work": "Independent .yt validation/additions and planned documentation/quality/full-suite lanes remain outside .ir.",
+  "integration": "No local Docker TESTPLAN groups, collectors or scheduler jobs.",
+  "full_suite": "Not run; .zj retains ownership.",
+  "formal": "No spec/tla changes or necessary model input changes; no formal/parser/TLC/Java execution or jobs requested.",
+  "boundaries": "No .claude access, real AD stores, credentials/login/logout, live Cursor, host repository scripts/build/tests, commits, pushes, delegation or outbound messages. Source edits used apply_patch; every repository format/build/test/evidence script ran via make sandbox. Bees CLI used only to read assigned authoritative tickets and update own .ir.",
+  "final_source_sha256": {
+    "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "internal/store/lockwait.go": "9042cd64c394df390ccc2ddf28bfe8e21563d2586c376972254094be5cf45ac4",
+    "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+    "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+    "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+    "pkg/api/decide_trail_deadline_test.go": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88"
+  },
+  "retained_regression_unchanged": true,
+  "receipt_sha256": {
+    "01-initial-green-test-output.log": "fb3c5667a9e6abc462a9b898d8504ee7691b9b93aa01271d63dc4b5d9bae4bd7",
+    "02-existing-deadline.log": "efba659cb56e90928891f03b03b712baeeae6dde3f5b0f3734e1167a9fcd9239",
+    "03-store-deadline-guards.log": "051a26dff284e0aca6922bf1f41cb030024fcd9e33bfc8bdd1c5163cdfff7534",
+    "04-trail.log": "40605ef8c3731270db26444bb107110468e90b60d91845106be45b41640b7404",
+    "05-store-zero-budget-fix.log": "eae59457bbdca1eead7041f240918c720c9b7ad090d5322611a0dccf03eb34fa",
+    "06-api-decision-cases.log": "40fa83cc1da0865ad5b30cf1d0a79b7cf34c57ada9553f7bdbf0b3045a6973c6",
+    "07-cleanup-worker-store-guards.log": "b171ffdd34fcdc83544c8c6c246bab853ae6c8a6499959ddf3da94f541a740d6",
+    "08-final-api-decision-cases.log": "21140d746cff5ec2bf33e87bbe2416f52843dc3b55553f41585138b261757ae8",
+    "09-race-workers.log": "f808ae173108b033461825c1597fca295bd306483f06a82663440f79acc6b4d3",
+    "10-trail-cli.log": "0113365c475e6aa96fcbb1f71634229535c37d05ffc2ce503f92adea7a542e98",
+    "11-final-compile-integrity.log": "39a35d50314ff07e723f6448f3753fdfdc2611f965dc200eb6d518ab89c6b2a5",
+    "12-final-bound-regression-integrity.log": "4054fe1587f74bd9312b9c3fb0e41517224242aca9ce0c0ab9ad9c6331685df8",
+    "13-final-regression-rejection-accounting.log": "2826a84176c4ee0e444b896debd2679cff781d2aa618467ddc93b1e55b032193"
+  },
+  "final_green_observations": [
+    "    decide_trail_deadline_test.go:103: independent connection observed committed allow at +4.736577ms with trail mutex still held",
+    "    decide_trail_deadline_test.go:123: decide finished after 501.018208ms; reporting released at +501.020608ms",
+    "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t0.537s",
+    "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t2.291s"
+  ],
+  "final_green_source_binding": "Final-source manifest generated immediately after 13's targeted tests; finalize rehashes each explicit path and verifies retained regression identity.",
+  "evidence_generator": "finalize.mjs"
+}

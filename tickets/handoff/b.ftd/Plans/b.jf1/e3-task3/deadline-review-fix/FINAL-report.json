@@ -1,0 +1,124 @@
+{
+  "role": "apiary_engineer_e3_task3_deadline_fix",
+  "result": "D1 repaired; retained regression and affected existing SQL/cleanup boundary cases GREEN. Fresh independent PRAGMA-context boundary validation remains required.",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.ir": "done -> active -> done"
+  },
+  "status_scope": "Only own .ir; no parent Task/Epic/.yt status changes.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "source_files_changed_this_lane": [
+    "internal/store/lockwait.go"
+  ],
+  "precise_repair": "At the failed setup PRAGMA busy_timeout only, errors wrapping context.Canceled or context.DeadlineExceeded additionally wrap ErrStoreBusy. This branch precedes callback/BEGIN and cannot hide a commit. Real non-context SQL errors retain their ordinary wrapper. Existing discard=true executes first; releaseConn continues quarantine/disposal under the original context. COMMIT and cleanup paths are unchanged.",
+  "technical_decisions_for_srd": [
+    "Setup cancellation/deadline before BEGIN is a precommit ErrStoreBusy, preserving the underlying context error. Classification tests the returned error with errors.Is rather than ctx.Err(), so an unrelated I/O error coinciding with deadline expiry is not converted into busy. No new budget, worker, public signature, model or schema change."
+  ],
+  "commands": [
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.ir --status active",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/lockwait.go && timeout 90s go test -timeout 75s -count=1 -v ./internal/store ./pkg/api -run \"^(TestDecisionAbsoluteDeadlineAtSQLiteBoundaries|TestDecisionCleanupQuarantinesNoncancelableClose|TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait|TestDecisionLateAcquisitionRetainsOriginalSQLDeadline|TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance|TestBoundedCallsUnderAHeldLockOrConnection|TestDecideMaxWaitWithBlockedTrail)$\"'",
+      "log": "01-targeted-regression.log",
+      "exit": 0
+    },
+    {
+      "command": "bees update-ticket --ids t3.jf1.r8.a8.ir --status done",
+      "exit": 0
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-review-fix/finalize.mjs && git diff --check'",
+      "logs": [
+        "03-final-integrity.log",
+        "04-complete-test-integrity.log"
+      ],
+      "purpose": "Evidence assembly: 03 verified four new tests; 04 extends verification to all 700 tracked and new Go tests without rerunning tests."
+    }
+  ],
+  "test_results": {
+    "passed_leaves": 26,
+    "leaves": [
+      "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+      "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+      "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+      "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+      "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+      "TestDecisionCleanupQuarantinesNoncancelableClose",
+      "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+      "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+      "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+      "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict",
+      "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict",
+      "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait",
+      "TestDecideMaxWaitWithBlockedTrail"
+    ],
+    "observations": [
+      "    decide_trail_deadline_test.go:103: independent connection observed committed allow at +4.726947ms with trail mutex still held",
+      "    decide_trail_deadline_test.go:123: decide finished after 500.653228ms; reporting released at +500.660158ms"
+    ],
+    "log_sha256": "93927208939d404c6282b4b7f799c604aeffad1d8a99b1b39e78dd31e4ab0e98"
+  },
+  "test_integrity": {
+    "verified_count": 700,
+    "baseline": "Tracked Go tests match HEAD blobs; four new tests match independent GREEN new_test_sha256 and exact retained regression hash. .claude paths excluded before blob/file access.",
+    "manifest": "verified-tests.sha256",
+    "all_match": true,
+    "retained_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "test_edits": []
+  },
+  "source_before_sha256": {
+    "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "internal/store/lockwait.go": "9042cd64c394df390ccc2ddf28bfe8e21563d2586c376972254094be5cf45ac4",
+    "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+    "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+    "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7"
+  },
+  "source_after_sha256": {
+    "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "internal/store/lockwait.go": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+    "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+    "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+    "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7"
+  },
+  "administrative_failures": [
+    "Initial sandbox test-manifest pipeline used unavailable rg, and lacked pipefail, so setup and 02 integrity commands exited zero while hashing empty stdin. Their tests-before.sha256/tests-after.sha256 files are INVALID evidence and are not used. Retained raw logs show the error. Corrected finalize.mjs verifies actual test bytes against independent retained authoritative manifests; no test rerun or assertion change."
+  ],
+  "deviations": [
+    "Initial integrity pipeline invalid; corrected against independent retained manifests. No source-scope deviation."
+  ],
+  "followup_work": [
+    "Fresh Test Writer should add PRAGMA setup cancellation/deadline driver boundary, assert no BEGIN/COMMIT, ErrStoreBusy, safe subsequent reuse/discard; preserve ordinary setup I/O errors and postcommit uncertainty; revalidate affected cases."
+  ],
+  "evidence_limits": [
+    "This source lane did not add or execute a new PRAGMA setup cancellation case; that is explicitly assigned to the fresh independent Test Writer.",
+    "Historical09 deadline causes remain unknown.",
+    "Existing cooperative SQL/context and uninterruptible-native execution limits, and pending audit crash-durability limits, are unchanged."
+  ],
+  "full_suite": "Not run; .zj retains ownership.",
+  "integration": "No local Docker TESTPLAN groups, collectors, scheduler submissions.",
+  "formal": "No spec/tla changes; no TLA/TLC/Java/parser execution.",
+  "boundaries": "No .claude access, real AD stores, credentials/login/logout/live Cursor, host repository tests/scripts/builds, test/doc/fixture edits, commits, pushes, delegation or outbound messages. Repository format/test/evidence scripts only make sandbox. Workspace-scoped discovery.",
+  "incomplete_work": [],
+  "questions_for_caller": []
+}

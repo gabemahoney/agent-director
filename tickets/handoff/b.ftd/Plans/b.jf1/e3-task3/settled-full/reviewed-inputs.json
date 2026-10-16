@@ -1,0 +1,112 @@
+{
+  "legacy-commit-assessment/FINAL-report.json": {
+    "sha256": "38d118c3d1b4d01a9845223d3051cee9875bfa7286be95405ed4b1b1975a07a6",
+    "bytes": 12580,
+    "result": "Real no-match transaction defect repaired with one minimal source change; existing targeted race checks pass. Independent deterministic no-match regression and later settled full-suite run remain caller-owned."
+  },
+  "no-match-validation/FINAL-report.json": {
+    "sha256": "4e06383ef49c5157545534f2ae885c1e7e3adc9fca6327c9484b4f1095c6911a",
+    "bytes": 20727,
+    "result": "Independent exact pre-repair RED and unchanged regression GREEN on repaired source; focused race checks and vet pass after correcting an existing COMMIT-attempt observer. No full-suite run."
+  },
+  "no-match-code-review.json": {
+    "sha256": "fb01ded21f00f87787b35a4d8535f3306ad622efe266d98d1a055eda4748a96d",
+    "bytes": 686,
+    "result": "No findings"
+  },
+  "docs-no-match/FINAL-report.json": {
+    "sha256": "bddf424cc2c824db8636075655b8aea7d369c7d3c278903d0d48688e2cd3a9fb",
+    "bytes": 10362,
+    "result": "Narrow no-match architecture clarification complete; strict inherited whole-base/every-delta chain independently verified and extended."
+  },
+  "contract-final-tests/FINAL-report.json": {
+    "sha256": "5c198691cd208bb5083116c6d1ba6dc4605726e862f5cb988d1f62dc92cb7e0d",
+    "bytes": 43950,
+    "result": "Full sandbox failed; preserve this receipt and route the actual failures before further full execution."
+  },
+  "contract-final-tests/quality-review-after.json": {
+    "sha256": "a2960aac7c28d66435aa742a2ce5121a39af8ee85a37098f46dc8af7838022fe",
+    "bytes": 9375,
+    "result": "One new real-SQL legacy error-contract failure remains; quality/full subtasks stay active."
+  },
+  "final-tests/FINAL-report.json": {
+    "sha256": "266838065699eb82609f75c2613fd34b636050ccd8e96984383417095ce3795f",
+    "bytes": 35489,
+    "result": "Full suite FAILED. Two Store observer lifecycle fixes targeted GREEN; three unchanged API leaves require Engineer assessment. No full-suite pass claim."
+  },
+  "final-tests/quality-review.json": {
+    "sha256": "715795b53870ed21e0aa61a32d389480a64e277ad433a6e3e4b5f4209c07ab9e",
+    "bytes": 7680,
+    "result": "Incomplete: three actual full-suite API failures require assessment; no final quality/full pass claim."
+  },
+  "api-deadline-assessment/FINAL-report.json": {
+    "sha256": "d9d71aa5612e9323e608975918c768250119c1c89015adf494cac3df687e5fd9",
+    "bytes": 15275,
+    "result": "Three API failures assessed as obsolete test clock/fixture assumptions under the required original SQL/cleanup deadline. No demonstrated production defect requiring source repair. Test Writer corrections and subsequent sole-owner full sandbox remain required; no full-pass claim."
+  },
+  "docs/FINAL-report.json": {
+    "sha256": "c591d956a3bfa12379caa7b26325ca0e239ff509c26b6c95277cf2853d515a1e",
+    "bytes": 12671,
+    "result": "One settled documentation authoring pass complete; exact whole-base/every-delta architecture chain verified through Task3. Literal advice remains assigned downstream, not passed."
+  },
+  "docs/postdoc-advice-inventory.json": {
+    "sha256": "a63c671a2d6899c4f590c3f83ebceacddf8bcd33724b2cdc4b2675606c9e6952",
+    "bytes": 3669,
+    "result": "PENDING literal-follow behavior validation; documentation authoring is complete, not advice execution"
+  },
+  "deadline-red/FINAL-report.json": {
+    "sha256": "b4a80499dcd1751f7b909039d7a4aad02ffd88dbef4033ba68a7b2f749275cd2",
+    "bytes": 7696,
+    "result": "expected old-production deadline RED established before source repair"
+  },
+  "deadline-engineer/FINAL-report.json": {
+    "sha256": "b9f80e5c51090b86f7d0ea58edfb75495e0ff0a1c12a21f596f811c7ac41a66d",
+    "bytes": 20789,
+    "result": "Source repair complete; retained regression GREEN unchanged, targeted decision/store/Cursor audit/CLI checks and race checks pass; independent .yt remains required."
+  },
+  "deadline-green/FINAL-report.json": {
+    "sha256": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775",
+    "bytes": 29397,
+    "result": "Retained old-code RED regression independently GREEN unchanged; distinct real SQLite, cleanup, absolute-context, Client audit and bounded trail lifecycle cases pass, including race verification. No source findings."
+  },
+  "deadline-review-fix/FINAL-report.json": {
+    "sha256": "ac4752ffdc66fd6ddad5690e011f0a8e345b5994cc26d344a85fb17fcdff5c4a",
+    "bytes": 9289,
+    "result": "D1 repaired; retained regression and affected existing SQL/cleanup boundary cases GREEN. Fresh independent PRAGMA-context boundary validation remains required."
+  },
+  "public/FINAL-report.json": {
+    "sha256": "cb09003843ba658e18e91432f185dd7273e6d2bba70af75de4098347a012571b",
+    "bytes": 28147,
+    "result": "D1 independently GREEN; genuine four-surface public mixed-input/recreation and representative adversarial public compositions settled GREEN under race detector."
+  },
+  "collector/FINAL-report.json": {
+    "sha256": "a3c994f15bc985636297fd8cd96efa10bd94eeee331b3081bac15feccb2b234d",
+    "bytes": 11571,
+    "result": "Authoring complete; static syntax/registration/source-test-integrity checks passed. Collector and authenticated acceptance NOT EXECUTED."
+  },
+  "acceptance-review-fix/FINAL-report.json": {
+    "sha256": "72a3de4f5de511670787b032d2f34350af3b9ba2ca784f2e34a9f523567e8dc3",
+    "bytes": 12176,
+    "result": "P1/P2/P3 acceptance repairs complete. Targeted genuine public tests: 13 race leaves passed. Collector: authored/static only, never executed."
+  },
+  "PM-initial-review.json": {
+    "sha256": "bed412f1bcaf3fcb29a09a9836fd9d6f7aad28747b60e06f2b5eb10e10e3800c",
+    "bytes": 2296,
+    "result": "Repair three acceptance issues before one doc pass; no additional production defect"
+  },
+  "SRD-NO-MATCH-TRANSACTION-DECISION.md": {
+    "sha256": "f913240371497fb68571c94a842ddac5cd2ceca73f5b82c4b0947bdded4b7ca3",
+    "bytes": 773,
+    "result": null
+  },
+  "SRD-DEADLINE-DECISIONS.md": {
+    "sha256": "882a0b59ecf3bf82cad3294b468f71de7758d734e90e46cd17437e489ef632d5",
+    "bytes": 3750,
+    "result": null
+  },
+  "SRD-DEADLINE-REVIEW-DECISION.md": {
+    "sha256": "32315c55f399fa5c52554e1223ce827a595949c0a94ff1412e2d62089ffd0503",
+    "bytes": 563,
+    "result": null
+  }
+}

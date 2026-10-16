@@ -1,0 +1,505 @@
+{
+  "role": "apiary_test_writer_e3_task3_deadline_contract_final",
+  "result": "Full sandbox failed; preserve this receipt and route the actual failures before further full execution.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.yj": "active",
+    "t3.jf1.r8.a8.zj": "active"
+  },
+  "status_scope": "Only own .yj/.zj; .6f remains done and all other Subtask/Task/Epic statuses untouched. Status receipts are separate.",
+  "files_changed": [
+    "pkg/api/export_test.go",
+    "pkg/api/decide_delivery_test.go",
+    "pkg/api/decide_policy_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/",
+  "contract_correction": {
+    "assessment": "api-deadline-assessment/FINAL-report.json read completely. No source fix justified: real fresh 100ms cannot unconditionally guarantee SQL success, and exact 300ms fake sleep is not a real overall SQL budget.",
+    "seam": "Explicit _test.go DecideWithinForTest=decideWithin only for selected controlled policies. DecideWithSleep=decide remains unchanged for physical deadline callers.",
+    "fixture": "Small stateful DecideStore snapshots seeded through existing relayEnv/real seed helpers; held/free availability and fake policy time explicit. Held write consumes its passed wait and returns ErrStoreBusy before mutation. Free conditional write records one allow, refuses duplicates; unexpected unused methods fail. No copied SQL, retries, cleanup, queue or Decide algorithm.",
+    "exact_delivery": "Both parallel agent cases keep exact original 300ms total, six 50ms polls, not_confirmed, hook_alive, confirm_by and stored allow/one commit. Precommit fixture time is zero.",
+    "f9": "Two held refusals preserve no decision/no attempt/zero commits, each fresh exact 100ms. Deliberate free third call with same 100ms records one allow, independent snapshot read confirms it; duplicate call ErrAlreadyDecided adds no commit.",
+    "cancellation": "Both agents cancel explicit no-timer context immediately after fixture commit, retain allow/not_confirmed/hook_alive/confirm_by and assert no extra sleep or read after cancellation before independent snapshot inspection.",
+    "observer": "deadlineStore copied wrapper forwards optional WithDecideContext to underlying concrete Store.WithContext or cooperating decorator. Same phase pointer and captured original deadline survive; every observed bounded phase is checked against that exact deadline. No source unwrapping.",
+    "limits": "Controlled policy fixture is not evidence of real SQLite locks, SQL success within 100ms, physical deadlines or durability. Context has no fabricated wall Deadline or timer. Real operations retain public Decide/DecideWithSleep and actual Store deadline owners."
+  },
+  "physical_guards": {
+    "protected_regression": {
+      "path": "pkg/api/decide_trail_deadline_test.go",
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "unchanged": true,
+      "request_ms": 500,
+      "wall_bound_ms": 1500
+    },
+    "held_lock": "All original TestDecideMaxWaitUnderHeldLock agent/busy-timeout/phase parallel leaves and original 500ms/1.5s guards retained; observer forwarding now carries original absolute SQL context.",
+    "client": "Original TestClientDecideBoundsDeferredAuditAndPreservesFIFO 500ms/1.5s audit bound and FIFO preserved.",
+    "recovery": "Original TestDecideAbsoluteContextSurvivesParkedPhase real precommit refusal/no write followed by deliberate public fresh-budget success and actual GetPermission retained.",
+    "sql_cleanup": "Actual SQLite driver/PRAGMA/BEGIN/SQL/COMMIT/rollback/restore/disposal quarantine/late acquisition/zero-wait/first-writer tests retained. F10 actual SQLite uncertain COMMIT -> actual public GetPermission and exactly one UPDATE/COMMIT retained.",
+    "original_old_red": {
+      "sha256": "6df7958d2e4cfc072321660a9717723899faf0894dc2d4c31aa489df48bf91a5",
+      "production_manifest_count": 1333,
+      "verification": "retained old exact64a production receipt; no attempt to infer historical09 causes"
+    },
+    "historical09": "Causes remain UNKNOWN; this correction and controlled old64a RED/GREEN do not reconstruct either historical failure."
+  },
+  "quality": {
+    "report": "quality-review-after.json",
+    "pre_full_report": "quality-review.json",
+    "mandatory_unresolved": [
+      {
+        "test": "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "location": "pkg/api/decide_delivery_test.go:315",
+        "assertion": "err store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded matches []; want exactly ErrStoreBusy",
+        "facts": "Unchanged original real-SQL legacy leaf, still parallel, MaxWaitMs 100ms and original no-sleep/1.1s physical assertion. Full subtest reported 1.53s including setup. assertOneSentinel uses t.Errorf, so later original elapsed/no-sleep/no-write assertions executed and reported no failures. Only sentinel classification failed; no phase trace locates COMMIT elapsed time.",
+        "assessment": "New actual SQL/legacy error-contract failure, distinct from corrected three policy leaves; fresh Engineer source/test-contract assessment required. Existing source intentionally distinguishes unconfirmed COMMIT from precommit ErrStoreBusy. Real legacy path attempts guarded UPDATE and COMMIT before refusal-by-settle-time. Independent row assertion saw no decision/attempt, and physical/no-sleep assertions passed. This does not establish a source defect or deadline overrun.",
+        "route": "Do not relax sentinel/physical assertions, enlarge 100ms, lower parallelism, distort source or rerun unchanged. Preserve receipt and original protected 500ms/1.5s guards. Calling agent routes fresh assessment before necessary correction/new full run."
+      }
+    ],
+    "vet_and_diff_check": "02-targeted-race-quality.log, exit 0; all existing parallel declarations and assertions retained; Bun parallelism unchanged",
+    "method": "Current test correction and changed production diff/new source checked against actual Store/context/trail owners and inherited whole Task3 quality/advice/acceptance inventories. Complete named reports/full failed log parsed and hash-bound. No new personal whole-file architecture or unchanged-test-suite review claim.",
+    "docs": "Eight source files and five product docs byte-identical to prior settled manifests. Test-only seam correction changes no product contract; no docs resync."
+  },
+  "advice": [
+    {
+      "id": "precommit_exhaustion_retry",
+      "primary": "pkg/api/decide_absolute_deadline_test.go:TestDecideAbsoluteContextSurvivesParkedPhase",
+      "behavior": "Actual public Decide receives expired original context through parked decorator and real Store, returns ErrStoreBusy with no durable verdict/attempt and no competing holder. New explicit 500ms-budget call succeeds; actual public GetPermission verifies committed allow. Existing F9 retains condition-held refusal and fresh-call success.",
+      "current_disposition": "Real original-context recovery retained and full-run covered; F9 exact policy-time retry corrected as documented above."
+    },
+    {
+      "id": "original_deadline_and_zero_wait",
+      "primary": "internal/store/deadline_boundary_test.go:TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait; TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+      "behavior": "Expired original contexts run zero SQL even after lease becomes free, for positive and zero local wait. Zero-lock-wait real SQL exceeds 1ms acquisition allowance and commits within original 500ms context; existing original budget/SQL/cleanup/trail/API tests retain their assertions.",
+      "current_disposition": "Existing literal behavioral owner retained; targeted/full run covers actual owner."
+    },
+    {
+      "id": "unconfirmed_commit_inspect_before_retry",
+      "primary": "internal/store/advice_follow_decision_test.go:TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry",
+      "behavior": "Actual api.Decide and real SQLite COMMIT; injected response expires after commit. Production errnames.Classify returns ErrInternal, never ErrStoreBusy, with exact inspection phrase. Fresh independent Store feeds actual public api.GetPermission by request_token; committed allow and not_confirmed delivery observed before deciding whether to retry. No replay: two public reads retain request facts and exactly one actual UPDATE/COMMIT remains.",
+      "current_disposition": "Existing literal behavioral owner retained; targeted/full run covers actual owner."
+    }
+  ],
+  "tested_tree": {
+    "files": 2321,
+    "manifest_before": "input-manifest-pre-full.json",
+    "manifest_after": "input-manifest-after.json",
+    "drift": [],
+    "sha256_before": "33b83df3782036b6bda89faa71e9874eb552e402cc758a1528731739ab7f98e4",
+    "sha256_after": "33b83df3782036b6bda89faa71e9874eb552e402cc758a1528731739ab7f98e4",
+    "changed_from_prior_final": [
+      "pkg/api/decide_delivery_test.go",
+      "pkg/api/export_test.go",
+      "pkg/api/decide_policy_test.go"
+    ],
+    "unchanged_eight_sources": {
+      "internal/store/store.go": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+      "internal/store/lockwait.go": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+      "internal/store/permission.go": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+      "internal/store/connection_cleanup.go": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+      "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+      "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+      "pkg/api/client.go": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+      "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7"
+    },
+    "exclusions": ".claude filtered before stat/content/blob reads; all handoff metadata and ignored generated artifacts excluded",
+    "identity": "File bytes plus working Git mode. index_mode is provenance only: newly added files have null until staged. Coordinator commit comparison must use bytes/git_mode, not index_mode nullness.",
+    "current_manifest_test_files": 761,
+    "previous_docs_test_hash_provenance": "Docs 759-test snapshot is prior provenance; current differences are justified prior final advice/boundary changes and the three files in this pass. No claim that its historical hash total is current."
+  },
+  "commands": [
+    {
+      "command": "make sandbox CMD=<gofmt three own tests; targeted API decisions>",
+      "receipt": {
+        "log": "01-targeted.log",
+        "exit": 2,
+        "passed_leaves": 19,
+        "leaves": [
+          "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+          "TestDecideMaxWaitWithBlockedTrail",
+          "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex",
+          "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude",
+          "TestAdviceFollow_F9_DecideStoreBusyRetry",
+          "TestDecideReportsDelivery/the_hook_acks_within_the_wait",
+          "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+          "TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at",
+          "TestDecideReportsDelivery/codex/no_ack_within_1_s",
+          "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+          "TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at",
+          "TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack",
+          "TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait",
+          "TestDecideReportsDelivery/no_ack_within_1_s",
+          "TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack",
+          "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+          "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+          "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+          "TestDecideAbsoluteContextSurvivesParkedPhase"
+        ],
+        "failed": [
+          "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.00s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s (0.65s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s (0.65s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (0.65s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (0.67s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s (0.68s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s (0.68s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (0.68s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s (0.69s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s (0.70s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s (0.70s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s (0.71s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s (0.72s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (0.71s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s (0.72s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s (0.72s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s (0.72s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s (0.73s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s (0.74s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s (0.75s)",
+          "    --- FAIL: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s (0.75s)",
+          "FAIL",
+          "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t1.848s",
+          "FAIL"
+        ],
+        "package_lines": [
+          "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t1.848s"
+        ]
+      },
+      "disposition": "New observer-only test assertion defect: external pre-call timestamp predates context creation by hundreds of ns. Corrected to received exact context; all original physical bounds unchanged. Three corrected policy leaves/cancellation already passed."
+    },
+    {
+      "command": "make sandbox CMD=<gofmt observer; go test -race targeted API/Store; go vet; git diff --check; versions>",
+      "receipt": {
+        "log": "02-targeted-race-quality.log",
+        "exit": 0,
+        "passed_leaves": 67,
+        "leaves": [
+          "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+          "TestDecideMaxWaitWithBlockedTrail",
+          "TestDecisionReasonOnlyCanonicalValues",
+          "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude",
+          "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex",
+          "TestAdviceFollow_F9_DecideStoreBusyRetry",
+          "TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait",
+          "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+          "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+          "TestDecideReportsDelivery/the_hook_acks_within_the_wait",
+          "TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at",
+          "TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack",
+          "TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at",
+          "TestDecideReportsDelivery/no_ack_within_1_s",
+          "TestDecideReportsDelivery/codex/no_ack_within_1_s",
+          "TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack",
+          "TestDecideAbsoluteContextSurvivesParkedPhase",
+          "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+          "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+          "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+          "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+          "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+          "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+          "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+          "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+          "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+          "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+          "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+          "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+          "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+          "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+          "TestDecisionCleanupQuarantinesNoncancelableClose",
+          "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+          "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+          "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+          "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+          "TestRelayWritePrecondition/ack/lock_held_past_the_wait",
+          "TestRelayWritePrecondition/ack/precondition_fails",
+          "TestRelayWritePrecondition/ack/precondition_holds",
+          "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+          "TestRelayWritePrecondition/timeout_deny/precondition_fails",
+          "TestRelayWritePrecondition/timeout_deny/precondition_holds",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path",
+          "TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity",
+          "TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry"
+        ],
+        "failed": [],
+        "package_lines": [
+          "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.650s",
+          "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t4.720s",
+          "ok  \tgithub.com/gabemahoney/agent-director/internal/trail\t1.010s [no tests to run]"
+        ]
+      },
+      "note": "Trail selector TestWriterDeadline matched no tests; output reports no tests to run, never counted as trail coverage. Correct trail names run next."
+    },
+    {
+      "command": "make sandbox CMD=<go test -race ./internal/trail -run ^TestBoundedWriter; bun evidence.mjs pre-full>",
+      "receipt": {
+        "log": "03-pre-full-integrity-trail.log",
+        "exit": 0,
+        "passed_leaves": 2,
+        "leaves": [
+          "TestBoundedWriterPendingCapacityFIFOAndDrain",
+          "TestBoundedWriterFailureIsObservableAndCloses"
+        ],
+        "failed": [],
+        "package_lines": [
+          "ok  \tgithub.com/gabemahoney/agent-director/internal/trail\t1.082s"
+        ]
+      }
+    },
+    {
+      "command": "make test-sandbox",
+      "log": "04-full-test-sandbox.log",
+      "exit_file": "04-full-test-sandbox.exit",
+      "exit": 2,
+      "configured": "CLAUDE.md and Makefile",
+      "runs_this_pass": 1,
+      "total_Task3_full_attempts": 2,
+      "prior_failed": "../final-tests/04-full-test-sandbox.log",
+      "phases": [
+        "locked Bun dependencies",
+        "canonical package build",
+        "go test -timeout 30m ./...",
+        "bun test"
+      ],
+      "parallelism": "Default unchanged, no -p/-parallel reductions; Bun unchanged sequential configuration."
+    },
+    {
+      "command": "make sandbox CMD=<bun evidence.mjs after; bun report.mjs; git diff --check>",
+      "purpose": "Post-run input integrity and report only; no test rerun."
+    }
+  ],
+  "exact_commands": [
+    {
+      "receipt": "01-targeted",
+      "command": "make sandbox CMD='gofmt -w pkg/api/export_test.go pkg/api/decide_delivery_test.go pkg/api/decide_policy_test.go && go test -timeout 150s -count=1 -v ./pkg/api -run \"^(TestDecideReportsDelivery|TestAdviceFollow_F9_DecideStoreBusyRetry|TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'"
+    },
+    {
+      "receipt": "02-targeted-race-quality",
+      "command": "make sandbox CMD='gofmt -w pkg/api/decide_delivery_test.go && go test -race -timeout 150s -count=1 -v ./pkg/api ./internal/store ./internal/trail -run \"^(TestDecideReportsDelivery|TestAdviceFollow_F9_DecideStoreBusyRetry|TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecision|TestRelayWritePrecondition|TestCursorRotationIndependentEvidenceAndGateAreMandatory|TestWriterDeadline)\" && go vet ./pkg/api ./internal/store ./internal/trail && git diff --check && go version && bun --version && tmux -V'"
+    },
+    {
+      "receipt": "03-pre-full-integrity-trail",
+      "command": "make sandbox CMD='go test -race -timeout 90s -count=1 -v ./internal/trail -run \"^TestBoundedWriter\" && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/evidence.mjs pre-full'"
+    },
+    {
+      "receipt": "04-full-test-sandbox",
+      "command": "make test-sandbox"
+    },
+    {
+      "receipt": "05-after-integrity-report",
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/evidence.mjs after && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/report.mjs && git diff --check'"
+    }
+  ],
+  "full_suite": {
+    "result": "failed",
+    "exit": 2,
+    "runs_this_correction_pass": 1,
+    "repeated_after_pass": false,
+    "go": {
+      "executed_passed_packages": 7,
+      "cached_passed_packages": 60,
+      "no_test_files_packages": 13,
+      "failed_packages": [
+        "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s"
+      ],
+      "package_lines": [
+        "?   \tgithub.com/gabemahoney/agent-director/internal/adminapi\t[no test files]",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/cmd/agent-director-admin\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/clisetup\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/config\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t(cached)",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/codexfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/cwdfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/cursorfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/launchfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/dbpathfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/procstat\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/testsupport/writefailfix\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/internal/version\t[no test files]",
+        "?   \tgithub.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest\t[no test files]",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/hook\t78.908s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/layout\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/mcp\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/oldnames\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/probe\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/spawn\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t97.607s",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/sandboxguard\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/storefix\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/testsupport/tmuxfix\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/tmux\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/trail\t(cached)",
+        "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/apitest\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/errnames\t1.282s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api/manifest\t1.676s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay\t1.409s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub\t0.003s",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/driver-scripts\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/envelope-diff\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/fake-tmux\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/grounding-replay\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/install-sh\t205.468s",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/realtmux\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/reboot-recovery\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/cigates\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/cmdinject\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/gitmount\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/prebuild\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/releaseversion\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/sandbox/requiresandbox\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/smoke/go\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/smoke/ts-helper\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/test/tla\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/check-doccomments\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/check-nondet\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/gen-docs\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/measure-exit\t(cached)",
+        "ok  \tgithub.com/gabemahoney/agent-director/tools/measure-exit/dryrun\t(cached)"
+      ],
+      "counting": "Actual package output. No inferred Go leaf total from nonverbose full-suite output."
+    },
+    "bun": {
+      "passed": 429,
+      "failed": 0,
+      "expect_calls": 1660,
+      "tests": 429,
+      "files": 57,
+      "elapsed": "14.38s"
+    },
+    "failure_lines": [
+      "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.40s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (1.53s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s",
+      "FAIL"
+    ],
+    "unresolved": [
+      {
+        "test": "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "location": "pkg/api/decide_delivery_test.go:315",
+        "assertion": "err store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded matches []; want exactly ErrStoreBusy",
+        "facts": "Unchanged original real-SQL legacy leaf, still parallel, MaxWaitMs 100ms and original no-sleep/1.1s physical assertion. Full subtest reported 1.53s including setup. assertOneSentinel uses t.Errorf, so later original elapsed/no-sleep/no-write assertions executed and reported no failures. Only sentinel classification failed; no phase trace locates COMMIT elapsed time.",
+        "assessment": "New actual SQL/legacy error-contract failure, distinct from corrected three policy leaves; fresh Engineer source/test-contract assessment required. Existing source intentionally distinguishes unconfirmed COMMIT from precommit ErrStoreBusy. Real legacy path attempts guarded UPDATE and COMMIT before refusal-by-settle-time. Independent row assertion saw no decision/attempt, and physical/no-sleep assertions passed. This does not establish a source defect or deadline overrun.",
+        "route": "Do not relax sentinel/physical assertions, enlarge 100ms, lower parallelism, distort source or rerun unchanged. Preserve receipt and original protected 500ms/1.5s guards. Calling agent routes fresh assessment before necessary correction/new full run."
+      }
+    ],
+    "prior_full": {
+      "log": "../final-tests/04-full-test-sandbox.log",
+      "sha256": "a56fa6630731a1c275d860d78997a9c55c11bc0c4cb9ce7539121d07359dbe25",
+      "failed_leaves": 5,
+      "dispositions": "Two Store raw observation cleanup races corrected in previous pass and retained; three API mixed-clock failures corrected here after fresh Engineer assessment. No unchanged full retry."
+    }
+  },
+  "receipt_provenance": {
+    "first_targeted_inputs": "01-input-manifest-reconstructed.json and 01-decide_delivery_test.go.txt: explicitly retrospective exact inverse reconstruction of subsequent own test edits, not a contemporaneous snapshot. This administrative limitation does not affect the contemporaneous full-run before/after manifest.",
+    "second_targeted_inputs": "Same settled source/test/doc/build/registry/testplan bytes/modes as input-manifest-pre-full.json; no tested inputs edited between targeted race and pre-full manifest.",
+    "earlier_receipts": "All previous failed/successful receipts remain in their original directories, never overwritten. Complete named reports and original failed full log byte-read/parsed/hash-bound in integrity-pre-full.json.",
+    "no_retry_until_green": "One failed targeted assertion correction, then targeted race pass and one full run. No full rerun on unchanged inputs."
+  },
+  "environment": {
+    "go": "go1.22.10 linux/amd64",
+    "bun": "1.3.13",
+    "tmux": "3.3a",
+    "execution": "make sandbox/make test-sandbox, fresh isolated HOME with per-test owned stores/sockets/processes"
+  },
+  "deviations": [
+    "One administrative bees show-ticket call used comma-separated IDs, rejected before mutation; corrected to space-separated IDs.",
+    "First targeted manifest not captured contemporaneously; transparently reconstructed after known test-only edits. Full before/after manifests are contemporaneous.",
+    "Targeted trail selector initially matched zero tests; actual two trail cases explicitly run with correct names before full.",
+    "Initial evidence report incorrectly called assertOneSentinel fatal. Read actual helper, corrected to t.Errorf and successful later physical/no-write assertions. Initial report/quality preserved as 05-initial-*-before-fact-correction.json; no test/input change or rerun."
+  ],
+  "limits": [
+    "Controlled policy fixture makes no real SQL/durability/physical deadline claim.",
+    "No local Docker TESTPLAN groups/collector/helper body execution. Installed Bun collector steps authored/static only, require locked dependency network access.",
+    "O1-O6 actual human/authenticated terminal acceptance remains pending. Synthetic ACP with actual tmux/public callers is not authenticated terminal evidence.",
+    "No arbitrary concurrent SendKeys text+Enter atomicity promise. Audit pending is memory resident, not fsync/crash durable; cooperative native I/O/scheduling limits retained.",
+    "Whole architecture coverage remains inherited verified base partitions plus deltas; no fresh whole-file or clean-document certification. Inherited doc debt deferred."
+  ],
+  "next_handoff": {
+    "owner": "Root routes new legacy SQL/COMMIT error-contract failure for fresh Engineer assessment",
+    "required": "Assess the new unchanged real-SQL legacy leaf before any necessary correction or full rerun. Preserve exact original budgets/assertions/parallelism and both prior full receipts. No final PM/commit/gate-ready claim. Later postcommit scheduler still needs 17 groups/172 cases and concrete writable /tmp/cursor-pane-controls-artifacts mount, no invented Makefile extra args variable.",
+    "integration_executed_here": false,
+    "task_or_epic_done_here": false
+  },
+  "formal": "No spec/tla input change, zero TLA/TLC/Java/parser/scheduler jobs.",
+  "boundaries": "No source/docs/registry/testplan edits, .claude access, real AD stores, credentials/login/logout/live Cursor, host repo build/format/tests/scripts, local groups/collectors/helpers, scheduler submissions, commits/pushes, subagents or outbound messages. Only own tests/evidence and own Subtask statuses.",
+  "incomplete_work": [
+    "Fresh Engineer assessment of new legacy real-SQL deadline/COMMIT error contract failure.",
+    "Complete .yj/.zj only after necessary correction and settled full pass; no unchanged retry.",
+    "No final PM/coordinator commit/scheduler gate closure authorized by this failed receipt."
+  ],
+  "questions_for_caller": [],
+  "receipt_sha256": {
+    "01-decide_delivery_test.go.txt": "eb1469e37f2e79382b4226e0978f9e311f9fb3d35317bb54f916a34a5f0d9f84",
+    "01-input-manifest-reconstructed.json": "8f53b078876fd917c5bbf97bb2241e5a8c9d2a58931f34200b0dfdf80383a860",
+    "01-targeted.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "01-targeted.log": "894e9da6780356b50dede1cd3789d396c069fca54e29145754c46fe09822cad0",
+    "02-targeted-race-quality.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "02-targeted-race-quality.log": "b8a3c57a797ca738f0d8fab692364f07d1eb43a0293b377e418c6aa52bbde4b9",
+    "03-pre-full-integrity-trail.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "03-pre-full-integrity-trail.log": "77ee54c277ddde54925766388f6752c79234d5f2b607045a400e82cead769afb",
+    "04-full-test-sandbox.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "04-full-test-sandbox.log": "d32382354cac639a2ac9ff31cbb697ade92290f2af9341ff5968bef84d10a7a4",
+    "06-report-fact-correction.log": "baf1287b4db05bf5a07cd2ad69821c29e5f4da0d87a871ca889f9ebf9ef104d4",
+    "commands.json": "aa49f40acd52dc0f1b1b89652b93880310a99926712d58c51bf5a0e1ee93b281",
+    "evidence.mjs": "db413eccfb1cace8dc9b65d35c16f23fca6f19b422c45bc0964752993d6e51d2",
+    "input-manifest-after.json": "33b83df3782036b6bda89faa71e9874eb552e402cc758a1528731739ab7f98e4",
+    "input-manifest-pre-full.json": "33b83df3782036b6bda89faa71e9874eb552e402cc758a1528731739ab7f98e4",
+    "integrity-after.json": "e9a7021e3bd452eed26318016b3d298d7bd32ee495fc680581cfd3694016024a",
+    "integrity-pre-full.json": "0ba41fb55b2ea53802c979ea7f26b3d17d34ee6eb2ebbb4060dabffb7689b557",
+    "quality-review-after.json": "a2960aac7c28d66435aa742a2ce5121a39af8ee85a37098f46dc8af7838022fe",
+    "quality-review.json": "90511340a4c24df98638ea57eba59d401cab46196c14eb5f59d6edbf7618f287",
+    "report.mjs": "2246db86cf1c3dac978c59defc8bb08a04f98d01fd2f4ebdcfee3a776e837032",
+    "ticket-statuses.json": "6a58f71f658a1f5ed5d73e5609668a966d71d6321d941d3343af8dbe2b9d1d0c"
+  }
+}

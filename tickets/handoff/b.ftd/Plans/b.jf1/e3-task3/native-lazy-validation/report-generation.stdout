@@ -1,0 +1,209 @@
+{
+  "result": "New production-outer-connector and late prompt COUNT regressions pass 18 targeted race leaves; store vet and formatting pass. Exact pre-N1b snapshot fails the explicit successful-background-handoff contract. End-user retry exhaustion and N2 causal RED remain unproven. No current source failure found. Full unit acceptance remains the later sole owner.",
+  "files": [
+    {
+      "path": "internal/store/sqlite_lazy_native_test.go",
+      "sha256": "ebca9cad88a114827ac4e757cd6053f1b4e24a7dc53abf003ec46563f9cb7807",
+      "mode": "664",
+      "lines": 442
+    },
+    {
+      "path": "internal/store/sqlite_lazy_context_test.go",
+      "sha256": "9c6f54093044f76c1d229c90d4b73af8c7c2a4afc80e46ee6ce715df2e986141",
+      "mode": "664",
+      "lines": 124
+    },
+    {
+      "path": "internal/store/prompt_native_observer_test.go",
+      "sha256": "8b8e6e305023e05b51f1d94781fec6b303e4ddfbf4718b5bf4211c05059a5a34",
+      "mode": "664",
+      "lines": 13
+    },
+    {
+      "path": "internal/store/cursor_prompt_native_test.go",
+      "sha256": "74cdff39fb800a211ee6874c4127288010794a6c8c8ebe758728bec923b66c2f",
+      "mode": "664",
+      "lines": 76
+    }
+  ],
+  "integrity": {
+    "current_tested_inputs": 844,
+    "before_after_manifests": "Each runner receipt has corresponding *-inputs-before.json and *-inputs-after.json; all contain Go module inputs and Go files under internal, pkg/api and cmd with modes and SHA256. Receipt changed_inputs is empty in every run.",
+    "source_against_engineer_snapshot": {
+      "checked": 15,
+      "unexpected": []
+    },
+    "changes_since_native_boundaries": [
+      "internal/store/cursor_prompt.go",
+      "internal/store/cursor_rotation.go",
+      "internal/store/lockwait.go",
+      "internal/store/sqlite_connector.go"
+    ],
+    "protected": {
+      "trail": {
+        "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+        "mode": "664"
+      },
+      "no_match_permission": {
+        "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+        "mode": "664"
+      },
+      "connector": {
+        "sha256": "850688eeb67b2bd9f8d71c3324c735e14c94fe63b1a48afad266b285bee36c79",
+        "mode": "664"
+      }
+    },
+    "provenance_checks": {
+      "red-n1b-contract": {
+        "same_physical_current_inputs_as_green": true,
+        "same_other_current_production_bytes_as_green": true,
+        "all_differences_are_explicitly_excluded_n1_tests": true,
+        "differences": [],
+        "verified_exact_snapshots": [
+          {
+            "path": "internal/store/sqlite_connector.go",
+            "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/before/internal/store/sqlite_connector.go",
+            "sha256": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+            "mode": "664"
+          }
+        ],
+        "independent_test_bytes": {
+          "internal/store/sqlite_lazy_native_test.go": {
+            "sha256": "ebca9cad88a114827ac4e757cd6053f1b4e24a7dc53abf003ec46563f9cb7807",
+            "mode": "664"
+          },
+          "internal/store/sqlite_lazy_context_test.go": {
+            "sha256": "9c6f54093044f76c1d229c90d4b73af8c7c2a4afc80e46ee6ce715df2e986141",
+            "mode": "664"
+          },
+          "internal/store/prompt_native_observer_test.go": {
+            "sha256": "8b8e6e305023e05b51f1d94781fec6b303e4ddfbf4718b5bf4211c05059a5a34",
+            "mode": "664"
+          },
+          "internal/store/cursor_prompt_native_test.go": {
+            "sha256": "74cdff39fb800a211ee6874c4127288010794a6c8c8ebe758728bec923b66c2f",
+            "mode": "664"
+          }
+        }
+      },
+      "red-n2": {
+        "same_physical_current_inputs_as_green": false,
+        "same_other_current_production_bytes_as_green": true,
+        "all_differences_are_explicitly_excluded_n1_tests": true,
+        "differences": [
+          "internal/store/sqlite_lazy_native_test.go"
+        ],
+        "verified_exact_snapshots": [
+          {
+            "path": "internal/store/sqlite_connector.go",
+            "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/sqlite_connector.go",
+            "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+            "mode": "664"
+          },
+          {
+            "path": "internal/store/lockwait.go",
+            "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/lockwait.go",
+            "sha256": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+            "mode": "664"
+          },
+          {
+            "path": "internal/store/cursor_prompt.go",
+            "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_prompt.go",
+            "sha256": "2031e304a71c319777ec6d151684c24daddac388519c482296b9dcf0bd855ac0",
+            "mode": "664"
+          },
+          {
+            "path": "internal/store/cursor_rotation.go",
+            "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_rotation.go",
+            "sha256": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+            "mode": "664"
+          }
+        ],
+        "independent_test_bytes": {
+          "internal/store/prompt_native_observer_test.go": {
+            "sha256": "8b8e6e305023e05b51f1d94781fec6b303e4ddfbf4718b5bf4211c05059a5a34",
+            "mode": "664"
+          },
+          "internal/store/cursor_prompt_native_test.go": {
+            "sha256": "74cdff39fb800a211ee6874c4127288010794a6c8c8ebe758728bec923b66c2f",
+            "mode": "664"
+          }
+        }
+      }
+    }
+  },
+  "validation": [
+    {
+      "mode": "green-final",
+      "status": 0,
+      "passed_leaves": 16,
+      "failed": []
+    },
+    {
+      "mode": "green-complete",
+      "status": 0,
+      "passed_leaves": 18,
+      "failed": []
+    },
+    {
+      "mode": "red-n1b",
+      "status": 0,
+      "passed_leaves": 1,
+      "failed": []
+    },
+    {
+      "mode": "red-n2",
+      "status": 0,
+      "passed_leaves": 1,
+      "failed": []
+    },
+    {
+      "mode": "vet",
+      "status": 0,
+      "passed_leaves": 0,
+      "failed": []
+    },
+    {
+      "mode": "green-handoff",
+      "status": 0,
+      "passed_leaves": 18,
+      "failed": []
+    },
+    {
+      "mode": "red-n1b-handoff",
+      "status": 0,
+      "passed_leaves": 18,
+      "failed": []
+    },
+    {
+      "mode": "red-n1b-contract",
+      "status": 1,
+      "passed_leaves": 0,
+      "failed": [
+        "TestProductionLazyReplacementMultipleLegitimateWaiters"
+      ]
+    },
+    {
+      "mode": "vet-final",
+      "status": 0,
+      "passed_leaves": 18,
+      "failed": []
+    },
+    {
+      "mode": "vet-confirmed",
+      "status": 0,
+      "passed_leaves": 0,
+      "failed": []
+    }
+  ],
+  "format": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "diff": {
+    "exit": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+}

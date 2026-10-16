@@ -1,0 +1,89 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestDecideReportsDelivery
+=== PAUSE TestDecideReportsDelivery
+=== RUN   TestAdviceFollow_F9_DecideStoreBusyRetry
+=== PAUSE TestAdviceFollow_F9_DecideStoreBusyRetry
+=== RUN   TestDecideHeldLockExactPolicy
+=== PAUSE TestDecideHeldLockExactPolicy
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== CONT  TestDecideReportsDelivery
+=== RUN   TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== RUN   TestDecideReportsDelivery/no_ack_within_1_s
+=== PAUSE TestDecideReportsDelivery/no_ack_within_1_s
+=== CONT  TestDecideHeldLockExactPolicy
+=== CONT  TestAdviceFollow_F9_DecideStoreBusyRetry
+=== RUN   TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== RUN   TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== PAUSE TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== RUN   TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== PAUSE TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== RUN   TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== PAUSE TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== RUN   TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== PAUSE TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== CONT  TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== CONT  TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== PAUSE TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== RUN   TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== RUN   TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== RUN   TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== PAUSE TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== RUN   TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== CONT  TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== CONT  TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideReportsDelivery/no_ack_within_1_s
+=== CONT  TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== CONT  TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+--- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep (0.00s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex (0.12s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude (0.14s)
+--- PASS: TestAdviceFollow_F9_DecideStoreBusyRetry (0.16s)
+--- PASS: TestDecideHeldLockExactPolicy (0.00s)
+    --- PASS: TestDecideHeldLockExactPolicy/codex/fallen-back_refusal (0.10s)
+    --- PASS: TestDecideHeldLockExactPolicy/postcommit_not_confirmed (0.15s)
+    --- PASS: TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed (0.15s)
+    --- PASS: TestDecideHeldLockExactPolicy/fallen-back_refusal (0.16s)
+--- PASS: TestDecideReportsDelivery (0.00s)
+    --- PASS: TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait (0.14s)
+    --- PASS: TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait (0.14s)
+    --- PASS: TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at (0.16s)
+    --- PASS: TestDecideReportsDelivery/no_ack_within_1_s (0.17s)
+    --- PASS: TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack (0.17s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait (0.17s)
+    --- PASS: TestDecideReportsDelivery/codex/no_ack_within_1_s (0.18s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack (0.17s)
+    --- PASS: TestDecideReportsDelivery/the_hook_acks_within_the_wait (0.18s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at (0.18s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	0.187s

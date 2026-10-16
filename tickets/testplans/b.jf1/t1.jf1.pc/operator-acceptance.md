@@ -1,0 +1,168 @@
+# E3 actual terminal acceptance instructions
+
+AUTHORED ONLY. All O1–O6 predicates below are PENDING. Execution requires separate
+operator authorization after the final exact-revision scheduler gate. This file
+is an input to the fresh post-commit Integration Test Writer, not the final handoff.
+That writer must replace `__FINAL_FULL_SHA__` in its handoff with the root's real
+commit, hash the settled source/test/collector files and image/binary/package,
+record all 17 registry groups and exact expected case counts, and supply scheduler
+commands/receipts. Reject placeholder or mismatching source/binary stamps.
+No spec/tla change means no formal job; never schedule baseline TLA work here.
+
+## Prerequisites and evidence destination
+
+Reuse the already established existing-login E1 namespace procedure referenced by
+Ideas/b.ftd/live-cursor-home-isolation-2026-10-14.md and
+live-acceptance-f4f41fd3-2026-10-14/REPORT.md, also summarized in the adjacent
+E1/E2 operator instructions. Those historical receipts establish the procedure,
+not current E3 success. The test user's HOME value may stay unchanged. Before any
+AD caller, bind HOME read-only in the accepted private mount/PID namespace; only
+a fresh unique `~/ad-codex/ftd/__FINAL_FULL_SHA__/<run>/` is writable. Overlay
+`$HOME/.config/agent-director` with a fresh run-owned directory, mask legacy
+`$HOME/.agent-director` with an empty run-owned directory if present. Never open,
+copy or hash the host AD stores. All config/store/WAL/templates/trail/protected
+transcripts and explicit CLI/MCP/Bun routes point to this isolated directory.
+
+Keep Cursor config/data, cwd, TMPDIR and a short private tmux socket in the run;
+apply the accepted namespace's mappings to tmux and every descendant. Unset
+TMUX/TMUX_PANE and inherited AD instance/agent/store identity. Cursor alone uses
+the established existing login normally. Do not inspect/copy/hash/relocate auth
+files or run login/logout. If existing login is unreachable in that accepted
+namespace, STOP: prerequisite unmet, all dependent predicates pending, no workaround.
+
+Use actual configured Cursor, no cursorfix. Record source full SHA, binary
+commit/version/hash, image and mount manifest, installed package tarball/hash,
+Cursor path/version, negotiated ACP protocol, Linux kernel/architecture, tmux,
+Node/Bun and default client/configured timeouts. Unknown fields remain PENDING.
+Use shipped public clients pinned to that CLI. AD stores, permission decisions,
+session identities and process proofs must be observed independently of screen
+content. A successful send-keys only proves transport until protected admission
+and actual correlated protocol evidence establish more.
+
+Define operator variables inside that namespace: AD is the exact binary path,
+RUN the unique writable run path, STORE its isolated override database, SOCKET
+the short private tmux socket. All CLI examples mean
+`"$AD" <verb> --home "$HOME" --store-path "$STORE" ...`.
+Write artifacts beneath `$RUN/acceptance/O<N>/`: actions.jsonl (timestamped human
+keystrokes/pastes/attach/detach), public.jsonl, protected.jsonl, protocol.jsonl,
+process.jsonl, history.json, timing.json and verdict.json. Protect raw files at
+0600; summaries redact uncontrolled text. Never capture credentials. Keep an
+unrelated private sentinel; record its PID/start identity before and after.
+
+## O1 launch, genuine attach and detach
+
+Launch one fresh `--agent cursor --instance-id <run-unique-id> --cwd <empty-run-cwd>
+--no-pre-trust` through the installed Bun Client using its default 30000ms timeout.
+Save the public result and independent row/runtime binding. Pending at return is
+allowed; do not require generation already working. Confirm eventual startup by
+protocol/store ownership. Record pane ID, gateway/runtime PID/start, launch token,
+life, connection, session and protected JSONL path. Attach a real terminal client
+with `tmux -S "$SOCKET" attach-session -t <actual-session-name>`.
+Record operator terminal/locale/bracketed-paste settings. Detach with tmux's
+configured prefix then d, reattach the same session. Inspect via public read-pane
+(`--n-lines 200`) before and after. Pass only if attach/detach preserves the exact
+owned gateway/runtime/session identity and actual terminal is usable.
+
+## O2 real typing and bracketed Unicode multiline paste
+
+In the attached terminal type exactly `Reply with only HUMAN-ONE.` and press Enter
+once. Wait for the actual correlated turn to finish and committed waiting/readiness.
+Then use the terminal's real paste facility, with bracketed paste enabled, to paste
+the following two lines as one submission; press Enter once after paste ends:
+
+    Repeat these two lines exactly, with no tools: café 🐝
+    第二行 — naïve 🦋
+
+Record the literal clipboard text and actual paste/action timestamps, not a tmux
+send-keys approximation. Compare the exact protected submission text and actual
+session/prompt bytes including newline/Unicode, one unique submission/start/outcome
+request linkage, and matching public read-pane output. Pass requires exactly one
+complete input, no duplicate/lost/glued line and no unrequested tool action.
+
+## O3 successive public multiline, mixed follow-ups and caller recreation
+
+From the installed Bun public Client send exactly
+`Repeat exactly:\nAPI-FIRST café 🐝` then, after correlated completion plus committed
+waiting/readiness, `Repeat exactly:\nAPI-SECOND 第二行`. Use actual newlines in each
+text parameter. Literal text and Enter are separate operations internally; serialize
+each complete send against other callers. No arbitrary concurrent-send atomicity claim.
+
+Send `Write a careful 600-word description of a blue square. Do not use tools.`
+through the public caller. When its actual prompt starts, type/paste the complete
+terminal follow-up `After that, reply with MIXED-HUMAN café.` and Enter once;
+wait for its protected admission. Then send the public multiline follow-up
+`After that, repeat exactly:\nMIXED-API 第二行`. Capture both accepted submission IDs
+before terminating the inspection MCP caller/client process; wait for its death,
+recreate it and inspect get/read-pane without retrying either submission.
+If the model finishes too early for a queued condition, mark that condition
+UNOBSERVED; do not silently retry until passing. Fixed synthetic held-turn coverage
+stays separately labeled. Pass requires original gateway/runtime/token/life/session
+survive, exact protected/protocol FIFO and once-only outcomes, no follow-up-induced
+cancellation. Save literal text and all submission/request/session correlations.
+
+## O4 independent real permission, plan and question conditions
+
+Use only empty controlled cwd. Ask exactly: `Propose a plan to create one file named
+acceptance-note.txt containing only OK. Wait for my approval before executing the plan.`
+Separately, where the actual runtime/rules provide a permission boundary, ask:
+`Request permission to run only: printf 'OK\\n' > acceptance-note.txt. Do not run
+anything else.` Do not weaken personal/project policies to force a dialog. Save the
+actual offered method/params/options and immutable request/token/tool/confirm_by.
+If actual runtime cannot produce a real plan or concurrent independent permission,
+those predicates remain PENDING; never substitute synthetic JSON as live proof.
+
+Where both exist, deny the plan through actual AD decide using its real request
+token (`--decision deny --max-wait-ms 1000`), then recreate MCP get-permission for
+the still-open permission. Its token/deadline/undecided authority and child-safe
+hold must remain. Attempt ordinary send-keys and pause; preserve exact refusal
+outcomes and verify no actual model bytes. Never retry an uncertain allow.
+
+For real question conditions, ask `Ask me which of the words amber or violet I
+prefer before continuing; do not run tools.` Only an actual runtime question
+envelope proves a real denial. When one arrives, save its exact ID and supported
+cancellation/rejection, absent public approval route, and the independent
+permission's unchanged identity. No question means live denial PENDING. Existing
+both-setting/multiple/fallback exhaustive synthetic coverage stays separate.
+Press real Ctrl-C during an eligible active turn; record session/cancel and each
+queued submission's explicit cancellation disposition. Complete only supported
+current requests with their exact token; if cancellation times out, verify owned
+death and report uncertainty without fabricating a model reply or proof gone.
+
+## O5 clear/new, history and inspection continuity
+
+On a fresh surviving eligible row with no outstanding independent holds, type
+`/clear` and Enter in the actual terminal. Wait for the real correlated session/new
+reply and durable publication. Recreate CLI/MCP/Bun inspection and compare current
+session to that reply; current-life history must contain the old ID exactly once.
+Then send `/new` through the installed public client and repeat. Life/launch token,
+gateway/runtime/start and protected file identity remain the same. History covers
+this life only. No control string may become a model session/prompt. If either
+rotation fails, inspect and record the authoritative current row, runtime binding
+and current-life history. Distinguish failure before publication from committed
+identity/history publication followed by reporting failure; if evidence is
+incomplete, record publication as uncertain. Do not infer rollback or require
+restoration of the old identity after committed publication. Preserve explicit
+refusal evidence for provisional held input and verify no automatic replay to
+either conversation. Never claim success from new screen text or manufacture the
+desired ID from a row.
+
+## O6 exit, eligible pause and death evidence
+
+Type `/exit` and Enter. Independently prove accepting runtime/gateway death using
+the recorded PID/start identities and verify any protected session_end has true
+runtime_gone. A dead process without durable end remains honestly missing or
+unconfirmed until supported process reconciliation; no replay from caller reopen.
+Keep sentinel alive. In a second fresh isolated launch after committed waiting
+and no independent requests, invoke public pause once; verify intended owned
+runtime death, terminal row and sentinel survival. No E4 resume/load/reuse/switch.
+
+## Final operator verdict
+
+For each O predicate and mapped AC/SR, write passed/failed/unobserved with raw
+artifact links and exact revisions/provenance. Current status is PENDING for all.
+Document actual request schemas and missing conditions, platform gaps and timing.
+Intentional synthetic persistence/crash faults prove only their scripted boundary;
+live interruption or crash gets its own observed uncertainty. Explicit pane
+comparisons are operator assertions, never AD screen classification. Finish only
+owned private processes/namespace; retain receipts and destroy the namespace using
+the accepted procedure. No historical E1/E2 receipt closes current E3 acceptance.

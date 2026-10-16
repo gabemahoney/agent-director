@@ -75,6 +75,10 @@ func main() {
 is the canonical safe first call for verifying connectivity. `List` is an
 acceptable alternative when you want to confirm store access as well.
 
+`Close` releases this client's store. Audit reporting belongs to the host
+process lifetime; closing a client does not drain accepted process audit
+events or certify their durability.
+
 ---
 
 ## Verb examples
@@ -489,12 +493,13 @@ unknown-origin holds are defined in
 answers and fallback follow the
 [caller contract](../../docs/caller-contract.md#permission-relay).
 
-`DecideParams.MaxWaitMs` bounds the whole call, its reads and its write,
-and has no default; pass at most your deadline minus 1 s. A bound reached
-before the verdict is recorded returns `ErrStoreBusy` with nothing
-recorded, whether the store was held by another process or by another
-call on the same `Client` (a `Client` uses one store connection).
-Once the verdict is recorded, `Decide` never returns `ErrStoreBusy`.
+`DecideParams.MaxWaitMs` bounds the whole call, including SQL, cleanup and
+reporting, and has no default; pass at most your deadline minus 1 s. Already
+entered database work can retain its connection while the caller returns.
+Precommit exhaustion returns `ErrStoreBusy`; an unconfirmed commit returns
+an internal error. Once the verdict is confirmed committed, `Decide` never
+returns `ErrStoreBusy`. Zero-wait semantics and recovery are defined in the
+[caller contract](../../docs/caller-contract.md#permission-relay).
 
 `ErrNoOpenPermissionRequest` means no open request has that token, or the
 request is closed; see the

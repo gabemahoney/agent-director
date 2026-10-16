@@ -1,0 +1,152 @@
+{
+  "result": "PASS",
+  "architecture": {
+    "sha256": "9593447ca9fe0640268803d42c07f5cbe9e5865be306c2a9b91388307ca7b509",
+    "bytes": 1551455,
+    "lines": 22461
+  },
+  "inherited_steps": 5,
+  "partition_reports": [
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-a.txt",
+      "sha256": "81aef94730dfbcbf1873ec5f8fab7ac78974f33a631d35731f1ec8a8eb6c6175",
+      "lines": [
+        1,
+        5554
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-b.txt",
+      "sha256": "2dbbece23feed138b8423ae6779913ca37540aac2d2a68a96f94c0656520b26f",
+      "lines": [
+        5555,
+        11108
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-c.txt",
+      "sha256": "9f0f272dcde9c9ba3d29f86829db128ea81e521073a13f80d5a3b9b250a63595",
+      "lines": [
+        11109,
+        16661
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-d.txt",
+      "sha256": "c40ad1b02e8ac90488877db2b90128f5b5383d40484ddb68d971fb641c679edb",
+      "lines": [
+        16662,
+        22213
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    }
+  ],
+  "reference_hashes_verified": [
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/FINAL-report.json",
+      "sha256": "fe66dba56662a1d84a8b3c41792001a8f21f49f6864c4f2716a5c0aa11d88077"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/architecture-review-provenance.json",
+      "sha256": "e74787da08d87f639862438c8d185b1f36e1da41999f156719b5dd9dd2248475"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/document-hashes.json",
+      "sha256": "82cde7012ee648e4af4178f0deebc918fbd9a9fa7027a146e6dc55b6d2e019a8"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/docs/FINAL-report.json",
+      "sha256": "9c04f1d52f26d14e757c7325b67fc754f664d626d9be408421caa8f690a1e582"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/docs/architecture-review-provenance.json",
+      "sha256": "ddf66ef8dfa87af7d4d99302de52a2fffb534c909f81fc81193ddde65ab4b829"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/docs/document-hashes.json",
+      "sha256": "61f5f957f1fb3e118f25fd0cf07405265393226892ed7a1d3203bb61d9329286"
+    }
+  ],
+  "all_hunks_and_complete_endpoints_verified": true,
+  "unchanged_inputs": 2322,
+  "eight_sources": {
+    "internal/store/store.go": {
+      "sha256": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+      "mode": 436
+    },
+    "internal/store/lockwait.go": {
+      "sha256": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+      "mode": 436
+    },
+    "internal/store/permission.go": {
+      "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+      "mode": 436
+    },
+    "internal/store/connection_cleanup.go": {
+      "sha256": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+      "mode": 436
+    },
+    "internal/trail/trail.go": {
+      "sha256": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+      "mode": 436
+    },
+    "internal/trail/deadline.go": {
+      "sha256": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+      "mode": 436
+    },
+    "pkg/api/client.go": {
+      "sha256": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+      "mode": 436
+    },
+    "pkg/api/decide.go": {
+      "sha256": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+      "mode": 436
+    }
+  },
+  "protected_regression_unchanged": true,
+  "input_report_hashes": [
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/FINAL-report.json",
+      "sha256": "c591d956a3bfa12379caa7b26325ca0e239ff509c26b6c95277cf2853d515a1e"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/architecture-review-provenance.json",
+      "sha256": "8300349536a90c954a37128e507c0819a95d7f4300e7367970ff78e7068fffd9"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/legacy-commit-assessment/FINAL-report.json",
+      "sha256": "38d118c3d1b4d01a9845223d3051cee9875bfa7286be95405ed4b1b1975a07a6"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/no-match-code-review.json",
+      "sha256": "fb01ded21f00f87787b35a4d8535f3306ad622efe266d98d1a055eda4748a96d"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/no-match-validation/FINAL-report.json",
+      "sha256": "4e06383ef49c5157545534f2ae885c1e7e3adc9fca6327c9484b4f1095c6911a"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/FINAL-report.json",
+      "sha256": "5c198691cd208bb5083116c6d1ba6dc4605726e862f5cb988d1f62dc92cb7e0d"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/api-deadline-assessment/FINAL-report.json",
+      "sha256": "d9d71aa5612e9323e608975918c768250119c1c89015adf494cac3df687e5fd9"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/SRD-NO-MATCH-TRANSACTION-DECISION.md",
+      "sha256": "f913240371497fb68571c94a842ddac5cd2ceca73f5b82c4b0947bdded4b7ca3"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/SRD-DEADLINE-TEST-CONTRACT-DECISION.md",
+      "sha256": "d716cacd6057c555ed419640de5e5f2e37d224d43fa53f6921b984afe552f062"
+    }
+  ]
+}

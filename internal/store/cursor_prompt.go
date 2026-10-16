@@ -27,5 +27,8 @@ func (s *Store) CheckCursorPrompt(b CursorRuntime, until time.Time, check Cursor
 		eligible = held == 0
 		return nil
 	})
-	return eligible && err == nil, err
+	if err != nil {
+		return false, err
+	}
+	return eligible, nil
 }

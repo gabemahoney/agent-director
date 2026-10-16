@@ -417,9 +417,10 @@ supplies neither ACP approval authority nor proof.
   outside agent-director (see
   [Answer a request at the pane](usage.md#answer-a-request-at-the-pane)); the
   refused verdict is kept as `attempted_decision`.
-- `ErrStoreBusy`: the store stayed busy for longer than `--max-wait-ms`
-  (another agent-director process held it, or another call in the same
-  process did). Retry.
+- `ErrStoreBusy`: the bound ran out before the verdict could commit.
+  This can include store acquisition or SQL work; it does not establish
+  that another process or call held the store. Retry only as a new,
+  deliberate call with a fresh budget.
 - `ErrAlreadyDecided`: a verdict is already recorded (first `decide` wins, and
   the relay hook records a deny of its own when its time runs out,
   `decision_reason` `timeout`), or the request was answered at the pane.
@@ -427,6 +428,34 @@ supplies neither ACP approval authority nor proof.
   closed. Do not answer it at the pane. A request still awaiting an answer
   when its agent ended, or when `find-missing` marked it `missing`, is
   closed, and stays closed after `resume`.
+
+The positive `--max-wait-ms` bound covers store acquisition, SQL, cleanup
+and reporting under the same original deadline. Expiry prevents new SQL
+from being started by the operation, even if the store is free. Already
+entered database work can continue while the caller returns; its connection
+stays unavailable until safe disposal completes. Zero permits immediately
+available work within a fixed one-second allowance, with no lock retries;
+it does not mean zero execution time. These bounds depend on the host
+scheduling AD and are not hard real-time guarantees.
+
+Keep the one-second reply margin above. The CLI uses up to 500 ms of that
+margin after the verb returns to drain accepted audit events. This does not
+extend the verb's SQL or reporting deadline. Failed or pending audit shutdown
+prints a stderr diagnostic without changing the verdict's exit code. Pending
+events can be lost when the process exits, including a normal exit after
+the drain times out. Read the structured result/error separately from stderr
+notices; neither a successful decision nor process exit confirms audit
+durability.
+
+An `ErrInternal` reporting an unconfirmed commit is different from a
+precommit refusal: the verdict may already be recorded. Inspect the durable
+request with `get-permission` and its `request_token` before deciding whether
+to retry. Do not infer that nothing was written, resend an uncertain approval,
+or automatically replay the call. Cancellation does not undo an already
+committed verdict. After a confirmed commit, later deadline exhaustion keeps
+the verdict and returns the available delivery facts; follow `not_confirmed`
+as above. A decision or delivery response is not a receipt that its audit
+events have reached durable storage.
 
 A pane answer (`send-keys --request-token`) sends nothing when it refuses
 with:

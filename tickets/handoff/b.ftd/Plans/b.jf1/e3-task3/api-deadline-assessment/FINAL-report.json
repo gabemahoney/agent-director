@@ -1,0 +1,110 @@
+{
+  "role": "apiary_engineer_e3_task3_api_deadline_assessment",
+  "result": "Three API failures assessed as obsolete test clock/fixture assumptions under the required original SQL/cleanup deadline. No demonstrated production defect requiring source repair. Test Writer corrections and subsequent sole-owner full sandbox remain required; no full-pass claim.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "tickets_read": ["t2.jf1.r8.a8", "t3.jf1.r8.a8.ir", "t1.ftd.hj", "t1.ftd.y5"],
+  "ticket_statuses": {"t3.jf1.r8.a8.ir": "done; unchanged, no source repair needed"},
+  "statuses_set": [],
+  "source_files_changed": [],
+  "test_files_changed": [],
+  "doc_files_changed": [],
+  "files_changed": [
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/api-deadline-assessment/FINAL-report.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/api-deadline-assessment/verify.mjs",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/api-deadline-assessment/integrity.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/api-deadline-assessment/01-integrity.log"
+  ],
+  "authoritative_contract": "User-required one original overall deadline covers actual SQL and cleanup, independently of the injectable relay judging clock. An expired precommit call returns ErrStoreBusy even without a competing holder. A successful COMMIT stays committed; later exhaustion returns available delivery facts without a new wait. A deliberate fresh budget permits a retry; it cannot guarantee all I/O completes within that budget. These technical decisions are already adopted in the authoritative SRD; no product contradiction or user clarification is needed.",
+  "failures": [
+    {
+      "test": "TestAdviceFollow_F9_DecideStoreBusyRetry",
+      "location": "pkg/api/decide_delivery_test.go:469",
+      "observed": "Third fresh 100ms call after actual lock release: ErrStoreBusy: store: get permission: context deadline exceeded; unconditional verdict-recorded assertion failed.",
+      "disposition": "Test fixture/guarantee correction required; do not change production deadline enforcement.",
+      "causal_trace": [
+        "Each e.decideWith invocation calls export_test DecideWithSleep=decide, creating its own real 100ms decideContext, despite frozen fake e.now between sleeps.",
+        "Real *store.Store is explicitly scoped to that context in decideWithin. readRequest passes lockWait to GetPermissionRequestWithin; operationContext intersects local wait with the original context. readWithin classifies actual SQL context expiry as ErrStoreBusy before any verdict write.",
+        "Freshness is already correct: decideContext runs separately for the third call. The failure says get permission, not COMMIT or postcommit cleanup. No evidence establishes that it inherited a prior expired context or renewed a deadline.",
+        "release() joins the external SQLite holder but does not freeze SQL elapsed time, drain the local cleanup lane, or promise the next read/transaction completes within 100ms. Expired previous operations may still have their lease safely quarantined; ordinary same-Store read can synchronize that cleanup before a later independent observation. That synchronization alone is insufficient to guarantee third-call SQL success within 100ms.",
+        "The 2.90s test duration includes fixture setup, all three calls, inspections and scheduling; it cannot locate third-call or SQL phase duration. Do not infer a production overrun or dismiss it as host load."
+      ],
+      "required_test_change": "Retain exact 100ms, two refusals/no decision, deliberate third call/success, independent state assertion and parallelism in a deterministic policy fixture using the actual decideWithin core. Make held/free availability and elapsed policy time explicit fixture inputs. Retain real SQLite held-lock/precommit no-write and public absolute-context/recovery coverage as companions; a fake is not evidence of real SQL locking or durability. See deterministic_plan."
+    },
+    {
+      "test": "TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait",
+      "location": "pkg/api/decide_delivery_test.go:87",
+      "observed": "Correct not_confirmed, hook_alive true and confirm_by; injected sleep total 0s instead of exact 300ms.",
+      "disposition": "Mixed real deadline/fake judging clock fixture correction required; production early stop after confirmed commit is correct.",
+      "causal_trace": [
+        "e.decideWith starts a real 300ms context and a separate fake e.now deadline. Its sleep callback alone advances e.now and slept; real SQL and cleanup consume only real time.",
+        "A confirmed write can return after its real context expires during cleanup or synchronous bounded reporting without undoing COMMIT. awaitAck sees ctx.Err at entry and returns retained delivery facts, or its first read consumes the remaining real budget and lockWait becomes zero before any sleep.",
+        "Either source exit can produce the observed zero fake sleep. The receipt does not distinguish expired entry from expiry in the initial ack read; it does establish that the exact fake-clock wait assertion cannot represent the whole real operation budget.",
+        "Forcing 300ms of injected sleeps or renewing a real deadline after COMMIT would contradict the original overall deadline. Successful COMMIT and correct available delivery facts must remain authoritative.",
+        "Subtest 4.29s includes setup and durable inspection; no phase instrumentation proves which phase consumed real budget."
+      ],
+      "required_test_change": "Preserve exact 300ms simulated wait plus all delivery, liveness, confirm_by and committed-state assertions in a wholly controlled policy fixture. Add/retain a separate original-context-expired-after-commit path expecting zero additional sleep and no new store read after observed cancellation. Exercise real SQL/cleanup cancellation through existing real-driver and physical-bound tests."
+    },
+    {
+      "test": "TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait",
+      "location": "pkg/api/decide_delivery_test.go:87",
+      "observed": "Correct not_confirmed, hook_alive true and confirm_by; injected sleep total 0s instead of exact 300ms.",
+      "disposition": "Same mixed-clock test fixture correction as Codex; retain this separate parallel agent case.",
+      "causal_trace": "The same e.decideWith, decideContext, real Store.WithContext, awaitAck and lockWait path applies. Its 5.29s top-level duration is not phase proof. Neither agent branch warrants production behavior changes.",
+      "required_test_change": "Apply the same deterministic 300ms policy fixture and expired-after-commit companion to this agent case without dropping assertions or reducing parallelism."
+    }
+  ],
+  "deterministic_plan": {
+    "owner": "Test Writer .yj/.zj; no implementation in this assessment lane",
+    "minimal_test_only_seam": "Add an explicit export in pkg/api/export_test.go: var DecideWithinForTest = decideWithin. Call it only from the selected policy fixtures with an explicit context. Leave DecideWithSleep=decide intact for callers intended to test the real deadline; do not silently change every existing helper caller or production API.",
+    "context": "Use a fresh context.WithCancel(context.Background()) per controlled call. The fake relay clock remains the sole policy time; its sleep callback advances the existing e.now. Explicitly cancel at an exercised boundary for cancellation cases. No fabricated wall Deadline, real context.WithTimeout or timer goroutine belongs in this deterministic policy fixture. This seam exercises existing core algorithms, not a copied decide implementation; it is not a physical deadline test.",
+    "store": "Use a small test-local stateful DecideStore fixture with Spawn/PermissionRow snapshots seeded from existing fixture values. Reads return current snapshots. The conditional verdict write records allow only for the open request, updates its snapshot once, and refuses a second writer. Held mode returns ErrStoreBusy before mutation; for F9 advance the fake clock by the passed wait on the refused write so each held call exhausts its own exact 100ms. Free mode commits immediately and later ack reads use that recorded snapshot. Expose observed method durations/inputs and commit count to assertions. Unexpected unused interface methods should fail the test, not accidentally call an embedded real Store. Do not copy SQL, transaction, retry, queue or deadline algorithms into the fixture.",
+    "f9_assertions": [
+      "Original 100ms MaxWaitMs on every explicit call; per-call budget starts afresh, all observed waits are within that budget, first required read sees full 100ms on fake time.",
+      "First and second held calls ErrStoreBusy, no decision/attempt and zero commits; deliberately switch availability only after the second result.",
+      "Third call still uses 100ms, succeeds and records exactly one allow; independent fixture read confirms it. A later duplicate cannot add a commit.",
+      "Keep actual held SQLite lock refusal/no durable decision in its existing real deadline owner or a clearly named companion. Synchronize local cleanup with a normal bounded Store read before independent raw SQL when necessary. Preserve public fresh-call recovery/inspection owner TestDecideAbsoluteContextSurvivesParkedPhase and real transaction first-writer/guard tests. Do not call the controlled fixture a real-lock or durability test."
+    ],
+    "delivery_assertions": [
+      "Keep every current parallel agent leaf, exact original 300ms total and 50ms polling behavior, correct delivery/hook_alive/confirm_by and stored allow.",
+      "Fake store precommit time is explicit (zero in the existing exact300ms case); it never consumes unobserved wall time from the fake budget.",
+      "For postcommit-expiry companion, cancel the explicit context only after the actual fixture commit boundary, then assert committed allow, not_confirmed, correct liveness/confirm_by, zero extra sleep and no subsequent read after cancellation. Real Store COMMIT/cleanup behavior remains covered separately by actual driver boundaries and held trail tests."
+    ],
+    "why_background_core_alone_is_insufficient": "Calling decideWithin with Background and retaining real SQLite removes the API's real absolute deadline, but each bounded Store method still creates a real 100/300ms operationContext. Unconditional success can still fail on real SQL. Nor does a no-op WithDecideContext wrapper make tests deterministic: c.ctx still clips sleep through time.Until and its own expiry check. A fully controlled policy fixture is required for deterministic unconditional exact-budget success.",
+    "real_deadline_guards": "Leave TestDecideMaxWaitWithBlockedTrail bytes exactly unchanged (500ms request /1.5s wall assertion); retain Client 500ms/1.5s deferred-audit check, all parallel TestDecideMaxWaitUnderHeldLock leaves and actual SQLite/PRAGMA/cleanup/quarantine tests. Do not route these through the controlled seam.",
+    "validation_handoff": "After actual test changes, run targeted sandbox API policy + original-context/physical-bound + Store affected real-boundary tests with default package/test parallelism and race coverage where applicable. Then sole full-suite owner settles tree and runs required make test-sandbox. Never rerun unchanged failures until green."
+  },
+  "decorator_assessment": {
+    "actual_failures": "All three failing calls pass e.s directly, a real *store.Store; missing optional decorator forwarding did not cause these failures.",
+    "deadlineStore": "The existing phase observer embeds api.DecideStore. That interface does not expose WithContext or WithDecideContext, so embedding alone does not forward the original context. Its relative duration observations remain useful but are not proof that the original context reached real SQL.",
+    "exact_recommendation": "For real deadline observations add test-only WithDecideContext(ctx) returning a copied deadlineStore retaining the same phases pointer and wrapping the underlying concrete Store.WithContext(ctx), or forwarding an underlying WithDecideContext capability. Preserve the observer wrapper and all overridden phase methods; never unwrap it in production. Store the real delegate explicitly as parkedDecideStore already does if needed. Assert each delegated SQL deadline is no later than the original and keep independent durable verification on a fresh verification context.",
+    "production_change": "None. Existing optionalWithDecideContext structural assertion in decideWithin is appropriate; arbitrary custom DecideStore implementations must cooperate."
+  },
+  "evidence": {
+    "complete_inputs": [
+      "final-tests/FINAL-report.json", "final-tests/04-full-test-sandbox.log",
+      "deadline-engineer/FINAL-report.json", "deadline-review-fix/FINAL-report.json",
+      "deadline-green/FINAL-report.json", "docs/FINAL-report.json"
+    ],
+    "contract_and_source": [
+      "CLAUDE.md", "docs/engineering-guide.md", "docs/architecture.md:2301", "docs/architecture.md:10893",
+      "SRD-DEADLINE-DECISIONS.md", "SRD-DEADLINE-REVIEW-DECISION.md",
+      "pkg/api/decide.go:215", "pkg/api/decide.go:235", "pkg/api/decide.go:358", "pkg/api/decide.go:480",
+      "pkg/api/export_test.go", "pkg/api/decide_delivery_test.go", "pkg/api/relay_delivery_test.go",
+      "pkg/api/decide_absolute_deadline_test.go", "internal/store/lockwait.go", "internal/store/connection_cleanup.go"
+    ],
+    "integrity": "integrity.json verifies settled eight sources, protected regression, complete prior input manifest and historical old-production receipt bytes; execution only make sandbox.",
+    "tests_run_this_lane": [],
+    "full_suite": "No run here. First Task3 full sandbox failed five leaves; two Store observer fixes subsequently passed 19 targeted leaves per retained report. Three API leaves remain for Test Writer correction. No second full run and no full-pass claim.",
+    "historical09": "Causes remain UNKNOWN. This source/fixture assessment does not reproduce or explain those historical failures."
+  },
+  "administrative_failures": [
+    "Read-only bees show-ticket --ids t1.ftd.hj --json failed because --json is unsupported; ordinary show-ticket already returns JSON and subsequent extraction used jq.",
+    "One read-only proposed pkg/api/decide_deadline_test.go path did not exist; actual deadline coverage is in decide_delivery_test.go and decide_absolute_deadline_test.go. No repository execution/test failure."
+  ],
+  "deviations": [],
+  "incomplete_work": ["Test Writer must implement controlled policy fixture/seam, retain real boundary coverage and run targeted validation; sole owner then performs final full sandbox."],
+  "questions_for_caller": [],
+  "formal": "No spec/tla changes; no TLA/TLC/Java/parser/scheduler execution.",
+  "boundaries": "No source/tests/docs edits, status mutations, .claude access, real AD stores/credentials/login/logout/live Cursor, host repository scripts/build/tests, Docker TESTPLAN groups/collectors/helpers, scheduler jobs, commits/pushes or subagents. Evidence script only make sandbox; administrative bees reads and workspace text/git inspection only on host."
+}

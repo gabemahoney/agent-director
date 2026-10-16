@@ -1,0 +1,58 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{
+  "cmd/agent-director/main.go": {
+    "expected": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "actual": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/cmd_agent-director_main.go.txt",
+    "bytes": 35402
+  },
+  "internal/cursorhost/requests.go": {
+    "expected": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "actual": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_cursorhost_requests.go.txt",
+    "bytes": 14250
+  },
+  "internal/store/cursor_permission.go": {
+    "expected": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758",
+    "actual": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_store_cursor_permission.go.txt",
+    "bytes": 10863
+  },
+  "internal/store/relay_writes.go": {
+    "expected": "7896aace87f68217d6b5d1805f4a0a30e4a373f13a7850e705d165a3cbe8fd02",
+    "actual": "7896aace87f68217d6b5d1805f4a0a30e4a373f13a7850e705d165a3cbe8fd02",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_store_relay_writes.go.txt",
+    "bytes": 19740
+  },
+  "internal/store/store.go": {
+    "expected": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "actual": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_store_store.go.txt",
+    "bytes": 20080
+  },
+  "internal/store/connection_cleanup.go": {
+    "expected": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "actual": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+    "matches": true,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_store_connection_cleanup.go.txt",
+    "bytes": 2096
+  },
+  "internal/store/lockwait.go": {
+    "expected": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+    "actual": "f575d1bed3c3ef0c6352a0051e1c1378a36bfb7d5b1c8a8592cb488f2035a6b3",
+    "matches": false,
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/internal_store_lockwait.go.txt",
+    "bytes": 12725
+  }
+}

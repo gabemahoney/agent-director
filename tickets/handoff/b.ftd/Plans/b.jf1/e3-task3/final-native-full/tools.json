@@ -1,0 +1,8 @@
+{
+  "go": "go version go1.22.10 linux/amd64",
+  "bun": "1.3.13",
+  "git": "git version 2.39.5",
+  "make": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.",
+  "HOME": "/home/sandbox",
+  "sandbox": "1"
+}

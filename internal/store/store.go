@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -104,8 +105,12 @@ const parentDirMode os.FileMode = 0o700
 // Store is the opaque handle callers hold for the lifetime of a process.
 // The underlying *sql.DB is unexported on purpose — see package doc.
 type Store struct {
-	filePath string // actual opened database, retained for owned Cursor launch plumbing
-	db       *sql.DB
+	// callContext is immutable on a scoped handle; the pool is shared with its
+	// owner. It carries the original caller deadline through every statement.
+	callContext context.Context
+	cleanup     *connectionCleanupLane
+	filePath    string // actual opened database, retained for owned Cursor launch plumbing
+	db          *sql.DB
 	// storeID is store_meta's store_id, read once at open (SR-5.1); see
 	// StoreID.
 	storeID string
@@ -238,15 +243,16 @@ func busyTimeoutOrDefault(busyTimeoutMs int) int {
 func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 	busyTimeoutMs = busyTimeoutOrDefault(busyTimeoutMs)
 
-	// foreign_keys is a per-connection PRAGMA, so set it via DSN so every
-	// connection the pool dials in starts with FKs enforced.
+	// foreign_keys is a per-connection PRAGMA. The context-aware connector
+	// sets it before every connection is admitted to the pool.
 	//
 	// busy_timeout tells the driver to retry-with-backoff for up to
 	// busyTimeoutMs ([store] busy_timeout_ms, 10 s by default) on
 	// SQLITE_BUSY instead of failing on the first lock collision. With N
 	// hook processes hitting the same DB file during burst-spawn, this is
 	// the floor of correctness for any multi-writer SQLite system. It is
-	// per-connection too, so it is set via DSN as well.
+	// per-connection too. Connector initialization uses the acquisition
+	// context; the driver's DSN PRAGMAs would use context.Background.
 	//
 	// journal_mode is intentionally NOT set here. WAL persists in the DB
 	// header; re-running PRAGMA journal_mode=WAL on every connection forces
@@ -254,9 +260,7 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 	// bug. We set WAL once at fresh-DB init (see ensureJournalModeWAL) and
 	// trust the header thereafter; verifyPragmas keeps reading it
 	// (read-only form, no lock) to confirm.
-	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)", resolved, busyTimeoutMs)
-
-	db, err := sql.Open("sqlite", dsn)
+	db, err := openContextSQLite(resolved, busyTimeoutMs)
 	if err != nil {
 		return nil, fmt.Errorf("store: open sqlite: %w", err)
 	}
@@ -301,7 +305,7 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("store: resolve opened database path: %w", err)
 	}
-	return &Store{db: db, filePath: absolutePath, storeID: storeID, busyTimeoutMs: busyTimeoutMs}, nil
+	return &Store{db: db, filePath: absolutePath, storeID: storeID, busyTimeoutMs: busyTimeoutMs, cleanup: &connectionCleanupLane{}}, nil
 }
 
 // Close releases the underlying database handle. Safe to call once.

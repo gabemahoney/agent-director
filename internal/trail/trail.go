@@ -54,12 +54,20 @@ var errOldLayout = errors.New("trail: only the old directory is present, trail n
 // trail. Obtain the process-singleton via Default(). The zero value is not
 // usable.
 type Writer struct {
-	mu      sync.Mutex
-	f       *os.File
-	path    string      // absolute trail path; "" when no home directory was found
-	home    string      // home the path was resolved under; "" skips the old-layout check
-	pathErr error       // why path is "" (from resolvePath); nil when path is set
-	olog    *log.Logger // optional; nil silently discards fallback messages
+	mu                 sync.Mutex
+	closed             bool
+	queueMu            sync.Mutex
+	queue              chan emission
+	drained            chan struct{}
+	stopping           bool
+	delivery           DeliveryStatus
+	rejectedEvent      string
+	reportedRejections uint64
+	f                  *os.File
+	path               string      // absolute trail path; "" when no home directory was found
+	home               string      // home the path was resolved under; "" skips the old-layout check
+	pathErr            error       // why path is "" (from resolvePath); nil when path is set
+	olog               *log.Logger // optional; nil silently discards fallback messages
 }
 
 var (
@@ -158,13 +166,27 @@ func resolve() (path, home string, err error) {
 // While only the old directory is present (layout.OnlyOldPresent, judged on
 // every call) Emit writes and creates nothing, no meta envelope and no log
 // line, and returns an error wrapping errOldLayout.
-func (w *Writer) Emit(_ context.Context, event string, fields map[string]any) error {
+//
+// A cancelable context uses a bounded FIFO worker. On expiry ErrPending means
+// accepted, memory-resident delivery, not durable delivery; values in fields
+// must remain immutable until delivery completes. Status reports pending,
+// failed and rejected events. Close can drain the worker with its own context.
+func (w *Writer) Emit(ctx context.Context, event string, fields map[string]any) error {
 	if event == "" {
 		return fmt.Errorf("trail: event is required")
 	}
+	if ctx.Done() != nil {
+		return w.emitWithin(ctx, event, fields)
+	}
+	return w.emit(event, fields)
+}
 
+func (w *Writer) emit(event string, fields map[string]any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
 
 	if !filepath.IsAbs(w.path) {
 		err := w.noPathErr()

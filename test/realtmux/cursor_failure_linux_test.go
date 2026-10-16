@@ -29,6 +29,8 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 	for _, stage := range []string{"input replacement", "input permission", "queued admission", "queued cancellation", "turn outcome", "end publication", "rotation confirmation", "rotation publication"} {
 		t.Run(stage, func(t *testing.T) {
 			f, r, launch := newCursorPane(t, false)
+			// Keep this owned server stable while the fault destroys its gateway pane.
+			sentinel := launch.rt.startSession(t, uniqueName())
 			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
 			row := readRow(t, f.DBPath, launch.ID)
 			path := row.JSONLPath.(string)
@@ -192,6 +194,9 @@ func TestCursorPersistenceFailureStopsAdmission(t *testing.T) {
 				if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: freshID}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if pidGone(sentinel.PanePID) {
+				t.Fatal("failure cleanup killed the independent owned sentinel")
 			}
 			for _, frame := range r.Frames(t) {
 				if strings.Contains(string(frame["params"]), "must not be admitted") || strings.Contains(string(frame["params"]), "queued-never-dispatch") {

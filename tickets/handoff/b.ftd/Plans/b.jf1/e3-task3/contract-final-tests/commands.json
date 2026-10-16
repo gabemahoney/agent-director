@@ -1,0 +1,22 @@
+[
+  {
+    "receipt": "01-targeted",
+    "command": "make sandbox CMD='gofmt -w pkg/api/export_test.go pkg/api/decide_delivery_test.go pkg/api/decide_policy_test.go && go test -timeout 150s -count=1 -v ./pkg/api -run \"^(TestDecideReportsDelivery|TestAdviceFollow_F9_DecideStoreBusyRetry|TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'"
+  },
+  {
+    "receipt": "02-targeted-race-quality",
+    "command": "make sandbox CMD='gofmt -w pkg/api/decide_delivery_test.go && go test -race -timeout 150s -count=1 -v ./pkg/api ./internal/store ./internal/trail -run \"^(TestDecideReportsDelivery|TestAdviceFollow_F9_DecideStoreBusyRetry|TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecision|TestRelayWritePrecondition|TestCursorRotationIndependentEvidenceAndGateAreMandatory|TestWriterDeadline)\" && go vet ./pkg/api ./internal/store ./internal/trail && git diff --check && go version && bun --version && tmux -V'"
+  },
+  {
+    "receipt": "03-pre-full-integrity-trail",
+    "command": "make sandbox CMD='go test -race -timeout 90s -count=1 -v ./internal/trail -run \"^TestBoundedWriter\" && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/evidence.mjs pre-full'"
+  },
+  {
+    "receipt": "04-full-test-sandbox",
+    "command": "make test-sandbox"
+  },
+  {
+    "receipt": "05-after-integrity-report",
+    "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/evidence.mjs after && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/report.mjs && git diff --check'"
+  }
+]

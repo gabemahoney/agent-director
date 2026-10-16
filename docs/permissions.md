@@ -791,13 +791,12 @@ normal case returns `delivered`.
 **`--max-wait-ms`** (`max_wait_ms` over MCP and in the TypeScript client)
 bounds the whole call, from its start, and has no default:
 
-- Every read before the verdict, and the verdict write, waits for the
-  store at most what is left of the bound (with nothing left, the write
-  goes ahead only if the lock is free at once). That covers a wait for the
-  store's write lock, held by another process, and a wait for the store's
-  one connection, held by another call in the same process (a Go program
-  making concurrent calls on one Client). A wait cut by the bound is
-  `ErrStoreBusy`: nothing was recorded, so a retry is safe.
+- Reads, the verdict write, cleanup and reporting share the original
+  deadline. Expiry prevents starting new SQL; already entered database work
+  can retain its connection while the caller returns. Zero permits
+  immediately available work with no lock retries.
+  Exact bounds, error meanings and recovery are in the
+  [caller contract](caller-contract.md#permission-relay).
 - Once the verdict is recorded, `decide` never returns `ErrStoreBusy`: a
   bound reached while it waits for the confirmation returns
   `not_confirmed`.

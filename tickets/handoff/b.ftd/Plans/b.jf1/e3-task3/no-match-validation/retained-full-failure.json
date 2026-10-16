@@ -1,0 +1,12 @@
+{
+  "sha256": "d32382354cac639a2ac9ff31cbb697ade92290f2af9341ff5968bef84d10a7a4",
+  "bytes": 63609,
+  "failures": [
+    "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.40s)",
+    "    --- FAIL: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (1.53s)",
+    "        decide_delivery_test.go:315: err store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded matches []; want exactly ErrStoreBusy",
+    "FAIL",
+    "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s",
+    "FAIL"
+  ]
+}

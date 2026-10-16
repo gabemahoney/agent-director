@@ -1,0 +1,574 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestDecideAbsoluteContextSurvivesParkedPhase
+=== PAUSE TestDecideAbsoluteContextSurvivesParkedPhase
+=== RUN   TestClientDecideBoundsDeferredAuditAndPreservesFIFO
+    decide_absolute_deadline_test.go:121: Client.Decide including deferred audit returned at 500.550836ms while writer held
+--- PASS: TestClientDecideBoundsDeferredAuditAndPreservesFIFO (0.54s)
+=== RUN   TestDecideReportsDelivery
+=== PAUSE TestDecideReportsDelivery
+=== RUN   TestDecideMaxWaitUnderHeldLock
+=== PAUSE TestDecideMaxWaitUnderHeldLock
+=== RUN   TestAdviceFollow_F9_DecideStoreBusyRetry
+=== PAUSE TestAdviceFollow_F9_DecideStoreBusyRetry
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== RUN   TestDecideMaxWaitWithBlockedTrail
+    decide_trail_deadline_test.go:103: independent connection observed committed allow at +2.530068ms with trail mutex still held
+    decide_trail_deadline_test.go:123: decide finished after 500.371716ms; reporting released at +500.373966ms
+--- PASS: TestDecideMaxWaitWithBlockedTrail (0.52s)
+=== CONT  TestDecideAbsoluteContextSurvivesParkedPhase
+=== CONT  TestAdviceFollow_F9_DecideStoreBusyRetry
+=== CONT  TestDecideMaxWaitUnderHeldLock
+=== CONT  TestDecideReportsDelivery
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideReportsDelivery/no_ack_within_1_s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideReportsDelivery/no_ack_within_1_s
+=== RUN   TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== RUN   TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== PAUSE TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== RUN   TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== RUN   TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== PAUSE TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== PAUSE TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== PAUSE TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== RUN   TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== PAUSE TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== RUN   TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== PAUSE TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== CONT  TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== CONT  TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideReportsDelivery/no_ack_within_1_s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== CONT  TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== CONT  TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/codex/no_ack_within_1_s
+--- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep (0.00s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex (0.10s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude (0.14s)
+--- PASS: TestAdviceFollow_F9_DecideStoreBusyRetry (0.22s)
+--- PASS: TestDecideReportsDelivery (0.00s)
+    --- PASS: TestDecideReportsDelivery/the_hook_acks_within_the_wait (0.13s)
+    --- PASS: TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait (0.20s)
+    --- PASS: TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at (0.21s)
+    --- PASS: TestDecideReportsDelivery/codex/no_ack_within_1_s (0.23s)
+    --- PASS: TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait (0.23s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at (0.23s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack (0.24s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait (0.24s)
+    --- PASS: TestDecideReportsDelivery/no_ack_within_1_s (0.24s)
+    --- PASS: TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack (0.24s)
+=== NAME  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.783155662 +0000 UTC m=+1.716830671
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.783155662 +0000 UTC m=+1.716830671
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.783155662 +0000 UTC m=+1.716830671
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.783155662 +0000 UTC m=+1.716830671
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.283154952Z end=2026-10-16T01:08:00.783213839Z elapsed=500.058897ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+6.24µs end=+191.69µs elapsed=185.45µs requested wait=499.99457ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+192.5µs end=+274.3µs elapsed=81.8µs requested wait=499.80833ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+274.75µs end=+333.9µs elapsed=59.15µs requested wait=499.72602ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+334.86µs end=+500.056847ms elapsed=499.721987ms requested wait=499.66605ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.784554472 +0000 UTC m=+1.718229471
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.784554472 +0000 UTC m=+1.718229471
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.784554472 +0000 UTC m=+1.718229471
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.784554472 +0000 UTC m=+1.718229471
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.284554242Z end=2026-10-16T01:08:00.784337158Z elapsed=499.782916ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.91µs end=+184.72µs elapsed=181.81µs requested wait=499.9974ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+185.32µs end=+267.34µs elapsed=82.02µs requested wait=499.81499ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+268.39µs end=+326.129µs elapsed=57.739µs requested wait=499.73189ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+327.959µs end=+499.781306ms elapsed=499.453347ms requested wait=499.672401ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.786261811 +0000 UTC m=+1.719936810
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.786261811 +0000 UTC m=+1.719936810
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.786261811 +0000 UTC m=+1.719936810
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.786261811 +0000 UTC m=+1.719936810
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.286261041Z end=2026-10-16T01:08:00.785824757Z elapsed=499.563716ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+5.01µs end=+205.51µs elapsed=200.5µs requested wait=499.99585ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+206.49µs end=+291.999µs elapsed=85.509µs requested wait=499.79437ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+292.499µs end=+352.059µs elapsed=59.56µs requested wait=499.708321ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+353.049µs end=+499.561766ms elapsed=499.208717ms requested wait=499.647941ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.809058037 +0000 UTC m=+1.742733036
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.809058037 +0000 UTC m=+1.742733036
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.809058037 +0000 UTC m=+1.742733036
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.809058037 +0000 UTC m=+1.742733036
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.309057807Z end=2026-10-16T01:08:00.808835063Z elapsed=499.777256ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.58µs end=+174.34µs elapsed=171.76µs requested wait=499.99773ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+175.05µs end=+254.64µs elapsed=79.59µs requested wait=499.82528ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+255.11µs end=+315.93µs elapsed=60.82µs requested wait=499.74517ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+316.57µs end=+499.775006ms elapsed=499.458436ms requested wait=499.68374ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:289: phase RecordRefusedDecision lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.811603135 +0000 UTC m=+1.745278144
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.311602915Z end=2026-10-16T01:08:00.811545072Z elapsed=499.942157ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.48µs end=+199.49µs elapsed=197.01µs requested wait=499.99783ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+200.07µs end=+281.59µs elapsed=81.52µs requested wait=499.80026ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+282.6µs end=+345.89µs elapsed=63.29µs requested wait=499.71768ms
+    decide_delivery_test.go:269: decide phase RecordRefusedDecision: start=+347.51µs end=+499.573707ms elapsed=499.226197ms requested wait=499.65293ms
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.575347ms end=+499.715217ms elapsed=139.87µs requested wait=424.983µs
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.717087ms end=+499.931657ms elapsed=214.57µs requested wait=283.193µs
+=== NAME  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.814485304 +0000 UTC m=+1.748160303
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.814485304 +0000 UTC m=+1.748160303
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.814485304 +0000 UTC m=+1.748160303
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.814485304 +0000 UTC m=+1.748160303
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.314485084Z end=2026-10-16T01:08:00.81398243Z elapsed=499.497336ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.469µs end=+190.199µs elapsed=187.73µs requested wait=499.997821ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+190.799µs end=+281.759µs elapsed=90.96µs requested wait=499.809501ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+282.769µs end=+356.379µs elapsed=73.61µs requested wait=499.717491ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+357.889µs end=+499.495856ms elapsed=499.137967ms requested wait=499.642401ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.817694652 +0000 UTC m=+1.751369661
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.317694442Z end=2026-10-16T01:08:00.817817318Z elapsed=500.122886ms total real sleep=453.443024ms
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.56µs end=+174.189µs elapsed=171.629µs requested wait=499.99775ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+174.739µs end=+253.799µs elapsed=79.06µs requested wait=499.825571ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+254.569µs end=+313.799µs elapsed=59.23µs requested wait=499.745701ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+315.209µs end=+45.519962ms elapsed=45.204753ms requested wait=499.685091ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+45.521792ms end=+45.636262ms elapsed=114.47µs requested wait=454.480678ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+45.636982ms end=+45.736302ms elapsed=99.32µs requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+45.736392ms end=+96.252661ms elapsed=50.516269ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+96.253971ms end=+96.345681ms elapsed=91.71µs requested wait=403.748359ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+96.346231ms end=+96.346281ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+96.346361ms end=+146.400211ms elapsed=50.05385ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+146.401511ms end=+146.495751ms elapsed=94.24µs requested wait=353.600769ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+146.496261ms end=+146.496311ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+146.496391ms end=+196.57907ms elapsed=50.082679ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+196.5815ms end=+196.73077ms elapsed=149.27µs requested wait=303.42095ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+196.73152ms end=+196.73158ms elapsed=60ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+196.73167ms end=+247.620229ms elapsed=50.888559ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+247.621269ms end=+247.736059ms elapsed=114.79µs requested wait=252.381081ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+247.736659ms end=+247.736719ms elapsed=60ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+247.736799ms end=+298.324418ms elapsed=50.587619ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+298.325958ms end=+298.447288ms elapsed=121.33µs requested wait=201.676482ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+298.447878ms end=+298.447928ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+298.448008ms end=+348.768078ms elapsed=50.32007ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+348.768538ms end=+348.835658ms elapsed=67.12µs requested wait=151.233732ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+348.835928ms end=+348.835978ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+348.836038ms end=+399.784797ms elapsed=50.948759ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+399.786047ms end=+399.875907ms elapsed=89.86µs requested wait=100.216223ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+399.876557ms end=+399.876607ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+399.876697ms end=+450.706396ms elapsed=50.829699ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+450.707956ms end=+450.828026ms elapsed=120.07µs requested wait=49.294484ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+450.828576ms end=+450.828626ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+450.828696ms end=+500.044216ms elapsed=49.21552ms requested wait=49.171754ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+500.045516ms end=+500.120786ms elapsed=75.27µs requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:289: phase RecordRefusedDecision lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.824546007 +0000 UTC m=+1.758221016
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.324545197Z end=2026-10-16T01:08:00.824543044Z elapsed=499.997857ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+4.96µs end=+264.85µs elapsed=259.89µs requested wait=499.99595ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+265.89µs end=+369.38µs elapsed=103.49µs requested wait=499.73502ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+370.41µs end=+430.25µs elapsed=59.84µs requested wait=499.63046ms
+    decide_delivery_test.go:269: decide phase RecordRefusedDecision: start=+432.4µs end=+499.803517ms elapsed=499.371117ms requested wait=499.56861ms
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.804817ms end=+499.927477ms elapsed=122.66µs requested wait=196.123µs
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.928827ms end=+499.993437ms elapsed=64.61µs requested wait=72.103µs
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.830548644 +0000 UTC m=+1.764223643
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.330548434Z end=2026-10-16T01:08:00.83128181Z elapsed=500.733376ms total real sleep=463.07833ms
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.86µs end=+199.49µs elapsed=196.63µs requested wait=499.99743ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+200.05µs end=+277.42µs elapsed=77.37µs requested wait=499.80025ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+278.22µs end=+336.72µs elapsed=58.5µs requested wait=499.72204ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+338.2µs end=+35.755178ms elapsed=35.416978ms requested wait=499.66221ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+35.756658ms end=+35.965638ms elapsed=208.98µs requested wait=464.246062ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+35.966738ms end=+36.432088ms elapsed=465.35µs requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+36.432188ms end=+86.811067ms elapsed=50.378879ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+86.812777ms end=+86.957247ms elapsed=144.47µs requested wait=413.189943ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+86.957897ms end=+86.957947ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+86.958037ms end=+136.997767ms elapsed=50.03973ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+136.998267ms end=+137.096226ms elapsed=97.959µs requested wait=363.004313ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+137.096756ms end=+137.096806ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+137.096896ms end=+188.047806ms elapsed=50.95091ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+188.050106ms end=+188.185965ms elapsed=135.859µs requested wait=311.952624ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+188.186835ms end=+188.186885ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+188.186965ms end=+239.235434ms elapsed=51.048469ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+239.236394ms end=+239.347434ms elapsed=111.04µs requested wait=260.766226ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+239.348064ms end=+239.348114ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+239.348204ms end=+290.100443ms elapsed=50.752239ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+290.101483ms end=+290.198743ms elapsed=97.26µs requested wait=209.901207ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+290.199143ms end=+290.199193ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+290.199263ms end=+340.396583ms elapsed=50.19732ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+340.397373ms end=+340.481283ms elapsed=83.91µs requested wait=159.605207ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+340.481683ms end=+340.481723ms elapsed=40ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+340.481773ms end=+390.628112ms elapsed=50.146339ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+390.629332ms end=+390.934232ms elapsed=304.9µs requested wait=109.373268ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+390.934812ms end=+390.934862ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+390.934922ms end=+441.448972ms elapsed=50.51405ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+441.450712ms end=+441.561962ms elapsed=111.25µs requested wait=58.552008ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+441.562822ms end=+441.562872ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+441.562962ms end=+491.657631ms elapsed=50.094669ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+491.658991ms end=+491.759401ms elapsed=100.41µs requested wait=8.343699ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+491.760041ms end=+491.760101ms elapsed=60ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+491.761051ms end=+500.716776ms elapsed=8.955725ms requested wait=8.240269ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+500.717626ms end=+500.731456ms elapsed=13.83µs requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.837496069 +0000 UTC m=+1.771171078
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.837496069 +0000 UTC m=+1.771171078
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.837496069 +0000 UTC m=+1.771171078
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.837496069 +0000 UTC m=+1.771171078
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.337495859Z end=2026-10-16T01:08:00.836893716Z elapsed=499.397847ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.43µs end=+200.56µs elapsed=198.13µs requested wait=499.99786ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+201.14µs end=+285.72µs elapsed=84.58µs requested wait=499.79917ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+286.18µs end=+343.12µs elapsed=56.94µs requested wait=499.71408ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+343.76µs end=+499.396157ms elapsed=499.052397ms requested wait=499.65653ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.819139411 +0000 UTC m=+1.752814410
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.319139091Z end=2026-10-16T01:08:00.820032576Z elapsed=500.893485ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+4.33µs end=+500.892615ms elapsed=500.888285ms requested wait=499.99616ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.846479354 +0000 UTC m=+1.780154353
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.346479134Z end=2026-10-16T01:08:00.84683669Z elapsed=500.357556ms total real sleep=475.352872ms
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.39µs end=+187.4µs elapsed=185.01µs requested wait=499.99791ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+187.98µs end=+267.41µs elapsed=79.43µs requested wait=499.81233ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+268.29µs end=+325.23µs elapsed=56.94µs requested wait=499.73199ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+326.7µs end=+23.134696ms elapsed=22.807996ms requested wait=499.6736ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+    decide_delivery_test.go:289: phase RecordRefusedDecision lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.847392424 +0000 UTC m=+1.781067423
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+23.137966ms end=+23.496266ms elapsed=358.3µs requested wait=476.864574ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+23.497476ms end=+24.007895ms elapsed=510.419µs requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+24.007995ms end=+74.307025ms elapsed=50.29903ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+74.309595ms end=+74.415025ms elapsed=105.43µs requested wait=425.692615ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+74.415445ms end=+74.415495ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+74.415565ms end=+124.534034ms elapsed=50.118469ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+124.534634ms end=+124.604734ms elapsed=70.1µs requested wait=375.467476ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+124.605074ms end=+124.605124ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+124.605174ms end=+175.523083ms elapsed=50.917909ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+175.525103ms end=+175.658663ms elapsed=133.56µs requested wait=324.477177ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+175.659293ms end=+175.659343ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+175.659433ms end=+226.696612ms elapsed=51.037179ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+226.697312ms end=+226.782512ms elapsed=85.2µs requested wait=273.304858ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+226.782872ms end=+226.782912ms elapsed=40ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+226.782972ms end=+277.575221ms elapsed=50.792249ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+277.576681ms end=+277.746671ms elapsed=169.99µs requested wait=222.425579ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+277.746991ms end=+277.747031ms elapsed=40ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+277.747081ms end=+327.762481ms elapsed=50.0154ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+327.763021ms end=+327.831661ms elapsed=68.64µs requested wait=172.239119ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+327.832051ms end=+327.832101ms elapsed=50ns requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.347392234Z end=2026-10-16T01:08:00.84705739Z elapsed=499.665166ms total real sleep=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase real sleep: start=+327.832151ms end=+377.917271ms elapsed=50.08512ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+377.918281ms end=+378.02465ms elapsed=106.369µs requested wait=122.083869ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.87µs end=+221.189µs elapsed=218.319µs requested wait=499.99751ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+378.02517ms end=+378.02522ms elapsed=50ns requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+221.749µs end=+335.549µs elapsed=113.8µs requested wait=499.778541ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase real sleep: start=+378.0253ms end=+428.944269ms elapsed=50.918969ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+428.945519ms end=+429.039069ms elapsed=93.55µs requested wait=71.056581ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+336.679µs end=+397.119µs elapsed=60.44µs requested wait=499.663561ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+429.039499ms end=+429.039549ms elapsed=50ns requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase RecordRefusedDecision: start=+398.879µs end=+499.461626ms elapsed=499.062747ms requested wait=499.601501ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase real sleep: start=+429.039599ms end=+479.278379ms elapsed=50.23878ms requested wait=50ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.462886ms end=+499.583106ms elapsed=120.22µs requested wait=537.414µs
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+479.279359ms end=+479.416909ms elapsed=137.55µs requested wait=20.722831ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+479.417489ms end=+479.417539ms elapsed=50ns requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.584136ms end=+499.659066ms elapsed=74.93µs requested wait=416.104µs
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:269: decide phase real sleep: start=+479.424849ms end=+500.354616ms elapsed=20.929767ms requested wait=20.582841ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.849113542 +0000 UTC m=+1.782788541
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.349113332Z end=2026-10-16T01:08:00.849229339Z elapsed=500.116007ms total real sleep=477.154892ms
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.01µs end=+202.84µs elapsed=200.83µs requested wait=499.99827ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+203.34µs end=+277.97µs elapsed=74.63µs requested wait=499.79696ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+278.93µs end=+338.73µs elapsed=59.8µs requested wait=499.72133ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+339.92µs end=+21.578297ms elapsed=21.238377ms requested wait=499.66037ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+21.580977ms end=+21.738937ms elapsed=157.96µs requested wait=478.421073ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+21.739767ms end=+21.853007ms elapsed=113.24µs requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+21.853107ms end=+72.785256ms elapsed=50.932149ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+72.786356ms end=+72.858016ms elapsed=71.66µs requested wait=427.215574ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+72.858386ms end=+72.858436ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+72.858486ms end=+122.997056ms elapsed=50.13857ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+122.997796ms end=+123.063406ms elapsed=65.61µs requested wait=377.004084ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+123.063806ms end=+123.063856ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+123.063906ms end=+174.045775ms elapsed=50.981869ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+174.047515ms end=+174.169585ms elapsed=122.07µs requested wait=325.954415ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+174.170315ms end=+174.170365ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+174.170415ms end=+224.221214ms elapsed=50.050799ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+224.222884ms end=+224.375154ms elapsed=152.27µs requested wait=275.779146ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+224.375804ms end=+224.375854ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+224.375944ms end=+274.973963ms elapsed=50.598019ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+274.974583ms end=+275.068933ms elapsed=94.35µs requested wait=225.027267ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+275.069363ms end=+275.069413ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+275.069493ms end=+325.128663ms elapsed=50.05917ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+325.129153ms end=+325.257003ms elapsed=127.85µs requested wait=174.872697ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+325.257293ms end=+325.257343ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+325.257403ms end=+375.270753ms elapsed=50.01335ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+375.271623ms end=+375.412272ms elapsed=140.649µs requested wait=124.730227ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+375.412712ms end=+375.412762ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+375.412822ms end=+426.289712ms elapsed=50.87689ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+426.290692ms end=+426.470761ms elapsed=180.069µs requested wait=73.711258ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+426.471591ms end=+426.471641ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+426.471731ms end=+476.564021ms elapsed=50.09229ms requested wait=50ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+476.565261ms end=+476.693781ms elapsed=128.52µs requested wait=23.436739ms
+    decide_delivery_test.go:269: decide phase sleep callback enter to holder ready: start=+476.694361ms end=+476.694411ms elapsed=50ns requested wait=0s
+    decide_delivery_test.go:269: decide phase real sleep: start=+476.695871ms end=+500.107657ms elapsed=23.411786ms requested wait=23.305939ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+500.108197ms end=+500.114617ms elapsed=6.42µs requested wait=0s
+=== NAME  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.851243531 +0000 UTC m=+1.784918530
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.851243531 +0000 UTC m=+1.784918530
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.851243531 +0000 UTC m=+1.784918530
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.851243531 +0000 UTC m=+1.784918530
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.351242691Z end=2026-10-16T01:08:00.851363377Z elapsed=500.120696ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+13.71µs end=+607.99µs elapsed=594.28µs requested wait=499.98732ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+608.97µs end=+853.11µs elapsed=244.14µs requested wait=499.39197ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+854.85µs end=+955.91µs elapsed=101.06µs requested wait=499.1461ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+957.85µs end=+500.119466ms elapsed=499.161616ms requested wait=499.04307ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.853978449 +0000 UTC m=+1.787653448
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.853978449 +0000 UTC m=+1.787653448
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.853978449 +0000 UTC m=+1.787653448
+    decide_delivery_test.go:289: phase DecideRelayRequest (including verdict write return) lacks the original SQL deadline: 2026-10-16 01:08:00.853978449 +0000 UTC m=+1.787653448
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.353977879Z end=2026-10-16T01:08:00.853626276Z elapsed=499.648397ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+4.29µs end=+198.05µs elapsed=193.76µs requested wait=499.99637ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+198.84µs end=+283.44µs elapsed=84.6µs requested wait=499.80182ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+284.38µs end=+347.71µs elapsed=63.33µs requested wait=499.71625ms
+    decide_delivery_test.go:269: decide phase DecideRelayRequest (including verdict write return): start=+349.21µs end=+499.646727ms elapsed=499.297517ms requested wait=499.65155ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:289: phase GetPermissionRequestWithin lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:289: phase RecordRefusedDecision lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:289: phase PermissionRequestsForSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.860293006 +0000 UTC m=+1.793968005
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.360292796Z end=2026-10-16T01:08:00.860362952Z elapsed=500.070156ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+1.87µs end=+179.06µs elapsed=177.19µs requested wait=499.99841ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+179.57µs end=+255.3µs elapsed=75.73µs requested wait=499.82072ms
+    decide_delivery_test.go:269: decide phase GetPermissionRequestWithin: start=+256.22µs end=+329.56µs elapsed=73.34µs requested wait=499.74404ms
+    decide_delivery_test.go:269: decide phase RecordRefusedDecision: start=+331.06µs end=+499.856406ms elapsed=499.525346ms requested wait=499.66936ms
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.857826ms end=+499.997526ms elapsed=139.7µs requested wait=142.504µs
+    decide_delivery_test.go:269: decide phase PermissionRequestsForSpawnWithin: start=+499.998706ms end=+500.064716ms elapsed=66.01µs requested wait=1.554µs
+=== NAME  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.850607441 +0000 UTC m=+1.784282450
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.350607231Z end=2026-10-16T01:08:00.850650188Z elapsed=500.042957ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+3.98µs end=+500.042057ms elapsed=500.038077ms requested wait=499.99632ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.857424167 +0000 UTC m=+1.791099176
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.357423937Z end=2026-10-16T01:08:00.858006933Z elapsed=500.582996ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+3.16µs end=+500.582056ms elapsed=500.578896ms requested wait=499.99737ms
+=== NAME  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+    decide_delivery_test.go:289: phase GetSpawnWithin lacks the original SQL deadline: 2026-10-16 01:08:00.862659574 +0000 UTC m=+1.796334583
+    decide_delivery_test.go:267: decide phases: call start=2026-10-16T01:08:00.362659384Z end=2026-10-16T01:08:00.86275412Z elapsed=500.094726ms total real sleep=0s
+    decide_delivery_test.go:269: decide phase GetSpawnWithin: start=+2.44µs end=+500.093996ms elapsed=500.091556ms requested wait=499.99783ms
+--- FAIL: TestDecideMaxWaitUnderHeldLock (0.00s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms (0.17s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (0.20s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout (0.32s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s (0.65s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s (0.65s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (0.65s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (0.67s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s (0.68s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s (0.68s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (0.68s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s (0.69s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s (0.70s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s (0.70s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s (0.71s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s (0.72s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (0.71s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s (0.72s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s (0.72s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s (0.72s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s (0.73s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s (0.74s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s (0.75s)
+    --- FAIL: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s (0.75s)
+--- PASS: TestDecideAbsoluteContextSurvivesParkedPhase (0.78s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/pkg/api	1.848s
+FAIL
+make: *** [Makefile:735: sandbox] Error 1

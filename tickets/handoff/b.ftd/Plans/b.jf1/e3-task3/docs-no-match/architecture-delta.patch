@@ -1,0 +1,21 @@
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -10967,9 +10967,15 @@
+    inspect the durable request before retry, without assuming rollback.
+    Without a bound, `writeError` reports store busy as an unnamed store
+    error (`ErrInternal`), as before decision 9 B, so a caller that passes
+-   no bound meets no new error name (problem 5 (a)). A write that matched
+-   nothing is named by `notWritten` (absent, decided or closed meanwhile,
+-   Spawn finished meanwhile, a pane answer recorded meanwhile).
++   no bound meets no new error name (problem 5 (a)). A guarded UPDATE that
++   matches nothing returns `sql.ErrNoRows` through `inWriteTx`, causing
++   rollback without COMMIT. `DecideRelayRequest` maps that sentinel to
++   `(false, nil)` only when the helper has not also classified precommit
++   expiry as `ErrStoreBusy`; expired cleanup retains the shared quarantine
++   path. A timely no-match is named by `notWritten` through follow-up reads
++   (absent, decided or closed meanwhile, Spawn finished meanwhile, a pane
++   answer recorded meanwhile). Potentially written verdicts still attempt
++   COMMIT and retain unconfirmed-outcome handling on a COMMIT error.
+ 6. `awaitAck`: at most `decideAckWait` (1 s) and never past the bound, on
+    the call's own clock. Before each read it judges the hook (from the
+    identity it read), then reads through `GetPermissionRequestWithin` with

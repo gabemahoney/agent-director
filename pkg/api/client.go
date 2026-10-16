@@ -310,12 +310,15 @@ func tmuxTimeouts(t config.Tmux) tmux.Timeouts {
 // return ErrClientClosed.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
 	c.closed = true
+	// checkClosed must not wait behind database/file cleanup. New calls see
+	// the closed flag while the owner releases its resources.
+	c.mu.Unlock()
 	return c.st.Close()
 }
 

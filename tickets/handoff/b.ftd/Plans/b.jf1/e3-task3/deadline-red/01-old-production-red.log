@@ -1,0 +1,9 @@
+=== RUN   TestDecideMaxWaitWithBlockedTrail
+    decide_trail_deadline_test.go:103: independent connection observed committed allow at +4.480057ms with trail mutex still held
+    decide_trail_deadline_test.go:92: decide has not returned after 1.500842204s; want within 1.5s while the real trail mutex remains held
+    decide_trail_deadline_test.go:123: decide finished after 1.505624411s; reporting released at +1.505631831s
+    decide_trail_deadline_test.go:125: decide returned after 1.505624411s; want within 1.5s
+--- FAIL: TestDecideMaxWaitWithBlockedTrail (1.54s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/pkg/api	1.546s
+FAIL

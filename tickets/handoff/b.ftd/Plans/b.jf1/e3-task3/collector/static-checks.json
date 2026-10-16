@@ -1,0 +1,110 @@
+{
+  "result": "passed static authoring checks only",
+  "case_bodies_executed": false,
+  "helpers_sourced": false,
+  "bash_n_cases": [
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md"
+  ],
+  "bash_n_helpers": [
+    "test/driver/cursor-pane-controls.sh"
+  ],
+  "node_syntax_only": [
+    "test/driver/cursor-pane-public.mjs",
+    "test/driver/cursor-pane-records.cjs"
+  ],
+  "registered_groups": [
+    {
+      "slug": "epic-03-spawn",
+      "collector": "tickets/testplans/b.75s/t1.75s.qo/t1.75s.qo.md",
+      "expected_cases": 22
+    },
+    {
+      "slug": "epic-04-interact",
+      "collector": "tickets/testplans/b.75s/t1.75s.9x/t1.75s.9x.md",
+      "expected_cases": 11
+    },
+    {
+      "slug": "epic-05-stop",
+      "collector": "tickets/testplans/b.75s/t1.75s.ks/t1.75s.ks.md",
+      "expected_cases": 15
+    },
+    {
+      "slug": "epic-06-discover",
+      "collector": "tickets/testplans/b.75s/t1.75s.fj/t1.75s.fj.md",
+      "expected_cases": 12
+    },
+    {
+      "slug": "epic-07-templates",
+      "collector": "tickets/testplans/b.75s/t1.75s.ze/t1.75s.ze.md",
+      "expected_cases": 8
+    },
+    {
+      "slug": "epic-08-recovery",
+      "collector": "tickets/testplans/b.75s/t1.75s.9b/t1.75s.9b.md",
+      "expected_cases": 8
+    },
+    {
+      "slug": "epic-09-resume",
+      "collector": "tickets/testplans/b.75s/t1.75s.ue/t1.75s.ue.md",
+      "expected_cases": 11
+    },
+    {
+      "slug": "epic-10-relay",
+      "collector": "tickets/testplans/b.75s/t1.75s.65/t1.75s.65.md",
+      "expected_cases": 8
+    },
+    {
+      "slug": "epic-11-mcp",
+      "collector": "tickets/testplans/b.75s/t1.75s.nd/t1.75s.nd.md",
+      "expected_cases": 9
+    },
+    {
+      "slug": "epic-12-install",
+      "collector": "tickets/testplans/b.75s/t1.75s.f7/t1.75s.f7.md",
+      "expected_cases": 13
+    },
+    {
+      "slug": "epic-13-agents",
+      "collector": "tickets/testplans/b.75s/t1.75s.ag/t1.75s.ag.md",
+      "expected_cases": 24
+    },
+    {
+      "slug": "harness-smoke",
+      "collector": "tickets/testplans/b.75s/t1.75s.by/t1.75s.by.md",
+      "expected_cases": 5
+    },
+    {
+      "slug": "installsh-preflight-gates",
+      "collector": "tickets/testplans/b.75s/t1.75s.pg/t1.75s.pg.md",
+      "expected_cases": 2
+    },
+    {
+      "slug": "template-overwrite",
+      "collector": "tickets/testplans/b.75s/t1.75s.ny/t1.75s.ny.md",
+      "expected_cases": 4
+    },
+    {
+      "slug": "cursor-owned-launch",
+      "collector": "tickets/testplans/b.jf1/t1.jf1.cl/t1.jf1.cl.md",
+      "expected_cases": 5
+    },
+    {
+      "slug": "cursor-relay",
+      "collector": "tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md",
+      "expected_cases": 10
+    },
+    {
+      "slug": "cursor-pane-controls",
+      "collector": "tickets/testplans/b.jf1/t1.jf1.pc/t1.jf1.pc.md",
+      "expected_cases": 5
+    }
+  ],
+  "expected_groups": 17,
+  "expected_total_cases": 172,
+  "new_expected_cases": 5,
+  "unknown_live_build_protocol_platform_scheduler_provenance": "PENDING"
+}

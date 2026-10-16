@@ -238,6 +238,11 @@ func TestCursorRotationIndependentEvidenceAndGateAreMandatory(t *testing.T) {
 			if err == nil || ok {
 				t.Fatalf("%s accepted %v %v", tc, ok, err)
 			}
+			// Expiry can return while the sole lease is still being discarded.
+			// Finish that lifecycle before the independent zero-wait SQL snapshot.
+			if _, err := e.f.s.GetSpawnWithin(row.InstanceID, time.Second); err != nil {
+				t.Fatalf("post-refusal cleanup/read: %v", err)
+			}
 			rotationVisibility(t, e, e.b.SessionID, 0)
 		})
 	}

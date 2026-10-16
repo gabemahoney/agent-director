@@ -1,0 +1,28 @@
+{
+  "epic": "t1.jf1.r8",
+  "criteria": "E3 AC1–7; SR-0.4 does not exist",
+  "inventory": "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md",
+  "registered_slug": "cursor-pane-controls",
+  "case_order": [
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md"
+  ],
+  "expected_groups": 17,
+  "expected_total_cases": 172,
+  "new_expected_cases": 5,
+  "execution_status": "NOT RUN",
+  "provenance": {
+    "captured": "authorization bodies from cursorfix/testdata/authorizations.json rebound to synthetic connection",
+    "source_derived": "direct synthetic question schema",
+    "scripted": "cursorfix ACP runtime; terminal input via actual tmux",
+    "actual_after_scheduler_only": "shipped image CLI/MCP and canonical built/packed/installed Bun consumer",
+    "authenticated_human": "PENDING"
+  },
+  "retained_public_owner": "test/realtmux/cursor_pane_controls_test.go and cursor_pane_controls_boundary_linux_test.go: 13 leaves retained from prior writer",
+  "Go": "Actual pkg/api public-client boundary already covered by public unit owner; no redundant Go shell build harness",
+  "deadline": "unchanged pkg/api/decide_trail_deadline_test.go causal mutex RED/GREEN plus real SQLite/cleanup/context/trail queue focused owners; no shell mutex imitation",
+  "raw_collector_artifact_mount": "/tmp/cursor-pane-controls-artifacts (scheduler must retain before --rm; shortened driver details is not raw receipt)"
+}

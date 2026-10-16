@@ -1,0 +1,29 @@
+{
+  "existing_inventory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/postdoc-advice-inventory.json",
+  "canonical_recovery_owner": "docs/caller-contract.md#permission-relay",
+  "canonical_recovery_links_unchanged": true,
+  "new_or_changed_commands": [],
+  "new_recovery_sequences": [],
+  "clarified_sequences": [
+    {
+      "id": "original_deadline_and_zero_wait",
+      "delta": "Caller may return while entered database work retains the connection; no renewed positive deadline or automatic replay. Existing deliberate fresh-call and uncertain-COMMIT inspection procedures unchanged."
+    },
+    {
+      "id": "cli_audit_teardown",
+      "delta": "Keep existing 1 s reply margin; includes separate fixed 500 ms process audit drain. Read structured result/error among stderr notices. Pending/failed drain preserves verdict exit code and may lose pending events at normal exit.",
+      "validation_owner": "Final Test Writer .yj/.zj",
+      "existing_evidence": "cmd/agent-director/decide_shutdown_linux_test.go; native-boundaries real CLI shutdown/ordinary exactly-once called receipts; pkg/ts-bun-client/src/internal/subprocessClient.ts scans error JSON among notices. No new literal advice pass claimed."
+    },
+    {
+      "id": "client_lifetime",
+      "delta": "Go Client.Close releases its store; host process retains audit lifetime. No new public shutdown API, command or procedure."
+    }
+  ],
+  "unchanged_recovery": [
+    "precommit_exhaustion_retry",
+    "unconfirmed_commit_inspect_before_retry",
+    "delivery_not_confirmed_poll"
+  ],
+  "literal_follow_status": "Final writer must review this delta against existing advice/CLI/Bun receipts; this docs role ran no tests."
+}

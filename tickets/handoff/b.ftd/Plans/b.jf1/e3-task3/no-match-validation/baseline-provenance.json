@@ -1,0 +1,6 @@
+{
+  "method": "Exact inverse of two no-match repair hunks, hash verified against contemporaneous legacy-commit-assessment before manifest. Current other production inputs unchanged; not old64a.",
+  "before": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+  "after": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+  "overlay": "overlay.json"
+}

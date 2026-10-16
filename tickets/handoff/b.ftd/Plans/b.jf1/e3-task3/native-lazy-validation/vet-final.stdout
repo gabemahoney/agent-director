@@ -1,0 +1,43 @@
+=== RUN   TestProductionConnectorExplicitCallerContexts
+=== RUN   TestProductionConnectorExplicitCallerContexts/default_unbounded
+=== RUN   TestProductionConnectorExplicitCallerContexts/default_cancel_only
+=== RUN   TestProductionConnectorExplicitCallerContexts/zero_work
+=== RUN   TestProductionConnectorExplicitCallerContexts/zero_parent_deadline
+--- PASS: TestProductionConnectorExplicitCallerContexts (0.40s)
+    --- PASS: TestProductionConnectorExplicitCallerContexts/default_unbounded (0.10s)
+    --- PASS: TestProductionConnectorExplicitCallerContexts/default_cancel_only (0.10s)
+    --- PASS: TestProductionConnectorExplicitCallerContexts/zero_work (0.10s)
+    --- PASS: TestProductionConnectorExplicitCallerContexts/zero_parent_deadline (0.10s)
+=== RUN   TestProductionLazyInitializationFailureIsNotLent
+--- PASS: TestProductionLazyInitializationFailureIsNotLent (0.05s)
+=== RUN   TestProductionLazyReplacementRetainsBoundedNativeOwner
+--- PASS: TestProductionLazyReplacementRetainsBoundedNativeOwner (0.69s)
+=== RUN   TestProductionLazyReplacementMultipleLegitimateWaiters
+    sqlite_lazy_native_test.go:303: actual native replacement borrower=legacy2
+--- PASS: TestProductionLazyReplacementMultipleLegitimateWaiters (0.56s)
+=== RUN   TestProductionFreshLazyBorrowerMethods
+=== RUN   TestProductionFreshLazyBorrowerMethods/exec
+=== RUN   TestProductionFreshLazyBorrowerMethods/query
+=== RUN   TestProductionFreshLazyBorrowerMethods/exec_fallback
+=== RUN   TestProductionFreshLazyBorrowerMethods/query_fallback
+=== RUN   TestProductionFreshLazyBorrowerMethods/prepare
+=== RUN   TestProductionFreshLazyBorrowerMethods/begin
+=== RUN   TestProductionFreshLazyBorrowerMethods/ping
+=== RUN   TestProductionFreshLazyBorrowerMethods/returned_unused
+=== RUN   TestProductionFreshLazyBorrowerMethods/raw_discard
+=== RUN   TestProductionFreshLazyBorrowerMethods/unopened_close
+--- PASS: TestProductionFreshLazyBorrowerMethods (0.51s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/exec (0.06s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/query (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/exec_fallback (0.06s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/query_fallback (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/prepare (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/begin (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/ping (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/returned_unused (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/raw_discard (0.05s)
+    --- PASS: TestProductionFreshLazyBorrowerMethods/unopened_close (0.05s)
+=== RUN   TestCursorPromptLateCountCannotPublishEligibility
+--- PASS: TestCursorPromptLateCountCannotPublishEligibility (0.58s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	3.838s

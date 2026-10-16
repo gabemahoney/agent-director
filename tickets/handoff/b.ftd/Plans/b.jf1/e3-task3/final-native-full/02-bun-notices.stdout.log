@@ -1,0 +1,18 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+bun test v1.3.13 (bf2e2cec)
+make: Entering directory '/work'
+CGO_ENABLED=0 go build -o bin/ts-helper ./test/smoke/ts-helper/
+make: Leaving directory '/work'
+make: Entering directory '/work'
+CGO_ENABLED=0 go build -o test/fake-tmux/tmux ./test/fake-tmux/ && chmod 755 test/fake-tmux/tmux
+make: Leaving directory '/work'
+make: Entering directory '/work'
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=e85a74c9803ffe1dddb80bdcb19bf4614f643839" -o ./bin/agent-director ./cmd/agent-director
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=e85a74c9803ffe1dddb80bdcb19bf4614f643839" -o ./bin/agent-director-admin ./cmd/agent-director-admin
+make: Leaving directory '/work'

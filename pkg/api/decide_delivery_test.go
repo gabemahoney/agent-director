@@ -9,7 +9,10 @@ package api_test
 // relayEnv.
 
 import (
+	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -68,7 +71,15 @@ func TestDecideReportsDelivery(t *testing.T) {
 				e := newRelayEnvAgent(t, relayEnvHook, agent)
 				e.ns = tc.ns
 				acked := false
-				res, waited, err := e.decideWith(t, e.s, "allow", tc.maxWaitMs, func() {
+				var policy *decidePolicyStore
+				call := func(atSleep func()) (api.DecideResult, time.Duration, error) {
+					if tc.maxWaitMs != nil {
+						policy = newDecidePolicyStore(t, e)
+						return policy.decide(tc.maxWaitMs)
+					}
+					return e.decideWith(t, e.s, "allow", tc.maxWaitMs, atSleep)
+				}
+				res, waited, err := call(func() {
 					if tc.gone {
 						e.pc.Set(relayEnvHook.PID, procfix.Gone())
 					}
@@ -87,7 +98,21 @@ func TestDecideReportsDelivery(t *testing.T) {
 					t.Errorf("decide = delivery %q, hook_alive %s, confirm_by %v after waiting %v; want %q, %s, %v after %v",
 						res.Delivery, aliveIs(res.HookAlive), res.ConfirmBy, waited, tc.want, tc.alive, e.settled, tc.waited)
 				}
-				if pr := e.request(t); pr.Decision != "allow" {
+				var pr api.PermissionRow
+				if policy != nil {
+					pr, err = policy.GetPermissionRequest(e.id, storefix.TestRequestTokenA)
+					if err != nil || policy.commits != 1 || len(policy.sleeps) != 6 {
+						t.Fatalf("policy commits=%d sleeps=%v read error=%v", policy.commits, policy.sleeps, err)
+					}
+					for _, d := range policy.sleeps {
+						if d != 50*time.Millisecond {
+							t.Errorf("policy poll=%v; want 50ms", d)
+						}
+					}
+				} else {
+					pr = e.request(t)
+				}
+				if pr.Decision != "allow" {
 					t.Errorf("request decision = %q; want allow recorded", pr.Decision)
 				}
 			})
@@ -210,6 +235,8 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 						t.Fatalf("OpenWithBusyTimeout: %v", err)
 					}
 					defer s.Close()
+					var commitStarted, commitConfirmed atomic.Bool
+					postcommitHolder := make(chan func(), 1)
 					view := e.view()
 					view.Now = time.Now
 					var release func()
@@ -220,11 +247,22 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 						release = holdStoreConnection(t, s, release)
 					}
 					phases := make([]decidePhase, 0, 32)
-					observed := &deadlineStore{DecideStore: s, phases: &phases}
+					observed := &deadlineStore{DecideStore: s, phases: &phases, originalDeadline: new(time.Time)}
+					if tc.lockLater {
+						observed.afterVerdict = func(written bool, err error) {
+							if written || err != nil && strings.Contains(err.Error(), "commit outcome unconfirmed") {
+								commitStarted.Store(true)
+							}
+							if written {
+								commitConfirmed.Store(true)
+								postcommitHolder <- apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+							}
+						}
+					}
 					var realSleep time.Duration
 					sleep := func(d time.Duration) {
 						entered := time.Now()
-						if release == nil {
+						if release == nil && !tc.lockLater {
 							release = apitest.HoldWriteLock(t, e.dbPath, time.Minute)
 						}
 						ready := time.Now()
@@ -252,8 +290,41 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 					if release != nil {
 						release()
 					}
+					// Join the operation's safe lease before durable inspection of an
+					// unconfirmed response; never replay it to obtain a desired phase.
+					verifyCtx, stopVerify := context.WithTimeout(context.Background(), 3*time.Second)
+					_, verifyErr := s.WithContext(verifyCtx).GetSpawnWithin(e.id, store.DefaultLockWait)
+					stopVerify()
+					if verifyErr != nil {
+						t.Fatalf("safe lease inspection: %v", verifyErr)
+					}
+					if tc.lockLater && commitConfirmed.Load() {
+						select {
+						case free := <-postcommitHolder:
+							free()
+							t.Log("actual COMMIT and postcommit holder-ready observed")
+						case <-time.After(time.Second):
+							t.Fatal("actual COMMIT lacked holder-ready event")
+						}
+					}
 
-					if tc.want == nil {
+					wantDecision := tc.decision
+					if tc.lockLater && !commitStarted.Load() {
+						assertOneSentinel(t, err, api.ErrStoreBusy)
+						wantDecision = ""
+						t.Log("physical guard expired before COMMIT; exact postcommit policy is covered separately")
+					} else if tc.lockLater && err != nil && strings.Contains(err.Error(), "commit outcome unconfirmed") {
+						if errors.Is(err, api.ErrStoreBusy) {
+							t.Error("in-flight COMMIT misclassified as Busy")
+						}
+						wantDecision = e.request(t).Decision
+						if wantDecision != "" && wantDecision != "allow" {
+							t.Errorf("uncertain COMMIT invalid durable decision %q", wantDecision)
+						}
+					} else if tc.gone && errors.Is(err, api.ErrStoreBusy) {
+						assertOneSentinel(t, err, api.ErrStoreBusy)
+						t.Log("physical guard expired during authoritative preclassification reads")
+					} else if tc.want == nil {
 						if err != nil || res.Delivery != api.DeliveryNotConfirmed {
 							t.Errorf("decide = %+v, %v; want not_confirmed, no error", res, err)
 						}
@@ -263,8 +334,13 @@ func TestDecideMaxWaitUnderHeldLock(t *testing.T) {
 					if limit := bound*time.Millisecond + time.Second; took > limit {
 						t.Errorf("decide returned after %v; want within %v", took, limit)
 					}
-					if pr := e.request(t); pr.Decision != tc.decision || pr.AttemptedDecision != "" {
-						t.Errorf("request = decision %q, attempted %q; want %q, none", pr.Decision, pr.AttemptedDecision, tc.decision)
+					for _, phase := range phases {
+						if phase.name != "sleep callback enter to holder ready" && phase.name != "real sleep" && (phase.deadline.IsZero() || !phase.deadline.Equal(*observed.originalDeadline)) {
+							t.Errorf("phase %s lacks the original SQL deadline: %v", phase.name, phase.deadline)
+						}
+					}
+					if pr := e.request(t); pr.Decision != wantDecision || pr.AttemptedDecision != "" {
+						t.Errorf("request = decision %q, attempted %q; want %q, none", pr.Decision, pr.AttemptedDecision, wantDecision)
 					}
 				})
 			}
@@ -326,20 +402,41 @@ type decidePhase struct {
 	name       string
 	start, end time.Time
 	wait       time.Duration
+	deadline   time.Time
 }
 
 // deadlineStore observes the bounded calls used by the deadline table, delegating
 // every operation to its real store. Unbounded methods are forwarded by embedding.
 type deadlineStore struct {
 	api.DecideStore
-	phases *[]decidePhase
+	phases           *[]decidePhase
+	ctx              context.Context
+	originalDeadline *time.Time
+	afterVerdict     func(bool, error)
+}
+
+func (s *deadlineStore) WithDecideContext(ctx context.Context) api.DecideStore {
+	scoped := *s
+	scoped.ctx = ctx
+	*s.originalDeadline, _ = ctx.Deadline()
+	if real, ok := s.DecideStore.(*store.Store); ok {
+		scoped.DecideStore = real.WithContext(ctx)
+	} else if contextual, ok := s.DecideStore.(interface {
+		WithDecideContext(context.Context) api.DecideStore
+	}); ok {
+		scoped.DecideStore = contextual.WithDecideContext(ctx)
+	} else {
+		panic("deadline observer requires a context-aware delegate")
+	}
+	return &scoped
 }
 
 func (s *deadlineStore) observe(name string, wait time.Duration) func() {
 	start := time.Now()
 	return func() {
 		end := time.Now()
-		*s.phases = append(*s.phases, decidePhase{name: name, start: start, end: end, wait: wait})
+		deadline, _ := s.ctx.Deadline()
+		*s.phases = append(*s.phases, decidePhase{name: name, start: start, end: end, wait: wait, deadline: deadline})
 	}
 }
 
@@ -360,7 +457,11 @@ func (s *deadlineStore) PermissionRequestsForSpawnWithin(id string, wait time.Du
 
 func (s *deadlineStore) DecideRelayRequest(id, token, decision, reason, writer string, cutoff time.Time, wait time.Duration) (bool, error) {
 	defer s.observe("DecideRelayRequest (including verdict write return)", wait)()
-	return s.DecideStore.DecideRelayRequest(id, token, decision, reason, writer, cutoff, wait)
+	written, err := s.DecideStore.DecideRelayRequest(id, token, decision, reason, writer, cutoff, wait)
+	if s.afterVerdict != nil {
+		s.afterVerdict(written, err)
+	}
+	return written, err
 }
 
 func (s *deadlineStore) RecordRefusedDecision(id, token, decision string, at, gone time.Time, wait time.Duration) error {
@@ -444,32 +545,38 @@ func minTime(a, b time.Time) time.Time {
 }
 
 // TestAdviceFollow_F9_DecideStoreBusyRetry: F9 ErrStoreBusy "nothing was
-// recorded, so retry". Followed literally, the same decide retried once the
-// lock is free records the verdict; while it is held the retry is refused
-// alike, nothing recorded.
+// recorded, so retry". Controlled policy availability preserves two refusals
+// then a fresh-budget success; real SQLite locking has its deadline owner above.
 func TestAdviceFollow_F9_DecideStoreBusyRetry(t *testing.T) {
 	t.Parallel()
 	adviceAssertGoDoc(t, "decide.go", "Decide", "[ErrStoreBusy]: MaxWaitMs prevents completing a required wait before recording the verdict; nothing was recorded, so retry.")
 	adviceAssertManifest(t, "decide", "max_wait_ms", "if they cannot finish in time, ErrStoreBusy records nothing and a retry is safe")
 	e := newRelayEnv(t, relayEnvHook)
+	policy := newDecidePolicyStore(t, e)
+	policy.held = true
 	decide := func() error {
-		_, _, err := e.decideWith(t, e.s, "allow", ptr(int64(100)), nil)
+		_, _, err := policy.decide(ptr(int64(100)))
 		return err
 	}
-	release := apitest.HoldWriteLock(t, e.dbPath, time.Minute)
 	first := decide()
 	assertOneSentinel(t, first, api.ErrStoreBusy)
-	if again := decide(); !errors.Is(again, api.ErrStoreBusy) || e.request(t).Decision != "" {
-		t.Errorf("retried while the lock is held: %v, decision %q; want ErrStoreBusy again, nothing recorded", again, e.request(t).Decision)
+	if pr, _ := policy.GetPermissionRequest(e.id, storefix.TestRequestTokenA); pr.Decision != "" || pr.AttemptedDecision != "" || policy.commits != 0 {
+		t.Fatalf("first held call mutated policy request: %+v commits=%d", pr, policy.commits)
 	}
-	release()
+	if again := decide(); !errors.Is(again, api.ErrStoreBusy) || policy.row.Decision != "" || policy.row.AttemptedDecision != "" || policy.commits != 0 {
+		t.Errorf("retried while held: %v, request %+v commits=%d; want ErrStoreBusy again, nothing recorded", again, policy.row, policy.commits)
+	}
+	policy.held = false
 
 	// The advice, literally: retry.
 	if err := decide(); err != nil {
 		t.Fatalf("decide retried: %v; want the verdict recorded", err)
 	}
-	if pr := e.request(t); pr.Decision != "allow" {
+	if pr, _ := policy.GetPermissionRequest(e.id, storefix.TestRequestTokenA); pr.Decision != "allow" || policy.commits != 1 {
 		t.Errorf("request decision = %q; want allow", pr.Decision)
+	}
+	if err := decide(); !errors.Is(err, api.ErrAlreadyDecided) || policy.commits != 1 {
+		t.Errorf("duplicate call=%v commits=%d; want first verdict preserved", err, policy.commits)
 	}
 }
 

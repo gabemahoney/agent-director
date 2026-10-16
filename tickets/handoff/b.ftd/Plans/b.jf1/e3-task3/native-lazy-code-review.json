@@ -1,0 +1,7 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task3_lazy_connector",
+  "verdict": "No source findings; N1/N1b/N2 sourceclosed",
+  "assessment": "Background replacement returns an unopened logical connection without synthetic ErrBadConn. Actual borrower methods initialize it under their own context/retained operation ownership; multiple waiters no longer consume retry allowance merely to get capacity. CheckCursorPrompt error-first publication retained.",
+  "scope": "Reviewed full connector interfaces/fallbacks/direct callers/cancellation/init cleanup/reuse constraints/Raw disposal using retained Go1.22.10+modernc source evidence; source/before/patch hashes verified. Read-only no tests/build/lint/mutations.",
+  "limits": "Independent production-pool single/multiwaiter and lateCOUNT regressions pending; no fullpass or historical09causeclaim."
+}

@@ -693,7 +693,9 @@ func (s *Store) DecideRelayRequest(instanceID, requestToken, decision, reason, w
 	err := s.inWriteTx(maxWait, func(ctx context.Context, conn *sql.Conn) error {
 		err := conn.QueryRowContext(ctx, decideRelayRequestSQL, args...).Scan(&requestID, &toolName)
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			// No verdict matched the guards. Roll back this transaction rather
+			// than attempt a COMMIT whose outcome the caller need not resolve.
+			return sql.ErrNoRows
 		}
 		if err != nil {
 			return fmt.Errorf("store: decide permission: %w", err)
@@ -701,11 +703,14 @@ func (s *Store) DecideRelayRequest(instanceID, requestToken, decision, reason, w
 		written = true
 		return nil
 	})
+	if errors.Is(err, sql.ErrNoRows) && !errors.Is(err, ErrStoreBusy) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
 	if written {
-		emitDecisionCommitted(instanceID, requestToken, requestID, toolName, decision, reason, writerProcess)
+		emitDecisionCommittedContext(s.callContext, instanceID, requestToken, requestID, toolName, decision, reason, writerProcess)
 	}
 	return written, nil
 }
@@ -721,6 +726,13 @@ func (s *Store) DecideRelayRequest(instanceID, requestToken, decision, reason, w
 // reason "" are emitted as null. A trail-emit failure must not fail the store
 // call (SR-A-3.2).
 func emitDecisionCommitted(instanceID, requestToken string, requestID int64, toolName, decision, reason, writerProcess string) {
+	emitDecisionCommittedContext(nil, instanceID, requestToken, requestID, toolName, decision, reason, writerProcess)
+}
+
+func emitDecisionCommittedContext(ctx context.Context, instanceID, requestToken string, requestID int64, toolName, decision, reason, writerProcess string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var decisionField, decisionReasonField any
 	if decision != "" {
 		decisionField = decision
@@ -728,7 +740,7 @@ func emitDecisionCommitted(instanceID, requestToken string, requestID int64, too
 	if reason != "" {
 		decisionReasonField = reason
 	}
-	_ = trail.Emit(context.Background(), "ad.row_mutation.committed", map[string]any{
+	_ = trail.Emit(ctx, "ad.row_mutation.committed", map[string]any{
 		"instance_id":     instanceID,
 		"request_token":   requestToken,
 		"request_id":      requestID,

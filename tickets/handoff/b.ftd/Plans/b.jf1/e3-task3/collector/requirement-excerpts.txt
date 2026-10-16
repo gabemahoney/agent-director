@@ -1,0 +1,22 @@
+### SR-0.2: Interactive terminal and transcript
+- The gateway implements `/clear`, `/new` and `/exit` as local terminal commands with SR-3.3/SR-6 confirmation and history rules; it does not forward them blindly as model prompts. Protocol request identity binds displayed choices to their answers.
+### SR-0.3: Pane identity and coupled lifetime
+### SR-3.1: Human takeover
+### SR-3.2: Automated and human input
+### SR-3.3: Terminal commands
+### SR-4.1: State meanings
+### SR-4.2: Authoritative identity
+- Liveness is determined from process evidence, never screen content. The tracked gateway must terminate when its owned Cursor child exits, as required by SR-0.3; a surviving renderer, worker or hook cannot keep that launch live.
+### SR-6.2: Latest-session resume and current life
+### SR-9.2: Time bounds
+| AC-2: Cursor-only install, launch path/failures | SR-2.1–2.2; SR-9.2; SR-10.3 |
+| AC-3: own pane, read-pane, multiline sends | SR-3.1–3.2; SR-4.2; SR-10.3 |
+| AC-4: attach and normal typing takeover | SR-3.1–3.3; SR-11.1; R1 |
+| AC-5: startup, pending, state meanings | SR-2.1; SR-4.1–4.2; SR-5.3 |
+| AC-6: all permissions, delivery/fallback/safety | SR-5.1–5.2; SR-3.2; R2 |
+| AC-8: Cursor question-off denial (Gabe amendment) | SR-5.3; SR-4.1; R3 |
+| AC-9: pause/kill ownership and survivor limits | SR-4.2; SR-6.1; SR-9.1; R1 |
+| AC-10: session rotation/stale exit identities | SR-3.3; SR-4.2; SR-6.2; R4 |
+| AC-11: latest resume, lives, child association | SR-1.2; SR-6.2; SR-10.3; R4 |
+| AC-13: honest subagents/required child relay | SR-8.1; SR-4.2; SR-5.1–5.2; R2 |
+Corrected traceability: SR-0.4 does not exist. Public terminal/transcript coverage maps to SR-0.2; pane identity/coupled lifetime SR-0.3; human/mixed input and terminal commands SR-3.1–3.3; state/authoritative identity SR-4.1–4.2; current-life history SR-6.2. This does not authorize E4 resume/load/reuse/life-switch work. Current .wn/.wc tickets and planning/context.md corrected; historical snapshots remain unchanged evidence.

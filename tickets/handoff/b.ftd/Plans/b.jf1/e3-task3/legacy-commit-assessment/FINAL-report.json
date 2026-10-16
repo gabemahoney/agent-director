@@ -1,0 +1,153 @@
+{
+  "role": "apiary_engineer_e3_task3_legacy_commit_assessment",
+  "result": "Real no-match transaction defect repaired with one minimal source change; existing targeted race checks pass. Independent deterministic no-match regression and later settled full-suite run remain caller-owned.",
+  "tickets": {
+    "t3.jf1.r8.a8.ir": "done -> active -> done"
+  },
+  "status_scope": "Only own source Subtask .ir changed; no other ticket status changed.",
+  "files_changed": [
+    "internal/store/permission.go"
+  ],
+  "source_before": {
+    "sha256": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "mode": 436
+  },
+  "source_after": {
+    "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+    "mode": 436
+  },
+  "assessment": {
+    "retained_failure": "contract-final-tests/04-full-test-sandbox.log: unchanged legacy actual SQLite case expected ErrStoreBusy, observed commit outcome unconfirmed wrapping context deadline exceeded. Subsequent no-sleep, original 100ms+1s physical and independent no-decision/no-attempt assertions reported no failures. Subtest 1.53s includes setup; no phase trace proves actual COMMIT duration or historical09 cause.",
+    "defect": "DecideRelayRequest converted sql.ErrNoRows from guarded UPDATE RETURNING to nil inside inWriteTx. That instructed the helper to attempt COMMIT for a transaction with no matched verdict. Deadline expiry during that unnecessary COMMIT was correctly classified unconfirmed by the helper but prevented the caller from naming the known guarded refusal.",
+    "fix": "Return sql.ErrNoRows from the callback, invoking existing precommit rollback/quarantine cleanup. After the helper, convert the no-match sentinel to (false,nil) only if the helper did not also classify precommit context expiry as ErrStoreBusy. There is no COMMIT attempt for a successful no-match observation. The API performs its existing follow-up reads and legacy settling refusal.",
+    "safety": "No earlier API refusal based on a stale read. Guarded UPDATE, BEGIN IMMEDIATE and first-writer atomicity are unchanged. The zero-row path never sets written or emits a committed mutation. Existing rollback/restoration and expired-disposal quarantine remain authoritative. A matched UPDATE still reaches the same COMMIT; every possibly written COMMIT error remains internal unconfirmed. A precommit expired callback keeps ErrStoreBusy, with the original underlying error.",
+    "scope": "No helper-wide speculative error reclassification, deadline enlargement, reduced parallelism, assertion weakening, SQL guard change, public signature/schema/model change or fixture distortion."
+  },
+  "technical_decision_for_srd": "A guarded decision UPDATE that returns no row is a precommit no-match outcome: roll its transaction back rather than COMMIT. Return false,nil to allow existing race-aware refusal classification when the callback/operation is still valid; retain helper ErrStoreBusy on precommit expiry. Only potentially applied verdicts attempt COMMIT and retain unconfirmed-outcome handling on COMMIT error.",
+  "independent_test_handoff": {
+    "seam": "Use existing internal/store/deadline_boundary_test.go installDeadlineBoundary/ObserveDecisionBoundaryForTest around actual SQLite. Arrange a legacy cutoff mismatch (or other explicit guarded nonmatch), count BEGIN/UPDATE/ROLLBACK/COMMIT; a COMMIT hook should fail or cancel if reached. Assert (false,nil), zero COMMIT, one guarded UPDATE and rollback, no durable decision/attempt/mutation event, restored PRAGMA and reusable connection after awaiting cleanup through the existing pool-lease helper. Run a separate controlled cancellation during no-match SQL or rollback to exercise original deadline/quarantine, retaining original physical bounds.",
+    "red_reason": "On source before this patch, no-match callback returns nil and reaches the fail-on-COMMIT hook; repaired source never reaches it. This adds deterministic coverage for the exact no-match branch without relying on 100ms host-load timing.",
+    "preserve": "Keep original parallel actual-SQL TestDecideMaxWaitUnderHeldLock legacy case with 100ms/no-sleep/no-decision/no-attempt and 1.1s physical guard unchanged. Keep protected blocked-trail test bytes, 500ms and 1.5s. Keep real committed-response boundary case proving durable allow plus unconfirmed error, never Busy."
+  },
+  "doc_implications": {
+    "owner": "One later batched DocWriter pass",
+    "required": "Add narrow architecture note near bounded inWriteTx users / DecideRelayRequest step: guarded no-match rolls back without COMMIT, then existing follow-up refusal classification applies. Existing COMMIT ambiguity and caller retry advice remain intact. No caller-visible contract change; user docs need no new error or budget."
+  },
+  "commands": [
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/legacy-commit-assessment/evidence.mjs before'",
+      "log": "01-before.log",
+      "exit_code": 0
+    },
+    {
+      "command": "make sandbox CMD='gofmt -w internal/store/permission.go && go test -race -timeout 150s -count=1 -v ./internal/store ./pkg/api -run \"^(TestDecideRelayRequestGuards|TestRelayWritePrecondition|TestDecision|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'",
+      "log": "02-targeted-race.log",
+      "exit_code": 0
+    },
+    {
+      "command": "make sandbox CMD='go test -race -timeout 90s -count=1 -v ./internal/store -run \"^TestDecision\" && go vet ./internal/store && git diff --check && bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/legacy-commit-assessment/evidence.mjs after'",
+      "log": "03-boundaries-vet-integrity.log",
+      "exit_code": 0
+    }
+  ],
+  "targeted_results": {
+    "02-targeted-race.log": {
+      "sha256": "3bbea44883aa62cea89d44dfd19c43a4e394745b51756f97fd74ca22455a76b4",
+      "passed_leaves": 38,
+      "leaves": [
+        "TestDecideRelayRequestGuards/undecided",
+        "TestDecideRelayRequestGuards/undecided,_the_legacy_cutoff_after_created_at",
+        "TestDecideRelayRequestGuards/decided",
+        "TestDecideRelayRequestGuards/its_hook's_timeout_deny_delivered",
+        "TestDecideRelayRequestGuards/a_pane_answer_begun",
+        "TestRelayWritePrecondition/ack/lock_held_past_the_wait",
+        "TestRelayWritePrecondition/ack/precondition_fails",
+        "TestRelayWritePrecondition/ack/precondition_holds",
+        "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+        "TestRelayWritePrecondition/timeout_deny/precondition_fails",
+        "TestRelayWritePrecondition/timeout_deny/precondition_holds",
+        "TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry",
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitWithBlockedTrail",
+        "TestDecideAbsoluteContextSurvivesParkedPhase",
+        "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+        "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      ],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t2.531s",
+        "ok  \tgithub.com/gabemahoney/agent-director/pkg/api\t3.370s"
+      ],
+      "failures": []
+    },
+    "03-boundaries-vet-integrity.log": {
+      "sha256": "4165977b76d0431443b07a5eb5c11966d7ad9c563139ad0b4778ffc77dd92ec9",
+      "passed_leaves": 13,
+      "leaves": [
+        "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+        "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+        "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance"
+      ],
+      "packages": [
+        "ok  \tgithub.com/gabemahoney/agent-director/internal/store\t3.091s"
+      ],
+      "failures": []
+    }
+  },
+  "integrity": {
+    "inputs": 484,
+    "manifests": [
+      "input-manifest-before.json",
+      "input-manifest-after.json"
+    ],
+    "only_changed_input": "internal/store/permission.go",
+    "reviewed_complete_reports_and_raw_full_log": "reviewed-inputs-before.json / reviewed-inputs-after.json (11 complete files read and hash-bound)",
+    "protected_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "tests_and_docs_changed": []
+  },
+  "deviations": [
+    "First targeted selector accidentally anchored TestDecision as a whole literal, so Store TestDecision* boundary cases were not selected there. Corrected with a separate prefix-only Store run; no unchanged failed test rerun."
+  ],
+  "failures": [],
+  "limits": [
+    "This lane did not reproduce the full-suite scheduling condition or claim its exact native COMMIT timing; static control flow establishes the unnecessary no-match COMMIT and the existing unchanged legacy test passes after actual source repair.",
+    "No full suite run here. Earlier failed receipts/manifests remain unmodified. Historical09 causes remain unknown.",
+    "Cancellation remains cooperative; process descheduling/native uninterruptible I/O limits unchanged. Accepted audit pending remains memory resident, not crash durable."
+  ],
+  "boundaries": "All repository execution, formatting, tests, vet and evidence scripts through make sandbox with fresh container HOME and per-test isolated stores/sockets/owned processes. No tests/docs edits, .claude access, real AD stores, credentials/login/logout/live Cursor, host repository execution, local Docker groups/collectors/helpers, scheduler jobs, commits/pushes, subagents or outbound messages. Parent-only technical progress reports sent.",
+  "formal": "No spec/tla changes; zero TLA/TLC/Java/parser/scheduler jobs.",
+  "incomplete_work": [
+    "Independent deterministic no-match regression, source review and one later batched documentation note; necessary settled full run by sole full-suite owner."
+  ],
+  "questions_for_caller": []
+}

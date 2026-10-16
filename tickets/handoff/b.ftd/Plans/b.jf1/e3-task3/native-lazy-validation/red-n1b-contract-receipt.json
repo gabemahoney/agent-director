@@ -1,0 +1,44 @@
+{
+  "command": [
+    "go",
+    "test",
+    "-race",
+    "-count=1",
+    "-timeout",
+    "60s",
+    "-overlay",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-lazy-validation/red-n1b-contract-overlay.json",
+    "./internal/store",
+    "-run",
+    "TestProductionLazyReplacementMultipleLegitimateWaiters",
+    "-v"
+  ],
+  "status": 1,
+  "signal": null,
+  "verified_before": [
+    {
+      "path": "internal/store/sqlite_connector.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/before/internal/store/sqlite_connector.go",
+      "sha256": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+      "mode": "664"
+    }
+  ],
+  "replacements": {
+    "/work/internal/store/sqlite_connector.go": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-multiwaiter-fix/before/internal/store/sqlite_connector.go"
+  },
+  "environment": {
+    "HOME": "/tmp/native-lazy-home-2afgel",
+    "GOMODCACHE": "/go/pkg/mod",
+    "GOCACHE": "/home/sandbox/.cache/go-build",
+    "sandbox": "1"
+  },
+  "changed_inputs": [],
+  "stdout": {
+    "sha256": "4edb54c7f2c6998613a3052a636d5086eec39cb6ef668fc11e0b28fb5fb7160f",
+    "mode": "644"
+  },
+  "stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mode": "644"
+  }
+}

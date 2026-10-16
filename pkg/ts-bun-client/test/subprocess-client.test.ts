@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { ErrCallTimeout, ErrConsumerSignal } from "../src/errors.js";
+import { ErrCallTimeout, ErrConsumerSignal, ErrStoreBusy } from "../src/errors.js";
 import { PKG_VERSION, openClient, rejection, withProcessEnv } from "./internal/helper.js";
 
 const FIXTURES = path.resolve(import.meta.dir, "fixtures/epic-a");
@@ -24,6 +24,24 @@ afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 function makeClient(fixture: string, extra: Record<string, unknown> = {}) {
   return openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: path.join(FIXTURES, fixture), callTimeoutMs: 5000, ...extra });
 }
+
+test("Task3: structured error survives stderr notices before and after audit shutdown", async () => {
+  const cli = path.join(tmp, `${crypto.randomUUID()}-audit-notices.sh`);
+  fs.writeFileSync(cli, `#!/bin/sh
+if [ "$1" = version ]; then
+  printf '{"version":"0.0.0-dev","commit":"probe"}\\n'
+  exit 0
+fi
+printf 'agent-director: audit notice before result\\n' >&2
+printf '{"err_name":"ErrStoreBusy","err_description":"original deadline exhausted"}\\n' >&2
+printf 'agent-director: audit shutdown: pending: context deadline exceeded\\n' >&2
+exit 1
+`, { mode: 0o700 });
+  using client = await openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: cli });
+  const err = await rejection(client.list({}));
+  expect(err).toBeInstanceOf(ErrStoreBusy);
+  expect(err).toMatchObject({ verb: "list", errDescription: "original deadline exhausted" });
+});
 
 test("call N rejects (subprocess crash) → call N+1 still succeeds", async () => {
   await withProcessEnv({ CALL_MARKER_FILE: path.join(tmp, `${crypto.randomUUID()}-marker`) }, async () => {

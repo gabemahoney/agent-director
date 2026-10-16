@@ -1,0 +1,461 @@
+// Package store is the single layer permitted to touch SQL in agent-director.
+//
+// Per SRD §4.5, no other package may import database/sql or speak SQL directly.
+// Callers receive a *Store with typed methods (added in later Tasks); raw
+// *sql.DB and SQL strings stay private to this package.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/sys/unix"
+	_ "modernc.org/sqlite" // pure-Go SQLite driver registered as "sqlite"
+
+	"github.com/gabemahoney/agent-director/internal/layout"
+)
+
+// ErrSchemaMismatch is returned by Open/OpenOrInit when the SQLite
+// user_version is non-zero and does not match the schema version this binary
+// understands, and when a store at the current version has no valid store id
+// (store_meta's store_id row missing, or not 16 lowercase hex; SR-5.1, WD
+// 2026-09-29 STORE). Callers should use errors.Is to detect it.
+var ErrSchemaMismatch = errors.New("store: schema version mismatch")
+
+// ErrSchemaMigrationRequired is returned by Open/OpenOrInit when the SQLite
+// user_version is older than the version this binary understands and no valid
+// administrator authorization was presented to permit the migration. The store
+// never auto-migrates on open; the upgrade must be performed out-of-band by an
+// administrator via the agent-director install process. Callers should use
+// errors.Is to detect it.
+//
+// The user-visible message deliberately names no command, flag, file path, or
+// environment variable — it is a dead end that routes the operator to their
+// administrator (SR-1.4).
+var ErrSchemaMigrationRequired = errors.New("store: schema migration required")
+
+// ErrOldLayout is returned, by CheckOldLayout, to a verb or the hook about to
+// open the default store when no store exists there and the old directory, the
+// one agent-director used before ~/.config/agent-director, is present. Nothing
+// was opened or created. The description says what was refused and to run this
+// release's install.sh, which moves the old directory. Callers use errors.Is
+// to detect it.
+var ErrOldLayout = errors.New("store: this host still has the old agent-director directory and no store in ~/.config/agent-director; run this release's install.sh to move it")
+
+// CheckOldLayout returns an error wrapping ErrOldLayout when the old
+// directory is present (internal/layout's presence rule) and no store exists
+// at the default path in ~/.config/agent-director. It examines names only and
+// creates nothing. With HOME unset, empty or not absolute it returns nil: the
+// open that follows refuses that case as it always did.
+//
+// The caller applies it only when it is about to open the default store: no
+// --store-path or Options.StorePath, and no [store] db_path set in the config
+// file (config.Store.DbPathSet), and before anything that can create a file.
+func CheckOldLayout() error {
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return nil
+	}
+	if layout.OldPresent(home) && !layout.StoreExists(home) {
+		return ErrOldLayout
+	}
+	return nil
+}
+
+// ErrStoreNotInitialized is returned by Open when the database file does not
+// exist. It signals that the caller should either run OpenOrInit (which
+// creates the file and applies the schema) or report a useful error to the
+// user. Callers should use errors.Is to detect it.
+var ErrStoreNotInitialized = errors.New("store: database not initialized")
+
+// errNoHome is returned, wrapped, by Open and OpenOrInit when path starts
+// with "~/" and no home directory can be determined (HOME unset or empty);
+// see expandTilde. Nothing is opened or created.
+var errNoHome = errors.New("no home directory")
+
+// errEmptyPath is returned, wrapped, by Open and OpenOrInit for an empty
+// path; see resolvePath. Nothing is opened or created.
+var errEmptyPath = errors.New("empty database path")
+
+// schemaVersion is the current schema version this package writes and reads.
+// Bump (and add a migration) whenever the DDL in schema.go changes.
+const schemaVersion = 11
+
+// agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
+// migrateV8toV9, b.ssz) produces. install.sh holds the same number as
+// AGENT_RENAME_HOP_VERSION: it migrates config.toml and the templates only
+// for a store below it (SR-11.2), and a Go test fails when the two differ.
+// Unlike schemaVersion it never moves when a later hop is added.
+const agentRenameHopVersion = 9
+
+// dbFileMode is the mode the SQLite file itself is forced to on every Open.
+// 0600 = owner read/write only.
+const dbFileMode os.FileMode = 0o600
+
+// parentDirMode is the mode applied to the parent directory of the DB file
+// when it is created. 0700 = owner traverse/read/write only.
+const parentDirMode os.FileMode = 0o700
+
+// Store is the opaque handle callers hold for the lifetime of a process.
+// The underlying *sql.DB is unexported on purpose — see package doc.
+type Store struct {
+	// callContext is immutable on a scoped handle; the pool is shared with its
+	// owner. It carries the original caller deadline through every statement.
+	callContext context.Context
+	cleanup     *connectionCleanupLane
+	filePath    string // actual opened database, retained for owned Cursor launch plumbing
+	db          *sql.DB
+	// storeID is store_meta's store_id, read once at open (SR-5.1); see
+	// StoreID.
+	storeID string
+	// busyTimeoutMs is the busy timeout the store's connection was opened
+	// with (busyTimeoutOrDefault's value). A bounded-wait write sets a
+	// shorter one on the connection for its own transaction and puts this
+	// one back afterwards (lockwait.go).
+	busyTimeoutMs int
+	// settleMs is the settle time, in whole milliseconds, this process's hook
+	// writes judge the raw value they replace with ([state] settle_ms, b.3ie;
+	// settle.go): 0 until SetSettleMs, which every opener that loads the
+	// config calls once right after the open.
+	settleMs int64
+	// hookBeforeUpdateForTest is a test seam, nil in production: when set,
+	// ApplyHookTransitionResult calls it after its Go-side read of the prior
+	// state and before its UPDATE, so a test can write the row in that window
+	// (b.3ie) and prove the UPDATE decides the same-value test and the settle
+	// base itself, never from that read. Set only by this package's tests,
+	// on their own Store and before the call; a hook that writes through the
+	// same Store must clear it first or it runs again on the inner call.
+	hookBeforeUpdateForTest func()
+}
+
+// DefaultBusyTimeoutMs is the busy timeout, in whole milliseconds (10000),
+// with which Open and OpenOrInit open the store: the default of the
+// [store] busy_timeout_ms config key, config.DefaultStoreBusyTimeoutMs, which
+// this package does not import (the dependency arrow points into store,
+// never out). Every opener that loads the config (pkg/api.New, the hook
+// handler) passes the configured value to OpenWithBusyTimeout or
+// OpenOrInitWithBusyTimeout instead, which open with DefaultBusyTimeoutMs in
+// place of a value outside 1 to math.MaxInt32 (busyTimeoutOrDefault; b.c7f).
+const DefaultBusyTimeoutMs = 10000
+
+// Open opens an existing SQLite database at path with the busy timeout
+// DefaultBusyTimeoutMs; see OpenWithBusyTimeout.
+func Open(path string) (*Store, error) {
+	return OpenWithBusyTimeout(path, DefaultBusyTimeoutMs)
+}
+
+// OpenWithBusyTimeout opens an existing SQLite database at path. It does NOT
+// create the parent directory or the database file; if the file is absent it
+// returns ErrStoreNotInitialized. Use OpenOrInitWithBusyTimeout when
+// create-if-missing behavior is required (e.g. CLI first-run).
+//
+// busyTimeoutMs is how long each of the store's connections waits for a lock
+// another connection holds, in whole milliseconds (SQLite's busy timeout; see
+// openDB). Pass config.Store.EffectiveBusyTimeoutMs, which a loaded config
+// keeps between 1 and math.MaxInt32. A value outside that range (0, a
+// negative value, or one above math.MaxInt32), which SQLite would take as
+// turning the wait off, is never passed on: the store opens with
+// DefaultBusyTimeoutMs instead (see busyTimeoutOrDefault).
+//
+// A leading "~/" in path is expanded against $HOME; with HOME unset or empty
+// it is refused, never resolved against another home (see expandTilde). An
+// empty path is refused (see resolvePath).
+//
+// On any error the caller does not need to close anything —
+// OpenWithBusyTimeout cleans up the partially-opened *sql.DB before
+// returning.
+func OpenWithBusyTimeout(path string, busyTimeoutMs int) (*Store, error) {
+	resolved, err := resolvePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(resolved); os.IsNotExist(err) {
+		return nil, fmt.Errorf("store: %w", ErrStoreNotInitialized)
+	} else if err != nil {
+		return nil, fmt.Errorf("store: stat db file: %w", err)
+	}
+
+	return openDB(resolved, busyTimeoutMs)
+}
+
+// OpenOrInit prepares the SQLite database at path with the busy timeout
+// DefaultBusyTimeoutMs; see OpenOrInitWithBusyTimeout.
+func OpenOrInit(path string) (*Store, error) {
+	return OpenOrInitWithBusyTimeout(path, DefaultBusyTimeoutMs)
+}
+
+// OpenOrInitWithBusyTimeout prepares the SQLite database at path, creating
+// its parent directory and the file itself when missing, applying file-mode
+// constraints, opening a single-connection pool, enabling WAL + foreign keys,
+// and ensuring the schema is at the current version. busyTimeoutMs is as for
+// OpenWithBusyTimeout, a value outside 1 to math.MaxInt32 included: the store
+// opens with DefaultBusyTimeoutMs instead (see busyTimeoutOrDefault).
+//
+// A leading "~/" in path is expanded against $HOME; with HOME unset or empty
+// it is refused, never resolved against another home (see expandTilde). An
+// empty path is refused (see resolvePath).
+//
+// On any error the caller does not need to close anything —
+// OpenOrInitWithBusyTimeout cleans up the partially-opened *sql.DB before
+// returning.
+func OpenOrInitWithBusyTimeout(path string, busyTimeoutMs int) (*Store, error) {
+	resolved, err := resolvePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	parent := filepath.Dir(resolved)
+	if err := os.MkdirAll(parent, parentDirMode); err != nil {
+		return nil, fmt.Errorf("store: create parent dir: %w", err)
+	}
+
+	return openDB(resolved, busyTimeoutMs)
+}
+
+// busyTimeoutOrDefault returns busyTimeoutMs when SQLite holds it as a busy
+// timeout, from 1 to math.MaxInt32 milliseconds, and DefaultBusyTimeoutMs
+// otherwise. SQLite turns its wait for a lock off for 0 or a negative value
+// and reads a value above math.MaxInt32 as 0, so passing an out-of-range value
+// on would make every statement on a locked store fail at once instead of
+// waiting (b.c7f). A loaded config never yields one (config.Load refuses it);
+// this guards every other caller of OpenWithBusyTimeout and
+// OpenOrInitWithBusyTimeout.
+func busyTimeoutOrDefault(busyTimeoutMs int) int {
+	if busyTimeoutMs < 1 || int64(busyTimeoutMs) > math.MaxInt32 {
+		return DefaultBusyTimeoutMs
+	}
+	return busyTimeoutMs
+}
+
+// openDB dials a SQLite connection at the given (already-resolved, already-
+// present-or-newly-created) path with the given busy timeout in whole
+// milliseconds (DefaultBusyTimeoutMs in place of one outside 1 to
+// math.MaxInt32; see busyTimeoutOrDefault), verifies PRAGMAs, enforces file
+// mode, and ensures the schema is current. It is the shared backend for
+// OpenWithBusyTimeout and OpenOrInitWithBusyTimeout.
+func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
+	busyTimeoutMs = busyTimeoutOrDefault(busyTimeoutMs)
+
+	// foreign_keys is a per-connection PRAGMA, so set it via DSN so every
+	// connection the pool dials in starts with FKs enforced.
+	//
+	// busy_timeout tells the driver to retry-with-backoff for up to
+	// busyTimeoutMs ([store] busy_timeout_ms, 10 s by default) on
+	// SQLITE_BUSY instead of failing on the first lock collision. With N
+	// hook processes hitting the same DB file during burst-spawn, this is
+	// the floor of correctness for any multi-writer SQLite system. It is
+	// per-connection too, so it is set via DSN as well.
+	//
+	// journal_mode is intentionally NOT set here. WAL persists in the DB
+	// header; re-running PRAGMA journal_mode=WAL on every connection forces
+	// a write-lock acquisition and is what caused the b.x2m burst-spawn
+	// bug. We set WAL once at fresh-DB init (see ensureJournalModeWAL) and
+	// trust the header thereafter; verifyPragmas keeps reading it
+	// (read-only form, no lock) to confirm.
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)", resolved, busyTimeoutMs)
+
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("store: open sqlite: %w", err)
+	}
+	// SRD §13.3: serialize all writers through a single connection so WAL
+	// readers never observe a half-applied transaction and SQLite's own
+	// "database is locked" retry loop is bypassed.
+	db.SetMaxOpenConns(1)
+
+	if err := ensureJournalModeWAL(db, resolved); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	if err := verifyPragmas(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	// Force the file mode after the driver has created it. chmod is
+	// idempotent, so always setting it is simpler than statting first.
+	if err := os.Chmod(resolved, dbFileMode); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("store: chmod db file: %w", err)
+	}
+
+	if err := ensureSchema(db, resolved); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	// Read the store id once, now that the schema is current (SR-5.1). A
+	// missing or malformed id fails the open (ErrSchemaMismatch); the read
+	// writes nothing.
+	storeID, err := readStoreID(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	absolutePath, err := filepath.Abs(resolved)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: resolve opened database path: %w", err)
+	}
+	return &Store{db: db, filePath: absolutePath, storeID: storeID, busyTimeoutMs: busyTimeoutMs, cleanup: &connectionCleanupLane{}}, nil
+}
+
+// Close releases the underlying database handle. Safe to call once.
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+// resolvePath is Open's and OpenOrInit's path step: it refuses an empty path
+// with an error wrapping errEmptyPath and expands a leading "~/"
+// (expandTilde). An empty path would otherwise become a DSN that the SQLite
+// driver takes whole as a file name, so OpenOrInit would create that file
+// and the ".initlock" beside it in the cwd, with no PRAGMAs applied (b.8up).
+func resolvePath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("store: resolve path: %w", errEmptyPath)
+	}
+	resolved, err := expandTilde(path)
+	if err != nil {
+		return "", fmt.Errorf("store: resolve path: %w", err)
+	}
+	return resolved, nil
+}
+
+// expandTilde resolves a leading "~/" against $HOME via os.UserHomeDir. This
+// is the same rule as pkg/api and internal/config, so a caller that redirects
+// HOME never reaches the real user's store through a "~/" path (b.hvf).
+//
+// When os.UserHomeDir fails (on Unix, HOME unset or empty) it returns "" and
+// an error wrapping errNoHome, so Open and OpenOrInit open and create nothing.
+// It deliberately does not fall back to another home source such as the
+// passwd entry: an empty HOME is usually deliberate isolation (test
+// sandboxes, CI), and the passwd home holds the real AD directory (the
+// b.8dr incident class, b.4uz). pkg/api refuses the same case and the trail
+// writes nothing in it (b.iin). Any other form of path is returned unchanged.
+func expandTilde(path string) (string, error) {
+	if !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("%w for %q: %w", errNoHome, path, err)
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
+}
+
+// ensureJournalModeWAL sets journal_mode=WAL exactly once per DB file —
+// only when the header doesn't already report WAL. Reading PRAGMA
+// journal_mode is a lock-free header read; the write-form PRAGMA only
+// runs on a genuinely fresh DB (or one whose header was reset by hand),
+// which avoids the per-connection write-lock contention that caused
+// b.x2m.
+//
+// The cross-process fresh-init race (b.ng9) is serialized via flock on a
+// sibling lock file. SQLite's busy_timeout does NOT cover the EXCLUSIVE
+// lock acquisition that PRAGMA journal_mode=WAL performs on a brand-new
+// DB file: empirically the WAL transition fails immediately with
+// SQLITE_BUSY when two processes race rather than retrying-with-wait. A
+// process-level flock around the WAL-set step makes the operation
+// genuinely serial across processes; once the first process commits the
+// WAL header, every subsequent process reads journal_mode=wal and early-
+// returns at the first check below without ever taking the flock.
+//
+// dbPath identifies the SQLite file; the lock file lives next to it at
+// dbPath + ".initlock". Lock contention waits indefinitely (Flock with
+// no LOCK_NB), which is the desired behavior — the lock is held only for
+// the duration of one PRAGMA write (sub-millisecond).
+func ensureJournalModeWAL(db *sql.DB, dbPath string) error {
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		return fmt.Errorf("store: read journal_mode: %w", err)
+	}
+	if mode == "wal" {
+		return nil
+	}
+
+	release, err := acquireInitLock(dbPath)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	// Re-check under the lock: another process may have set WAL between
+	// our first read and our flock acquisition. Avoids re-running the
+	// EXCLUSIVE-lock PRAGMA when it isn't needed.
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		return fmt.Errorf("store: read journal_mode (post-lock): %w", err)
+	}
+	if mode == "wal" {
+		return nil
+	}
+
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return fmt.Errorf("store: set journal_mode=wal: %w", err)
+	}
+	return nil
+}
+
+// acquireInitLock acquires an exclusive POSIX file lock on the sibling
+// "<dbPath>.initlock" file and returns a release callback the caller is
+// responsible for invoking (typically via defer). It serializes the
+// first-init PRAGMA journal_mode=WAL write across processes — see
+// ensureJournalModeWAL for the full rationale (b.ng9).
+//
+// The lock file is created with mode 0600 to match the DB file's
+// posture; it's left in place after release (idempotent, harmless to
+// reuse on subsequent runs).
+func acquireInitLock(dbPath string) (func(), error) {
+	lockPath := dbPath + ".initlock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, dbFileMode)
+	if err != nil {
+		return nil, fmt.Errorf("store: open init lock: %w", err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("store: acquire init lock: %w", err)
+	}
+	return func() {
+		// LOCK_UN before Close is belt-and-suspenders; Close also drops
+		// any flock held on the fd. Errors here can't be propagated and
+		// are non-fatal (lock files survive without harm).
+		_ = unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		_ = f.Close()
+	}, nil
+}
+
+// verifyPragmas confirms the required PRAGMAs are in effect. journal_mode
+// is checked as WAL and foreign_keys as 1 (SRD §4.5 / §13.3); if either
+// silently downgraded we want a loud failure at Open, not a mysterious
+// data-integrity bug later.
+func verifyPragmas(db *sql.DB) error {
+	var journal string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil {
+		return fmt.Errorf("store: read journal_mode: %w", err)
+	}
+	if journal != "wal" {
+		return fmt.Errorf("store: journal_mode = %q, want wal", journal)
+	}
+	var fk int
+	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		return fmt.Errorf("store: read foreign_keys: %w", err)
+	}
+	if fk != 1 {
+		return fmt.Errorf("store: foreign_keys = %d, want 1", fk)
+	}
+	return nil
+}
+
+// Path is the absolute database this Store opened, never a caller-supplied protocol claim.
+func (s *Store) Path() string { return s.filePath }

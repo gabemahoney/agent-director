@@ -1,0 +1,19 @@
+--- tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md (tested bytes)
++++ tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md (O5 prose correction)
+@@ -137,8 +137,14 @@
+ Then send `/new` through the installed public client and repeat. Life/launch token,
+ gateway/runtime/start and protected file identity remain the same. History covers
+ this life only. No control string may become a model session/prompt. If either
+-rotation fails, preserve old identity and explicit refused provisional input;
+-never claim success from new screen text or manufacture the desired ID from a row.
++rotation fails, inspect and record the authoritative current row, runtime binding
++and current-life history. Distinguish failure before publication from committed
++identity/history publication followed by reporting failure; if evidence is
++incomplete, record publication as uncertain. Do not infer rollback or require
++restoration of the old identity after committed publication. Preserve explicit
++refusal evidence for provisional held input and verify no automatic replay to
++either conversation. Never claim success from new screen text or manufacture the
++desired ID from a row.
+ 
+ ## O6 exit, eligible pause and death evidence
+ 

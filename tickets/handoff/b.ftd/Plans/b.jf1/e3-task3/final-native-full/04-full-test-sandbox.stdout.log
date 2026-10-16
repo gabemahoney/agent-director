@@ -1,0 +1,109 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun  -w /work agent-director-sandbox \
+	bash -c 'cd /work/pkg/ts-bun-client || exit 1; \
+		echo "[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client"; \
+		bun install --frozen-lockfile || { echo "ERROR: test-sandbox: bun install --frozen-lockfile failed in pkg/ts-bun-client; no tests ran. If package.json changed, run bun install there (make sandbox CMD=...) and commit bun.lock." >&2; exit 1; }; \
+		bun run build || { echo "ERROR: test-sandbox: bun run build failed in pkg/ts-bun-client; no tests ran. Both suites need its dist/; fix the build errors above." >&2; exit 1; }; \
+		rc=0; (cd /work && go test -timeout 30m ./...) || rc=1; (cd /work/pkg/ts-bun-client && bun test) || rc=1; exit $rc'
+[test-sandbox] bun install --frozen-lockfile and bun run build in pkg/ts-bun-client
+bun install v1.3.13 (bf2e2cec)
+
+Checked 129 installs across 130 packages (no changes) [2.00ms]
+Build complete: dist/
+?   	github.com/gabemahoney/agent-director/internal/adminapi	[no test files]
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director	(cached)
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director-admin	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/clisetup	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/config	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/cursorhost	(cached)
+?   	github.com/gabemahoney/agent-director/internal/testsupport/codexfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/cursorfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/cwdfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/dbpathfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/launchfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/procstat	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/testsupport/writefailfix	[no test files]
+?   	github.com/gabemahoney/agent-director/internal/version	[no test files]
+?   	github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest	[no test files]
+ok  	github.com/gabemahoney/agent-director/internal/hook	153.590s
+ok  	github.com/gabemahoney/agent-director/internal/layout	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/mcp	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/oldnames	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/probe	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/spawn	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/store	198.401s
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/storefix	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/tmux	(cached)
+ok  	github.com/gabemahoney/agent-director/internal/trail	(cached)
+ok  	github.com/gabemahoney/agent-director/pkg/api	283.068s
+ok  	github.com/gabemahoney/agent-director/pkg/api/apitest	(cached)
+ok  	github.com/gabemahoney/agent-director/pkg/api/errnames	2.387s
+ok  	github.com/gabemahoney/agent-director/pkg/api/manifest	2.766s
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay	2.262s
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub	0.002s
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage	(cached)
+ok  	github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution	(cached)
+ok  	github.com/gabemahoney/agent-director/test/driver-scripts	(cached)
+ok  	github.com/gabemahoney/agent-director/test/envelope-diff	(cached)
+ok  	github.com/gabemahoney/agent-director/test/fake-tmux	(cached)
+ok  	github.com/gabemahoney/agent-director/test/grounding-replay	(cached)
+ok  	github.com/gabemahoney/agent-director/test/install-sh	357.184s
+ok  	github.com/gabemahoney/agent-director/test/realtmux	262.365s
+ok  	github.com/gabemahoney/agent-director/test/reboot-recovery	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/cigates	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/cmdinject	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/gitmount	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/prebuild	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/releaseversion	(cached)
+ok  	github.com/gabemahoney/agent-director/test/sandbox/requiresandbox	(cached)
+ok  	github.com/gabemahoney/agent-director/test/smoke/go	(cached)
+ok  	github.com/gabemahoney/agent-director/test/smoke/ts-helper	(cached)
+ok  	github.com/gabemahoney/agent-director/test/tla	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/check-doccomments	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/check-nondet	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/gen-docs	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/measure-exit	(cached)
+ok  	github.com/gabemahoney/agent-director/tools/measure-exit/dryrun	(cached)
+bun test v1.3.13 (bf2e2cec)
+make: Entering directory '/work'
+make: Nothing to be done for 'ts-helper'.
+make: Leaving directory '/work'
+make: Entering directory '/work'
+make: Nothing to be done for 'fake-tmux'.
+make: Leaving directory '/work'
+make: Entering directory '/work'
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=e85a74c9803ffe1dddb80bdcb19bf4614f643839" -o ./bin/agent-director ./cmd/agent-director
+CGO_ENABLED=0 go build -ldflags="-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev -X github.com/gabemahoney/agent-director/internal/version.Commit=e85a74c9803ffe1dddb80bdcb19bf4614f643839" -o ./bin/agent-director-admin ./cmd/agent-director-admin
+make: Leaving directory '/work'

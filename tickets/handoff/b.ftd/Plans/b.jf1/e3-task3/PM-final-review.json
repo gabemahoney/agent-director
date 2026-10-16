@@ -1,0 +1,32 @@
+{
+  "reviewer": "apiary_product_manager_e3_task3_final",
+  "verdict": "One mandatory acceptance-instruction correction before local commit/handoff; no production source finding",
+  "mandatory_findings": [
+    {
+      "id": "O5",
+      "path": "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md:139",
+      "issue": "Unconditional If either rotation fails preserve old identity contradicts possible reporting failure after committed identity/history publication.",
+      "required": "Inspect/record authoritative current identity/history, distinguish prepublication refusal from committed publication then reporting failure, preserve refused input/no-replay evidence; never require retaining/restoring old identity for everyfailure."
+    }
+  ],
+  "validation": "Inspected final full report/rawBunsummary and identicalbeforeaftermanifest3216131b3a5f0b61f085bd1e8cbb85fcfc3e9ce4e54c6f445d01fc1197efc558;68Go9executed59cached13notests;430Bun. MandatoryoriginaltrailRED proven old64a andunchangedGREEN032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88.",
+  "source_assessment": "Adopted originaldeadline/nativeownership/latecommituncertainty/lazybackgroundreplacement/error-firstcapturedresults/immutableCursorbinding/trailFIFO/CLIteardown responsibilities supported by source; no newverbs/schema/laterEpicfunctionality. All12Subtasksdone;Task/Epicactiveappropriately. ValidSRmappingcorrected.",
+  "architecture": "Verified final027a6e33aed5b2546102a82e0c5b8946b265461528adc4302f1dfc84aa5446df and partition/patch hashes across7-stepchain; inheritedwholebase+revieweddeltas, notfreshwhole22kread/noclean-doccert.",
+  "deferred_feedback": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2",
+    "Inheritedhooks/permissionsguide-scope/recoveryplacementnormalization"
+  ],
+  "proof_limits": [
+    "Extra nativepreownership/callerretryexhaustion/N2causalREDremainunproven;originalusertrailREDsatisfied.",
+    "Historicaltimingcausesunknown;newouterreadphasefailuresnotinnercausattribution.",
+    "17Docker172cases incl5newauthored-only;installedBunprereq+rawartifactmount required.",
+    "O1-O6livepending/separateauthorization;syntheticACPactualtmuxnotliveacceptance.",
+    "No spec/tlachangeszeroformaljobs."
+  ],
+  "product_conflicts": [],
+  "disposition": "After narrow O5doccorrection+read-onlyverification readyforlocalcommit/externalgate. No unchangedunittestrerunneeded for instructions-only correction. DoNOTmarkTask/Epicdone.",
+  "scope": "Read-only; no tests/build/lint/collectors/mutations."
+}

@@ -1,0 +1,26 @@
+{
+  "command": [
+    "go",
+    "vet",
+    "./internal/store"
+  ],
+  "status": 0,
+  "signal": null,
+  "verified_before": [],
+  "replacements": {},
+  "environment": {
+    "HOME": "/tmp/native-lazy-home-0xvFoP",
+    "GOMODCACHE": "/go/pkg/mod",
+    "GOCACHE": "/home/sandbox/.cache/go-build",
+    "sandbox": "1"
+  },
+  "changed_inputs": [],
+  "stdout": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mode": "644"
+  },
+  "stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mode": "644"
+  }
+}

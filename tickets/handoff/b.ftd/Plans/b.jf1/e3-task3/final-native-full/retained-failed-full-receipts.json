@@ -1,0 +1,18 @@
+{
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-tests/04-full-test-sandbox.log": {
+    "sha256": "a56fa6630731a1c275d860d78997a9c55c11bc0c4cb9ce7539121d07359dbe25",
+    "bytes": 64919
+  },
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/contract-final-tests/04-full-test-sandbox.log": {
+    "sha256": "d32382354cac639a2ac9ff31cbb697ade92290f2af9341ff5968bef84d10a7a4",
+    "bytes": 63609
+  },
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/settled-full/02-full-test-sandbox.stderr.log": {
+    "sha256": "273facb85d56e0c8823a6c8812fcd6cef5e99e95f55593ff0ac3d550b86cf410",
+    "bytes": 38922
+  },
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/settled-full/02-full-test-sandbox.stdout.log": {
+    "sha256": "62eed3b8614147160abc55cdaff2483effe7c9f21a0e2d4878d658801c6ae179",
+    "bytes": 30967
+  }
+}

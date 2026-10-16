@@ -1,0 +1,12 @@
+{
+  "reported_by": "apiary_test_writer_e3_task3_lazy_connector_validate",
+  "mistake": "make test-sandbox CMD=cat ... ignored CMD and started full tests in targeted role",
+  "classification": "Unauthorized owner/scope invocation; never accepted as settled validation",
+  "make_pid_and_pgid": 3550691,
+  "docker_pid": 3551007,
+  "container_id": "12cba7d0339cde7fc662879f45f359a0a02673c117e9071112611bfb7d544797",
+  "identity_checks": "Verified make argv, project cwd, process group and unit container command/mounts; no other containers touched.",
+  "cancellation": "SIGTERM verified make process group; container continued, so KILL exact verified sandbox unit container. Follow-up docker ps and ps confirmed container and processes absent.",
+  "session_receipt": "Agent-owned session43226 not available to root write_stdin (Unknown process id); agent retains its original output.",
+  "workflow_exception": "One necessary mid-flight process-safety message sent to active writer with cancellation result; no reassignment or other role work."
+}

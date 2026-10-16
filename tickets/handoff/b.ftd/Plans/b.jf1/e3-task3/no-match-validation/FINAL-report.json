@@ -1,0 +1,304 @@
+{
+  "role": "apiary_test_writer_e3_task3_no_match",
+  "result": "Independent exact pre-repair RED and unchanged regression GREEN on repaired source; focused race checks and vet pass after correcting an existing COMMIT-attempt observer. No full-suite run.",
+  "tickets": {
+    "t3.jf1.r8.a8.yj": "active, unchanged; narrow regression/quality complete, retain active for final postdoc quality reconciliation",
+    "t3.jf1.r8.a8.zj": "active, untouched; later sole full-suite owner"
+  },
+  "statuses_set": [],
+  "files_changed": [
+    "internal/store/deadline_boundary_test.go",
+    "internal/store/decision_no_match_test.go",
+    "internal/store/advice_follow_decision_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/no-match-validation/",
+  "proof": {
+    "baseline": {
+      "method": "Exact inverse of two no-match repair hunks, hash verified against contemporaneous legacy-commit-assessment before manifest. Current other production inputs unchanged; not old64a.",
+      "before": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+      "after": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+      "overlay": "overlay.json"
+    },
+    "regression_sha256": "3f56cadd2e0d086f99e718a744c2acc6ad983f64f286037e16d0e0f083306085",
+    "unchanged_between_red_and_green": true,
+    "scope": "Actual SQLite legacy request seeded with existing recordAwaitCase; actual DecideRelayRequest guarded UPDATE RETURNING consumes real EOF. Timely refusal returns false,nil, executes one real ROLLBACK, zero COMMIT, reuses original connection with restored PRAGMA/no transaction. At empty-result deadline expiry returns Busy, no COMMIT/no durable mutation, discards unsafe lease; replacement connection safely reusable. Whole independent request dump and no committed-mutation trail event checked in both cases.",
+    "old64a": "Not reconstructed here; earlier causal deadline RED/GREEN retained separately."
+  },
+  "receipts": {
+    "01-prepare": {
+      "make_exit": 0,
+      "log_sha256": "1590ef11522d29ae573544e0135029a0f0055ef3828c4abe6f8d05b4f7cba9c3",
+      "passed_leaves": [],
+      "failures": []
+    },
+    "02-red": {
+      "make_exit": 2,
+      "log_sha256": "a3fdda8a41ea9bc9b26c44be07fd0e892f79b62725710e0c8c1603f0f8edcc0f",
+      "passed_leaves": [
+        "TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result"
+      ],
+      "failures": [
+        "    decision_no_match_test.go:61: no-match decision=false, store: commit outcome unconfirmed; read the request before retrying: fixture: unmatched decision must never COMMIT; want false, busy=false",
+        "    decision_no_match_test.go:68: BEGIN/UPDATE/empty/COMMIT=1/1/1/1; want 1/1/1/0",
+        "--- FAIL: TestDecisionNoMatchRollsBackWithoutCommit (0.45s)",
+        "    --- FAIL: TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal (0.16s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t0.491s",
+        "FAIL"
+      ]
+    },
+    "03-green-race-quality": {
+      "make_exit": 2,
+      "log_sha256": "85f7ae2993280805a4ed636d1513610ac0b71ea89eb84e852b0e9305ab4da81b",
+      "passed_leaves": [
+        "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+        "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+        "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal",
+        "TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result",
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitWithBlockedTrail",
+        "TestDecisionReasonOnlyCanonicalValues",
+        "TestDecideAbsoluteContextSurvivesParkedPhase",
+        "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+        "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      ],
+      "failures": [
+        "    advice_follow_decision_test.go:71: recovery replayed verdict: COMMIT=0 verdict updates=1",
+        "--- FAIL: TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry (0.26s)",
+        "FAIL",
+        "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t3.881s",
+        "FAIL"
+      ]
+    },
+    "04-corrected-green-race": {
+      "make_exit": 0,
+      "log_sha256": "04d08706902c81bbc4a12c1d0b756e09a2a29c9b743206473016de1d6040eb00",
+      "passed_leaves": [
+        "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+        "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+        "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal",
+        "TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result",
+        "TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry",
+        "TestClientDecideBoundsDeferredAuditAndPreservesFIFO",
+        "TestDecideMaxWaitWithBlockedTrail",
+        "TestDecisionReasonOnlyCanonicalValues",
+        "TestDecideAbsoluteContextSurvivesParkedPhase",
+        "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+        "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s"
+      ],
+      "failures": []
+    },
+    "05-vet-integrity": {
+      "make_exit": 0,
+      "log_sha256": "49a78ed7544fa1a3468ed911119fec83d802d2e5a0e65ec0060cd1e9ee65a1be",
+      "passed_leaves": [],
+      "failures": []
+    }
+  },
+  "commands": {
+    "prepare": "make sandbox CMD=\"gofmt -w internal/store/deadline_boundary_test.go internal/store/decision_no_match_test.go && bun .../no-match-validation/evidence.mjs before\"",
+    "red": "make sandbox CMD='go test -race -overlay tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/no-match-validation/overlay.json -timeout 60s -count=1 -v ./internal/store -run \"^TestDecisionNoMatchRollsBackWithoutCommit$\"'",
+    "focused": "make sandbox CMD='go test -race -timeout 150s -count=1 -v ./internal/store ./pkg/api -run \"^(TestDecision.*|TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry|TestDecideMaxWaitUnderHeldLock|TestDecideMaxWaitWithBlockedTrail|TestDecideAbsoluteContextSurvivesParkedPhase|TestClientDecideBoundsDeferredAuditAndPreservesFIFO)$\"'",
+    "corrected": "Same focused command after test observer correction; preceded by gofmt and contemporaneous pre-corrected-green manifest.",
+    "quality": "make sandbox CMD=\"go vet ./internal/store && git diff --check && bun .../no-match-validation/evidence.mjs after && go version && bun --version\""
+  },
+  "failed_attempts": [
+    {
+      "receipt": "02-red",
+      "expected": true,
+      "inner_go_exit": 1,
+      "reason": "Exact pre-repair no-match path attempted COMMIT and returned internal unconfirmed when fail-on-COMMIT seam fired; expiry companion passed."
+    },
+    {
+      "receipt": "03-green-race-quality",
+      "expected": false,
+      "reason": "New no-match regression and all API deadline checks passed. Existing F10 durable allow and actual uncertainty assertions passed, but COMMIT counter was zero because it counted only the post-success callback. Actual SQLite driver can durably commit yet itself return an error before that callback.",
+      "correction": "Count actual COMMIT attempts in existing before-driver hook, instead of post-success response hook. Retain 100ms, actual public classifier/inspection, allow/not_confirmed/stability and exactly one UPDATE/COMMIT attempt. No source change or unsupported native timing inference.",
+      "next": "04-corrected-green-race passed after necessary test-only change; no unchanged retry."
+    }
+  ],
+  "integrity": {
+    "unchanged_during_corrected_run": true,
+    "changed_after_first_focused_failure": [
+      "internal/store/advice_follow_decision_test.go"
+    ],
+    "files": 2322,
+    "protected": {
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "mode": 436
+    },
+    "sources": {
+      "internal/store/store.go": {
+        "sha256": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+        "mode": 436
+      },
+      "internal/store/lockwait.go": {
+        "sha256": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+        "mode": 436
+      },
+      "internal/store/permission.go": {
+        "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+        "mode": 436
+      },
+      "internal/store/connection_cleanup.go": {
+        "sha256": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+        "mode": 436
+      },
+      "internal/trail/trail.go": {
+        "sha256": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+        "mode": 436
+      },
+      "internal/trail/deadline.go": {
+        "sha256": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+        "mode": 436
+      },
+      "pkg/api/client.go": {
+        "sha256": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+        "mode": 436
+      },
+      "pkg/api/decide.go": {
+        "sha256": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+        "mode": 436
+      }
+    },
+    "inherited_manifest_inputs_verified": 484,
+    "inherited_existing_delta_only": [
+      "internal/store/deadline_boundary_test.go"
+    ],
+    "protected_regression": {
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "mode": 436
+    },
+    "production_docs_collectors_mapping_unchanged": true,
+    "provenance": "Contemporaneous before and pre-corrected-green manifests. Exact pre-repair permission bytes are an explicitly inverse reconstruction verified against retained contemporaneous legacy source manifest. Existing earlier retrospective receipts remain labeled and unmodified."
+  },
+  "quality": {
+    "guide": "docs/test-writing-guide.md Pre-Submit Checklist/Red Flags",
+    "findings_closed": [
+      "Missing deterministic guarded nonmatch transaction boundary regression",
+      "Existing F10 success-only hook undercounted real COMMIT attempts when native driver returned an uncertain error"
+    ],
+    "coverage": "Two distinct no-match outcomes in one parameterized test; existing factories, real SQLite boundary, cleanup lease helper, raw snapshot and trail readers reused. No fake Store/copied SQL/algorithm, broad matrix, sleeps, new advice, or production seam. Existing matched commit response/public inspection remain separate owners.",
+    "serial": "New Store test scans singleton trail and uses fixed relay identity, so remains serial; existing API parallelism unchanged.",
+    "prior_quality": "Inherited prior complete quality-review-after.json coverage/collector/authentication findings retained; this pass independently reviewed the no-match source delta and affected fixture/COMMIT observer only, no claim of fresh whole acceptance review.",
+    "doc_impact": "Later batched DocWriter architecture note: no-match rolls back without COMMIT, then existing race-aware follow-up refusal classification applies. No new caller advice; existing F10 inspection advice retained. No user docs edits warranted by test-only changes.",
+    "remaining": [
+      "Batched architecture note and final postdoc quality reconciliation; .yj left active",
+      "Sole .zj settled full sandbox run after docs; both previous full failed receipts retained",
+      "Coordinator exact-revision integration/authenticated terminal gate remains pending"
+    ]
+  },
+  "retained_full_failure": {
+    "sha256": "d32382354cac639a2ac9ff31cbb697ade92290f2af9341ff5968bef84d10a7a4",
+    "bytes": 63609,
+    "failures": [
+      "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.40s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (1.53s)",
+      "        decide_delivery_test.go:315: err store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded matches []; want exactly ErrStoreBusy",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t155.723s",
+      "FAIL"
+    ]
+  },
+  "historical09": "Causes remain UNKNOWN; this proof does not reconstruct either historical timing failure.",
+  "full_suite": "Not run; narrow pass is not full owner. No unchanged full retry.",
+  "integration": "Not run; no integration/live/authenticated/whole-full-pass claim.",
+  "formal": "No spec/tla changes; zero TLA/TLC/Java/parser/scheduler jobs.",
+  "boundaries": "All repository formatting/tests/vet/evidence scripts only make sandbox, fresh container HOME/per-test isolated stores, sockets and owned processes. Workspace-only discovery. No .claude access, real AD stores, credentials/login/logout/live Cursor, host repository execution, local Docker TESTPLAN groups/collectors/helpers, production/docs/collectors/mapping edits, commits/pushes, delegation or outbound messages. Bees administrative reads only.",
+  "deviations": [
+    "Necessary F10 test-only observer correction after retained focused failure; no assertion/budget weakening.",
+    "Own .yj remains active for final postdoc reconciliation rather than claiming whole quality closure in this narrow pass."
+  ],
+  "incomplete_work": [
+    "Later documentation and sole full-suite work remain caller-owned; no unresolved narrow regression failure."
+  ],
+  "questions_for_caller": [],
+  "receipt_sha256": {
+    "input-manifest-before.json": "2c08c3ecc969cb474031092f029257f0f6b6fa03347fedd606d624121d2244b2",
+    "baseline-provenance.json": "fe862097e28fc16b230c44192975b899e95503e81a968babe4250494a5885770",
+    "04-corrected-green-race.log": "04d08706902c81bbc4a12c1d0b756e09a2a29c9b743206473016de1d6040eb00",
+    "01-prepare.log": "1590ef11522d29ae573544e0135029a0f0055ef3828c4abe6f8d05b4f7cba9c3",
+    "02-red.log": "a3fdda8a41ea9bc9b26c44be07fd0e892f79b62725710e0c8c1603f0f8edcc0f",
+    "04-corrected-green-race.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "01-prepare.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "05-vet-integrity.log": "49a78ed7544fa1a3468ed911119fec83d802d2e5a0e65ec0060cd1e9ee65a1be",
+    "report.mjs": "e8ecd057e403260c5f26971a1c3e0629f9f07759e65daa68c54739a4f7684777",
+    "05-vet-integrity.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "testing-subtasks.json": "4e81d2a8c4a3917a89406c46df093b7968de54f7093c877b1c07a3399aec2f06",
+    "permission-before.go.txt": "151d6bec0905b78e24e3ce571da8a8a8017b1f1965565cc80be0f4c4adf736a9",
+    "03-green-race-quality.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "input-manifest-pre-corrected-green.json": "679e64024a599c56441f4fed5fb5af435690cc3ea23c0ed3751e838b385a6330",
+    "evidence.mjs": "5163f2c5fc784e2c940c1835570eb6b4cc1f7c796b76efaa97668d0234d7a058",
+    "overlay.json": "1f24cce594f95438623110911d4242e21591507eba1278271a754ff62c8d1f2e",
+    "retained-full-failure.json": "733f2428371e587a2ae515a4b31349e216b602ccd236317e1a964f342b050cc5",
+    "input-manifest-after.json": "679e64024a599c56441f4fed5fb5af435690cc3ea23c0ed3751e838b385a6330",
+    "02-red.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "reviewed-inputs.json": "eb2ef56f0c0b20b50c248d3e38fde0dd2df10a8977df05e180d02db75b1f7ca2",
+    "integrity.json": "c27a19e72a99c2bf465818a5b3dae51bd6ac29e689cabfc40604a9c6e9c1b666",
+    "03-green-race-quality.log": "85f7ae2993280805a4ed636d1513610ac0b71ea89eb84e852b0e9305ab4da81b"
+  }
+}

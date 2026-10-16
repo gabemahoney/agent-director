@@ -52,10 +52,19 @@ func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestCon
 	return &requestController{rep: rep, protocol: p, out: out, requests: map[string]*pendingAuthorization{}, seenIDs: map[string]bool{}, idSessions: map[string]string{}, seenTools: map[string]bool{}, menu: map[rune]nativeChoice{}}
 }
 func (c *requestController) check(row store.Spawn) error {
-	if e := VerifyRuntime(c.rep.binding, false); e != nil {
-		return e
+	return c.checkFor(c.rep.binding)(row)
+}
+
+func (c *requestController) checkFor(binding store.CursorRuntime) store.CursorCheck {
+	// A bounded store call can return while native work still owns its lease.
+	// Capture this launch's binding before dispatch; later rotation must not
+	// change the evidence examined by that operation.
+	return func(row store.Spawn) error {
+		if e := VerifyRuntime(binding, false); e != nil {
+			return e
+		}
+		return VerifyPane(c.rep.store, row, c.rep.cfg)
 	}
-	return VerifyPane(c.rep.store, row, c.rep.cfg)
 }
 func (c *requestController) key(r rune) (string, string, bool) {
 	c.menuMu.Lock()
@@ -131,7 +140,7 @@ func (c *requestController) admit(f frame, session string) error {
 		nativeUntil = settle.Add(30 * time.Minute)
 	}
 	r := &pendingAuthorization{session: session, generation: c.generation.Load(), auth: a, token: token, settle: settle, timeout: settle.Add(-requestReserve), nativeUntil: nativeUntil, relay: relay}
-	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.check)
+	e = c.rep.store.InsertCursorRequest(c.rep.binding, store.RelayRequest{RequestToken: token, ToolName: a.name, ToolInput: string(f.Params), ToolUseID: a.toolID, SettledAt: settle}, c.rep.cfg.Relay.PermissionRequestCap, now.Add(transportWriteWait), transportWriteWait, c.checkFor(c.rep.binding))
 	if e != nil {
 		return e
 	}
@@ -345,7 +354,7 @@ func (c *requestController) tick() error {
 			if r.relay {
 				nativeDeadline = r.timeout
 			}
-			chosen, e := c.rep.store.ClaimCursorPaneAnswer(c.rep.binding, r.token, r.choice.decision, nativeDeadline, 0, c.check)
+			chosen, e := c.rep.store.ClaimCursorPaneAnswer(c.rep.binding, r.token, r.choice.decision, nativeDeadline, 0, c.checkFor(c.rep.binding))
 			if e != nil {
 				continue
 			}
@@ -370,7 +379,7 @@ func (c *requestController) tick() error {
 			if pr.Decision == "" && now.Before(r.timeout) {
 				continue
 			}
-			d, ok, e := c.rep.store.AckCursorDecision(c.rep.binding, r.token, !now.Before(r.timeout), r.settle, r.timeout, 0, c.check)
+			d, ok, e := c.rep.store.AckCursorDecision(c.rep.binding, r.token, !now.Before(r.timeout), r.settle, r.timeout, 0, c.checkFor(c.rep.binding))
 			if e != nil {
 				continue
 			}
@@ -413,7 +422,7 @@ func (c *requestController) execution(params json.RawMessage) error {
 		if json.Unmarshal(output["exitCode"], &exit) != nil || string(output["exitCode"]) == "null" || json.Unmarshal(output["stdout"], &stdout) != nil || bytes.Equal(bytes.TrimSpace(output["stdout"]), []byte("null")) || json.Unmarshal(output["stderr"], &stderr) != nil || bytes.Equal(bytes.TrimSpace(output["stderr"]), []byte("null")) {
 			return nil
 		}
-		if e := c.rep.store.ProveCursorToolRan(c.rep.binding, r.token, r.auth.toolID, c.check); e != nil {
+		if e := c.rep.store.ProveCursorToolRan(c.rep.binding, r.token, r.auth.toolID, c.checkFor(c.rep.binding)); e != nil {
 			return e
 		}
 		r.terminal.Store(true)

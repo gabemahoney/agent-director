@@ -1,0 +1,145 @@
+{
+  "method": "Inherited four-partition whole-base review plus independently reverified all six prior complete deltas/endpoints and personally reviewed every new native-batch hunk/context. Aggregate coverage, not a fresh personal whole-file read.",
+  "original_base": {
+    "sha256": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+    "lines": 22213,
+    "bytes": 1534189
+  },
+  "task3_base": {
+    "sha256": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+    "lines": 22358,
+    "bytes": 1544650
+  },
+  "final": {
+    "sha256": "027a6e33aed5b2546102a82e0c5b8946b265461528adc4302f1dfc84aa5446df",
+    "bytes": 1557414,
+    "lines": 22549
+  },
+  "partition_reports": [
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-a.txt",
+      "sha256": "81aef94730dfbcbf1873ec5f8fab7ac78974f33a631d35731f1ec8a8eb6c6175",
+      "lines": [
+        1,
+        5554
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-b.txt",
+      "sha256": "2dbbece23feed138b8423ae6779913ca37540aac2d2a68a96f94c0656520b26f",
+      "lines": [
+        5555,
+        11108
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-c.txt",
+      "sha256": "9f0f272dcde9c9ba3d29f86829db128ea81e521073a13f80d5a3b9b250a63595",
+      "lines": [
+        11109,
+        16661
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-review-d.txt",
+      "sha256": "c40ad1b02e8ac90488877db2b90128f5b5383d40484ddb68d971fb641c679edb",
+      "lines": [
+        16662,
+        22213
+      ],
+      "hash_verified": true,
+      "independently_hash_verified": true
+    }
+  ],
+  "chain": [
+    {
+      "from": "b18e03d4f94c47898090a8ed3e96ef5e5a7cb39fadb8918639bc062599aa0ebf",
+      "to": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/doc-corrections-architecture-delta.patch",
+      "exact_patch_verified": true,
+      "patch_sha256": "16234d1669085b1346769ba08175cc5c516afdb67e63dc63a6bd6fd29339fe70",
+      "strict_hunks_and_complete_endpoints_verified": true,
+      "independently_reverified_complete_endpoints_and_all_hunks": true
+    },
+    {
+      "from": "759fb631d8c1aa043181435d56d48d316f5d7928c6ea99d23679fb568d16d094",
+      "to": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e2-task3/gate-repair-3/doc-architecture-delta.patch",
+      "exact_patch_verified": true,
+      "patch_sha256": "1b7ae89f481d360d9e14bafd8bb68c13845447d226cb3d87afedbe2d4057d57d",
+      "strict_hunks_and_complete_endpoints_verified": true,
+      "independently_reverified_complete_endpoints_and_all_hunks": true
+    },
+    {
+      "from": "2738e9b73c018bc0170465f360ffb4a490ace2268fa54c3f8501b53d71472aa0",
+      "to": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task1/docs/architecture-delta.patch",
+      "review": "all changed prose and context personally read against actual source",
+      "patch_sha256": "dde29846726636653991d0b79e54fff497310ef97b2667e08ce1d5e694eeb1da",
+      "strict_hunks_and_complete_endpoints_verified": true,
+      "independently_reverified_complete_endpoints_and_all_hunks": true
+    },
+    {
+      "from": "6c36cd06401cd89e1164afd048b9c1f22ccf56869ef615b31fcb8388fa9e578d",
+      "to": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/architecture-delta.patch",
+      "patch_sha256": "97e2d610af123722a73b74098e245faee6ec66f850e3e92304ff0989ded51087",
+      "strict_hunks_and_complete_endpoints_verified": true,
+      "review": "All new Task2 prose and changed context personally read against production source and settled reports",
+      "independently_reverified_complete_endpoints_and_all_hunks": true
+    },
+    {
+      "from": "b2dc75bf87725ac756abcdf596cad3e237b4714e45f2611521c5bd45c994dab0",
+      "to": "9593447ca9fe0640268803d42c07f5cbe9e5865be306c2a9b91388307ca7b509",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs/architecture-delta.patch",
+      "patch_sha256": "eff9ce71b029ef0e2ec080f36b37eeea614e0ed4654cd46e96e0cf9c013f879a",
+      "independently_reverified_complete_endpoints_and_all_hunks": true,
+      "review": "Every Task3 hunk and its changed context personally read against actual source and settled reports; existing unchanged whole base inherited."
+    },
+    {
+      "from": "9593447ca9fe0640268803d42c07f5cbe9e5865be306c2a9b91388307ca7b509",
+      "to": "b7f2ea55fda7b7f61dee2e2bfd830a269578c7c29ad1c3524252ccbc64f7f819",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs-no-match/architecture-delta.patch",
+      "patch_sha256": "7a7e1592fe22b861d869d9124e6ea02f5fc54eff5931d1069ec43579e8244370",
+      "independently_reverified_complete_endpoints_and_all_hunks": true,
+      "review": "Every new line and surrounding DecideRelayRequest/inWriteTx context personally reviewed against settled source and reports."
+    },
+    {
+      "from": "b7f2ea55fda7b7f61dee2e2bfd830a269578c7c29ad1c3524252ccbc64f7f819",
+      "to": "027a6e33aed5b2546102a82e0c5b8946b265461528adc4302f1dfc84aa5446df",
+      "patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/docs-native/architecture-delta.patch",
+      "patch_sha256": "2a8e2b90bb3670971da6b024d5460d25c43d6a305c81414a9ae18ed04ce9f18d",
+      "independently_reverified_complete_endpoints_and_all_hunks": true,
+      "review": "Every new batch hunk and surrounding context personally reviewed against final native ownership, lazy connector, publication and CLI source."
+    }
+  ],
+  "whole_final_aggregate_covered": true,
+  "personal_whole_file_read": false,
+  "clean_document_claim": false,
+  "deferred": [
+    "A2-A6",
+    "B3-B8",
+    "C2-C5",
+    "D1-D2",
+    "Inherited hooks/permissions guide-scope and recovery-placement normalization"
+  ],
+  "prior_report": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/FINAL-report.json",
+    "sha256": "fe66dba56662a1d84a8b3c41792001a8f21f49f6864c4f2716a5c0aa11d88077"
+  },
+  "prior_provenance": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/architecture-review-provenance.json",
+    "sha256": "e74787da08d87f639862438c8d185b1f36e1da41999f156719b5dd9dd2248475"
+  },
+  "prior_document_hashes": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task2/docs/document-hashes.json",
+    "sha256": "82cde7012ee648e4af4178f0deebc918fbd9a9fa7027a146e6dc55b6d2e019a8"
+  },
+  "inherited_reference_hashes_verified": true
+}

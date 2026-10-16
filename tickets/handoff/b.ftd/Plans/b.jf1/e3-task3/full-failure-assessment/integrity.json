@@ -1,0 +1,133 @@
+{
+  "baseline": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/settled-full/input-manifest-after.json",
+  "baseline_inputs": 2322,
+  "inputs": 2323,
+  "changed": [
+    {
+      "path": "cmd/agent-director/main.go",
+      "before": {
+        "sha256": "62d70c82df893c6b182122bb7d1fe2767ab648bb8a7f7a7fc8cd4760d34907d0",
+        "bytes": 35402,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "826e86b9b22ce0448cec2a3d46a6298e30e81ab32d5608bb7318e1afa43db685",
+        "bytes": 35922,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/cursorhost/requests.go",
+      "before": {
+        "sha256": "ccbef81bf87176ecc65328ec34f296e2292120834e6f00306319f8b4d2fc92fc",
+        "bytes": 14250,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "76af7ffd7299bbbea8f13bfe2deed19d8a411481822d042073e808c35c0ccd0d",
+        "bytes": 14692,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/connection_cleanup.go",
+      "before": {
+        "sha256": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+        "bytes": 2096,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": null
+      },
+      "after": {
+        "sha256": "95f55a315ac6567047af3f98f5c8a3190b854daad43de432215293431a2a2612",
+        "bytes": 4411,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/cursor_permission.go",
+      "before": {
+        "sha256": "e6baeb6e41f25cc2dfb3aa4ec3e7f5ed738569a4d943f4785539c5a2f0be1758",
+        "bytes": 10863,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "d8941cc66650f5030c66d6c927892ea5d92d607e01a6fa174a4c69ee054d2bda",
+        "bytes": 10903,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/lockwait.go",
+      "before": {
+        "sha256": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+        "bytes": 12425,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+        "bytes": 14020,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/relay_writes.go",
+      "before": {
+        "sha256": "7896aace87f68217d6b5d1805f4a0a30e4a373f13a7850e705d165a3cbe8fd02",
+        "bytes": 19740,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "65d929871daa5aadd685e13381b5241c9630ec986fec1f610e72c528d3ba58e6",
+        "bytes": 19899,
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/store.go",
+      "before": {
+        "sha256": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+        "bytes": 20080,
+        "mode": 436,
+        "git_mode": "100644",
+        "index_mode": "100644"
+      },
+      "after": {
+        "sha256": "d625550192fd4959e9042443b7b7d84d19767f0bb9735914452720501a411fbe",
+        "bytes": 20085,
+        "mode": 436
+      }
+    }
+  ],
+  "added_inputs": [
+    {
+      "path": "internal/store/sqlite_connector.go",
+      "after": {
+        "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+        "bytes": 1851,
+        "mode": 436
+      }
+    }
+  ],
+  "tests_and_docs_changed": [],
+  "protected_regression": {
+    "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "bytes": 4036,
+    "mode": 436
+  },
+  "preserved_no_match_source": {
+    "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+    "bytes": 39402,
+    "mode": 436
+  }
+}

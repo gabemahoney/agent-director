@@ -1,0 +1,215 @@
+{
+  "role": "apiary_test_writer_e3_task3_collector",
+  "result": "Authoring complete; static syntax/registration/source-test-integrity checks passed. Collector and authenticated acceptance NOT EXECUTED.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "ticket_statuses": {
+    "t3.jf1.r8.a8.wc": "defined -> active -> done (authoring only)",
+    "t3.jf1.r8.a8.ky": "defined -> active -> done (instructions only)"
+  },
+  "status_scope": "Only own .wc/.ky; no parent or other statuses",
+  "files_changed": [
+    "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t1.jf1.pc.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+    "test/driver/cursor-pane-controls.sh",
+    "test/driver/cursor-pane-public.mjs",
+    "test/driver/cursor-pane-records.cjs",
+    "test/docker-epics.txt"
+  ],
+  "evidence_files": [
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/requirement-excerpts.txt",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/acceptance-inventory.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/coverage-inventory.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/01-static-check.log",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/source-test-integrity.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/02-static-integrity.log",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-check.mjs",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/03-final-report.log",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/own-statuses.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-checks.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/input-hashes.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/finalize.mjs"
+  ],
+  "reused_helpers": [
+    "test/driver/cursor-owned-launch.sh unchanged",
+    "test/driver/run-testplan.sh unchanged; whole-case private ERR and separate xtrace preserved",
+    "test/driver/sql.sh unchanged; every SQL observation/fault through helper; default 5000ms unchanged",
+    "internal/testsupport/cursorfix/runtime.js unchanged; collector-only newRelease environment setting",
+    "existing process observers/procfs; cursor-pipe.c unchanged, retained focused pipe boundary owner"
+  ],
+  "commands": [
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/static-check.mjs'",
+      "logs": [
+        "01-static-check.log",
+        "02-static-integrity.log"
+      ],
+      "result": "passed static only; no case/helper sourced or executed"
+    },
+    {
+      "command": "make sandbox CMD='bun tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/collector/finalize.mjs'",
+      "purpose": "evidence assembly only"
+    }
+  ],
+  "static_checks": {
+    "result": "passed static authoring checks only",
+    "case_bodies_executed": false,
+    "helpers_sourced": false,
+    "bash_n_cases": [
+      "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md",
+      "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md",
+      "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md",
+      "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md",
+      "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md"
+    ],
+    "bash_n_helpers": [
+      "test/driver/cursor-pane-controls.sh"
+    ],
+    "node_syntax_only": [
+      "test/driver/cursor-pane-public.mjs",
+      "test/driver/cursor-pane-records.cjs"
+    ],
+    "registered_groups": [
+      {
+        "slug": "epic-03-spawn",
+        "collector": "tickets/testplans/b.75s/t1.75s.qo/t1.75s.qo.md",
+        "expected_cases": 22
+      },
+      {
+        "slug": "epic-04-interact",
+        "collector": "tickets/testplans/b.75s/t1.75s.9x/t1.75s.9x.md",
+        "expected_cases": 11
+      },
+      {
+        "slug": "epic-05-stop",
+        "collector": "tickets/testplans/b.75s/t1.75s.ks/t1.75s.ks.md",
+        "expected_cases": 15
+      },
+      {
+        "slug": "epic-06-discover",
+        "collector": "tickets/testplans/b.75s/t1.75s.fj/t1.75s.fj.md",
+        "expected_cases": 12
+      },
+      {
+        "slug": "epic-07-templates",
+        "collector": "tickets/testplans/b.75s/t1.75s.ze/t1.75s.ze.md",
+        "expected_cases": 8
+      },
+      {
+        "slug": "epic-08-recovery",
+        "collector": "tickets/testplans/b.75s/t1.75s.9b/t1.75s.9b.md",
+        "expected_cases": 8
+      },
+      {
+        "slug": "epic-09-resume",
+        "collector": "tickets/testplans/b.75s/t1.75s.ue/t1.75s.ue.md",
+        "expected_cases": 11
+      },
+      {
+        "slug": "epic-10-relay",
+        "collector": "tickets/testplans/b.75s/t1.75s.65/t1.75s.65.md",
+        "expected_cases": 8
+      },
+      {
+        "slug": "epic-11-mcp",
+        "collector": "tickets/testplans/b.75s/t1.75s.nd/t1.75s.nd.md",
+        "expected_cases": 9
+      },
+      {
+        "slug": "epic-12-install",
+        "collector": "tickets/testplans/b.75s/t1.75s.f7/t1.75s.f7.md",
+        "expected_cases": 13
+      },
+      {
+        "slug": "epic-13-agents",
+        "collector": "tickets/testplans/b.75s/t1.75s.ag/t1.75s.ag.md",
+        "expected_cases": 24
+      },
+      {
+        "slug": "harness-smoke",
+        "collector": "tickets/testplans/b.75s/t1.75s.by/t1.75s.by.md",
+        "expected_cases": 5
+      },
+      {
+        "slug": "installsh-preflight-gates",
+        "collector": "tickets/testplans/b.75s/t1.75s.pg/t1.75s.pg.md",
+        "expected_cases": 2
+      },
+      {
+        "slug": "template-overwrite",
+        "collector": "tickets/testplans/b.75s/t1.75s.ny/t1.75s.ny.md",
+        "expected_cases": 4
+      },
+      {
+        "slug": "cursor-owned-launch",
+        "collector": "tickets/testplans/b.jf1/t1.jf1.cl/t1.jf1.cl.md",
+        "expected_cases": 5
+      },
+      {
+        "slug": "cursor-relay",
+        "collector": "tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md",
+        "expected_cases": 10
+      },
+      {
+        "slug": "cursor-pane-controls",
+        "collector": "tickets/testplans/b.jf1/t1.jf1.pc/t1.jf1.pc.md",
+        "expected_cases": 5
+      }
+    ],
+    "expected_groups": 17,
+    "expected_total_cases": 172,
+    "new_expected_cases": 5,
+    "unknown_live_build_protocol_platform_scheduler_provenance": "PENDING"
+  },
+  "source_integrity": {
+    "all_eight_settled_source_hashes_match": true,
+    "verified_prior_go_tests": 700,
+    "public_tests_match": true,
+    "unchanged_causal_regression_sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "manifest": "source-test-integrity.json"
+  },
+  "technical_decisions_for_srd": [
+    "Representative shipped-boundary compositions retain exhaustive Task1/2/public unit ownership; installed Bun proof uses canonical copied package build.ts/declarations/pack and local tarball consumer rather than source export relabeling. Image has no preinstalled package/tsc; locked dependency setup needs network.",
+    "Current-life session promotion compares actual peer session/new replies, public get and independent helper SQL. No hard-coded desired next session or schema version. Failed provisional IDs receive exact separate refusals.",
+    "Raw success/failure artifacts export to fixed test-only /tmp/cursor-pane-controls-artifacts/<instance-id>; scheduler must retain this mount before container deletion because standard driver details is truncated. Fresh Integration Writer owns final exact-SHA invocation.",
+    "Existing 20s event observation/15s state/process bounds retained; 35s outer public helper bound surrounds unchanged default client timeouts; no cancellation/deadline/SQL timeout widening."
+  ],
+  "deviations": [
+    "Initial discovery mistakenly listed /tmp filenames and read existing /tmp orchestrator metadata instead of staying workspace scoped. No real AD store/credential access; subsequent discovery was workspace scoped.",
+    "Initial bees show syntax was invalid; corrected to show-ticket --ids before status changes. Some read-only rg lookups used nonexistent proposed paths/invalid newline pattern; no mutations or execution resulted."
+  ],
+  "failures_and_limits": [
+    "All five case bodies and installed package build/install steps remain unexecuted; static checks cannot prove runtime success.",
+    "Installed package case requires access to locked build dependencies; missing dependency/network is a real prerequisite failure, never an installation pass.",
+    "All runtime protocol peers here are synthetic. Actual tmux scripting is not real human attach/type/bracketed paste. All O1–O6 authenticated predicates remain pending.",
+    "Canonical driver truncates case details; raw archive retention needs the documented scheduler mount.",
+    "Historical09 deadline cause remains UNKNOWN; causal RED/GREEN is retained independent evidence, not reconstruction.",
+    "Final source/binary/image/package hashes, actual runtime/protocol/platform and scheduler metadata stay pending until final root commit and separately authorized execution."
+  ],
+  "full_suite": "Not run; .zj solely owns final settled make test-sandbox",
+  "integration": "Not run; collector author only. User scheduler gate required after final commit.",
+  "formal": "No spec/tla changes; no formal/TLA/TLC/Java/parser jobs",
+  "boundaries": "No .claude access; no real AD stores/credentials/login/logout/live Cursor; no source/product docs or prior unit test edits; no host repo execution; no collector body/helper execution even in sandbox; no full/integration suites, scheduler submissions, commit/push, delegation or outbound messages.",
+  "incomplete_work": [],
+  "questions_for_caller": [],
+  "file_sha256": {
+    "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md": "db6c83852f6da784d84cb27fdc748f613c213e055e6fd25baf67b97144cf4d76",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.04/t2.jf1.pc.04.md": "d73c8c6b16085a92d6de6266508713aa7a8d58fb6af4addb63b3f0c5e860c250",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t1.jf1.pc.md": "8ce0f82da7a5f2438aa92e854ce218d5c39ae00839e16dad7fd3302ef8a4c408",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md": "58e493bc01755ec4ed8d35b268da196b84930a4e6dfaf0e4c6cdc86588efafc3",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.03/t2.jf1.pc.03.md": "2f01c7981701371b31c2b60f6b9e47432ddc4c92095815f2604ce4d2cae8bf9e",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.05/t2.jf1.pc.05.md": "d40db0c6ddad2f0c7b555e08a5ac7d410f8b3c0d17e199ef038c0da8392e6246",
+    "tickets/testplans/b.jf1/t1.jf1.pc/COVERAGE.md": "15630adffb2fbab2bc6509887daff665125e08038a27317bccf9ac1d3de23af2",
+    "tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.02/t2.jf1.pc.02.md": "eb8ea4170fd7c1510b3dfbbc512b03671e4d30504687f79f894849867e213981",
+    "test/driver/cursor-pane-controls.sh": "bf244218e5c01960f0e416e2dfbe84f972664831cecb0b30a694991cf31df6a0",
+    "test/driver/cursor-pane-public.mjs": "5b830cbc1281800e9ab13a50b27ef319ad84e871ba97f3678e3f6b577be47f66",
+    "test/driver/cursor-pane-records.cjs": "7c9f52e3b22851cbf34061e02b477bb2722c07604162856075b5ee207ed46f64",
+    "test/docker-epics.txt": "6879fe9811c9a0d6a74f7deb360e8d8758d062c96b4b903f1cb7a695afd7535c"
+  }
+}

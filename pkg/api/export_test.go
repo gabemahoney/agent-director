@@ -60,6 +60,10 @@ func SetPaneSelfForTest(c *Client, self func() ProcessIdentity) { c.paneSelf = s
 // (c *Client).Decide instead.
 var DecideWithSleep = decide
 
+// DecideWithinForTest exercises policy with an explicit controlled context;
+// physical deadline tests continue to use DecideWithSleep or the public API.
+var DecideWithinForTest = decideWithin
+
 // CreatedAtResolution is the storage resolution of a permission request's
 // created_at (createdAtResolution), which relayGuardHold adds to both the send-keys guard's release and
 // Decide's wait (b.pzy, b.z6g), so no test spells it.

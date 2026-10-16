@@ -105,6 +105,7 @@ func (s *Store) ObserveCursorRotation(ctx context.Context, previous CursorRuntim
 // unchanged outgoing snapshot. Neither result grants runtime authority. Both
 // false means the current binding/history is unknown, not an outgoing proof.
 func (s *Store) ReconcileCursorRotation(ctx context.Context, previous CursorRuntime, examined Spawn, next, path string) (committed, unchanged bool, err error) {
+	ctx = context.WithValue(ctx, connectionInitializationContextKey{}, ctx)
 	args := cursorBindingArgs(previous)
 	args = append(args, path, examined.Identity.Token, examined.LifeNumber, examined.Identity.Socket, examined.Identity.ServerPID, examined.Identity.ServerStart, examined.Identity.ServerStarttime, examined.Identity.PaneID, examined.Identity.PanePID, examined.Identity.PaneStarttime)
 	args = append(args, next, next, previous.SessionID, previous.Life, path, previous.SessionID, previous.SessionID)

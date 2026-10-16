@@ -1,0 +1,29 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task3_native_ownership",
+  "verdict": "Two mandatory findings",
+  "findings": [
+    {
+      "id": "N1",
+      "paths": [
+        "internal/store/sqlite_connector.go:23",
+        "internal/store/lockwait.go:101"
+      ],
+      "issue": "database/sql background connectionOpener can open replacements with pool Background-derived context after legacy held connection is discarded while bounded db.Conn waits; bounded owner releases slot while native Open continues, then expired request initialization PRAGMAs can run.",
+      "required": "Make background replacement dialing participate in the same admission/context/disposal ownership; regression mixed legacy-held + bounded-wait + discarded-held + noncooperative replacement Open."
+    },
+    {
+      "id": "N2",
+      "paths": [
+        "internal/store/cursor_prompt.go:27",
+        "internal/store/connection_cleanup.go:68"
+      ],
+      "issue": "CheckCursorPrompt evaluates eligible before err after inWriteTx can return early while callback still active; noncooperative COUNT/Rows completing after context before until exposes callback result race.",
+      "required": "On error return false,err before reading eligible; regression late COUNT/Rows boundary and independent result/race proof."
+    }
+  ],
+  "scope": "Read-only source inspection; no tests/builds/mutations; source hashes matched Engineer integrity.",
+  "deviations": [
+    "Initial skill-local CODEX-SHIM.md absent, corrected parent path. bees show rejected, corrected show-ticket."
+  ],
+  "disposition": "Mandatory fixes accepted; source repair deferred until in-flight independent writer completes so its source inputs remain stable."
+}

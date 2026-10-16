@@ -1,0 +1,16 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task3_deadline",
+  "method": "Sourceinspectiononly",
+  "findings": [
+    {
+      "id": "D1",
+      "priority": "mandatory",
+      "file": "internal/store/lockwait.go:144",
+      "issue": "Context expiry after connection acquisition before/during PRAGMA busy_timeout returns ordinary wrappedcontext error from inWriteTx; bounded Decide then ErrInternal instead of precommit ErrStoreBusy despite no transaction.",
+      "repair": "Classify cancellation/deadline here as precommit ErrStoreBusy, retain discard/quarantine.",
+      "regression": "Driverboundary expire at PRAGMA; noBEGIN/COMMIT, safe subsequent connectionreuse."
+    }
+  ],
+  "historical_cause": "Unknown",
+  "formal": "No changedmodelinputs; noTLAjobs"
+}

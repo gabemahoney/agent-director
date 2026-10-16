@@ -1,0 +1,55 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{"phase":"pre-context-check","inputs":2326,"protected":{"sha256":"032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88","mode":436},"permission":{"sha256":"af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194","mode":436}}
+=== RUN   TestDecisionUncooperativeNativeBoundaries
+=== RUN   TestDecisionUncooperativeNativeBoundaries/open
+=== RUN   TestDecisionUncooperativeNativeBoundaries/initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/zero_initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/setup
+=== RUN   TestDecisionUncooperativeNativeBoundaries/rows_next
+=== RUN   TestDecisionUncooperativeNativeBoundaries/precommit
+=== RUN   TestDecisionUncooperativeNativeBoundaries/commit_response
+=== RUN   TestDecisionUncooperativeNativeBoundaries/close
+--- PASS: TestDecisionUncooperativeNativeBoundaries (5.05s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/open (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/initialization (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/zero_initialization (0.64s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/setup (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/rows_next (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/precommit (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/commit_response (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/close (0.63s)
+=== RUN   TestProductionSQLiteConnectorInitializesEveryReplacement
+--- PASS: TestProductionSQLiteConnectorInitializesEveryReplacement (0.05s)
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/ack
+--- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs (1.13s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny (0.56s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/ack (0.57s)
+=== RUN   TestProductionSQLiteConnectorCancellationBetweenPragmas
+--- PASS: TestProductionSQLiteConnectorCancellationBetweenPragmas (0.06s)
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/0s
+--- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait (0.20s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns (0.10s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/0s (0.10s)
+=== RUN   TestDecisionNativeReadCannotOutliveCaller
+--- PASS: TestDecisionNativeReadCannotOutliveCaller (0.56s)
+=== RUN   TestCursorNativeReturningRowsCannotPublishLateAck
+--- PASS: TestCursorNativeReturningRowsCannotPublishLateAck (0.60s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	8.668s
+=== RUN   TestEveryTestDeclaresParallelOrSerial
+=== PAUSE TestEveryTestDeclaresParallelOrSerial
+=== CONT  TestEveryTestDeclaresParallelOrSerial
+--- PASS: TestEveryTestDeclaresParallelOrSerial (0.30s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	1.314s
+{"phase":"after","inputs":2326,"protected":{"sha256":"032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88","mode":436},"permission":{"sha256":"af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194","mode":436}}

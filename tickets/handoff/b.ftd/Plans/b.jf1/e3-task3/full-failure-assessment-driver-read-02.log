@@ -1,0 +1,325 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+
+func (c *conn) begin(ctx context.Context, opts driver.TxOptions) (t driver.Tx, err error) {
+	return newTx(ctx, c, opts)
+}
+
+// Close invalidates and potentially stops any current prepared statements and
+// transactions, marking this connection as no longer in use.
+//
+// Because the sql package maintains a free pool of connections and only calls
+// Close when there's a surplus of idle connections, it shouldn't be necessary
+// for drivers to do their own connection caching.
+func (c *conn) Close() (err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p: err %v", c, err)
+		}()
+	}
+	c.Lock() // Defend against race with .interrupt invoked by context handling.
+
+	defer c.Unlock()
+
+	if c.db != 0 {
+		if err := c.closeV2(c.db); err != nil {
+			return err
+		}
+
+		c.db = 0
+	}
+
+	if c.tls != nil {
+		c.tls.Close()
+		c.tls = nil
+	}
+	return nil
+}
+
+// C documentation
+//
+//	int sqlite3_close_v2(sqlite3*);
+func (c *conn) closeV2(db uintptr) error {
+	if rc := sqlite3.Xsqlite3_close_v2(c.tls, db); rc != sqlite3.SQLITE_OK {
+		return c.errstr(rc)
+	}
+
+	return nil
+}
+
+func (c *conn) ResetSession(ctx context.Context) error {
+	if c.db == 0 {
+		return driver.ErrBadConn
+	}
+	return nil
+}
+
+func (c *conn) IsValid() bool {
+	return c.db != 0
+}
+
+// FunctionImpl describes an [application-defined SQL function]. If Scalar is
+// set, it is treated as a scalar function; otherwise, it is treated as an
+// aggregate function using MakeAggregate.
+//
+// [application-defined SQL function]: https://sqlite.org/appfunc.html
+type FunctionImpl struct {
+	// NArgs is the required number of arguments that the function accepts.
+	// If NArgs is negative, then the function is variadic.
+	NArgs int32
+
+	// If Deterministic is true, the function must always give the same
+	// output when the input parameters are the same. This enables functions
+	// to be used in additional contexts like the WHERE clause of partial
+	// indexes and enables additional optimizations.
+	//
+	// See https://sqlite.org/c3ref/c_deterministic.html#sqlitedeterministic
+	// for more details.
+	Deterministic bool
+
+	// Scalar is called when a scalar function is invoked in SQL. The
+	// argument Values are not valid past the return of the function.
+	Scalar func(ctx *FunctionContext, args []driver.Value) (driver.Value, error)
+
+	// MakeAggregate is called at the beginning of each evaluation of an
+	// aggregate function.
+	MakeAggregate func(ctx FunctionContext) (AggregateFunction, error)
+}
+
+}
+
+// Commit releases all resources associated with the Backup object but does not
+// close the destination database connection.
+//
+// The destination database connection is returned to the caller or an error if raised.
+// It is the responsibility of the caller to handle the connection closure.
+func (b *Backup) Commit() (driver.Conn, error) {
+	rc := sqlite3.Xsqlite3_backup_finish(b.srcConn.tls, b.pBackup)
+
+	if rc == sqlite3.SQLITE_OK {
+		return b.dstConn, nil
+	} else {
+		return nil, b.srcConn.errstr(rc)
+	}
+}
+
+// ConnectionHookFn function type for a connection hook on the Driver. Connection
+// hooks are called after the connection has been set up.
+type ConnectionHookFn func(
+	conn ExecQuerierContext,
+	dsn string,
+) error
+
+// Driver implements database/sql/driver.Driver.
+type Driver struct {
+	// user defined functions that are added to every new connection on Open
+	udfs map[string]*userDefinedFunction
+	// collations that are added to every new connection on Open
+	collations map[string]*collation
+	// connection hooks are called after a connection is opened
+	connectionHooks []ConnectionHookFn
+}
+
+var d = &Driver{
+	udfs:            make(map[string]*userDefinedFunction, 0),
+	collations:      make(map[string]*collation, 0),
+	connectionHooks: make([]ConnectionHookFn, 0),
+}
+
+func newDriver() *Driver { return d }
+
+// Open returns a new connection to the database. The name is a string in a
+// driver-specific format.
+//
+// Open may return a cached connection (one previously closed), but doing so is
+// unnecessary; the sql package maintains a pool of idle connections for
+// efficient re-use.
+//
+// The returned connection is only used by one goroutine at a time.
+//
+// The name may be a filename, e.g., "/tmp/mydata.sqlite", or a URI, in which
+// case it may include a '?' followed by one or more query parameters.
+// For example, "file:///tmp/mydata.sqlite?_pragma=foreign_keys(1)&_time_format=sqlite".
+// The supported query parameters are:
+//
+// _pragma: Each value will be run as a "PRAGMA ..." statement (with the PRAGMA
+// keyword added for you). May be specified more than once, '&'-separated. For more
+// information on supported PRAGMAs see: https://www.sqlite.org/pragma.html
+//
+// _time_format: The name of a format to use when writing time values to the
+// database. Currently the only supported value is "sqlite", which corresponds
+// to format 7 from https://www.sqlite.org/lang_datefunc.html#time_values,
+// including the timezone specifier. If this parameter is not specified, then
+// the default String() format will be used.
+//
+// _txlock: The locking behavior to use when beginning a transaction. May be
+// "deferred" (the default), "immediate", or "exclusive" (case insensitive). See:
+// https://www.sqlite.org/lang_transaction.html#deferred_immediate_and_exclusive_transactions
+func (d *Driver) Open(name string) (conn driver.Conn, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("name %q: (driver.Conn %p, err %v)", name, conn, err)
+		}()
+	}
+	c, err := newConn(name)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, udf := range d.udfs {
+		if err = c.createFunctionInternal(udf); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	for _, coll := range d.collations {
+		if err = c.createCollationInternal(coll); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+	for _, connHookFn := range d.connectionHooks {
+		if err = connHookFn(c, name); err != nil {
+			c.Close()
+			return nil, fmt.Errorf("connection hook: %w", err)
+		}
+	}
+	return c, nil
+}
+
+// FunctionContext represents the context user defined functions execute in.
+// Fields and/or methods of this type may get addedd in the future.
+type FunctionContext struct {
+	tls *libc.TLS
+	ctx uintptr
+}
+
+const sqliteValPtrSize = unsafe.Sizeof(&sqlite3.Sqlite3_value{})
+
+// RegisterFunction registers a function named zFuncName with nArg arguments.
+// Passing -1 for nArg indicates the function is variadic. The FunctionImpl
+// determines whether the function is deterministic or not, and whether it is a
+// scalar function (when Scalar is defined) or an aggregate function (when
+// Scalar is not defined and MakeAggregate is defined).
+//
+// The new function will be available to all new connections opened after
+// executing RegisterFunction.
+func RegisterFunction(
+	zFuncName string,
+	impl *FunctionImpl,
+// Copyright 2017 The Sqlite Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build go1.8
+// +build go1.8
+
+package sqlite // import "modernc.org/sqlite"
+
+import (
+	"context"
+	"database/sql/driver"
+)
+
+// Ping implements driver.Pinger
+func (c *conn) Ping(ctx context.Context) (err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, ctx %p: err %v", c, ctx, err)
+		}()
+	}
+	_, err = c.ExecContext(ctx, "select 1", nil)
+	return err
+}
+
+// BeginTx implements driver.ConnBeginTx
+func (c *conn) BeginTx(ctx context.Context, opts driver.TxOptions) (dt driver.Tx, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, ctx %p, opts %+v: (driver.Tx %v, err %v)", c, ctx, opts, dt, err)
+		}()
+	}
+	return c.begin(ctx, opts)
+}
+
+// PrepareContext implements driver.ConnPrepareContext
+func (c *conn) PrepareContext(ctx context.Context, query string) (ds driver.Stmt, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, ctx %p, query %q: (driver.Stmt %v, err %v)", c, ctx, query, ds, err)
+		}()
+	}
+	return c.prepare(ctx, query)
+}
+
+// ExecContext implements driver.ExecerContext
+func (c *conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (dr driver.Result, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, ctx %p, query %q, args %v: (driver.Result %p, err %v)", c, ctx, query, args, dr, err)
+		}()
+	}
+	return c.exec(ctx, query, args)
+}
+
+// QueryContext implements driver.QueryerContext
+func (c *conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (dr driver.Rows, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("conn %p, ctx %p, query %q, args %v: (driver.Rows %p, err %v)", c, ctx, query, args, dr, err)
+		}()
+	}
+	return c.query(ctx, query, args)
+}
+
+// ExecContext implements driver.StmtExecContext
+func (s *stmt) ExecContext(ctx context.Context, args []driver.NamedValue) (dr driver.Result, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("stmt %p, ctx %p, args %v: (driver.Result %p, err %v)", s, ctx, args, dr, err)
+		}()
+	}
+	return s.exec(ctx, args)
+}
+
+// QueryContext implements driver.StmtQueryContext
+func (s *stmt) QueryContext(ctx context.Context, args []driver.NamedValue) (dr driver.Rows, err error) {
+	if dmesgs {
+		defer func() {
+			dmesg("stmt %p, ctx %p, args %v: (driver.Rows %p, err %v)", s, ctx, args, dr, err)
+		}()
+	}
+	return s.query(ctx, args)
+}

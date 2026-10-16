@@ -1,0 +1,21 @@
+{
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/FINAL-report.json": "b4a80499dcd1751f7b909039d7a4aad02ffd88dbef4033ba68a7b2f749275cd2",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-engineer/FINAL-report.json": "b9f80e5c51090b86f7d0ea58edfb75495e0ff0a1c12a21f596f811c7ac41a66d",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-green/FINAL-report.json": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-code-review.json": "77fb3afe21ff5e2349cf1e0ed7604d3ffdbd676ee3ec1ed8535a00a447bdb090",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-review-fix/FINAL-report.json": "ac4752ffdc66fd6ddad5690e011f0a8e345b5994cc26d344a85fb17fcdff5c4a",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/public/FINAL-report.json": "cb09003843ba658e18e91432f185dd7273e6d2bba70af75de4098347a012571b",
+  "CLAUDE.md": "0e216d858f3888c96775e6b8cac25bf807212bd105ca7dc3605d3a67036cd0b4",
+  "docs/test-writing-guide.md": "71372a1f42895354cebe97770d57e7e00e89b2cd29c5ee5f6c96f15b096b90fc",
+  "test/Dockerfile": "f9b3851c0d754f52de5e04ec5e6e4b93246eea9604d964b00f801811a01fe6b1",
+  "test/driver/run-testplan.sh": "c86402ec5d2c4183b169a6b25b3dcd329a6eb521e0e0d134f070baf45a33df17",
+  "test/driver/cursor-owned-launch.sh": "f00def2a7dd97e93e8feb00522513021f2f09a864615bd20d85a579e88f3f976",
+  "test/driver/sql.sh": "46b3760a31619d01ed28979df5c5743cb662eb4e4a4ccb66b717b9a4cbcf0294",
+  "internal/testsupport/cursorfix/runtime.js": "6d34e8cb81e70e52a9e3229d6e91d615ab2abfb285e5b9286ace79700f0928e0",
+  "pkg/ts-bun-client/package.json": "3d73c77736a1df98ec9382c98fca6e20f23d9cd551cfd26310c1082cbcb5b047",
+  "pkg/ts-bun-client/build.ts": "fbc569be81dc680b3285f2bb00a8229576d4f99f1db5e444fcd0808966846bc6",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/start/collector-authority.json": "e8bf79aa918f3266f1dd3726d0f63f4c6978d5aed6d47ae411b909b3515031d8",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/start/collector-task.json": "24bfd5319b10cbd1ad4d1c63400291037bccb70a9cd71b366f2322693c539456",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/start/collector-epic.json": "a3855c02e5d55097fc060773e4386f84712e19d4388c4cefa4dfa7babd44222c",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/start/collector-subtasks.json": "8a0681b0840599f5162ca8e50e17069e708c13d8178c51386f060c81a1bcd47e"
+}

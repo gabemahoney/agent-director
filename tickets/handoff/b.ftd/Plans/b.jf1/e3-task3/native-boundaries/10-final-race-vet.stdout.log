@@ -1,0 +1,566 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+{"phase":"pre-final","inputs":2326,"protected":{"sha256":"032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88","mode":436},"permission":{"sha256":"af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194","mode":436}}
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/canceled
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/deadline
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context
+--- PASS: TestDecisionSetupPragmaFailureBeforeBegin (0.43s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/canceled (0.12s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/deadline (0.25s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context (0.06s)
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response
+--- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries (1.08s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response (0.23s)
+=== RUN   TestDecisionCleanupQuarantinesNoncancelableClose
+--- PASS: TestDecisionCleanupQuarantinesNoncancelableClose (0.28s)
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s
+--- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait (0.19s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s (0.09s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s (0.10s)
+=== RUN   TestDecisionLateAcquisitionRetainsOriginalSQLDeadline
+--- PASS: TestDecisionLateAcquisitionRetainsOriginalSQLDeadline (0.26s)
+=== RUN   TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance
+--- PASS: TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance (0.16s)
+=== RUN   TestDecisionNoMatchRollsBackWithoutCommit
+=== RUN   TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal
+=== RUN   TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result
+--- PASS: TestDecisionNoMatchRollsBackWithoutCommit (0.34s)
+    --- PASS: TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal (0.10s)
+    --- PASS: TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result (0.25s)
+=== RUN   TestDecisionUncooperativeNativeBoundaries
+=== RUN   TestDecisionUncooperativeNativeBoundaries/open
+=== RUN   TestDecisionUncooperativeNativeBoundaries/initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/zero_initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/setup
+=== RUN   TestDecisionUncooperativeNativeBoundaries/rows_next
+=== RUN   TestDecisionUncooperativeNativeBoundaries/precommit
+=== RUN   TestDecisionUncooperativeNativeBoundaries/commit_response
+=== RUN   TestDecisionUncooperativeNativeBoundaries/close
+--- PASS: TestDecisionUncooperativeNativeBoundaries (5.04s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/open (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/initialization (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/zero_initialization (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/setup (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/rows_next (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/precommit (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/commit_response (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/close (0.63s)
+=== RUN   TestProductionSQLiteConnectorInitializesEveryReplacement
+--- PASS: TestProductionSQLiteConnectorInitializesEveryReplacement (0.05s)
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/ack
+--- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs (1.13s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny (0.56s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/ack (0.57s)
+=== RUN   TestProductionSQLiteConnectorCancellationBetweenPragmas
+--- PASS: TestProductionSQLiteConnectorCancellationBetweenPragmas (0.06s)
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/0s
+--- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait (0.19s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns (0.10s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/0s (0.10s)
+=== RUN   TestDecisionNativeReadCannotOutliveCaller
+--- PASS: TestDecisionNativeReadCannotOutliveCaller (0.56s)
+=== RUN   TestRelayAckAndTimeoutDeny
+=== RUN   TestRelayAckAndTimeoutDeny/ack,_undecided:_nothing_to_ack
+=== RUN   TestRelayAckAndTimeoutDeny/ack_an_allow
+=== RUN   TestRelayAckAndTimeoutDeny/ack_a_deny_with_its_reason
+=== RUN   TestRelayAckAndTimeoutDeny/ack,_a_pane_answer_begun
+=== RUN   TestRelayAckAndTimeoutDeny/ack_a_verdict_the_mark_closed
+=== RUN   TestRelayAckAndTimeoutDeny/ack_the_mark's_deny
+=== RUN   TestRelayAckAndTimeoutDeny/timeout_deny,_undecided
+=== RUN   TestRelayAckAndTimeoutDeny/timeout_deny,_a_verdict_landed_first
+=== RUN   TestRelayAckAndTimeoutDeny/timeout_deny,_a_pane_answer_begun
+=== RUN   TestRelayAckAndTimeoutDeny/timeout_deny,_the_mark's_deny_first
+--- PASS: TestRelayAckAndTimeoutDeny (0.62s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack,_undecided:_nothing_to_ack (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack_an_allow (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack_a_deny_with_its_reason (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack,_a_pane_answer_begun (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack_a_verdict_the_mark_closed (0.07s)
+    --- PASS: TestRelayAckAndTimeoutDeny/ack_the_mark's_deny (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/timeout_deny,_undecided (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/timeout_deny,_a_verdict_landed_first (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/timeout_deny,_a_pane_answer_begun (0.06s)
+    --- PASS: TestRelayAckAndTimeoutDeny/timeout_deny,_the_mark's_deny_first (0.06s)
+=== RUN   TestDecideRelayRequestGuards
+=== RUN   TestDecideRelayRequestGuards/undecided
+=== RUN   TestDecideRelayRequestGuards/undecided,_the_legacy_cutoff_after_created_at
+=== RUN   TestDecideRelayRequestGuards/decided
+=== RUN   TestDecideRelayRequestGuards/its_hook's_timeout_deny_delivered
+=== RUN   TestDecideRelayRequestGuards/a_pane_answer_begun
+--- PASS: TestDecideRelayRequestGuards (0.38s)
+    --- PASS: TestDecideRelayRequestGuards/undecided (0.07s)
+    --- PASS: TestDecideRelayRequestGuards/undecided,_the_legacy_cutoff_after_created_at (0.07s)
+    --- PASS: TestDecideRelayRequestGuards/decided (0.08s)
+    --- PASS: TestDecideRelayRequestGuards/its_hook's_timeout_deny_delivered (0.08s)
+    --- PASS: TestDecideRelayRequestGuards/a_pane_answer_begun (0.09s)
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait
+--- PASS: TestBoundedCallsUnderAHeldLockOrConnection (3.39s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait (0.09s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait (0.10s)
+=== RUN   TestBoundedCallsFreshFixtureRecovery
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_request
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row's_requests
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_first_write
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_ack
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_verdict
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_refused_verdict
+=== RUN   TestBoundedCallsFreshFixtureRecovery/a_reader's_hook_gone_at,_no_wait
+--- PASS: TestBoundedCallsFreshFixtureRecovery (0.50s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_request (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row's_requests (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_first_write (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_ack (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_timeout_deny (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_verdict (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_refused_verdict (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/a_reader's_hook_gone_at,_no_wait (0.06s)
+=== RUN   TestRelayWritePrecondition
+=== RUN   TestRelayWritePrecondition/ack/lock_held_past_the_wait
+=== RUN   TestRelayWritePrecondition/ack/precondition_fails
+=== RUN   TestRelayWritePrecondition/ack/precondition_holds
+=== RUN   TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait
+=== RUN   TestRelayWritePrecondition/timeout_deny/precondition_fails
+=== RUN   TestRelayWritePrecondition/timeout_deny/precondition_holds
+--- PASS: TestRelayWritePrecondition (0.77s)
+    --- PASS: TestRelayWritePrecondition/ack/lock_held_past_the_wait (0.24s)
+    --- PASS: TestRelayWritePrecondition/ack/precondition_fails (0.08s)
+    --- PASS: TestRelayWritePrecondition/ack/precondition_holds (0.07s)
+    --- PASS: TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait (0.23s)
+    --- PASS: TestRelayWritePrecondition/timeout_deny/precondition_fails (0.08s)
+    --- PASS: TestRelayWritePrecondition/timeout_deny/precondition_holds (0.07s)
+=== RUN   TestRecordHookGoneAndRefusedDecision
+--- PASS: TestRecordHookGoneAndRefusedDecision (0.07s)
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/undecided
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/acked
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/timeout_deny_delivered
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/pane_answer_begun
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/pane_answer_sent
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/answered_outside_agent-director
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/its_tool_ran
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_answered_outside_agent-director
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_pane_answer_begun
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/undecided,_closed_by_find-missing's_mark
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_decided
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked,_closed_by_find-missing's_mark
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_closed_by_find-missing's_mark
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/undecided,_closed_by_its_SessionEnd
+=== RUN   TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked,_closed_by_its_SessionEnd
+--- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting (1.50s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/undecided (0.08s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/acked (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/timeout_deny_delivered (0.08s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/pane_answer_begun (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/pane_answer_sent (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/answered_outside_agent-director (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/its_tool_ran (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_answered_outside_agent-director (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_pane_answer_begun (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/undecided,_closed_by_find-missing's_mark (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_decided (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked,_closed_by_find-missing's_mark (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/before_v7,_undecided,_closed_by_find-missing's_mark (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/undecided,_closed_by_its_SessionEnd (0.09s)
+    --- PASS: TestRecordRefusedDecisionOnlyWhileAwaiting/decided,_not_acked,_closed_by_its_SessionEnd (0.09s)
+=== RUN   TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+=== PAUSE TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+=== RUN   TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds
+--- PASS: TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds (0.12s)
+=== RUN   TestCursorTrailAdmissionRefusalIsSilent
+=== RUN   TestCursorTrailAdmissionRefusalIsSilent/collision_after_state_update
+=== RUN   TestCursorTrailAdmissionRefusalIsSilent/stale_binding
+=== RUN   TestCursorTrailAdmissionRefusalIsSilent/deadline
+=== RUN   TestCursorTrailAdmissionRefusalIsSilent/invalid_request
+--- PASS: TestCursorTrailAdmissionRefusalIsSilent (0.44s)
+    --- PASS: TestCursorTrailAdmissionRefusalIsSilent/collision_after_state_update (0.11s)
+    --- PASS: TestCursorTrailAdmissionRefusalIsSilent/stale_binding (0.11s)
+    --- PASS: TestCursorTrailAdmissionRefusalIsSilent/deadline (0.11s)
+    --- PASS: TestCursorTrailAdmissionRefusalIsSilent/invalid_request (0.11s)
+=== RUN   TestCursorTrailNativeRefusalIsSilent
+=== RUN   TestCursorTrailNativeRefusalIsSilent/mismatch
+=== RUN   TestCursorTrailNativeRefusalIsSilent/intent
+=== RUN   TestCursorTrailNativeRefusalIsSilent/outside
+=== RUN   TestCursorTrailNativeRefusalIsSilent/stale_binding
+=== RUN   TestCursorTrailNativeRefusalIsSilent/deadline
+=== RUN   TestCursorTrailNativeRefusalIsSilent/missing
+=== RUN   TestCursorTrailNativeRefusalIsSilent/delivered
+=== RUN   TestCursorTrailNativeRefusalIsSilent/closed
+=== RUN   TestCursorTrailNativeRefusalIsSilent/proven
+--- PASS: TestCursorTrailNativeRefusalIsSilent (1.04s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/mismatch (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/intent (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/outside (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/stale_binding (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/deadline (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/missing (0.11s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/delivered (0.12s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/closed (0.12s)
+    --- PASS: TestCursorTrailNativeRefusalIsSilent/proven (0.12s)
+=== RUN   TestCursorTrailProofRefusalIsSilent
+=== RUN   TestCursorTrailProofRefusalIsSilent/wrong_token
+=== RUN   TestCursorTrailProofRefusalIsSilent/wrong_tool
+=== RUN   TestCursorTrailProofRefusalIsSilent/independent_token_tool_mismatch
+=== RUN   TestCursorTrailProofRefusalIsSilent/closed
+=== RUN   TestCursorTrailProofRefusalIsSilent/stale_binding
+--- PASS: TestCursorTrailProofRefusalIsSilent (0.68s)
+    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_token (0.14s)
+    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_tool (0.13s)
+    --- PASS: TestCursorTrailProofRefusalIsSilent/independent_token_tool_mismatch (0.13s)
+    --- PASS: TestCursorTrailProofRefusalIsSilent/closed (0.14s)
+    --- PASS: TestCursorTrailProofRefusalIsSilent/stale_binding (0.13s)
+=== RUN   TestCursorTrailRollbackIsSilent
+=== RUN   TestCursorTrailRollbackIsSilent/native/update
+=== RUN   TestCursorTrailRollbackIsSilent/native/commit
+=== RUN   TestCursorTrailRollbackIsSilent/proof/update
+=== RUN   TestCursorTrailRollbackIsSilent/proof/commit
+--- PASS: TestCursorTrailRollbackIsSilent (0.59s)
+    --- PASS: TestCursorTrailRollbackIsSilent/native/update (0.14s)
+    --- PASS: TestCursorTrailRollbackIsSilent/native/commit (0.16s)
+    --- PASS: TestCursorTrailRollbackIsSilent/proof/update (0.14s)
+    --- PASS: TestCursorTrailRollbackIsSilent/proof/commit (0.15s)
+=== RUN   TestCursorTrailFailureDoesNotUndoCommit
+--- PASS: TestCursorTrailFailureDoesNotUndoCommit (1.12s)
+=== RUN   TestCursorNativeReturningRowsCannotPublishLateAck
+--- PASS: TestCursorNativeReturningRowsCannotPublishLateAck (0.60s)
+=== RUN   TestCursorTrailAdmissionAndTimeout
+--- PASS: TestCursorTrailAdmissionAndTimeout (0.21s)
+=== RUN   TestCursorTrailNativeClaim
+=== RUN   TestCursorTrailNativeClaim/direct_allow
+=== RUN   TestCursorTrailNativeClaim/direct_deny
+=== RUN   TestCursorTrailNativeClaim/consume_sent
+--- PASS: TestCursorTrailNativeClaim (0.44s)
+    --- PASS: TestCursorTrailNativeClaim/direct_allow (0.15s)
+    --- PASS: TestCursorTrailNativeClaim/direct_deny (0.14s)
+    --- PASS: TestCursorTrailNativeClaim/consume_sent (0.15s)
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/undecided
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/API_allow
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/operator_deny
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/timeout_deny
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/native_pane
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/outside_unknown
+=== RUN   TestCursorTrailProofFinalValuesAndDuplicate/incomplete_proof
+--- PASS: TestCursorTrailProofFinalValuesAndDuplicate (1.56s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/undecided (0.22s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/API_allow (0.22s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/operator_deny (0.22s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/timeout_deny (0.22s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/native_pane (0.23s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/outside_unknown (0.23s)
+    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/incomplete_proof (0.23s)
+=== RUN   TestCursorTrailAcknowledgementAddsNoMutation
+=== RUN   TestCursorTrailAcknowledgementAddsNoMutation/allow
+=== RUN   TestCursorTrailAcknowledgementAddsNoMutation/deny
+--- PASS: TestCursorTrailAcknowledgementAddsNoMutation (0.24s)
+    --- PASS: TestCursorTrailAcknowledgementAddsNoMutation/allow (0.12s)
+    --- PASS: TestCursorTrailAcknowledgementAddsNoMutation/deny (0.12s)
+=== CONT  TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry
+--- PASS: TestAdviceFollow_F10_UnconfirmedCommitInspectBeforeRetry (0.18s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	25.282s
+=== RUN   TestBoundedWriterPendingCapacityFIFOAndDrain
+--- PASS: TestBoundedWriterPendingCapacityFIFOAndDrain (0.13s)
+=== RUN   TestBoundedWriterFailureIsObservableAndCloses
+--- PASS: TestBoundedWriterFailureIsObservableAndCloses (0.00s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/trail	1.158s
+=== RUN   TestDecideAbsoluteContextSurvivesParkedPhase
+=== PAUSE TestDecideAbsoluteContextSurvivesParkedPhase
+=== RUN   TestClientDecideBoundsDeferredAuditAndPreservesFIFO
+    decide_absolute_deadline_test.go:121: Client.Decide including deferred audit returned at 501.100945ms while writer held
+--- PASS: TestClientDecideBoundsDeferredAuditAndPreservesFIFO (0.67s)
+=== RUN   TestDecideReportsDelivery
+=== PAUSE TestDecideReportsDelivery
+=== RUN   TestDecideMaxWaitUnderHeldLock
+=== PAUSE TestDecideMaxWaitUnderHeldLock
+=== RUN   TestAdviceFollow_F9_DecideStoreBusyRetry
+=== PAUSE TestAdviceFollow_F9_DecideStoreBusyRetry
+=== RUN   TestDecideHeldLockExactPolicy
+=== PAUSE TestDecideHeldLockExactPolicy
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== RUN   TestDecisionReasonOnlyCanonicalValues
+=== PAUSE TestDecisionReasonOnlyCanonicalValues
+=== RUN   TestDecideMaxWaitWithBlockedTrail
+    decide_trail_deadline_test.go:103: independent connection observed committed allow at +12.413202ms with trail mutex still held
+    decide_trail_deadline_test.go:123: decide finished after 500.666485ms; reporting released at +500.687265ms
+--- PASS: TestDecideMaxWaitWithBlockedTrail (0.57s)
+=== CONT  TestDecideMaxWaitUnderHeldLock
+=== CONT  TestDecisionReasonOnlyCanonicalValues
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep
+=== CONT  TestDecideHeldLockExactPolicy
+=== CONT  TestAdviceFollow_F9_DecideStoreBusyRetry
+=== CONT  TestDecideAbsoluteContextSurvivesParkedPhase
+=== RUN   TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== CONT  TestDecideReportsDelivery
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== PAUSE TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== RUN   TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== RUN   TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== PAUSE TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== PAUSE TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== RUN   TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== PAUSE TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex
+=== CONT  TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== RUN   TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== PAUSE TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== RUN   TestDecideReportsDelivery/no_ack_within_1_s
+=== PAUSE TestDecideReportsDelivery/no_ack_within_1_s
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== RUN   TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== PAUSE TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== RUN   TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed
+=== CONT  TestDecideHeldLockExactPolicy/postcommit_not_confirmed
+=== PAUSE TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideHeldLockExactPolicy/codex/fallen-back_refusal
+=== CONT  TestDecideHeldLockExactPolicy/fallen-back_refusal
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== RUN   TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== RUN   TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== PAUSE TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== RUN   TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== PAUSE TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== PAUSE TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== RUN   TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== PAUSE TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideReportsDelivery/no_ack_within_1_s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideReportsDelivery/codex/no_ack_within_1_s
+=== CONT  TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait
+=== CONT  TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait
+=== CONT  TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack
+=== CONT  TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at
+=== CONT  TestDecideReportsDelivery/the_hook_acks_within_the_wait
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== PAUSE TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== RUN   TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== PAUSE TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== RUN   TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== PAUSE TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== RUN   TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== PAUSE TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms
+=== CONT  TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout
+=== CONT  TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+=== CONT  TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+=== CONT  TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s
+--- PASS: TestDecisionReasonOnlyCanonicalValues (0.47s)
+--- PASS: TestDecideHeldLockExactPolicy (0.00s)
+    --- PASS: TestDecideHeldLockExactPolicy/postcommit_not_confirmed (0.99s)
+    --- PASS: TestDecideHeldLockExactPolicy/codex/postcommit_not_confirmed (1.00s)
+    --- PASS: TestDecideHeldLockExactPolicy/fallen-back_refusal (1.09s)
+    --- PASS: TestDecideHeldLockExactPolicy/codex/fallen-back_refusal (1.10s)
+--- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep (0.00s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex (0.93s)
+    --- PASS: TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude (1.11s)
+--- PASS: TestAdviceFollow_F9_DecideStoreBusyRetry (1.17s)
+--- PASS: TestDecideReportsDelivery (0.00s)
+    --- PASS: TestDecideReportsDelivery/codex/max_wait_ms_reached_during_the_wait (0.93s)
+    --- PASS: TestDecideReportsDelivery/max_wait_ms_reached_during_the_wait (1.10s)
+    --- PASS: TestDecideReportsDelivery/the_hook_acks_within_the_wait (1.18s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_acks_within_the_wait (1.18s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_cannot_be_checked,_before_settled_at (1.28s)
+    --- PASS: TestDecideReportsDelivery/codex/the_hook_exits_during_the_wait_without_an_ack (1.31s)
+    --- PASS: TestDecideReportsDelivery/no_ack_within_1_s (1.31s)
+    --- PASS: TestDecideReportsDelivery/the_hook_cannot_be_checked,_before_settled_at (1.31s)
+    --- PASS: TestDecideReportsDelivery/the_hook_exits_during_the_wait_without_an_ack (1.32s)
+    --- PASS: TestDecideReportsDelivery/codex/no_ack_within_1_s (1.32s)
+--- PASS: TestDecideAbsoluteContextSurvivesParkedPhase (1.48s)
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:305: actual COMMIT and postcommit holder-ready observed
+=== NAME  TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s
+    decide_delivery_test.go:305: actual COMMIT and postcommit holder-ready observed
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s
+    decide_delivery_test.go:305: actual COMMIT and postcommit holder-ready observed
+=== NAME  TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s
+    decide_delivery_test.go:305: actual COMMIT and postcommit holder-ready observed
+--- PASS: TestDecideMaxWaitUnderHeldLock (0.01s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms (1.12s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound (1.21s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout (1.30s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (1.47s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s (1.48s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s (1.51s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s (1.57s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s (1.59s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s (1.61s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s (1.62s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s (1.63s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s (1.63s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (1.64s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s (1.65s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s (1.65s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s (1.68s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s (1.69s)
+    --- PASS: TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s (1.71s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	3.997s
+=== RUN   TestDecideCalledEmitsTrailLine
+=== RUN   TestDecideCalledEmitsTrailLine/ok
+=== RUN   TestDecideCalledEmitsTrailLine/ErrStoreBusy
+=== RUN   TestDecideCalledEmitsTrailLine/ErrInvalidFlags
+=== RUN   TestDecideCalledEmitsTrailLine/ErrAlreadyDecided
+=== RUN   TestDecideCalledEmitsTrailLine/ErrRelayFallenBack
+=== RUN   TestDecideCalledEmitsTrailLine/ErrInvalidFlags#01
+--- PASS: TestDecideCalledEmitsTrailLine (0.86s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ok (0.10s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ErrStoreBusy (0.39s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ErrInvalidFlags (0.08s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ErrAlreadyDecided (0.09s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ErrRelayFallenBack (0.11s)
+    --- PASS: TestDecideCalledEmitsTrailLine/ErrInvalidFlags#01 (0.09s)
+=== RUN   TestDecideProcessShutdownBoundsBlockedAudit
+--- PASS: TestDecideProcessShutdownBoundsBlockedAudit (0.89s)
+PASS
+ok  	github.com/gabemahoney/agent-director/cmd/agent-director	3.325s
+realtmux: tmux 3.3a at /usr/bin/tmux
+=== RUN   TestCursorPersistenceFailureStopsAdmission
+=== RUN   TestCursorPersistenceFailureStopsAdmission/input_replacement
+=== RUN   TestCursorPersistenceFailureStopsAdmission/input_permission
+=== RUN   TestCursorPersistenceFailureStopsAdmission/queued_admission
+=== RUN   TestCursorPersistenceFailureStopsAdmission/queued_cancellation
+=== RUN   TestCursorPersistenceFailureStopsAdmission/turn_outcome
+=== RUN   TestCursorPersistenceFailureStopsAdmission/end_publication
+=== RUN   TestCursorPersistenceFailureStopsAdmission/rotation_confirmation
+=== RUN   TestCursorPersistenceFailureStopsAdmission/rotation_publication
+--- PASS: TestCursorPersistenceFailureStopsAdmission (9.30s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/input_replacement (0.79s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/input_permission (0.61s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/queued_admission (0.75s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/queued_cancellation (0.73s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/turn_outcome (0.68s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/end_publication (3.66s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/rotation_confirmation (0.64s)
+    --- PASS: TestCursorPersistenceFailureStopsAdmission/rotation_publication (1.44s)
+=== RUN   TestCursorRelayLockCannotExtendApprovalDeadline
+    cursor_relay_boundary_linux_test.go:75: holderReady=2026-10-16 02:13:17.709667702 +0000 UTC m=+10.029750122 originalApproval=2026-10-16 02:13:19.576 +0000 UTC
+--- PASS: TestCursorRelayLockCannotExtendApprovalDeadline (6.67s)
+PASS
+ok  	github.com/gabemahoney/agent-director/test/realtmux	16.987s
+{"phase":"after","inputs":2326,"protected":{"sha256":"032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88","mode":436},"permission":{"sha256":"af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194","mode":436}}

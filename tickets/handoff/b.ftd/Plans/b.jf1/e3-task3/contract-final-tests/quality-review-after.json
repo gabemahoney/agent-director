@@ -1,0 +1,81 @@
+{
+  "guide": "docs/test-writing-guide.md: Pre-Submit Checklist and Red Flags",
+  "method": "All Task3 changed source diffs/new source, deadline/store/trail/API/public tests, collector helpers/five cases/coverage/operator instructions and full named reports reviewed as one coverage set. Existing Task1/2 owners preserved and independently hash-bound; no claim of a fresh manual review of every unchanged test.",
+  "findings": [
+    {
+      "id": "Q1",
+      "disposition": "closed by advice work",
+      "issue": "Store COMMIT-response phase test alone did not execute public recovery advice.",
+      "resolution": "External store_test public Decide/GetPermission composition reuses internal Store test-only real SQLite driver boundary; no production seam. Real COMMIT succeeds then response expires, actual classifier returns ErrInternal and exact inspection phrase, fresh independent public reader sees allow, two reads preserve facts, exactly one verdict UPDATE/COMMIT. Distinct API recovery boundary complements SQL phase owner."
+    }
+  ],
+  "mandatory_unresolved": [
+    {
+      "test": "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+      "location": "pkg/api/decide_delivery_test.go:315",
+      "assertion": "err store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded matches []; want exactly ErrStoreBusy",
+      "facts": "Unchanged original real-SQL legacy leaf, still parallel, MaxWaitMs 100ms and original no-sleep/1.1s physical assertion. Full subtest reported 1.53s including setup. assertOneSentinel uses t.Errorf, so later original elapsed/no-sleep/no-write assertions executed and reported no failures. Only sentinel classification failed; no phase trace locates COMMIT elapsed time.",
+      "assessment": "New actual SQL/legacy error-contract failure, distinct from corrected three policy leaves; fresh Engineer source/test-contract assessment required. Existing source intentionally distinguishes unconfirmed COMMIT from precommit ErrStoreBusy. Real legacy path attempts guarded UPDATE and COMMIT before refusal-by-settle-time. Independent row assertion saw no decision/attempt, and physical/no-sleep assertions passed. This does not establish a source defect or deadline overrun.",
+      "route": "Do not relax sentinel/physical assertions, enlarge 100ms, lower parallelism, distort source or rerun unchanged. Preserve receipt and original protected 500ms/1.5s guards. Calling agent routes fresh assessment before necessary correction/new full run."
+    }
+  ],
+  "ownership": {
+    "causal_deadline": "pkg/api/decide_trail_deadline_test.go retained byte-identically; old exact64a RED/new GREEN with unchanged 500ms/1.5s assertions",
+    "sql_cleanup": "internal/store/deadline_boundary_test.go owns phase matrix/setup context classification/safe reuse-discard/quarantine/original deadline/zero wait",
+    "audit": "internal/trail/deadline_test.go owns 1 active+64 queue/rejection/status/FIFO/drain/failure; API Client test owns deferred audit return and commit/called order",
+    "public": "Two cursor_pane_controls files parameterize four genuine callers and representative distinct faults. Task1 controls and Task2 exhaustive rotation matrices are retained, not copied.",
+    "shipped": "Five authored collector compositions add installed Bun tarball/build/declaration/consumer evidence. They are static authored only.",
+    "authenticated": "O1-O6 and actual human/authenticated runtime predicates remain pending; synthetic received bytes/frames/source-derived questions never relabeled authenticated."
+  },
+  "checklist": {
+    "parameterization": "Five SQL phases, three setup errors, four callers, three controls and four representative faults parameterized. All new Go files below 500 lines; existing larger files already feature grouped/parameterized.",
+    "fixtures": "Existing relayEnv/parked decorator, apitest.SeedDecideFixtureAgent/procfix, deadlineBoundary/execHookConnector, cursorfix/newCursorPaneScenario/public adapter/owned-launch/sql reused. No copied controller/retry/queue implementation, helper-only tests, parallel exhaustive fault matrix, or newly unused helper found.",
+    "isolation": "Per-test real SQLite; test singleton holders serial with reasons; public fixtures serial for HOME/PATH/tmux environment; independent tests parallel. Bun execution remains sequential. Finite contexts/event channels/process waits and owned cleanup retained.",
+    "preservation": "Entry manifest binds all unchanged guards: Task1 R1-R5/E2 bounded pending/hash/dialog/answer gates, frame/request minima, postwait authority, independent permission/plan/unknown holds, question denial, ack before bytes and native pause/exact owned death. No deadline/SQL timeout/assertion relaxation, parallelism reduction, retry-until-green, or concurrent send atomicity promise.",
+    "evidence": "Received raw bytes versus complete frames and source-derived versus received traffic are distinct; P1 startup/P2 completed publication/P3 partial-byte corrections reviewed. No audit fsync/crash durability claim; cleanup quarantines leases and original deadline/one-second zero-work semantics agree with docs. Native uninterruptible/descheduling limits remain explicit.",
+    "formal": "No actual spec/tla input change; zero formal/parser/TLC/Java jobs."
+  },
+  "doc_consistency": "Five edited product docs remain unchanged from entry. Canonical changed recovery is caller-contract Permission relay. Architecture final 9593447 retained; inherited whole-base four partitions plus five verified deltas is aggregate coverage, not a fresh whole-file read or clean-document claim; deferred A2-A6/B3-B8/C2-C5/D1-D2 and inherited guide normalization remain deferred.",
+  "collector_gate": {
+    "groups": 17,
+    "expected_cases": 172,
+    "executed": false,
+    "installed_dependency_network_prerequisite": true,
+    "raw_archive_mount_required": true,
+    "makefile_extra_args_variable": false
+  },
+  "historical09": "Both historical failure causes remain UNKNOWN. Controlled regression does not reconstruct them.",
+  "post_full_observer_corrections": [
+    {
+      "test": "TestRelayWritePrecondition/timeout_deny/lock_held_past_the_wait",
+      "failure": "relay_writes_test.go:125: table_info(permission_requests): database is locked (5) (SQLITE_BUSY)",
+      "correction": "Await safe lease through the same one-connection pool before unchanged zero-wait raw request dump. Original bounded write and refusal/no-write/free-lock assertions unchanged."
+    },
+    {
+      "test": "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence",
+      "failure": "cursor_rotation_test.go:241: atomic independent visibility row=\"\" runtime=\"\" path=\"\" life=0 archives=0 err=database is locked (5) (SQLITE_BUSY)",
+      "correction": "Ordinary same-Store bounded read synchronizes quarantine/disposal completion before unchanged independent atomic raw snapshot. Original 20ms expiry, expired-after-evidence verifier and refusal/identity/archive assertions unchanged."
+    }
+  ],
+  "post_full_targeted_receipt": {
+    "log": "06-cleanup-observer-targeted.log",
+    "exit": 0,
+    "passed_leaves": 19
+  },
+  "final_result": "One new real-SQL legacy error-contract failure remains; quality/full subtasks stay active.",
+  "current_pass": {
+    "changes": [
+      "pkg/api/export_test.go",
+      "pkg/api/decide_delivery_test.go",
+      "pkg/api/decide_policy_test.go"
+    ],
+    "assessment": "Fresh Engineer assessed three mixed-real/fake-clock failures; no source defect demonstrated. Exact 100ms/300ms policy calls use explicit cancelable context and stateful snapshots with existing decideWithin core. DecideWithSleep=decide and all physical deadline callers remain.",
+    "assertions": "Both agents retain exact 300ms, six 50ms polls, liveness, confirm_by and recorded allow. F9 retains two held refusals/no write/attempt, fresh 100ms on all calls, third success/one allow and later duplicate no additional commit.",
+    "cancellation": "Both agents cancel immediately after the fixture commit; committed allow/not_confirmed/liveness/confirm_by survive with zero sleep and zero subsequent reads before independent inspection.",
+    "observer": "Copied deadlineStore forwards WithDecideContext to a real WithContext delegate or cooperating decorator, retaining observer and same phase/deadline pointers; every bounded observed phase keeps exact original context deadline.",
+    "fixture_limits": "Policy fixture proves no real SQL locking, durability or physical deadlines. Real held-lock/precommit no-write guards, original-context public fresh recovery/GetPermission, F10 actual SQLite uncertain COMMIT, SQL cleanup and trail owners retained.",
+    "docs": "Source and five product docs unchanged. Test-only seam correction changes no product contract and requires no doc resync.",
+    "retained_previous_failure": "Prior full five failures preserved. Two Store cleanup observation repairs from previous pass retained; three API leaves corrected here.",
+    "new_targeted_failure": "01-targeted: newly added observer assertion incorrectly used external pre-call timestamp as the API-created original deadline; context is created slightly later. Fixed assertion captures exact received context instead. Original elapsed guards never altered."
+  }
+}

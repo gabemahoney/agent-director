@@ -1,0 +1,9 @@
+Receipt: exact test-process output returned by exec/write_stdin for the initial sandbox invocation. Image-build/setup output was shown in the tool transcript; this file preserves the test portion only.
+Command: make sandbox CMD='gofmt -w internal/store/store.go internal/store/lockwait.go internal/store/permission.go pkg/api/decide.go internal/trail/trail.go internal/trail/deadline.go && timeout 90s go test -timeout 75s -count=1 -v ./pkg/api -run "^TestDecideMaxWaitWithBlockedTrail$"'
+Exit: 0
+=== RUN   TestDecideMaxWaitWithBlockedTrail
+    decide_trail_deadline_test.go:103: independent connection observed committed allow at +2.420249ms with trail mutex still held
+    decide_trail_deadline_test.go:123: decide finished after 502.652417ms; reporting released at +502.794007ms
+--- PASS: TestDecideMaxWaitWithBlockedTrail (0.53s)
+PASS
+ok  	github.com/gabemahoney/agent-director/pkg/api	0.536s

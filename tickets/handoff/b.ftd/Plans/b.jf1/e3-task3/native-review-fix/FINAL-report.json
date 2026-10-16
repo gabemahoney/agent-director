@@ -1,0 +1,311 @@
+{
+  "role": "apiary_engineer_e3_task3_native_review_fix",
+  "result": "Implemented mandatory N1/N2 source fixes. Targeted existing race tests, store vet and diff checks pass. Fresh independent N1/N2 regression writer and review remain required; no full-suite run or test/document edits.",
+  "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+  "branch": "feature/b.ftd",
+  "tickets": {
+    "t3.jf1.r8.a8.ir": "done -> active -> done"
+  },
+  "source_files": [
+    {
+      "path": "internal/store/sqlite_connector.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/sqlite_connector.go",
+      "before": {
+        "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+        "mode": "664"
+      },
+      "after": {
+        "sha256": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+        "mode": "664"
+      }
+    },
+    {
+      "path": "internal/store/lockwait.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/lockwait.go",
+      "before": {
+        "sha256": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+        "mode": "664"
+      },
+      "after": {
+        "sha256": "723c4ec77dca158d0d8871dd0e9cdee3bd1f4e298794d751da92e246e7926e22",
+        "mode": "664"
+      }
+    },
+    {
+      "path": "internal/store/cursor_prompt.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_prompt.go",
+      "before": {
+        "sha256": "2031e304a71c319777ec6d151684c24daddac388519c482296b9dcf0bd855ac0",
+        "mode": "664"
+      },
+      "after": {
+        "sha256": "30259961264d9b3d5b9417da754525d2f2e6a43a1a5a7d6a1eaf8c0c4549a19c",
+        "mode": "664"
+      }
+    },
+    {
+      "path": "internal/store/cursor_rotation.go",
+      "before_path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/before/internal/store/cursor_rotation.go",
+      "before": {
+        "sha256": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+        "mode": "664"
+      },
+      "after": {
+        "sha256": "a8716b101b10095ff541aa52bf9540432828929c15fd5d6f4b5e8d90d8825d8b",
+        "mode": "664"
+      }
+    }
+  ],
+  "minimal_patch": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/minimal.patch",
+    "sha256": "3d7cf84d4ca4da3ec1bb8223f186b8f060423a13bf9e5b34d09cc4e2b49d8641",
+    "mode": "644"
+  },
+  "integrity": {
+    "baseline": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-boundaries/input-manifest-after.json",
+    "checked_inputs": 2326,
+    "changed": [
+      {
+        "path": "internal/store/cursor_prompt.go",
+        "prior": {
+          "sha256": "2031e304a71c319777ec6d151684c24daddac388519c482296b9dcf0bd855ac0",
+          "mode": 436
+        },
+        "current": {
+          "sha256": "30259961264d9b3d5b9417da754525d2f2e6a43a1a5a7d6a1eaf8c0c4549a19c",
+          "mode": "664"
+        }
+      },
+      {
+        "path": "internal/store/cursor_rotation.go",
+        "prior": {
+          "sha256": "47a9909915adf7ac9e8af472ea52109e9309742c5bb25947dc35fd5d0e9a427d",
+          "mode": 436
+        },
+        "current": {
+          "sha256": "a8716b101b10095ff541aa52bf9540432828929c15fd5d6f4b5e8d90d8825d8b",
+          "mode": "664"
+        }
+      },
+      {
+        "path": "internal/store/lockwait.go",
+        "prior": {
+          "sha256": "84aa538cd6111acf1f11be3ac66f787f540294c08b57b8cc667a527f56252ffe",
+          "mode": 436
+        },
+        "current": {
+          "sha256": "723c4ec77dca158d0d8871dd0e9cdee3bd1f4e298794d751da92e246e7926e22",
+          "mode": "664"
+        }
+      },
+      {
+        "path": "internal/store/sqlite_connector.go",
+        "prior": {
+          "sha256": "e6c8bd2c824514efdef1c1d4f55845bc0591f0efed122e405be06f0bd0462161",
+          "mode": 436
+        },
+        "current": {
+          "sha256": "d2230fcedd3855ff5a10771f7ec89ee0d92b6abb8b7cbbbe4512ae1732ba5c29",
+          "mode": "664"
+        }
+      }
+    ],
+    "unexpected": [],
+    "protected_trail": {
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "mode": "664"
+    },
+    "protected_no_match": {
+      "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+      "mode": "664"
+    }
+  },
+  "decisions": {
+    "N1": "Production OpenDB wraps sqliteConnector with callerOwnedConnector. A cancelable context without the private explicit-acquisition marker is refused with driver.ErrBadConn BEFORE physical Open or initialization. database/sql openNewConnection sends that error to a waiting acquisition; DB.Conn retry executes in the actual waiting caller with its marker and original context, under its existing bounded-operation slot. The background opener is never given any caller context. No mutable latest-context state, foreign provenance, new worker or queue. Noncancelable legacy pool calls remain synchronous and can replace connections with normal initialization. All boundedConnContext acquisitions are marked, including DefaultLockWait with explicit call cancellation and zero wait; zero still separates 1ms admission from original fixed SQL budget. The separate explicit ReconcileCursorRotation pool context is also marked to preserve its legitimate cancelable acquisition.",
+    "N1_primary_sources": "Sandbox Go1.22.10 database/sql: OpenDB derives the pool context from Background; finalClose schedules replacements after physical Close; maybeOpenNewConnections reserves capacity; openNewConnection uses only the pool context and delivers connection errors to waiters; DB.Conn uses retry on ErrBadConn then opens directly with its explicit context. modernc1.34.0 Driver.Open/newConn have no context and DSN pragma execution uses Background. Successful raw inspection is retained in 04-primary-sources.log.",
+    "N2": "CheckCursorPrompt returns false,err on failure BEFORE reading callback-owned eligible. Its exact authority, hold count and until guards remain unchanged. A nil inWriteTx result publishes completed callback values under operation synchronization before the successful read.",
+    "result_slot_audit": "Reviewed every production withConn/readWithin/inWriteTx call in permission.go, spawns.go, relay_writes.go, cursor_permission.go, cursor_rotation.go, pane_writes.go and cursor_prompt.go. Existing private locals are read only after error checks or error-first short-circuit guards (RecordPaneIntent err != nil || !written; ProveCursorToolRan err == nil && written). No other same-pattern callback result race found; no unrelated edits."
+  },
+  "validation": [
+    {
+      "name": "01-targeted-race",
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/01-targeted-race.log",
+      "exit": 0,
+      "sha256": "6b965ca21350b3b449138aeb7997c0e282a5060454a00ccfb050958d597455b7",
+      "mode": "664",
+      "passed_nodes": 100,
+      "passed_leaves": 88,
+      "leaves": [
+        "TestDecisionSetupPragmaFailureBeforeBegin/canceled",
+        "TestDecisionSetupPragmaFailureBeforeBegin/deadline",
+        "TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore",
+        "TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response",
+        "TestDecisionCleanupQuarantinesNoncancelableClose",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s",
+        "TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s",
+        "TestDecisionLateAcquisitionRetainsOriginalSQLDeadline",
+        "TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance",
+        "TestDecisionNoMatchRollsBackWithoutCommit/timely_refusal",
+        "TestDecisionNoMatchRollsBackWithoutCommit/deadline_at_empty_SQLite_result",
+        "TestDecisionUncooperativeNativeBoundaries/open",
+        "TestDecisionUncooperativeNativeBoundaries/initialization",
+        "TestDecisionUncooperativeNativeBoundaries/zero_initialization",
+        "TestDecisionUncooperativeNativeBoundaries/setup",
+        "TestDecisionUncooperativeNativeBoundaries/rows_next",
+        "TestDecisionUncooperativeNativeBoundaries/precommit",
+        "TestDecisionUncooperativeNativeBoundaries/commit_response",
+        "TestDecisionUncooperativeNativeBoundaries/close",
+        "TestProductionSQLiteConnectorInitializesEveryReplacement",
+        "TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny",
+        "TestRelayNativeReturningRowsCannotPublishLateOutputs/ack",
+        "TestProductionSQLiteConnectorCancellationBetweenPragmas",
+        "TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns",
+        "TestProductionSQLiteConnectorDefaultAndZeroWait/0s",
+        "TestDecisionNativeReadCannotOutliveCaller",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict",
+        "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait",
+        "TestCursorRotationAtomicPublicationAndSuccessiveHistory",
+        "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive",
+        "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update",
+        "TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit",
+        "TestCursorRotationRejectsChangedExaminedAuthority/launch",
+        "TestCursorRotationRejectsChangedExaminedAuthority/life",
+        "TestCursorRotationRejectsChangedExaminedAuthority/pane",
+        "TestCursorRotationRejectsChangedExaminedAuthority/pane_start",
+        "TestCursorRotationRejectsChangedExaminedAuthority/server",
+        "TestCursorRotationRejectsChangedExaminedAuthority/socket",
+        "TestCursorRotationRejectsChangedExaminedAuthority/snapshot",
+        "TestCursorRotationRejectsChangedExaminedAuthority/snapshot_process",
+        "TestCursorRotationRejectsChangedExaminedAuthority/transcript",
+        "TestCursorRotationRejectsChangedExaminedAuthority/old_session",
+        "TestCursorRotationRejectsChangedExaminedAuthority/retired",
+        "TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid",
+        "TestCursorRotationRejectsChangedExaminedAuthority/runtime_start",
+        "TestCursorRotationRejectsChangedExaminedAuthority/connection",
+        "TestCursorRotationRejectsChangedExaminedAuthority/input_pipe",
+        "TestCursorRotationRejectsChangedExaminedAuthority/output_pipe",
+        "TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor",
+        "TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor",
+        "TestCursorRotationRejectsChangedExaminedAuthority/deletion",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path",
+        "TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity",
+        "TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds",
+        "TestCursorRotationReconciliationRejectsInconsistentOutgoingHistory",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_expired",
+        "TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/store_closed",
+        "TestCursorRotationObservationConnectionWaitUsesCallerDeadline"
+      ]
+    },
+    {
+      "name": "02-vet",
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/02-vet.log",
+      "exit": 0,
+      "sha256": "baf1287b4db05bf5a07cd2ad69821c29e5f4da0d87a871ca889f9ebf9ef104d4",
+      "mode": "664",
+      "passed_nodes": 0,
+      "passed_leaves": 0,
+      "leaves": []
+    },
+    {
+      "name": "03-api-race",
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/03-api-race.log",
+      "exit": 0,
+      "sha256": "fdefa515fcc0ecdbf311c33a1cf2edf1db7da4ac2878ff8792dd3bca35cc1f5e",
+      "mode": "664",
+      "passed_nodes": 28,
+      "passed_leaves": 26,
+      "leaves": [
+        "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/codex",
+        "TestDecidePostCommitCancellationKeepsDeliveryWithoutReadOrSleep/claude",
+        "TestDecideAbsoluteContextSurvivesParkedPhase",
+        "TestDecideMaxWaitUnderHeldLock/negative_max_wait_ms",
+        "TestDecideMaxWaitUnderHeldLock/a_request_recorded_before_v7,_its_relay_hook_settling_after_the_bound",
+        "TestDecideMaxWaitUnderHeldLock/no_max_wait_ms,_the_lock_held_past_the_store's_busy_timeout",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/verdict_write,_a_request_recorded_before_v7/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/the_store's_connection_held_by_another_call/busy_596h31m23.647s",
+        "TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_10s",
+        "TestDecideMaxWaitUnderHeldLock/codex/the_store's_connection_held_by_another_call/busy_596h31m23.647s"
+      ]
+    },
+    {
+      "name": "04-primary-sources",
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/native-review-fix/04-primary-sources.log",
+      "exit": 0,
+      "sha256": "7e727db1cad5f37dc7c9b277389c3577c9955a383569e18feab148b03f0e8825",
+      "mode": "664",
+      "passed_nodes": 0,
+      "passed_leaves": 0,
+      "leaves": []
+    }
+  ],
+  "limitations": [
+    "Current native-boundary fixtures build sql.OpenDB(sqliteConnector) directly, bypassing the new outer production callerOwnedConnector. Their passing race checks preserve existing native ownership/initialization behavior, but do not independently prove N1 mixed legacy/bounded replacement. Fresh writer must retain the outer production callerOwnedConnector when wrapping physical Driver.Open (or otherwise exercise openContextSQLite actual production pool).",
+    "No new N1/N2 regression was written in the source-only lane. Exact pre-review source bytes and modes are preserved for independent RED overlays; no review-fix RED is claimed.",
+    "ReconcileCursorRotation retains its existing synchronous SQL contract; this patch supplies explicit connector provenance to preserve its original cancellation behavior. It is not moved into the bounded-operation worker lane.",
+    "No full suite, Docker TESTPLAN collector/group, scheduler job, TLA/parser/Java job, credential/store access, .claude access, live Cursor action, commit or push. TLA+ not applicable: no model inputs changed.",
+    "Historical09 causes remain unknown; retained full-suite read failures isolate outer read methods but not native/scheduling phases. No passing focused result establishes those historical causes."
+  ],
+  "independent_handoff": [
+    "N1: use actual production callerOwnedConnector around sqliteConnector with physical native Open boundary; hold a legacy db.Conn lease, start bounded DB.Conn acquisition, discard the held lease with ErrBadConn and block replacement native Open. Require original caller physical deadline, Busy, retained operation admission through native Open and Close, no repeated work, no initialization SQL after original expiry, then finite release and safe recovery with configured busy_timeout and foreign_keys on replacements.",
+    "N1: separately retain legitimate DefaultLockWait/unbounded replacements, cancellation-only explicit owner and zero-wait original work budget; background opener must do zero physical work and must never receive a foreign caller marker.",
+    "N2: block actual prompt COUNT/Rows with a finite barrier beyond original operation context but before the separate until guard; require false/error and race-safe return, no late COMMIT, safe lease/disposal and unchanged exact eligibility guards.",
+    "Use before/ exact snapshots for independent review-fix RED rather than reconstructing uncommitted source. Old64a trail RED is already proven and protected test hash remains unchanged. Prior native pre-ownership RED was never executed on a mismatched overlay and is not claimed here.",
+    "Then one batch documentation pass for all native-operation/CLI/review fixes, fresh code review and sole-owner settled full suite."
+  ],
+  "documentation_implications": "Coordinator should transcribe N1/N2 technical decisions into SRD and final architecture ownership docs: background database/sql replacement dial refusal/retry-to-explicit-owner, private context provenance including direct rotation reconciliation, and error-first captured-result publication. No product question or contract contradiction identified.",
+  "deviations_and_failures": [
+    "Initial sandbox dependency inspection used rg, absent in sandbox; command exit127/make exit2 after Go primary source reads succeeded. Corrected to grep/sed in sandbox; successful raw source inspection saved. No source/test/build failure.",
+    "One discovery command looked for nonexistent internal/store/cursor_prompt_test.go and rg returned2; actual CheckCursorPrompt coverage is in cursor_rotation_test.go and was run.",
+    "Initial no-match discovery hashed decision_no_match_test.go, which is not the protected af61fc61 source. Corrected protected integrity to internal/store/permission.go; no file changed.",
+    "A metadata read attempted minimal.patch before the report generator had created it and exited1; generation below creates and hashes the patch.",
+    "Documentation and unit-test creation requirements of generic engineering guidance are delegated by explicit source-only dispatch; no docs/tests changed."
+  ],
+  "incomplete_source_work": [],
+  "questions": []
+}

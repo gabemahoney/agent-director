@@ -18,7 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -498,11 +500,91 @@ func TestBoundedCallsUnderAHeldLockOrConnection(t *testing.T) {
 				if err := s.db.QueryRow("PRAGMA busy_timeout").Scan(&busy); err != nil || busy != DefaultBusyTimeoutMs {
 					t.Errorf("busy_timeout after the bounded call = %d, %v; want the store's %d back", busy, err, DefaultBusyTimeoutMs)
 				}
-				if err := c.call(s, c.maxWait); err != nil {
-					t.Errorf("the same call once freed = %v; want it to go ahead", err)
+				boundary := installDeadlineBoundary(t, s, path)
+				var commits, confirmed atomic.Int32
+				boundary.before = func(_ context.Context, q string) error {
+					if q == "COMMIT" {
+						commits.Add(1)
+					}
+					return nil
+				}
+				boundary.afterCommit = func(context.Context) error { confirmed.Add(1); return nil }
+				recoveryStart := time.Now()
+				recoveryWait := time.Duration(0)
+				if c.maxWait > 0 {
+					recoveryWait = 100 * time.Millisecond
+				}
+				recoveryErr := c.call(s, recoveryWait)
+				if elapsed := time.Since(recoveryStart); elapsed > recoveryWait+time.Second {
+					t.Errorf("fresh recovery exceeded original %v + 1s: %v", recoveryWait, elapsed)
+				}
+				boundary.stopObservingAfterCleanup(t, s)
+				switch {
+				case recoveryErr == nil:
+					assertBoundedRecoveryEffect(t, s, c)
+				case errors.Is(recoveryErr, ErrStoreBusy):
+					if commits.Load() != 0 || !slices.EqualFunc(requestDump(t, path), reqsBefore, mapsEqual) {
+						t.Errorf("precommit recovery expiry committed or mutated: commits=%d", commits.Load())
+					}
+				case strings.Contains(recoveryErr.Error(), "commit outcome unconfirmed"):
+					if commits.Load() != 1 {
+						t.Errorf("unconfirmed recovery without COMMIT: %d", commits.Load())
+					}
+					if confirmed.Load() == 1 || !slices.EqualFunc(requestDump(t, path), reqsBefore, mapsEqual) {
+						assertBoundedRecoveryEffect(t, s, c)
+					}
+				default:
+					t.Errorf("unexpected fresh recovery error: %v", recoveryErr)
 				}
 			})
 		}
+	}
+}
+
+func assertBoundedRecoveryEffect(t *testing.T, s *Store, c boundedCall) {
+	t.Helper()
+	pr := mustRequest(t, s, tokenA)
+	switch c.name {
+	case "relay hook's first write":
+		if got := mustRequest(t, s, tokenB); got.Decision != "" {
+			t.Errorf("new request already decided: %+v", got)
+		}
+	case "relay hook's ack":
+		if pr.Decision != "allow" || pr.DeliveredAt.IsZero() {
+			t.Errorf("ack recovery not durable: %+v", pr)
+		}
+	case "relay hook's timeout deny":
+		if pr.Decision != "deny" || pr.DeliveredAt.IsZero() {
+			t.Errorf("timeout recovery not durable: %+v", pr)
+		}
+	case "decide's verdict":
+		if pr.Decision != "allow" {
+			t.Errorf("verdict recovery not durable: %+v", pr)
+		}
+	case "decide's refused verdict":
+		if pr.AttemptedDecision != "allow" || pr.AttemptedAt.IsZero() {
+			t.Errorf("refusal recovery not durable: %+v", pr)
+		}
+	case "a reader's hook_gone_at, no wait":
+		if pr.HookGoneAt.IsZero() {
+			t.Errorf("hook-gone recovery not durable: %+v", pr)
+		}
+	}
+}
+
+func TestBoundedCallsFreshFixtureRecovery(t *testing.T) {
+	for _, c := range boundedCalls {
+		t.Run(c.name, func(t *testing.T) {
+			s, _ := newRelayRow(t, "on", StateWorking)
+			insertRelay(t, s, relayReq(tokenA))
+			if c.decided {
+				decideA(t, s, "allow")
+			}
+			if err := c.call(s, DefaultLockWait); err != nil {
+				t.Fatalf("fresh default-wait recovery: %v", err)
+			}
+			assertBoundedRecoveryEffect(t, s, c)
+		})
 	}
 }
 
@@ -594,6 +676,15 @@ func TestRelayWritePrecondition(t *testing.T) {
 					}
 					return
 				}
+				// Cancellation may return before quarantined connection disposal.
+				// Await the pool lease before opening a zero-wait independent reader.
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				lease, leaseErr := s.db.Conn(ctx)
+				if leaseErr != nil {
+					t.Fatalf("cleanup did not return a safe pool lease: %v", leaseErr)
+				}
+				_ = lease.Close()
 				if !slices.EqualFunc(requestDump(t, path), before, mapsEqual) {
 					t.Errorf("request changed by a %s that did not go ahead", w.name)
 				}

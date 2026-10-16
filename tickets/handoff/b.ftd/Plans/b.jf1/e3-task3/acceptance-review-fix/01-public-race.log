@@ -1,0 +1,97 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+realtmux: tmux 3.3a at /usr/bin/tmux
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt
+    cursor_pane_controls_boundary_linux_test.go:137: instance=cursor-21ba6690-0061-4980-9bd3-6cbfdfa676a2 control=interrupt accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new
+    cursor_pane_controls_boundary_linux_test.go:137: instance=cursor-b7d846aa-8dae-4fe4-85e1-3cd12969e985 control=/new accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+=== RUN   TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit
+    cursor_pane_controls_boundary_linux_test.go:137: instance=cursor-96cf03b5-303d-4fd9-923e-8324c8a6a26b control=/exit accepted=map[1:HOLD 2:terminal-cancelled 🐝 3:public-cancelled
+        別の行] cancelled=map[2:1 3:1]
+--- PASS: TestCursorPaneControlsPublicMixedQueueRetirement (5.55s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/MCPinterrupt (2.19s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/Bun/new (1.82s)
+    --- PASS: TestCursorPaneControlsPublicMixedQueueRetirement/CLI/exit (1.54s)
+=== RUN   TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation
+    cursor_pane_controls_boundary_linux_test.go:227: instance=cursor-9028afcb-4f52-4918-afad-c13a10420070 preserved unknown-origin tokens=cfe5e96a50bd454cf84f4680ae9c0b21/3c89cc739a97f1187205814c4f39c325 after questions/cancel/new
+--- PASS: TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation (1.72s)
+=== RUN   TestCursorPaneControlsPublicDisconnectBeforeObservingSend
+    cursor_pane_controls_boundary_linux_test.go:278: instance=cursor-b40584c6-2f69-4009-b71d-e8aefbc7fe9c unobserved caller response; independent accepted=2 dispatched=2 completed=2; no replay
+--- PASS: TestCursorPaneControlsPublicDisconnectBeforeObservingSend (1.85s)
+=== RUN   TestCursorPaneControlsPublicFailureInspection
+=== RUN   TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation
+    cursor_pane_controls_boundary_linux_test.go:379: instance=cursor-9749ca32-4a92-4b2c-a291-be941b93c7a0 surface=MCP fault=rejected rotation state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+=== RUN   TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication
+    cursor_pane_controls_boundary_linux_test.go:379: instance=cursor-e7c1c8be-7af6-49cb-9a02-e21dcbf54210 surface=Bun fault=failed rotation publication state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+=== RUN   TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss
+    cursor_pane_controls_boundary_linux_test.go:379: instance=cursor-9d277080-6283-4066-8b13-2c500f214919 surface=CLI fault=terminal loss state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+=== RUN   TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission
+    cursor_pane_controls_boundary_linux_test.go:379: instance=cursor-18115592-8e9c-4bd7-89fb-755969df28d7 surface=Go fault=protected transcript permission state=waiting session=synthetic-session-1 accepting runtime gone; no replay or false ended
+--- PASS: TestCursorPaneControlsPublicFailureInspection (6.47s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/MCPrejected_rotation (1.64s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/Bunfailed_rotation_publication (1.66s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/CLIterminal_loss (1.61s)
+    --- PASS: TestCursorPaneControlsPublicFailureInspection/Goprotected_transcript_permission (1.56s)
+=== RUN   TestCursorPaneControlsPublicMixedInputAndRecreation
+=== RUN   TestCursorPaneControlsPublicMixedInputAndRecreation/CLI
+    cursor_pane_controls_test.go:349: public boundary=CLI instance=cursor-202f8fbf-3581-479e-b3db-7c6ac93a6615 session=synthetic-session-1 accepted=map[1:第一 🐝
+        line café 2:second 🦋
+        別の行 3:HOLD 4:terminal queued café 5:public queued 🐝
+        last line] dispatched=map[1:3 2:4 3:5 4:6 5:7] completed=map[1:3 2:4 3:5 4:6 5:7]
+=== RUN   TestCursorPaneControlsPublicMixedInputAndRecreation/MCP
+    cursor_pane_controls_test.go:349: public boundary=MCP instance=cursor-f202ceec-2226-4cc1-b369-54c0b51f7d4c session=synthetic-session-1 accepted=map[1:第一 🐝
+        line café 2:second 🦋
+        別の行 3:HOLD 4:terminal queued café 5:public queued 🐝
+        last line] dispatched=map[1:3 2:4 3:5 4:6 5:7] completed=map[1:3 2:4 3:5 4:6 5:7]
+=== RUN   TestCursorPaneControlsPublicMixedInputAndRecreation/Go
+    cursor_pane_controls_test.go:349: public boundary=Go instance=cursor-15d87800-5d4f-46c2-8f67-a36d237f6e08 session=synthetic-session-1 accepted=map[1:第一 🐝
+        line café 2:second 🦋
+        別の行 3:HOLD 4:terminal queued café 5:public queued 🐝
+        last line] dispatched=map[1:3 2:4 3:5 4:6 5:7] completed=map[1:3 2:4 3:5 4:6 5:7]
+=== RUN   TestCursorPaneControlsPublicMixedInputAndRecreation/Bun
+    cursor_pane_controls_test.go:349: public boundary=Bun instance=cursor-a40bc218-6fe5-424f-9eb1-e2c711f09aad session=synthetic-session-1 accepted=map[1:第一 🐝
+        line café 2:second 🦋
+        別の行 3:HOLD 4:terminal queued café 5:public queued 🐝
+        last line] dispatched=map[1:3 2:4 3:5 4:6 5:7] completed=map[1:3 2:4 3:5 4:6 5:7]
+--- PASS: TestCursorPaneControlsPublicMixedInputAndRecreation (10.90s)
+    --- PASS: TestCursorPaneControlsPublicMixedInputAndRecreation/CLI (2.47s)
+    --- PASS: TestCursorPaneControlsPublicMixedInputAndRecreation/MCP (2.67s)
+    --- PASS: TestCursorPaneControlsPublicMixedInputAndRecreation/Go (2.71s)
+    --- PASS: TestCursorPaneControlsPublicMixedInputAndRecreation/Bun (3.05s)
+PASS
+ok  	github.com/gabemahoney/agent-director/test/realtmux	27.501s

@@ -1,0 +1,54 @@
+{
+  "legacy-commit-assessment/FINAL-report.json": {
+    "sha256": "38d118c3d1b4d01a9845223d3051cee9875bfa7286be95405ed4b1b1975a07a6",
+    "bytes": 12580
+  },
+  "legacy-commit-assessment/input-manifest-before.json": {
+    "sha256": "c0f11ccec9305e77a83371044a150638b23120b05cc54900be5add52b3f3b555",
+    "bytes": 68915
+  },
+  "legacy-commit-assessment/input-manifest-after.json": {
+    "sha256": "c9b9cbb1e83222e15923784ce7fc82650a9ed791bb7214733910386b1bebf5fd",
+    "bytes": 68915
+  },
+  "contract-final-tests/FINAL-report.json": {
+    "sha256": "5c198691cd208bb5083116c6d1ba6dc4605726e862f5cb988d1f62dc92cb7e0d",
+    "bytes": 43950
+  },
+  "api-deadline-assessment/FINAL-report.json": {
+    "sha256": "d9d71aa5612e9323e608975918c768250119c1c89015adf494cac3df687e5fd9",
+    "bytes": 15275
+  },
+  "deadline-green/FINAL-report.json": {
+    "sha256": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775",
+    "bytes": 29397
+  },
+  "deadline-engineer/FINAL-report.json": {
+    "sha256": "b9f80e5c51090b86f7d0ea58edfb75495e0ff0a1c12a21f596f811c7ac41a66d",
+    "bytes": 20789
+  },
+  "deadline-review-fix/FINAL-report.json": {
+    "sha256": "ac4752ffdc66fd6ddad5690e011f0a8e345b5994cc26d344a85fb17fcdff5c4a",
+    "bytes": 9289
+  },
+  "deadline-code-review.json": {
+    "sha256": "77fb3afe21ff5e2349cf1e0ed7604d3ffdbd676ee3ec1ed8535a00a447bdb090",
+    "bytes": 759
+  },
+  "PM-initial-review.json": {
+    "sha256": "bed412f1bcaf3fcb29a09a9836fd9d6f7aad28747b60e06f2b5eb10e10e3800c",
+    "bytes": 2296
+  },
+  "docs/FINAL-report.json": {
+    "sha256": "c591d956a3bfa12379caa7b26325ca0e239ff509c26b6c95277cf2853d515a1e",
+    "bytes": 12671
+  },
+  "contract-final-tests/quality-review-after.json": {
+    "sha256": "a2960aac7c28d66435aa742a2ce5121a39af8ee85a37098f46dc8af7838022fe",
+    "bytes": 9375
+  },
+  "SRD-NO-MATCH-TRANSACTION-DECISION.md": {
+    "sha256": "f913240371497fb68571c94a842ddac5cd2ceca73f5b82c4b0947bdded4b7ca3",
+    "bytes": 773
+  }
+}

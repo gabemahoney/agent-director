@@ -1,0 +1,27 @@
+{
+  "original_tested_manifest": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/final-native-full/input-manifest-after.json",
+  "original_sha256": "3216131b3a5f0b61f085bd1e8cbb85fcfc3e9ce4e54c6f445d01fc1197efc558",
+  "current_manifest": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/readiness/current-input-manifest.json",
+  "current_manifest_sha256": "eb8450a338591f19249ba6a3e5dc8b6516705dc9f89822cd1cede994e2b3a6ca",
+  "input_count": 2330,
+  "unchanged": 2329,
+  "approved_document_only_delta": {
+    "path": "tickets/testplans/b.jf1/t1.jf1.pc/operator-acceptance.md",
+    "before": {
+      "sha256": "db6c83852f6da784d84cb27fdc748f613c213e055e6fd25baf67b97144cf4d76",
+      "bytes": 10584,
+      "mode": 436,
+      "git_mode": "100644",
+      "index_mode": null
+    },
+    "after": {
+      "sha256": "0c92e8746eb16478b1133da5688d9309fde83035153b3624c7b38ceaf2337155",
+      "bytes": 10999,
+      "mode": 436,
+      "git_mode": "100644",
+      "index_mode": null
+    }
+  },
+  "approval": "PM-final-review.json +PM-O5-verified.json; no unchanged unit rerun needed",
+  "claim": "68Go/430Bun fullPASS onoriginalinputs;lateronefileinstructions-onlyoverlayindependentlyreviewed. No retestclaim."
+}

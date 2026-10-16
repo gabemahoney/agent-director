@@ -1,0 +1,102 @@
+{
+  "docs-native/FINAL-report.json": {
+    "sha256": "0db516277a1cc584847bfa6022410d6c503163421f469bd5b8c98a6ac3a24488",
+    "bytes": 15825,
+    "result": "Batched native operation, final lazy replacement, captured-result and CLI lifetime documentation complete. Aggregate architecture chain independently verified and extended; source/test bytes and modes unchanged."
+  },
+  "docs-native/postdoc-advice-inventory-delta.json": {
+    "sha256": "5f8bb4936c48a8d856d0a9488747fec7eedf38c3c79247cb86a4d377811de2dd",
+    "bytes": 1694,
+    "result": null
+  },
+  "native-lazy-validation/FINAL-report.json": {
+    "sha256": "033da750b146dab42cc89fc7655ea7a11a39116c13f2db8a9627073894677215",
+    "bytes": 36051,
+    "result": "New production-outer-connector and late prompt COUNT regressions pass 18 targeted race leaves; store vet and formatting pass. Exact pre-N1b snapshot fails the explicit successful-background-handoff contract. End-user retry exhaustion and N2 causal RED remain unproven. No current source failure found. Full unit acceptance remains the later sole owner."
+  },
+  "native-lazy-code-review.json": {
+    "sha256": "a0629a8c504f71792bdaf42548f1271ef8fa11121202fe9941c3ff0af341db35",
+    "bytes": 849,
+    "result": "No source findings; N1/N1b/N2 sourceclosed"
+  },
+  "native-multiwaiter-fix/FINAL-report.json": {
+    "sha256": "ff83e2dccc8fb0bbc2b9bb9d4c40c8b8ce375c845ec5e2f4c62c7ce79a4f4e07",
+    "bytes": 12285,
+    "result": "N1b source fix complete; existing focused race checks and store vet pass. Independent production-pool N1/N1b and late-COUNT N2 regressions, review, one docs pass and sole full-suite owner remain required. No full-pass or Task-done claim."
+  },
+  "native-boundaries/FINAL-report.json": {
+    "sha256": "93f838a8c208d9ede2659563478d9a560154fa4a847556a43757a09b624cc602",
+    "bytes": 43275,
+    "result": "Independent native-boundary and fixture corrections pass targeted race checks and vet. No production or product-document changes. Full-suite and later docs remain caller-owned."
+  },
+  "full-failure-assessment/FINAL-report.json": {
+    "sha256": "bad562074f3e197e162843f580a5d31cdee51e91a92f87ecc2f781e1326d0d9e",
+    "bytes": 27639,
+    "result": "All nine retained full-suite failures assessed. Repaired CLI process audit shutdown and the SQL native-call ownership gap, including contextless driver initialization. Eight source files changed; tests/docs unchanged. Final focused race checks pass. Independent native-boundary regressions, identified fixture corrections, documentation reconciliation and the sole-owner settled full suite remain required."
+  },
+  "settled-full/FINAL-report.json": {
+    "sha256": "faa1a0c71d2a17c890b519ff3e348bed794d5f6845e90b41cc18e4756cf2d365",
+    "bytes": 27225,
+    "result": "Full sandbox FAILED in four Go packages/nine leaves; Bun 429/429 passed; all 2322 input bytes/modes unchanged. Route actual failures for fresh Engineer/source-test contract assessment."
+  },
+  "settled-full/quality-review-after.json": {
+    "sha256": "ed3874bd3d3eecbd7b4fb8d9df33dc76c04c7977c76c5364fdf8119f112a6cd8",
+    "bytes": 20242,
+    "result": "Full run failed in four Go packages/nine leaves; .yj/.zj remain active. No assertion/budget/parallelism changes or retries."
+  },
+  "contract-final-tests/quality-review-after.json": {
+    "sha256": "a2960aac7c28d66435aa742a2ce5121a39af8ee85a37098f46dc8af7838022fe",
+    "bytes": 9375,
+    "result": "One new real-SQL legacy error-contract failure remains; quality/full subtasks stay active."
+  },
+  "public/FINAL-report.json": {
+    "sha256": "cb09003843ba658e18e91432f185dd7273e6d2bba70af75de4098347a012571b",
+    "bytes": 28147,
+    "result": "D1 independently GREEN; genuine four-surface public mixed-input/recreation and representative adversarial public compositions settled GREEN under race detector."
+  },
+  "collector/FINAL-report.json": {
+    "sha256": "a3c994f15bc985636297fd8cd96efa10bd94eeee331b3081bac15feccb2b234d",
+    "bytes": 11571,
+    "result": "Authoring complete; static syntax/registration/source-test-integrity checks passed. Collector and authenticated acceptance NOT EXECUTED."
+  },
+  "acceptance-review-fix/FINAL-report.json": {
+    "sha256": "72a3de4f5de511670787b032d2f34350af3b9ba2ca784f2e34a9f523567e8dc3",
+    "bytes": 12176,
+    "result": "P1/P2/P3 acceptance repairs complete. Targeted genuine public tests: 13 race leaves passed. Collector: authored/static only, never executed."
+  },
+  "PM-initial-review.json": {
+    "sha256": "bed412f1bcaf3fcb29a09a9836fd9d6f7aad28747b60e06f2b5eb10e10e3800c",
+    "bytes": 2296,
+    "result": "Repair three acceptance issues before one doc pass; no additional production defect"
+  },
+  "deadline-red/FINAL-report.json": {
+    "sha256": "b4a80499dcd1751f7b909039d7a4aad02ffd88dbef4033ba68a7b2f749275cd2",
+    "bytes": 7696,
+    "result": "expected old-production deadline RED established before source repair"
+  },
+  "deadline-green/FINAL-report.json": {
+    "sha256": "2fb4e2e4bf32b308ff32552b91f34be8c4952330cbed0b1cd6c10f484d91e775",
+    "bytes": 29397,
+    "result": "Retained old-code RED regression independently GREEN unchanged; distinct real SQLite, cleanup, absolute-context, Client audit and bounded trail lifecycle cases pass, including race verification. No source findings."
+  },
+  "no-match-validation/FINAL-report.json": {
+    "sha256": "4e06383ef49c5157545534f2ae885c1e7e3adc9fca6327c9484b4f1095c6911a",
+    "bytes": 20727,
+    "result": "Independent exact pre-repair RED and unchanged regression GREEN on repaired source; focused race checks and vet pass after correcting an existing COMMIT-attempt observer. No full-suite run."
+  },
+  "docs/postdoc-advice-inventory.json": {
+    "sha256": "a63c671a2d6899c4f590c3f83ebceacddf8bcd33724b2cdc4b2675606c9e6952",
+    "bytes": 3669,
+    "result": "PENDING literal-follow behavior validation; documentation authoring is complete, not advice execution"
+  },
+  "archive-layout-correction.json": {
+    "sha256": "52e885c6d1cc99bdc868f67ec5f2aed91c40fa90b1d0475bdc5bd336fbc2e5fb",
+    "bytes": 2943,
+    "result": null
+  },
+  "accidental-full-cancellation.json": {
+    "sha256": "379b214581568d64fd41046893d414a10d20307064cab8fc03710c4f9eeefb59",
+    "bytes": 1042,
+    "result": null
+  }
+}

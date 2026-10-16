@@ -1,0 +1,502 @@
+{
+  "role": "apiary_test_writer_e3_task3_settled_full",
+  "result": "Full sandbox failed or integrity/result evidence incomplete; preserve receipts and route actual findings.",
+  "tickets": {
+    "t3.jf1.r8.a8.yj": "active",
+    "t3.jf1.r8.a8.zj": "active"
+  },
+  "status_scope": "Only own .yj/.zj. Task/Epic remain caller-owned pending exact-commit scheduler gate.",
+  "files_changed": [
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/settled-full/* (evidence only)"
+  ],
+  "source_test_doc_edits": [],
+  "full_suite": {
+    "command": "make test-sandbox",
+    "configured": "CLAUDE.md and Makefile",
+    "runs_this_pass": 1,
+    "make_exit": 2,
+    "passed": false,
+    "preparation": "bun install --frozen-lockfile and bun run build completed before both suites",
+    "raw_stdout": "02-full-test-sandbox.stdout.log",
+    "raw_stderr": "02-full-test-sandbox.stderr.log",
+    "exit_receipt": "02-full-test-sandbox.exit",
+    "tools": {
+      "go": "go version go1.22.10 linux/amd64",
+      "bun": "1.3.13",
+      "git": "git version 2.39.5",
+      "make": "GNU Make 4.3",
+      "home": "/home/sandbox",
+      "sandbox": "1"
+    },
+    "go": {
+      "command": "go test -timeout 30m ./...",
+      "passed_packages": 64,
+      "executed_packages": 19,
+      "uncached_passed_packages": 15,
+      "cached_packages": 49,
+      "no_test_packages": 13,
+      "failed_packages": [
+        {
+          "package": "github.com/gabemahoney/agent-director/cmd/agent-director",
+          "result": "74.601s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/store",
+          "result": "198.237s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/pkg/api",
+          "result": "286.712s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/realtmux",
+          "result": "252.065s"
+        }
+      ],
+      "failed_leaves": 9,
+      "packages": [
+        {
+          "package": "github.com/gabemahoney/agent-director/cmd/agent-director-admin",
+          "result": "12.088s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/clisetup",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/config",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/cursorhost",
+          "result": "149.694s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/hook",
+          "result": "174.396s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/layout",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/mcp",
+          "result": "24.052s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/oldnames",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/probe",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/spawn",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/testsupport/storefix",
+          "result": "12.038s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix",
+          "result": "1.538s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/tmux",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/internal/trail",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/pkg/api/apitest",
+          "result": "0.912s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/pkg/api/errnames",
+          "result": "3.165s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/pkg/api/manifest",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coherence-binary-version-fires",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-bun-test-fires",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-consumer-dryrun-fires",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-go-root-fires",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/coverage-parallel-phase",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/cross-compile-stamps-from-package-json",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/emit-diagnostic-control-chars",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/existing-tag",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/expired-npm-token",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/fast-forward-main-worktree",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/helper-tag-replay",
+          "result": "5.700s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/install-root-clears-setgid",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/notes-heredoc",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/pack-first-version-mismatch",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/preflight-sentinel-replay",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/publish-artifact-path-resolution",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/release-postconditions",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/smoke-magic-bytes-fires",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-drift",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-reference-prune",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/source-of-truth-release-work-prune",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-coherence-drift",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/tarball-round-trip",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/ts-bun-client-module-stub",
+          "result": "0.003s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/verify-restage",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/skills/release-agent-director/tests/synthetic-regressions/worktree-pollution",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/driver-scripts",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/envelope-diff",
+          "result": "11.173s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/fake-tmux",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/grounding-replay",
+          "result": "0.673s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/install-sh",
+          "result": "362.367s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/reboot-recovery",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/cigates",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/cmdinject",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/gitmount",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/prebuild",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/releaseversion",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/sandbox/requiresandbox",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/smoke/go",
+          "result": "4.008s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/smoke/ts-helper",
+          "result": "5.814s"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/test/tla",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/tools/check-doccomments",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/tools/check-nondet",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/tools/gen-docs",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/tools/measure-exit",
+          "result": "(cached)"
+        },
+        {
+          "package": "github.com/gabemahoney/agent-director/tools/measure-exit/dryrun",
+          "result": "(cached)"
+        }
+      ],
+      "no_test_package_names": [
+        "github.com/gabemahoney/agent-director/internal/adminapi",
+        "github.com/gabemahoney/agent-director/internal/testsupport/codexfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/cursorfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/cwdfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/dbpathfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/launchfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/procfix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/procstarttimefix",
+        "github.com/gabemahoney/agent-director/internal/testsupport/procstat",
+        "github.com/gabemahoney/agent-director/internal/testsupport/writefailfix",
+        "github.com/gabemahoney/agent-director/internal/version",
+        "github.com/gabemahoney/agent-director/test/sandbox/internal/sandboxtest"
+      ],
+      "individual_cases": "Default nonverbose Go output does not report individual passed test-case counts; no invented counts."
+    },
+    "bun": {
+      "passed": 429,
+      "failed": 0,
+      "skipped": 0,
+      "expect_calls": 1660,
+      "summary": "Ran 429 tests across 57 files. [22.40s]"
+    },
+    "failure_lines": [
+      "--- FAIL: TestDecideCalledEmitsTrailLine (2.40s)",
+      "    --- FAIL: TestDecideCalledEmitsTrailLine/ErrStoreBusy (0.60s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/cmd/agent-director\t74.601s",
+      "--- FAIL: TestBoundedCallsUnderAHeldLockOrConnection (3.54s)",
+      "    --- FAIL: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny (0.38s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/internal/store\t198.237s",
+      "--- FAIL: TestDecideMaxWaitUnderHeldLock (0.10s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/fallen-back_refusal/busy_596h31m23.647s (6.07s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/lock_taken_after_the_commit/busy_596h31m23.647s (5.69s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/lock_taken_after_the_commit/busy_596h31m23.647s (7.03s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write,_a_request_recorded_before_v7/busy_596h31m23.647s (10.57s)",
+      "    --- FAIL: TestDecideMaxWaitUnderHeldLock/codex/verdict_write/busy_596h31m23.647s (10.64s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/pkg/api\t286.712s",
+      "--- FAIL: TestCursorPersistenceFailureStopsAdmission (16.00s)",
+      "    --- FAIL: TestCursorPersistenceFailureStopsAdmission/rotation_publication (1.51s)",
+      "--- FAIL: TestCursorRelayLockCannotExtendApprovalDeadline (1.91s)",
+      "FAIL",
+      "FAIL\tgithub.com/gabemahoney/agent-director/test/realtmux\t252.065s",
+      "FAIL",
+      "make: *** [Makefile:649: test-sandbox] Error 1"
+    ]
+  },
+  "integrity": {
+    "head": "e85a74c9803ffe1dddb80bdcb19bf4614f643839",
+    "branch": "feature/b.ftd",
+    "inputs": 2322,
+    "unchanged": true,
+    "drift": [],
+    "manifest_before_sha256": "4ca299c5ef1a3045d693a9be286a8b07d1cd3e0af31dd1102f2b1d7c4d528219",
+    "manifest_after_sha256": "4ca299c5ef1a3045d693a9be286a8b07d1cd3e0af31dd1102f2b1d7c4d528219",
+    "final_tested_manifest": "input-manifest-after.json",
+    "mode_binding": "Content bytes, filesystem permission mode, executable/symlink Git mode and index mode. Entire tracked/nonignored-untracked input set, except forbidden .claude filtered before stat/content/blob reads and handoff metadata; ignored generated outputs excluded.",
+    "protected_regression": {
+      "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+      "bytes": 4036,
+      "mode": 436,
+      "git_mode": "100644",
+      "index_mode": null
+    },
+    "eight_sources": {
+      "internal/store/store.go": {
+        "sha256": "84c614af52e4a7d80d1fa0da2a437223c6ab566dc1525af71a19ea23d3111dde",
+        "mode": 436
+      },
+      "internal/store/lockwait.go": {
+        "sha256": "0b0857a81c60951650a2b8f5b938fe16aa5183fd7714e4bbe3a07b2ae26d4dc1",
+        "mode": 436
+      },
+      "internal/store/permission.go": {
+        "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+        "mode": 436
+      },
+      "internal/store/connection_cleanup.go": {
+        "sha256": "0be9944d570ead31cec4cc5218a4a9ad190fb6c461f1187ed60cd672683f9e08",
+        "mode": 436
+      },
+      "internal/trail/trail.go": {
+        "sha256": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd",
+        "mode": 436
+      },
+      "internal/trail/deadline.go": {
+        "sha256": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+        "mode": 436
+      },
+      "pkg/api/client.go": {
+        "sha256": "31e93073347efc90a5ebf27bfb9062394cf595fb8c3e2dad6886bc7b8dbfe5dd",
+        "mode": 436
+      },
+      "pkg/api/decide.go": {
+        "sha256": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+        "mode": 436
+      }
+    },
+    "prior_failed_receipts": "retained-full-failures.json; both previous full logs verified unchanged; no earlier manifest provenance rewritten."
+  },
+  "quality": {
+    "receipt": "quality-review-after.json (pre-run quality-review.json retained)",
+    "mandatory_unresolved": [
+      {
+        "test": "TestDecideCalledEmitsTrailLine/ErrStoreBusy",
+        "location": "cmd/agent-director/decide_cli_test.go:96",
+        "observed": "After child CLI exit, audit file does not exist. Original envelope, 300ms+1s+startup bound and no-decision checks reported no failure before audit read.",
+        "assessment": "Source lifecycle/contract finding requiring Engineer assessment: Client.Decide deferred trail.Emit uses expired original ctx and can return ErrPending immediately after queue admission. CLI main os.Exit(run()) ends the worker; deferred Client.Close only closes Store, no trail drain is wired. This is not an in-process observer that test polling can synchronize after child exit. Do not weaken exactly-one audit assertion or extend operation budget; phase scheduling is not established by receipt."
+      },
+      {
+        "test": "TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny",
+        "location": "internal/store/relay_writes_test.go:502",
+        "observed": "Fresh same-call-after-release expected success, received store: commit outcome unconfirmed wrapping context deadline exceeded.",
+        "assessment": "Fresh source/test contract assessment required. A released connection alone cannot promise real SQL and COMMIT finish inside a fixed budget, but receipt does not establish whether this is fixture assumption or source defect. Preserve uncertainty and all original bounds/parallelism; do not change source or rerun unchanged."
+      },
+      {
+        "test": "TestDecideMaxWaitUnderHeldLock (five leaves)",
+        "location": "pkg/api/decide_delivery_test.go:281,284,287,295",
+        "observed": "fallen-back_refusal/busy_596h31m23.647s: ErrStoreBusy on get permission instead of ErrRelayFallenBack (533.506495ms total); codex/lock_taken_after_the_commit and lock_taken_after_the_commit: no verdict recorded/ErrStoreBusy instead of allow/not_confirmed (501.767385ms and 562.614518ms). codex/verdict_write,_a_request_recorded_before_v7: 1.8925824s exceeds original 1.5s; GetPermissionRequestWithin took 1.653776235s for requested 261.200065ms. codex/verdict_write: 1.593989341s exceeds original 1.5s; GetSpawnWithin took 1.593975091s for requested 499.98972ms.",
+        "assessment": "Actual physical deadline guard failures plus three precommit outcome failures. Preserve original 500ms/1.5s assertions and all phase traces. Source/fixture assessment required; receipt does not identify descheduling/native-driver/cancellation cause, and failures must not be dismissed as load, relaxed, serialized or retried unchanged. Protected blocked-trail regression unchanged."
+      },
+      {
+        "test": "TestCursorPersistenceFailureStopsAdmission/rotation_publication",
+        "location": "test/realtmux/cursor_failure_linux_test.go:168",
+        "observed": "tmux unresponsive: session lookup reply server exited unexpectedly at post-fault independent readPane.",
+        "assessment": "Unexplained actual tmux process/fixture/source failure; no unsupported attribution or retry. Preserve isolation/death evidence and route assessment."
+      },
+      {
+        "test": "TestCursorRelayLockCannotExtendApprovalDeadline",
+        "location": "test/realtmux/cursor_relay_boundary_linux_test.go:50",
+        "observed": "database is locked (5) (SQLITE_BUSY)",
+        "assessment": "Actual SQLite failure while configuring pre-scenario request; independent setup observer/lease assessment required. No weakening of approval deadline or lock guards."
+      }
+    ],
+    "method": "Pre-run quality reconciled; actual full failures supersede that closure. Reconciled prior complete acceptance/coverage quality review and all named settled reports against new no-match source/test delta, retained physical deadlines and postdoc note. Inherited aggregate architecture whole-base/every-delta evidence; not a fresh personal whole-document/test read or clean-document claim.",
+    "deferred": [
+      "A2-A6",
+      "B3-B8",
+      "C2-C5",
+      "D1-D2",
+      "Inherited hooks/permissions guide scope and recovery-placement normalization"
+    ],
+    "advice": "Own .6f already done. New architecture note changes no advice; no additional advice rerun warranted."
+  },
+  "prior_failures": "Both previous full failures retained. Necessary cleanup observers, mixed-clock policy fixture, no-match source repair and deterministic regression/F10 COMMIT observer correction precede this run; this is not an unchanged retry. Focused failed receipts retained separately.",
+  "historical09": "Causes remain UNKNOWN; controlled old64a RED/new GREEN proves reachable deadline weakness, not historical cause.",
+  "integration": "Not run by this unit owner; 17 groups/172 cases require fresh exact-commit user scheduler handoff with writable /tmp/cursor-pane-controls-artifacts bind mount and installed Bun dependency network prerequisite.",
+  "authenticated": "O1-O6 remain PENDING and not authorized. Synthetic/public/unit evidence is not actual authenticated terminal acceptance.",
+  "formal": "No spec/tla changes; zero TLA/TLC/Java/parser/scheduler jobs.",
+  "boundaries": "All repository scripts/build/tests ran only via make sandbox or make test-sandbox with fresh container HOME and isolated stores/sockets/owned processes. Host git/text discovery and bees administration only. No .claude access, real AD stores, credentials/login/logout/live Cursor, local Docker TESTPLAN groups/collectors/helpers, scheduler submissions, commits/pushes, subagents or outbound messages.",
+  "administrative_failures": [
+    "One read-only rg lookup named nonexistent cmd/agent-director/decide.go; actual handler is spawn_cmd.go. Command exit 2; no test/build/admin mutation or protected access.",
+    "One read-only rg failure-summary pattern lacked -- before leading --- and returned exit 2; corrected read only.",
+    "Initial reporting regex allowed newline whitespace across bare FAIL lines, misidentifying failed-package names/count. Corrected report-only parser to horizontal whitespace; initial report retained as 03-initial-report-before-count-correction.json. No tests repeated."
+  ],
+  "deviations": [],
+  "incomplete_work": [
+    "Actual failed run must be assessed before any necessary repair or repeat. Quality/full remain active; no test/source/docs edits made."
+  ],
+  "questions_for_caller": [],
+  "receipt_sha256": {
+    "01-before.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "01-before.stderr.log": "42d1b9a318a4c8710e1e2ef77eeec92a84c623a49f2e5f0a643a8e968aa62e97",
+    "01-before.stdout.log": "0049df7d873e1fc0b745c0a5a03ec2a4430297d8c6b433d706b8c53eb6c04080",
+    "02-full-test-sandbox.exit": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "02-full-test-sandbox.stderr.log": "273facb85d56e0c8823a6c8812fcd6cef5e99e95f55593ff0ac3d550b86cf410",
+    "02-full-test-sandbox.stdout.log": "62eed3b8614147160abc55cdaff2483effe7c9f21a0e2d4878d658801c6ae179",
+    "03-after-report.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "03-after-report.stderr.log": "42d1b9a318a4c8710e1e2ef77eeec92a84c623a49f2e5f0a643a8e968aa62e97",
+    "03-after-report.stdout.log": "882584ec6c778e093ce72326012a66624abbc4769f04acf08a7fd43d7c184b3b",
+    "03-initial-report-before-count-correction.json": "7630852bb07422fe3d6373123531616d77dc51cf745e41a3630dd043cddcedeb",
+    "evidence.mjs": "de421c903d97498788c3a2a506e2b3a6379cc3bc21a304beafa91df522554f4b",
+    "input-manifest-after.json": "4ca299c5ef1a3045d693a9be286a8b07d1cd3e0af31dd1102f2b1d7c4d528219",
+    "input-manifest-before.json": "4ca299c5ef1a3045d693a9be286a8b07d1cd3e0af31dd1102f2b1d7c4d528219",
+    "integrity-after.json": "5594cb89e30c78b4728cfae3c04dbde99006462b8dff62e6bcea6bc8aff10fce",
+    "integrity-before.json": "08c8f033d4175a096fd9d4b5d7fb3df3db8c20d0f0daabdd72d1ccfe22fd444e",
+    "quality-review-after.json": "b7ae55eafe16e8079a3c4f76acbb739043888d66e60b84afd64a2de635ef1295",
+    "quality-review.json": "7fdc51c5b0022962867b31c8c5818ba371ca6ef18b613869e2d365b5c36f4623",
+    "report.mjs": "376e7fc4e1ca16fc8ea951d60940bc9c2ff9be163d825224b7702bae729b632c",
+    "retained-full-failures.json": "2532692f2a0aa5a8c2d88be4bb63d07cc14f1a45d7e9acabf16b5f2ef8a12157",
+    "reviewed-inputs.json": "8f4f31cd92b0b4e8d5870d3ea86d4f460fe1e9d0ce044ec700524140b79a92d6",
+    "testing-subtasks.json": "92388a80997f1b8c486ff9687f44b5e882edf4e281daeec81b3c3d57b7878ca3",
+    "tools-before.json": "fe6e92a689afe80e87bdeb5c191136b864363ebd42c180002429f7dc87160f5f"
+  }
+}

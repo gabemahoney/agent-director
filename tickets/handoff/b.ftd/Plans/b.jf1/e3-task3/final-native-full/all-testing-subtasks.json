@@ -1,0 +1,226 @@
+{
+  "status": "success",
+  "tickets": [
+    {
+      "ticket_id": "t3.jf1.r8.a8.wn",
+      "ticket_type": "t3",
+      "title": "Verify public mixed-input workflows and caller recreation",
+      "body": "## Context\n\nTask1FIFO/cancel/transcript, Task2rotation/actualhook retainfocusedownership. Publiccomposition reuse cursorfix.Runtime/Scenario/newCursorPaneScenario/newSpawnFix/buildHookCLI/startStdioMCP/newRealTmux/newClientWith/waitFor/readRow/existingpublicdispatch. Sharedtestonlyadapterwithgroup2 notfourclones.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- ParameterizegenuineCLI/MCP/Go/Bun publicacceptance:successiveUnicode/multiline/mixedterminalAPI/paneinspection/callerrecreation activequeued.\n- Realcallerclose/recreate preservesgateway/runtime/launch/conversation no duplicate/cancel.\n- Representativeconfirmedrotation publicinspection currentlife/history.\n- Onlysupersededassertionsremoved; startup/defaulttimeouts retained.\n\n## Key Files\n\n- test/realtmux/cursor_pane_controls_test.go — proposedowner\n- test/realtmux/cursor_launch_test.go\n- test/realtmux/cursor_relay_test.go\n- test/realtmux/codex_setup_test.go\n- test/realtmux/harness_test.go\n- test/realtmux/harness_client_test.go\n- internal/testsupport/cursorfix/cursorfix.go — demonstratedseamonly\n- internal/testsupport/cursorfix/runtime.js — demonstratedseamonly\n\n## Acceptance Criteria\n\n- Eachrealpublicboundary; MCP/Bun replacementprocesses actuallyclose.\n- Exacttext/submission/session/requestIDs showobservedorder/FIFO/noduplication.\n- Matchingreadpane, transportdistinctacceptance.\n- Callerrecreationpreservesidentity/queue; rotationonlyintendedconversation/historyfacts.\n- ExplicitstoreroutingisolatedsameIDdecoyunchanged.\n- AC1/2 successAC4/5; SR-0.2, SR-0.3, SR-3.1–3.3, SR-4.1–4.2 and current-life SR-6.2; syntheticruntime labelled.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.yt"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.8u",
+        "t3.jf1.r8.a8.wc",
+        "t3.jf1.r8.a8.ky",
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.6f",
+        "t3.jf1.r8.a8.yj"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:52.285682",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8wn2ebcow1gt1s8mii6cfyhobt",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.8u",
+      "ticket_type": "t3",
+      "title": "Close public adversarial control and failure gaps",
+      "body": "## Context\n\nReusegroup1calleradapter/newCursorPaneScenario/Task1/2scenarios/correlation/rawInput/processdeath/unrelatedworker/transcriptfault/storefix.InjectWriteFailure. InternalexhaustivematricesremainTask1/2.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- Missingpubliccompositiononly: mixedacceptedinputs theninterrupt/controls, independentpermissionplan+questiondenial, callerdisconnectduringuncertainty/rotation, publicobservationafterfailedrotation/terminalloss/persistfault.\n- Representative distinctpublicbehavior noteveryfault×caller.\n- Inspect/referenceadequateTask1/2coverage notduplicate.\n- Demonstratedproductiondefects routedEngineer preservingreds; nospeculativesourcework.\n\n## Key Files\n\n- test/realtmux/cursor_pane_controls_boundary_linux_test.go — proposedowner\n- test/realtmux/cursor_relay_pane_test.go\n- test/realtmux/cursor_relay_boundary_linux_test.go\n- test/realtmux/cursor_blocked_linux_test.go\n- test/realtmux/cursor_failure_linux_test.go\n- test/realtmux/cursor_rotation_linux_test.go\n- Group1sharedfixtures\n\n## Acceptance Criteria\n\n- Visibleper-submissioncancel; none laterstarts/migrates.\n- Failedrotationrefusesheld; restartnouncertainacceptance/replay.\n- Exitnotmodeltext; eligiblepauseexit honestendedonlyrealdeath; dialogrefusalretained.\n- Independentholds/requestidentitysurvivequestiondenial; rotationcancelcompletionnotunknownproof.\n- Pending/hash/dialog/permissionguardsdocumentedlimits; no concurrentatomicpromise.\n- Rawforzerobytes; persistence/terminationhonest.\n- Answer/cancel/Codextimingguard unchanged.\n- RemainingpublicAC3-6gaps only.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.wn"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.wc",
+        "t3.jf1.r8.a8.ky",
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.6f",
+        "t3.jf1.r8.a8.yj"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:52.357124",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a88uzn8pdoqvhzajrcyj1n383rq",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.wc",
+      "ticket_type": "t3",
+      "title": "Author and register cursor-pane-controls integration collector",
+      "body": "## Context\n\nAuthoronly NOexecution. Reuseharnessreset/test-drivercursor-owned-launch/cursorfix/sql.sh/processobservers/percase diagnostics. Publicmatrixgroups1/2, representative shippedartifactevidencehere.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- NewunusedID orderedcollector/cases tickets/testplans/b.jf1, registertest/docker-epics.txt.\n- Distinctgroups mixedcompleteinputs/callercontinuity; controls+independentdecisions; confirmedrotationhistory; faileduncertainrotation; shutdowncrash/persistfailure. Consolidateoverlap.\n- Coverage/provenanceinventory AC1-7 SR-0.2, SR-0.3, SR-3.1–3.3, SR-4.1–4.2 and SR-6.2→focused/public/collector/separatelypendingauthenticated.\n\n## Key Files\n\n- tickets/testplans/b.jf1/<unused-id>/ collector/cases/coverage\n- test/docker-epics.txt\n- test/driver/cursor-owned-launch.sh\n- internal/testsupport/cursorfix/runtime.js\n- test/driver/run-testplan.sh — preserveexistingdriver\n- test/driver/sql.sh\n\n## Acceptance Criteria\n\n- Eachcase Setup/Steps/Passcriteria+selfcontainedexecutableBash.\n- Title/childrenorder/paths/registryagree.\n- One deterministicJSONverdict/case stablecheckIDs, variablerunfactsseparate.\n- Exacttext/submission/protocol/session/history/dispositioncorrelated.\n- AllSQL/faults/observers /opt/driver/sql.sh no hardcodedschema.\n- Isolatedstate/processes nosiblingleftovers.\n- Captured/source-derived/synthetic/scripted/authdistinct.\n- Wholecasefailurediagnostics/privatecapture/separatextracepreserved.\n- ShellcannotclaimactualhumanAC7; noexecution/passclaim.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.wn",
+        "t3.jf1.r8.a8.8u"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.ky",
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.6f",
+        "t3.jf1.r8.a8.yj"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:52.427122",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8wcstizx71xgnz42u1ifnsz9dv",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.ky",
+      "ticket_type": "t3",
+      "title": "Prepare operator instructions and artifacts for actual terminal acceptance",
+      "body": "## Context\n\nAC7actualactions notautomatedpanewrites/JSON. Reusecollectorcoverage/Task1/2correlation/operatorisolation/publicdefinitions. Prepareinstructions ONLY no live/jobs.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- E3fixedsafeexactprompts/actions/prerequisites/predicates/artifactdestinations.\n- Realattach/Unicode/bracketedmultilinepaste/successivepublicmultilines/mixedfollowups/interrupt/clear/new/exit/eligiblepause/attachdetach/callerrecreation.\n- Matchingreadpane/protectedtranscript/currentlifehistory/independentprocessproof.\n- Representative realpermissionplanquestion conditions; missingrealcondition stayspending notsyntheticreplacement.\n- PreparepostcommitIntegrationTestWriter exactSHAhandoffinputs.\n\n## Key Files\n\n- Collectoradjacentoperator-acceptance.md\n- Collectorcoverageinventory\n- tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/ acceptanceinventory\n- ExistingE1/E2operatorreferences notcurrentpasses\n\n## Acceptance Criteria\n\n- Operatorneednotinventprompts/order/correlation/passpredicates.\n- Actualterminalactionrecording/exacttext/submissionpromptsessionIDs/matchingreadpane required.\n- Build/runtimeprotocol/platform/scheduler/provenance required unknownpending.\n- Onlyestablishedsafeexistinglogin isolatedAD; missingprereqpending no credentialworkaround.\n- Syntheticfailures/authseparatestatus.\n- No historicalE1/E2passes/staleTLArequirements promoted.\n- FreshpostcommitIntegrationTestWriterfinalSHA/hashes/handoff; nocommit/integrationexecutionSubtask.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.wn",
+        "t3.jf1.r8.a8.8u",
+        "t3.jf1.r8.a8.wc"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.6f",
+        "t3.jf1.r8.a8.yj"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:52.497401",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8ky94an826g22efgx7gykgfqze",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.6f",
+      "ticket_type": "t3",
+      "title": "Follow newly changed recovery advice literally",
+      "body": "## Context\n\nAftersettledTask3docs; Task1/2ownprioradvice. Reusepublicfixtures/adviceAssertAdvice/adviceAssertPhrase/adviceAwaitFinished/existingowners.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- Inventorygenuinelynewchangedactionableadvice; trigger/checkexactphrase/followstatedaction/verify.\n- Extendappropriateexistingowner; explicitno-newsequenceifnone.\n\n## Key Files\n\n- test/realtmux/advice_follow_pane_test.go\n- Task2rotationadviceownerifcreated\n- pkg/api/advice_follow_pane_test.go\n- pkg/api/advice_follow_helpers_test.go\n- AffectedCLI/MCP/Bunadviceownersonlyiftextchanges\n- docs/caller-contract.md\n- docs/usage.md\n- docs/operator-actions.md\n\n## Acceptance Criteria\n\n- Eachnewsequenceoneowner oradequateexistingliteralcoveragejustified.\n- Statedactionworksafterconditionclear/prematureretrysafe.\n- No replay/unsupportedlifecycle/inventedrecovery.\n- No docparsing/helpermetatests/manufactureddocs/duplicateTask1/2matrix.\n- Advicecorrectionreturnsdocownerbeforefinalreview.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.wn",
+        "t3.jf1.r8.a8.8u",
+        "t3.jf1.r8.a8.wc",
+        "t3.jf1.r8.a8.ky"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.yj"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T12:11:52.568274",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a86ftyb1isgisv7o87brfjgqoij",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.yj",
+      "ticket_type": "t3",
+      "title": "Review final E3 acceptance quality and traceability",
+      "body": "## Context\n\nReviewwork OUTSIDElanes afterbehavior/collector/docs/advice; PreSubmit/RedFlags, sharedadapter/cursorfix/realpane/process/collector/evidence together.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- FullACSRmapping/uniqueowners/representativecollector/actualterminalrequirements/honestprovenance.\n- Removeduplicatematrix/setup/obsoleteassertions/fixturetests/unsupportedclaims.\n- Isolation/cleanup/finiteeventsync/diagnostics.\n- Actualmodelassessment no artificialedit/baselines.\n\n## Key Files\n\n- AllTask3changedtests/fixtures/collector/acceptance artifacts\n- docs/test-writing-guide.md\n- Task1/2settledcoverage\n- Actualchangedspec/tlainputs only\n\n## Acceptance Criteria\n\n- Mandatoryfindingsbeforefull.\n- Task1/2ownersretained distinctnewpublic/shippedevidence.\n- No screenstate/fakeactualterminal/synthetic-onlyauthclaim.\n- No weakenedbounds/retryuntilgreen/dismissedunexplainedfailures.\n- pkg/api parallel orreason Bunsequential.\n- Externalacceptancependinguntilreceiptsaudited.\n- No modelchange TLAinapplicable; changedonlyaffectedrationale.\n\n\n### User-added mandatory deadline repair\n\nPlan b.jf1; Epic t1.jf1.r8; Task3 t2.jf1.r8.a8; approved PRD t1.ftd.y5; SRD t1.ftd.hj. User superseding instruction: “Treat it as real: AD may overrun a deadline it promises. Add it to Task 3 scope: give the SQL and cleanup paths an overall deadline, so remaining-time budgets cannot go stale. Add a regression that holds the trail mutex or slows I/O and proves the deadline is still met. Prove it red on the old code.” Historical cause still unknown; deadline weakness is mandatory scope, superseding its prior nonblocking treatment for Task3. Task2 gate input stays unchanged.\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.” No .claude reads/access, real AD stores, credentials/login/logout, host repository execution, local Docker groups/collectors, TLC/parser/Java, scheduler submissions, pushes or commits before Task2 gate confirmation. All later execution only make sandbox/make test-sandbox with isolated HOME/stores/sockets/processes. Task3 remains defined/unstarted until user accepts Task2 at 64a35baf37a1c44eb576ea661f3c30b13708f6fa.\n\nSequence: deterministic old-code RED → Engineer source repair → independent unchanged-regression GREEN → public Task3 composition/collector → one settled docs pass → advice/quality/full sandbox → local commit and exact-revision user scheduler gate. Preserve original bounds, atomic commit outcome, safe cleanup and audit truth. No implementation or test execution before gate.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.6f",
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro",
+        "t3.jf1.r8.a8.wn",
+        "t3.jf1.r8.a8.8u",
+        "t3.jf1.r8.a8.wc",
+        "t3.jf1.r8.a8.ky"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.zj"
+      ],
+      "ticket_status": "active",
+      "created_at": "2026-10-15T12:11:52.639885",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8yj3cta8ca7mew8nudm1ex7xvj",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.zj",
+      "ticket_type": "t3",
+      "title": "Run settled full unit suite and resolve failures",
+      "body": "## Context\n\nFinalTestWriter OUTSIDEalllanes solefullowner afterallrepairs/tests/collectorauthoring/docs/advice/quality.\n\nPlan b.jf1; Idea b.ftd; approved PRD t1.ftd.y5; SRD t1.ftd.hj; Epic t1.jf1.r8. Planning artifacts and PM approval are in tickets/handoff/b.ftd/Plans/b.jf1/e3/planning/. E2 all Tasks are done and its accepted source is b8236bbc; E2 Epic remains active because the user owns its closure. User explicitly authorized scoped E3 hatch/build despite that status and later draft siblings. Preserve E2 bounded answer guards, committed-waiting admission, unknown-origin proof holds, acknowledgement-before-output, finite cancellation and public input safeguards. No E4 resume/load/reuse/life-switch, installation, groups or help work. SendKeys literal text and Enter remain separate operations; no arbitrary concurrent-caller atomicity promise.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.”\n\nExecute repository tests, scripts and binaries only through `make sandbox` or `make test-sandbox`, with fresh isolated HOME, AD store, socket and owned processes. Never touch the real `~/.config/agent-director` or `~/.agent-director`. Never access/edit `.claude`, log in/out, or read, copy, hash or change credentials. Existing Cursor login stays as is; separately authorized live work runs isolated under `~/ad-codex/ftd/` and stops if login is unreachable. No host tests/binaries, local Docker TESTPLAN groups/collectors, TLC, parsers, scheduler submissions or pushes. Only actual changed `spec/tla/**` model inputs warrant affected-model scheduler jobs, with reasons; do not manufacture model changes or baseline jobs. AD never derives state, identity, permissions or liveness from screen text. Local commits are coordinator-owned on feature/b.ftd with scope b.jf1. Technical decisions are recorded in the SRD; escalate only genuine product questions.\n\n\n## What Needs to Change\n\n- make test-sandbox once settledtree; causalfixactualfailures no weakenedassertions/productdeadlines.\n- Preservefailedreceipts/finalgreenafternecessarycorrection; unresolvedreported.\n\n## Key Files\n\n- Makefile\n- Sandboxsetup\n- Actualfailurefiles\n\n## Acceptance Criteria\n\n- Allrequiredunitspass; testedrevision/tree/GoBun/failedattemptdisposition recorded.\n- No unsupportedcauseclaim historicalCodextiming.\n- No prohibitedhost/heavy/realstore/auth/.claude/push.\n- FinalEpicacceptancecallerpostcommitgate, notunitclaim.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.yj",
+        "t3.jf1.r8.a8.48",
+        "t3.jf1.r8.a8.ro"
+      ],
+      "down_dependencies": [],
+      "ticket_status": "active",
+      "created_at": "2026-10-15T12:11:52.711350",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8zjj9pa3u3z7n7qbfw9bcsd8fi",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.gf",
+      "ticket_type": "t3",
+      "title": "Reproduce promised deadline overrun with deterministic blocked-work regression",
+      "body": "## Context\n\nPlan b.jf1; Epic t1.jf1.r8; Task3 t2.jf1.r8.a8; approved PRD t1.ftd.y5; SRD t1.ftd.hj. User superseding instruction: “Treat it as real: AD may overrun a deadline it promises. Add it to Task 3 scope: give the SQL and cleanup paths an overall deadline, so remaining-time budgets cannot go stale. Add a regression that holds the trail mutex or slows I/O and proves the deadline is still met. Prove it red on the old code.” Historical cause still unknown; deadline weakness is mandatory scope, superseding its prior nonblocking treatment for Task3. Task2 gate input stays unchanged.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.” No .claude reads/access, real AD stores, credentials/login/logout, host repository execution, local Docker groups/collectors, TLC/parser/Java, scheduler submissions, pushes or commits before Task2 gate confirmation. All later execution only make sandbox/make test-sandbox with isolated HOME/stores/sockets/processes. Task3 remains defined/unstarted until user accepts Task2 at 64a35baf37a1c44eb576ea661f3c30b13708f6fa.\n\n## Work — Test Writer, before Engineer\n\nAdd a deterministic behavioral regression using existing actual Decide/store/trail test owners. Hold the real trail mutex or block a realistic I/O boundary with event synchronization; exercise the actual bounded public operation, not a copied algorithm or helper-only test. Preserve parallel coverage and unchanged 500ms request / existing 1.5s elapsed assertion. Show a completed authoritative verdict can coexist with blocked reporting and the caller still must return within its promised bound. Cover the precommit SQL/cleanup and stale-budget boundary where separate behavior requires it, without duplicating matrices. No arbitrary sleep to select race, assertion weakening, retries-until-green or widened product deadline.\n\nRun against exact old production revision 64a35baf37a1c44eb576ea661f3c30b13708f6fa with new tests in an isolated sandbox. Retain original failing assertion, fixed timeout, production source hashes and full receipt; prove it fails for deadline overrun, not compile/setup failure. Any instrumentation must not manufacture success or change the algorithm. Regression must have finite cleanup even on old code. Test-only edits; source seam requests go to coordinator/Engineer.\n\n## Acceptance\n\nActual old-code causal RED recorded before repair. New test ready for unchanged-assertion revalidation, precise evidence limitations, no claim historic failure cause established.\n\n## Key paths\n\npkg/api/decide.go; pkg/api/decide_delivery_test.go; internal/store/lockwait.go; internal/store/permission.go; internal/trail/trail.go; relevant shared callers and existing fixtures. Read-only evidence: e3-task2/timing-investigation/FINAL-report.json and final-tests/09-full-test-sandbox.log. Shared trail mutex held through Write/Sync is reachable; DB connections released before emission; pre-verdict slow reads mean trail alone is not a proven historical cause. No unsynchronized-memory or duplicate-authorization defect established.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.ir"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T16:29:05.898841",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8gfs9ta72yh1xaousqmkusg7fu",
+      "priority": null
+    },
+    {
+      "ticket_id": "t3.jf1.r8.a8.yt",
+      "ticket_type": "t3",
+      "title": "Validate overall deadlines and preserve commit, cleanup and relay guarantees",
+      "body": "## Context\n\nPlan b.jf1; Epic t1.jf1.r8; Task3 t2.jf1.r8.a8; approved PRD t1.ftd.y5; SRD t1.ftd.hj. User superseding instruction: “Treat it as real: AD may overrun a deadline it promises. Add it to Task 3 scope: give the SQL and cleanup paths an overall deadline, so remaining-time budgets cannot go stale. Add a regression that holds the trail mutex or slows I/O and proves the deadline is still met. Prove it red on the old code.” Historical cause still unknown; deadline weakness is mandatory scope, superseding its prior nonblocking treatment for Task3. Task2 gate input stays unchanged.\n\n## Execution boundary\n\nUser: “make test-sandbox is yours, Docker groups and any TLA+ come to me via a scheduler handoff, TLA+ only if spec/tla changes.” No .claude reads/access, real AD stores, credentials/login/logout, host repository execution, local Docker groups/collectors, TLC/parser/Java, scheduler submissions, pushes or commits before Task2 gate confirmation. All later execution only make sandbox/make test-sandbox with isolated HOME/stores/sockets/processes. Task3 remains defined/unstarted until user accepts Task2 at 64a35baf37a1c44eb576ea661f3c30b13708f6fa.\n\n## Work — Test Writer, after Engineer\n\nRun the retained deterministic trail-mutex/slow-I/O regression unchanged against repaired source; bind RED and GREEN to exact production hashes. Add only necessary distinct precommit SQL, cleanup and stale absolute-budget cases using real Store operations and existing fixtures. Demonstrate bounded return plus accurate committed/not-committed outcome, safe connection reuse/discard, no open transaction, audit truth and no duplicate permission/output. A late acquisition or scheduled delay cannot renew the original deadline. Preserve actual parallel cases, 500ms/1.5s existing bounds, existing answer/control deadlines and acknowledgement-before-output. No timeout enlargement or repeated-until-green.\n\nRetain all failures/commands/environment/input hashes. A passing new regression proves its controlled boundary, not the exact cause of historical run09. No source/docs edits. Full make test-sandbox remains solely final writer .zj after all Task3 work settles; no full run here.\n\n## Acceptance\n\nOld-code causal RED plus repaired GREEN with same assertions; genuine SQL/cleanup/trail blocking boundaries covered without fake copied implementation; current source race/authority/cleanup safety demonstrated honestly.\n\n## Key paths\n\npkg/api/decide.go; pkg/api/decide_delivery_test.go; internal/store/lockwait.go; internal/store/permission.go; internal/trail/trail.go; relevant shared callers and existing fixtures. Read-only evidence: e3-task2/timing-investigation/FINAL-report.json and final-tests/09-full-test-sandbox.log. Shared trail mutex held through Write/Sync is reachable; DB connections released before emission; pre-verdict slow reads mean trail alone is not a proven historical cause. No unsynchronized-memory or duplicate-authorization defect established.\n",
+      "tags": [],
+      "parent": "t2.jf1.r8.a8",
+      "children": [],
+      "up_dependencies": [
+        "t3.jf1.r8.a8.ir"
+      ],
+      "down_dependencies": [
+        "t3.jf1.r8.a8.wn"
+      ],
+      "ticket_status": "done",
+      "created_at": "2026-10-15T16:29:13.823508",
+      "schema_version": "0.1",
+      "reference_materials": null,
+      "guid": "jf1r8a8ytzkvjeby5d6fi7xctxteuedw",
+      "priority": null
+    }
+  ],
+  "not_found": [],
+  "errors": []
+}

@@ -1,0 +1,256 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 DONE 0.0s
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='-e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/canceled
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/deadline
+=== RUN   TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context
+--- PASS: TestDecisionSetupPragmaFailureBeforeBegin (0.29s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/canceled (0.07s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/deadline (0.16s)
+    --- PASS: TestDecisionSetupPragmaFailureBeforeBegin/ordinary_error_with_canceled_context (0.07s)
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore
+=== RUN   TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response
+--- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries (1.06s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/precommit_SQL (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/BEGIN_phase_parking (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/rollback (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/restore (0.21s)
+    --- PASS: TestDecisionAbsoluteDeadlineAtSQLiteBoundaries/commit_response (0.21s)
+=== RUN   TestDecisionCleanupQuarantinesNoncancelableClose
+--- PASS: TestDecisionCleanupQuarantinesNoncancelableClose (0.21s)
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s
+=== RUN   TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s
+--- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait (0.18s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/0s (0.09s)
+    --- PASS: TestDecisionExpiredContextCannotRenewAcquisitionOrZeroWait/5s (0.09s)
+=== RUN   TestDecisionLateAcquisitionRetainsOriginalSQLDeadline
+--- PASS: TestDecisionLateAcquisitionRetainsOriginalSQLDeadline (0.26s)
+=== RUN   TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance
+--- PASS: TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance (0.10s)
+=== RUN   TestDecisionUncooperativeNativeBoundaries
+=== RUN   TestDecisionUncooperativeNativeBoundaries/open
+=== RUN   TestDecisionUncooperativeNativeBoundaries/initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/zero_initialization
+=== RUN   TestDecisionUncooperativeNativeBoundaries/setup
+=== RUN   TestDecisionUncooperativeNativeBoundaries/rows_next
+=== RUN   TestDecisionUncooperativeNativeBoundaries/precommit
+=== RUN   TestDecisionUncooperativeNativeBoundaries/commit_response
+=== RUN   TestDecisionUncooperativeNativeBoundaries/close
+--- PASS: TestDecisionUncooperativeNativeBoundaries (5.04s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/open (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/initialization (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/zero_initialization (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/setup (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/rows_next (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/precommit (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/commit_response (0.63s)
+    --- PASS: TestDecisionUncooperativeNativeBoundaries/close (0.63s)
+=== RUN   TestProductionSQLiteConnectorInitializesEveryReplacement
+--- PASS: TestProductionSQLiteConnectorInitializesEveryReplacement (0.05s)
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny
+=== RUN   TestRelayNativeReturningRowsCannotPublishLateOutputs/ack
+--- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs (1.13s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/timeout_deny (0.56s)
+    --- PASS: TestRelayNativeReturningRowsCannotPublishLateOutputs/ack (0.57s)
+=== RUN   TestProductionSQLiteConnectorCancellationBetweenPragmas
+--- PASS: TestProductionSQLiteConnectorCancellationBetweenPragmas (0.06s)
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns
+=== RUN   TestProductionSQLiteConnectorDefaultAndZeroWait/0s
+--- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait (0.20s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/-1ns (0.10s)
+    --- PASS: TestProductionSQLiteConnectorDefaultAndZeroWait/0s (0.10s)
+=== RUN   TestDecisionNativeReadCannotOutliveCaller
+--- PASS: TestDecisionNativeReadCannotOutliveCaller (0.56s)
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict
+=== RUN   TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait
+--- PASS: TestBoundedCallsUnderAHeldLockOrConnection (3.37s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_first_write (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_ack (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/relay_hook's_timeout_deny (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_verdict (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/write_lock_held_by_another_process/a_reader's_hook_gone_at,_no_wait (0.09s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_request (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_read_of_the_row's_requests (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_first_write (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_ack (0.25s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/relay_hook's_timeout_deny (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/decide's_refused_verdict (0.24s)
+    --- PASS: TestBoundedCallsUnderAHeldLockOrConnection/connection_held_by_another_call/a_reader's_hook_gone_at,_no_wait (0.09s)
+=== RUN   TestBoundedCallsFreshFixtureRecovery
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_request
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row's_requests
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_first_write
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_ack
+=== RUN   TestBoundedCallsFreshFixtureRecovery/relay_hook's_timeout_deny
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_verdict
+=== RUN   TestBoundedCallsFreshFixtureRecovery/decide's_refused_verdict
+=== RUN   TestBoundedCallsFreshFixtureRecovery/a_reader's_hook_gone_at,_no_wait
+--- PASS: TestBoundedCallsFreshFixtureRecovery (0.50s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_request (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_read_of_the_row's_requests (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_first_write (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_ack (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/relay_hook's_timeout_deny (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_verdict (0.06s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/decide's_refused_verdict (0.05s)
+    --- PASS: TestBoundedCallsFreshFixtureRecovery/a_reader's_hook_gone_at,_no_wait (0.06s)
+=== RUN   TestCursorRotationAtomicPublicationAndSuccessiveHistory
+--- PASS: TestCursorRotationAtomicPublicationAndSuccessiveHistory (0.28s)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive
+    cursor_rotation_test.go:138: causal archive refusal: store: required Cursor archive: constraint failed: injected write failure: reuse archive (1811)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update
+    cursor_rotation_test.go:138: causal runtime update refusal: constraint failed: synthetic runtime write failure (1811)
+=== RUN   TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit
+    cursor_rotation_test.go:138: causal commit refusal: store: commit outcome unconfirmed; read the request before retrying: constraint failed: FOREIGN KEY constraint failed (787)
+--- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether (0.41s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/archive (0.14s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/runtime_update (0.13s)
+    --- PASS: TestCursorRotationRequiredArchiveAndLaterWritesRollbackTogether/commit (0.14s)
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/launch
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/life
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/pane
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/pane_start
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/server
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/socket
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/snapshot
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/snapshot_process
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/transcript
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/old_session
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/retired
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/runtime_start
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/connection
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/input_pipe
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/output_pipe
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor
+=== RUN   TestCursorRotationRejectsChangedExaminedAuthority/deletion
+--- PASS: TestCursorRotationRejectsChangedExaminedAuthority (2.07s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/launch (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/life (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/pane (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/pane_start (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/server (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/socket (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/snapshot (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/snapshot_process (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/transcript (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/old_session (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/retired (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/runtime_pid (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/runtime_start (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/connection (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/input_pipe (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/output_pipe (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/input_descriptor (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/output_descriptor (0.11s)
+    --- PASS: TestCursorRotationRejectsChangedExaminedAuthority/deletion (0.10s)
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path
+=== RUN   TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity
+--- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory (0.65s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/nil_verifier (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/kernel_lost (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_parent (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/parent_reused (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/expired_after_evidence (0.11s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/wrong_path (0.09s)
+    --- PASS: TestCursorRotationIndependentEvidenceAndGateAreMandatory/malformed_identity (0.08s)
+=== RUN   TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds
+--- PASS: TestCursorRotationPreservesIndependentUnknownPermissionAndPlanHolds (0.12s)
+=== RUN   TestCursorRotationReconciliationRejectsInconsistentOutgoingHistory
+--- PASS: TestCursorRotationReconciliationRejectsInconsistentOutgoingHistory (0.09s)
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_expired
+=== RUN   TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/store_closed
+--- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication (1.06s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_missing (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_life (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/archive_wrong_path (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/runtime_replaced (0.12s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/launch_replaced (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/pane_replaced (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/row_wrong_path (0.11s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_cancelled (0.09s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/context_expired (0.09s)
+    --- PASS: TestCursorRotationObservationRejectsIncompleteOrReplacedPublication/store_closed (0.10s)
+=== RUN   TestCursorRotationObservationConnectionWaitUsesCallerDeadline
+--- PASS: TestCursorRotationObservationConnectionWaitUsesCallerDeadline (0.12s)
+PASS
+ok  	github.com/gabemahoney/agent-director/internal/store	18.827s

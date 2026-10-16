@@ -1,0 +1,20 @@
+{
+  "reviewer": "apiary_code_reviewer_e3_task3_native_fixcheck",
+  "verdict": "N1 remains mandatory;N2 sourceclosed",
+  "findings": [
+    {
+      "id": "N1b",
+      "path": "internal/store/sqlite_connector.go:29",
+      "issue": "Background ErrBadConn refusal can exhaust database/sql three acquisition attempts with multiple queued legitimate waiters: openNewConnection reserves capacity for next request before awakened caller can dial directly; alternating bounded+legacy callers requeue and receive synthetic errors without physical opening.",
+      "required": "Keep caller-owned opening and ensure multiple-waiter replacement handoff cannot exhaust retry allowance; independent multiwaiter regression."
+    }
+  ],
+  "closed": [
+    "N2 CheckCursorPrompt error-first result publication; other inspected slots error-first/shortcircuit guarded"
+  ],
+  "scope": "Read-only source/report inspection, no tests/lint/build/mutations",
+  "deviations": [
+    "Initialbeesomitted--ids corrected. RetainedGo1.22.10 primaryreceipt supplemented installedGo1.26.1 static source."
+  ],
+  "disposition": "Accepted mandatoryN1b. Just-started fresh TestWriter interrupted before validation to avoid testing known-stale source; fresh writer after repair, neverreuse interrupted agent."
+}

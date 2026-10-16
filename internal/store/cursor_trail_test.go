@@ -1,13 +1,68 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
+
+func TestCursorNativeReturningRowsCannotPublishLateAck(t *testing.T) {
+	e := newCursorTrailEnv(t)
+	e.insert(t, "late-ack")
+	if written, err := e.f.s.DecideRelayRequest(e.b.InstanceID, "late-ack", "allow", "", store.WriterProcessDecide, time.Time{}, store.DefaultLockWait); err != nil || !written {
+		t.Fatalf("seed decision=%v,%v", written, err)
+	}
+	before := e.read(t, "late-ack")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	timer := time.AfterFunc(3*time.Second, unblock)
+	defer func() { unblock(); timer.Stop() }()
+	var enter sync.Once
+	stopObserving := store.ObserveReturningRowsForTest(t, e.f.s, e.f.path, func(_ context.Context, q string, _ error) {
+		if strings.Contains(q, "UPDATE permission_requests") {
+			enter.Do(func() { close(entered); <-release })
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	type result struct {
+		decision string
+		acked    bool
+		err      error
+	}
+	done := make(chan result, 1)
+	start := time.Now()
+	go func() {
+		d, a, err := e.f.s.WithContext(ctx).AckCursorDecision(e.b, "late-ack", false, e.until, e.until, 5*time.Second, cursorTrailCheck)
+		done <- result{d, a, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("actual Cursor ack returning row was not reached")
+	}
+	select {
+	case got := <-done:
+		if got.decision != "" || got.acked || !errors.Is(got.err, store.ErrStoreBusy) {
+			t.Errorf("late native Cursor row leaked ack: %+v", got)
+		}
+	case <-time.After(1500*time.Millisecond - time.Since(start)):
+		t.Error("Cursor native row blocked past original 500ms + 1s")
+	}
+	unblock()
+	stopObserving()
+	if after := e.read(t, "late-ack"); !reflect.DeepEqual(before, after) {
+		t.Errorf("late Cursor row fabricated durable ack: before=%+v after=%+v", before, after)
+	}
+}
 
 // These store tests exercise persisted authority; controller tests own runtime proof validation.
 type cursorTrailEnv struct {

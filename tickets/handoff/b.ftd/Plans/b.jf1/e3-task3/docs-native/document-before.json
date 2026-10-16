@@ -1,0 +1,27 @@
+{
+  "docs/architecture.md": {
+    "sha256": "b7f2ea55fda7b7f61dee2e2bfd830a269578c7c29ad1c3524252ccbc64f7f819",
+    "bytes": 1551902,
+    "lines": 22467
+  },
+  "docs/caller-contract.md": {
+    "sha256": "6e15d1029a6c84dade3790a6b0a1eb8f47305cb3f0662b2c84a2f452e999d288",
+    "bytes": 30293,
+    "lines": 494
+  },
+  "docs/permissions.md": {
+    "sha256": "a61f634e5c39f55139f20282497db27b48283e40b03be180c8f835ac4ea000a0",
+    "bytes": 87524,
+    "lines": 1479
+  },
+  "pkg/api/README.md": {
+    "sha256": "8d3438090d91292f0c5155bda34b7ac5136eb58628ff9d03337656d06c2641a5",
+    "bytes": 26858,
+    "lines": 600
+  },
+  "pkg/ts-bun-client/README.md": {
+    "sha256": "70fbfb86c84961c55a718daa476a75bbd0414968301f4bb2c8f4070fd6688e09",
+    "bytes": 47204,
+    "lines": 637
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "before_inputs": 2323,
+  "after_inputs": 2326,
+  "changed": [
+    {
+      "path": "internal/store/cursor_trail_test.go",
+      "before": {
+        "sha256": "75ce1835b70d99667a703d374624f7c25465ca12da1fe057b561634bbce359bd",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "bfed5e0a09d18aaa988295f25a1a5b5bccfcb62269d3eabffa2eb7d45ae3d6da",
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/deadline_boundary_test.go",
+      "before": {
+        "sha256": "86a62814de10d167075dd75836b4716e936e5becb22644e9bc4d0b4615b6dfe1",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "fcf8f8c66e33399b3bdc416ac04e9aa09c13d13f6716d2e59c26d4c0427bf69a",
+        "mode": 436
+      }
+    },
+    {
+      "path": "internal/store/relay_writes_test.go",
+      "before": {
+        "sha256": "72c012703f3bbf5792ebf412127f28444d59e4fbda4507358c47494f722e0bdb",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "344a551c79973b6caa21ee710f455bc8dea928c17f28ddb521854998b1c0e833",
+        "mode": 436
+      }
+    },
+    {
+      "path": "pkg/api/decide_delivery_test.go",
+      "before": {
+        "sha256": "75a05ad3262a40ea42f960a5ff2e498287b0c6b5d2349f057109fb44c4dc4999",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "9cd00bd86993a0bae81a5d84fdc8dc975b10990aee86874efb4e103588d4c5e4",
+        "mode": 436
+      }
+    },
+    {
+      "path": "pkg/api/decide_policy_test.go",
+      "before": {
+        "sha256": "2c750af744f9916e2b0beb07216a3daea9a1f9ff843ce141a275db125e4f8aa3",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "0e538a512dd39c0f6f655b7edcbd79d3977267146a9cb50f0684ea4d4f8cf159",
+        "mode": 436
+      }
+    },
+    {
+      "path": "test/realtmux/cursor_failure_linux_test.go",
+      "before": {
+        "sha256": "a242960aeddcbaa7f0c0e598462854a3836af4d0383d295f4f31ced5c2346f71",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "80aee921a4292b1090f582c8ab8efc8d14d797d3808671a77b105045127826c0",
+        "mode": 436
+      }
+    },
+    {
+      "path": "test/realtmux/cursor_relay_boundary_linux_test.go",
+      "before": {
+        "sha256": "149859addef894b8269bc53c343986200fcf9a03ad4885f30ea44036dd1b35a6",
+        "mode": 436
+      },
+      "after": {
+        "sha256": "c7cd4eca21648fc6fe2f0e8c4a5005daa972dda7c13fde835b1004a0cd7fe65a",
+        "mode": 436
+      }
+    }
+  ],
+  "added": [
+    "cmd/agent-director/decide_shutdown_linux_test.go",
+    "internal/store/native_boundary_test.go",
+    "internal/store/native_read_deadline_test.go"
+  ],
+  "source_or_docs_changed": [],
+  "protected": {
+    "sha256": "032950e86d9919e2c48ae79189751e36f8875312a78bf1410973954fdde86d88",
+    "mode": 436
+  },
+  "no_match": {
+    "sha256": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+    "mode": 436
+  },
+  "original_old_red_receipt": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-red/old-production-receipt.json",
+    "sha256": "6df7958d2e4cfc072321660a9717723899faf0894dc2d4c31aa489df48bf91a5"
+  },
+  "final_configured_run_input_drift": []
+}
