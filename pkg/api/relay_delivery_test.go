@@ -346,9 +346,34 @@ func TestReaderSkipsHookGoneWhileTheConnectionIsHeld(t *testing.T) {
 	if got := e.request(t).HookGoneAt; !got.IsZero() {
 		t.Fatalf("hook_gone_at = %v; want none written while the connection was held", got)
 	}
-	if got := e.getPermission(t, slow).HookGoneAt; got == nil || !got.Equal(e.now) {
-		t.Errorf("get-permission with the connection free: hook_gone_at = %v; want %v recorded", got, e.now)
+	trace := &hookGoneTrace{Store: slow}
+	if got := e.getPermission(t, trace).HookGoneAt; got == nil || !got.Equal(e.now) {
+		t.Errorf("get-permission with the connection free: hook_gone_at = %v; want %v recorded; RecordHookGone calls=%d at=%v maxWait=%v requestIDs=%v stored=%v elapsed=%v error=(%T) %v",
+			got, e.now, trace.calls, trace.at, trace.maxWait, trace.requestIDs, trace.stored, trace.elapsed, trace.err, trace.err)
 	}
+}
+
+// hookGoneTrace attributes a failed free read without changing the store result.
+type hookGoneTrace struct {
+	*store.Store
+	calls      int
+	at         time.Time
+	maxWait    time.Duration
+	requestIDs []int64
+	stored     map[int64]time.Time
+	elapsed    time.Duration
+	err        error
+}
+
+func (s *hookGoneTrace) RecordHookGone(at time.Time, maxWait time.Duration, ids ...int64) (map[int64]time.Time, error) {
+	start := time.Now()
+	stored, err := s.Store.RecordHookGone(at, maxWait, ids...)
+	s.elapsed = time.Since(start)
+	s.calls++
+	s.at, s.maxWait = at, maxWait
+	s.requestIDs = append([]int64(nil), ids...)
+	s.stored, s.err = stored, err
+	return stored, err
 }
 
 // TestPreV7RequestsFallBackByTime (b.146 rule 5's compatibility clause): a

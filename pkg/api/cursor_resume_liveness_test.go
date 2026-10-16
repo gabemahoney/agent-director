@@ -50,12 +50,14 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 				}
 				e.pc.Set(pid, process)
 				before := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
+				getStarted := time.Now()
 				got, err := c.Get(row.InstanceID)
-				after := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
-				t.Logf("public state=%s error=%v; raw before=%+v after=%+v", got.State, err, before, after)
+				t.Logf("public Get elapsed=%s state=%s error=%v", time.Since(getStarted), got.State, err)
 				if err != nil {
 					t.Fatal(err)
 				}
+				after := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
+				t.Logf("raw before=%+v after=%+v", before, after)
 				want := store.StatePending
 				if verdict == "dead" {
 					want = store.StateMissing
@@ -107,33 +109,57 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 // Read all three tables in one independent, read-only SQLite snapshot without reconciliation.
 func cursorResumeRawSnapshot(t *testing.T, path, id string) map[string]map[string]any {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	started := time.Now()
+	// This independent verification allowance is not a product/API deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	phase, table, phaseStarted := "open", "", started
+	nextPhase := func(next string) {
+		t.Logf("raw snapshot phase=%s table=%s duration=%s elapsed=%s", phase, table, time.Since(phaseStarted), time.Since(started))
+		phase, phaseStarted = next, time.Now()
+	}
+	fail := func(err error) {
+		t.Helper()
+		t.Fatalf("raw snapshot phase=%s table=%s elapsed=%s: %v", phase, table, time.Since(started), err)
+	}
+	defer func() { t.Logf("raw snapshot total elapsed=%s", time.Since(started)) }()
 	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro"}).String())
 	if err != nil {
-		t.Fatal(err)
+		fail(err)
 	}
-	defer db.Close()
+	defer func() {
+		cleanupStarted := time.Now()
+		err := db.Close()
+		t.Logf("raw snapshot pool cleanup duration=%s error=%v", time.Since(cleanupStarted), err)
+	}()
+	nextPhase("begin (including connection initialization)")
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
-		t.Fatal(err)
+		fail(err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		cleanupStarted := time.Now()
+		err := tx.Rollback()
+		t.Logf("raw snapshot transaction cleanup duration=%s error=%v", time.Since(cleanupStarted), err)
+	}()
 	snapshot := make(map[string]map[string]any)
-	for _, table := range []string{"spawns", "cursor_runtimes", "permission_requests"} {
+	for _, name := range []string{"spawns", "cursor_runtimes", "permission_requests"} {
+		nextPhase("schema")
+		table = name
 		key := "instance_id"
 		if table == "cursor_runtimes" {
 			key = "bound_instance_id"
 		}
 		rows, err := tx.QueryContext(ctx, "SELECT * FROM "+table+" LIMIT 0")
 		if err != nil {
-			t.Fatal(err)
+			fail(err)
 		}
 		columns, err := rows.Columns()
 		rows.Close()
 		if err != nil {
-			t.Fatal(err)
+			fail(err)
 		}
+		nextPhase("data query")
 		expressions := make([]string, len(columns))
 		values := make([]any, len(columns))
 		pointers := make([]any, len(columns))
@@ -144,15 +170,16 @@ func cursorResumeRawSnapshot(t *testing.T, path, id string) map[string]map[strin
 		}
 		rows, err = tx.QueryContext(ctx, "SELECT "+strings.Join(expressions, ",")+" FROM "+table+" WHERE "+key+"=?", id)
 		if err != nil {
-			t.Fatal(err)
+			fail(err)
 		}
+		nextPhase("scan")
 		if !rows.Next() {
 			rows.Close()
-			t.Fatalf("raw %s snapshot missing: %v", table, rows.Err())
+			t.Fatalf("raw snapshot phase=%s table=%s elapsed=%s missing: %v", phase, table, time.Since(started), rows.Err())
 		}
 		if err := rows.Scan(pointers...); err != nil {
 			rows.Close()
-			t.Fatal(err)
+			fail(err)
 		}
 		row := make(map[string]any, len(columns))
 		for i, column := range columns {
@@ -160,10 +187,11 @@ func cursorResumeRawSnapshot(t *testing.T, path, id string) map[string]map[strin
 		}
 		if rows.Next() || rows.Err() != nil {
 			rows.Close()
-			t.Fatalf("raw %s snapshot must contain one row: %v", table, rows.Err())
+			t.Fatalf("raw snapshot phase=%s table=%s elapsed=%s must contain one row: %v", phase, table, time.Since(started), rows.Err())
 		}
 		rows.Close()
 		snapshot[table] = row
 	}
+	nextPhase("complete")
 	return snapshot
 }
