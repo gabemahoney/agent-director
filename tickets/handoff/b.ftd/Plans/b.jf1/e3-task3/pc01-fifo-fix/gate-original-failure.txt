@@ -1,0 +1,55 @@
+driver: loaded 5 t2 case(s) from /work/tickets/testplans/b.jf1/t1.jf1.pc/t1.jf1.pc.md
+driver: original failure for t2.jf1.pc.01 (exit=1)
+CASE_FAILURE exit=1 line=75 command=node\ \"\$SOURCE_DIR/test/driver/cursor-pane-records.cjs\"\ \"\$path\"\ \"\$case_dir/trace.jsonl\"\ \"\$case_dir/raw\"\ \"\$case_dir/want.json\"\ \"\$initial\"\ \"\$id\" context=mode= relay= disabled= seam= shape= case_dir=/tmp/co-4HRAiy
+CASE_FAILURE exit=1 line=1 command=node\ \"\$SOURCE_DIR/test/driver/cursor-pane-records.cjs\"\ \"\$path\"\ \"\$case_dir/trace.jsonl\"\ \"\$case_dir/raw\"\ \"\$case_dir/want.json\"\ \"\$initial\"\ \"\$id\" context=mode= relay= disabled= seam= shape= case_dir=/tmp/co-4HRAiy
+node:assert:90
+  throw new AssertionError(obj);
+  ^
+
+AssertionError [ERR_ASSERTION]: prompt.exact-admission-FIFO
++ actual - expected
+
+  [
+    '第一 🐝\nline café',
+    'second 🦋\n別の行',
+    'HOLD',
+    'terminal queued café',
++   'public queued 🐝\nlast line'
+  ]
+    at Object.<anonymous> (/work/source/test/driver/cursor-pane-records.cjs:8:8)
+    at Module._compile (node:internal/modules/cjs/loader:1521:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
+    at Module.load (node:internal/modules/cjs/loader:1266:32)
+    at Module._load (node:internal/modules/cjs/loader:1091:12)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12)
+    at node:internal/main/run_main_module:28:49 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: [
+    '第一 🐝\nline café',
+    'second 🦋\n別の行',
+    'HOLD',
+    'terminal queued café',
+    'public queued 🐝\nlast line'
+  ],
+  expected: [
+    '第一 🐝\nline café',
+    'second 🦋\n別の行',
+    'HOLD',
+    'terminal queued café'
+  ],
+  operator: 'deepStrictEqual'
+}
+
+Node.js v20.20.2
+ASSERTION_FAILED id=prompt.correlation instance=co-07eaea53-3a31-4691-8e4f-1f35ab668a93 dir=/tmp/co-4HRAiy
+CASE_EXIT exit=1 command=node\ \"\$SOURCE_DIR/test/driver/cursor-pane-records.cjs\"\ \"\$path\"\ \"\$case_dir/trace.jsonl\"\ \"\$case_dir/raw\"\ \"\$case_dir/want.json\"\ \"\$initial\"\ \"\$id\" context=mode= relay= disabled= seam= shape= case_dir=/tmp/co-4HRAiy
+[{"state":"waiting","session_id":"synthetic-session-1","pane_pid":204}]
+CASE_ARTIFACT trace.jsonl
+{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"agent-director","version":"0.13.0-ftde3t3b"},"protocolVersion":1}}
+{"id":2,"jsonrpc":"2.0","method":"session/new","params":{"cwd":"/tmp/co-4HRAiy/cwd","mcpServers":[]}}
+{"id":3,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"第一 🐝\nline café","type":"text"}],"sessionId":"synthetic-session-1"}}
+{"id":4,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"second 🦋\n別の行","type":"text"}],"sessionId":"synthetic-session-1"}}
+{"id":5,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"HOLD","type":"text"}],"sessionId":"synthetic-session-1"}}
+{"id":6,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"terminal queued café","type":"text"}],"sessionId":"synthetic-session-1"}}
+{"id":7,"jsonrpc":"2.0","method":"session/prompt","params":{"prompt":[{"text":"public queued 🐝\nlast line","type":"text"}],"sessionId":"synthetic-session-1"}}

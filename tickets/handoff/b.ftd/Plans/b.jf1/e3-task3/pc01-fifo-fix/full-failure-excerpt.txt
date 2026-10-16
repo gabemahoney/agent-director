@@ -1,0 +1,10 @@
+--- FAIL: TestRepairCheckPermission (0.09s)
+    --- FAIL: TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered (6.40s)
+        find_missing_repair_test.go:140: decide: store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded
+    --- FAIL: TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered (6.39s)
+        find_missing_repair_test.go:140: decide: store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded
+    --- FAIL: TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered (6.50s)
+        find_missing_repair_test.go:140: decide: store: commit outcome unconfirmed; read the request before retrying: context deadline exceeded
+agent-director: pre-trust failed for /tmp/pkg-api-home-2356067706/.claude.json (file does not exist); the agent may stop at Claude Code's folder-trust prompt
+FAIL
+FAIL	github.com/gabemahoney/agent-director/pkg/api	142.576s

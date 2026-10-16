@@ -1,0 +1,15 @@
+{
+  "masked_home": "/run/openclaw/horde/pc01-fifo-home-ofu2ojjc",
+  "stripped": [
+    "AGENT_DIRECTOR_*",
+    "TMUX",
+    "TMUX_PANE",
+    "GIT_CONFIG_GLOBAL"
+  ],
+  "git_config_global": "/run/openclaw/horde/pc01-fifo-home-ofu2ojjc/.gitconfig",
+  "cache_links": [
+    "go/pkg/mod",
+    ".cache/go-build",
+    ".bun"
+  ]
+}

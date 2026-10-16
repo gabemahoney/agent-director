@@ -1,0 +1,27 @@
+diff --git a/tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md b/tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md
+index 464b8711..b25770ad 100644
+--- a/tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md
++++ b/tickets/testplans/b.jf1/t1.jf1.pc/t2.jf1.pc.01/t2.jf1.pc.01.md
+@@ -37,6 +37,13 @@ Five exact accepted/start/outcome/wire correlations, unchanged launch identity
+ across caller replacement, no cancellation from follow-ups, both decoys unchanged,
+ unrelated sentinel alive. One final stable-check JSON verdict. No human/auth claim.
+ 
++SR-3.2 and E3 AC2 require both ordinary queued follow-ups to execute FIFO after
++HOLD is released; this case sends no interrupt or conversation control before
++all five completions. Build the expected array directly from all five shell
++arguments, preserving Unicode and newlines. On jq 1.6, splitting NUL-delimited
++raw input omits the trailing empty element, so slicing `[:-1]` incorrectly drops
++the fifth prompt. Keep the exact admission, ID, wire, raw-byte and outcome checks.
++
+ ```bash
+ set -euo pipefail
+ source /work/source/test/driver/cursor-pane-controls.sh
+@@ -44,7 +51,7 @@ check_id=installed.setup
+ pc_install_bun
+ pc_start
+ texts=($'第一 🐝\nline café' $'second 🦋\n別の行' HOLD 'terminal queued café' $'public queued 🐝\nlast line')
+-printf '%s\0' "${texts[@]}" | jq -Rs 'split("\u0000")[:-1]' > "$case_dir/want.json"
++jq -cn --args '$ARGS.positional' "${texts[@]}" > "$case_dir/want.json"
+ for i in 0 1; do
+  check_id=prompt.successive-multiline
+  pc_send Bun "${texts[$i]}" >/dev/null

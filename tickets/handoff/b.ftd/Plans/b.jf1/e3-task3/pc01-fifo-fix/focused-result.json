@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "old_count": 4,
+  "unsliced_count": 5,
+  "new_count": 5,
+  "all_five_exact": true,
+  "newlines_unicode_exact": true,
+  "old_behavior": "jq split omits trailing empty element; [:-1] removes fifth real text",
+  "jq": "jq-1.6"
+}

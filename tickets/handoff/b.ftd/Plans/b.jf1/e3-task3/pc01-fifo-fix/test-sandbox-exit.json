@@ -1,0 +1,5 @@
+{
+  "command": "make test-sandbox",
+  "exit_code": 2,
+  "elapsed_seconds": 219.39
+}

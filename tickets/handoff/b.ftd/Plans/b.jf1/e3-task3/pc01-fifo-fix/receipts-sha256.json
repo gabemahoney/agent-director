@@ -1,0 +1,17 @@
+{
+  "case.diff": "34a11138ab384015d65761ad9b645514639e750dedb37e682543879a7b0858b6",
+  "environment.json": "aa043c0e604b3f2156959f5d9652a9728488ebdf749349863bab01989501aa17",
+  "focused-exit.txt": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+  "focused-result.json": "a8efe7869eaf84d1be7d313c2ed8574830832ac43ba2546f57e35cf1e94c9b29",
+  "focused.log": "e2eed5ec3f2a2837f2fe3b477697e6fedd4aeafa5ea57d1f3cad23ee94a221b3",
+  "full-failure-excerpt.txt": "407f05d52ba6df8ee430b213804aa2dbcc9f6214dd3251b16cf032dd1487ef6b",
+  "gate-original-failure.txt": "0b2b6a5866f896ccd2326a183dc74443a4f90e257154d1840211352a02dba7b1",
+  "jq-version.txt": "e2cfc9a901d66cf6aca67f104545e351ddb7f028a7fe80ca5af7c9297e5111a1",
+  "new-want.json": "b507f4369d9b7e4b5af161aa590497e6ee29970e484a928b46ad62b35045d69f",
+  "old-unsliced.json": "e682fb771f24246fb5843d4c9e4e85c19b7c583112f04f68facd16d199be10d3",
+  "old-want.json": "2a5cb53f372d10e6bc73ff6ed72302fd7b053084405f52346b49daf426215ff8",
+  "prove-json.sh": "d64740f915e18395fa90a7a5235ca681df9fefd5d62d8960c5ddffd50d332360",
+  "report.json": "65ea62e855978bdea7812d0189b5270805cca02eb418d98f14c2aacbecdbfb05",
+  "test-sandbox-exit.json": "d558065db711983eef60d19e57d689436e069ff2912bec7774e12e7e638775c5",
+  "test-sandbox.log": "6b30ff428a6b7ce3db4b766afdd06a242d66d327c089f55a5fff02f4b1e76ccc"
+}
