@@ -92,6 +92,24 @@ func TestValidateClaudeResumePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateCursorSwitchResumePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		args, want, dropped []string
+		refused             string
+	}{
+		{"verified selectors in order", []string{"--resume", "OLD", "--continue", "--new-session-id", "NEW", "resume", "--model", "x", "hello"}, []string{"--model", "x", "hello"}, []string{"--resume", "OLD", "--continue", "--new-session-id", "NEW", "resume"}, ""},
+		{"required model owns command", []string{"-m", "resume", "--continue", "hello"}, []string{"-m", "resume", "hello"}, []string{"--continue"}, ""},
+		{"empty prompt", []string{"--resume=OLD", "--", ""}, []string{"--", ""}, []string{"--resume=OLD"}, ""},
+		{"malformed survivor", []string{"--continue", "--model"}, nil, nil, "--model requires a value"},
+		{"owned selector is invalid model", []string{"--model", "--resume", "--continue"}, nil, nil, "--model requires a model"},
+		{"mode survivor remains refused", []string{"--resume", "OLD", "--mode=plan"}, nil, nil, "--mode (unsupported Cursor argument)"},
+		{"unverified alias", []string{"--continue", "-r", "OLD"}, nil, nil, "-r (unsupported Cursor argument)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) { validatePolicy(t, "cursor", tc.args, true, tc.want, tc.dropped, tc.refused) })
+	}
+}
+
 func TestValidateClaudePrintFullList(t *testing.T) {
 	for _, tc := range []struct {
 		name, bare string
@@ -215,6 +233,8 @@ func TestValidateSwitchCheckPrecedence(t *testing.T) {
 		{"agent before selector drop", "", "Claude", "", ErrAgentInvalid},
 		{"ownership before selector drop", "", "claude", "codex", ErrAgentArgsMismatch},
 		{"dropped selector exposes reserved env", "", "claude", "", ErrReservedEnvKey},
+		{"Cursor ownership before selector drop", "", "cursor", "claude", ErrAgentArgsMismatch},
+		{"Cursor selector exposes reserved env", "", "cursor", "", ErrReservedEnvKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := []string{"--resume", "S1"}

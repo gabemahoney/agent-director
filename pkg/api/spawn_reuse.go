@@ -75,17 +75,19 @@ func (p reusePreCheck) SpawnState(string) (string, bool, error) {
 
 // reuseDeps is what the reuse path uses besides the request and the row: the
 // reuse store, tmux client, start-time reader, configuration, this store's id
-// (Launch.StoreID, which every lookup and label carries), clock and logger,
+// (Launch.StoreID, which every lookup and label carries), actual store path
+// (for Cursor's gateway), clock and logger,
 // and the caller identity collected once at entry.
 type reuseDeps struct {
-	rs      reuseStore
-	t       spawnTmux
-	pc      ProcChecker
-	cfg     config.Config
-	storeID string
-	now     func() time.Time
-	lg      *log.Logger
-	who     caller
+	rs        reuseStore
+	t         spawnTmux
+	pc        ProcChecker
+	cfg       config.Config
+	storeID   string
+	storePath string
+	now       func() time.Time
+	lg        *log.Logger
+	who       caller
 }
 
 // reuseExamined is what the reuse path keeps from its decision, so the change,
@@ -334,6 +336,10 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	}
 
 	req := c.Create
+	if r.Agent == store.AgentCursor {
+		// Match fresh launches, including the caller's per-call store override.
+		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = d.storePath
+	}
 	req.Socket = socket
 	req.Token = token
 	req.StoreID = d.storeID

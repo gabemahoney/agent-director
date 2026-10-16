@@ -541,9 +541,26 @@ func TestCursorIndependentPaneVerifierRejectsChangedOwnership(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real pane ownership mutations")
 	}
-	for _, change := range []string{"moved", "respawned", "conflicting label", "server replaced"} {
-		t.Run(change, func(t *testing.T) {
-			f, _, launch := newCursorPane(t, false)
+	for _, tc := range []struct{ change, phase string }{{"moved", "fresh"}, {"respawned", "fresh"}, {"conflicting label", "fresh"}, {"server replaced", "fresh"}, {"moved", "reuse"}, {"respawned", "rotation"}} {
+		t.Run(tc.change+"/"+tc.phase, func(t *testing.T) {
+			change := tc.change
+			f, runtime, launch := newCursorPane(t, false)
+			original := readRow(t, f.DBPath, launch.ID)
+			if tc.phase == "reuse" {
+				if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: launch.ID}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "prior gateway exited", func() bool { return pidGone(int(original.PanePID.(int64))) }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+				runtime.Configure(t, cursorfix.Scenario{SessionID: "reused-pane-session"})
+				if _, err := f.API.Spawn(api.SpawnParams{InstanceID: launch.ID, Agent: "cursor", CWD: f.CWD, ReuseFinished: true, NoPreTrust: true}); err != nil {
+					t.Fatal(err)
+				}
+			} else if tc.phase == "rotation" {
+				if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "/new"}); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "rotation published", func() bool { return readRow(t, f.DBPath, launch.ID).SessionID != original.SessionID }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
+			}
 			waitFor(t, "fresh waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f.DBPath, launch.ID)) })
 			st, err := store.Open(f.DBPath)
 			if err != nil {

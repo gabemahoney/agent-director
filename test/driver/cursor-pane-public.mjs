@@ -10,7 +10,7 @@ if(surface==='Bun' && !process.env.PC_INSIDE_INSTALLED) {
 } else if(surface==='Bun') {
  const {Client}=await import('agent-director');
  const client=await Client.create({home,storePath:store,_cliPath:'/usr/local/bin/agent-director'});
- const method={'resume':'resume','list-subagents':'listSubagents','send-keys':'sendKeys','get':'get','read-pane':'readPane','pause':'pause','get-permission':'getPermission'}[verb];
+ const method={'spawn':'spawn','resume':'resume','list-subagents':'listSubagents','send-keys':'sendKeys','get':'get','read-pane':'readPane','pause':'pause','get-permission':'getPermission'}[verb];
  try {console.log(JSON.stringify(await client[method](params)));} finally {await client.close();}
 } else if(surface==='MCP') {
  const p=spawn('agent-director',['serve','--stdio','--home',home,'--store-path',store],{stdio:['pipe','pipe','inherit']});

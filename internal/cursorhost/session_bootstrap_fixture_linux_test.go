@@ -37,7 +37,7 @@ func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener fu
 	marker := []byte("Cursor ready")
 	var tail []byte
 	seen := false
-	c := &cursorSession{e: e, master: master, pane: &observedWire{}, done: make(chan error, 1)}
+	c := &cursorSession{e: e, master: master, pane: &observedWire{}, done: make(chan error, 1), waitFailureDiagnostics: true}
 	c.pane.observe = func(raw []byte) {
 		if seen {
 			return
@@ -95,15 +95,27 @@ func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener fu
 			}
 		}
 	})
+	t.Cleanup(func() {
+		if t.Failed() {
+			c.captureFailure(t, "test failed outside wait")
+		}
+	})
+	queueEnabled := make(chan struct{}, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), protocolWait)
 	defer cancel()
 	go func() {
-		c.done <- runWithInput(Options{Runtime: e.runtime.Program, InitialPrompt: initial}, slave, c.pane, open, starter)
+		c.done <- runWithInput(Options{Runtime: e.runtime.Program, InitialPrompt: initial, beforeControllerCleanup: c.observeControllerReturn, afterStartupQueueEnabled: func() {
+			select {
+			case queueEnabled <- struct{}{}:
+			default:
+			}
+		}}, slave, c.pane, open, starter)
 	}()
 	fail := func(phase string, err error) {
 		t.Helper()
 		t.Errorf("post-bootstrap setup %s: %v", phase, err)
-		rotationFailureDiagnostics(t, c, latch, []string{"spawns", "cursor_runtimes", "permission_requests"})
+		c.diagnosticBarrier = latch
+		c.captureFailure(t, "post-bootstrap setup "+phase)
 		t.FailNow()
 	}
 	for ready != nil || accepted != nil {
@@ -145,7 +157,18 @@ func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener fu
 	case <-ctx.Done():
 		fail("waiting binding/session_start snapshot", ctx.Err())
 	}
-	// Do not return success if Run or the aggregate budget expired with the snapshot.
+	if latch != nil {
+		latch.unblock()
+	}
+	select {
+	case <-queueEnabled:
+	case c.endErr = <-c.done:
+		c.ended = true
+		fail("startup queue enablement: Run ended", c.endErr)
+	case <-ctx.Done():
+		fail("startup queue enablement", ctx.Err())
+	}
+	// Do not return success if Run or the aggregate budget expired with enablement.
 	select {
 	case c.endErr = <-c.done:
 		c.ended = true

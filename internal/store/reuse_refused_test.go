@@ -117,31 +117,33 @@ func TestReuseResetFailClosed(t *testing.T) {
 		{"parent id names no row", 0, "no-such-parent", false, false},
 		{"fresh launch with no instant", 0, "", false, true},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newV5Store(t)
-			r := seedReuseRow(t, f, reuseSpec{})
-			mix := f.seedCloseMix(r.id) // before the injection, which fails the seed inserts too
-			if tc.kind != 0 {
-				storefix.InjectWriteFailure(t, f.path, tc.kind, r.id)
-			}
-			before := f.reuseStateOf(t, r)
-			fresh := reuseFresh(tc.parent, false)
-			if tc.noInstant {
-				fresh.LaunchStartedAtMillis = 0
-			}
-			res, archived, v, err := f.reuseReset(r, fresh)
-			if err == nil || res != 0 || archived != "" || v != 0 {
-				t.Fatalf("ResetForReuse = %v, %q, %d, %v; want an error with no outcome", res, archived, v, err)
-			}
-			if got := errors.Is(err, store.ErrReuseArchive); got != tc.wantArchive {
-				t.Errorf("errors.Is(%v, ErrReuseArchive) = %v; want %v", err, got, tc.wantArchive)
-			}
-			if after := f.reuseStateOf(t, r); !reflect.DeepEqual(after, before) {
-				t.Errorf("a failed reset wrote:\n before %+v\n after  %+v", before, after)
-			}
-			f.assertBystanderKept(mix)
-		})
+	for _, agent := range []string{store.AgentCodex, store.AgentCursor} {
+		for _, tc := range cases {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				f := newV5Store(t)
+				r := seedReuseRow(t, f, reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+				mix := f.seedCloseMix(r.id) // before the injection, which fails the seed inserts too
+				if tc.kind != 0 {
+					storefix.InjectWriteFailure(t, f.path, tc.kind, r.id)
+				}
+				before := f.reuseStateOf(t, r)
+				fresh := reuseFresh(tc.parent, false)
+				if tc.noInstant {
+					fresh.LaunchStartedAtMillis = 0
+				}
+				res, archived, v, err := f.reuseReset(r, fresh)
+				if err == nil || res != 0 || archived != "" || v != 0 {
+					t.Fatalf("ResetForReuse = %v, %q, %d, %v; want an error with no outcome", res, archived, v, err)
+				}
+				if got := errors.Is(err, store.ErrReuseArchive); got != tc.wantArchive {
+					t.Errorf("errors.Is(%v, ErrReuseArchive) = %v; want %v", err, got, tc.wantArchive)
+				}
+				if after := f.reuseStateOf(t, r); !reflect.DeepEqual(after, before) {
+					t.Errorf("a failed reset wrote:\n before %+v\n after  %+v", before, after)
+				}
+				f.assertBystanderKept(mix)
+			})
+		}
 	}
 }
 
@@ -155,33 +157,35 @@ func TestReuseResetConcurrent(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = s2.Close() })
-	for round := 0; round < 5; round++ {
-		r := seedReuseRow(t, f, reuseSpec{})
-		var (
-			wg    sync.WaitGroup
-			start = make(chan struct{})
-			res   [2]store.CondResult
-			errs  [2]error
-		)
-		for i, s := range []*store.Store{f.s, s2} {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				<-start
-				res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, reuseFresh("", false))
-			}()
-		}
-		close(start)
-		wg.Wait()
-		if errs[0] != nil || errs[1] != nil || (res != [2]store.CondResult{store.CondApplied, store.CondChanged} &&
-			res != [2]store.CondResult{store.CondChanged, store.CondApplied}) {
-			t.Fatalf("round %d: outcomes %v, errors %v; want one CondApplied and one CondChanged", round, res, errs)
-		}
-		if cur, _ := splitHistory(f.historyAllLives(r.id), reuseSessionID); len(cur) != 1 {
-			t.Errorf("round %d: archived entries %+v; want exactly one", round, cur)
-		}
-		if after := f.rawColumns(r.id); after.LifeNumber != reuseLife+1 || after.RowVersion != r.read.Snapshot.RowVersion+1 {
-			t.Errorf("round %d: life %#v, row_version %#v; want one reset applied", round, after.LifeNumber, after.RowVersion)
+	for _, agent := range []string{store.AgentCodex, store.AgentCursor} {
+		for round := 0; round < 5; round++ {
+			r := seedReuseRow(t, f, reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(agent)}})
+			var (
+				wg    sync.WaitGroup
+				start = make(chan struct{})
+				res   [2]store.CondResult
+				errs  [2]error
+			)
+			for i, s := range []*store.Store{f.s, s2} {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					res[i], _, _, errs[i] = s.ResetForReuse(r.id, r.read.Snapshot, r.read.Agent, reuseFresh("", false))
+				}()
+			}
+			close(start)
+			wg.Wait()
+			if errs[0] != nil || errs[1] != nil || (res != [2]store.CondResult{store.CondApplied, store.CondChanged} &&
+				res != [2]store.CondResult{store.CondChanged, store.CondApplied}) {
+				t.Fatalf("round %d: outcomes %v, errors %v; want one CondApplied and one CondChanged", round, res, errs)
+			}
+			if cur, _ := splitHistory(f.historyAllLives(r.id), reuseSessionID); len(cur) != 1 {
+				t.Errorf("round %d: archived entries %+v; want exactly one", round, cur)
+			}
+			if after := f.rawColumns(r.id); after.LifeNumber != reuseLife+1 || after.RowVersion != r.read.Snapshot.RowVersion+1 {
+				t.Errorf("round %d: life %#v, row_version %#v; want one reset applied", round, after.LifeNumber, after.RowVersion)
+			}
 		}
 	}
 }

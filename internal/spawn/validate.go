@@ -291,8 +291,20 @@ func validateRelayMode(m string) error {
 func validateSpawnArgs(r *Resolved) error {
 	original := r.AgentArgs
 	if r.Agent == config.AgentCursor {
-		_, _, err := CursorArgs(original)
-		return err
+		args := original
+		var extracted ExtractedArgs
+		if r.DropResumeArgs {
+			extracted = ExtractResumeArgs(r.Agent, original)
+			args = extracted.Args
+		}
+		if _, _, err := CursorArgs(args); err != nil {
+			return err
+		}
+		if r.DropResumeArgs {
+			r.AgentArgs = args
+			r.DroppedArgs = extracted.Dropped
+		}
+		return nil
 	}
 	if r.Agent == config.AgentClaude {
 		if err := refuseClaudePrint(original); err != nil {

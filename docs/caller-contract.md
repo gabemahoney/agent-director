@@ -32,8 +32,8 @@ error:
   session to a human; never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
   until `get` shows `ended` or `missing`, then `spawn --instance-id`
-  with `--reuse-finished` and the row's agent (`get` shows it), for Claude or
-  Codex. For Cursor, inspect the latest session and use the
+  with `--reuse-finished` and the row's agent (`get` shows it). For Cursor,
+  inspect the latest session and follow the
   [resume or fresh-instance boundary](#cursor-operation-boundaries). A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
@@ -122,9 +122,26 @@ of the old conversation, which cannot be resumed through agent-director
 afterwards. Same-agent reuse keeps inspectable history and records; a switch
 starts a new life, including when switching back.
 
-If a failed reuse restores the row, its previous agent and life become current
-again, with their history and records. Deleted permission requests stay
-deleted, and records closed by the attempt stay closed.
+Reuse of any agent uses the same launch outcome rules. A determinate create
+or label failure attempts a conditional restore; this includes a label failure
+whose newly created session was ended or may still be running.
+`ErrTmuxNotAvailable` or `ErrTmuxSessionCreate` reports the launch failure and
+whether the row was restored. `ErrTmuxSessionConflict` reports ownership or
+pane conflicts; a duplicate-name re-lookup can instead return
+`ErrTmuxUnresponsive`. Follow its exact row and survivor outcome. A restored
+row is not proof that a surviving session stopped; human inspection follows
+[Operator actions](operator-actions.md#inspect-and-end-a-session-by-hand).
+
+If restoration applies, the previous agent and life become current again,
+with their saved configuration, latest identity and history. The attempted
+reuse's archive remains. Deleted permission requests stay deleted, and
+records closed by the attempt stay closed. A changed or removed row is never
+overwritten; a failed restore can leave it `pending`. A launch timeout or
+indeterminate nonzero create reply returns `ErrTmuxUnresponsive` without
+restoring. A lost create reply can return success without identity and does
+not restore. Check the row and surviving work before any retry. For Cursor,
+cleanup and process death do not create per-request proof; delivery alone
+does not establish execution or dialog closure.
 
 ## Cursor operation boundaries
 
@@ -149,10 +166,12 @@ after current binding verification and every durable dialog hold; it bypasses
 neither. Replayed updates cannot establish readiness, new requests, decisions,
 choices or execution proof, and no transient input is recovered.
 
-`spawn --reuse-finished` involving Cursor, including switches to or from it,
-still returns `ErrSpawnDeniedFlag` before row or launch changes. If the latest
-session cannot be resumed, preserve the original row, session, transcript and
-saved artifacts. After resolving surviving work, run this from the intended
+Cursor supports same-agent finished-id reuse and switches through the
+[life and history rules](usage.md#naming-the-agent). Reuse starts fresh and
+never loads a saved session. Its failure outcomes follow
+[Transcript recovery](#transcript-recovery). If the latest session cannot be
+resumed and you want to preserve the original row, session, transcript and
+saved artifacts, resolve surviving work first, then run this from the intended
 project directory, omitting `instance_id` so AD generates a unique id:
 
 ```sh
@@ -169,8 +188,14 @@ arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
 permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
 Cursor session selectors are `--resume [chatId]`, `--continue`, command-position
 `resume` as the first non-option word, and `--new-session-id` with its required
-value. Fresh launch refuses them. Resume filters recognized selectors and their
-owned values from a copy of saved `agent_args`, leaving the stored list intact.
+value. Plain spawn and same-agent reuse refuse them. Only reuse with an
+explicit id and a successfully read finished (`ended` or `missing`) row whose
+agent differs from the resolved target removes recognized selectors and their
+owned values. The surviving arguments are checked as for a fresh spawn.
+Removed original tokens are reported in `dropped_args` in argv order; the
+field is omitted when empty. Missing, live, unreadable or same-agent rows
+grant no selector-removal authority. Resume filters recognized selectors and
+their owned values from a copy of saved `agent_args`, leaving the stored list intact.
 Values owned by `--model`/`-m` and prompt operands after `--` remain values or
 prompt text even when they spell a selector; no `-r` or `-c` alias is assumed.
 Normal input ordering and limits are in
@@ -226,6 +251,8 @@ conversation. Unknown binding or exhausted persistence cannot establish success.
 
 A slow pane can omit rendered output and show
 `Cursor pane output omitted under pressure; inspect the protected transcript`.
+Once physical output resumes, pending loss is reported even without another
+prompt or output update. A permanently blocked writer cannot display the notice.
 Inspect the protected transcript at `get`'s `jsonl_path` for recorded submission
 outcomes. Display loss supplies no readiness, permission or termination evidence.
 

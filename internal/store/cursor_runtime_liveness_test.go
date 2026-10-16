@@ -4,9 +4,104 @@ import (
 	"database/sql"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
+
+func TestCursorReuseRetiresOldBindingAndPublicationDefeatsRestore(t *testing.T) {
+	for _, agents := range [][]string{{"cursor"}, {"claude", "cursor"}, {"codex", "cursor"}} {
+		t.Run(agents[0], func(t *testing.T) {
+			f, old, binding := cursorRowBinding(t)
+			db, err := sql.Open("sqlite", f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			for i, agent := range agents {
+				// A finished synthetic launch qualifies through the real read/reset transaction.
+				if _, err := db.Exec("UPDATE spawns SET state='ended' WHERE instance_id=?", old.InstanceID); err != nil {
+					t.Fatal(err)
+				}
+				fresh := reuseFresh("", false)
+				fresh.Agent = agent
+				fresh.Identity.Token = []string{"1111111111111111", "2222222222222222"}[i]
+				r := rrDoReset(t, f, old.InstanceID, fresh)
+				if got, err := f.s.RecordLaunchIdentity(old.InstanceID, r.version, fresh.Identity.Token, fresh.Identity); err != nil || got != store.CondApplied {
+					t.Fatalf("publish pane: %v %v", got, err)
+				}
+				row, err := f.s.GetSpawn(old.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := f.rawColumns(old.InstanceID)
+				for _, event := range []string{"UserPromptSubmit", "Stop", "SessionEnd"} {
+					g := store.HookGate{Event: event, ParentPID: binding.GatewayPID, ParentStart: binding.GatewayStart, SessionID: binding.SessionID, Cursor: &binding, Examined: old.Snapshot}
+					if _, a, err := f.s.ApplyHookTransitionResult(old.InstanceID, g, store.StateEnded, false, event, "", false); err != nil || a.Applied {
+						t.Fatalf("old %s applied: %+v %v", event, a, err)
+					}
+				}
+				if ok, err := f.s.MarkCursorRuntimeGone(binding); err != nil || ok {
+					t.Fatalf("old gateway retirement: %v %v", ok, err)
+				}
+				if ok, err := f.s.SetCursorRuntimeSession(binding, "stale-session"); err != nil || ok {
+					t.Fatalf("old connection publication: %v %v", ok, err)
+				}
+				if !reflect.DeepEqual(before, f.rawColumns(old.InstanceID)) {
+					t.Fatal("old binding changed reused row")
+				}
+				if agent == "cursor" {
+					current := binding
+					current.Token, current.Life = row.Identity.Token, row.LifeNumber
+					current.GatewayPID, current.GatewayStart = row.Identity.PanePID, row.Identity.PaneStarttime
+					current.Connection, current.SessionID = "replacement-connection", ""
+					if ok, err := f.s.RegisterCursorRuntime(row, current); err != nil || !ok {
+						t.Fatalf("replacement register: %v %v", ok, err)
+					}
+					if ok, err := f.s.SetCursorRuntimeSession(current, "replacement-session"); err != nil || !ok {
+						t.Fatalf("replacement report binding: %v %v", ok, err)
+					}
+					current.SessionID = "replacement-session"
+					gate := store.HookGate{Event: "SessionStart", ParentPID: current.GatewayPID, ParentStart: current.GatewayStart, SessionID: current.SessionID, Cursor: &current, SessionStart: true, Examined: row.Snapshot}
+					if applied, _, err := f.s.RecordSessionStartIdentity(row.InstanceID, gate, "/synthetic/reused-launch.jsonl", true); err != nil || !applied.Applied {
+						t.Fatalf("replacement report: %+v %v", applied, err)
+					}
+					row, err = f.s.GetSpawn(row.InstanceID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if ok, err := f.s.RotateCursorSession(row, gate, "replacement-rotated", row.JSONLPath, time.Now().Add(time.Second), cursorTrailCheck); err != nil || !ok {
+						t.Fatalf("reused rotation: %v %v", ok, err)
+					}
+					rotated := f.rawColumns(row.InstanceID)
+					gate.Event, gate.SessionStart = "SessionEnd", false
+					if _, applied, err := f.s.ApplyHookTransitionResult(row.InstanceID, gate, store.StateEnded, false, "SessionEnd", "", false); err != nil || applied.Applied {
+						t.Fatalf("retired conversation ended reused launch: %+v %v", applied, err)
+					}
+					if !reflect.DeepEqual(rotated, f.rawColumns(row.InstanceID)) {
+						t.Fatal("old conversation changed rotated reused row")
+					}
+					live, err := f.s.ReadCursorRuntime(row.InstanceID)
+					if err != nil || live.SessionID != "replacement-rotated" || live.Terminated {
+						t.Fatalf("reused rotated binding: %+v %v", live, err)
+					}
+					// Real death of this continuing gateway still retires the binding after rotation.
+					if ok, err := f.s.MarkCursorRuntimeGone(live); err != nil || !ok {
+						t.Fatalf("reused rotated runtime death: %v %v", ok, err)
+					}
+
+				}
+				published := f.rawColumns(old.InstanceID)
+				if got, err := f.s.RestoreAfterFailedReuse(old.InstanceID, r.version, r.prior, time.Now()); err != nil || got != store.CondChanged {
+					t.Fatalf("stale restore after publication: %v %v", got, err)
+				}
+				if !reflect.DeepEqual(published, f.rawColumns(old.InstanceID)) {
+					t.Fatal("stale restore changed published launch")
+				}
+			}
+		})
+	}
+}
 
 func TestCursorMissingRefusesReplacedAuthority(t *testing.T) {
 	for _, tc := range []struct{ name, query string }{

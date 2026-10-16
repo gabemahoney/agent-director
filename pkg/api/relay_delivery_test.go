@@ -9,7 +9,12 @@ package api_test
 // (storefix.SeedRelayRequest), a process fake and a clock to judge it with.
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net/url"
+	"runtime"
 	"sort"
 	"testing"
 	"time"
@@ -348,6 +353,9 @@ func TestReaderSkipsHookGoneWhileTheConnectionIsHeld(t *testing.T) {
 	}
 	trace := &hookGoneTrace{Store: slow}
 	if got := e.getPermission(t, trace).HookGoneAt; got == nil || !got.Equal(e.now) {
+		if trace.err != nil {
+			hookGoneFailureDiagnostics(t, e.dbPath, trace)
+		}
 		t.Errorf("get-permission with the connection free: hook_gone_at = %v; want %v recorded; RecordHookGone calls=%d at=%v maxWait=%v requestIDs=%v stored=%v elapsed=%v error=(%T) %v",
 			got, e.now, trace.calls, trace.at, trace.maxWait, trace.requestIDs, trace.stored, trace.elapsed, trace.err, trace.err)
 	}
@@ -374,6 +382,39 @@ func (s *hookGoneTrace) RecordHookGone(at time.Time, maxWait time.Duration, ids 
 	s.requestIDs = append([]int64(nil), ids...)
 	s.stored, s.err = stored, err
 	return stored, err
+}
+
+// Capture after the failed call; this independent snapshot may observe later progress.
+func hookGoneFailureDiagnostics(t *testing.T, path string, trace *hookGoneTrace) {
+	t.Helper()
+	stacks := make([]byte, 256<<10)
+	n := runtime.Stack(stacks, true)
+	t.Logf("hook-gone failure goroutines (truncated=%v):\n%s", n == len(stacks), stacks[:n])
+	if len(trace.requestIDs) == 0 {
+		t.Log("hook-gone raw readback: no request id captured")
+		return
+	}
+	id := trace.requestIDs[0]
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	result := make(chan string, 1)
+	go func() {
+		db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=ro&_pragma=busy_timeout(0)"}).String())
+		if err != nil {
+			result <- fmt.Sprintf("open error=%v", err)
+			return
+		}
+		defer db.Close()
+		var value sql.NullInt64
+		err = db.QueryRowContext(ctx, "SELECT hook_gone_at FROM permission_requests WHERE request_id=?", id).Scan(&value)
+		result <- fmt.Sprintf("requestID=%d hook_gone_at(raw milliseconds)=%v error=(%T) %v", id, value, err, err)
+	}()
+	select {
+	case raw := <-result:
+		t.Logf("hook-gone independent durable readback (max 200ms): %s", raw)
+	case <-ctx.Done():
+		t.Logf("hook-gone independent durable readback: diagnostic bound expired: %v; native worker may still be finishing", ctx.Err())
+	}
 }
 
 // TestPreV7RequestsFallBackByTime (b.146 rule 5's compatibility clause): a

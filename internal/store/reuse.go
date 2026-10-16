@@ -315,11 +315,11 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     no_pre_trust this call's fresh.NoPreTrust; launch_token and tmux_socket
 //     from fresh.Identity (zero = NULL); the three launch-owner columns from
 //     fresh.LaunchOwner (zero = NULL; the reuse records itself as the owner
-//     of the launch it begins, b.kdf); agent fresh.Agent, which must be claude
-//     or codex (checked before anything is written: ErrRowAgentInvalid) and
+//     of the launch it begins, b.kdf); agent fresh.Agent, which must be claude,
+//     codex or cursor (checked before anything is written: ErrRowAgentInvalid) and
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
-//     for codex, over whatever the row held; row_version advanced by one, and
+//     for codex or cursor, over whatever the row held; row_version advanced by one, and
 //     life_number advanced by one only if the exact stored agent differs
 //     from fresh.Agent. Same-agent reuse keeps the life. The store reads no
 //     clock: the caller supplies

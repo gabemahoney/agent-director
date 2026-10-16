@@ -62,7 +62,7 @@ var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 // (SpawnParams.Agent, --agent; the description names the row's recorded one),
 // since there is no conversation to resume. Cursor instead preserves the
 // original row and artifacts and starts a fresh unique instance with --agent
-// cursor; Cursor reuse is not currently supported. It is also returned when resume
+// cursor. It is also returned when resume
 // loses a race: the row changed between resume's read and its move to
 // `pending`, and nothing was written.
 var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
@@ -76,7 +76,7 @@ var ErrSpawnNotResumable = errors.New("ErrSpawnNotResumable")
 // Cursor instead preserves the original row/session/transcript/artifacts and
 // starts a fresh unique instance: from the intended project directory run
 // agent-director spawn --agent cursor --cwd "$PWD", omitting instance_id.
-// Cursor reuse is not currently supported. Older sessions remain listed for
+// Older sessions remain listed for
 // inspection only; resume never chooses them. An agent switch or
 // switch back starts a new life with no memory of the earlier one.
 var ErrNoSessionId = errors.New("ErrNoSessionId")
@@ -89,7 +89,7 @@ var ErrNoSessionId = errors.New("ErrNoSessionId")
 // gateway transcript and returns this error for a missing or unsafe reference;
 // it never synthesizes a path or reads native storage. Cursor recovery can
 // preserve the artifacts and spawn a new instance_id for a fresh conversation;
-// Cursor reuse is not currently supported. Other agents' messages list only current-session attempts,
+// Other agents' messages list only current-session attempts,
 // with sources persisted and fallback; a Codex row with an empty recorded
 // path and visible history has zero attempts and says that the current
 // session has no recorded path. Older sessions are never tried, even when

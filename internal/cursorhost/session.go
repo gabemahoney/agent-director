@@ -29,6 +29,17 @@ type Options struct {
 	RuntimeArgs   []string
 	InitialPrompt string
 	LoadSession   string
+
+	// afterStartupQueueEnabled observes successful epoch-owned startup admission.
+	// It runs once on the session goroutine, outside mailbox locks, and must
+	// return promptly. Production leaves it nil.
+	afterStartupQueueEnabled func()
+
+	// beforeControllerCleanup observes the controller loop's result before any
+	// deferred cleanup can delay or amend it. Setup returns before loop entry are
+	// not observed. It runs on the session goroutine, outside locks, and must
+	// return promptly. Production leaves it nil.
+	beforeControllerCleanup func(error)
 }
 
 // Run owns a fresh or latest-loaded Cursor conversation. Follow-ups remain
@@ -594,6 +605,10 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return nil
 	}
 
+	// Register after all cleanup defers so the loop result is observed first.
+	if options.beforeControllerCleanup != nil {
+		defer func() { options.beforeControllerCleanup(err) }()
+	}
 	for {
 		if v := inputs.takeControl(); v != nil {
 			if err = handleControl(*v); err != nil {
@@ -1255,7 +1270,14 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					}
 				}
 				if !intentional {
-					inputs.ifCurrent(waitingEpoch, admission.enableQueue)
+					queueEnabled := false
+					inputs.ifCurrent(waitingEpoch, func() {
+						admission.enableQueue()
+						queueEnabled = true
+					})
+					if queueEnabled && options.afterStartupQueueEnabled != nil {
+						options.afterStartupQueueEnabled()
+					}
 				}
 			case "prompt":
 				var completed struct {

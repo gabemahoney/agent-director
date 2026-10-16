@@ -31,6 +31,7 @@ func TestCursorRotationHeldCapacityIsProvisional(t *testing.T) {
 		t.Run(capacity, func(t *testing.T) {
 			i := &completeInput{ready: make(chan struct{})}
 			c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
+			c.waitFailureDiagnostics = true
 			<-i.ready
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
@@ -471,14 +472,7 @@ func TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue(t *testing.T) {
 	i := &completeInput{ready: make(chan struct{})}
 	c := postBootstrapCursorSessionWithInput(t, "HOLD", openTranscript, i.start)
 	<-i.ready
-	func() {
-		defer func() {
-			if t.Failed() {
-				rotationFailureDiagnostics(t, c, nil, []string{"spawns", "cursor_runtimes", "permission_requests"})
-			}
-		}()
-		c.wait(t, "active receipt", func() bool { return len(rotationPrompts(c, t)) == 1 })
-	}()
+	c.wait(t, "active receipt", func() bool { return len(rotationPrompts(c, t)) == 1 })
 	for n := 0; n < 32; n++ {
 		i.submit(t, fmt.Sprintf("old-full-%02d", n))
 	}
@@ -528,6 +522,7 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 		return json.Unmarshal(raw, &r) == nil && r.Data.Params.Session == "synthetic-session-1" && r.Data.Params.Update.Kind == "tool_call_update" && r.Data.Params.Update.Tool == "old-shell" && r.Data.Params.Update.Status == "completed"
 	})
 	c := postBootstrapCursorSessionWithInput(t, "", opener, terminalLoop)
+	c.diagnosticBarrier = barrier
 	defer barrier.unblock()
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	permission, _ := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(`"old-permission"`), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-1", "old-shell", "execute")})

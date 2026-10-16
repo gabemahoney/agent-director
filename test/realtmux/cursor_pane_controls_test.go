@@ -1,6 +1,7 @@
 package realtmux_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -59,7 +60,7 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 	case "CLI":
 		c.call = func(verb string, p map[string]any) ([]byte, error) {
 			args := []string{verb, "--store-path", f.DBPath}
-			for _, key := range []string{"instance_id", "text", "key", "n_lines", "request_token", "decision", "expect_pane_sha256"} {
+			for _, key := range []string{"instance_id", "text", "key", "n_lines", "request_token", "decision", "expect_pane_sha256", "agent", "cwd", "parent"} {
 				if v, ok := p[key]; ok {
 					args = append(args, "--"+strings.ReplaceAll(key, "_", "-"), fmt.Sprint(v))
 				}
@@ -67,9 +68,25 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 			if allowed, _ := p["allow_pending"].(bool); allowed {
 				args = append(args, "--allow-pending")
 			}
+			for _, key := range []string{"reuse_finished", "no_pre_trust"} {
+				if enabled, _ := p[key].(bool); enabled {
+					args = append(args, "--"+strings.ReplaceAll(key, "_", "-"))
+				}
+			}
+			if values, ok := p["agent_args"].([]string); ok {
+				args = append(args, "--")
+				args = append(args, values...)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			return exec.CommandContext(ctx, bin, args...).CombinedOutput()
+			cmd := exec.CommandContext(ctx, bin, args...)
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
+			if err != nil {
+				return append(out, stderr.Bytes()...), err
+			}
+			return out, nil
 		}
 	case "Go":
 		client, err := api.New(api.Options{StorePath: f.DBPath})
@@ -86,6 +103,14 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 			var result any
 			var err error
 			switch verb {
+			case "spawn":
+				reuse, _ := p["reuse_finished"].(bool)
+				noTrust, _ := p["no_pre_trust"].(bool)
+				args, _ := p["agent_args"].([]string)
+				result, err = client.Spawn(api.SpawnParams{InstanceID: p["instance_id"].(string), Agent: p["agent"].(string), CWD: p["cwd"].(string), ReuseFinished: reuse, NoPreTrust: noTrust, AgentArgs: args})
+			case "list":
+				parent, _ := p["parent"].(string)
+				result, err = client.List(api.ListParams{Parent: parent})
 			case "resume":
 				result, err = client.Resume(api.ResumeParams{InstanceID: p["instance_id"].(string)})
 			case "list-subagents":
@@ -132,7 +157,7 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 			js := fmt.Sprintf(`import {Client} from %q;
 import {createInterface} from "node:readline";
 const c=await Client.create({storePath:%q,home:%q,_cliPath:%q});
-const methods={"send-keys":"sendKeys","read-pane":"readPane","get":"get","get-permission":"getPermission","pause":"pause"};
+const methods={"spawn":"spawn","resume":"resume","list":"list","list-subagents":"listSubagents","send-keys":"sendKeys","read-pane":"readPane","get":"get","get-permission":"getPermission","pause":"pause"};
 try {for await(const line of createInterface({input:process.stdin})) {
  const r=JSON.parse(line); let text="{}";
  if(r.method==="tools/call") {try {text=JSON.stringify(await c[methods[r.params.name]](r.params.arguments));}

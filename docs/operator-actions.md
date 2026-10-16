@@ -59,11 +59,15 @@ conflict refusals and `ErrStoreBusy` behavior are in the
 If a Cursor row is `missing`, check for surviving work
 before starting its replacement; follow the
 [Cursor recovery boundary](caller-contract.md#cursor-operation-boundaries).
-The resume ownership and conflict procedures below also apply to Cursor.
-Cursor still refuses reuse and switches to or from another agent. If its latest
-native session or protected transcript is unavailable, preserve the row and
-artifacts and follow the fresh-instance command in the caller contract; do not
-substitute an older session or repair saved identity by hand.
+The resume and reuse ownership and conflict procedures below also apply to
+Cursor, including switches. A failed-label error may report a restored row
+while its new session may still run: follow the error's surviving-session
+warning and the inspection steps above before retrying. If its latest native
+session or protected transcript is unavailable, the fresh-instance command in
+the caller contract preserves the original row and artifacts. Same-id reuse
+starts a fresh conversation under the documented
+[life rules](usage.md#naming-the-agent); do not substitute an older session or
+repair saved identity by hand.
 
 ## A finished row's own old session
 

@@ -74,11 +74,14 @@ rl_preserved() {
 rl_export_evidence() {
  artifact_dir="/tmp/cursor-resume-life-artifacts/$id"
  mkdir -m 700 -p "$artifact_dir"
- for item in saved.json history.json public.json artifact-sha256 source-sha256 native-source-sha256 retained-sha256 trace.jsonl sent.jsonl raw scenario resume.json error protected-before; do
+ for item in saved.json history.json public.json artifact-sha256 source-sha256 native-source-sha256 retained-sha256 trace.jsonl trace-before-reuse.jsonl sent.jsonl raw scenario resume.json error protected-before; do
   if [[ -f $case_dir/$item ]]; then cp "$case_dir/$item" "$artifact_dir/$item"; fi
  done
  if [[ -n ${path:-} && -f $path ]]; then cp "$path" "$artifact_dir/protected.jsonl"; fi
- sql -readonly -json "SELECT * FROM spawns WHERE instance_id='$id'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$id'; SELECT * FROM permission_requests WHERE instance_id='$id';" > "$artifact_dir/authority.jsonl"
+ sql -readonly -json "SELECT * FROM spawns WHERE instance_id='$id'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$id'; SELECT * FROM permission_requests WHERE instance_id='$id'; SELECT * FROM session_history WHERE instance_id='$id'; SELECT * FROM spawns WHERE parent_id='$id';" > "$artifact_dir/authority.jsonl"
+ if [[ -f $HOME/.config/agent-director/ad-trail.jsonl ]]; then
+  jq -c --arg id "$id" 'select(.instance_id==$id or .instance_id==($id+"-child"))' "$HOME/.config/agent-director/ad-trail.jsonl" > "$artifact_dir/trail.jsonl"
+ fi
  chmod -R go-rwx "$artifact_dir"
 }
 rl_finish() {
@@ -226,4 +229,133 @@ rl_saved_transient() {
 }
 rl_queued() { jq -se 'any(.[]; .kind=="submission_accepted" and .data.text=="queued transient before crash")' "$path" >/dev/null; }
 rl_saved_complete() { [[ $(row_state) == waiting ]] && pc_prompts_is 1 && [[ $(pc_count turn_outcome) == "$((saved_outcomes+1))" ]]; }
+
+# E4 AC5-7: reuse uses the same isolated runtime/public helpers as latest resume.
+rl_reuse_call() {
+ local surface=$1 target=$2 args=${3:-'[]'}
+ if [[ $surface == CLI ]]; then
+  local values=()
+  mapfile -t values < <(jq -r '.[]' <<<"$args")
+  ad spawn --agent "$target" --instance-id "$id" --cwd "$case_dir/cwd" --reuse-finished --no-pre-trust -- "${values[@]}"
+ else
+  pc_public "$surface" spawn "$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" --arg agent "$target" --argjson args "$args" '{instance_id:$id,cwd:$cwd,agent:$agent,agent_args:$args,reuse_finished:true,no_pre_trust:true}')"
+ fi
+}
+rl_reuse_fixture() {
+ pc_start
+ older=$session
+ cp "$path" "$case_dir/protected-before"
+ sql -json "SELECT session_id,jsonl_path,life_number,agent_args,extra_env,no_pre_trust FROM spawns WHERE instance_id='$id';" > "$case_dir/saved.json"
+ rl_public CLI pause >/dev/null
+ check stopped.runtime wait_gone "$runtime"
+ check stopped.gateway wait_gone "$gateway"
+ check stopped.state test "$(row_state)" = ended
+}
+rl_reuse_fresh() {
+ local surface=$1 old_life
+ if [[ $surface == Bun ]]; then pc_install_bun; fi
+ rl_reuse_fixture
+ old_life=$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")
+ local old_path=$path
+ jq -cn --arg session "$older-reused" '{sessionId:$session}' > "$case_dir/scenario"
+ cp "$case_dir/trace.jsonl" "$case_dir/trace-before-reuse.jsonl"
+ : > "$case_dir/trace.jsonl"
+ rl_reuse_call "$surface" cursor > "$case_dir/resume.json"
+ check reuse.result jq -e --arg id "$id" '.instance_id==$id and .pre_trust=="skipped" and (has("dropped_args")|not)' "$case_dir/resume.json" >/dev/null
+ check reuse.ready wait_until pc_start_ready
+ check reuse.waiting wait_until rl_row_waiting
+ load_identity
+ path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$id';")
+ check reuse.fresh-session test "$session" != "$older"
+ check reuse.same-life test "$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")" = "$old_life"
+ check reuse.no-load test "$(frames | jq -s '[.[]|select(.method=="session/load")]|length')" = 0
+ check reuse.old-artifact cmp "$old_path" "$case_dir/protected-before"
+ check reuse.current-history rl_public_history
+ rl_public "$surface" list-subagents | jq -e '.tracked==false and .subagents==[]' >/dev/null
+ rl_public CLI pause >/dev/null
+}
+rl_public_history() {
+ rl_public CLI get | jq -e --arg older "$older" --arg current "$session" 'any(.prior_sessions[]; .session_id==$older) and all(.prior_sessions[]; .session_id!=$current)' >/dev/null
+}
+rl_reuse_restore() {
+ rl_reuse_fixture
+ local before old_path=$path original_path=$PATH
+ before=$(sql -json "SELECT agent,state,session_id,jsonl_path,life_number,agent_args,extra_env,no_pre_trust FROM spawns WHERE instance_id='$id';")
+ mkdir -m 700 "$case_dir/fail-create"
+ cat > "$case_dir/fail-create/tmux" <<'FAILCREATE'
+#!/bin/sh
+for value in "$@"; do if [ "$value" = new-session ]; then exit 1; fi; done
+exec /usr/bin/tmux "$@"
+FAILCREATE
+ chmod 700 "$case_dir/fail-create/tmux"
+ export PATH="$case_dir/fail-create:$PATH"
+ if rl_reuse_call CLI cursor > "$case_dir/resume.json" 2> "$case_dir/error"; then return 1; fi
+ export PATH=$original_path
+ check restore.error jq -e '.err_name=="ErrTmuxSessionCreate" and (.err_description|contains("restored"))' "$case_dir/error" >/dev/null
+ check restore.full-saved-row test "$(sql -json "SELECT agent,state,session_id,jsonl_path,life_number,agent_args,extra_env,no_pre_trust FROM spawns WHERE instance_id='$id';")" = "$before"
+ check restore.archive test "$(sql "SELECT count(*) FROM session_history WHERE instance_id='$id' AND session_id='$older';")" = 1
+ check restore.old-artifact cmp "$old_path" "$case_dir/protected-before"
+ jq -cn --arg session "$older-reused" '{sessionId:$session}' > "$case_dir/scenario"
+ rl_reuse_call CLI cursor > "$case_dir/resume.json"
+ check retry.ready wait_until pc_start_ready
+ check retry.waiting wait_until rl_row_waiting
+ load_identity
+ path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$id';")
+ check retry.fresh-session test "$session" != "$older"
+ rl_public CLI pause >/dev/null
+}
+rl_row_waiting() { [[ $(row_state) == waiting ]]; }
+rl_reuse_switches() {
+ local route=$1 first second old_life child
+ cat > "$case_dir/other-agent" <<'OTHERAGENT'
+#!/bin/sh
+exec sleep 300
+OTHERAGENT
+ chmod 700 "$case_dir/other-agent"
+ sed -i "/^cursor_path = /a claude_path = \"$case_dir/other-agent\"\ncodex_path = \"$case_dir/other-agent\"" "$HOME/.config/agent-director/config.toml"
+ rl_reuse_fixture
+ if [[ $route == claude ]]; then
+  # Explicit synthetic finished-Claude seed; no Claude runtime/native claim.
+  sql "UPDATE spawns SET agent='claude',subagent_tracking=1 WHERE instance_id='$id' AND state='ended';"
+  first=cursor; second=claude
+ else first=codex; second=cursor; fi
+ child="$id-child"
+ AGENT_DIRECTOR_INSTANCE_ID="$id" ad spawn --agent claude --instance-id "$child" --cwd "$case_dir/cwd" --no-pre-trust >/dev/null
+ old_life=$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")
+ for target in "$first" "$second"; do
+  jq -cn --arg session "$older-$target-fresh" '{sessionId:$session}' > "$case_dir/scenario"
+  local args='["--resume","old-selector"]'
+  if [[ $target == codex ]]; then args='["resume","old-selector"]'; fi
+  rl_reuse_call CLI "$target" "$args" > "$case_dir/resume.json"
+  check switch.original-drops jq -e --argjson args "$args" '.dropped_args==$args' "$case_dir/resume.json" >/dev/null
+  old_life=$((old_life+1))
+  check switch.life test "$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")" = "$old_life"
+  check switch.no-earlier-history test "$(sql "SELECT count(*) FROM session_history h JOIN spawns s USING(instance_id) WHERE s.instance_id='$id' AND h.life_number=s.life_number;")" = 0
+  ad list --parent "$id" | jq -e --arg child "$child" '.spawns|any(.instance_id==$child)' >/dev/null
+  if [[ $target == cursor ]]; then
+   check switch.waiting wait_until rl_row_waiting
+   load_identity
+   path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$id';")
+   rl_public CLI list-subagents | jq -e '.tracked==false and .subagents==[]' >/dev/null
+   rl_public CLI pause >/dev/null
+   check switch.gateway-gone wait_gone "$gateway"
+  else
+   gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$id';")
+   ad kill --instance-id "$id" | jq -e '.kill_sent==true' >/dev/null
+   check synthetic-agent.gone wait_gone "$gateway"
+   # The stand-in has no native hooks: fixture marks only independently dead launch finished.
+   sql "UPDATE spawns SET state='ended' WHERE instance_id='$id' AND state='pending';"
+  fi
+ done
+ check switch.old-artifact cmp "$(sql "SELECT jsonl_path FROM session_history WHERE instance_id='$id' AND session_id='$older';")" "$case_dir/protected-before"
+ check switch.trail-all-lives test "$(jq -s --arg id "$id" '[.[]|select(.event=="ad.spawn.reused" and .instance_id==$id)]|length' "$HOME/.config/agent-director/ad-trail.jsonl")" = 2
+ # The child is independent throughout both switches; finish its synthetic process explicitly.
+ local child_gateway
+ child_gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$child' AND parent_id='$id';")
+ [[ $child_gateway =~ ^[0-9]+$ ]]
+ check child.independent-alive kill -0 "$child_gateway"
+ ad kill --instance-id "$child" | jq -e '.kill_sent==true' >/dev/null
+ check child.synthetic-gone wait_gone "$child_gateway"
+}
+
 trap 'rc=$?; if ((rc)); then printf "ASSERTION_FAILED id=%s instance=%s dir=%s\n" "$check_id" "$id" "$case_dir" >&2; fi; set +e; rl_export_evidence; (exit "$rc"); cleanup_cursor_case; exit "$rc"' EXIT

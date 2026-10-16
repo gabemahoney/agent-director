@@ -11,6 +11,7 @@ import (
 type paneDisplay struct {
 	mu     sync.Mutex
 	queue  chan []byte
+	loss   chan struct{}
 	closed chan struct{}
 	done   chan struct{}
 	lost   bool
@@ -18,16 +19,28 @@ type paneDisplay struct {
 }
 
 func newPaneDisplay(out io.Writer) *paneDisplay {
-	d := &paneDisplay{queue: make(chan []byte, 64), closed: make(chan struct{}), done: make(chan struct{})}
+	d := &paneDisplay{queue: make(chan []byte, 64), loss: make(chan struct{}, 1), closed: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(d.done)
 		write := func(raw []byte) { d.mu.Lock(); d.bytes -= len(raw); d.mu.Unlock(); _, _ = out.Write(raw) }
+		writeLoss := func() {
+			d.mu.Lock()
+			lost := d.lost
+			d.lost = false
+			d.mu.Unlock()
+			if lost {
+				_, _ = io.WriteString(out, "\r\nCursor pane output omitted under pressure; inspect the protected transcript\r\n")
+			}
+		}
 		for {
+			writeLoss()
 			select {
 			case raw := <-d.queue:
 				write(raw)
+			case <-d.loss:
 			case <-d.closed:
 				for {
+					writeLoss()
 					select {
 					case raw := <-d.queue:
 						write(raw)
@@ -43,18 +56,16 @@ func newPaneDisplay(out io.Writer) *paneDisplay {
 
 func (d *paneDisplay) Write(raw []byte) (int, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.lost {
-		warning := []byte("\r\nCursor pane output omitted under pressure; inspect the protected transcript\r\n")
-		if d.bytes+len(warning) <= maxQueuedBytes {
+	defer func() {
+		if d.lost {
+			// Loss must wake an idle consumer even when no frame was queued.
 			select {
-			case d.queue <- warning:
-				d.bytes += len(warning)
-				d.lost = false
+			case d.loss <- struct{}{}:
 			default:
 			}
 		}
-	}
+		d.mu.Unlock()
+	}()
 	if len(raw) > maxFrameBytes || d.bytes+len(raw) > maxQueuedBytes {
 		d.lost = true
 		return len(raw), nil

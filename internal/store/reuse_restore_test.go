@@ -79,6 +79,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 		spec            reuseSpec
 		freshNoPreTrust bool // the reset's pre-trust choice, the opposite of the seed's
 		deleteParent    bool
+		reopen          bool
 		seedClass       string // typeof(no_pre_trust) the seed must store; "" = unchecked
 	}{
 		{name: "ended, text a re-format would change"},
@@ -95,6 +96,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 		{name: "pre-trust allowed, reset with the opt-out", spec: reuseSpec{preTrust: true}, freshNoPreTrust: true},
 		{name: "pre-reuse parent deleted", deleteParent: true},
 		{name: "same-agent claude", spec: reuseSpec{tracked: true, opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentClaude)}}},
+		{name: "Cursor switch restores unsupported tracking after reopen", reopen: true, spec: reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(store.AgentCursor)}}},
 		{name: "malformed agent text", spec: reuseSpec{handAgent: true, rawAgent: " Claude\n"}},
 		{name: "NULL agent", spec: reuseSpec{handAgent: true}},
 		{name: "blob agent", spec: reuseSpec{handAgent: true, rawAgent: []byte("claude")}},
@@ -152,6 +154,17 @@ func TestReuseRestoreApplied(t *testing.T) {
 			if res, err := f.rrRestore(r, r.version); err != nil || res != store.CondApplied {
 				t.Fatalf("RestoreAfterFailedReuse = %v, %v; want CondApplied", res, err)
 			}
+			if tc.reopen {
+				if err := f.s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				reopened, err := store.Open(f.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = reopened.Close() })
+				f.s = reopened
+			}
 			rsAssertRow(t, f.rawColumns(id), want)
 			if got := rrStorageClass(t, f, id, "agent"); got != agentClass {
 				t.Errorf("agent storage class = %q; want %q", got, agentClass)
@@ -165,7 +178,7 @@ func TestReuseRestoreApplied(t *testing.T) {
 			if got := f.subagentRowsOf(id); !reflect.DeepEqual(got, reset) {
 				t.Errorf("subagent rows %+v -> %+v; want unchanged by the restore", reset, got)
 			}
-			_, visible, err := f.s.ListSubagentRecords(id)
+			tracked, visible, err := f.s.ListSubagentRecords(id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -175,7 +188,15 @@ func TestReuseRestoreApplied(t *testing.T) {
 					wantVisible++
 				}
 			}
-			if len(visible) != wantVisible || wantVisible == 0 {
+			if r.before.Agent == store.AgentCursor {
+				if tracked || visible == nil {
+					t.Fatalf("Cursor tracking projection: %v %+v", tracked, visible)
+				}
+				wantVisible = 0
+			} else if wantVisible == 0 {
+				t.Fatal("seeded retained subagent records missing")
+			}
+			if len(visible) != wantVisible {
 				t.Errorf("restore shows %d records; want %d previous-life records", len(visible), wantVisible)
 			}
 			f.assertBystanderKept(mix)
@@ -202,25 +223,27 @@ func TestReuseRestoreErrors(t *testing.T) {
 			return f.readForReuse(t, f.seed(store.StateWaiting, "sess-rr-live")).Life
 		}},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newV5Store(t)
-			id := seedReuseRow(t, f, reuseSpec{}).id
-			mix := f.seedCloseMix(id)
-			fresh := reuseFresh("", false)
-			r := rrDoReset(t, f, id, fresh)
-			if res, err := f.s.RestoreAfterFailedReuse(r.id, r.version, tc.prior(t, f, r), rrFailedAt); err == nil || res != 0 {
-				t.Fatalf("RestoreAfterFailedReuse = %v, %v; want an error with no CondResult", res, err)
-			}
-			if r.reset.Agent == r.before.Agent || r.reset.EndReportedAt != nil {
-				t.Fatalf("the reset wrote agent %v (was %v), end_reported_at %v; want a new agent and none, or the check is vacuous",
-					r.reset.Agent, r.before.Agent, r.reset.EndReportedAt)
-			}
-			rsAssertRow(t, f.rawColumns(r.id), r.reset)
-			if got := f.historyAllLives(r.id); !reflect.DeepEqual(got, r.history) {
-				t.Errorf("history %+v -> %+v; want the reset's", r.history, got)
-			}
-			f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
-		})
+	for _, agent := range []string{store.AgentCodex, store.AgentCursor} {
+		for _, tc := range cases {
+			t.Run(agent+"/"+tc.name, func(t *testing.T) {
+				f := newV5Store(t)
+				id := seedReuseRow(t, f, reuseSpec{opts: []apitest.SpawnOption{apitest.WithAgent(agent)}}).id
+				mix := f.seedCloseMix(id)
+				fresh := reuseFresh("", false)
+				r := rrDoReset(t, f, id, fresh)
+				if res, err := f.s.RestoreAfterFailedReuse(r.id, r.version, tc.prior(t, f, r), rrFailedAt); err == nil || res != 0 {
+					t.Fatalf("RestoreAfterFailedReuse = %v, %v; want an error with no CondResult", res, err)
+				}
+				if r.reset.Agent == r.before.Agent || r.reset.EndReportedAt != nil {
+					t.Fatalf("the reset wrote agent %v (was %v), end_reported_at %v; want a new agent and none, or the check is vacuous",
+						r.reset.Agent, r.before.Agent, r.reset.EndReportedAt)
+				}
+				rsAssertRow(t, f.rawColumns(r.id), r.reset)
+				if got := f.historyAllLives(r.id); !reflect.DeepEqual(got, r.history) {
+					t.Errorf("history %+v -> %+v; want the reset's", r.history, got)
+				}
+				f.assertMixClosedAt(mix, fresh.LaunchStartedAtMillis)
+			})
+		}
 	}
 }

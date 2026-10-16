@@ -97,6 +97,8 @@ func TestFindMissingLaunchOwnerHoldsPendingRow(t *testing.T) {
 // whether its agent runs (it would be noted unreported) or its create made nothing (it would be marked missing),
 // and the launch releases its hold when it ends. With the owner gone the same sweep judges the row.
 func TestFindMissingSparesALaunchInProgress(t *testing.T) {
+	// Serial: installs the shared HOME's gateway before entering the parallel phase.
+	installCursorFixtureGateway(t) // Inert composition fixture before parallel cases.
 	t.Parallel()
 	ns := selfPIDNamespace(t)
 	paths := []struct {
@@ -117,6 +119,15 @@ func TestFindMissingSparesALaunchInProgress(t *testing.T) {
 			return r.ID, func() error { _, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{})); return err }
 		}},
 	}
+	paths = append(paths, struct {
+		name   string
+		launch func(*testing.T, *killEnv) (string, func() error)
+	}{"Cursor reuse", func(t *testing.T, e *killEnv) (string, func() error) {
+		r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Opts: agentRowOpts("cursor")})
+		p := reuseParams(t, r, reuseRequest{})
+		p.Agent = "cursor"
+		return r.ID, func() error { _, _, err := e.reuse(t, p); return err }
+	}})
 	creates := []struct {
 		name       string
 		script     tmuxfix.Script
@@ -126,6 +137,7 @@ func TestFindMissingSparesALaunchInProgress(t *testing.T) {
 	}{
 		{"lost reply, agent running", tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 0, Applied: true, Times: 1},
 			store.StatePending, "unreported", nil},
+		{"indeterminate create output", tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, HadStdout: true, Times: 1}, store.StateMissing, nil, api.ErrTmuxUnresponsive},
 		{"create timed out", tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, store.StateMissing, nil, api.ErrTmuxUnresponsive},
 	}
 	for _, p := range paths {

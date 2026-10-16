@@ -151,15 +151,20 @@ func TestSpawnReuseIdentityWrite(t *testing.T) {
 // relabel fails too, the session is killed by id (a failed kill leaves it), ErrTmuxSessionCreate says so,
 // and the restore runs (a successful kill's: TestSpawnReuseRestoreAfterEachLaunchFailure).
 func TestSpawnReuseLabelStep(t *testing.T) {
+	// Serial: installs the shared HOME's gateway before entering the parallel phase.
+	installCursorFixtureGateway(t) // Before parallel execution: composition fixture only.
 	t.Parallel()
 	lookup, create, label, kill := tmux.CallLookup, tmux.CallCreate, tmux.CallSetLabel, tmux.CallKillSession
 	cases := []struct {
 		name                string
+		agent               string
 		labelFail, killFail bool
 		want                []tmux.Call
 	}{
-		{"relabel by id succeeds", false, false, []tmux.Call{lookup, create, label}},
-		{"relabel fails, kill by id fails", true, true, []tmux.Call{lookup, create, label, kill}},
+		{"relabel by id succeeds", "claude", false, false, []tmux.Call{lookup, create, label}},
+		{"relabel fails, kill by id fails", "claude", true, true, []tmux.Call{lookup, create, label, kill}},
+		{"Cursor relabel by id succeeds", "cursor", false, false, []tmux.Call{lookup, create, label}},
+		{"Cursor relabel fails, kill by id fails", "cursor", true, true, []tmux.Call{lookup, create, label, kill}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -178,7 +183,9 @@ func TestSpawnReuseLabelStep(t *testing.T) {
 			e.rec.AfterCall(create, func(c tmuxfix.SocketCall, _ error) { created = rplSessionNamed(t, e.rec, c.Socket, r.Name) })
 			before := e.columns(t, r.ID)
 
-			_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+			p := reuseParams(t, r, reuseRequest{})
+			p.Agent = tc.agent
+			_, _, err := e.reuse(t, p)
 			c := rlOneCreate(t, e, r.Socket, tc.want...)
 			l := e.rec.SocketCallsOf(label)[0]
 			if l.Target != created.ID || l.PaneID != created.Panes[0].ID || l.Token != c.Token || l.InstanceID != r.ID || l.StoreID != e.storeID {

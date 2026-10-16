@@ -115,7 +115,8 @@ the row can remain `pending` until a first real prompt. After inspecting the
 pane, set `SendKeysParams.AllowPending` for that prompt; current binding and
 dialog guards still apply. Saved configuration and initial-prompt replay are
 defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
-Reuse and switches to or from Cursor return `ErrSpawnDeniedFlag` before mutation. Argument and
+`SpawnParams.ReuseFinished` supports Cursor and agent switches; see the
+[life rules](../../docs/usage.md#naming-the-agent). Argument and
 asynchronous failure handling are in the
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
 
@@ -123,7 +124,7 @@ Go applications launching or resuming Cursor require an installed
 `$HOME/.config/agent-director/bin/agent-director`. Its resolved symlink target
 must be a regular executable; an unavailable gateway fails before row mutation.
 The application itself does not need to implement the gateway. The Client's
-`Options.StorePath` selection is also used by fresh and resumed Cursor
+`Options.StorePath` selection is also used by fresh, reused and resumed Cursor
 processes; no separate gateway path or store parameter is needed.
 
 A spawn names its agent: `SpawnParams.Agent`, `"claude"`, `"codex"` or `"cursor"`
@@ -159,7 +160,7 @@ see [Pause and resume](../../docs/usage.md#pause-and-resume) for replay rules an
 [Caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals)
 for argument recognition limits.
 
-For Claude and Codex, `SpawnParams.ReuseFinished` on a finished id starts a
+For all agents, `SpawnParams.ReuseFinished` on a finished id starts a
 fresh conversation. Same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
 `Resume` accepts only the id and continues its recorded agent's latest

@@ -153,9 +153,9 @@ agent-director resume --instance-id <id>   # relaunch the latest reported sessio
 makes a dead live row `missing` (or `ended`, for a Codex row that reported its
 end). Cursor loads only its saved latest session and protected transcript;
 load may leave it `pending` until a real first prompt. Missing native session
-or protected transcript never falls back to older history. Cursor refuses
-same-id reuse and agent switches: preserve its artifacts and use the
-[Cursor recovery procedure](caller-contract.md#cursor-operation-boundaries).
+or protected transcript never falls back to older history. For unavailable
+latest sessions, fresh reuse or artifact-preserving fresh-instance recovery,
+follow the [Cursor recovery procedure](caller-contract.md#cursor-operation-boundaries).
 
 For Claude and Codex, without a session id or transcript (see
 `transcript_status` in `get`), spawn the id again with reuse and the row's

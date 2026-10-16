@@ -115,7 +115,7 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 	}
 	for _, tr := range triggers {
 		for _, prior := range []string{store.StateEnded, store.StateMissing} {
-			for _, rowAgent := range []string{"claude", "codex"} {
+			for _, rowAgent := range []string{"claude", "codex", "cursor"} {
 				t.Run(tr.name+"/"+prior+"/"+rowAgent+" row", func(t *testing.T) {
 					t.Parallel()
 					e := newKillEnv(t)
@@ -170,9 +170,12 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 // and the subagent_tracking flag it had, byte for byte, with the reuse's
 // create having run codex.
 func TestSpawnReuseAsCodexRestoreAfterLaunchFailure(t *testing.T) {
+	// Serial: installs the shared HOME's gateway before entering the parallel phase.
+	installCursorFixtureGateway(t) // Before parallel execution: shared inert gateway, never executed.
 	t.Parallel()
-	for _, rowAgent := range []string{"claude", "codex"} {
-		t.Run("a "+rowAgent+" row", func(t *testing.T) {
+	for _, pair := range []struct{ rowAgent, target string }{{"claude", "codex"}, {"codex", "codex"}, {"cursor", "codex"}, {"claude", "cursor"}, {"cursor", "cursor"}} {
+		rowAgent := pair.rowAgent
+		t.Run("a "+rowAgent+" row as "+pair.target, func(t *testing.T) {
 			t.Parallel()
 			e := newKillEnv(t)
 			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: time.Hour,
@@ -183,14 +186,18 @@ func TestSpawnReuseAsCodexRestoreAfterLaunchFailure(t *testing.T) {
 			}
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 			p := reuseParams(t, r, reuseRequest{Args: []string{"--model", "gpt"}, Env: map[string]string{"TEAM": "new"}})
-			p.Agent = "codex"
+			p.Agent = pair.target
 
 			_, _, err := e.reuse(t, p)
 
 			assertLaunchSentinel(t, err, tmux.ErrTmuxSessionCreate)
 			c := rlOneCreate(t, e, r.Socket, tmux.CallLookup, tmux.CallCreate)
-			if l := codexfix.Split(t, c.Command); l.Program != codexProgram || !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) {
-				t.Errorf("the failed create ran %q; want codex --model gpt", c.Command)
+			if pair.target == "codex" {
+				if l := codexfix.Split(t, c.Command); l.Program != codexProgram || !slices.Equal(l.PassThrough(), []string{"--model", "gpt"}) {
+					t.Errorf("the failed create ran %q; want codex --model gpt", c.Command)
+				}
+			} else if !slices.Contains(c.Command, "cursor-host") {
+				t.Errorf("the failed create did not run Cursor gateway: %q", c.Command)
 			}
 			want := before // every column restored but the launch start, cleared, two versions on (reset, restore)
 			want.LaunchStartedAt, want.RowVersion = nil, before.RowVersion.(int64)+2
@@ -224,6 +231,7 @@ func (e *killEnv) rrcReuse(t *testing.T, r reuseRow, act func()) rrcRun {
 		}
 	})
 	p := reuseParams(t, r, reuseRequest{})
+	p.Agent = r.Spawn.Agent
 	run := rrcRun{r: r, before: e.snapshotReuse(t, r)}
 	_, run.logs, run.err = e.reuseWith(t, rs, p)
 	if creates := e.rec.SocketCallsOf(tmux.CallCreate); len(creates) == 1 {
@@ -285,6 +293,8 @@ func (e *killEnv) rrcColumns(t *testing.T, id string) (cols apitest.SpawnColumns
 // with one WARN line; each returns the launch error (not ErrInternal) after
 // one create, with the restore's sentence.
 func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
+	// Serial: installs the shared HOME's gateway before entering the parallel phase.
+	installCursorFixtureGateway(t) // Before parallel cases; inert composition only.
 	t.Parallel()
 	writes := []struct {
 		name    string
@@ -296,57 +306,59 @@ func TestSpawnReuseRestoreNotAppliedAfterAnotherWrite(t *testing.T) {
 		{"row deleted", func(e *killEnv, id, _ string) error { return e.st.DeleteSpawn(id) }, apitest.RestoreRowRemoved},
 		{"restore store error", nil, apitest.RestoreStoreError},
 	}
-	for _, wr := range writes {
-		t.Run(wr.name, func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e)})
-			other := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
-			if wr.write == nil {
-				storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, r.ID)
-			}
-			var written apitest.SpawnColumns
-			var present bool
-			run := e.rrcReuse(t, r, func() {
-				if wr.write != nil {
-					if err := wr.write(e, r.ID, other); err != nil {
-						t.Errorf("write: %v", err)
+	for _, agent := range []string{"claude", "cursor"} {
+		for _, wr := range writes {
+			t.Run(agent+"/"+wr.name, func(t *testing.T) {
+				t.Parallel()
+				e := newKillEnv(t)
+				r := e.seedReusable(t, agentGone, reuseRowSpec{Age: rlkSettled(e), Opts: agentRowOpts(agent)})
+				other := e.seedRow(t, killRowSpec{State: store.StateEnded, Agent: agentGone, NoSession: true}).ID
+				if wr.write == nil {
+					storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailReuseRestore, r.ID)
+				}
+				var written apitest.SpawnColumns
+				var present bool
+				run := e.rrcReuse(t, r, func() {
+					if wr.write != nil {
+						if err := wr.write(e, r.ID, other); err != nil {
+							t.Errorf("write: %v", err)
+						}
+					}
+					written, present = e.rrcColumns(t, r.ID)
+				})
+
+				e.rrcAssertLaunchError(t, run, apitest.ResumeRestore{Outcome: wr.outcome})
+				final, still := e.rrcColumns(t, r.ID)
+				if still != present || !reflect.DeepEqual(final, written) {
+					t.Errorf("row after the reuse (present %v) =\n  %+v\nwant as left before the restore (present %v)\n  %+v",
+						still, final, present, written)
+				}
+				switch wr.outcome {
+				case apitest.RestoreRowRemoved:
+					if still {
+						t.Error("row present after the reuse; want it to stay deleted")
+					}
+				case apitest.RestoreRowChanged:
+					if final.State != store.StatePending || final.ParentID != other || final.LifeNumber != reuseLife {
+						t.Errorf("row {state %v, parent %v, life %v}; want pending, %s, %d (the reset's life)",
+							final.State, final.ParentID, final.LifeNumber, other, reuseLife)
+					}
+				case apitest.RestoreStoreError:
+					if written.State != store.StatePending {
+						t.Errorf("row = %v; want the reset's, pending", written.State)
 					}
 				}
-				written, present = e.rrcColumns(t, r.ID)
+				lines := strings.Split(strings.TrimSpace(run.logs), "\n")
+				switch {
+				case wr.write != nil && run.logs != "":
+					t.Errorf("client log = %q; want nothing", run.logs)
+				case wr.write == nil && (len(lines) != 1 || !strings.HasPrefix(lines[0], "WARN: spawn: ") ||
+					!strings.Contains(lines[0], r.ID) || strings.Contains(lines[0], run.token) || strings.Contains(lines[0], r.Token)):
+					t.Errorf("client log lines = %q; want one spawn WARN line naming %s and no token", lines, r.ID)
+				}
+				e.rrcAssertOneAttempt(t, run, false, wr.write == nil)
 			})
-
-			e.rrcAssertLaunchError(t, run, apitest.ResumeRestore{Outcome: wr.outcome})
-			final, still := e.rrcColumns(t, r.ID)
-			if still != present || !reflect.DeepEqual(final, written) {
-				t.Errorf("row after the reuse (present %v) =\n  %+v\nwant as left before the restore (present %v)\n  %+v",
-					still, final, present, written)
-			}
-			switch wr.outcome {
-			case apitest.RestoreRowRemoved:
-				if still {
-					t.Error("row present after the reuse; want it to stay deleted")
-				}
-			case apitest.RestoreRowChanged:
-				if final.State != store.StatePending || final.ParentID != other || final.LifeNumber != reuseLife {
-					t.Errorf("row {state %v, parent %v, life %v}; want pending, %s, %d (the reset's life)",
-						final.State, final.ParentID, final.LifeNumber, other, reuseLife)
-				}
-			case apitest.RestoreStoreError:
-				if written.State != store.StatePending {
-					t.Errorf("row = %v; want the reset's, pending", written.State)
-				}
-			}
-			lines := strings.Split(strings.TrimSpace(run.logs), "\n")
-			switch {
-			case wr.write != nil && run.logs != "":
-				t.Errorf("client log = %q; want nothing", run.logs)
-			case wr.write == nil && (len(lines) != 1 || !strings.HasPrefix(lines[0], "WARN: spawn: ") ||
-				!strings.Contains(lines[0], r.ID) || strings.Contains(lines[0], run.token) || strings.Contains(lines[0], r.Token)):
-				t.Errorf("client log lines = %q; want one spawn WARN line naming %s and no token", lines, r.ID)
-			}
-			e.rrcAssertOneAttempt(t, run, false, wr.write == nil)
-		})
+		}
 	}
 }
 

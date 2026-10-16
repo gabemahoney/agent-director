@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -186,5 +187,38 @@ func TestResolveTemplateNotFound(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if _, err := spawn.Resolve(spawn.SpawnParams{Template: "nope"}, config.Default()); !errors.Is(err, config.ErrTemplateNotFound) {
 		t.Fatalf("err = %v; want ErrTemplateNotFound", err)
+	}
+}
+
+// Switching drops selectors only after template argument ownership and replacement resolve.
+func TestResolveCursorSwitchSelectorsAndTemplateOwnership(t *testing.T) {
+	withTemplates(t, map[string]apitest.TemplateFields{
+		"cursor-select": {CWD: "/tmp", Agent: "cursor", AgentArgs: []string{"--resume", "old", "--model", "sonnet", "hello"}},
+		"claude-select": {CWD: "/tmp", Agent: "claude", AgentArgs: []string{"--resume", "old"}},
+	})
+	for _, tc := range []struct {
+		name, template    string
+		args, want, drops []string
+		refused           error
+	}{
+		{"inherit matching template", "cursor-select", nil, []string{"--model", "sonnet", "hello"}, []string{"--resume", "old"}, nil},
+		{"explicit empty replaces foreign args", "claude-select", []string{}, []string{}, nil, nil},
+		{"own list replaces foreign args", "claude-select", []string{"--continue", "hello"}, []string{"hello"}, []string{"--continue"}, nil},
+		{"foreign inherited args refused before drop", "claude-select", nil, []string{"--resume", "old"}, nil, spawn.ErrAgentArgsMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := spawn.Resolve(spawn.SpawnParams{Template: tc.template, Agent: "cursor", AgentArgs: tc.args, ReuseFinished: true}, config.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.args != nil && len(tc.args) == 0 && r.InheritedArgsAgent != "" {
+				t.Fatal("explicit empty call inherited foreign template arguments")
+			}
+			r.DropResumeArgs = true
+			err = spawn.Validate(&r)
+			if !errors.Is(err, tc.refused) || (err == nil) != (tc.refused == nil) || !slices.Equal(r.AgentArgs, tc.want) || !slices.Equal(r.DroppedArgs, tc.drops) {
+				t.Fatalf("resolved switch args=%q drops=%q error=%v; want %q / %q / %v", r.AgentArgs, r.DroppedArgs, err, tc.want, tc.drops, tc.refused)
+			}
+		})
 	}
 }

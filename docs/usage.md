@@ -9,15 +9,18 @@ A `spawn` names its agent, `claude`, `codex` or `cursor` (case-sensitive), with 
 through its [template](#templates); with neither it is refused. The rules
 for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
 
-Cursor supports fresh launches and latest-session resume; see
+Cursor supports fresh launches, finished-id reuse, agent switches and
+latest-session resume; see
 [Fresh Cursor use](#fresh-cursor-use) and [Pause and resume](#pause-and-resume).
 
-For Claude and Codex, a `spawn --reuse-finished` on a finished id starts a fresh conversation with
-the resolved agent. Keeping the same agent keeps its current life, including
-its session history and subagent records. Switching from Claude to Codex or
-from Codex to Claude starts a fresh life; switching back starts another new
-life. Earlier lives' history and records stay stored but are hidden. A switch
-neither hides nor stops child spawns: `list --parent <id>` still lists them.
+For any agent, a `spawn --reuse-finished` on a finished id starts a fresh
+conversation with the resolved agent; Cursor reuse never loads an earlier
+conversation. Keeping the same agent keeps its current life, including
+its session history and subagent records. Every agent switch starts a fresh
+life and permanently surrenders agent-director resume access to the prior
+life, including when switching back. Earlier lives' history and records stay
+stored but are hidden from current-life reads. The append-only trail retains
+events from all lives. A switch neither hides nor stops child spawns: `list --parent <id>` still lists them.
 The record rules are in [Read an agent's subagent records](#read-an-agents-subagent-records).
 
 For example, Claude runs and ends on an id, then Codex runs and ends on
@@ -161,7 +164,8 @@ record precedes prompt delivery and does not prove Cursor received it.
 Recorded admission does not establish execution or durable resumability.
 The transcript is separate from Cursor's native session storage.
 After rotation, `get`'s current session and `prior_sessions` can reference this
-same file within the current life. Individual records retain their known
+same file within the current life. Same-agent reuse keeps prior references
+inspectable; `prior_sessions` excludes the new current session. Individual records retain their known
 conversation identity; provisionally held or refused input has no admitted
 conversation. Rotation requested, fresh identity confirmed and publication are separate
 records. Known retired traffic retains its outgoing attribution; unknown origin
@@ -305,7 +309,10 @@ start and stop events, so its subagents are recorded. It is `false`, with
 `subagents` `[]`, for an agent that predates subagent tracking; it becomes
 `true` when that agent is next resumed or its id is reused. The hooks that
 write the records are in [Hooks](hooks.md#what-the-hooks-write-for-subagent-records).
-A Cursor row always reads `tracked: false` with `subagents: []`.
+A Cursor row always reads `tracked: false` with `subagents: []`, including
+after reuse, `/clear`, `/new` and switches. Retained records from earlier
+launches are not exposed or fabricated by Cursor; these records are separate
+from the independent AD child spawns returned by `list --parent`.
 A Codex agent's hooks write no records, so its row reads `tracked: false` and
 its `subagents` stays `[]`, from its spawn and after every resume or reuse of
 its id.
@@ -679,8 +686,8 @@ The template names its agent, so that `spawn` needs no `--agent`.
 ## Pause and resume
 
 Cursor supports the eligible pause described in [Fresh Cursor use](#fresh-cursor-use)
-and latest-session resume. Reuse and switches to or from Cursor remain refused;
-their recovery rules are in the
+and latest-session resume. Fresh reuse and switches follow the
+[life rules](#naming-the-agent); recovery rules are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
@@ -688,7 +695,7 @@ it under the same id with the last agent's latest reported session, so the
 conversation carries on if that agent can reopen it. `resume` accepts no
 agent or session choice. Older sessions of the current life remain inspectable
 in `get`'s `prior_sessions`, but agent-director never resumes them, even when
-their transcript files exist. For Claude and Codex, a same-agent reuse starts a fresh conversation;
+their transcript files exist. Same-agent reuse starts a fresh conversation;
 its next `resume` continues that new session. Agent-director adds no in-session
 picker and does not control the agent's own picker; its resume guarantee applies
 to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)

@@ -58,12 +58,46 @@ func (r *submissionRecord) UnmarshalJSON(raw []byte) error {
 }
 
 type cursorSession struct {
-	e      *requestEnv
-	master *os.File
-	pane   *observedWire
-	done   chan error
-	ended  bool
-	endErr error
+	e                      *requestEnv
+	master                 *os.File
+	pane                   *observedWire
+	done                   chan error
+	ended                  bool
+	endErr                 error
+	waitFailureDiagnostics bool
+	diagnosticBarrier      *recordBarrier
+	diagnosticMu           sync.Mutex
+	diagnosticCaptured     bool
+	controllerReturnMu     sync.Mutex
+	controllerReturned     bool
+	controllerErr          error
+}
+
+// observeControllerReturn retains nil as an observed result without blocking cleanup.
+func (c *cursorSession) observeControllerReturn(err error) {
+	c.controllerReturnMu.Lock()
+	c.controllerReturned, c.controllerErr = true, err
+	c.controllerReturnMu.Unlock()
+}
+
+func (c *cursorSession) controllerResult() (bool, error) {
+	c.controllerReturnMu.Lock()
+	defer c.controllerReturnMu.Unlock()
+	return c.controllerReturned, c.controllerErr
+}
+
+func (c *cursorSession) captureFailure(t *testing.T, label string) {
+	t.Helper()
+	c.diagnosticMu.Lock()
+	if c.diagnosticCaptured {
+		c.diagnosticMu.Unlock()
+		return
+	}
+	c.diagnosticCaptured = true
+	c.diagnosticMu.Unlock()
+	seen, err := c.controllerResult()
+	t.Logf("rotation failure label=%q before-cleanup observed=%v original error=%v; final Run ended=%v error=%v", label, seen, err, c.ended, c.endErr)
+	rotationFailureDiagnostics(t, c, c.diagnosticBarrier, []string{"spawns", "cursor_runtimes", "permission_requests"})
 }
 
 // completeInput feeds completed text through Run's real admission and mailbox.
@@ -129,10 +163,19 @@ func (c *cursorSession) wait(t *testing.T, label string, predicate func() bool) 
 		select {
 		case err := <-c.done:
 			c.ended = true
+			c.endErr = err
+			if c.waitFailureDiagnostics {
+				t.Logf("rotation wait failure label=%q done reason=%v", label, err)
+				c.captureFailure(t, label)
+			}
 			t.Fatalf("%s: session ended %v; pane=%s", label, err, c.pane.bytes())
 		default:
 		}
 		if time.Now().After(until) {
+			if label == "held FIFO completion" || c.waitFailureDiagnostics {
+				t.Logf("rotation wait failure label=%q deadline expired; session ended=%v reason=%v", label, c.ended, c.endErr)
+				c.captureFailure(t, label)
+			}
 			pane := c.pane.bytes()
 			if len(pane) > 2000 {
 				pane = pane[len(pane)-2000:]

@@ -711,7 +711,7 @@ func resumeLostRace(s ResumeStore, row Spawn) error {
 // SR-4.4). The step is conditional on get still showing no
 // session id: an agent that reports in late records one, and once that row is
 // missing it is resumable, so a reuse would discard its conversation.
-const cursorFreshRecovery = `preserve the original row, session, transcript and saved artifacts; from the intended project directory run agent-director spawn --agent cursor --cwd "$PWD" for a fresh conversation with an automatically generated unique instance_id; Cursor reuse is not currently supported`
+const cursorFreshRecovery = `preserve the original row, session, transcript and saved artifacts; from the intended project directory run agent-director spawn --agent cursor --cwd "$PWD" for a fresh conversation with an automatically generated unique instance_id`
 
 func launchInProgressNoSessionStep(agent string) string {
 	if agent == config.AgentCursor {
@@ -849,7 +849,7 @@ func launchInProgressError(row Spawn) error {
 //     agent (SpawnParams.Agent, the row's recorded one), if get still shows
 //     no session id, as its description says. Cursor instead preserves the original
 //     row and artifacts and starts a fresh unique instance with --agent cursor;
-//     Cursor reuse is not currently supported. Nothing was written. Also a lost race: the row changed after resume examined it
+//     Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
 //   - [ErrNoSessionId]: the current session_id is empty, as when a launch
@@ -860,7 +860,7 @@ func launchInProgressError(row Spawn) error {
 //     Cursor instead preserves the original row/session/transcript/artifacts
 //     and starts a fresh unique instance: from the intended project directory,
 //     agent-director spawn --agent cursor --cwd "$PWD" (omit instance_id).
-//     Cursor reuse is not currently supported. Older sessions remain listed
+//     Older sessions remain listed
 //     for inspection only; resume never chooses them. An agent switch or switch back starts a new life with no memory
 //     of the earlier one.
 //   - ErrReservedEnvKey: the row's stored extra env sets HOME, or has an
@@ -871,7 +871,7 @@ func launchInProgressError(row Spawn) error {
 //     its own config (the error names the row's agent's variable). Cursor keeps
 //     HOME unchanged, omits the refused key on a fresh unique instance, and
 //     preserves the original row/session/transcript/artifacts; no Cursor config
-//     directory override or Cursor reuse is currently supported.
+//     directory override is supported.
 //   - [ErrJsonlMissing]: the latest protected Cursor transcript is unavailable,
 //     or no other-agent current-session transcript path stats successfully.
 //     Claude tries the recorded path and its config-dir-aware recomputation;
