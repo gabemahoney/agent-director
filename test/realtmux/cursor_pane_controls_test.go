@@ -30,6 +30,32 @@ func newPaneCaller(t *testing.T, f *spawnFix, surface, bin string) *paneCaller {
 	t.Helper()
 	c := &paneCaller{t: t, surface: surface, close: func() {}}
 	switch surface {
+	case "Go release wrapper":
+		source := filepath.Join(t.TempDir(), "main.go")
+		program := `package main
+import("encoding/json";"fmt";"os";"github.com/gabemahoney/agent-director/pkg/api")
+func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)};defer c.Close(); var p map[string]any;if e=json.Unmarshal([]byte(os.Args[3]),&p);e!=nil{panic(e)};var r any;switch os.Args[2]{case "resume":r,e=c.Resume(api.ResumeParams{InstanceID:p["instance_id"].(string)});case "spawn":r,e=c.Spawn(api.SpawnParams{InstanceID:p["instance_id"].(string),Agent:p["agent"].(string),CWD:p["cwd"].(string),NoPreTrust:p["no_pre_trust"].(bool)});default:panic("unsupported wrapper verb")};if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)};json.NewEncoder(os.Stdout).Encode(r)}
+`
+		if err := os.WriteFile(source, []byte(program), 0600); err != nil {
+			t.Fatal(err)
+		}
+		wrapper := filepath.Join(t.TempDir(), "embedded-caller")
+		if out, err := exec.Command("go", "build", "-trimpath", "-ldflags=-s -w", "-o", wrapper, source).CombinedOutput(); err != nil {
+			t.Fatalf("build standalone Go caller: %v %s", err, out)
+		}
+		reads := newPaneCaller(t, f, "Go", bin)
+		c.call = func(verb string, p map[string]any) ([]byte, error) {
+			if verb != "resume" && verb != "spawn" {
+				return reads.call(verb, p)
+			}
+			raw, err := json.Marshal(p)
+			if err != nil {
+				return nil, err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return exec.CommandContext(ctx, wrapper, f.DBPath, verb, string(raw)).CombinedOutput()
+		}
 	case "CLI":
 		c.call = func(verb string, p map[string]any) ([]byte, error) {
 			args := []string{verb, "--store-path", f.DBPath}
@@ -37,6 +63,9 @@ func newPaneCaller(t *testing.T, f *spawnFix, surface, bin string) *paneCaller {
 				if v, ok := p[key]; ok {
 					args = append(args, "--"+strings.ReplaceAll(key, "_", "-"), fmt.Sprint(v))
 				}
+			}
+			if allowed, _ := p["allow_pending"].(bool); allowed {
+				args = append(args, "--allow-pending")
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
@@ -57,6 +86,10 @@ func newPaneCaller(t *testing.T, f *spawnFix, surface, bin string) *paneCaller {
 			var result any
 			var err error
 			switch verb {
+			case "resume":
+				result, err = client.Resume(api.ResumeParams{InstanceID: p["instance_id"].(string)})
+			case "list-subagents":
+				result, err = client.ListSubagents(p["instance_id"].(string))
 			case "send-keys":
 				var v api.SendKeysParams
 				json.Unmarshal(encoded, &v)

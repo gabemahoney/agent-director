@@ -16,6 +16,9 @@ type transcript struct {
 func openTranscript(string, store.CursorRuntime) (*transcript, error) {
 	return nil, fmt.Errorf("protected Cursor transcripts unsupported")
 }
+func appendTranscript(string, store.CursorRuntime) (*transcript, error) {
+	return nil, fmt.Errorf("protected Cursor transcripts unsupported")
+}
 func (*transcript) record(string, any) error {
 	return fmt.Errorf("protected Cursor transcripts unsupported")
 }

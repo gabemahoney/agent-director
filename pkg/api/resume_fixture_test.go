@@ -185,6 +185,8 @@ var resumeLookupQ = config.Tmux{}.EffectiveQueryTimeout()
 // newResumeEnv builds a resumeEnv over a fresh store, with TestMain's
 // TMUX_TMPDIR, no caller instance id and config.Default(). It sets no
 // environment its test has not already changed, so the test may run in parallel.
+func (s *hookedResumeStore) Path() string { return s.st.Path() }
+
 func newResumeEnv(t *testing.T) *resumeEnv {
 	t.Helper()
 	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", "")

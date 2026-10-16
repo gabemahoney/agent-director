@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"strings"
 )
 
 // RelaunchInput is what a resume launch is composed from (SR-8.1): the row
@@ -58,8 +59,11 @@ type ComposedRelaunch struct {
 // would change their meaning; otherwise order/spelling survive. Codex's prompt
 // remains one original token after --. Stored AgentArgs is unchanged and no spawn
 // validation runs.
+// Cursor uses the current cursor_path through the actual AD cursor-host, with
+// the row's latest session as a private load target and one saved initial prompt.
+// Parsed Cursor selectors are filtered from a copy, never persisted back.
 // It writes nothing in any Codex folder. A row whose agent
-// is neither claude nor codex gets store.ErrRowAgentInvalid.
+// is neither claude, codex nor cursor gets store.ErrRowAgentInvalid.
 //
 // The create is on in.Socket, labelled with in.Token, the row's instance id and
 // in.StoreID.
@@ -76,9 +80,6 @@ type ComposedRelaunch struct {
 // ExtraEnv. AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
-	if in.Row.Agent == store.AgentCursor {
-		return ComposedRelaunch{}, fmt.Errorf("%w: Cursor resume is unsupported", ErrSpawnDeniedFlag)
-	}
 	if err := launchAgentError(in.Row.Agent); err != nil {
 		return ComposedRelaunch{}, err
 	}
@@ -99,7 +100,22 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 	envs := composeEnv(r)
 	var command []string
 	var carried PreTrustOutcome
-	if r.Agent == store.AgentCodex {
+	if r.Agent == store.AgentCursor {
+		if in.SessionID == "" || len(in.SessionID) > 512 || strings.TrimSpace(in.SessionID) != in.SessionID || strings.ContainsAny(in.SessionID, "\x00\r\n") || in.SessionID != in.Row.SessionID || in.Row.JSONLPath == "" {
+			return ComposedRelaunch{}, fmt.Errorf("%w: Cursor latest conversation unavailable", ErrSpawnDeniedFlag)
+		}
+		r.AgentArgs = ExtractResumeArgs(r.Agent, r.AgentArgs).Args
+		var err error
+		command, err = composeCursorCommand(r, cfg)
+		if err != nil {
+			return ComposedRelaunch{}, err
+		}
+		command = append(command, "--load-session", in.SessionID)
+		carried = PreTrustFailed
+		if in.Row.NoPreTrust {
+			carried = PreTrustSkipped
+		}
+	} else if r.Agent == store.AgentCodex {
 		r.AgentArgs = ExtractResumeArgs(r.Agent, r.AgentArgs).Args
 		carried = CodexPreTrust(r.ExtraEnv, in.Row.NoPreTrust)
 		var err error
@@ -144,8 +160,8 @@ func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, err
 //
 // Relaunch does not wait for Claude to come up. The caller (resume) has
 // moved the row to pending before the create, writing the parent id; the row
-// stays pending until the resumed agent's first SessionStart takes it to
-// waiting.
+// stays pending until the resumed agent reports in. A loaded Cursor session
+// stays pending until its first verified prompt, without a synthetic SessionStart.
 func Relaunch(t LaunchTmux, req CreateRequest) CreateOutcome {
 	return CreateAndLabel(t, req)
 }

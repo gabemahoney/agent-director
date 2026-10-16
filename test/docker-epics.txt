@@ -35,3 +35,4 @@ template-overwrite
 cursor-owned-launch
 cursor-relay
 cursor-pane-controls
+cursor-resume-life

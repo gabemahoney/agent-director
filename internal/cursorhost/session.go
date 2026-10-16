@@ -28,9 +28,11 @@ type Options struct {
 	Runtime       string
 	RuntimeArgs   []string
 	InitialPrompt string
+	LoadSession   string
 }
 
-// Run owns one fresh Cursor conversation without authentication or restoration. Follow-ups remain transient and conversation-bound.
+// Run owns a fresh or latest-loaded Cursor conversation. Follow-ups remain
+// transient and conversation-bound; load replay never restores a local queue.
 func Run(options Options, in *os.File, out io.Writer) error {
 	return runWithTranscript(options, in, out, openTranscript)
 }
@@ -50,6 +52,16 @@ type inputStarter func(*os.File, io.Writer, func(terminalInput), func() bool, ..
 // epoch-owned finalization. It runs on the session goroutine, outside mailbox
 // locks, so tests can order a real control after await has selected completion.
 func runWithInput(options Options, in *os.File, out io.Writer, open func(string, store.CursorRuntime) (*transcript, error), startInput inputStarter, afterRecoveryReport ...func()) (err error) {
+	return runWithLoadPublicationObserver(options, in, out, open, startInput, nil, afterRecoveryReport...)
+}
+
+// beforeLoadPublication is a per-run test observer of an accepted load response.
+// It runs in await's worker immediately before binding, outside mailbox locks,
+// with the publication's original context/deadline and control supervision active.
+// Tests may acquire a real SQL writer here and observe cancellation through ctx;
+// they must return promptly so the actual binding operation can proceed.
+// Production always passes nil.
+func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer, open func(string, store.CursorRuntime) (*transcript, error), startInput inputStarter, beforeLoadPublication func(context.Context), afterRecoveryReport ...func()) (err error) {
 	if len(options.InitialPrompt) > maxFrameBytes/2 {
 		return fmt.Errorf("Cursor input exceeds limit")
 	}
@@ -88,6 +100,14 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		return err
 	}
 	ownedID = row.InstanceID
+	if options.LoadSession != "" {
+		if row.SessionID != options.LoadSession || len(options.LoadSession) > 512 || strings.TrimSpace(options.LoadSession) != options.LoadSession || strings.ContainsAny(options.LoadSession, "\x00\r\n") || row.JSONLPath == "" {
+			return fmt.Errorf("Cursor latest conversation changed")
+		}
+		if err = VerifyTranscriptPath(row.JSONLPath); err != nil {
+			return err
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("Cursor reporting executable unavailable")
@@ -135,7 +155,12 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		return fmt.Errorf("Cursor runtime binding was refused")
 	}
 	cleanupBinding = &b
-	tr, err := open(os.Getenv("HOME"), b)
+	var tr *transcript
+	if options.LoadSession != "" {
+		tr, err = appendTranscript(row.JSONLPath, b)
+	} else {
+		tr, err = open(os.Getenv("HOME"), b)
+	}
 	if err != nil {
 		return err
 	}
@@ -151,6 +176,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	writer := newPaneDisplay(out)
 	defer writer.stop()
 	inputs := newInputMailbox()
+	// Initialization/load keeps its original authority even if a control is
+	// queued before the controller consumes it or before publication starts.
+	loadEpoch := inputs.epochValue()
 	requests := newRequestController(rep, protocol, writer)
 	defer requests.cancel()
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -185,12 +213,17 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	}, requests.key)
 	defer restore()
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
-	fmt.Fprint(writer, "Cursor gateway: starting a fresh conversation\r\n")
+	if options.LoadSession != "" {
+		fmt.Fprint(writer, "Cursor gateway: loading the latest conversation\r\n")
+	} else {
+		fmt.Fprint(writer, "Cursor gateway: starting a fresh conversation\r\n")
+	}
 	if _, err = protocol.request("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false}, "clientInfo": map[string]any{"name": "agent-director", "version": version.Version}}); err != nil {
 		return err
 	}
 	session := ""
 	phase := "initialize"
+	var loadUntil time.Time
 	busy := false
 	requestDeadlineHeld := false
 	cancelled := false
@@ -286,6 +319,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 
 		admission.disable()
 		requests.cancel()
+		if options.LoadSession != "" && stopPublication != nil {
+			stopPublication()
+		}
 		if !busy && !rotating {
 			idleControl = true
 		}
@@ -801,6 +837,20 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			if err = VerifyRuntime(rep.binding, false); err != nil {
 				return err
 			}
+			// session/load replays history before its response. Historical frames
+			// never reach recording, request admission, execution proof or state.
+			if phase == "load" && f.Method != "" {
+				if len(f.ID) > 0 {
+					cancel, e := protocol.deny(f)
+					if e != nil {
+						return e
+					}
+					if cancel {
+						return fmt.Errorf("unsupported authorization during Cursor load")
+					}
+				}
+				continue
+			}
 			if protocol.retiredResponse(f) {
 				id, _ := strconv.ParseUint(strings.TrimSpace(string(f.ID)), 10, 64)
 				origin := ""
@@ -964,6 +1014,9 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 			}
 			switch phase {
 			case "initialize":
+				if options.LoadSession != "" && (!cancelAt.IsZero() || !inputs.current(loadEpoch)) {
+					return fmt.Errorf("Cursor initialization retired by control")
+				}
 				var init struct {
 					Version      int             `json:"protocolVersion"`
 					Capabilities json.RawMessage `json:"agentCapabilities"`
@@ -971,11 +1024,28 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				if json.Unmarshal(raw, &init) != nil || init.Version != 1 || len(init.Capabilities) == 0 {
 					return fmt.Errorf("Cursor runtime does not support ACP protocol 1")
 				}
-				if _, err = protocol.request("session/new", map[string]any{"cwd": row.CWD, "mcpServers": []any{}}); err != nil {
+				method := "session/new"
+				params := map[string]any{"cwd": row.CWD, "mcpServers": []any{}}
+				phase = "new"
+				if options.LoadSession != "" {
+					var capabilities struct {
+						Load bool `json:"loadSession"`
+					}
+					if json.Unmarshal(init.Capabilities, &capabilities) != nil || !capabilities.Load {
+						return fmt.Errorf("Cursor runtime does not support session/load")
+					}
+					method, phase = "session/load", "load"
+					params["sessionId"] = options.LoadSession
+					loadUntil = time.Now().Add(protocolWait)
+				}
+				if _, err = protocol.request(method, params); err != nil {
 					return err
 				}
-				phase = "new"
-				resetDeadline(protocolWait)
+				if phase == "load" {
+					resetDeadline(time.Until(loadUntil))
+				} else {
+					resetDeadline(protocolWait)
+				}
 			case "rotate_new":
 				var created struct {
 					ID string `json:"sessionId"`
@@ -1058,49 +1128,110 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 				stopDeadline()
 				cancelAt = time.Time{}
 				fmt.Fprint(writer, "Cursor fresh conversation published\r\n> ")
-			case "new":
+			case "new", "load":
+				loaded := phase == "load"
+				if loaded && (!cancelAt.IsZero() || !inputs.current(loadEpoch)) {
+					return fmt.Errorf("Cursor load retired by control")
+				}
 				var created struct {
 					ID string `json:"sessionId"`
 				}
-				if json.Unmarshal(raw, &created) != nil || created.ID == "" || len(created.ID) > 512 {
+				if loaded {
+					var result map[string]json.RawMessage
+					if json.Unmarshal(raw, &result) != nil || result == nil {
+						return fmt.Errorf("invalid Cursor load response")
+					}
+					if supplied, ok := result["sessionId"]; ok {
+						if json.Unmarshal(supplied, &created.ID) != nil || created.ID != options.LoadSession {
+							return fmt.Errorf("Cursor loaded session mismatch")
+						}
+					}
+					created.ID = options.LoadSession
+				}
+				if (!loaded && json.Unmarshal(raw, &created) != nil) || created.ID == "" || len(created.ID) > 512 || strings.TrimSpace(created.ID) != created.ID || strings.ContainsAny(created.ID, "\x00\r\n") {
 					return fmt.Errorf("Cursor did not confirm a fresh session")
 				}
-				session = created.ID
+				waitingEpoch := inputs.epochValue()
+				expected := b
+				expected.SessionID = created.ID
+				var applied bool
+				var e error
+				if loaded {
+					waitingEpoch = loadEpoch
+					publicationContext, cancelPublication := context.WithDeadline(context.Background(), loadUntil)
+					stopPublication = cancelPublication
+					// await supervises controls/death; SQL, commit and cleanup use
+					// the same cancelable context and original load deadline.
+					e = await(func() error {
+						if beforeLoadPublication != nil {
+							beforeLoadPublication(publicationContext)
+						}
+						ok, bindErr := s.BindLoadedCursorSession(publicationContext, row, expected, tr.path, loadUntil, func() bool {
+							return inputs.current(loadEpoch) && VerifyRuntime(expected, false) == nil
+						})
+						if bindErr == nil && !ok {
+							return fmt.Errorf("Cursor session binding changed")
+						}
+						return bindErr
+					})
+					cancelPublication()
+					stopPublication = nil
+					if e != nil {
+						return fmt.Errorf("Cursor load publication failed; commit may be unconfirmed; no prompt admitted: %w", e)
+					}
+					applied = true
+				} else {
+					applied, e = s.SetCursorRuntimeSession(expected, created.ID)
+				}
+				if e != nil || !applied {
+					return fmt.Errorf("Cursor session binding changed")
+				}
+				b, rep.binding, tr.binding, session = expected, expected, expected, created.ID
+				if loaded && (!cancelAt.IsZero() || intentional || !inputs.current(loadEpoch) || !time.Now().Before(loadUntil)) {
+					return fmt.Errorf("Cursor load publication committed but authority retired; no prompt admitted")
+				}
 				admissionIdentity.Store(session)
 				confirmedSessions[session] = true
 				responseOrigins = append(responseOrigins, responseOrigin{protocol.next, session})
-				b.SessionID = session
-				rep.binding = b
-				tr.binding = b
+				rep.loaded = loaded
 				admission.mu.Lock()
 				admissionReporter := *rep
 				admission.validate = func() bool { ok, e := admissionReporter.promptEligible(); return e == nil && ok }
 				admission.mu.Unlock()
-				applied, e := s.SetCursorRuntimeSession(b, session)
-				if e != nil || !applied {
-					return fmt.Errorf("Cursor session binding changed")
+				kind := "session_start"
+				if loaded {
+					kind = "session_loaded"
 				}
-				waitingEpoch := inputs.epochValue()
-				if err = record("session_start", map[string]any{"origin": "main"}); err != nil {
+				if err = record(kind, map[string]any{"origin": "main"}); err != nil {
 					return err
+				}
+				if loaded && (!cancelAt.IsZero() || intentional || !inputs.current(loadEpoch) || !time.Now().Before(loadUntil)) {
+					return fmt.Errorf("Cursor loaded binding retained but authority retired; no prompt admitted")
 				}
 				var waiting func(func() bool)
 				if options.InitialPrompt == "" {
 					waiting = func(check func() bool) { inputs.ifCurrent(waitingEpoch, func() { admission.waiting(check) }) }
 				}
-				if err = reportWaiting("SessionStart", waiting); err != nil {
-					return err
+				if !loaded {
+					if err = reportWaiting("SessionStart", waiting); err != nil {
+						return err
+					}
 				}
 				if cancelAt.IsZero() {
 					stopDeadline()
 				}
-				fmt.Fprint(writer, "Cursor ready\r\n> ")
+				if loaded {
+					fmt.Fprint(writer, "Cursor conversation loaded; awaiting a prompt\r\n> ")
+				} else {
+					fmt.Fprint(writer, "Cursor ready\r\n> ")
+				}
+				phase = "idle"
 				if options.InitialPrompt == "" {
 					if !intentional {
 						inputs.ifCurrent(waitingEpoch, admission.enableQueue)
 					}
 				}
-				if options.InitialPrompt != "" {
+				if options.InitialPrompt != "" && !intentional && cancelAt.IsZero() && inputs.current(waitingEpoch) {
 					text := options.InitialPrompt
 					options.InitialPrompt = ""
 					v := terminalInput{text: text, sessionID: session, accepted: true, submission: "initial", at: time.Now()}
@@ -1113,13 +1244,15 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 						return err
 					}
 					queue = append(queue, v)
-					if err = submit(v); err != nil {
-						if active != nil && active.submission == v.submission {
-							queue = queue[1:]
+					if !loaded {
+						if err = submit(v); err != nil {
+							if active != nil && active.submission == v.submission {
+								queue = queue[1:]
+							}
+							return err
 						}
-						return err
+						queue = queue[1:]
 					}
-					queue = queue[1:]
 				}
 				if !intentional {
 					inputs.ifCurrent(waitingEpoch, admission.enableQueue)

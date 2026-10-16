@@ -136,7 +136,7 @@ func TestCursorReadGatewayVerdicts(t *testing.T) {
 	}
 }
 
-func TestCursorReadLostGatewayRefusesUnsafeSuccess(t *testing.T) {
+func TestCursorReadLostGatewayRetainedDescriptorAndFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, query  string
@@ -159,7 +159,11 @@ func TestCursorReadLostGatewayRefusesUnsafeSuccess(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, read := range []func() error{func() error { _, err := c.Get(b.InstanceID); return err }, func() error { _, err := c.Status(b.InstanceID); return err }} {
-				if err := read(); err == nil {
+				if err := read(); !tc.closeFailure {
+					if err != nil {
+						t.Fatalf("examined obsolete descriptor blocked current gateway death: %v", err)
+					}
+				} else if err == nil {
 					t.Fatal("known-dead unsafe binding reported success")
 				} else if tc.closeFailure && !strings.Contains(err.Error(), "injected write failure") {
 					t.Fatal(err)
@@ -169,7 +173,12 @@ func TestCursorReadLostGatewayRefusesUnsafeSuccess(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(before, e.columns(t, b.InstanceID)) || !reflect.DeepEqual(prBefore, prAfter) {
+			if !tc.closeFailure {
+				after := e.columns(t, b.InstanceID)
+				if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !prAfter.Closed() || prAfter.ProvenGone() || prAfter.ProvenGoneHow != "" {
+					t.Fatalf("retained descriptor close not atomic/request-safe: %+v %+v", after, prAfter)
+				}
+			} else if !reflect.DeepEqual(before, e.columns(t, b.InstanceID)) || !reflect.DeepEqual(prBefore, prAfter) {
 				t.Fatal("failed reconciliation partially committed")
 			}
 		})

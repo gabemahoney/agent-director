@@ -57,7 +57,8 @@ const ReservedHomeReason = "the agent's hook resolves agent-director's config an
 // ReservedHomeAlternative is what a caller who set HOME in extra_env sets
 // instead, shared like ReservedHomeReason. It names the folder variable of the
 // agent the call is for (SR-4.4): CLAUDE_CONFIG_DIR for claude, CODEX_HOME for
-// codex, and both when agent is neither (no agent is known: make-template
+// codex; Cursor keeps HOME and has no supported directory override. Both
+// Claude/Codex variables are named when no agent is known (make-template
 // with no agent).
 func ReservedHomeAlternative(agent string) string {
 	switch agent {
@@ -65,6 +66,8 @@ func ReservedHomeAlternative(agent string) string {
 		return "to give the agent its own Claude Code config, set an absolute CLAUDE_CONFIG_DIR in extra_env instead"
 	case config.AgentCodex:
 		return "to give the agent its own Codex config, set an absolute CODEX_HOME in extra_env instead"
+	case config.AgentCursor:
+		return "keep HOME unchanged for Cursor; no Cursor-specific config-directory environment override is supported"
 	}
 	return "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"
 }

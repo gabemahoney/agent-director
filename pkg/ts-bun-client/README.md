@@ -112,8 +112,12 @@ never selects an archived one. See [Usage](../../docs/usage.md#naming-the-agent)
 and [Transcript recovery](../../docs/caller-contract.md#transcript-recovery).
 
 Cursor uses the existing result and row fields; `status` keeps its existing
-shape. `resume` throws `ErrSpawnNotResumable` for Cursor; reuse and switches
-to or from Cursor throw `ErrSpawnDeniedFlag` before mutation. `makeTemplate`
+shape. `resume({ instance_id: id })` launches load of only its latest saved session;
+the row can remain `pending` until a real first prompt. After inspecting the
+pane, pass `allow_pending: true` to `sendKeys` for that prompt; binding and
+dialog guards still apply. Saved configuration and initial-prompt replay are
+defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+Reuse and switches to or from Cursor throw `ErrSpawnDeniedFlag` before mutation. `makeTemplate`
 and `spawn` refuse nonempty Cursor permission lists with
 `ErrPermissionsUnsupported`. The fresh workflow is in
 [Usage](../../docs/usage.md#fresh-cursor-use); argument and asynchronous failure
@@ -562,9 +566,9 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
-| `ErrSpawnNotResumable` | Cursor resume is unsupported (see [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries)). For Claude and Codex, `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
-| `ErrNoSessionId` | The spawn has no `session_id` (killed before its first SessionStart, or a spawn's or reuse's launch that never reported in and that `find-missing` marked `missing`), so there is nothing to resume; recourse contract: spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. See [Caller contract](../../docs/caller-contract.md) for the recovery procedure. |
-| `ErrJsonlMissing` | The current session's resume JSONL could not be located at any candidate path (for a Codex agent, only its current recorded path; older sessions are never tried); recourse contract: spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), which starts with no memory of the old conversation. See [Caller contract](../../docs/caller-contract.md) for the recovery procedure. |
+| `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
+| `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. Recovery is owned by [Transcript recovery](../../docs/caller-contract.md#transcript-recovery) for Claude/Codex and [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries) for Cursor. |
+| `ErrJsonlMissing` | The current session's transcript is unavailable. Cursor requires its protected gateway transcript; native session availability is decided later during load. Older sessions are never tried. Recovery is owned by [Transcript recovery](../../docs/caller-contract.md#transcript-recovery) for Claude/Codex and [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries) for Cursor. |
 | `ErrListInvalidLabel` | A `list` label filter could not be parsed as `key=value`. |
 | `ErrProbeUnsupported` | No verb returns it: `find-missing` no longer reads process environments, the only path that returned it. The name stays catalogued (and listed for `find-missing`) so the client still maps it. |
 

@@ -3,6 +3,9 @@ package spawn
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"unicode/utf8"
 
@@ -61,8 +64,29 @@ func RefuseCursorPermissions(allow, deny, ask []string) error {
 	return fmt.Errorf("%w: Cursor takes no allow, deny or ask entries; use Cursor's own permission rules", ErrPermissionsUnsupported)
 }
 
+// Library callers are not the gateway executable. Only the CLI can re-exec
+// itself; other callers use the same canonical installed AD path as help hooks.
+func installedGatewayBinary() (string, error) {
+	if info, ok := debug.ReadBuildInfo(); ok && info.Path == "github.com/gabemahoney/agent-director/cmd/agent-director" {
+		return executablePath()
+	}
+	path, err := helpHookBinPath()
+	if err != nil {
+		return "", err
+	}
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("installed Cursor gateway unavailable: %w", err)
+	}
+	st, err := os.Stat(path)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0111 == 0 {
+		return "", fmt.Errorf("installed Cursor gateway is not executable")
+	}
+	return path, nil
+}
+
 func composeCursorCommand(r Resolved, cfg config.Config) ([]string, error) {
-	exe, err := executablePath()
+	exe, err := installedGatewayBinary()
 	if err != nil {
 		return nil, fmt.Errorf("resolve agent-director path: %w", err)
 	}

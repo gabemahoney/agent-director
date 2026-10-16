@@ -15,7 +15,7 @@ import (
 func TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch(t *testing.T) {
 	// Serial: real Run, protected records and terminal fixture own environment.
 	i := &completeInput{ready: make(chan struct{})}
-	c := beginCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	before, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
@@ -97,7 +97,7 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 		for _, delta := range []int{-1, 0, 1} {
 			t.Run(fmt.Sprintf("%s/%+d", scope, delta), func(t *testing.T) {
 				i := &completeInput{ready: make(chan struct{})}
-				c := beginCursorSessionWithInput(t, "HOLD", openTranscript, i.start)
+				c := postBootstrapCursorSessionWithInput(t, "HOLD", openTranscript, i.start)
 				<-i.ready
 				c.wait(t, "active receipt", func() bool { return len(c.prompts(t)) == 1 })
 				var want []string

@@ -44,10 +44,22 @@ type spawnEnv struct {
 
 // newSpawnEnv builds a spawnEnv over a fresh store and empty config under a
 // temp HOME and a per-test TMUX_TMPDIR, with a Recorder as its tmux client.
+func installCursorFixtureGateway(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newSpawnEnv(t *testing.T) spawnEnv {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	installCursorFixtureGateway(t)
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "") // no parent id from the host shell
 	tmpdir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

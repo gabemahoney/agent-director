@@ -35,7 +35,17 @@ input.on('line', async line => {
   if(pendingScenario.ids.size===0) {pendingScenario.resolve();pendingScenario=null;}
   return;
  }
- if(frame.method==='initialize') send({id:frame.id,result:{protocolVersion:1,agentCapabilities:{askQuestion:true}}});
+ if(frame.method==='initialize') send({id:frame.id,result:{protocolVersion:1,agentCapabilities:{askQuestion:true,...(scenario()?.loadSupport ? {loadSession:true} : {})}}});
+ else if(frame.method==='session/load') {
+  const scripted=scenario();
+  if(scripted?.beforeLoadReply) for(const event of scripted.beforeLoadReply) send(event);
+  if(scripted?.waitForLoad)
+   while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
+  // Source-derived synthetic agent-store.ts existence check; success remains scripted ACP, never authenticated recall.
+  const nativeMissing=scripted?.nativeConfigRoot && !fs.existsSync(require('path').join(scripted.nativeConfigRoot,'acp-sessions',frame.params.sessionId,'store.db'));
+  send({id:frame.id,...(nativeMissing ? {error:{code:-32603,message:'Session "'+frame.params.sessionId+'" not found'}} : (scripted?.loadReply || {result:{}}))});
+  if(scripted?.afterLoadReply) for(const event of scripted.afterLoadReply) send(event);
+ }
  else if(frame.method==='session/new') {
   if(fs.existsSync(SETTINGS.scenario) && fs.readFileSync(SETTINGS.scenario,'utf8')==='blocked-input') {
    input.pause(); process.stdin.pause();

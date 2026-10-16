@@ -606,8 +606,9 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	if len(refused.calls) != 0 {
 		t.Fatalf("calls = %v; want none", paKinds(refused.calls))
 	}
-	if _, err := api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: tokB, Decision: "allow",
-		MaxWaitMs: ptr(int64(0))}); err != nil {
+	// Establish B's verdict with a finite setup budget; advance the fixture's ack clock.
+	if _, err := api.DecideWithSleep(p.st, p.view(), func(d time.Duration) { p.now = p.now.Add(d) }, api.DecideParams{InstanceID: p.r.ID, RequestToken: tokB, Decision: "allow",
+		MaxWaitMs: ptr(int64(10000))}); err != nil {
 		t.Fatalf("decide %s, which the refusal names: %v; want the verdict recorded", tokB, err)
 	}
 	if _, _, ok, err := p.st.AckRelayDecision(p.r.ID, tokB, p.now, store.DefaultLockWait, nil); err != nil || !ok {

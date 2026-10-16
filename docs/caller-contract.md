@@ -26,14 +26,15 @@ error:
   "may be typed": do the step the error names, never resend the same text.
   `--text ""` sends Enter only. Retry a `pause` that returns
   `ErrTmuxUnresponsive` later.
-- For Claude and Codex, `resume` or `spawn --reuse-finished` refused as "still stopping" or "still
+- `resume`, or a supported `spawn --reuse-finished`, refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
   session to a human; never end it yourself.
 - After a timed-out `spawn` or `resume` the row stays `pending`: do not retry
   until `get` shows `ended` or `missing`, then `spawn --instance-id`
   with `--reuse-finished` and the row's agent (`get` shows it), for Claude or
-  Codex. Cursor instead uses the [fresh-instance boundary](#cursor-operation-boundaries). A row noted `unreported` has a running agent: use it
+  Codex. For Cursor, inspect the latest session and use the
+  [resume or fresh-instance boundary](#cursor-operation-boundaries). A row noted `unreported` has a running agent: use it
   or end it first (see [Maintenance](maintenance.md)).
 - `ErrConfigMalformed` (a config value is refused): store-backed verbs fail,
   `serve` does not start, hooks record nothing and relayed permission requests
@@ -80,7 +81,7 @@ To end a live row (`pending` included) and relaunch its id:
 4. Still live: `kill` once more, wait about 5 s, run `find-missing`, check.
 5. Still live: stop and escalate to a human.
 6. Once `ended` or `missing`, Cursor uses the
-   [fresh-instance boundary](#cursor-operation-boundaries). For Claude or Codex:
+   [resume or fresh-instance boundary](#cursor-operation-boundaries). For Claude or Codex:
    - with a session id, to get the conversation back:
      `agent-director resume --instance-id <id>`
    - otherwise, a reuse (a fresh conversation with no memory of the old one), with
@@ -127,16 +128,51 @@ deleted, and records closed by the attempt stay closed.
 
 ## Cursor operation boundaries
 
-Cursor supports fresh instances only. `resume` returns
-`ErrSpawnNotResumable`; `spawn --reuse-finished` involving Cursor, including
-switching to or from it, returns `ErrSpawnDeniedFlag`. These refusals precede
-row or launch changes. Start a fresh unique instance instead; there is no AD
-resume or reuse recovery for the Cursor conversation.
+`resume` accepts only `instance_id` (`--instance-id` on the CLI) for an
+`ended` or `missing` Cursor row. It loads only the latest durably reported
+session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).
+Live and pending rows return `ErrSpawnNotResumable`. No saved session returns
+`ErrNoSessionId`. Missing, unreadable or insecure current protected transcript
+returns `ErrJsonlMissing` before row or launch changes. Older sessions are
+never candidates, even when their native storage or transcripts exist.
+
+Native conversation availability is checked by Cursor during asynchronous
+load; `resume` does not wait for it. Unsupported load, a missing native session,
+invalid response, timeout or transport failure never selects an older session
+or starts a new conversation. Inspect the pane, row and `ad.cursor.failed`
+reason; a successful resume result confirms launch, not successful load.
+Invalid protected-file continuity also fails in the gateway; no missing or
+damaged transcript is reconstructed from replay or replaced with an empty file.
+Load can leave the row `pending` until a real first prompt. Explicit
+`allow_pending` (`--allow-pending` on the CLI) permits that first prompt only
+after current binding verification and every durable dialog hold; it bypasses
+neither. Replayed updates cannot establish readiness, new requests, decisions,
+choices or execution proof, and no transient input is recovered.
+
+`spawn --reuse-finished` involving Cursor, including switches to or from it,
+still returns `ErrSpawnDeniedFlag` before row or launch changes. If the latest
+session cannot be resumed, preserve the original row, session, transcript and
+saved artifacts. After resolving surviving work, run this from the intended
+project directory, omitting `instance_id` so AD generates a unique id:
+
+```sh
+agent-director spawn --agent cursor --cwd "$PWD"
+```
+
+This is an explicit fresh conversation. For `ErrReservedEnvKey`, omit the
+refused saved environment key from the new launch. Cursor retains the caller's
+`HOME`; it has no supported config-directory override.
 
 Only model selection (`--model`, `-m`, with a separate or `=` value) and a
 single initial prompt are accepted in Cursor `agent_args`. Unsupported
 arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
 permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
+Cursor session selectors are `--resume [chatId]`, `--continue`, command-position
+`resume` as the first non-option word, and `--new-session-id` with its required
+value. Fresh launch refuses them. Resume filters recognized selectors and their
+owned values from a copy of saved `agent_args`, leaving the stored list intact.
+Values owned by `--model`/`-m` and prompt operands after `--` remain values or
+prompt text even when they spell a selector; no `-r` or `-c` alias is assumed.
 Normal input ordering and limits are in
 [Fresh Cursor use](usage.md#fresh-cursor-use). A successful `send-keys`
 means keys were sent, not that the gateway admitted a prompt. Literal text
@@ -252,7 +288,8 @@ remains available.
 A Cursor `missing` row is not proof that its runtime has exited. Resolve any
 surviving work through the existing ownership and
 [human inspection procedures](operator-actions.md#inspect-and-end-a-session-by-hand)
-before a replacement launch, then use a fresh unique instance. Never replay an
+before a relaunch, then resume the latest saved session if available or use
+the explicit fresh-instance procedure above. Never replay an
 uncertain submission automatically.
 
 Unknown process evidence authorizes neither adoption nor a kill. Existing

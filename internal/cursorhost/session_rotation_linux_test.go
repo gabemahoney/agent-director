@@ -123,7 +123,7 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 				if active {
 					initial = "HOLD"
 				}
-				c := startCursorSession(t, initial)
+				c := postBootstrapCursorSession(t, initial)
 				if active {
 					c.wait(t, "old prompt received", func() bool { return len(rotationPrompts(c, t)) == 1 })
 					c.keys(t, "old-queue-never-new\r")
@@ -243,7 +243,7 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 
 func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
-	c := startCursorSession(t, "")
+	c := postBootstrapCursorSession(t, "")
 	before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 	b, _ := c.e.s.ReadCursorRuntime(before.InstanceID)
 	gate := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
@@ -269,15 +269,15 @@ func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 			t.Fatal("publication cleared independent guards")
 		}
 	}
-	c.e.exec(t, `UPDATE permission_requests SET closed_at=?`, time.Now().UnixMilli())
+	c.rotationFixtureSQL(t, nil, 2, `UPDATE permission_requests SET closed_at=?`, time.Now().UnixMilli())
 	c.keys(t, "ordinary-must-be-refused\r")
 	c.wait(t, "guarded refusal", func() bool { return rotationRecordCount(c, t, "submission_refused") == 1 })
-	c.e.exec(t, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Unknown'`, time.Now().UnixMilli())
+	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Unknown'`, time.Now().UnixMilli())
 	// A second actual control-input consumption is an observable check, without inferring admission from screen state.
 	c.keys(t, "still-refused\r")
 	c.wait(t, "remaining hold refuses", func() bool { return rotationRecordCount(c, t, "submission_refused") == 2 })
 	rotationNoBytes(t, c, "held-until-all-proofs")
-	c.e.exec(t, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Plan'`, time.Now().UnixMilli())
+	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE tool_name='Plan'`, time.Now().UnixMilli())
 	c.wait(t, "all proofs release held", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
 	c.stop(t)
 	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-2", "held-until-all-proofs"}}) {
@@ -289,7 +289,7 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 	// Serial: real runtime/report subprocess and fault injection own environment.
 	for _, failure := range []string{"rejection", "missing ID", "malformed ID", "reused ID", "archive", "report after commit", "authority loss", "runtime death"} {
 		t.Run(failure, func(t *testing.T) {
-			c := startCursorSession(t, "")
+			c := postBootstrapCursorSession(t, "")
 			before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 			scenario := cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true}
 			switch failure {
@@ -358,7 +358,7 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 
 func TestCursorRotationRepeatedControlsPreserveFirstDeadline(t *testing.T) {
 	// Serial: actual three-second controller cancellation deadline and isolated processes.
-	c := startCursorSession(t, "")
+	c := postBootstrapCursorSession(t, "")
 	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 	first := time.Now()
 	c.keys(t, "/new\r")
@@ -393,8 +393,17 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 				kind = "not-armed"
 			}
 			barrier, opener := newRecordBarrier(t, kind)
-			c := beginCursorSession(t, "", opener)
-			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+			i := &completeInput{ready: make(chan struct{})}
+			c := postBootstrapCursorSessionWithInput(t, "", opener, i.start)
+			<-i.ready
+			func() {
+				defer func() {
+					if t.Failed() {
+						rotationStartupFailure(t, c, barrier)
+					}
+				}()
+				c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+			}()
 			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 			dir := ""
 			if phase == "start report" {
@@ -404,7 +413,9 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 				t.Setenv("AD_TEST_CURSOR_BARRIER_DIR", dir)
 				t.Cleanup(func() { os.WriteFile(filepath.Join(dir, "release"), nil, 0600) })
 			}
-			c.keys(t, "zero-byte-old\r")
+			input := terminalInput{text: "zero-byte-old"}
+			c.wait(t, "actual old input admission", func() bool { input.accepted = i.admit(); return input.accepted })
+			i.emit(input)
 			if phase == "start report" {
 				rotationEntered(c, t, dir)
 			} else {
@@ -435,7 +446,7 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 func TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication(t *testing.T) {
 	// Serial: existing complete-input seam parks actual consumption before mailbox insertion.
 	i := &completeInput{ready: make(chan struct{})}
-	c := beginCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	old := terminalInput{text: "old-admitted-late-insertion", accepted: i.admit()}
@@ -467,7 +478,7 @@ func TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication(t *test
 func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *testing.T) {
 	// Serial: parks the real admission callback; durable unknown proof owns release.
 	i := &completeInput{ready: make(chan struct{})}
-	c := beginCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
@@ -510,7 +521,7 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 	if request.ProvenGone() || request.MainTurnEndEligible || request.AgentID != "" {
 		t.Fatalf("publication invented unknown-origin proof: %+v", request)
 	}
-	c.e.exec(t, `UPDATE permission_requests SET closed_at=?`, time.Now().UnixMilli())
+	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET closed_at=?`, time.Now().UnixMilli())
 	// A closed unknown request still requires independent proof before promotion.
 	c.keys(t, "ordinary-under-closed-hold\r")
 	c.wait(t, "closed hold still refuses", func() bool { return rotationRecordCount(c, t, "submission_refused") == 1 })
@@ -518,7 +529,7 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 	if rotationRecordCount(c, t, "submission_accepted") != 0 {
 		t.Fatal("closed_at supplied unknown proof")
 	}
-	c.e.exec(t, `UPDATE permission_requests SET proven_gone_at=? WHERE request_token=?`, time.Now().UnixMilli(), token)
+	c.rotationFixtureSQL(t, nil, 1, `UPDATE permission_requests SET proven_gone_at=? WHERE request_token=?`, time.Now().UnixMilli(), token)
 	c.wait(t, "guarded fresh turn completes", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
 	c.stop(t)
 	accepted := 0
@@ -553,7 +564,7 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 
 func TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries(t *testing.T) {
 	// Serial: actual successive requests and retired responses, protected attribution.
-	c := startCursorSession(t, "")
+	c := postBootstrapCursorSession(t, "")
 	origins := map[string]string{"1": "", "2": "synthetic-session-1"}
 	for turn := 1; turn <= 2; turn++ {
 		session := fmt.Sprintf("synthetic-session-%d", turn)

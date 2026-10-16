@@ -184,6 +184,15 @@ type mcpEnv struct {
 func newEnv(t *testing.T) *mcpEnv {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
+	// The Recorder never executes this command; embedded Cursor callers still
+	// require a canonical installed executable before composing the launch.
+	gateway := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director")
+	if err := os.MkdirAll(filepath.Dir(gateway), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(gateway, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("AGENT_DIRECTOR_INSTANCE_ID", "")
 	t.Setenv("TMUX", "")
 	tmpdir, err := filepath.EvalSymlinks(t.TempDir())

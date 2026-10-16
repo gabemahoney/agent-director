@@ -16,11 +16,15 @@ import (
 type CursorCheck func(Spawn) error
 
 func (s *Store) cursorAuthority(ctx context.Context, conn *sql.Conn, b CursorRuntime, until time.Time, check CursorCheck) (Spawn, error) {
+	return s.cursorAuthorityForPrompt(ctx, conn, b, until, check, "")
+}
+
+func (s *Store) cursorAuthorityForPrompt(ctx context.Context, conn *sql.Conn, b CursorRuntime, until time.Time, check CursorCheck, pendingPath string) (Spawn, error) {
 	row, e := scanSpawn(conn.QueryRowContext(ctx, getSpawnSQL, b.InstanceID), getSpawnErrs)
 	if e != nil {
 		return row, e
 	}
-	if b.SessionID == "" || b.Terminated || row.Agent != AgentCursor || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID || row.State == StateEnded || row.State == StateMissing || row.State == StatePending {
+	if b.SessionID == "" || b.Terminated || row.Agent != AgentCursor || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID || row.State == StateEnded || row.State == StateMissing || (row.State == StatePending && (pendingPath == "" || row.JSONLPath != pendingPath)) {
 		return row, fmt.Errorf("store: Cursor launch authority changed")
 	}
 	var n int

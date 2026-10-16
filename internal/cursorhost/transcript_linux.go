@@ -3,16 +3,62 @@
 package cursorhost
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// appendTranscript reopens only an existing protected gateway file. Replayed
+// ACP history is never used to reconstruct a missing transcript.
+func appendTranscript(path string, b store.CursorRuntime) (*transcript, error) {
+	f, err := openExistingTranscriptFlags(path, unix.O_RDWR|unix.O_APPEND)
+	if err != nil {
+		return nil, err
+	}
+	t := &transcript{file: f, path: path, binding: b}
+	st, statErr := f.Stat()
+	if statErr != nil || st.Size() == 0 {
+		f.Close()
+		return nil, fmt.Errorf("Cursor transcript continuity unavailable")
+	}
+	// Continuation reads only the bounded final gateway record. ACP replay is
+	// not a transcript source, and history size cannot grow startup parsing.
+	length := min(st.Size(), int64(maxFrameBytes))
+	tail := make([]byte, int(length))
+	if _, err = f.ReadAt(tail, st.Size()-length); err != nil || tail[len(tail)-1] != '\n' {
+		f.Close()
+		return nil, fmt.Errorf("Cursor transcript has an incomplete record")
+	}
+	tail = tail[:len(tail)-1]
+	start := bytes.LastIndexByte(tail, '\n') + 1
+	if start == 0 && st.Size() > length {
+		f.Close()
+		return nil, fmt.Errorf("Cursor transcript record exceeds limit")
+	}
+	var record struct {
+		Sequence uint64 `json:"sequence"`
+		Instance string `json:"instance_id"`
+		Life     int64  `json:"life_number"`
+	}
+	if json.Unmarshal(tail[start:], &record) != nil || record.Sequence == 0 || record.Sequence == ^uint64(0) || record.Instance != b.InstanceID || record.Life != b.Life {
+		f.Close()
+		return nil, fmt.Errorf("Cursor transcript continuity binding changed")
+	}
+	t.seq = record.Sequence
+	if err = t.record("launch", map[string]any{"agent": "cursor", "resumed": true}); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return t, nil
+}
 
 type transcript struct {
 	file    transcriptFile
@@ -121,50 +167,12 @@ func (t *transcript) record(kind string, data any) error {
 // VerifyTranscriptPath rejects replaced/symlinked path components. Reports
 // never turn an arbitrary path in a protocol/hook payload into a transcript.
 func VerifyTranscriptPath(path string) error {
-	f, err := openExistingTranscript(path)
-	if err != nil {
-		return err
-	}
-	return f.Close()
+	return cursortranscript.Verify(path)
 }
 func openExistingTranscript(path string) (*os.File, error) {
-	base := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "cursor-transcripts")
-	name := filepath.Base(path)
-	if filepath.Dir(path) != base || len(name) != 38 || name[32:] != ".jsonl" {
-		return nil, fmt.Errorf("invalid Cursor transcript reference")
-	}
-	if _, err := hex.DecodeString(name[:32]); err != nil {
-		return nil, fmt.Errorf("invalid Cursor transcript reference")
-	}
-	dir, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, fmt.Errorf("Cursor transcript unavailable")
-	}
-	for _, part := range splitPath(base) {
-		if part == "" || part == "." || part == ".." {
-			unix.Close(dir)
-			return nil, fmt.Errorf("unsafe Cursor transcript path")
-		}
-		next, e := unix.Openat(dir, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-		unix.Close(dir)
-		if e != nil {
-			return nil, fmt.Errorf("protected Cursor transcript unavailable")
-		}
-		dir = next
-	}
-	defer unix.Close(dir)
-	var ds unix.Stat_t
-	if err = unix.Fstat(dir, &ds); err != nil || ds.Uid != uint32(os.Getuid()) || ds.Mode&0077 != 0 {
-		return nil, fmt.Errorf("Cursor transcript directory changed")
-	}
-	fd, err := unix.Openat(dir, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, fmt.Errorf("Cursor transcript unavailable")
-	}
-	var st unix.Stat_t
-	if err = unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || st.Uid != uint32(os.Getuid()) || st.Mode&0077 != 0 || st.Nlink != 1 {
-		unix.Close(fd)
-		return nil, fmt.Errorf("Cursor transcript is not protected")
-	}
-	return os.NewFile(uintptr(fd), name), nil
+	return openExistingTranscriptFlags(path, unix.O_RDONLY)
+}
+
+func openExistingTranscriptFlags(path string, flags int) (*os.File, error) {
+	return cursortranscript.Open(path, flags)
 }

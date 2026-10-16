@@ -30,6 +30,10 @@ type submissionRecord struct {
 		Started    bool      `json:"started"`
 		Reason     string    `json:"reason"`
 		ConsumedAt time.Time `json:"consumed_at"`
+		Control    string    `json:"control"`
+		InputID    string    `json:"input_id"`
+		InputEpoch *uint64   `json:"input_epoch"`
+		Count      uint64    `json:"count"`
 	} `json:"data"`
 }
 
@@ -59,6 +63,7 @@ type cursorSession struct {
 	pane   *observedWire
 	done   chan error
 	ended  bool
+	endErr error
 }
 
 // completeInput feeds completed text through Run's real admission and mailbox.
@@ -217,6 +222,8 @@ type recordBarrier struct {
 	release chan struct{}
 	once    sync.Once
 	current string
+	match   func([]byte) bool
+	matched bool
 }
 
 func (f *recordBarrier) Write(raw []byte) (int, error) {
@@ -227,11 +234,12 @@ func (f *recordBarrier) Write(raw []byte) (int, error) {
 		return 0, err
 	}
 	f.current = record.Kind
+	f.matched = f.match == nil || f.match(raw)
 	return f.transcriptFile.Write(raw)
 }
 
 func (f *recordBarrier) Sync() error {
-	if f.current == f.kind {
+	if f.current == f.kind && f.matched {
 		f.once.Do(func() { close(f.entered); <-f.release })
 	}
 	return f.transcriptFile.Sync()
@@ -239,7 +247,12 @@ func (f *recordBarrier) Sync() error {
 
 func newRecordBarrier(t *testing.T, kind string) (*recordBarrier, func(string, store.CursorRuntime) (*transcript, error)) {
 	t.Helper()
-	f := &recordBarrier{kind: kind, entered: make(chan struct{}), release: make(chan struct{})}
+	return newMatchingRecordBarrier(t, kind, nil)
+}
+
+func newMatchingRecordBarrier(t *testing.T, kind string, match func([]byte) bool) (*recordBarrier, func(string, store.CursorRuntime) (*transcript, error)) {
+	t.Helper()
+	f := &recordBarrier{kind: kind, match: match, entered: make(chan struct{}), release: make(chan struct{})}
 	t.Cleanup(func() {
 		select {
 		case <-f.release:

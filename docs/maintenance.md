@@ -141,19 +141,23 @@ agents' user, in their tmux environment, against their
 ## Recovering after a reboot
 
 A reboot kills every agent and tmux server; the rows survive. Run
-`find-missing` for all rows. Cursor cannot currently resume or reuse a
-finished row; its recovery is a fresh unique instance (see
-[Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries)).
-For Claude and Codex, run these two steps in order from a startup script:
+`find-missing` for all rows, then resume each wanted latest session. Run these
+two steps in order from a startup script:
 
 ```sh
 agent-director find-missing                       # end or mark dead rows `missing`
 agent-director resume --instance-id <id>   # relaunch the latest reported session
 ```
 
-`resume` acts on a finished Claude or Codex row (`ended` or `missing`); `find-missing` first
+`resume` acts on a finished row (`ended` or `missing`); `find-missing` first
 makes a dead live row `missing` (or `ended`, for a Codex row that reported its
-end). Without a session id or transcript (see
+end). Cursor loads only its saved latest session and protected transcript;
+load may leave it `pending` until a real first prompt. Missing native session
+or protected transcript never falls back to older history. Cursor refuses
+same-id reuse and agent switches: preserve its artifacts and use the
+[Cursor recovery procedure](caller-contract.md#cursor-operation-boundaries).
+
+For Claude and Codex, without a session id or transcript (see
 `transcript_status` in `get`), spawn the id again with reuse and the row's
 agent, which `get` shows; the new agent has no memory of the old
 conversation:

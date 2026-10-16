@@ -50,13 +50,21 @@ func (s *CursorMissingReads) ListSpawns(filters ListFilters) ([]Spawn, error) {
 }
 
 func cursorMissingGuard(row Spawn, b CursorRuntime) (string, []any) {
-	if row.Agent != AgentCursor || row.InstanceID != b.InstanceID || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID {
+	if row.Agent != AgentCursor || row.InstanceID != b.InstanceID || row.Identity.Token == "" || row.Identity.PanePID <= 0 || row.Identity.PaneStarttime == "" {
+		return "", nil
+	}
+	// The proof is death of the examined row's gateway. A retained descriptor
+	// from an older launch is an examined fact, never authority for this one.
+	// Its entire binding must remain unchanged, including session/termination.
+	if cursorRuntimeAbsent(b) && (row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID) {
 		return "", nil
 	}
 	guard := `instance_id=? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=?`
 	args := append([]any{row.InstanceID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(row.Snapshot)...)
-	args = append(args, b.Token, b.Life, b.GatewayPID, b.GatewayStart)
+	args = append(args, row.Identity.Token, row.LifeNumber, row.Identity.PanePID, row.Identity.PaneStarttime)
+	guard += ` AND COALESCE(tmux_socket,'')=? AND COALESCE(tmux_server_pid,0)=? AND COALESCE(tmux_server_started,0)=? AND COALESCE(tmux_server_starttime,'')=? AND COALESCE(pane_id,'')=? AND COALESCE(jsonl_path,'')=?`
+	args = append(args, row.Identity.Socket, row.Identity.ServerPID, row.Identity.ServerStart, row.Identity.ServerStarttime, row.Identity.PaneID, row.JSONLPath)
 	if cursorRuntimeAbsent(b) {
 		guard += ` AND NOT EXISTS(SELECT 1 FROM cursor_runtimes WHERE bound_instance_id=?)`
 		args = append(args, row.InstanceID)

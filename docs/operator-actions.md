@@ -48,7 +48,7 @@ tmux -u -S '<socket>' kill-pane -t '<pane id>'
 # 5. List again (step 1): the id is gone (`no such session` or `no server running` also mean gone).
 ```
 
-Cursor failure reasons and the fresh-instance recovery boundary are in the
+Cursor failure reasons and the latest-resume/fresh-instance recovery boundary are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Use the
 same inspection and ownership procedures above for a Cursor launch. A
 transport failure alone does not authorize deleting a row or adopting an
@@ -59,7 +59,11 @@ conflict refusals and `ErrStoreBusy` behavior are in the
 If a Cursor row is `missing`, check for surviving work
 before starting its replacement; follow the
 [Cursor recovery boundary](caller-contract.md#cursor-operation-boundaries).
-The resume/reuse retry procedures below apply to Claude and Codex; Cursor refuses those operations before mutation.
+The resume ownership and conflict procedures below also apply to Cursor.
+Cursor still refuses reuse and switches to or from another agent. If its latest
+native session or protected transcript is unavailable, preserve the row and
+artifacts and follow the fresh-instance command in the caller contract; do not
+substitute an older session or repair saved identity by hand.
 
 ## A finished row's own old session
 

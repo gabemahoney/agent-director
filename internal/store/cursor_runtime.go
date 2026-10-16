@@ -1,9 +1,11 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // CursorRuntime is the narrow current-launch pipe owner, separate from the
@@ -138,6 +140,42 @@ func (s *Store) ReadCursorRuntime(id string) (b CursorRuntime, err error) {
 func (s *Store) SetCursorRuntimeSession(b CursorRuntime, sid string) (bool, error) {
 	return s.execGuarded(`UPDATE cursor_runtimes SET bound_session_id=? WHERE bound_session_id='' AND bound_terminated=0 AND `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start AND state='pending')`, append([]any{sid}, cursorBindingArgs(b)...), "store: Cursor session")
 }
+
+// BindLoadedCursorSession publishes only a confirmed load of the examined
+// latest durable identity into this launch's previously unbound connection.
+// Lock acquisition, SQL, COMMIT and cleanup retain the original absolute
+// load bound. current must recheck captured input authority and runtime facts;
+// a raced or unconfirmed COMMIT never grants prompt admission.
+func (s *Store) BindLoadedCursorSession(ctx context.Context, row Spawn, b CursorRuntime, path string, until time.Time, current func() bool) (bool, error) {
+	if b.Terminated || b.InstanceID != row.InstanceID || b.GatewayPID != row.Identity.PanePID || b.GatewayStart != row.Identity.PaneStarttime || b.SessionID == "" || row.SessionID != b.SessionID || row.JSONLPath != path || path == "" || row.Identity.Token != b.Token || row.LifeNumber != b.Life {
+		return false, nil
+	}
+	args := append([]any{b.SessionID}, cursorBindingArgs(b)...)
+	args = append(args, b.SessionID, path)
+	args = append(args, snapshotMatchArgs(row.Snapshot)...)
+	args = append(args, row.Identity.Socket, row.Identity.ServerPID, row.Identity.ServerStart, row.Identity.ServerStarttime, row.Identity.PaneID)
+	ctx, cancel := context.WithDeadline(ctx, until)
+	defer cancel()
+	applied := false
+	err := s.inWriteTxContext(ctx, time.Until(until), func(ctx context.Context, conn *sql.Conn) error {
+		if current == nil || !current() || ctx.Err() != nil || !time.Now().Before(until) {
+			return fmt.Errorf("store: loaded Cursor publication retired")
+		}
+		result, err := conn.ExecContext(ctx, `UPDATE cursor_runtimes SET bound_session_id=? WHERE bound_session_id='' AND bound_terminated=0 AND `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start AND state='pending' AND session_id=? AND jsonl_path=? AND `+snapshotMatchSQL+` AND COALESCE(tmux_socket,'')=? AND COALESCE(tmux_server_pid,0)=? AND COALESCE(tmux_server_started,0)=? AND COALESCE(tmux_server_starttime,'')=? AND COALESCE(pane_id,'')=?)`, args...)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		applied = n == 1
+		if err == nil && !current() {
+			return fmt.Errorf("store: loaded Cursor publication retired before commit")
+		}
+		return err
+	})
+	// The callback's UPDATE is provisional. Only confirmed COMMIT is success;
+	// the shared transaction helper preserves unconfirmed-commit classification.
+	return err == nil && applied, err
+}
 func (s *Store) MarkCursorRuntimeGone(b CursorRuntime) (bool, error) {
 	return s.execGuarded(`UPDATE cursor_runtimes SET bound_terminated=1 WHERE `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start)`, cursorBindingArgs(b), "store: retire Cursor runtime")
 }
@@ -150,7 +188,9 @@ func cursorBindingArgs(b CursorRuntime) []any {
 
 // MarkCursorMissingIfSameLaunch closes a lost gateway or a failed Run using
 // the common terminal transaction, including request and subagent closure.
-// The row snapshot and complete examined connection must still match. A descriptor
+// The complete examined row launch and descriptor must still match. A retained
+// obsolete descriptor is guarded as present, without granting launch authority.
+// A descriptor
 // with every runtime field empty represents examined absence of registration;
 // that branch requires no binding for this instance at the terminal write.
 // It never waits for the write lock: contention returns ErrStoreBusy with no

@@ -28,9 +28,10 @@ func newCursorPane(t *testing.T, disableQuestions bool) (*spawnFix, cursorfix.Ru
 }
 
 type cursorPaneOptions struct {
-	Script  *cursorfix.Scenario
-	Relay   string
-	Timeout int
+	Script       *cursorfix.Scenario
+	Relay        string
+	Timeout      int
+	StandaloneGo bool
 }
 
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
@@ -50,6 +51,13 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 		r.Configure(t, *opts.Script)
 	}
 	bin := buildHookCLI(t, t.TempDir())
+	installed := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director")
+	if err := os.MkdirAll(filepath.Dir(installed), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(bin, installed); err != nil {
+		t.Fatal(err)
+	}
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "config.toml")
 	cfg, err := os.ReadFile(configPath)
 	if err != nil {
@@ -106,7 +114,13 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 		defer cancel()
 		cmd = exec.CommandContext(ctx, "bun", path)
 	}
-	out, err := cmd.CombinedOutput()
+	var out []byte
+	if opts.StandaloneGo {
+		caller := newPaneCaller(t, f, "Go release wrapper", bin)
+		out, err = caller.call("spawn", map[string]any{"agent": "cursor", "instance_id": id, "cwd": f.CWD, "no_pre_trust": true})
+	} else {
+		out, err = cmd.CombinedOutput()
+	}
 	if err != nil {
 		t.Fatalf("production CLI spawn: %v %s", err, out)
 	}

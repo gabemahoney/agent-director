@@ -18,6 +18,7 @@ type reporter struct {
 	binding            store.CursorRuntime
 	exe                string
 	path               string
+	loaded             bool
 	rotationContext    context.Context
 	rotationObserved   func(store.CursorRuntime)
 	rotationReconciled func()
@@ -26,12 +27,17 @@ type reporter struct {
 // A locally retired authorization is not evidence that the durable dialog is
 // gone. Every new turn checks all outstanding requests and the current binding.
 func (r *reporter) promptEligible() (bool, error) {
-	return r.store.CheckCursorPrompt(r.binding, time.Now().Add(transportWriteWait), func(row store.Spawn) error {
+	check := func(row store.Spawn) error {
 		if err := VerifyRuntime(r.binding, false); err != nil {
 			return err
 		}
 		return VerifyPane(r.store, row, r.cfg)
-	})
+	}
+	until := time.Now().Add(transportWriteWait)
+	if r.loaded {
+		return r.store.CheckLoadedCursorPrompt(r.binding, r.path, until, check)
+	}
+	return r.store.CheckCursorPrompt(r.binding, until, check)
 }
 
 func (r *reporter) report(event string) error {

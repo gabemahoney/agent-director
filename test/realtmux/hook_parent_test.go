@@ -95,7 +95,7 @@ const sessionStartFixture = "../../internal/hook/testdata/hook-payloads/session-
 func buildHookCLI(t *testing.T, dir string) string {
 	t.Helper()
 	out := filepath.Join(dir, "agent-director")
-	build := exec.Command("go", "build", "-ldflags", "-X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev", "-o", out, "github.com/gabemahoney/agent-director/cmd/agent-director")
+	build := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w -X github.com/gabemahoney/agent-director/internal/version.Version=0.0.0-dev", "-o", out, "github.com/gabemahoney/agent-director/cmd/agent-director")
 	var stderr bytes.Buffer
 	build.Stderr = &stderr
 	if err := build.Run(); err != nil {

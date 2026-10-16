@@ -48,10 +48,11 @@ func hookCursorRotationVerifier(cfg config.Config) func(*store.Store, store.Curs
 // runtime launch or ACP admission.
 func cursorHostHandler(args []string) error {
 	fs := flag.NewFlagSet("cursor-host", flag.ContinueOnError)
-	var program, encoded, prompt string
+	var program, encoded, prompt, load string
 	fs.StringVar(&program, "runtime", "", "selected Cursor executable (internal)")
 	fs.StringVar(&encoded, "runtime-args", "[]", "validated Cursor model arguments (internal)")
 	fs.StringVar(&prompt, "initial-prompt", "", "fresh initial prompt (internal)")
+	fs.StringVar(&load, "load-session", "", "latest saved Cursor conversation (internal)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -66,7 +67,7 @@ func cursorHostHandler(args []string) error {
 	if err != nil || initial != "" {
 		return fmt.Errorf("invalid cursor-host runtime arguments")
 	}
-	if err = cursorhost.Run(cursorhost.Options{Runtime: program, RuntimeArgs: checked, InitialPrompt: prompt}, os.Stdin, os.Stdout); err != nil {
+	if err = cursorhost.Run(cursorhost.Options{Runtime: program, RuntimeArgs: checked, InitialPrompt: prompt, LoadSession: load}, os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "Cursor gateway:", err)
 		return errDispatch
 	}

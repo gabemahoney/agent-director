@@ -9,7 +9,8 @@ A `spawn` names its agent, `claude`, `codex` or `cursor` (case-sensitive), with 
 through its [template](#templates); with neither it is refused. The rules
 for combining the two are in [Settings](settings.md#templates-and-per-call-merge).
 
-Cursor currently supports fresh launches only; see [Fresh Cursor use](#fresh-cursor-use).
+Cursor supports fresh launches and latest-session resume; see
+[Fresh Cursor use](#fresh-cursor-use) and [Pause and resume](#pause-and-resume).
 
 For Claude and Codex, a `spawn --reuse-finished` on a finished id starts a fresh conversation with
 the resolved agent. Keeping the same agent keeps its current life, including
@@ -151,7 +152,7 @@ and question behavior is in [Permissions](permissions.md#cursor-spawns).
 ### Cursor transcripts
 
 `get` exposes the confirmed conversation's gateway transcript in `jsonl_path`.
-It is one ordered JSONL file for the launch beneath
+It is one ordered JSONL file, continued across resumes, beneath
 `~/.config/agent-director/cursor-transcripts/`, with private access. It records
 launch/conversation identity and submission identities linking accepted input,
 dispatch starts, updates, cancellation and confirmed outcomes; refusals and
@@ -164,7 +165,9 @@ same file within the current life. Individual records retain their known
 conversation identity; provisionally held or refused input has no admitted
 conversation. Rotation requested, fresh identity confirmed and publication are separate
 records. Known retired traffic retains its outgoing attribution; unknown origin
-stays unknown. These references do not provide Cursor resume or replay.
+stays unknown. Resume continues the current session's protected file; older
+references remain available for inspection only. Load replay adds no duplicate
+messages, decisions or history entries to that file.
 A path appears only after it is recorded by an accepted startup report;
 `transcript_status` describes the recorded reference, not a fresh file check.
 Availability and persistence failures are covered by the
@@ -675,21 +678,34 @@ The template names its agent, so that `spawn` needs no `--agent`.
 
 ## Pause and resume
 
-Cursor supports the eligible pause described in [Fresh Cursor use](#fresh-cursor-use);
-its resume and reuse limitations are in the
-[caller contract](caller-contract.md#cursor-operation-boundaries). The resume
-and reuse rules below apply to Claude and Codex.
+Cursor supports the eligible pause described in [Fresh Cursor use](#fresh-cursor-use)
+and latest-session resume. Reuse and switches to or from Cursor remain refused;
+their recovery rules are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
 
 `pause` asks a `waiting` agent to exit and keeps its row. `resume` relaunches
 it under the same id with the last agent's latest reported session, so the
 conversation carries on if that agent can reopen it. `resume` accepts no
 agent or session choice. Older sessions of the current life remain inspectable
 in `get`'s `prior_sessions`, but agent-director never resumes them, even when
-their transcript files exist. A same-agent reuse starts a fresh conversation;
+their transcript files exist. For Claude and Codex, a same-agent reuse starts a fresh conversation;
 its next `resume` continues that new session. Agent-director adds no in-session
 picker and does not control the agent's own picker; its resume guarantee applies
 to launches it manages. See [Transcript recovery](caller-contract.md#transcript-recovery)
 for refusals and recovery.
+
+For Cursor, resume keeps the saved arguments, environment, cwd, group labels,
+session and protected transcript, using the current configured `cursor_path`.
+Retaining those values does not establish account or group isolation. Loading
+the latest conversation can leave the row `pending` until its first real
+prompt. After inspecting the pane, submit that prompt with the existing
+`--allow-pending`; confirmation of the current conversation and all permission
+holds still apply. Loading and replay do not manufacture `waiting`.
+The saved initial prompt in `agent_args` is submitted once per launch after
+successful load and hold checks. Transient queued, provisionally held and
+editable draft text are not restored. Session-selector filtering is defined in
+the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
+
 `resume` replays stored `agent_args` except recognized session selectors and
 their values, and Claude's `-p` / `--print`, so those options cannot replace
 the latest session or request print mode. A value or prompt that spells a

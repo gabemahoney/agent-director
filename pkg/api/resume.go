@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/cursortranscript"
 	"github.com/gabemahoney/agent-director/internal/spawn"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -130,6 +131,7 @@ type ResumeResult struct {
 	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
+	// Cursor grants no trust: failed by default, skipped with no_pre_trust.
 	//   - "ok": the folder trust took effect (a claude agent: the entry was
 	//     written to .claude.json; a codex agent: the launch carries the
 	//     folder trust and the hook-trust bypass).
@@ -213,8 +215,7 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 // tmux call):
 //
 //  1. GetSpawn → ErrSpawnNotFound when the id is unknown.
-//     A Cursor row then returns ErrSpawnNotResumable with fresh-instance
-//     advice, regardless of its state or session id.
+//     Cursor follows the same state and latest-session checks.
 //  2. State must be `ended` or `missing` → otherwise
 //     ErrSpawnNotResumable. The verb does NOT touch a live Spawn. A
 //     `pending` row is a launch in progress whose agent has not reported in
@@ -250,7 +251,8 @@ func (d resumeDeps) launchOnto(row Spawn, disagreeWritten []string, movedVersion
 //     pre-trust and the transcript lookup below read (a key
 //     "CLAUDE_CONFIG_DIR=/x" sets CLAUDE_CONFIG_DIR). No transcript is
 //     looked up.
-//  5. JSONL transcript file must exist on disk → otherwise
+//  5. Cursor validates only its saved protected gateway transcript, with no
+//     synthesized or older fallback. Other agents: JSONL must exist → otherwise
 //     ErrJsonlMissing. Pure os.Stat pre-flight; no read. Candidate
 //     resolution follows a strict precedence (decision of record,
 //     bug b.1ba):
@@ -304,9 +306,6 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		return ResumeResult{}, err
 	}
 
-	if row.Agent == store.AgentCursor {
-		return ResumeResult{}, fmt.Errorf("%w: Cursor resume is unsupported; create a fresh instance", ErrSpawnNotResumable)
-	}
 	if row.State == store.StatePending {
 		return ResumeResult{}, launchInProgressError(row)
 	}
@@ -316,6 +315,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 
 	if row.SessionID == "" {
+		if row.Agent == config.AgentCursor {
+			return ResumeResult{}, fmt.Errorf("%w: spawn %s has no session_id; %s", ErrNoSessionId, params.InstanceID, cursorFreshRecovery)
+		}
 		return ResumeResult{}, fmt.Errorf("%w: spawn %s has no session_id",
 			ErrNoSessionId, params.InstanceID)
 	}
@@ -325,6 +327,12 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 	if key, ok := spawn.InvalidEnvKey(row.ExtraEnv); ok {
 		return ResumeResult{}, invalidEnvKeyError(row.InstanceID, key, row.Agent)
+	}
+	if row.Agent == store.AgentCursor {
+		if err := cursortranscript.VerifyAppend(row.JSONLPath); err != nil {
+			return ResumeResult{}, fmt.Errorf("%w: latest protected Cursor transcript unavailable; %s", ErrJsonlMissing, cursorFreshRecovery)
+		}
+		return resumeAfterJsonl(d, row, row.SessionID)
 	}
 
 	// Resolve the transcript path against a strict precedence (bug b.1ba):
@@ -424,6 +432,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 // starts a fresh conversation in the retained life; older sessions remain
 // listed for inspection only. The alternative names that agent's folder variable.
 func homeInExtraEnvError(id, key, agent string) error {
+	if agent == config.AgentCursor {
+		return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; %s; omit HOME from the new launch's extra_env; %s", spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, cursorFreshRecovery, spawn.ReservedHomeAlternative(agent))
+	}
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q sets %s, which is reserved: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %s (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.ReservedHomeEnvKey, spawn.ReservedHomeReason, spawn.ReuseSpawn(agent), spawn.ReservedHomeEnvKey, spawn.ReservedHomeAlternative(agent))
 }
@@ -440,6 +451,9 @@ func homeInExtraEnvError(id, key, agent string) error {
 // the row's recorded one; SR-4.4) and an extra env without that key, which
 // starts a fresh conversation in the retained life.
 func invalidEnvKeyError(id, key, agent string) error {
+	if agent == config.AgentCursor {
+		return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; %s; omit the invalid key from the new launch's extra_env, and %s", spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), cursorFreshRecovery, spawn.InvalidEnvKeyAlternative)
+	}
 	return fmt.Errorf("%w: resume of instance %s: the row's extra_env key %q is not a valid env-var name: %s; nothing was written and nothing was launched; to run the agent again, spawn the id with %s and an extra_env without %q (same-agent reuse starts a fresh conversation in the retained life; older sessions remain listed for inspection only), and %s",
 		spawn.ErrReservedEnvKey, id, key, spawn.EnvKeyProblem(key), spawn.ReuseSpawn(agent), key, spawn.InvalidEnvKeyAlternative)
 }
@@ -596,6 +610,18 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, err
 	}
 	req := composed.Create
+	if row.Agent == config.AgentCursor {
+		// Match fresh launches: the gateway and its direct hook children must
+		// open the caller's actual store, including a per-call store override.
+		path, pathErr := d.cfg.Store.EffectiveDbPath()
+		if located, ok := d.s.(interface{ Path() string }); ok {
+			path, pathErr = located.Path(), nil
+		}
+		if pathErr != nil || path == "" {
+			return ResumeResult{}, fmt.Errorf("resume: Cursor store path unavailable")
+		}
+		req.Env["AGENT_DIRECTOR_CURSOR_STORE_PATH"] = path
+	}
 
 	// A failure never fails the launch; the outcome goes into the result.
 	preTrust := spawn.RunPreTrust(row.Agent, composed.PreTrust, row.CWD, row.ExtraEnv, row.NoPreTrust, d.cfg.PreTrust)
@@ -685,7 +711,12 @@ func resumeLostRace(s ResumeStore, row Spawn) error {
 // SR-4.4). The step is conditional on get still showing no
 // session id: an agent that reports in late records one, and once that row is
 // missing it is resumable, so a reuse would discard its conversation.
+const cursorFreshRecovery = `preserve the original row, session, transcript and saved artifacts; from the intended project directory run agent-director spawn --agent cursor --cwd "$PWD" for a fresh conversation with an automatically generated unique instance_id; Cursor reuse is not currently supported`
+
 func launchInProgressNoSessionStep(agent string) string {
+	if agent == config.AgentCursor {
+		return "the row has no session id: once find-missing marks it missing, if get still shows no session id, " + cursorFreshRecovery
+	}
 	return "the row has no session id, so there is no conversation to resume: once find-missing marks it missing, if get still shows no session id, spawn the id again with " + spawn.ReuseSpawn(agent)
 }
 
@@ -816,7 +847,9 @@ func launchInProgressError(row Spawn) error {
 //     resume would return ErrNoSessionId, is spawned again with the same id,
 //     opting in to reuse (SpawnParams.ReuseFinished) and passing the row's
 //     agent (SpawnParams.Agent, the row's recorded one), if get still shows
-//     no session id, as its description says. Nothing was written. Also a lost race: the row changed after resume examined it
+//     no session id, as its description says. Cursor instead preserves the original
+//     row and artifacts and starts a fresh unique instance with --agent cursor;
+//     Cursor reuse is not currently supported. Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
 //   - [ErrNoSessionId]: the current session_id is empty, as when a launch
@@ -824,16 +857,23 @@ func launchInProgressError(row Spawn) error {
 //     same id, opting in to reuse
 //     (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
 //     which get shows): a fresh conversation starts in the retained life.
-//     Older sessions remain listed for inspection only; resume never chooses
-//     them. An agent switch or switch back starts a new life with no memory
+//     Cursor instead preserves the original row/session/transcript/artifacts
+//     and starts a fresh unique instance: from the intended project directory,
+//     agent-director spawn --agent cursor --cwd "$PWD" (omit instance_id).
+//     Cursor reuse is not currently supported. Older sessions remain listed
+//     for inspection only; resume never chooses them. An agent switch or switch back starts a new life with no memory
 //     of the earlier one.
 //   - ErrReservedEnvKey: the row's stored extra env sets HOME, or has an
 //     invalid env-var key. Nothing is written or launched. Spawn the same id
 //     with the reuse opt-in, the row's agent and extra env without that key.
 //     That starts a fresh conversation in the retained life. An absolute
 //     CLAUDE_CONFIG_DIR gives Claude its own config; CODEX_HOME gives Codex
-//     its own config (the error names the row's agent's variable).
-//   - [ErrJsonlMissing]: no current-session transcript path stats successfully.
+//     its own config (the error names the row's agent's variable). Cursor keeps
+//     HOME unchanged, omits the refused key on a fresh unique instance, and
+//     preserves the original row/session/transcript/artifacts; no Cursor config
+//     directory override or Cursor reuse is currently supported.
+//   - [ErrJsonlMissing]: the latest protected Cursor transcript is unavailable,
+//     or no other-agent current-session transcript path stats successfully.
 //     Claude tries the recorded path and its config-dir-aware recomputation;
 //     Codex tries only the recorded path. The error names each current-session
 //     attempt and its source. Older sessions remain listed for inspection

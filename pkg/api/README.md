@@ -1,7 +1,8 @@
 # pkg/api — Go client library for agent-director
 
-Typed Go interface to all agent-director verbs. Same semantics as the
-CLI and MCP server; no subprocess or network hop required.
+Typed Go interface to all agent-director verbs, with the same semantics as the
+CLI and MCP server. Verb calls run in process; agent launches use their own
+processes.
 
 ## Contents
 
@@ -109,10 +110,21 @@ fmt.Println(result.InstanceID)
 
 Cursor uses the existing `SpawnResult` and row fields; `Status` keeps its
 existing shape. Its fresh workflow is in [Usage](../../docs/usage.md#fresh-cursor-use).
-`Resume` returns `ErrSpawnNotResumable` for Cursor; reuse and switches to or
-from Cursor return `ErrSpawnDeniedFlag` before mutation. Argument and
+`Resume(api.ResumeParams{InstanceID: id})` launches load of only its latest saved session;
+the row can remain `pending` until a first real prompt. After inspecting the
+pane, set `SendKeysParams.AllowPending` for that prompt; current binding and
+dialog guards still apply. Saved configuration and initial-prompt replay are
+defined in [Pause and resume](../../docs/usage.md#pause-and-resume).
+Reuse and switches to or from Cursor return `ErrSpawnDeniedFlag` before mutation. Argument and
 asynchronous failure handling are in the
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries).
+
+Go applications launching or resuming Cursor require an installed
+`$HOME/.config/agent-director/bin/agent-director`. Its resolved symlink target
+must be a regular executable; an unavailable gateway fails before row mutation.
+The application itself does not need to implement the gateway. The Client's
+`Options.StorePath` selection is also used by fresh and resumed Cursor
+processes; no separate gateway path or store parameter is needed.
 
 A spawn names its agent: `SpawnParams.Agent`, `"claude"`, `"codex"` or `"cursor"`
 (case-sensitive), or the `Agent` its template names. `MakeTemplateParams.Agent`

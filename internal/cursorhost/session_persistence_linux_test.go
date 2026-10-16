@@ -134,10 +134,10 @@ func TestCursorRecoveryCompletionCannotRestartCancellationDeadline(t *testing.T)
 
 func TestCursorControlDeadlineSupervisesBlockedTranscriptSync(t *testing.T) {
 	// Serial: Run and the verified runtime fixture own process-wide environment.
-	for _, mode := range []string{"idle interrupt", "idle exit", "busy", "start gate"} {
+	for _, mode := range []string{"idle interrupt", "idle exit", "busy", "start gate", "busy timer"} {
 		t.Run(mode, func(t *testing.T) {
 			kind, initial := "input_control", ""
-			if mode == "busy" {
+			if mode == "busy" || mode == "busy timer" {
 				initial = "HOLD"
 			}
 			if mode == "start gate" {
@@ -147,7 +147,7 @@ func TestCursorControlDeadlineSupervisesBlockedTranscriptSync(t *testing.T) {
 			c := beginCursorSession(t, initial, opener)
 			defer barrier.unblock()
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
-			if mode == "busy" {
+			if mode == "busy" || mode == "busy timer" {
 				c.wait(t, "active peer receipt", func() bool { return len(c.prompts(t)) == 1 })
 			}
 			if mode == "start gate" {
@@ -167,8 +167,26 @@ func TestCursorControlDeadlineSupervisesBlockedTranscriptSync(t *testing.T) {
 				c.keys(t, "\x03")
 			}
 			// Repetition is finite and must not replace the first cancellation deadline.
-			c.keys(t, "\x03\x03")
+			if mode != "busy timer" {
+				c.keys(t, "\x03\x03")
+			}
 			err := c.awaitFailure(t, cancelWait+time.Second)
+			failedAt := time.Now()
+			if mode == "busy timer" {
+				if err.Error() != "Cursor ACP operation timed out" {
+					t.Fatalf("parked control Sync did not expire through the operation timer: %v", err)
+				}
+				var consumed time.Time
+				for _, r := range c.records(t) {
+					if r.Kind == "input_control" {
+						consumed = r.Data.ConsumedAt
+						break
+					}
+				}
+				if consumed.IsZero() || failedAt.Sub(consumed) < cancelWait {
+					t.Fatal("parked control expired before its original consumption deadline")
+				}
+			}
 			if time.Since(started) > cancelWait+time.Second {
 				t.Fatal("repeated control extended deadline")
 			}

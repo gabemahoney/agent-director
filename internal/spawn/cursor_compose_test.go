@@ -3,17 +3,34 @@ package spawn
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
+func installCompositionGateway(t *testing.T) string {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	path := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestCursorFreshComposition(t *testing.T) {
 	for _, path := range []string{"", "/opt/cursor with space/agent", `/opt/q"uote's/agent --flag`} {
 		t.Run(path, func(t *testing.T) {
 			e := newLaunchEnv(t)
+			installCompositionGateway(t)
 			e.r.Agent = store.AgentCursor
 			e.r.AgentArgs = []string{"--model", "model-x", "first\n多行 🦋"}
 			e.cfg.Launch.CursorPath = path
@@ -45,6 +62,74 @@ func TestCursorFreshComposition(t *testing.T) {
 		})
 	}
 }
+
+func TestCursorInstalledGatewaySelection(t *testing.T) {
+	for _, kind := range []string{"regular", "symlink", "missing", "nonexecutable", "dangling", "directory", "symlink nonexecutable"} {
+		t.Run(kind, func(t *testing.T) {
+			e := newLaunchEnv(t)
+			path := installCompositionGateway(t)
+			want := path
+			if kind != "regular" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "symlink", "symlink nonexecutable":
+					want = filepath.Join(t.TempDir(), "gateway target")
+					mode := os.FileMode(0700)
+					if kind == "symlink nonexecutable" {
+						mode = 0600
+					}
+					if err := os.WriteFile(want, []byte("#!/bin/sh\nexit 0\n"), mode); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(want, path); err != nil {
+						t.Fatal(err)
+					}
+				case "nonexecutable":
+					if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "dangling":
+					if err := os.Symlink(path+"-missing", path); err != nil {
+						t.Fatal(err)
+					}
+				case "directory":
+					if err := os.Mkdir(path, 0700); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			e.r.Agent = store.AgentCursor
+			e.r.AgentArgs = nil
+			before, _ := json.Marshal(e.r)
+			c, err := ComposeLaunch(e.r, e.cfg)
+			valid := kind == "regular" || kind == "symlink"
+			if valid {
+				if err != nil || c.Create.Command[0] != want {
+					t.Fatalf("gateway=%+v err=%v want=%s", c.Create, err, want)
+				}
+			} else if err == nil {
+				t.Fatal("unavailable installed gateway accepted")
+			}
+			if !valid {
+				if _, _, err := e.launch(); err == nil {
+					t.Fatal("fresh launch accepted unavailable gateway")
+				}
+				if row, err := e.s.GetSpawn(e.r.InstanceID); !errors.Is(err, store.ErrSpawnNotFound) || row.InstanceID != "" {
+					t.Fatalf("fresh refusal wrote row: %+v %v", row, err)
+				}
+			}
+			after, _ := json.Marshal(e.r)
+			if string(before) != string(after) {
+				t.Fatal("composition mutated inputs")
+			}
+			if len(e.rec.SocketCalls()) != 0 {
+				t.Fatal("composition touched tmux")
+			}
+		})
+	}
+}
 func TestCursorArgsSupportedAndRefused(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -57,6 +142,10 @@ func TestCursorArgsSupportedAndRefused(t *testing.T) {
 		{"equals model", []string{"--model=x", "hello"}, []string{"--model", "x"}, "hello", false},
 		{"explicit prompt", []string{"--", "--looks-like-flag"}, nil, "--looks-like-flag", false},
 		{"session", []string{"--resume", "s"}, nil, "", true},
+		{"resume picker", []string{"--resume"}, nil, "", true},
+		{"continue", []string{"--continue"}, nil, "", true},
+		{"resume command", []string{"resume"}, nil, "", true},
+		{"hidden new session", []string{"--new-session-id", "new"}, nil, "", true},
 		{"remote", []string{"--remote", "wss://x"}, nil, "", true},
 		{"auth", []string{"--api-key", "synthetic"}, nil, "", true},
 		{"mode", []string{"acp"}, nil, "", true},
@@ -75,6 +164,102 @@ func TestCursorArgsSupportedAndRefused(t *testing.T) {
 			}
 			if err != nil || prompt != tc.prompt || !reflect.DeepEqual(args, tc.want) {
 				t.Fatalf("CursorArgs = %q %q %v", args, prompt, err)
+			}
+		})
+	}
+}
+
+func TestCursorResumeComposition(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		args       []string
+		prompt     string
+		noPreTrust bool
+	}{
+		{"configured", `/opt/current cursor/agent 'quoted'`, []string{"--resume", "OLDER", "--model", "model-x", "saved\n多行 🦋"}, "saved\n多行 🦋", false},
+		{"default path", "", []string{"--continue", "-m=model-x"}, "", false},
+		{"opt out", "/opt/new/agent", []string{"resume", "--new-session-id=NEW", "--model=model-x", "--", "--resume"}, "--resume", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			exe := installCompositionGateway(t)
+			e.row.Agent = store.AgentCursor
+			e.row.SessionID = "LATEST"
+			e.row.JSONLPath = "/synthetic/protected/transcript.jsonl"
+			e.row.AgentArgs = tc.args
+			e.row.NoPreTrust = tc.noPreTrust
+			e.row.CWD = "/saved/project with spaces"
+			e.row.TmuxSessionName = `$saved\name`
+			e.row.ExtraEnv = map[string]string{"CURSOR_GROUP": "saved-group", "SAVED_VALUE": "spaces and 'quotes'"}
+			e.cfg.Launch.CursorPath = tc.path
+			before, err := json.Marshal(e.row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: "LATEST", Socket: e.socket, Token: relaunchToken, StoreID: relaunchStoreID}, e.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := tc.path
+			if path == "" {
+				path = "agent"
+			}
+			want := []string{exe, "cursor-host", "--runtime", path, "--runtime-args", `["--model","model-x"]`, "--initial-prompt", tc.prompt, "--load-session", "LATEST"}
+			if !slices.Equal(c.Create.Command, want) {
+				t.Fatalf("command %q; want %q", c.Create.Command, want)
+			}
+			wantEnv := map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": e.row.InstanceID, "AGENT_DIRECTOR_RELAY_MODE": e.row.RelayMode, "AGENT_DIRECTOR_AGENT": "cursor", "AGENT_DIRECTOR_LABEL_ROLE": "worker", "CURSOR_GROUP": "saved-group", "SAVED_VALUE": "spaces and 'quotes'"}
+			if !reflect.DeepEqual(c.Create.Env, wantEnv) {
+				t.Fatalf("env %v; want %v", c.Create.Env, wantEnv)
+			}
+			if c.Create.CWD != e.row.CWD || c.Create.Name != e.row.TmuxSessionName || c.Create.Socket != e.socket || c.Create.Token != relaunchToken || c.Create.StoreID != relaunchStoreID || c.Create.InstanceID != e.row.InstanceID {
+				t.Fatalf("create identity/config %+v", c.Create)
+			}
+			wantTrust := PreTrustFailed
+			if tc.noPreTrust {
+				wantTrust = PreTrustSkipped
+			}
+			if c.PreTrust != wantTrust {
+				t.Fatalf("pretrust %q; want %q", c.PreTrust, wantTrust)
+			}
+			after, err := json.Marshal(e.row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(before) != string(after) {
+				t.Fatal("composition mutated saved row")
+			}
+			c.Create.Env["SAVED_VALUE"] = "changed"
+			c.Create.Command[0] = "changed"
+			if e.row.ExtraEnv["SAVED_VALUE"] != "spaces and 'quotes'" || !slices.Equal(e.row.AgentArgs, tc.args) {
+				t.Fatal("composition aliases saved configuration")
+			}
+		})
+	}
+}
+
+func TestCursorResumeRefusesUnavailableLatest(t *testing.T) {
+	for _, tc := range []struct{ name, saved, target, transcript string }{
+		{"missing latest", "", "", "/synthetic/transcript"},
+		{"older target", "LATEST", "OLDER", "/synthetic/transcript"},
+		{"missing protected path", "LATEST", "LATEST", ""},
+		{"whitespace", " LATEST", " LATEST", "/synthetic/transcript"},
+		{"newline", "LATEST\n", "LATEST\n", "/synthetic/transcript"},
+		{"nul", "LATEST\x00", "LATEST\x00", "/synthetic/transcript"},
+		{"oversize", strings.Repeat("s", 513), strings.Repeat("s", 513), "/synthetic/transcript"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRelaunchEnv(t)
+			e.row.Agent = store.AgentCursor
+			e.row.SessionID, e.row.JSONLPath = tc.saved, tc.transcript
+			before, _ := json.Marshal(e.row)
+			got, err := ComposeRelaunch(RelaunchInput{Row: e.row, SessionID: tc.target}, e.cfg)
+			if !errors.Is(err, ErrSpawnDeniedFlag) || !reflect.DeepEqual(got, ComposedRelaunch{}) {
+				t.Fatalf("composition %+v, %v; want empty refusal", got, err)
+			}
+			after, _ := json.Marshal(e.row)
+			if string(before) != string(after) {
+				t.Fatal("refusal mutated saved row")
 			}
 		})
 	}

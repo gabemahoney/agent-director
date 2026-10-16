@@ -54,3 +54,70 @@ func TestCursorMissingRefusesReplacedAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestCursorResumedGatewayMissingGuardsRetainedDescriptor(t *testing.T) {
+	for _, change := range []string{"none", "registered current", "old descriptor changed", "path replaced", "socket replaced", "pane replaced", "row restored"} {
+		t.Run(change, func(t *testing.T) {
+			f, old, b := cursorRowBinding(t)
+			db, err := sql.Open("sqlite", f.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`UPDATE spawns SET launch_token='2222222222222222',pane_pid=pane_pid+100,row_version=row_version+1 WHERE instance_id=?`, old.InstanceID); err != nil {
+				t.Fatal(err)
+			}
+			row, err := f.s.GetSpawn(old.InstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.Identity.Token == b.Token || row.Identity.PanePID == b.GatewayPID {
+				t.Fatal("setup retained current descriptor")
+			}
+			queries := map[string]string{
+				"old descriptor changed": `UPDATE cursor_runtimes SET bound_connection_id='replacement' WHERE bound_instance_id=?`,
+				"path replaced":          `UPDATE spawns SET jsonl_path='replacement' WHERE instance_id=?`,
+				"socket replaced":        `UPDATE spawns SET tmux_socket='replacement' WHERE instance_id=?`,
+				"pane replaced":          `UPDATE spawns SET pane_id='%replacement' WHERE instance_id=?`,
+				"row restored":           `UPDATE spawns SET launch_token='restored',row_version=row_version+1 WHERE instance_id=?`,
+			}
+			if change == "registered current" {
+				current := b
+				current.Token = row.Identity.Token
+				current.GatewayPID = row.Identity.PanePID
+				current.Connection = "resumed-connection"
+				if ok, err := f.s.RegisterCursorRuntime(row, current); err != nil || !ok {
+					t.Fatalf("current registration %v %v", ok, err)
+				}
+			} else if q := queries[change]; q != "" {
+				if _, err := db.Exec(q, row.InstanceID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := f.rawColumns(row.InstanceID)
+			bindingBefore, err := f.s.ReadCursorRuntime(row.InstanceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			view := f.s.WithCursorMissingReads([]store.CursorMissingProof{{Row: row, Binding: b}})
+			projected, readErr := view.GetSpawn(row.InstanceID)
+			prior, result, writeErr := f.s.MarkCursorMissingIfSameLaunch(row, b)
+			if change == "none" {
+				if readErr != nil || projected.State != store.StateMissing || writeErr != nil || result != store.CondApplied || prior != row.State {
+					t.Fatalf("retained descriptor read/write disagree: row=%+v read=%v prior=%s result=%v write=%v", projected, readErr, prior, result, writeErr)
+				}
+				return
+			}
+			if readErr == nil && projected.State == store.StateMissing {
+				t.Fatal("stale proof projected replacement missing")
+			}
+			if writeErr != nil || result != store.CondChanged || prior != "" {
+				t.Fatalf("stale proof mutated: %q %v %v", prior, result, writeErr)
+			}
+			bindingAfter, err := f.s.ReadCursorRuntime(row.InstanceID)
+			if err != nil || !reflect.DeepEqual(before, f.rawColumns(row.InstanceID)) || !reflect.DeepEqual(bindingBefore, bindingAfter) {
+				t.Fatal("stale proof changed current row/binding")
+			}
+		})
+	}
+}

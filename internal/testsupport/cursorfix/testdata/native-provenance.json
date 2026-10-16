@@ -1,0 +1,27 @@
+{
+  "classification": "source-derived synthetic",
+  "version": "2026.09.28-64d2043",
+  "platform": "Linux installed program distribution; fixture validated in Debian bookworm linux/amd64 sandbox",
+  "authenticated_cursor": false,
+  "captured_native_session": false,
+  "cursor_executed": false,
+  "program_root": "/opt/cursor-agent/versions/2026.09.28-64d2043",
+  "program_sha256": {
+    "index.js": "45d9b1df85d0165cb2e690f96fa5fbe4b59e8a71ddd22176a301ba7e5b18a0b9",
+    "6136.index.js": "e1000a10d7d6b2b0ad897abcadd43177267d1c18baa907861dd19eb9708eddca",
+    "4945.index.js": "e6b1a2a2d0a7974dd9ad5920483cecbcc1c3c76a9dc1978d11a081cab62e2df6",
+    "1623.index.js": "6e393636a7898efe8b9a52463682d7cddf211e668334aed58f6864b37eaef60d",
+    "6536.index.js": "d777b3cfcc2aa3f42eb0b22cb91480c31482a1c669c6942dc475c89491db9fd3"
+  },
+  "derivation": [
+    "6136 ./src/acp/acp-storage.ts: config root/acp-sessions/sessionId/store.db; meta.json contains schemaVersion=1, absolute cwd and optional title. No ~/.cursor access: factory owns its independent TempDir config root.",
+    "6136 ./src/acp/agent-store.ts: loading saved session checks store.db existence before initAndLoad; missing database throws SessionNotFoundError. NativeConfigRoot models this check only in the synthetic ACP peer; production API never receives or parses native paths.",
+    "4945 ../cursor-sdk-local-runtime/dist/run-store/sqlite-blob-store.js initializeDriver: WAL, synchronous NORMAL, busy_timeout=5000, user_version=1; blobs(id TEXT PRIMARY KEY,data BLOB); meta(key TEXT PRIMARY KEY,value TEXT). Same DDL independently occurs in 1623 and 6536.",
+    "index ../agent-kv/dist/index.js: AgentMetadataSerde uses UTF-8 JSON with latestRootBlobId encoded hex; SQLite metadata key 0 stores hex of serialized bytes. Blob IDs are SHA-256 of protobuf bytes, hex in SQLite; blob payload remains BLOB.",
+    "index ../proto/dist/generated/agent/v1/agent_pb.js: UserMessage fields text=1/message_id=2; AgentConversationTurnStructure user_message=1 bytes; ConversationTurnStructure agent_conversation_turn=1 message; ConversationStateStructure turns=8 repeated bytes. Factory encodes a single user-only checkpoint with these descriptors; no invented transcript or native marker.",
+    "index ../cursor-config/dist/paths.js: root chosen by CURSOR_CONFIG_DIR, then XDG_CONFIG_HOME/cursor, else homedir/.cursor. Factory takes an explicit isolated root and never probes a user's native/config/auth location."
+  ],
+  "lifecycle_labels": "API rows model ended after graceful stop and missing after gateway/runtime crash. The SQLite checkpoint is synthetically persisted, not captured through stop/crash execution; no WAL crash-recovery or authenticated recall evidence is claimed.",
+  "separation": "NativeHistory owns source-derived SQLite and ACP meta sidecars; GatewayHistory remains synthetic AD protected JSONL. Neither is Claude JSONL. They are independently removable.",
+  "peer_limit": "The optional native existence check models pinned missing-session behavior; a present DB still receives scripted ACP success. Peer does not execute Cursor or decode native data, and never proves conversation recall."
+}

@@ -23,6 +23,13 @@ var CodexResumeArgs = map[string]bool{
 	"--include-non-interactive": true,
 }
 
+// CursorResumeArgs contains the session selectors verified in the versioned
+// Cursor 2026.09.28-64d2043 command definition. The hidden new-session-id is
+// included because AD owns the selected conversation on replay.
+var CursorResumeArgs = map[string]bool{
+	"--resume": true, "--continue": true, "--new-session-id": true, "resume": true,
+}
+
 // ExtractedArgs carries copied survivors, original dropped-token spellings in
 // argv order, and the parsed options removed. A partially removed cluster is
 // reported with its original token spelling; Removed identifies the exact
@@ -51,7 +58,49 @@ func ExtractResumeArgs(agent string, args []string) ExtractedArgs {
 	if agent == "codex" {
 		return extractCodexArgs(args)
 	}
+	if agent == "cursor" {
+		return extractCursorArgs(args)
+	}
 	return ExtractedArgs{Args: append([]string(nil), args...)}
+}
+
+// Cursor selectors are verified in Cursor 2026.09.28-64d2043's versioned
+// command definition. Required model values and operands after -- own their
+// tokens, including spellings which would otherwise be selectors.
+func extractCursorArgs(args []string) ExtractedArgs {
+	var removed []ArgOption
+	commandPosition := true
+	for i := 0; i < len(args); i++ {
+		key, value, equals := strings.Cut(args[i], "=")
+		if key == "--" {
+			break
+		}
+		if key == "--model" || key == "-m" {
+			if !equals && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		if !CursorResumeArgs[key] || (key == "resume" && (equals || !commandPosition)) {
+			if !strings.HasPrefix(args[i], "-") {
+				commandPosition = false
+			}
+			continue
+		}
+		if key == "resume" {
+			commandPosition = false
+		}
+		o := ArgOption{Index: i, Name: key, Canonical: key, Spelling: args[i], Known: true}
+		if equals {
+			o.Values = []string{value}
+		} else if (key == "--new-session-id" || (key == "--resume" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-"))) && i+1 < len(args) {
+			i++
+			o.Values = []string{args[i]}
+			o.ValueIndices = []int{i}
+		}
+		removed = append(removed, o)
+	}
+	return removeArgOptions(args, removed, nil)
 }
 
 func extractClaudeArgs(args []string, print bool) ExtractedArgs {

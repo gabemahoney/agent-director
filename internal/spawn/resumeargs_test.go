@@ -358,6 +358,56 @@ func TestExtractResumeArgsOrderAndOwnership(t *testing.T) {
 	}
 }
 
+// Selector spellings and arities follow Cursor 2026.09.28-64d2043's command definition.
+func TestExtractCursorSelectorsAndOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		args, want, dropped []string
+	}{
+		{"resume id", []string{"--resume", "OLD", "--model", "x"}, []string{"--model", "x"}, []string{"--resume", "OLD"}},
+		{"resume equals", []string{"--resume=OLD", "hello"}, []string{"hello"}, []string{"--resume=OLD"}},
+		{"resume picker", []string{"--resume"}, nil, []string{"--resume"}},
+		{"resume before option", []string{"--resume", "--model", "x"}, []string{"--model", "x"}, []string{"--resume"}},
+		{"continue does not own prompt", []string{"--continue", "hello"}, []string{"hello"}, []string{"--continue"}},
+		{"resume command", []string{"resume"}, nil, []string{"resume"}},
+		{"command after model", []string{"-m", "x", "resume"}, []string{"-m", "x"}, []string{"resume"}},
+		{"resume prompt after command", []string{"resume", "resume"}, []string{"resume"}, []string{"resume"}},
+		{"later resume is operand", []string{"hello", "resume"}, []string{"hello", "resume"}, nil},
+		{"new session required value", []string{"--new-session-id", "NEW", "hello"}, []string{"hello"}, []string{"--new-session-id", "NEW"}},
+		{"new session equals", []string{"--new-session-id=NEW", "hello"}, []string{"hello"}, []string{"--new-session-id=NEW"}},
+		{"new session owns flag", []string{"--new-session-id", "--continue", "hello"}, []string{"hello"}, []string{"--new-session-id", "--continue"}},
+		{"new session owns delimiter", []string{"--new-session-id", "--", "--continue", "hello"}, []string{"hello"}, []string{"--new-session-id", "--", "--continue"}},
+		{"missing new session value", []string{"--new-session-id"}, nil, []string{"--new-session-id"}},
+		{"model owns selector", []string{"--model", "--resume", "hello"}, []string{"--model", "--resume", "hello"}, nil},
+		{"short model owns command", []string{"-m", "resume", "hello"}, []string{"-m", "resume", "hello"}, nil},
+		{"model equals owns selector", []string{"--model=--continue", "hello"}, []string{"--model=--continue", "hello"}, nil},
+		{"owned delimiter not boundary", []string{"--model", "--", "--continue", "hello"}, []string{"--model", "--", "hello"}, []string{"--continue"}},
+		{"delimiter protects selectors", []string{"--continue", "--", "--resume", "OLD", "resume"}, []string{"--", "--resume", "OLD", "resume"}, []string{"--continue"}},
+		{"unverified aliases survive", []string{"-r", "OLD", "-c"}, []string{"-r", "OLD", "-c"}, nil},
+		{"repeated selectors", []string{"--resume=OLDER", "--model", "x", "--continue", "--resume", "OLD", "hello"}, []string{"--model", "x", "hello"}, []string{"--resume=OLDER", "--continue", "--resume", "OLD"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := slices.Clone(tc.args)
+			got := ExtractResumeArgs("cursor", tc.args)
+			if !slices.Equal(got.Args, tc.want) || !slices.Equal(got.Dropped, tc.dropped) {
+				t.Fatalf("extracted %+v; want args %q dropped %q", got, tc.want, tc.dropped)
+			}
+			if !slices.Equal(tc.args, before) {
+				t.Fatal("extraction mutated saved args")
+			}
+			if len(got.Args) > 0 {
+				got.Args[0] = "changed"
+			}
+			if len(got.Dropped) > 0 {
+				got.Dropped[0] = "changed"
+			}
+			if !slices.Equal(tc.args, before) {
+				t.Fatal("extraction aliases saved args")
+			}
+		})
+	}
+}
+
 func TestExtractClaudeRemovedMetadata(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

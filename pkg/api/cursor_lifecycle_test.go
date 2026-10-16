@@ -18,10 +18,6 @@ func TestAdviceFollow_A25_B14_CursorFreshInstanceRemedy(t *testing.T) {
 		resume                bool
 		state, session        string
 	}{
-		{"resume ended with session", "cursor", "cursor", true, "ended", "synthetic-session"},
-		{"resume missing without session", "cursor", "cursor", true, "missing", ""},
-		{"resume pending without session", "cursor", "cursor", true, "pending", ""},
-		{"resume live with session", "cursor", "cursor", true, "waiting", "synthetic-session"},
 		{"same agent reuse", "cursor", "cursor", false, "ended", "synthetic-session"},
 		{"switch to cursor", "claude", "cursor", false, "ended", "synthetic-session"},
 		{"switch from cursor", "cursor", "claude", false, "ended", "synthetic-session"},

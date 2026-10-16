@@ -12,9 +12,23 @@ import (
 // Acknowledgement, a native claim and local request retirement do not prove a
 // dialog gone. This grants no authority to replay an earlier submission.
 func (s *Store) CheckCursorPrompt(b CursorRuntime, until time.Time, check CursorCheck) (bool, error) {
+	return s.checkCursorPrompt(b, until, check, "")
+}
+
+// CheckLoadedCursorPrompt permits the first real prompt while a confirmed
+// latest load remains pending. Only this prompt path admits pending, and only
+// for the exact saved transcript and current connection; all holds still apply.
+func (s *Store) CheckLoadedCursorPrompt(b CursorRuntime, path string, until time.Time, check CursorCheck) (bool, error) {
+	if path == "" {
+		return false, fmt.Errorf("store: loaded Cursor transcript required")
+	}
+	return s.checkCursorPrompt(b, until, check, path)
+}
+
+func (s *Store) checkCursorPrompt(b CursorRuntime, until time.Time, check CursorCheck, pendingPath string) (bool, error) {
 	eligible := false
 	err := s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
-		if _, err := s.cursorAuthority(ctx, conn, b, until, check); err != nil {
+		if _, err := s.cursorAuthorityForPrompt(ctx, conn, b, until, check, pendingPath); err != nil {
 			return err
 		}
 		var held int

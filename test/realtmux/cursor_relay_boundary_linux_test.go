@@ -3,6 +3,7 @@
 package realtmux_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -210,6 +211,7 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 				return worker > 0
 			}, nil)
 			before := readRow(t, f.DBPath, id)
+			controlBoundary := time.Now()
 			if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: "held cancellation"}); err != nil {
 				t.Fatal(err)
 			}
@@ -305,6 +307,9 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 				assertPreserved()
 			} else {
 				lastInterrupt := time.Time{}
+				if mode == "interrupt" {
+					controlBoundary = time.Now()
+				}
 				waitForObserved(t, 5*time.Second, "original cancellation deadline retires gateway and runtime", func() bool {
 					pc := probe.NewProcChecker()
 					if tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.GatewayPID, Starttime: binding.GatewayStart}) == tmux.ProcGone && tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.RuntimePID, Starttime: binding.RuntimeStart}) == tmux.ProcGone {
@@ -319,10 +324,33 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 				}, func() string {
 					return fmt.Sprintf("gateway=%s runtime=%s", procState(binding.GatewayPID), procState(binding.RuntimePID))
 				})
+				retiredAt := time.Now()
 				assertPreserved()
+				raw, readErr := os.ReadFile(before.JSONLPath.(string))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				for _, line := range bytes.Split(raw, []byte{'\n'}) {
+					var record struct {
+						Kind string `json:"kind"`
+						Data struct {
+							ConsumedAt time.Time `json:"consumed_at"`
+						} `json:"data"`
+					}
+					if json.Unmarshal(line, &record) == nil && record.Kind == "input_control" && !record.Data.ConsumedAt.IsZero() {
+						controlBoundary = record.Data.ConsumedAt
+						break
+					}
+				}
+				if elapsed := retiredAt.Sub(controlBoundary); elapsed < 3*time.Second {
+					t.Fatalf("cancellation expired before the original 3s deadline: %s", elapsed)
+				}
 				failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
-				if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), "operation timed out") {
-					t.Fatalf("expected original finite operation timeout: %v", failures)
+				if len(failures) != 1 || failures[0]["instance_id"] != id || failures[0]["source"] != "ad_cursor_host" {
+					t.Fatalf("expected one attributed cancellation failure: %v", failures)
+				}
+				if reason, ok := failures[0]["reason"].(string); !ok || strings.TrimSpace(reason) == "" {
+					t.Fatalf("cancellation failure lacks diagnostic reason: %v", failures)
 				}
 			}
 			cancels, permissionReplies, prompts, replies := 0, 0, 0, 0

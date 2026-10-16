@@ -45,6 +45,10 @@ Validated Cursor permission and blocking plan requests use `check_permission`,
 its own `request_token`; answering one never answers another. Requests retain
 their admitted conversation. [Conversation rotation](usage.md#fresh-cursor-use)
 does not transfer old choices or request identities to the fresh conversation.
+Resume does not restore old choices or make replayed permission, plan or question
+requests answerable. Load replay supplies no execution proof or readiness and
+cannot release independent durable holds; question denial still applies with
+either `disable_ask_user` value.
 Cancellation, a new session id and turn completion cannot prove unknown-origin
 requests gone or release independent permission or plan holds. `tool_name` is
 the supplied action title or plan name, `tool_use_id` is its actual

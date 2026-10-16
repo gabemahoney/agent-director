@@ -148,6 +148,13 @@ RUN cd /opt/cursor-pane-bun/source/pkg/ts-bun-client \
  && chmod -R a+rX /opt/cursor-pane-bun
 
 # Pre-built binary + driver assets are produced by the host Makefile.
+COPY go.mod go.sum /opt/cursor-resume-fixture/
+COPY internal/testsupport/cursorfix/nativecheckpoint /opt/cursor-resume-fixture/internal/testsupport/cursorfix/nativecheckpoint
+COPY test/driver/cursor-resume-native /opt/cursor-resume-fixture/test/driver/cursor-resume-native
+RUN cd /opt/cursor-resume-fixture \
+ && GOPROXY=off GOSUMDB=off CGO_ENABLED=0 go build -o /usr/local/bin/cursor-resume-native ./test/driver/cursor-resume-native \
+ && sha256sum go.mod go.sum internal/testsupport/cursorfix/nativecheckpoint/encode.go test/driver/cursor-resume-native/main.go > source-sha256
+
 COPY bin/agent-director /usr/local/bin/agent-director
 # The operator tool agent-director-admin (b.vqr), from the same `make build`
 # so its version stamp matches, kept off PATH as install.sh keeps it. At
