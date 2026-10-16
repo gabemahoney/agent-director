@@ -680,9 +680,9 @@ Find the cause by the message's first line.
 `config.toml`:
 
 - **`cannot tell which programs agent-director launches (the [launch] table)`.**
-  A `[launch]` line is outside the form `install.sh` reads. Keep `claude_path`
-  and `codex_path` each once, in lower case, under one `[launch]` header, each
-  on one line as `key = "<path>"` or `key = '<path>'`, with no backslash and at
+  A `[launch]` line is outside the form `install.sh` reads. Keep `claude_path`,
+  `codex_path` and `cursor_path` each once, in lower case, under one `[launch]`
+  header, each on one line as `key = "<path>"` or `key = '<path>'`, with no backslash and at
   most a `#` comment after it. A value is an absolute path or starts with `~/`;
   `""`, or no line, leaves the key unset. A blank value, a relative path, `~`
   alone and `~user/...` are refused (see [configuration](configuration.md)).

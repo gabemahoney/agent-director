@@ -3,11 +3,16 @@
 ## Requirements
 
 - Linux x86_64 or macOS arm64 (Apple Silicon); no other platform.
-- At least one of Claude Code and Codex. Each counts as installed when its
-  `[launch]` key in `config.toml` (`claude_path`, `codex_path`; see
+- At least one of Claude Code, Codex and Cursor. Each counts as installed when
+  its `[launch]` key in `config.toml` (`claude_path`, `codex_path`, `cursor_path`; see
   [configuration](configuration.md)) names an executable file, or its program
-  name (`claude`, `codex`) is on PATH. With neither, the install stops and names
-  both.
+  name (`claude`, `codex`, `agent`) is on PATH. With none, the install stops
+  and names all three. This checks presence, not runtime compatibility.
+- For Cursor: the standalone `agent` program from <https://cursor.com/install>,
+  on PATH or named by `[launch] cursor_path`. The editor's `cursor` command
+  does not count. The Cursor gateway currently runs on Linux only; no minimum
+  Cursor version or macOS Cursor runtime support is established. The recorded
+  Linux candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
 - For Claude Code: `claude` (Claude Code) 2.1.296 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.
@@ -89,8 +94,9 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   [Schedule the sweeps](#schedule-the-sweeps).
 - `--symlink-dir <dir>`: PATH symlink dir (default `~/.local/bin`, if on PATH).
 - `--no-symlink`: create no PATH symlink.
-- `--keep-prior`: keep each overwritten binary as `<target>.prior` (roll back
-  with `mv`). The upgrade that moves the directory makes no snapshot (see
+- `--keep-prior`: keep each overwritten binary as `<target>.prior`. Restoring
+  binaries alone requires an unchanged directory and schema. The upgrade that
+  moves the directory makes no snapshot (see
   [Upgrade](#upgrade)).
 
 ## Claude Code and Codex
@@ -106,13 +112,19 @@ Before it changes anything, `install.sh` looks for each agent (see
   checked and the command to check it. `install.sh` never runs Codex, because
   `codex --version` writes Codex's own files (`tmp/arg0/...`) in the Codex
   folder it runs against: the default one unless `CODEX_HOME` names another.
+- **Cursor found:** the standalone `agent` program's path, with a note that
+  this is presence only: version and compatibility were not checked and
+  `agent` was not run.
 - **An agent not found:** `not installed`, with the reason.
 - **A `[launch]` path that names no executable file:** a line saying so. The
   agent counts as installed only if its program is on PATH, and that program is
-  then the one used.
+  then the one discovered for installation. This does not rewrite `[launch]`.
+  For Cursor, a configured missing path remains the runtime launch path;
+  discovering `agent` on PATH allows installation only. See
+  [`cursor_path`](configuration.md).
 
-Without Claude Code (a Codex-only host) the install still succeeds, with these
-differences:
+Without Claude Code (a Codex-only or Cursor-only host) the install still
+succeeds, with these differences:
 
 - `~/.claude/settings.json` is not read, written or checked, so the help hooks
   are not added and a dangling link there is not an error. A line says it was
@@ -120,13 +132,14 @@ differences:
 - `--register-mcp` registers nothing, and says so. No `claude mcp get` runs.
 - `inject_help_hook` is still set in `config.toml` unless `--no-hooks`.
 
-`install.sh` registers nothing with Codex, writes nothing in any Codex folder
-and never writes `[launch]`. A Codex folder's MCP entry and help entry are made
+`install.sh` registers nothing with Codex or Cursor, writes nothing in their
+agent folders and never writes `[launch]`. A Codex folder's MCP entry and help entry are made
 by hand: see [Set up agent-director in a Codex
-folder](settings.md#set-up-agent-director-in-a-codex-folder). With neither agent
-found it stops, exit 2, before anything changes, and says how to make one found: put `claude` or `codex` on
-PATH, or set `[launch] claude_path` or `codex_path` in `config.toml`. The
-message names the `config.toml` the install read: the old directory's while the
+folder](settings.md#set-up-agent-director-in-a-codex-folder). With no supported agent
+found it stops, exit 2, before anything changes, and says how to make one found:
+put `claude`, `codex` or `agent` on PATH, or set `[launch] claude_path`,
+`codex_path` or `cursor_path` in `config.toml`. The message names the
+`config.toml` the install read: the old directory's while the
 move is due (see [Upgrade](#upgrade)), else `~/.config/agent-director/config.toml`.
 This stop comes after every `config.toml` refusal: a file that is malformed is
 refused first, exit 5 (see
@@ -359,7 +372,9 @@ because a re-run has no move to print them. See
 
 **Going back** to the previous release is
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-Every write since the upgrade is lost.
+Binary-only rollback requires an unchanged directory and schema. Restoring a
+pre-upgrade store loses writes since its backup; restoring the kept pre-move
+directory loses writes since the move.
 
 ## Install the TypeScript client
 

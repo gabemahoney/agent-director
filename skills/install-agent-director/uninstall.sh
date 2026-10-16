@@ -312,11 +312,11 @@ ad_db_path_refuse() {
     done
     if [[ "$n" -gt 0 ]]; then
         if [[ "${about_launch:-0}" -eq 1 ]]; then
-            echo "  install.sh reads [launch] claude_path and codex_path itself, to choose the" >&2
+            echo "  install.sh reads [launch] claude_path, codex_path and cursor_path itself, to choose the" >&2
             echo "  Claude Code program it runs and to see which agents are installed, and" >&2
             echo "  reads only this form of the file: blank lines, # comments, [name]" >&2
             echo "  headers and name = value lines, a name being letters, digits, _ and -," >&2
-            echo "  with claude_path and codex_path under [launch] set to a one-line \"...\"" >&2
+            echo "  with claude_path, codex_path and cursor_path under [launch] set to a one-line \"...\"" >&2
             echo "  holding no backslash, or '...', and an optional # comment after it. A" >&2
             echo "  value is an absolute path or starts with ~/; an empty \"\" counts as unset." >&2
         elif [[ "${want_log:-0}" -eq 1 ]]; then
@@ -351,7 +351,7 @@ ad_db_path_refuse() {
 #   log     [log] error_log_path, resolved the same way: empty when the file
 #           does not set it or sets it empty (there is then nothing to move
 #           or check);
-#   launch  [launch] claude_path, then codex_path, resolved as above: each
+#   launch  [launch] claude_path, then codex_path and cursor_path, resolved as above: each
 #           empty when unset or empty.
 # Every line is printed, an empty one too, so a caller reads them by
 # position (command substitution drops trailing empty lines: read from a
@@ -363,7 +363,7 @@ ad_store_db_path() (
     LC_ALL=C
     local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
     local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
-    local have_claude=0 have_codex=0 claude_value="" codex_value=""
+    local have_claude=0 have_codex=0 have_cursor=0 claude_value="" codex_value="" cursor_value=""
     local value="" log_value="" key rest resolved name t k which parsed seen arg
     local -a tables=(store)
     shift 3
@@ -389,6 +389,7 @@ ad_store_db_path() (
     local re_launch='^[Ll][Aa][Uu][Nn][Cc][Hh]$'
     local re_claude='^[Cc][Ll][Aa][Uu][Dd][Ee]_[Pp][Aa][Tt][Hh]$'
     local re_codex='^[Cc][Oo][Dd][Ee][Xx]_[Pp][Aa][Tt][Hh]$'
+    local re_cursor='^[Cc][Uu][Rr][Ss][Oo][Rr]_[Pp][Aa][Tt][Hh]$'
     local re_cntrl='[[:cntrl:]]'
     # Only to word a refusal: the line forms the reader refuses, as TOML
     # writes them. A key or table-name part is a bare name, a "..." holding no
@@ -416,10 +417,10 @@ ad_store_db_path() (
 
     # is_table <name> <table>: is <name> the table's name in some letter
     # case; key_of <table>: the key the reader reads under it.
-    # The launch table holds two keys, so is_key takes either of them there,
+    # The launch table holds three keys, so is_key takes any of them there,
     # and key_of names the one the (dynamically scoped) name holds, claude_path
-    # when it is neither; key_of also takes claude and codex, the two launch
-    # keys by their program.
+    # as the default; key_of also takes claude, codex and cursor, the three
+    # launch keys by their agent name.
     is_table() {
         case "$2" in
             store) [[ "$1" =~ $re_store ]] ;;
@@ -431,7 +432,7 @@ ad_store_db_path() (
         case "$2" in
             store) [[ "$1" =~ $re_db_path ]] ;;
             log) [[ "$1" =~ $re_elp ]] ;;
-            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex ]] ;;
+            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex || "$1" =~ $re_cursor ]] ;;
         esac
     }
     key_of() {
@@ -440,15 +441,18 @@ ad_store_db_path() (
             log) k=error_log_path ;;
             claude) k=claude_path ;;
             codex) k=codex_path ;;
+            cursor) k=cursor_path ;;
             launch)
-                if [[ "${name:-}" =~ $re_codex ]]; then k=codex_path; else k=claude_path; fi
+                if [[ "${name:-}" =~ $re_cursor ]]; then k=cursor_path
+                elif [[ "${name:-}" =~ $re_codex ]]; then k=codex_path
+                else k=claude_path; fi
                 ;;
         esac
     }
     # set_about <table>: the refusal that follows is about [launch] when <table>
     # is launch (its headline and closing note then name [launch]).
     set_about() {
-        if [[ "$1" == launch || "$1" == claude || "$1" == codex ]]; then
+        if [[ "$1" == launch || "$1" == claude || "$1" == codex || "$1" == cursor ]]; then
             about_launch=1
         else
             about_launch=0
@@ -460,7 +464,7 @@ ad_store_db_path() (
         local kdesc="$k" kset="set $k"
         set_about "$1"
         if [[ "$1" == launch ]]; then
-            kdesc="claude_path or codex_path"
+            kdesc="claude_path, codex_path or cursor_path"
             kset="set it"
         fi
         local -a reasons=(
@@ -670,6 +674,8 @@ ad_store_db_path() (
                     which=claude
                 elif [[ "$key" =~ $re_codex ]]; then
                     which=codex
+                elif [[ "$key" =~ $re_cursor ]]; then
+                    which=cursor
                 fi
             fi
             if [[ -z "$which" ]]; then
@@ -687,6 +693,7 @@ ad_store_db_path() (
                 log) seen=$have_log_value ;;
                 claude) seen=$have_claude ;;
                 codex) seen=$have_codex ;;
+                cursor) seen=$have_cursor ;;
             esac
             if [[ "$seen" -eq 1 ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
@@ -747,13 +754,16 @@ ad_store_db_path() (
                             "$k's value is not an absolute path or a path starting with ~/, which" \
                             "agent-director refuses (a blank value, a relative path, ~ alone and" \
                             "~user/... are refused too). Write the program's absolute path, or one" \
-                            "starting with ~/, or remove this line to launch ${which} by its name" \
+                            "starting with ~/, or remove this line to launch ${which/cursor/agent} by its name" \
                             "on the PATH; an empty \"\" counts as unset."
                         ;;
                 esac
                 if [[ "$which" == claude ]]; then
                     claude_value="$parsed"
                     have_claude=1
+                elif [[ "$which" == cursor ]]; then
+                    cursor_value="$parsed"
+                    have_cursor=1
                 else
                     codex_value="$parsed"
                     have_codex=1
@@ -782,7 +792,7 @@ ad_store_db_path() (
     if [[ "$want_launch" -eq 1 ]]; then
         # Only "", an absolute path or ~/... got here: an absolute path stays
         # as written and ~/... is joined onto the home directory.
-        for value in "$claude_value" "$codex_value"; do
+        for value in "$claude_value" "$codex_value" "$cursor_value"; do
             case "$value" in
                 "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
                 *)     resolved="$value" ;;
@@ -1418,7 +1428,7 @@ fi
 if [[ "$MCP_ALSO" -eq 1 ]]; then
     launch_claude=""
     if launch_out="$(ad_store_db_path "$CONFIG_TOML" "$HOME" "$DEFAULT_INSTALL_ROOT" launch 2>&1)"; then
-        # Lines: the store path, claude_path, codex_path (any may be empty).
+        # Lines: the store path, claude_path, codex_path, cursor_path (any may be empty).
         { IFS= read -r launch_line || true; IFS= read -r launch_claude || true; } <<<"$launch_out"
     else
         # The reader's refusal: its headline, then config, line and reason

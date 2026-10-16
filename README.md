@@ -1,6 +1,6 @@
 # agent-director
 
-Supervise long-running Claude Code and Codex sessions ("Spawns") from a
+Supervise long-running Claude Code, Codex and Cursor sessions ("Spawns") from a
 script, another agent, or an MCP-capable LLM client. One Go binary, one SQLite
 file, and tmux.
 
@@ -20,8 +20,11 @@ file, and tmux.
 ## Prerequisites
 
 - Linux x86_64 or Apple Silicon (arm64) macOS.
-- At least one of Claude Code and Codex, each on PATH or named by `[launch]
-  claude_path` / `codex_path` in `config.toml`. For Claude Code, `claude` (Claude
+- At least one of Claude Code, Codex and Cursor, each on PATH or named by
+  `[launch] claude_path` / `codex_path` / `cursor_path` in `config.toml`.
+  Cursor needs its standalone `agent` program, not the editor's `cursor`
+  command; its gateway currently supports Linux only, with no established
+  minimum Cursor version. For Claude Code, `claude` (Claude
   Code) 2.1.296 or later: the native binary, or a wrapper that `exec`s it. For
   Codex, `codex` (Codex) 0.159.2 or later: its native program, or a wrapper that
   `exec`s it. An npm-installed `codex` does not qualify: set `[launch]
@@ -38,12 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/gabemahoney/agent-director/main/ski
 This installs `agent-director` on your PATH and creates
 `~/.config/agent-director/`. Add `--register-mcp` to also register the MCP server
 with Claude Code, and `--schedule` to also schedule the two sweeps (see
-"Keep it healthy"). The install registers nothing with Codex.
+"Keep it healthy"). The install registers nothing with Codex or Cursor.
 
 ## First spawn
 
 ```sh
-agent=claude   # or codex
+agent=claude   # or codex; cursor on Linux
 id=$(agent-director spawn --cwd "$PWD" --agent "$agent" -- "what is 2+2?" | jq -r '.instance_id')
 
 agent-director list --state waiting

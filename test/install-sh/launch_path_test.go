@@ -222,6 +222,7 @@ func TestLaunchRefusals(t *testing.T) {
 		{name: "inline-table-before-any-header", raw: "launch = { codex_path = \"/opt/codex\" }\n", line: "line 1  : launch = "},
 		{name: "value-with-an-escape", keys: &apitest.ConfigKeys{ClaudePath: "/opt/cl\taude"}, line: "line 2  :   claude_path"},
 		{name: "relative-value", keys: &apitest.ConfigKeys{CodexPath: "bin/codex"}, line: "line 2  :   codex_path"},
+		{name: "relative-cursor", keys: &apitest.ConfigKeys{CursorPath: "bin/agent"}, line: "line 2  :   cursor_path"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

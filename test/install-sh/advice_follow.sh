@@ -2220,7 +2220,7 @@ EOF
 test_J14_LaunchRefusedFixAndRerun() {
     local broken advice fixed h cfg before
     local want="install.sh: cannot tell which programs agent-director launches (the [launch] table); refusing to install."
-    local note='install.sh reads [launch] claude_path and codex_path itself, to choose the Claude Code program it runs and to see which agents are installed, and reads only this form of the file: blank lines, # comments, [name] headers and name = value lines, a name being letters, digits, _ and -, with claude_path and codex_path under [launch] set to a one-line "..." holding no backslash, or '"'"'...'"'"', and an optional # comment after it. A value is an absolute path or starts with ~/; an empty "" counts as unset.'
+    local note='install.sh reads [launch] claude_path, codex_path and cursor_path itself, to choose the Claude Code program it runs and to see which agents are installed, and reads only this form of the file: blank lines, # comments, [name] headers and name = value lines, a name being letters, digits, _ and -, with claude_path, codex_path and cursor_path under [launch] set to a one-line "..." holding no backslash, or '"'"'...'"'"', and an optional # comment after it. A value is an absolute path or starts with ~/; an empty "" counts as unset.'
     while IFS='|' read -r broken advice fixed <&3; do
         h="$(new_home)" cfg="$h/.config/agent-director/config.toml"
         mkdir -p "$h/.config/agent-director"
@@ -2249,13 +2249,14 @@ test_J14_LaunchRefusedFixAndRerun() {
 [launch]\ncodex_path = ""\ncodex_path = ""|This sets codex_path a second time. Keep one.|[launch]\ncodex_path = ""
 [launch]\nCLAUDE_PATH = ""|agent-director reads this key as claude_path: its TOML decoder matches names regardless of letter case. Write it as claude_path.|[launch]\nclaude_path = ""
 [launch]\n"codex_path" = ""|agent-director reads this key as codex_path: a quoted key is the same as the bare one, and its TOML decoder matches names regardless of letter case. Write it as codex_path.|[launch]\ncodex_path = ""
-launch = { claude_path = "" }|This sets launch as a key (an inline table, say) rather than under a [launch] header. Remove this line. If it sets claude_path or codex_path, set it under the file's [launch] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[launch]\nclaude_path = ""
+launch = { claude_path = "" }|This sets launch as a key (an inline table, say) rather than under a [launch] header. Remove this line. If it sets claude_path, codex_path or cursor_path, set it under the file's [launch] header instead, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[launch]\nclaude_path = ""
 launch.claude_path = ""|This sets a launch key as a dotted key (launch.claude_path = ..., say) rather than under a [launch] header. Move this line, without the launch. prefix, to under the file's [launch] header, adding that header at the end of the file if the file has none. Add no header in this line's place: the lines below it, up to the next header, would fall under that header too.|[launch]\nclaude_path = ""
 [launch]\nclaude_path = bin/claude|claude_path's value is not a one-line "..." or '...' string, optionally followed by a # comment. Write it in that form.|[launch]\nclaude_path = '' # unset
 [launch]\ncodex_path = "/c\\\\x"|codex_path's "..." value holds a backslash, which starts an escape. Write the path without escapes; in single quotes ('...') a backslash or a double quote is literal.|[launch]\ncodex_path = ''
 [launch]\nclaude_path = "/x\t"|claude_path's value holds a control character, such as a tab. install.sh cannot install with one in the program's path, so remove it. agent-director then launches the path without it.|[launch]\nclaude_path = ""
 [launch]\nclaude_path = "bin/claude"|claude_path's value is not an absolute path or a path starting with ~/, which agent-director refuses (a blank value, a relative path, ~ alone and ~user/... are refused too). Write the program's absolute path, or one starting with ~/, or remove this line to launch claude by its name on the PATH; an empty "" counts as unset.|[launch]
 [launch]\ncodex_path = "~codex/x"|codex_path's value is not an absolute path or a path starting with ~/, which agent-director refuses (a blank value, a relative path, ~ alone and ~user/... are refused too). Write the program's absolute path, or one starting with ~/, or remove this line to launch codex by its name on the PATH; an empty "" counts as unset.|[launch]
+[launch]\ncursor_path = "bin/agent"|cursor_path's value is not an absolute path or a path starting with ~/, which agent-director refuses (a blank value, a relative path, ~ alone and ~user/... are refused too). Write the program's absolute path, or one starting with ~/, or remove this line to launch agent by its name on the PATH; an empty "" counts as unset.|[launch]
 EOF
 }
 
@@ -3551,7 +3552,7 @@ j27_toolbox() {
     local f
     rm -rf "$ROOT/toolbox-no-agents" && mkdir -p "$ROOT/toolbox-no-agents" || return 1
     for f in "$ROOT/toolbox"/*; do
-        [[ "${f##*/}" == claude || "${f##*/}" == codex ]] && continue
+        [[ "${f##*/}" == claude || "${f##*/}" == codex || "${f##*/}" == agent || "${f##*/}" == cursor ]] && continue
         ln -s "$(readlink -f "$f")" "$ROOT/toolbox-no-agents/${f##*/}" || return 1
     done
 }
@@ -3560,6 +3561,10 @@ j27_toolbox() {
 # must never run it: codex --version writes files in the Codex folder, RN-24).
 j27_codex() {
     mkdir -p "$1" && printf '#!/bin/bash\ntouch "%s/ran"\necho "codex 0.0.0"\n' "$1" >"$1/codex" && chmod 0755 "$1/codex"
+}
+
+j27_cursor() {
+    mkdir -p "$ROOT/cursor-on-path" && printf '#!/bin/bash\ntouch "%s/ran"\nexit 73\n' "$ROOT/cursor-on-path" >"$ROOT/cursor-on-path/agent" && chmod 0755 "$ROOT/cursor-on-path/agent"
 }
 
 # j27_refused <home> <claude reason> <codex reason> [old]: the refusal of an
@@ -3577,9 +3582,9 @@ j27_refused() {
     before="$(j14_snap "$h")"
     run "$h" "${argv[@]}"
     expect_rc 2 "no agent: ${2}" || return 1
-    [[ "$(head -n 1 "$ERR")" == "install.sh: neither Claude Code nor Codex was found; refusing to install." ]] \
+    [[ "$(head -n 1 "$ERR")" == "install.sh: no supported agent (Claude Code, Codex or Cursor) was found; refusing to install." ]] \
         || bad "first stderr line \"$(head -n 1 "$ERR")\""
-    expect_advice "Claude Code: $2 Codex : $3 agent-director launches Claude Code and Codex agents and needs at least one of them. Install either, then re-run this install: Claude Code: https://claude.com/claude-code, with claude on PATH, or its absolute path as claude_path under [launch] in $cfg. Codex: see Requirements in docs/install.md (https://github.com/gabemahoney/agent-director/blob/main/docs/install.md), with codex on PATH, or its absolute path as codex_path under [launch] in $cfg. Nothing was installed or changed. Re-run this install after the change."
+    expect_advice "Claude Code: $2 Codex : $3 Cursor : ${5:-agent is not on PATH, and [launch] cursor_path is not set} agent-director launches Claude Code, Codex and Cursor agents and needs at least one of them. Install one, then re-run this install: Claude Code: https://claude.com/claude-code, with claude on PATH, or its absolute path as claude_path under [launch] in $cfg. Codex: see Requirements in docs/install.md (https://github.com/gabemahoney/agent-director/blob/main/docs/install.md), with codex on PATH, or its absolute path as codex_path under [launch] in $cfg. Cursor: install the standalone agent program (https://cursor.com/install), with agent on PATH, or its absolute path as cursor_path under [launch] in $cfg. The Cursor editor's cursor command does not count. Nothing was installed or changed. Re-run this install after the change."
     [[ "$(j14_snap "$h")" == "$before" ]] || bad "the refusal changed $h: $(diff <(echo "$before") <(j14_snap "$h"))"
     expect_nothing_installed "$h"
 }
@@ -3595,7 +3600,8 @@ test_J27_MoveDueNeitherAgentOldConfigAdvice() {
     j27_toolbox || { bad "make the toolbox without agents"; return; }
     TOOLBOX="$ROOT/toolbox-no-agents"
     j27_codex "$ROOT/codex-on-path" || { bad "make the fake codex"; return; }
-    for which in claude codex; do
+    j27_cursor || { bad "make the fake Cursor agent"; return; }
+    for which in claude codex cursor; do
         h="$(new_home)" key="${which}_path"
         old_home "$h"
         rm -f "$ROOT/codex-on-path/ran"
@@ -3605,14 +3611,16 @@ test_J27_MoveDueNeitherAgentOldConfigAdvice() {
         [[ "$(flat "$ERR")" != *"$h/.config/agent-director/config.toml"* ]] || bad "$which: the advice names the new directory's config.toml: $(flat "$ERR")"
         prog="$claude"
         [[ "$which" == codex ]] && prog="$codex"
+        [[ "$which" == cursor ]] && prog="$ROOT/cursor-on-path/agent"
         printf '\n[launch]\n%s = "%s"\n' "$key" "$prog" >>"$h/.agent-director/config.toml"
         run "$h" "${MOVE_ARGV[@]}"
         moved "$h" "$which: the re-run after the old config.toml names the program" || continue
         [[ "$(flat "$ERR")" != *"ErrMoveConflict"* ]] || bad "$which: the re-run refuses with ErrMoveConflict"
         grep -qxF "$key = \"$prog\"" "$h/.config/agent-director/config.toml" \
             || bad "$which: the moved config.toml does not hold the advised line: $(cat "$h/.config/agent-director/config.toml")"
-        [[ "$(grep -c 'neither Claude Code nor Codex' "$ERR")" == 0 ]] || bad "$which: the re-run still refuses for no agent"
+        [[ "$(grep -c 'no supported agent (Claude Code, Codex or Cursor)' "$ERR")" == 0 ]] || bad "$which: the re-run still refuses for no agent"
         [[ ! -e "$ROOT/codex-on-path/ran" ]] || bad "$which: install.sh ran codex"
+        [[ ! -e "$ROOT/cursor-on-path/ran" ]] || bad "$which: install.sh ran Cursor"
     done
 }
 
@@ -3632,7 +3640,8 @@ test_J27_NeitherAgentFollowEachWay() {
     j27_codex "$ROOT/codex-on-path" || { bad "make the fake codex"; return; }
     mkdir -p "$ROOT/claude-on-path" && ln -sf "$claude" "$ROOT/claude-on-path/claude" || { bad "link the fake claude"; return; }
     grep -qx '## Requirements' "$REPO_ROOT/docs/install.md" || bad "docs/install.md has no \"## Requirements\" section for the Codex advice to point at"
-    for way in claude-on-path claude-path codex-on-path codex-path; do
+    j27_cursor || { bad "make the fake Cursor agent"; return; }
+    for way in claude-on-path claude-path codex-on-path codex-path cursor-on-path cursor-path; do
         h="$(new_home)" root="$h/.config/agent-director" cfg="$h/.config/agent-director/config.toml"
         rm -f "$ROOT/codex-on-path/ran"
         PATH_EXTRA=""
@@ -3643,6 +3652,8 @@ test_J27_NeitherAgentFollowEachWay() {
             claude-path) printf '[launch]\nclaude_path = "%s"\n' "$claude" >"$cfg" ;;
             codex-on-path) PATH_EXTRA="$ROOT/codex-on-path" ;;
             codex-path) printf '[launch]\ncodex_path = "%s"\n' "$codex" >"$cfg" ;;
+            cursor-on-path) PATH_EXTRA="$ROOT/cursor-on-path" ;;
+            cursor-path) printf '[launch]\ncursor_path = "%s"\n' "$ROOT/cursor-on-path/agent" >"$cfg" ;;
         esac
         run "$h" "${J7ARGV[@]}"
         expect_rc 0 "$way: the re-run" || continue
@@ -3660,8 +3671,11 @@ test_J27_NeitherAgentFollowEachWay() {
                 grep -qxF "  claude  : not installed (claude is not on PATH, and [launch] claude_path is not set)" "$OUT" \
                     || bad "$way: no \"claude : not installed\" line: $(grep -F '  claude  :' "$OUT")"
                 [[ ! -e "$ROOT/codex-on-path/ran" ]] || bad "$way: install.sh ran codex" ;;
+            cursor-*)
+                grep -qxF "  cursor  : $ROOT/cursor-on-path/agent (presence only; version and compatibility not checked; agent was not run)" "$OUT" || bad "$way: missing Cursor presence summary"
+                [[ ! -e "$ROOT/cursor-on-path/ran" ]] || bad "$way: install.sh ran Cursor" ;;
         esac
-        none="$(grep -c 'neither Claude Code nor Codex' "$ERR")"
+        none="$(grep -c 'no supported agent (Claude Code, Codex or Cursor)' "$ERR")"
         [[ "$none" == 0 ]] || bad "$way: the re-run still refuses for no agent"
     done
     PATH_EXTRA=""
@@ -3677,21 +3691,26 @@ test_J27_LaunchPathNamesNothingCorrectItAndRerun() {
     j27_toolbox || { bad "make the toolbox without agents"; return; }
     TOOLBOX="$ROOT/toolbox-no-agents"
     j27_codex "$ROOT/codex-on-path" || { bad "make the fake codex"; return; }
-    for which in claude codex; do
+    j27_cursor || { bad "make the fake Cursor agent"; return; }
+    for which in claude codex cursor; do
         h="$(new_home)" cfg="$h/.config/agent-director/config.toml" key="${which}_path"
         mkdir -p "$h/.config/agent-director"
         printf '[launch]\n%s = "%s"\n' "$key" "$h/nope/$which" >"$cfg"
         if [[ "$which" == claude ]]; then
             j27_refused "$h" "[launch] claude_path = \"$h/nope/claude\" names no executable file, and claude is not on PATH" "codex is not on PATH, and [launch] codex_path is not set" || continue
             printf '[launch]\nclaude_path = "%s"\n' "$claude" >"$cfg"
-        else
+        elif [[ "$which" == codex ]]; then
             j27_refused "$h" "claude is not on PATH, and [launch] claude_path is not set" "[launch] codex_path = \"$h/nope/codex\" names no executable file, and codex is not on PATH" || continue
             printf '[launch]\ncodex_path = "%s"\n' "$ROOT/codex-on-path/codex" >"$cfg"
+        else
+            j27_refused "$h" "claude is not on PATH, and [launch] claude_path is not set" "codex is not on PATH, and [launch] codex_path is not set" "" "[launch] cursor_path = \"$h/nope/cursor\" names no executable file, and agent is not on PATH" || continue
+            printf '[launch]\ncursor_path = "%s"\n' "$ROOT/cursor-on-path/agent" >"$cfg"
         fi
         run "$h" "${J7ARGV[@]}"
         expect_rc 0 "$which: the re-run after the path is corrected" || continue
         expect_installed "$h" "$BIN" "$ADMIN"
-        grep -qF "(program: $claude)" "$OUT" || [[ "$which" == codex ]] || bad "$which: the claude line does not name $claude: $(grep -F '  claude  :' "$OUT")"
+        grep -qF "(program: $claude)" "$OUT" || [[ "$which" != claude ]] || bad "$which: the claude line does not name $claude: $(grep -F '  claude  :' "$OUT")"
+        [[ ! -e "$ROOT/cursor-on-path/ran" ]] || bad "$which: install.sh ran Cursor"
     done
 }
 

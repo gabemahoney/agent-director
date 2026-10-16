@@ -39,7 +39,7 @@ func agentBareToolbox(t *testing.T, s *moveShared) string {
 			return
 		}
 		for _, e := range entries {
-			if e.Name() == "claude" || e.Name() == "codex" {
+			if e.Name() == "claude" || e.Name() == "codex" || e.Name() == "agent" || e.Name() == "cursor" {
 				continue
 			}
 			if agentBare.err = os.Symlink(filepath.Join(s.Toolbox, e.Name()), filepath.Join(agentBare.dir, e.Name())); agentBare.err != nil {
@@ -295,9 +295,10 @@ func TestAgentNeitherFound(t *testing.T) {
 			moveWant{
 				Code: 2,
 				Stderr: []string{
-					"install.sh: neither Claude Code nor Codex was found; refusing to install.",
+					"install.sh: no supported agent (Claude Code, Codex or Cursor) was found; refusing to install.",
 					"  Claude Code: " + tc.claude,
 					"  Codex      : " + tc.codex,
+					"  Cursor     : agent is not on PATH, and [launch] cursor_path is not set",
 					"  Nothing was installed or changed. Re-run this install after the change.",
 				},
 				NoStdout: []string{"kept", "  claude  :"},

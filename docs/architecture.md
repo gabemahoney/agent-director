@@ -116,6 +116,14 @@ Go applications instead require the existing canonical installed binary at
 regular executable before mutation. Fresh, reused and resumed launches MUST
 reuse this
 selection; a library caller's executable is not a gateway dispatcher.
+The runtime path travels as one private `--runtime` value. Selection uses the
+current loaded config on every spawn, reuse and resume; resume retains saved
+cwd, arguments, environment, group and latest session. An unset path selects
+`agent` on PATH. A configured path gets no executable/directory prevalidation
+or PATH fallback: startup uses the existing process launch, with inherited
+asynchronous failure and process-backed missing detection. Installed-gateway
+validation above is a separate dependency check. Installer presence discovery
+below must never change this runtime selection or rewrite launch config.
 `CursorArgs` extracts one initial prompt for
 ACP and supports model selection; other arguments fail before row writes.
 `pkg/api` retains all public control operations. Cursor reuse and agent switches
@@ -688,6 +696,18 @@ extracted from sanitized captures, installed-source-derived question signatures,
 and synthetic malformed/kind/ID/race/timing variants. Captured envelopes do not
 make the executing stand-in authenticated. A fixture pass proves the exercised AD
 behavior; it does not prove native Cursor/version/platform support.
+
+Current-runtime path tests MUST reuse this peer, `newCursorPaneScenario` and
+the existing real-tmux public Go/CLI/MCP/Bun caller adapters. Process argv,
+protocol and prompt effects establish actual selection for fresh/reuse/resume;
+`newResumeEnv`/`seedCursorResume` own saved-row preservation. The one
+`cursor-install-runtime` collector (`tickets/testplans/b.jf1/t1.jf1.ir`,
+`test/driver/cursor-install-runtime.sh`, registered in `test/docker-epics.txt`)
+owns the installer/path integration slice. Extend it using existing pane,
+resume, installed-Bun and `/opt/driver/sql.sh` helpers; do not add another
+collector or runtime framework. These fixtures remain synthetic ACP even with
+actual Linux tmux/client processes, and establish no native compatibility,
+minimum version, authentication, trust or other-platform acceptance.
 
 `SourceDerivedQuestions` reads the shared `testdata/questions.json` through the
 authorization fixture reader, substitutes the configured session and retains
@@ -8446,12 +8466,12 @@ claude /install-agent-director (or `bash install.sh`)
     ~/.config/agent-director/config.toml, or in the old directory's
     config.toml while the move is due (a form the reader cannot read → exit
     5, nothing on disk changed); the same reader also reads [launch]
-    claude_path and codex_path (a [launch] form it cannot read → exit 5,
+    claude_path, codex_path and cursor_path (a [launch] form it cannot read → exit 5,
     ErrConfigMalformed, nothing on disk changed)
   → agent presence (see "Agent presence" below): an agent is present when
     its [launch] path names an executable file or its program is on PATH;
-    neither Claude Code nor Codex present → exit 2 naming both, nothing
-    on disk changed; nothing is run and no [launch] key is written
+    discovery runs nothing and writes no [launch] key; absence is refused
+    only after the config/link checks below
   → migration gate: the store at $state_db has user_version below
     AGENT_RENAME_HOP_VERSION (see "Config and template migration at
     install-time" below); a version that cannot be read → exit 5,
@@ -8473,10 +8493,12 @@ claude /install-agent-director (or `bash install.sh`)
     (its links loop, or its target's directory is missing or cannot be
     written in) → exit 5, nothing on disk changed (see "A symlinked
     settings.json or config.toml" below)
+  → no Claude Code, Codex or Cursor present → exit 2 naming all three,
+    nothing on disk changed; earlier config/form refusals keep precedence
   → move due only: ErrAgentsLive (exit 5, nothing on disk changed) while the
     old store holds a live row or a process runs the old binary; a gate that
     was deferred above runs again here, then the migration's two checks
-  → pre-flight OK, then the per-agent summary lines (claude and codex; see
+  → pre-flight OK, then the per-agent summary lines (claude, codex and cursor; see
     "Agent presence")
   → with --from-release: download both assets, checking each hash when
     given (a mismatch → exit 3, nothing installed)
@@ -8552,9 +8574,12 @@ claude /install-agent-director (or `bash install.sh`)
 
 The pre-flight summary prints one line per agent: `  claude  : <version>
 (program: <path>)` or `not installed (<reason>)`, and `  codex   : <path>
-(version not checked: ...)` or `not installed (<reason>)`. A `[launch]`
-path that names no executable file adds a line saying so, and the line that
-follows says which program is used instead.
+(version not checked: ...)` or `not installed (<reason>)`, and `  cursor  :
+<path> (presence only; version and compatibility not checked; agent was not
+run)` or `not installed (<reason>)`. A `[launch]` path that names no
+executable file adds a line saying so. Any PATH discovery is for installation
+only and leaves the configured launch path unchanged; actual runtime launch
+does not fall back to a PATH program when that configured path fails.
 
 Pattern B is where the CLI / state / hooks side effects happen.
 
@@ -8562,7 +8587,8 @@ Pattern B is where the CLI / state / hooks side effects happen.
 (`--help`) lists its exit codes: 1 a write of the config and template
 migration that failed after the binaries were swapped (see "Config and
 template migration at install-time" below; it has no `err_name=` line),
-2 pre-flight (neither Claude Code nor Codex found included), 3 the source
+2 pre-flight (all three agents absent: Claude Code, Codex and Cursor; existing
+other pre-flight failures still apply), 3 the source
 binaries or
 their version stamps and `config_dir`, 4 the `settings.json` hook merge (with hooks on, a
 symlinked `settings.json` it cannot write through included, refused in
@@ -8613,10 +8639,10 @@ and exits 4 itself ("cannot merge the hooks into ~/.claude/settings.json
 (jq's error is above)"); sqlite3 exits 5 on a busy database, and each
 caller of `ad_user_version` captures the read's status beside its output.
 
-**Agent presence (b.ssz).** `install.sh` needs at least one of Claude Code and
-Codex. The `[launch]` keys come from the same reader as the store path:
+**Agent presence (b.ssz).** `install.sh` needs at least one of Claude Code,
+Codex and Cursor. The `[launch]` keys come from the same reader as the store path:
 `ad_store_db_path <config> <home> <base> launch` prints the store path, then
-`claude_path`, then `codex_path` (an empty line for a key that is unset), a
+`claude_path`, `codex_path`, then `cursor_path` (an empty line for a key that is unset or empty), a
 `~/` value joined onto `$HOME`, an absolute one as written, never joined onto
 the base. The reader refuses a `[launch]` form it cannot read (a quoted or
 dotted key, `[launch]` or a key in another letter case, a key set twice, a
@@ -8624,21 +8650,30 @@ value that is not one line of `"..."` without a backslash or `'...'`, a
 relative path) as every other form, exit 5, `ErrConfigMalformed`, with a
 headline that names the `[launch]` table. `ad_find_agent <name> <launch
 path>` then decides presence, once per agent, right after the reader and
-before anything on disk changes:
+before anything on disk changes. Store-only output remains one line, `log`
+prints store/log, `launch` prints store/Claude/Codex/Cursor, and `log launch`
+prints store/log/Claude/Codex/Cursor, all newline-ended. Normal and old-layout
+installer consumers preserve interior/trailing empty positions with
+`IFS= read -r ... || true`; old-layout move rewrites only store/log paths.
+Uninstaller `--mcp-also` reads store and Claude and deliberately ignores the
+remaining fields. Both marked reader blocks MUST remain byte-identical.
+
+Presence discovery:
 
 - an agent is present when its `[launch]` path names an existing executable
   file, which is then the program used (`CLAUDE_PROG` for Claude Code), or
-  else when its program name (`claude`, `codex`) is on `PATH`, which is then
-  the program used. A path that is set and names no executable file is
+  else when its program name (`claude`, `codex`, `agent`) is on `PATH`, which is then
+  the discovered program. The editor's `cursor` never counts. A path that is set and names no executable file is
   reported on the summary's line, and the `PATH` program, when there is one,
-  is used.
+  is discovered for installation only. Cursor's summary explicitly says that
+  its configured launch path is unchanged; actual launch never falls back.
 - presence only: nothing is run to decide it, and no `[launch]` key is ever
   written.
-- neither present is exit 2, nothing on disk changed:
-  `install.sh: neither Claude Code nor Codex was found; refusing to
-  install.`, one reason line per agent, and a pointer to "Requirements" in
-  docs/install.md for a Codex install.
-- `CLAUDE_PRESENT` and `CODEX_PRESENT` carry the result to the later steps.
+- none present is exit 2, nothing on disk changed:
+  `install.sh: no supported agent (Claude Code, Codex or Cursor) was found; refusing to install.`,
+  one reason line per agent and existing literal-follow advice. Config and
+  migration-form refusals retain exit 5 precedence over this final gate.
+- `CLAUDE_PRESENT`, `CODEX_PRESENT` and `CURSOR_PRESENT` carry the results to later steps.
   With Claude Code absent, the hooks step prints `hooks   : skipped because
   Claude Code is not installed (settings.json is not touched)` (this wins
   over `--no-hooks`, and the old directory's help-hook entries are neither
@@ -8650,11 +8685,15 @@ before anything on disk changes:
   line gives the program's path and says its version was not checked, with
   the command to check it by hand, because `codex --version` itself writes
   files there.
+  Cursor likewise gets no automatic registration or agent-folder writes;
+  its summary reports presence only, version/compatibility unchecked and
+  `agent` not run. No native runtime, minimum version, platform, authentication
+  or trust acceptance follows from this detection.
 
 `install.sh` and `uninstall.sh` stop at once, exit 2, when `HOME` is unset,
 empty or relative, before any other check. **Must use:** every call to Claude
 Code goes through `"$CLAUDE_PROG"`, which is set only from a present agent,
-never a literal `claude`; Codex is never run.
+never a literal `claude`; Codex and Cursor are never run by discovery.
 
 **The settings.json merge (b.cfq, b.zbg).** With hooks on, step 6 merges
 both `agent-director help` entries into `~/.claude/settings.json` with one
@@ -18759,7 +18798,7 @@ test. Do not edit these files to make a test pass.
 
 `internal/testsupport/dbpathfix` (b.2io) runs `install.sh`'s `[store]
 db_path` reader (which also reads `[log] error_log_path` and `[launch]
-claude_path` and `codex_path`), its `[store] busy_timeout_ms` reader
+claude_path`, `codex_path` and `cursor_path`), its `[store] busy_timeout_ms` reader
 (b.c7f) and its config and template migration (b.ssz) on their own, and
 holds the matrices of configs that the drift guards run through them and
 through Go's own resolution (see
@@ -18788,13 +18827,17 @@ package doc comment carries the detail.
   every case gives the same result under both bases, and the drift guard
   checks that.
 - `LaunchCases` (`launch_cases.go`) are the `[launch]` half of the matrix:
-  `claude_path` and `codex_path` cases (each per-key shape is written for both
+  `claude_path`, `codex_path` and `cursor_path` cases (each per-key shape is written for all three
   keys), run through the launch forms `Reader.ResolveLaunch` and
   `Reader.ResolveLogLaunch` (`ad_store_db_path <config> <home> <base> launch`,
   and `log launch`) and through `config.Load`'s `Launch`. Each case is `Same`
   (the reader prints the paths `config.Load` resolves, an empty line for a
   key that is unset or empty), `ReaderRefuses` (the reader is stricter than
   `config.Load`, as for letter case), `BothRefuse` or `GoRefuses`.
+  `ResolveLaunch` returns four newline-ended fields (store/Claude/Codex/Cursor),
+  `ResolveLogLaunch` five (store/log/Claude/Codex/Cursor); consumers use
+  `Result.Lines` with those counts, including trailing empty paths. This one
+  corpus owns Cursor syntax too; do not introduce another Cursor config matrix.
 - `RenameCases` (`rename_cases.go`) are the migration's matrix: each
   `RenameCase` is a `config.toml` or a template (`Kind`), the file's content,
   and what the migration does with it (`Outcome`): `Migrated` (status 0, the
@@ -18953,12 +18996,19 @@ down `config.toml`, templates and a store at a chosen version in a directory
 modes, links, a re-run, the gate on the store's version and the migration
 while the move is due, and `migration_refusals_test.go` the pre-flight
 refusals and the failed write after the binary swap. `agent_presence_test.go`
-holds the presence rule, a Codex-only install and the refusal with neither
-(its stand-in `codex` and a `PATH` without `claude` and `codex` are shared
+holds the presence rule, a Codex-only install and the refusal with no agent
+(its stand-in `codex` and a `PATH` without `claude`, `codex`, `agent` or editor
+`cursor` are shared
 with `launch_path_test.go`, which has the `[launch]` wiring: the summary lines,
 the program a launch path names running every Claude Code call, the
 refusals, and the table never being written); `home_refusal_test.go` has the
 `HOME` check of both scripts.
+`cursor_presence_test.go` extends those existing home/toolbox/config/snapshot
+factories for Cursor-only installation, whole paths, missing/nonexecutable/
+directory discovery and unchanged-config/skip behavior. New installer cases
+MUST reuse `newAgentHome`, `agentBareToolbox`, `agentLaunchConfig` and the move
+fixture instead of parallel setup. J27 owns absence remedies and J14 owns
+malformed-launch remedies, including Cursor; keep literal repair/rerun there.
 
 **Must use:** a test that needs an old-layout install uses this fixture, with
 `move`-prefixed helper names for anything it adds; never a second builder of
@@ -19918,14 +19968,14 @@ refused values alike, 0 written as an explicit 0), and
 which writes the same and sets each non-zero field of `keys`, an
 `apitest.ConfigKeys` (`RetentionDays`, `RelayTimeoutSeconds`,
 `PauseTimeoutSeconds`, `PreTrustLockWaitSeconds`, `StoreBusyTimeoutMs`,
-`StateSettleMs`, `ClaudePath`, `CodexPath`: `[defaults] expire_retention_days`, `[relay]
+`StateSettleMs`, `ClaudePath`, `CodexPath`, `CursorPath`: `[defaults] expire_retention_days`, `[relay]
 timeout_seconds` and `[pause] timeout_seconds`, b.8q2, `[pre_trust]
 lock_wait_seconds`, b.kr4, `[store] busy_timeout_ms`, b.c7f, `[state]
-settle_ms`, b.3ie, and `[launch] claude_path` and `codex_path`),
+settle_ms`, b.3ie, and `[launch] claude_path`, `codex_path` and `cursor_path`),
 accepted and refused values alike; a 0 field leaves its key out, which loads as a written 0
-does (for `settle_ms`, off). The two `[launch]` fields are strings written
+does (for `settle_ms`, off). The three `[launch]` fields are strings written
 exactly as given and left out when empty; `WriteEmptyClaudePath` and
-`WriteEmptyCodexPath` write the key as an explicit empty string, which
+`WriteEmptyCodexPath` and `WriteEmptyCursorPath` write the key as an explicit empty string, which
 loads as unset. `apitest.SettleOnConfig` is a whole
 `config.toml` setting `settle_ms` to `config.MaxStateSettleMs`, which the
 read-surface tests run under. Those two are the ONLY way those tests write

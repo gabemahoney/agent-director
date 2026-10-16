@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -114,11 +115,15 @@ func TestCursorResumeUnavailableGatewayRefusesBeforeMutation(t *testing.T) {
 
 func TestCursorResumeLatestGateway(t *testing.T) {
 	// Serial: the protected transcript fixture sets HOME.
-	for _, state := range []string{store.StateEnded, store.StateMissing} {
-		t.Run(state, func(t *testing.T) {
+	for _, tc := range []struct{ state, path string }{
+		{store.StateEnded, `/current/"cursor agent" --flag`},
+		{store.StateMissing, "/current/second-agent"},
+		{store.StateEnded, ""},
+	} {
+		t.Run(tc.state+"/"+tc.path, func(t *testing.T) {
 			e := newResumeEnv(t)
-			id, h := seedCursorResume(t, e, state)
-			e.cfg.Launch.CursorPath = "/current/cursor-path"
+			id, h := seedCursorResume(t, e, tc.state)
+			e.cfg.Launch.CursorPath = tc.path
 			before := e.columns(t, id)
 			history, err := e.st.ListSessionHistory(id, 3)
 			if err != nil {
@@ -139,6 +144,17 @@ func TestCursorResumeLatestGateway(t *testing.T) {
 			creates := e.rec.SocketCallsOf(tmux.CallCreate)
 			if len(creates) != 1 || creates[0].Socket != e.socket {
 				t.Fatalf("launch count/socket: %+v", creates)
+			}
+			wantRuntime := tc.path
+			if wantRuntime == "" {
+				wantRuntime = "agent"
+			}
+			at := slices.Index(creates[0].Command, "--runtime")
+			if at < 0 || at+1 >= len(creates[0].Command) || creates[0].Command[at+1] != wantRuntime {
+				t.Fatalf("current whole runtime lost: %q; want %q", creates[0].Command, wantRuntime)
+			}
+			if creates[0].Envs["SAVED_CURSOR_ENV"] != "retained" || creates[0].Envs["AGENT_DIRECTOR_GROUP"] != "saved-group" || after.CWD != before.CWD {
+				t.Fatalf("saved cwd/env/group lost: %+v", creates[0])
 			}
 			for path, want := range map[string][]byte{h.Latest: h.LatestBytes, h.Older: h.OlderBytes} {
 				got, err := os.ReadFile(path)

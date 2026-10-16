@@ -1,6 +1,6 @@
 ---
 name: install-agent-director
-description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up the find-missing and expire sweeps (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code or Codex on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
+description: Install (or upgrade) agent-director on this machine. Runs the bundled install.sh against the user's ~/ — creates ~/.config/agent-director/ with the binary and the off-PATH operator tool agent-director-admin (an upgrade from a release that kept its files in the old directory moves that directory first), migrates and opens state.db (authorizing any older-schema upgrade via a one-shot sentinel), migrates config.toml and the templates to the agent names, and, with Claude Code present, injects two persistent `agent-director help` hooks into ~/.claude/settings.json (SessionStart + SessionEnd reason=compact), and, with `--schedule`, sets up the find-missing and expire sweeps (cron, else systemd user timers; otherwise it warns that nothing schedules them). Needs Claude Code, Codex or the standalone Cursor agent on the machine. Use this skill when the user says "install agent-director", "set up agent-director", or "upgrade agent-director on this machine".
 ---
 
 ## First-time install on a brand-new machine
@@ -35,28 +35,33 @@ then execute. Keep it tight — five questions, then a confirm.
 Two checks come first. Neither is a question, but each changes what
 you ask and what you tell the operator.
 
-**Which agents are on the machine.** agent-director launches Claude Code
-and Codex agents, and `install.sh` needs at least one of them. Each
+**Which agents are on the machine.** agent-director launches Claude Code,
+Codex and Cursor agents, and `install.sh` needs at least one of them. Each
 counts as present when its launch path names an existing executable
-file (`[launch] claude_path` or `codex_path` in `config.toml`, both
-optional) or its program (`claude`, `codex`) is on PATH. Check with
-`command -v claude` and `command -v codex`, and read the `[launch]`
-table if the operator has one. With neither present `install.sh` stops
-(exit 2) naming both and how to install either: stop and tell the
+file (`[launch] claude_path`, `codex_path` or `cursor_path` in `config.toml`, all
+optional) or its program (`claude`, `codex`, `agent`) is on PATH. Check with
+`command -v claude`, `command -v codex` and `command -v agent`, and read
+the `[launch]` table if the operator has one. Cursor needs its standalone
+`agent` program (https://cursor.com/install); the editor's `cursor` command
+does not count. With none present `install.sh` stops
+(exit 2) naming all three and how to install one: stop and tell the
 operator to install one first. If the operator uses npm's Codex
 launcher, tell them to set `codex_path` to the native Codex program (a
 file `install.sh` can see as executable), as `docs/install.md`
 describes. Then:
 
 - **Claude Code present:** ask every question below.
-- **Claude Code absent (only Codex):** do not ask question 3 (the MCP
+- **Claude Code absent (Codex and/or Cursor only):** do not ask question 3 (the MCP
   server is Claude Code's), and in question 4 say the
   `~/.claude/settings.json` hooks do not apply; the install skips the
   `settings.json` step and `--register-mcp` and says so. The
   `inject_help_hook` setting in `config.toml` is still merged unless
   `--no-hooks`.
 - `install.sh` runs nothing in Codex, registers nothing with Codex and
-  writes nothing in any Codex folder, and never writes a `[launch]` key.
+  writes nothing in any Codex folder. It never runs Cursor or probes its
+  version, compatibility or authentication, and never writes a `[launch]` key.
+  A configured missing path can still allow PATH discovery for installation;
+  launches keep using the configured whole path, without a PATH fallback.
 
 **Whether this is an upgrade from the old layout.** An earlier release
 kept its files in a directory this release no longer uses, and the
@@ -298,7 +303,7 @@ previous release". The current installer refuses pre-move binaries with exit 3.
 
 3. **Register the MCP server with Claude Code? (`--register-mcp`)**
    *(Claude Code only: skip this question when Claude Code is not
-   installed. Codex gets no registration from the install.)*
+   installed. Codex and Cursor get no registration from the install.)*
 
    - *What this is:* MCP (Model Context Protocol) is how Claude Code
      learns about external tool servers and exposes their operations
@@ -541,8 +546,8 @@ This skill runs `install.sh` from the same directory. The script:
       the supported set and referencing Idea Bee `b.fg3` for
       cross-platform expansion status.
    3. **Required tools on PATH.** `tmux`, `jq`, `file`,
-      and `sqlite3` must all resolve via `command -v`. (Claude Code and
-      Codex are not on this list: at least one of them must be present,
+      and `sqlite3` must all resolve via `command -v`. (Claude Code,
+      Codex and Cursor are not on this list: at least one of them must be present,
       checked with item 4 below.) The `file(1)`
       tool is mandatory because step 7 below relies on it to probe
       `--binary` artifacts (never silent-skip per SR-2.2);
@@ -577,14 +582,14 @@ This skill runs `install.sh` from the same directory. The script:
       script cannot read stops the install here (exit `5`,
       `ErrConfigMalformed`), before anything is installed or changed.
       See "Which database install.sh checks" below for the accepted form
-      and the refusal. In the same read it takes `[launch] claude_path`
-      and `codex_path`, each optional, each an absolute path or one
+      and the refusal. In the same read it takes `[launch] claude_path`,
+      `codex_path` and `cursor_path`, each optional, each an absolute path or one
       starting with `~/`; a `[launch]` line it cannot read stops the
       install here too (exit `5`, `ErrConfigMalformed`; see "A refused
-      config file" below). It then looks for the two agents: each is
+      config file" below). It then looks for the three agents: each is
       present when its launch path names an existing executable file or
       its program is on PATH, and the `pre-flight OK` block prints a
-      `claude  :` and a `codex   :` line for them. The `claude  :` line
+      `claude  :`, `codex   :` and `cursor  :` line for them. The `claude  :` line
       gives the `--version` line and the program's path
       (`(program: <path>)`). The `codex   :` line gives the program's
       path and says the version was not checked: Codex is never run,
@@ -595,8 +600,11 @@ This skill runs `install.sh` from the same directory. The script:
       `[launch]` path that names no executable file while the program is
       on PATH prints a line saying so, then the line for the program
       found on PATH.
-      With neither present the install stops (exit `2`) naming both and
-      how to install either, after every other pre-flight check below,
+      Cursor's line gives the standalone `agent` path and explicitly reports
+      presence only: it runs no Cursor command and checks no version or
+      compatibility. PATH discovery never changes configured launch paths.
+      With none present the install stops (exit `2`) naming all three and
+      how to install one, after every other pre-flight check below,
       so a config file refused for its form (exit `5`) is reported first.
       It then reads `[store] busy_timeout_ms`, how long
       agent-director waits for a locked store, so that its own reads of
@@ -1317,10 +1325,11 @@ umask.
   via `--settings` at spawn time and are NOT persistent in the
   user's `settings.json`.
 - It does NOT touch existing user hooks in any event.
-- It does NOT install Claude Code, Codex or `tmux` themselves. At
-  least one of the two agents, and `tmux`, are pre-flight requirements.
+- It does NOT install Claude Code, Codex, Cursor or `tmux` themselves. At
+  least one of the three agents, and `tmux`, are pre-flight requirements.
 - It does NOT run Codex, register anything with Codex or write in any
-  Codex folder, and never writes a `[launch]` key.
+  Codex folder. It does NOT run Cursor or set up its authentication, group
+  or MCP configuration, and never writes a `[launch]` key.
 - It does NOT delete the old directory the move keeps
   (`~/.agent-director.pre-move-*`): that is for the operator to delete
   once the upgrade is confirmed.
@@ -1364,7 +1373,7 @@ no other exit status has a cause line.
 | `<Name>` | Cause | Remedy |
 |---|---|---|
 | `ErrVersionUnreadable` | A read of state.db's `user_version` gave no version: the gate of the config and template migration in pre-flight (before anything was installed or changed), step 2's read, step 3's read after the probe, or step 5's read when a migration was expected. | Re-run the install with the same flags. A read that failed (a lock held past `[store] busy_timeout_ms`, say) can succeed on a re-run. A read that printed something other than a whole number prints it again until the sqlite3 on PATH or state.db changes, so cap the re-runs, then show the operator the report. See "An unreadable schema version". |
-| `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
+| `ErrConfigMalformed` | AD's `config.toml` was refused: by install.sh's pre-flight readers of `[store] db_path`, `[store] busy_timeout_ms` and the `[launch]` table (`claude_path`, `codex_path`, `cursor_path`); by its migration checks (the question-tool key set more than once under `[defaults]`, or `defaults` set as a key on a line that names the key's old name, a file it cannot read, or a symlinked config.toml the migration cannot write through); with hooks on, by its checks that the `[defaults]` merge can extend the file and can write through a symlinked config.toml (all before anything was installed or changed); after the move, by the re-read of the moved config.toml's store and timeout keys; at apply time, by the migration refusing a config.toml that changed since pre-flight (nothing more is written; the two ways on are the exit 1 row's); or by agent-director at step 3's probe or step 4's store open. While the move is due, pre-flight reads the old directory's copy and the message names it. | Fix the file the message names, then re-run the install with the same flags. A symlink the hooks merge cannot write through also has a `--no-hooks` way out; a symlink the migration cannot write through does not (the migration runs with `--no-hooks` too): fix the link, or make the rename in the file's source. See "Which database install.sh checks", "How long install.sh waits for a locked state.db", step 5 and step 6 of "What this skill does", "A refused config file" and "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrTemplateMalformed` | A stored template was refused by install.sh's pre-flight check for the migration of config.toml and the templates (a line before its first table header that the check cannot read, the old name of the arguments key set twice or together with `agent_args`, a file it cannot read, or a symlinked template the migration cannot write through; all before anything was installed or changed), or, at apply time, a template that changed since pre-flight (the same two ways on as the exit 1 row). | Fix the template the message names, then re-run the install with the same flags. See "`install.sh` refuses config.toml or a template" in docs/operator-actions.md. |
 | `ErrSchemaMismatch` | Step 4's store open: newer store, invalid store id, or authorized migration refusing eligibility column shape/values (including eligible known-child requests). | Identify the cause from the actual error envelope. Use a matching binary for a newer store; invalid metadata requires stopped-writer backup/restore or human recovery, never DB edits to bypass eligibility validation. See "ErrSchemaMismatch recovery". |
 | `ErrSchemaVerifyFailed` | One of install.sh's own checks failed: after a migration, step 5 read a whole-number `user_version` that is not the target; or state.db is missing after a store open that succeeded (`state.db was not created by the store open`: `[store] db_path` changed after pre-flight, or something removed or moved the store after the open); or step 3's `mktemp` could not create the sentinel's temp file. | Needs a human. Stop, show the operator the report, and follow its advice with them. See "A version mismatch after the store open", "No store after the store open" and "No temp file for the sentinel". |
@@ -1836,10 +1845,10 @@ before any header (`defaults = { ... }`); with hooks on, the check that
 follows it refuses that line in pre-flight (exit 5); see step 6 of "What
 this skill does" above.
 
-**The `[launch]` table.** install.sh also reads `[launch] claude_path` and
-`codex_path` in pre-flight, from the same file, to choose the Claude Code
+**The `[launch]` table.** install.sh also reads `[launch] claude_path`,
+`codex_path` and `cursor_path` in pre-flight, from the same file, to choose the Claude Code
 program it runs and to see which agents are installed (it never runs
-Codex). It reads the same narrow form: a value is a one-line `"..."`
+Codex or Cursor). It reads the same narrow form: a value is a one-line `"..."`
 holding no backslash, or a `'...'`, and an optional `#` comment, and is an
 absolute path or starts with `~/`; an empty `""` counts as unset. Anything
 else stops the install with **exit 5** (`ErrConfigMalformed`) before

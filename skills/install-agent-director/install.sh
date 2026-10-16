@@ -146,8 +146,8 @@
 #      installed (a full disk, or permissions changed since pre-flight): see
 #      "The agent-rename migration" below. The file is as it was, every copy
 #      is kept, and the store is not opened.
-#   2  pre-flight failure (tmux, jq, file or sqlite3 missing, neither
-#      Claude Code nor Codex found (see "Agents" below), whitespace in path,
+#   2  pre-flight failure (tmux, jq, file or sqlite3 missing, no
+#      Claude Code, Codex or Cursor found (see "Agents" below), whitespace in path,
 #      a bad flag, only one of --sha256 and --admin-sha256, or HOME unset,
 #      empty or not an absolute path: checked first, before anything is read
 #      or written; run it with HOME set to the user's home directory)
@@ -175,7 +175,7 @@
 #      the migration sentinel (mktemp failed), or post-open
 #      user_version unreadable or != target when a migration was
 #      expected), or a config file whose [store] db_path or
-#      busy_timeout_ms or [launch] claude_path or codex_path install.sh
+#      busy_timeout_ms or [launch] claude_path, codex_path or cursor_path install.sh
 #      cannot read, or, on an install that crosses the agent rename (see
 #      "The agent-rename migration" below), a config.toml that sets the
 #      question-tool key (disable_askuserquestion, disable_ask_user) more
@@ -228,19 +228,20 @@
 #      serve --stdio`; the install's last line says so. The check of an earlier
 #      registration (`mcp get`) never fails the install.
 #
-# Agents (SR-11.1). agent-director launches Claude Code and Codex agents,
+# Agents (SR-11.1). agent-director launches Claude Code, Codex and Cursor agents,
 # and an install needs at least one of them. Each agent is present when its
-# launch path ([launch] claude_path or codex_path in config.toml, read in
+# launch path ([launch] claude_path, codex_path or cursor_path in config.toml, read in
 # pre-flight) names an existing executable file, or its program name (claude,
-# codex) is on PATH; install.sh only looks, and writes no [launch] key.
-# With neither present the install stops, exit 2, naming both agents, their
-# [launch] keys and how to install either; nothing is changed. The Claude
+# codex, agent) is on PATH; install.sh only looks, and writes no [launch] key.
+# With none present the install stops, exit 2, naming all three agents, their
+# [launch] keys and how to install one; nothing is changed. The Claude
 # Code program is claude_path when it names an executable, else `claude` from
 # PATH; every Claude Code command this script runs (the summary's --version,
 # `mcp get`, `mcp add`, `mcp remove`) goes through it. Codex is never run: the
 # summary prints its program's path, and says it did not run it, because
 # `codex --version` writes files in the Codex folder; install.sh registers
-# nothing with Codex and writes nothing in any Codex folder. With Claude Code
+# nothing with Codex and writes nothing in any Codex folder. Cursor is never
+# run: standalone agent presence proves no version or compatibility. With Claude Code
 # not installed the settings.json hook step (the help hooks, and the removal
 # of the old directory's, which --no-hooks would print instead) and
 # --register-mcp are skipped with a line saying "skipped because Claude Code
@@ -569,7 +570,7 @@ case "${uname_s}/${uname_m}" in
         ;;
 esac
 
-# tmux must be on PATH (Claude Code and Codex are looked for after the
+# tmux must be on PATH (Claude Code, Codex and Cursor are looked for after the
 # [launch] reader, below: at least one of them is needed). `file` is required for the --binary
 # architecture probe (SR-2.2) — hard requirement; never silent-skip.
 # `sqlite3` is required for the schema-migration flow: it reads the DB's
@@ -603,6 +604,7 @@ done
 CLAUDE_PROG=claude
 CLAUDE_PRESENT=0
 CODEX_PRESENT=0
+CURSOR_PRESENT=0
 
 # --------------------------------------------------------------------
 # Store database: [store] db_path (b.2io)
@@ -663,7 +665,7 @@ CODEX_PRESENT=0
 # path.
 #
 # When asked ("launch"), the reader also reads [launch] claude_path and
-# codex_path (SR-5.0, SR-11.1), in the same line form and with the same
+# codex_path and cursor_path (SR-5.0, SR-11.1), in the same line form and with the same
 # refusals: one lower-case [launch] header, each key once and in lower case,
 # a one-line "..." holding no backslash, or '...', optionally followed by a
 # # comment, and no control character; a '?' is accepted (it is no SQLite
@@ -674,7 +676,7 @@ CODEX_PRESENT=0
 # is used unchanged, "~/..." is joined onto $HOME and cleaned, and anything
 # else (a blank value, a relative path, ~ alone, ~user/...) is refused, as
 # Go refuses it with ErrConfigMalformed: a launch path is never joined onto
-# the base directory. Keys under [launch] other than these two are ignored.
+# the base directory. Keys under [launch] other than these three are ignored.
 #
 # The block between the >>> and <<< marker lines is self-contained (bash
 # 3.2 or later, builtins only), so a test can extract it with sed and
@@ -764,11 +766,11 @@ ad_db_path_refuse() {
     done
     if [[ "$n" -gt 0 ]]; then
         if [[ "${about_launch:-0}" -eq 1 ]]; then
-            echo "  install.sh reads [launch] claude_path and codex_path itself, to choose the" >&2
+            echo "  install.sh reads [launch] claude_path, codex_path and cursor_path itself, to choose the" >&2
             echo "  Claude Code program it runs and to see which agents are installed, and" >&2
             echo "  reads only this form of the file: blank lines, # comments, [name]" >&2
             echo "  headers and name = value lines, a name being letters, digits, _ and -," >&2
-            echo "  with claude_path and codex_path under [launch] set to a one-line \"...\"" >&2
+            echo "  with claude_path, codex_path and cursor_path under [launch] set to a one-line \"...\"" >&2
             echo "  holding no backslash, or '...', and an optional # comment after it. A" >&2
             echo "  value is an absolute path or starts with ~/; an empty \"\" counts as unset." >&2
         elif [[ "${want_log:-0}" -eq 1 ]]; then
@@ -803,7 +805,7 @@ ad_db_path_refuse() {
 #   log     [log] error_log_path, resolved the same way: empty when the file
 #           does not set it or sets it empty (there is then nothing to move
 #           or check);
-#   launch  [launch] claude_path, then codex_path, resolved as above: each
+#   launch  [launch] claude_path, then codex_path and cursor_path, resolved as above: each
 #           empty when unset or empty.
 # Every line is printed, an empty one too, so a caller reads them by
 # position (command substitution drops trailing empty lines: read from a
@@ -815,7 +817,7 @@ ad_store_db_path() (
     LC_ALL=C
     local config="$1" home="$2" base="$3" want_log=0 want_launch=0 n=0 line table=""
     local about_launch=0 seen_store=0 seen_log=0 seen_launch=0 have_value=0 have_log_value=0
-    local have_claude=0 have_codex=0 claude_value="" codex_value=""
+    local have_claude=0 have_codex=0 have_cursor=0 claude_value="" codex_value="" cursor_value=""
     local value="" log_value="" key rest resolved name t k which parsed seen arg
     local -a tables=(store)
     shift 3
@@ -841,6 +843,7 @@ ad_store_db_path() (
     local re_launch='^[Ll][Aa][Uu][Nn][Cc][Hh]$'
     local re_claude='^[Cc][Ll][Aa][Uu][Dd][Ee]_[Pp][Aa][Tt][Hh]$'
     local re_codex='^[Cc][Oo][Dd][Ee][Xx]_[Pp][Aa][Tt][Hh]$'
+    local re_cursor='^[Cc][Uu][Rr][Ss][Oo][Rr]_[Pp][Aa][Tt][Hh]$'
     local re_cntrl='[[:cntrl:]]'
     # Only to word a refusal: the line forms the reader refuses, as TOML
     # writes them. A key or table-name part is a bare name, a "..." holding no
@@ -868,10 +871,10 @@ ad_store_db_path() (
 
     # is_table <name> <table>: is <name> the table's name in some letter
     # case; key_of <table>: the key the reader reads under it.
-    # The launch table holds two keys, so is_key takes either of them there,
+    # The launch table holds three keys, so is_key takes any of them there,
     # and key_of names the one the (dynamically scoped) name holds, claude_path
-    # when it is neither; key_of also takes claude and codex, the two launch
-    # keys by their program.
+    # as the default; key_of also takes claude, codex and cursor, the three
+    # launch keys by their agent name.
     is_table() {
         case "$2" in
             store) [[ "$1" =~ $re_store ]] ;;
@@ -883,7 +886,7 @@ ad_store_db_path() (
         case "$2" in
             store) [[ "$1" =~ $re_db_path ]] ;;
             log) [[ "$1" =~ $re_elp ]] ;;
-            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex ]] ;;
+            launch) [[ "$1" =~ $re_claude || "$1" =~ $re_codex || "$1" =~ $re_cursor ]] ;;
         esac
     }
     key_of() {
@@ -892,15 +895,18 @@ ad_store_db_path() (
             log) k=error_log_path ;;
             claude) k=claude_path ;;
             codex) k=codex_path ;;
+            cursor) k=cursor_path ;;
             launch)
-                if [[ "${name:-}" =~ $re_codex ]]; then k=codex_path; else k=claude_path; fi
+                if [[ "${name:-}" =~ $re_cursor ]]; then k=cursor_path
+                elif [[ "${name:-}" =~ $re_codex ]]; then k=codex_path
+                else k=claude_path; fi
                 ;;
         esac
     }
     # set_about <table>: the refusal that follows is about [launch] when <table>
     # is launch (its headline and closing note then name [launch]).
     set_about() {
-        if [[ "$1" == launch || "$1" == claude || "$1" == codex ]]; then
+        if [[ "$1" == launch || "$1" == claude || "$1" == codex || "$1" == cursor ]]; then
             about_launch=1
         else
             about_launch=0
@@ -912,7 +918,7 @@ ad_store_db_path() (
         local kdesc="$k" kset="set $k"
         set_about "$1"
         if [[ "$1" == launch ]]; then
-            kdesc="claude_path or codex_path"
+            kdesc="claude_path, codex_path or cursor_path"
             kset="set it"
         fi
         local -a reasons=(
@@ -1122,6 +1128,8 @@ ad_store_db_path() (
                     which=claude
                 elif [[ "$key" =~ $re_codex ]]; then
                     which=codex
+                elif [[ "$key" =~ $re_cursor ]]; then
+                    which=cursor
                 fi
             fi
             if [[ -z "$which" ]]; then
@@ -1139,6 +1147,7 @@ ad_store_db_path() (
                 log) seen=$have_log_value ;;
                 claude) seen=$have_claude ;;
                 codex) seen=$have_codex ;;
+                cursor) seen=$have_cursor ;;
             esac
             if [[ "$seen" -eq 1 ]]; then
                 ad_db_path_refuse "$config" "$n" "$line" \
@@ -1199,13 +1208,16 @@ ad_store_db_path() (
                             "$k's value is not an absolute path or a path starting with ~/, which" \
                             "agent-director refuses (a blank value, a relative path, ~ alone and" \
                             "~user/... are refused too). Write the program's absolute path, or one" \
-                            "starting with ~/, or remove this line to launch ${which} by its name" \
+                            "starting with ~/, or remove this line to launch ${which/cursor/agent} by its name" \
                             "on the PATH; an empty \"\" counts as unset."
                         ;;
                 esac
                 if [[ "$which" == claude ]]; then
                     claude_value="$parsed"
                     have_claude=1
+                elif [[ "$which" == cursor ]]; then
+                    cursor_value="$parsed"
+                    have_cursor=1
                 else
                     codex_value="$parsed"
                     have_codex=1
@@ -1234,7 +1246,7 @@ ad_store_db_path() (
     if [[ "$want_launch" -eq 1 ]]; then
         # Only "", an absolute path or ~/... got here: an absolute path stays
         # as written and ~/... is joined onto the home directory.
-        for value in "$claude_value" "$codex_value"; do
+        for value in "$claude_value" "$codex_value" "$cursor_value"; do
             case "$value" in
                 "~/"*) resolved="$(ad_clean_path "${home}/${value:2}")" ;;
                 *)     resolved="$value" ;;
@@ -1993,15 +2005,16 @@ STORE_CLASS=""
 LOG_PHYS=""
 LOG_CLASS=""
 old_error_log=""
-# [launch] claude_path and codex_path as the reader resolved them ("" when
+# [launch] claude_path, codex_path and cursor_path as the reader resolved them ("" when
 # unset), read with the store's place from the same file (SR-11.1): the old
 # directory's while the move is due, the new one's otherwise. The move
 # rewrites only db_path and error_log_path, so these stay true after it.
 LAUNCH_CLAUDE_PATH=""
 LAUNCH_CODEX_PATH=""
+LAUNCH_CURSOR_PATH=""
 if [[ "$MOVE_DUE" -eq 1 ]]; then
     # While the move is due the reader also reads [log] error_log_path. Its
-    # lines come by position (store, error log, claude_path, codex_path), an
+    # lines come by position (store, error log, claude_path, codex_path, cursor_path), an
     # empty one included, which command substitution would drop at the end.
     if ! reader_out="$(ad_store_db_path "$PREFLIGHT_CONFIG" "$HOME" "$PREFLIGHT_ROOT" log launch)"; then
         ad_exit_5 ErrConfigMalformed
@@ -2011,6 +2024,7 @@ if [[ "$MOVE_DUE" -eq 1 ]]; then
         IFS= read -r old_error_log || true
         IFS= read -r LAUNCH_CLAUDE_PATH || true
         IFS= read -r LAUNCH_CODEX_PATH || true
+        IFS= read -r LAUNCH_CURSOR_PATH || true
     } <<<"$reader_out"
     # The two ErrMoveConflict causes that need the keys: a path key whose
     # place cannot be resolved, and a store inside the old directory that is
@@ -2040,6 +2054,7 @@ else
         IFS= read -r state_db || true
         IFS= read -r LAUNCH_CLAUDE_PATH || true
         IFS= read -r LAUNCH_CODEX_PATH || true
+        IFS= read -r LAUNCH_CURSOR_PATH || true
     } <<<"$reader_out"
 fi
 # Messages name the store "state.db" when it is the default one, as
@@ -2050,7 +2065,7 @@ if [[ "$state_db" != "$(ad_clean_path "${PREFLIGHT_ROOT}/state.db")" ]]; then
 fi
 
 # --------------------------------------------------------------------
-# Agents: Claude Code and Codex (SR-11.1)
+# Agents: Claude Code, Codex and Cursor (SR-11.1)
 #
 # Found here, right after the [launch] reader, before anything on disk
 # changes. An agent is present when its launch path names an existing
@@ -2062,7 +2077,7 @@ fi
 # --------------------------------------------------------------------
 
 # ad_find_agent <name> <launch path> — look for the agent whose program is
-# <name> (claude, codex) and whose [launch] path is <launch path> ("" when
+# <name> (claude, codex, agent) and whose [launch] path is <launch path> ("" when
 # unset): its launch path when that names an existing executable file, else
 # <name> on PATH. Sets agent_prog (what to run: the launch path, or the bare
 # name; empty when absent), agent_path (where it is, for messages), agent_how
@@ -2103,6 +2118,12 @@ CODEX_FOUND_PATH="$agent_path"
 if [[ -n "$agent_prog" ]]; then
     CODEX_PRESENT=1
 fi
+ad_find_agent agent "$LAUNCH_CURSOR_PATH"
+CURSOR_BAD="$agent_bad"
+CURSOR_FOUND_PATH="$agent_path"
+if [[ -n "$agent_prog" ]]; then
+    CURSOR_PRESENT=1
+fi
 
 # ad_agent_absent_reason <name> <key> <launch path> <bad> — one phrase saying
 # why the agent was not found: its launch path names no executable file (when
@@ -2115,24 +2136,28 @@ ad_agent_absent_reason() {
     fi
 }
 
-# ad_refuse_no_agent — stop the install (exit 2) when neither agent was found.
+# ad_refuse_no_agent — stop the install (exit 2) when no supported agent was found.
 # Called after the last pre-flight config read and link check below, so every
 # config-form refusal (exit 5) comes first. The advice names PREFLIGHT_CONFIG,
 # the file pre-flight read (the old directory's while the move is due).
 ad_refuse_no_agent() {
-    if [[ "$CLAUDE_PRESENT" -eq 1 || "$CODEX_PRESENT" -eq 1 ]]; then
+    if [[ "$CLAUDE_PRESENT" -eq 1 || "$CODEX_PRESENT" -eq 1 || "$CURSOR_PRESENT" -eq 1 ]]; then
         return 0
     fi
-    echo "install.sh: neither Claude Code nor Codex was found; refusing to install." >&2
+    echo "install.sh: no supported agent (Claude Code, Codex or Cursor) was found; refusing to install." >&2
     echo "  Claude Code: $(ad_agent_absent_reason claude claude_path "$LAUNCH_CLAUDE_PATH" "$CLAUDE_BAD")" >&2
     echo "  Codex      : $(ad_agent_absent_reason codex codex_path "$LAUNCH_CODEX_PATH" "$CODEX_BAD")" >&2
-    echo "  agent-director launches Claude Code and Codex agents and needs at least one" >&2
-    echo "  of them. Install either, then re-run this install:" >&2
+    echo "  Cursor     : $(ad_agent_absent_reason agent cursor_path "$LAUNCH_CURSOR_PATH" "$CURSOR_BAD")" >&2
+    echo "  agent-director launches Claude Code, Codex and Cursor agents and needs at least one" >&2
+    echo "  of them. Install one, then re-run this install:" >&2
     echo "    Claude Code: https://claude.com/claude-code, with claude on PATH, or its" >&2
     echo "      absolute path as claude_path under [launch] in ${PREFLIGHT_CONFIG}." >&2
     echo "    Codex: see Requirements in docs/install.md" >&2
     echo "      (https://github.com/${RELEASE_REPO_SLUG}/blob/main/docs/install.md), with codex on PATH," >&2
     echo "      or its absolute path as codex_path under [launch] in ${PREFLIGHT_CONFIG}." >&2
+    echo "    Cursor: install the standalone agent program (https://cursor.com/install)," >&2
+    echo "      with agent on PATH, or its absolute path as cursor_path under [launch]" >&2
+    echo "      in ${PREFLIGHT_CONFIG}. The Cursor editor's cursor command does not count." >&2
     echo "  Nothing was installed or changed. Re-run this install after the change." >&2
     exit 2
 }
@@ -2159,6 +2184,14 @@ ad_print_agent_summary() {
         echo "  codex   : $CODEX_FOUND_PATH (version not checked: codex --version writes files in the Codex folder, so install.sh does not run it; check it yourself with: $CODEX_FOUND_PATH --version)"
     else
         echo "  codex   : not installed ($(ad_agent_absent_reason codex codex_path "$LAUNCH_CODEX_PATH" "$CODEX_BAD"))"
+    fi
+    if [[ "$CURSOR_PRESENT" -eq 1 ]]; then
+        if [[ "$CURSOR_BAD" -eq 1 ]]; then
+            echo "  cursor  : [launch] cursor_path = \"$LAUNCH_CURSOR_PATH\" names no executable file; agent found on PATH for installation only (configured launch path unchanged)"
+        fi
+        echo "  cursor  : $CURSOR_FOUND_PATH (presence only; version and compatibility not checked; agent was not run)"
+    else
+        echo "  cursor  : not installed ($(ad_agent_absent_reason agent cursor_path "$LAUNCH_CURSOR_PATH" "$CURSOR_BAD"))"
     fi
 }
 
@@ -2751,7 +2784,7 @@ if [[ "$NO_HOOKS" -eq 0 ]] && ! ad_link_write_check "$PREFLIGHT_CONFIG"; then
     ad_link_refuse "$PREFLIGHT_CONFIG"
     ad_exit_5 ErrConfigMalformed
 fi
-# The last pre-flight config read and check is done: neither agent found
+# The last pre-flight config read and check is done: no supported agent found
 # stops the install now (exit 2), after every config-form refusal (exit 5).
 ad_refuse_no_agent
 

@@ -1,7 +1,7 @@
 package installsh_test
 
 // The order of install.sh's refusals (SR-11.1): the refusal for a host with
-// neither Claude Code nor Codex (exit 2) comes after every pre-flight check of
+// no Claude Code, Codex or Cursor agent (exit 2) comes after every pre-flight check of
 // config.toml and the store, so a host with no agent and a config install.sh
 // cannot read is told about the config (exit 5), whatever its form, and fixes
 // that first. TestAgentNeitherFound has the exit 2 refusal itself.
@@ -58,7 +58,7 @@ func TestNeitherAgentLosesToEveryConfigRefusal(t *testing.T) {
 			res := h.Install()
 
 			moveWant{Code: 5, Err: tc.err, Stderr: []string{tc.stderr, "Nothing was installed or changed."},
-				NoStderr: []string{"neither Claude Code nor Codex"}, NoStdout: []string{"neither Claude Code nor Codex"}}.Check(t, h, res)
+				NoStderr: []string{"no supported agent (Claude Code, Codex or Cursor)"}, NoStdout: []string{"no supported agent (Claude Code, Codex or Cursor)"}}.Check(t, h, res)
 			if d := moveDiff(before, h.Snapshot()); d != "" {
 				t.Errorf("a refused install changed HOME:\n%s", d)
 			}

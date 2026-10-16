@@ -474,17 +474,17 @@ func (res Result) Split(t *testing.T) (db, errLog string) {
 
 // ResolveLaunch runs ad_store_db_path <config> <home> <base> launch: the form
 // uninstall.sh and install.sh's non-move pre-flight use. On success Stdout
-// holds three lines, the store path, [launch] claude_path and codex_path (an
-// empty line for a key that is unset or empty); Lines(t, 3) reads them.
+// holds four lines: store, claude_path, codex_path and cursor_path (an
+// empty line for a key that is unset or empty); Lines(t, 4) reads them.
 func (r *Reader) ResolveLaunch(t *testing.T, config, home string, b Base) Result {
 	t.Helper()
 	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "launch")
 }
 
 // ResolveLogLaunch runs ad_store_db_path <config> <home> <base> log launch:
-// the pre-flight form while the move is due. On success Stdout holds four
-// lines, the store path, the error-log path, claude_path and codex_path;
-// Lines(t, 4) reads them.
+// the pre-flight form while the move is due. On success Stdout holds five
+// lines: store, error-log, claude_path, codex_path and cursor_path;
+// Lines(t, 5) reads them.
 func (r *Reader) ResolveLogLaunch(t *testing.T, config, home string, b Base) Result {
 	t.Helper()
 	return r.run(t, "ad_store_db_path", config, home, b.Dir(home), "log", "launch")

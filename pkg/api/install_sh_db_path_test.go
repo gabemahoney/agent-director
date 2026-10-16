@@ -231,7 +231,7 @@ type launchReader struct {
 // TestInstallShLaunchPathMatchesGo is the [launch] drift guard (SR-11.1,
 // SR-14.3): for every LaunchCases config, under each base and, where a "~/"
 // value makes it matter, each HOME, the reader's launch lines are the paths
-// config.Load resolves (claude_path, then codex_path), identical under both
+// config.Load resolves (claude_path, codex_path, cursor_path), identical under both
 // bases, or the reader refuses the file. A refusal where Go loads the file is
 // allowed only for a case the matrix marks ReaderRefuses (the reader is
 // stricter: letter case, forms it does not read); a case marked BothRefuse is
@@ -267,10 +267,13 @@ func TestInstallShLaunchPathMatchesGo(t *testing.T) {
 							if c.Expect == dbpathfix.GoRefuses {
 								continue
 							}
-							lines := got.Lines(t, 3)
+							lines := got.Lines(t, 4)
 							if lines[1] != loaded.Launch.ClaudePath || lines[2] != loaded.Launch.CodexPath {
 								t.Errorf("%s: claude_path %q, codex_path %q; Go resolves %q and %q",
 									rd.name, lines[1], lines[2], loaded.Launch.ClaudePath, loaded.Launch.CodexPath)
+							}
+							if lines[3] != loaded.Launch.CursorPath {
+								t.Errorf("%s: cursor_path %q; Go resolves %q", rd.name, lines[3], loaded.Launch.CursorPath)
 							}
 						case dbpathfix.ReaderRefuses, dbpathfix.BothRefuse:
 							if (c.Expect == dbpathfix.BothRefuse) != (goErr != nil) {
@@ -357,9 +360,9 @@ func TestInstallShLaunchLogForm(t *testing.T) {
 				if got.Code != 0 || got.Stderr != "" {
 					t.Fatalf("log+launch form: status %d, stderr %q; want status 0", got.Code, got.Stderr)
 				}
-				want, have := plain.Lines(t, 3), got.Lines(t, 4)
-				if have[0] != want[0] || have[2] != want[1] || have[3] != want[2] {
-					t.Errorf("log+launch lines %q; the launch form's are %q (store, claude_path, codex_path)", have, want)
+				want, have := plain.Lines(t, 4), got.Lines(t, 5)
+				if have[0] != want[0] || have[2] != want[1] || have[3] != want[2] || have[4] != want[3] {
+					t.Errorf("log+launch lines %q; the launch form's are %q (store, claude_path, codex_path, cursor_path)", have, want)
 				}
 			})
 		}

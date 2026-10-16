@@ -32,6 +32,8 @@ type cursorPaneOptions struct {
 	Relay        string
 	Timeout      int
 	StandaloneGo bool
+	ProgramName  string
+	UnsetPath    bool
 }
 
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
@@ -46,6 +48,20 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	var opts cursorPaneOptions
 	if len(options) > 0 {
 		opts = options[0]
+	}
+	if opts.ProgramName != "" {
+		whole := filepath.Join(filepath.Dir(r.Program), opts.ProgramName)
+		if err := os.Rename(r.Program, whole); err != nil {
+			t.Fatal(err)
+		}
+		r.Program = whole
+	}
+	if opts.UnsetPath {
+		tools := t.TempDir()
+		if err := os.Symlink(r.Program, filepath.Join(tools, "agent")); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", tools+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	if opts.Script != nil {
 		r.Configure(t, *opts.Script)
@@ -67,7 +83,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	if opts.Timeout > 0 {
 		cfg = append(cfg, []byte(fmt.Sprintf("\n[relay]\ntimeout_seconds = %d\n", opts.Timeout))...)
 	}
-	cfg = append(cfg, []byte(fmt.Sprintf("\n[launch]\ncursor_path = %q\n", r.Program))...)
+	if !opts.UnsetPath {
+		cfg = append(cfg, []byte(fmt.Sprintf("\n[launch]\ncursor_path = '%s'\n", r.Program))...)
+	}
 	if err = os.WriteFile(configPath, cfg, 0600); err != nil {
 		t.Fatal(err)
 	}

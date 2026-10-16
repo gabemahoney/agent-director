@@ -36,3 +36,4 @@ cursor-owned-launch
 cursor-relay
 cursor-pane-controls
 cursor-resume-life
+cursor-install-runtime

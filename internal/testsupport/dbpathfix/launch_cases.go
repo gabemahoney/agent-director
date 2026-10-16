@@ -2,10 +2,10 @@ package dbpathfix
 
 import "strings"
 
-// LaunchCases are the configs of the [launch] claude_path and codex_path half
+// LaunchCases are the configs of the [launch] claude_path, codex_path and cursor_path half
 // of the matrix (SR-11.1, SR-5.0), run through the reader's launch form
 // (ResolveLaunch, ResolveLogLaunch) and through Go's own resolution
-// (config.Load's Launch). Every per-key shape is written for both keys.
+// (config.Load's Launch). Every per-key shape is written for all three keys.
 //
 // Same: the reader accepts the file and prints the paths config.Load resolves
 // (an empty line for a key that is unset or empty), with either base: a
@@ -13,7 +13,11 @@ import "strings"
 // reader refuses a file config.Load accepts, so it is stricter, as for letter
 // case. BothRefuse: the reader refuses a file config.Load refuses too.
 // GoRefuses: the reader passes over a file the binary refuses itself.
-var LaunchCases = append(append(launchKeyCases("claude", "claude_path"), launchKeyCases("codex", "codex_path")...), []Case{
+var LaunchCases = append(append(append(launchKeyCases("claude", "claude_path"), launchKeyCases("codex", "codex_path")...), launchKeyCases("cursor", "cursor_path")...), []Case{
+	{Name: "launch-three-mixed", Config: "[launch]\nclaude_path = \"\"\ncodex_path = '/opt/codex'\ncursor_path = '~/bin/agent'\n"},
+	{Name: "launch-three-trailing-empty", Config: "[launch]\nclaude_path = '/opt/claude'\ncodex_path = '/opt/codex'\ncursor_path = ''\n"},
+	{Name: "launch-three-cursor-first", Config: "[launch]\ncursor_path = '/opt/agent'\ncodex_path = ''\nclaude_path = '/opt/claude'\n"},
+	{Name: "launch-three-store-log", Config: "[store]\ndb_path = 'relative.db'\n[log]\nerror_log_path = 'errors.log'\n[launch]\nclaude_path = ''\ncodex_path = '/opt/codex'\ncursor_path = '~/bin/agent'\n"},
 	{Name: "launch-missing-file", Form: NoFile},
 	{Name: "launch-empty-file"},
 	{Name: "launch-table-only", Config: "[launch]\n"},
@@ -61,6 +65,7 @@ func launchKeyCases(prefix, key string) []Case {
 		c("abs-unclean", kv(`"/abs//y/./z/../w/"`), Same),
 		c("abs-root", kv(`"/"`), Same),
 		c("abs-space", kv(`"/abs with space/prog"`), Same),
+		c("abs-whole-flags-and-quotes", kv(`'/abs "quoted" agent --flag'`), Same),
 		c("abs-utf8", kv(`"/é/prog"`), Same),
 		c("abs-var-literal", kv(`"/$HOME/prog"`), Same),
 		c("abs-hash", kv(`"/a#b"`), Same),

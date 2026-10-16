@@ -87,20 +87,19 @@ func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...Tmu
 // sets: [defaults] expire_retention_days (b.sgw), [relay] timeout_seconds and
 // [pause] timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4),
 // [store] busy_timeout_ms (b.c7f), [state] settle_ms (b.3ie) and [launch]
-// claude_path and codex_path (SR-5.0). A 0 field leaves its key out, which
+// claude_path, codex_path and cursor_path (SR-5.0). A 0 field leaves its key out, which
 // loads as a written 0 does: the key's default (for settle_ms, off).
 //
-// ClaudePath and CodexPath are written exactly as given, TOML strings that
+// ClaudePath, CodexPath and CursorPath are written exactly as given, TOML strings that
 // are not checked or expanded here, so a refusal case can write a relative
 // path, "~", "~user/x" or a blank one. An empty string leaves its key out
-// unless WriteEmptyClaudePath or WriteEmptyCodexPath is set, which writes
-// `claude_path = ""` or `codex_path = ""` (an empty value counts as unset).
+// unless its WriteEmpty field is set (an empty value counts as unset).
 type ConfigKeys struct {
 	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds, PreTrustLockWaitSeconds, StoreBusyTimeoutMs int64
 	StateSettleMs                                                                                        int64
 
-	ClaudePath, CodexPath                     string
-	WriteEmptyClaudePath, WriteEmptyCodexPath bool
+	ClaudePath, CodexPath, CursorPath                               string
+	WriteEmptyClaudePath, WriteEmptyCodexPath, WriteEmptyCursorPath bool
 }
 
 // WriteKeysConfig is WriteTmuxConfig with keys' non-zero fields set as well,
@@ -130,6 +129,9 @@ func WriteKeysConfig(t testing.TB, path string, keys ConfigKeys, settings ...Tmu
 	}
 	if keys.CodexPath != "" || keys.WriteEmptyCodexPath {
 		launch["codex_path"] = keys.CodexPath
+	}
+	if keys.CursorPath != "" || keys.WriteEmptyCursorPath {
+		launch["cursor_path"] = keys.CursorPath
 	}
 	if len(launch) > 0 {
 		tables["launch"] = launch
