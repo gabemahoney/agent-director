@@ -89,7 +89,10 @@ cancellation; this does not prove existing dialogs gone. Main/child turn
 completion, interruption and plan acceptance do not release unknown-origin
 requests. Only validated execution of the exact matching shell tool,
 or the owning spawn ending, releases their hold. Other execution evidence
-remains conservative. The shared [dialog hold](#the-dialog-hold) defines the
+remains conservative. A terminal spawn close ends the hold without establishing
+per-request proof: gateway or runtime death leaves `proven_gone_at` and
+`proven_gone_how` unchanged, including on requests already reading `delivered`.
+Existing validated execution proof is preserved. The shared [dialog hold](#the-dialog-hold) defines the
 proof fields and relay-on prompt/pause guards; relay-off requests still block
 ordinary prompt admission while awaiting their native answer. Accepted
 [queued input](usage.md#fresh-cursor-use) waits for every durable decision
@@ -675,9 +678,9 @@ A spawn's open requests close together with these changes:
 - `resume`'s move of the finished spawn to `pending`, as a backstop for a
   request an older binary left open on the finished spawn.
 
-The same close proves every request of the spawn gone, closed now or
-before (`proven_gone_how` `agent_gone`; see "The dialog hold" below): its
-agent is gone, so no dialog of it is left on the pane.
+For non-Cursor spawns, the same close proves every request gone, closed now or
+before (`proven_gone_how` `agent_gone`; see "The dialog hold" below).
+Cursor requests close without changing their proof fields; see [Cursor spawns](#cursor-spawns).
 
 Every request that still awaits an answer is closed (`closed_at` is set),
 decided or not:
@@ -732,7 +735,7 @@ finished, by the upgrade to this release, never by a reader (see "The dialog hol
 | `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent or a Cursor native choice was recorded; neither establishes ACP delivery, receipt or proof. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported its tool ran, or the Cursor gateway validated matching shell execution. `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. Public pane operations store the caller's claim without screen interpretation or verdict verification. Cursor additionally requires a sent claim to match the actual selected option before answering ACP; native choices derive the verdict from that option. An outside claim never supplies ACP approval authority or proof. |
 | `proven_gone_at` | When the agent's own hooks or validated Cursor execution proved the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`. |
-| `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching shell execution (never on a Codex row). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). `agent_gone`: its spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. `null` until proven. |
+| `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching shell execution (never on a Codex row). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
 | `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded by an older binary, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
@@ -1087,7 +1090,7 @@ prove it gone:
 |---|---|
 | `tool_ran` | A Claude agent's `PostToolUse` or `PostToolUseFailure` carrying the request's `tool_use_id`: the tool ran, so its dialog was answered. Any Claude request with that id, a subagent's included. Cursor requires current conversation/launch-bound shell execution for the exact request and tool id, with an integer exit code and non-null stdout/stderr; generic completed/failed status is insufficient. Never on a Codex row. |
 | `turn_end` | The turn of the agent that asked ended after the request was written. An owned main-agent `Stop`, Claude idle-prompt Notification or Codex/Cursor main Interrupt proves only a request durably eligible for main-turn proof, with no child id, recorded before the second the report started. Missing child identity alone never establishes eligibility. |
-| `agent_gone` | `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a spawn already `ended` or `missing` the same way. |
+| `agent_gone` | For non-Cursor spawns, `find-missing`'s mark of the spawn `missing`, the agent's terminal `SessionEnd`, or `resume`'s move of the finished spawn to `pending`: every request of the spawn. Upgrading the store proves every request of a non-Cursor spawn already `ended` or `missing` the same way. Cursor terminal closes leave proof unchanged; see [Cursor spawns](#cursor-spawns). |
 
 Main-turn eligibility is stored independently of child identity and survives
 restart. Historical non-Cursor main/child behavior is preserved: main

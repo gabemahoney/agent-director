@@ -140,7 +140,7 @@ func TestCursorListLostGatewayErrorsAndValidation(t *testing.T) {
 				}
 				after := e.columns(t, b.InstanceID)
 				pr, err := e.st.GetPermissionRequest(b.InstanceID, token)
-				if err != nil || after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !pr.Closed() || !pr.ProvenGone() || pr.Decision != "deny" || !pr.DeliveredAt.IsZero() {
+				if err != nil || after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !pr.Closed() || pr.ProvenGone() || pr.ProvenGoneHow != "" || pr.Decision != "deny" || !pr.DeliveredAt.IsZero() {
 					t.Errorf("absent binding missing close not atomic/idempotent: before=%+v after=%+v request=%+v err=%v", before, after, pr, err)
 				}
 				return

@@ -1865,7 +1865,7 @@ policy is in [migration-guide.md](migration-guide.md#current-worked-example-v10-
   requests' dialogs are gone is written only by `ProveRequestsGone`
   (`internal/store/request_proof.go`, with a `RequestProof`: `How`
   `tool_ran` and its `ToolUseID`, or `turn_end` and its `RecordedBefore`,
-  the hook's start; b.omt), the end of a Spawn's
+  the hook's start; b.omt), the end of a non-Cursor Spawn's
   agent only by `closeOrphanedRequests`' third statement
   (`proveAgentGoneSQL`) and, for a row already finished when the store
   is migrated, `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`), and the
@@ -2354,11 +2354,17 @@ still the one it read, so it knows the row has not changed since. As built:
     each undecided one (`decision` `deny`, `decision_reason` `reason`,
     `decided_at`, `closed_at`), then `closeDecidedRequestsSQL` sets only
     `closed_at` on each decided one its relay hook has not acked, then
-    `proveAgentGoneSQL` proves every request of the row not yet proven
+    `proveAgentGoneSQL` proves every request of a non-Cursor row not yet proven
     gone, closed now or before (`proven_gone_at`, `proven_gone_how`
     `agent_gone`; b.146 step 2c), one instant `at` for all three, in
     milliseconds, which the caller reads from the store's clock
-    (`storeNowMillis`) inside its transaction. It returns
+    (`storeNowMillis`) inside its transaction. The proof statement checks the
+    actual row with `agent IS NOT 'cursor'` in that transaction; NULL-agent
+    legacy rows retain this proof. Cursor requests retain their proof state,
+    including existing exact-request execution proof and unproven delivery
+    acknowledgements. Gateway/runtime death or terminal SessionEnd supplies no
+    Cursor request proof. Row closure, request deny/close and subagent cleanup
+    remain atomic. It returns
     what it closed in request-id order and
     emits nothing; the caller emits once its transaction commits, through
     `closedRequest.emitDeny` (one `ad.row_mutation.committed` per denied
@@ -11575,10 +11581,17 @@ docs/engineering-guide.md).
   end whether it was allowed or denied, and an `Interrupt` carrying an
   `agent_id` (Codex sends none) proves nothing.
 - **The agent's end.** `closeOrphanedRequests`' third statement,
-  `proveAgentGoneSQL`, proves every request of the row not yet proven
+  `proveAgentGoneSQL`, proves every request of a non-Cursor row not yet proven
   (`agent_gone`) in the transaction of `find-missing`'s mark, the ended
   transition and resume's move (see "Must use: the close of a Spawn's
-  requests" under [`internal/store`](#internalstore)). For a row already
+  requests" under [`internal/store`](#internalstore)). It checks the actual
+  `spawns` row in the caller's transaction with NULL-safe `agent IS NOT 'cursor'`,
+  preserving legacy NULL-agent behavior. Cursor terminal closes still deny
+  undecided requests and close requests awaiting an answer atomically with the
+  row transition and subagent cleanup, but leave all request proof unchanged.
+  Gateway/runtime death and authenticated SessionEnd are not per-request proof,
+  including after a durable delivery acknowledgement. Existing validated
+  exact-request execution proof is preserved. For a row already
   `ended` or `missing` before v7, the v6 → v7 hop's phase 3
   (`v7ProveFinishedSQL`) writes the same proof at the migration (see
   "Schema v6 → v7 Migration" under [`internal/store`](#internalstore)).
@@ -11811,10 +11824,11 @@ before the upgrade (rule 5's compatibility clause), through
 
 - **`internal/store/request_close.go`** — `closeOrphanedRequests` and its
   three statements, the close of a Spawn's requests that still await an
-  answer and the proof of every request of the Spawn (`agent_gone`),
+  answer and the proof of every request of a non-Cursor Spawn (`agent_gone`),
   shared by `find-missing`'s mark, the ended transition and resume's move
   (see "The ended transition closes the row's requests" above, and its
-  "Must use" under [`internal/store`](#internalstore)).
+  "Must use" under [`internal/store`](#internalstore)). Future terminal writers
+  MUST reuse this close so Cursor proof remains separate from row closure.
 
 - **`internal/store/request_proof.go`** — `ProveRequestsGone`,
   `RequestProof` (with `RecordedBefore`, a `turn_end` proof's cut) and its
@@ -12743,8 +12757,9 @@ back, inserting and evicting nothing.
 **Selector** (`evictClosedRequestsSQL`). A request is eligible only when
 it no longer awaits an answer (`NOT awaitingAnswerSQL`) **and** its dialog
 is proven gone: `proven_gone_at IS NOT NULL`, or its Spawn is `ended` or
-`missing` (`finishedStateGuardSQL`; the finished-row `agent_gone` projection,
-not independent proof of process exit). Eligible rows are ordered `decided_at ASC`; the oldest decided
+`missing` (`finishedStateGuardSQL`; terminal row state also permits eviction
+without stored per-request proof on Cursor, and is not independent proof of
+process exit). Eligible rows are ordered `decided_at ASC`; the oldest decided
 rows are removed first. A request agent-director's own records read
 closed (acked, answered at the pane, recorded with `record-pane-answer`)
 but that no hook has proven gone can still have its dialog on the pane

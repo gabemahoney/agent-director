@@ -1,0 +1,26 @@
+{
+  "role": "Apiary Doc Writer",
+  "idea": "b.ftd",
+  "plan": "b.jf1",
+  "epic": "t1.jf1.r8",
+  "task": "t2.jf1.r8.a8",
+  "statusesChanged": [],
+  "commits": [],
+  "result": "Documentation updated; root SRD append and readback pending",
+  "filesChanged": [
+    "docs/permissions.md",
+    "docs/architecture.md",
+    "docs/caller-contract.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/docs/srd-chunk.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/docs/report.json"
+  ],
+  "validation": "Read documentation guides, frozen causal RED report, Engineer focused GREEN report and central source repair; reviewed changed wording against retained transaction and proof boundaries. git diff --check passed inside literal make sandbox CMD with canonical HOME, stripped inherited runtime variables and private git config. No tests or product builds run by documentation lane.",
+  "operatorActions": "No change needed: existing manual inspection procedures remain valid; caller contract links to permissions owner.",
+  "deviations": [],
+  "failures": [],
+  "incomplete": [
+    "Root must append docs/srd-chunk.md to SRD t1.ftd.hj using host Bees and read back; no sandbox Bees wait or installation attempted.",
+    "Independent review and full requested gate are outside this documentation lane."
+  ],
+  "questions": []
+}

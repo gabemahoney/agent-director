@@ -1,0 +1,58 @@
+=== RUN   TestCloseClosesRelayRequests
+=== RUN   TestCloseClosesRelayRequests/find-missing's_mark
+=== RUN   TestCloseClosesRelayRequests/find-missing's_mark_of_a_Codex_row_with_no_end_report
+=== RUN   TestCloseClosesRelayRequests/find-missing's_move_of_a_Codex_row_with_an_end_report
+=== RUN   TestCloseClosesRelayRequests/the_terminal_SessionEnd
+=== RUN   TestCloseClosesRelayRequests/resume's_move_of_a_row_an_earlier_release_ended
+--- PASS: TestCloseClosesRelayRequests (0.27s)
+    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark (0.06s)
+    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark_of_a_Codex_row_with_no_end_report (0.06s)
+    --- PASS: TestCloseClosesRelayRequests/find-missing's_move_of_a_Codex_row_with_an_end_report (0.05s)
+    --- PASS: TestCloseClosesRelayRequests/the_terminal_SessionEnd (0.05s)
+    --- PASS: TestCloseClosesRelayRequests/resume's_move_of_a_row_an_earlier_release_ended (0.05s)
+=== RUN   TestCursorStartupMissingConditionalWrite
+=== RUN   TestCursorStartupMissingConditionalWrite/unchanged
+    cursor_startup_liveness_test.go:97: missing did not close request: {RequestID:1 InstanceID:5b7fc841-aaed-4dcf-8935-e64425ed82b5 RequestToken:77509f99-5df1-4123-8a0d-8a5ce711f3a2 ToolName:Bash ToolInput:{} Decision:deny DecisionReason:find_missing DecidedAt:2026-10-16 09:10:26 +0000 UTC CreatedAt:2026-10-16 09:10:26 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:0001-01-01 00:00:00 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:2026-10-16 09:10:26.776 +0000 UTC ProvenGoneAt:2026-10-16 09:10:26.776 +0000 UTC ProvenGoneHow:agent_gone} <nil>
+=== RUN   TestCursorStartupMissingConditionalWrite/binding_inserted
+=== RUN   TestCursorStartupMissingConditionalWrite/stale_binding_inserted
+=== RUN   TestCursorStartupMissingConditionalWrite/row_refreshed
+=== RUN   TestCursorStartupMissingConditionalWrite/token_replaced
+=== RUN   TestCursorStartupMissingConditionalWrite/life_replaced
+=== RUN   TestCursorStartupMissingConditionalWrite/gateway_PID_replaced
+=== RUN   TestCursorStartupMissingConditionalWrite/gateway_start_replaced
+=== RUN   TestCursorStartupMissingConditionalWrite/subagent_close_failure
+--- FAIL: TestCursorStartupMissingConditionalWrite (0.46s)
+    --- FAIL: TestCursorStartupMissingConditionalWrite/unchanged (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/binding_inserted (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/stale_binding_inserted (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/row_refreshed (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/token_replaced (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/life_replaced (0.06s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_PID_replaced (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_start_replaced (0.05s)
+    --- PASS: TestCursorStartupMissingConditionalWrite/subagent_close_failure (0.05s)
+=== RUN   TestCursorTerminalClosePreservesRequestProof
+=== RUN   TestCursorTerminalClosePreservesRequestProof/cursor_missing
+    cursor_terminal_request_proof_test.go:82: cursor missing invented proof or rewrote acknowledged request:
+         before {RequestID:1 InstanceID:1eabe4db-e4f2-4d2d-a1af-f794f1acfdfe RequestToken:28815883-6199-477f-9fc3-403259a94001 ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.207 +0000 UTC SettledAt:2026-10-16 10:10:27.207 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}
+         after {RequestID:1 InstanceID:1eabe4db-e4f2-4d2d-a1af-f794f1acfdfe RequestToken:28815883-6199-477f-9fc3-403259a94001 ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.207 +0000 UTC SettledAt:2026-10-16 10:10:27.207 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:2026-10-16 09:10:27.209 +0000 UTC ProvenGoneHow:agent_gone}
+=== RUN   TestCursorTerminalClosePreservesRequestProof/find_missing
+    cursor_terminal_request_proof_test.go:82: find missing invented proof or rewrote acknowledged request:
+         before {RequestID:1 InstanceID:00c597ae-0301-4ec3-81c5-4b6efadd37ac RequestToken:65fc3302-467c-46a5-97ee-e01670c5821d ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.232 +0000 UTC SettledAt:2026-10-16 10:10:27.232 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}
+         after {RequestID:1 InstanceID:00c597ae-0301-4ec3-81c5-4b6efadd37ac RequestToken:65fc3302-467c-46a5-97ee-e01670c5821d ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.232 +0000 UTC SettledAt:2026-10-16 10:10:27.232 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:2026-10-16 09:10:27.234 +0000 UTC ProvenGoneHow:agent_gone}
+=== RUN   TestCursorTerminalClosePreservesRequestProof/SessionEnd
+    cursor_terminal_request_proof_test.go:82: SessionEnd invented proof or rewrote acknowledged request:
+         before {RequestID:1 InstanceID:45609365-9019-452f-b162-b7d7cd485f19 RequestToken:0e0c1928-2f14-4860-81c2-cc4535199478 ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.258 +0000 UTC SettledAt:2026-10-16 10:10:27.258 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}
+         after {RequestID:1 InstanceID:45609365-9019-452f-b162-b7d7cd485f19 RequestToken:0e0c1928-2f14-4860-81c2-cc4535199478 ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.258 +0000 UTC SettledAt:2026-10-16 10:10:27.258 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:2026-10-16 09:10:27.262 +0000 UTC ProvenGoneHow:agent_gone}
+=== RUN   TestCursorTerminalClosePreservesRequestProof/resume_backstop
+    cursor_terminal_request_proof_test.go:82: resume backstop invented proof or rewrote acknowledged request:
+         before {RequestID:1 InstanceID:f7401e3c-fe70-4971-91bf-6c0ed9defab4 RequestToken:5a71e355-eaef-4bc6-8246-b8a4c54e01dc ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.283 +0000 UTC SettledAt:2026-10-16 10:10:27.283 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}
+         after {RequestID:1 InstanceID:f7401e3c-fe70-4971-91bf-6c0ed9defab4 RequestToken:5a71e355-eaef-4bc6-8246-b8a4c54e01dc ToolName:Bash ToolInput:{} Decision:allow DecisionReason:operator DecidedAt:2026-10-15 00:00:00 +0000 UTC CreatedAt:2026-10-16 09:10:27 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID: AgentID: MainTurnEndEligible:false DeliveredAt:2026-10-16 09:09:27.283 +0000 UTC SettledAt:2026-10-16 10:10:27.283 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:2026-10-16 09:10:27.286 +0000 UTC ProvenGoneHow:agent_gone}
+--- FAIL: TestCursorTerminalClosePreservesRequestProof (0.10s)
+    --- FAIL: TestCursorTerminalClosePreservesRequestProof/cursor_missing (0.02s)
+    --- FAIL: TestCursorTerminalClosePreservesRequestProof/find_missing (0.03s)
+    --- FAIL: TestCursorTerminalClosePreservesRequestProof/SessionEnd (0.03s)
+    --- FAIL: TestCursorTerminalClosePreservesRequestProof/resume_backstop (0.02s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/store	0.839s
+FAIL

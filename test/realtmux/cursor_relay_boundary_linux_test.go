@@ -270,7 +270,7 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 							missing = readRow(t, f.DBPath, id).State == store.StateMissing
 						}
 						if missing {
-							if got.Decision != "deny" || !got.ProvenGone() || !got.Closed() || !got.DeliveredAt.IsZero() || got.PaneAnswered() {
+							if got.Decision != "deny" || !got.ProvenGoneAt.IsZero() || got.ProvenGoneHow != "" || !got.Closed() || !got.DeliveredAt.IsZero() || got.PaneAnswered() {
 								t.Fatalf("missing did not atomically close held request: row=%+v request=%+v", row, got)
 							}
 						} else if got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {

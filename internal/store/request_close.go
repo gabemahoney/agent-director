@@ -18,8 +18,8 @@ import (
 // terminal SessionEnd's move to ended (ApplyHookTransitionResult, reason
 // ended) and, as a backstop for a request an earlier release left open on a
 // finished row, resume's move to pending (MoveToPending, reason ended). The
-// same close proves every request of the row gone (b.146 step 2c): its agent
-// is gone, so no dialog of it is left on the pane.
+// same close proves every non-Cursor request of the row gone (b.146 step 2c).
+// Cursor gateway/runtime loss ends the row but is not per-request proof.
 
 // denyOrphanedRequestsSQL is the close's first statement: every request of
 // the row that still awaits an answer (awaitingAnswerSQL) and is undecided is
@@ -41,11 +41,16 @@ var closeDecidedRequestsSQL = `UPDATE permission_requests AS pr
   RETURNING request_id, request_token, tool_name`
 
 // proveAgentGoneSQL is the close's third statement (b.146 step 2c): every
-// request of the row not yet proven gone, closed by the first two statements,
-// acked, answered at the pane or closed before, is proven gone, agent_gone.
+// request of a non-Cursor row not yet proven gone, closed by the first two
+// statements, acked, answered at the pane or closed before, is proven gone,
+// agent_gone. The agent check reads the actual row in the caller's transaction;
+// Cursor gateway/runtime loss supplies no request proof, even after an ack.
 const proveAgentGoneSQL = `UPDATE permission_requests
     SET proven_gone_at = ?, proven_gone_how = ?
-  WHERE instance_id = ? AND proven_gone_at IS NULL`
+  WHERE instance_id = ? AND proven_gone_at IS NULL
+    AND EXISTS (SELECT 1 FROM spawns
+                 WHERE spawns.instance_id = permission_requests.instance_id
+                   AND spawns.agent IS NOT 'cursor')`
 
 // closedRequest is one permission request closeOrphanedRequests closed;
 // denied when the close also denied it (it was undecided).
@@ -60,9 +65,10 @@ type closedRequest struct {
 // an answer, on conn, inside the transaction its caller holds: the undecided
 // ones denied with decision_reason reason (denyOrphanedRequestsSQL), then the
 // decided ones marked closed (closeDecidedRequestsSQL), both with one
-// closed_at. Then it proves every request of instanceID not yet proven gone,
-// whether it was just closed or no longer awaited an answer, with that same
-// instant and proven_gone_how agent_gone (proveAgentGoneSQL; b.146 step 2c).
+// closed_at. For non-Cursor rows it then proves every request of instanceID
+// not yet proven gone, whether it was just closed or no longer awaited an
+// answer, with that same instant and proven_gone_how agent_gone
+// (proveAgentGoneSQL; b.146 step 2c). Cursor requests retain their proof state.
 // It returns the requests it closed in request-id order and emits nothing:
 // its caller emits once its transaction commits (emitDeny).
 //

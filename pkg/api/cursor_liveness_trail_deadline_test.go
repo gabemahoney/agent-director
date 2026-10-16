@@ -119,7 +119,7 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 					t.Fatal(err)
 				}
 				if row.RowVersion != before.RowVersion.(int64)+1 || pr.AwaitsAnswer() || !pr.Closed() ||
-					pr.Decision != "deny" || pr.DecisionReason != "find_missing" || pr.ProvenGoneHow != store.ProvenGoneAgentGone {
+					pr.Decision != "deny" || pr.DecisionReason != "find_missing" || pr.ProvenGone() || pr.ProvenGoneHow != "" {
 					t.Fatalf("independent terminal commit: row=%+v request=%+v", row, pr)
 				}
 				committed = true

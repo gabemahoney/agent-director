@@ -93,7 +93,7 @@ func TestCursorStartupMissingConditionalWrite(t *testing.T) {
 				}
 				f.assertMixClosedInWindow(mix, lo, hi)
 				requestAfter, err := f.s.GetPermissionRequest(b.InstanceID, permission.RequestToken)
-				if err != nil || !requestAfter.Closed() || !requestAfter.ProvenGone() || requestAfter.Decision != "deny" {
+				if err != nil || !requestAfter.Closed() || requestAfter.ProvenGone() || requestAfter.ProvenGoneHow != "" || requestAfter.Decision != "deny" {
 					t.Errorf("missing did not close request: %+v %v", requestAfter, err)
 				}
 				if _, err := f.s.ReadCursorRuntime(b.InstanceID); !errors.Is(err, sql.ErrNoRows) {

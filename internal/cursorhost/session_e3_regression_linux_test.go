@@ -195,6 +195,9 @@ func TestCursorE3FatalRunClosesMissing(t *testing.T) {
 				if readErr != nil || len(requests) != 1 || !requests[0].Closed() {
 					t.Errorf("fatal Run did not close admitted request: %+v %v", requests, readErr)
 				}
+				if len(requests) == 1 && (requests[0].ProvenGone() || requests[0].ProvenGoneHow != "" || !requests[0].DeliveredAt.IsZero() || requests[0].PaneAnswered()) {
+					t.Errorf("fatal Run fabricated request proof or delivery: %+v", requests[0])
+				}
 			}
 			for _, r := range c.records(t) {
 				if r.Kind == "session_end" || r.Kind == "turn_outcome" {
@@ -342,6 +345,9 @@ func TestCursorE3PublicReadsReconcileKilledGateway(t *testing.T) {
 			requests, err = st.PermissionRequestsForSpawn(b.InstanceID)
 			if err != nil || len(requests) != 1 || !requests[0].Closed() {
 				t.Errorf("dead launch request not transactionally closed: %+v %v", requests, err)
+			}
+			if len(requests) == 1 && (requests[0].ProvenGone() || requests[0].ProvenGoneHow != "" || !requests[0].DeliveredAt.IsZero() || requests[0].PaneAnswered()) {
+				t.Errorf("gateway SIGKILL fabricated request proof or delivery: %+v", requests[0])
 			}
 			after, err := st.GetSpawn(b.InstanceID)
 			if err != nil {

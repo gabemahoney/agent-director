@@ -77,7 +77,7 @@ func TestCursorStartupAbsentBindingReads(t *testing.T) {
 					t.Fatal(err)
 				}
 				if verdict == "gone" {
-					if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !requestAfter.Closed() || !requestAfter.ProvenGone() || requestAfter.Decision != "deny" || !requestAfter.DeliveredAt.IsZero() || requestAfter.PaneAnswered() {
+					if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !requestAfter.Closed() || requestAfter.ProvenGone() || requestAfter.ProvenGoneHow != "" || requestAfter.Decision != "deny" || !requestAfter.DeliveredAt.IsZero() || requestAfter.PaneAnswered() {
 						t.Errorf("not a single atomic missing close: before=%+v after=%+v request=%+v", before, after, requestAfter)
 					}
 				} else if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(requestBefore, requestAfter) {

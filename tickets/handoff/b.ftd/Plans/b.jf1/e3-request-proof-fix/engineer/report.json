@@ -1,0 +1,255 @@
+{
+  "role": "Apiary Engineer source-only focused repair",
+  "idea": "b.ftd",
+  "plan": "b.jf1",
+  "epic": "t1.jf1.r8",
+  "task": "t2.jf1.r8.a8",
+  "statusesChanged": [],
+  "commits": [],
+  "head": "b63174070fb3c53a137a6cf413df368812b86a71",
+  "result": "GREEN: frozen causal RED set and targeted proof controls pass",
+  "changedSourceFiles": [
+    "internal/store/request_close.go"
+  ],
+  "sourceSHA256": {
+    "internal/store/request_close.go": "a7f6cad3c470b69420e30df8177deee294ea033982112ecf3ca11454a61cc5b3"
+  },
+  "patchSHA256": "be0de6e38cc0d4c40200a76846871cc63b951454ec26dc06eb8e490ef2d514b8",
+  "implementation": "proveAgentGoneSQL now requires an actual spawns row with agent IS NOT cursor, selected in the existing caller transaction. Only unsupported Cursor proof stamping is skipped. Close/deny SQL, caller transactions, rollback, bounded contexts, audit behavior and correlated proof setters are unchanged.",
+  "compatibility": "NULL-agent legacy rows retain proof through IS NOT; Claude/Codex controls pass. Existing Cursor tool_ran proof remains untouched. Acknowledged Cursor requests remain unproven after gateway/runtime loss.",
+  "runs": {
+    "api": {
+      "exit": 0,
+      "logSHA256": "7d4937f4f9824ff6daac55c527620ca4c09cea080ca662dd176124912fac9f8d",
+      "passedTests": [
+        "--- PASS: TestCursorReadsWithBlockedTrail (3.11s)",
+        "--- PASS: TestCursorStartupAbsentBindingReads (0.30s)",
+        "--- PASS: TestCursorTerminalReadsPreserveRequestEvidence (0.17s)",
+        "--- PASS: TestCursorListLostGatewayErrorsAndValidation (0.12s)"
+      ],
+      "passedSubtests": [
+        "    --- PASS: TestCursorReadsWithBlockedTrail/Get (1.04s)",
+        "    --- PASS: TestCursorReadsWithBlockedTrail/Status (1.04s)",
+        "    --- PASS: TestCursorReadsWithBlockedTrail/List (1.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/gone (0.04s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/gone (0.04s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/gone (0.04s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/unknown (0.03s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/Get (0.06s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/Status (0.06s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/List (0.06s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/absent_binding (0.04s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/request_close_fails (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/negative_limit_before_mutation (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/invalid_label_before_mutation (0.03s)"
+      ]
+    },
+    "store": {
+      "exit": 0,
+      "logSHA256": "9bf2915563a76a8cf1cb90586cc300924484a5228eab7e20d48d6254a75becfc",
+      "passedTests": [
+        "--- PASS: TestCloseClosesRelayRequests (0.28s)",
+        "--- PASS: TestCursorStartupMissingConditionalWrite (0.46s)",
+        "--- PASS: TestCursorTerminalClosePreservesRequestProof (0.10s)"
+      ],
+      "passedSubtests": [
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark_of_a_Codex_row_with_no_end_report (0.05s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_move_of_a_Codex_row_with_an_end_report (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/the_terminal_SessionEnd (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/resume's_move_of_a_row_an_earlier_release_ended (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/unchanged (0.06s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/stale_binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/row_refreshed (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/token_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/life_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_PID_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_start_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/subagent_close_failure (0.05s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/cursor_missing (0.02s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/find_missing (0.02s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/SessionEnd (0.03s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/resume_backstop (0.02s)"
+      ]
+    },
+    "runtime": {
+      "exit": 0,
+      "logSHA256": "1b312a52597d3c54c2f05e29b83405977ac175449b291ac1ab13510530668155",
+      "passedTests": [
+        "--- PASS: TestCursorE3FatalRunClosesMissing (1.05s)",
+        "--- PASS: TestCursorE3PublicReadsReconcileKilledGateway (1.06s)"
+      ],
+      "passedSubtests": [
+        "    --- PASS: TestCursorE3FatalRunClosesMissing/DIE (0.86s)",
+        "    --- PASS: TestCursorE3FatalRunClosesMissing/malformed_update (0.18s)",
+        "    --- PASS: TestCursorE3PublicReadsReconcileKilledGateway/Get (0.53s)",
+        "    --- PASS: TestCursorE3PublicReadsReconcileKilledGateway/Status (0.53s)"
+      ]
+    },
+    "nearby-store": {
+      "exit": 0,
+      "logSHA256": "2d637731fa987bb2abe86917248fcada556b523c0e45827844e45b12bc3b3946",
+      "passedTests": [
+        "--- PASS: TestCloseToolRanRequests (0.18s)",
+        "--- PASS: TestProveRequestsGone (0.26s)",
+        "--- PASS: TestProvenGoneRequestHoldsNothing (0.30s)",
+        "--- PASS: TestCursorTrailProofRefusalIsSilent (0.15s)",
+        "--- PASS: TestCursorTrailProofFinalValuesAndDuplicate (0.32s)"
+      ],
+      "passedSubtests": [
+        "    --- PASS: TestCloseToolRanRequests/fallen_back (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/hook_gone_at_already_recorded (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/its_hook_may_still_answer (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/no_judge (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/another_tool_use_id (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/no_tool_use_id (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/another_process's_hook (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/acked (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/already_proven_gone (0.02s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_the_main_agent's_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_a_subagent's_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_another_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_no_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end_after_A's_tool_ran (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end_from_another_process (0.03s)",
+        "    --- PASS: TestProveRequestsGone/an_unknown_proof (0.03s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_token (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_tool (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/independent_token_tool_mismatch (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/closed (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/stale_binding (0.03s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/undecided (0.04s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/API_allow (0.04s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/operator_deny (0.04s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/timeout_deny (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/native_pane (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/outside_unknown (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/incomplete_proof (0.05s)"
+      ]
+    },
+    "nearby-runtime": {
+      "exit": 0,
+      "logSHA256": "8f75fdf85579eee74f6a050b84c21a766fca6f84764aa91d784d349ab5b8cfe5",
+      "passedTests": [
+        "--- PASS: TestCursorExecutionProofRequiresMatchingShellResult (1.08s)",
+        "--- PASS: TestCursorProofAndAdmissionRejectStaleAuthority (0.29s)",
+        "--- PASS: TestCursorUnknownRequestRejectsGenericLifecycleProof (0.05s)",
+        "--- PASS: TestCursorGenericToolProofCannotBypassControllerValidation (0.10s)"
+      ],
+      "passedSubtests": [
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/captured_shell_result (0.37s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/nonzero_shell_result_synthetic (0.06s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/generic_completion (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/generic_failure (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/still_pending (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/wrong_authorization_kind (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/string_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/fractional_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/missing_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/array_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_stderr (0.06s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/duplicate_output (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/session (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/connection (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/token (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/life (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/runtime (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/retired (0.05s)",
+        "    --- PASS: TestCursorGenericToolProofCannotBypassControllerValidation/PostToolUse_close (0.05s)",
+        "    --- PASS: TestCursorGenericToolProofCannotBypassControllerValidation/generic_tool_proof (0.05s)"
+      ]
+    }
+  },
+  "frozen": {
+    "testsAndRunners": 9,
+    "protectedCollectorDriverFiles": 30,
+    "unchangedControls": 4
+  },
+  "frozenTestsAndRunners": {
+    "internal/cursorhost/session_e3_regression_linux_test.go": "c43d994aa36969701ca6fe31407797a7c5ae8bc696666d94c476dbf1506ea1e1",
+    "internal/store/cursor_startup_liveness_test.go": "d0ed60aa3c76a32d9a3083ffc59fa159fcb4e5081ec8d7583044de6f96b48236",
+    "internal/store/cursor_terminal_request_proof_test.go": "04ab4fa8b31f70523cf73998e04c3406d2c46994f464af3a0cc3981b98cb0650",
+    "pkg/api/cursor_liveness_list_test.go": "f6f68b32a06367a1da3d2aa162fb031914edf223f39b2e8f36cbe26bec9baef4",
+    "pkg/api/cursor_liveness_trail_deadline_test.go": "6275619a21833537a75250117d6524fb6489f27d34ca682105accdbe61dba67c",
+    "pkg/api/cursor_startup_liveness_test.go": "a60b69f1784b46cd526ea119a10f2e90e4e24a103af46bb4be74d5f2c5b0ce18",
+    "pkg/api/cursor_terminal_request_proof_test.go": "6fab650d65146115a04a480d5e9422c573e2ec4d9d7bfcbe53c6de155ade0da3",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/freeze.cjs": "ae33a6cc37890bac3b2fb77c0433ab0fe215606deb4ddf7f1193997c9d054757",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/sandbox-command.sh": "3aaebedff064cc26441ddc687c41236ab4e99c3cbd66c25c0e6c55c069a24251"
+  },
+  "protectedFiles": {
+    "test/driver/cursor-owned-launch.sh": "f00def2a7dd97e93e8feb00522513021f2f09a864615bd20d85a579e88f3f976",
+    "test/driver/cursor-pane-controls.sh": "2b725c64e114a0d9936a6461922019af7377d7785dbd474bf3163d65b642e624",
+    "test/driver/cursor-pane-public.mjs": "5b830cbc1281800e9ab13a50b27ef319ad84e871ba97f3678e3f6b577be47f66",
+    "test/driver/cursor-pane-records.cjs": "7c9f52e3b22851cbf34061e02b477bb2722c07604162856075b5ee207ed46f64",
+    "test/driver/cursor-pipe.c": "662ae3ed82a035fbac687014cac314304601c98efa129838542e79e1645dd424",
+    "test/driver/db-reset.sh": "0daf135a070ec0b7672127da53927933e74e724e6d7254f5440e448472849587",
+    "test/driver/delay-create-tmux/tmux": "b5b8c8d49298a0ed286ecd4f79939b9ca1f2267cdd4892238316f3e7506703b2",
+    "test/driver/early-hook-claude/claude": "a0418e494fe3e26ea2f3690b8095d94b7b77ac0d099963a9986366e5e16d8bc8",
+    "test/driver/forking-codex/codex": "cf331bcdcffc7691bc121ba970820644839d540dc4809a8ccea3d14743b386a5",
+    "test/driver/old-layout.sh": "396103578d8a983923ef0ab197714cfdd2ee800cffd4e817aecb00f58846cd17",
+    "test/driver/pane-hook.sh": "23118ab864f1df71c594e8fb4397dec7d6ca2cb55cfd729a34b7cc7bc301a092",
+    "test/driver/prompt.md": "f7e722b8b92383a7d79fdf27e17378bfc74aa5a67ebd9e6e8c2c3ba4d8ea6448",
+    "test/driver/run-testplan.sh": "c86402ec5d2c4183b169a6b25b3dcd329a6eb521e0e0d134f070baf45a33df17",
+    "test/driver/sql.sh": "46b3760a31619d01ed28979df5c5743cb662eb4e4a4ccb66b717b9a4cbcf0294",
+    "test/driver/stand-in-claude/claude": "3fb664763b851951baa49a9512bb17805cb81b15b43f8f3952b1406640ff27d1",
+    "test/driver/stand-in-codex/codex": "dc2e46da9e0c056a5601a2d2f49c71a83f9cd2b64d51af791f64d0169911b6ef",
+    "test/driver/tree-snapshot.sh": "6550a8f4e730beaafa63ab1f92d70893d78be8f31ab0690f1eb15a292b5e5c17",
+    "tickets/testplans/b.jf1/t1.jf1.cr/COVERAGE.md": "92443ce08e474ddad441282dc6360933eed2cccf308c5a3b545c03890f84a6f3",
+    "tickets/testplans/b.jf1/t1.jf1.cr/operator-acceptance.md": "ff08bf32447e68cd86124f901a053524b86d9e5bf8f40b0d958325eba569b4b8",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t1.jf1.cr.md": "0111a3fcc08e3012627e1731ea027cbe34f3eccde9ca96ea32561c23cbfd2c38",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.01/t2.jf1.cr.01.md": "f6ca6144ea8cd0751b919891deca32fc5e4f698605b8b4c7c744d1cf1ab9a570",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.02/t2.jf1.cr.02.md": "1bc4785de90bf9ad0e348ed102129b16872bee91833e5bbe697b9596e34d2ba4",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.03/t2.jf1.cr.03.md": "47179603a5641795673b3ecaf6d2bd364817bcee1de5d442266f399d7d789295",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.04/t2.jf1.cr.04.md": "3c901d0f085378c3b43651c04299f93a80887852ec97f18e23876cd84ed05f24",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.05/t2.jf1.cr.05.md": "392487e2ed6b958aad94706702098675db7fb1fea4fb5290b2d75bef490e28f6",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.06/t2.jf1.cr.06.md": "0f4bdeeb700d89b24decb7df8600c01f5bf9870aa028d9b42bbad19f9fcfe1c0",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.07/t2.jf1.cr.07.md": "f4c59aec16ab5e39d87b0a3395e4450ea3a96fda1681b1212399e606645cb86f",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.08/t2.jf1.cr.08.md": "6dc7f5fcd815864faf0227b4b8926ac5b4326bb1ef705076f376b81a5ad9c2d1",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.09/t2.jf1.cr.09.md": "98ac35f0211e6ea646ae42f77033500203e4eb2d3d6e33a5a50df9cbcfc3403b",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md": "10dca1a480a7ebe9048892af2b11ca9c317ff5042de81eb75ec9ff2bb6b69cce"
+  },
+  "preservedREDLogs": true,
+  "unchangedOtherProductionSources": 336,
+  "validationCommands": {
+    "frozen": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/engineer/sandbox-command.sh red'",
+    "nearbyStore": "go test ./internal/store -run \"^(TestCursorTrailProofFinalValuesAndDuplicate|TestCursorTrailProofRefusalIsSilent|TestCloseToolRanRequests|TestProveRequestsGone|TestProvenGoneRequestHoldsNothing)$\" -count=1 -v -timeout 120s",
+    "nearbyRuntime": "go test ./internal/cursorhost -run \"^(TestCursorExecutionProofRequiresMatchingShellResult|TestCursorProofAndAdmissionRejectStaleAuthority|TestCursorUnknownRequestRejectsGenericLifecycleProof|TestCursorGenericToolProofCannotBypassControllerValidation)$\" -count=1 -v -timeout 120s",
+    "scope": "All execution including format/hash/checks inside literal make sandbox CMD with canonical HOME, private git config, umask 022, stripped runtime variables; only targeted suites."
+  },
+  "runnerAdaptation": "Read frozen RED runner unchanged; evidence copy redirects out to engineer, removes test gofmt and source-freeze assertion that intentionally cannot pass after source repair. Same three test selections, counts and timeouts. Original RED artifacts preserved.",
+  "srdDecisionSuggestion": "Terminal Cursor row truth and atomic request close/deny do not prove per-request dialog disappearance, delivery receipt or execution. Gateway/runtime death and authenticated SessionEnd leave request proof unchanged, including delivered acknowledgements. Only existing authenticated matching execution proof may establish tool_ran. Legacy non-Cursor agent_gone policy remains.",
+  "documentationFollowup": [
+    "docs/architecture.md request-close and agent-end descriptions need the Cursor exception.",
+    "internal/store/find_missing_writes.go and resume_writes.go contain legacy unconditional proof descriptions; source comments may be aligned during documentation review."
+  ],
+  "deviations": [],
+  "failures": [],
+  "incomplete": [
+    "Independent GREEN review, requested full sandbox validation and local commit belong to caller; no full suite or commit assigned to this lane."
+  ],
+  "questions": []
+}

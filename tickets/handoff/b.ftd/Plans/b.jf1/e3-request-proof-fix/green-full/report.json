@@ -1,0 +1,321 @@
+{
+  "role": "Independent GREEN Test Writer and sole full UNIT owner",
+  "ticket_ids": [
+    "b.ftd",
+    "b.jf1",
+    "t1.jf1.r8",
+    "t2.jf1.r8.a8"
+  ],
+  "statusesChanged": [],
+  "commits": [],
+  "head": "b63174070fb3c53a137a6cf413df368812b86a71",
+  "result": "passed",
+  "command": "make test-sandbox",
+  "full_run_count": 1,
+  "make_exit": 0,
+  "go": {
+    "passed": 68,
+    "cached": 48,
+    "fresh": 20,
+    "failed": 0,
+    "no_test_files": 13,
+    "packages_reported": 81,
+    "skips": "Not exposed by successful default nonverbose Go output; no skip count claimed."
+  },
+  "bun": {
+    "passed": 430,
+    "failed": 0,
+    "summary": "Ran 430 tests across 57 files. [16.01s]",
+    "observed_skip_lines": 0
+  },
+  "missing_package_results": [],
+  "focused": {
+    "api": {
+      "exit": 0,
+      "actual_command": "See frozen selections and supplemental existing proof-control selection in sandbox-command.sh",
+      "top_level_passes": [
+        "--- PASS: TestCursorReadsWithBlockedTrail (3.10s)",
+        "--- PASS: TestCursorStartupAbsentBindingReads (0.29s)",
+        "--- PASS: TestCursorTerminalReadsPreserveRequestEvidence (0.17s)",
+        "--- PASS: TestCursorListLostGatewayErrorsAndValidation (0.12s)"
+      ],
+      "subtest_passes": [
+        "    --- PASS: TestCursorReadsWithBlockedTrail/Get (1.04s)",
+        "    --- PASS: TestCursorReadsWithBlockedTrail/Status (1.03s)",
+        "    --- PASS: TestCursorReadsWithBlockedTrail/List (1.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/gone (0.04s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/gone (0.04s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/gone (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/unknown (0.03s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/Get (0.06s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/Status (0.06s)",
+        "    --- PASS: TestCursorTerminalReadsPreserveRequestEvidence/List (0.05s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/absent_binding (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/request_close_fails (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/negative_limit_before_mutation (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/invalid_label_before_mutation (0.03s)"
+      ],
+      "failures": [],
+      "log": {
+        "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/api.log",
+        "mode": "600",
+        "sha256": "a6ca7cd12b98224092bbe570347eec6d926ff45db167d81021dca34b9334f6af"
+      }
+    },
+    "store": {
+      "exit": 0,
+      "actual_command": "See frozen selections and supplemental existing proof-control selection in sandbox-command.sh",
+      "top_level_passes": [
+        "--- PASS: TestCloseToolRanRequests (0.18s)",
+        "--- PASS: TestCloseClosesRelayRequests (0.28s)",
+        "--- PASS: TestProveRequestsGone (0.26s)",
+        "--- PASS: TestProvenGoneRequestHoldsNothing (0.28s)",
+        "--- PASS: TestCursorStartupMissingConditionalWrite (0.44s)",
+        "--- PASS: TestCursorTerminalClosePreservesRequestProof (0.10s)",
+        "--- PASS: TestCursorTrailProofRefusalIsSilent (0.16s)",
+        "--- PASS: TestCursorTrailProofFinalValuesAndDuplicate (0.35s)"
+      ],
+      "subtest_passes": [
+        "    --- PASS: TestCloseToolRanRequests/fallen_back (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/hook_gone_at_already_recorded (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/its_hook_may_still_answer (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/no_judge (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/another_tool_use_id (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/no_tool_use_id (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/another_process's_hook (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/acked (0.02s)",
+        "    --- PASS: TestCloseToolRanRequests/already_proven_gone (0.02s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark_of_a_Codex_row_with_no_end_report (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_move_of_a_Codex_row_with_an_end_report (0.05s)",
+        "    --- PASS: TestCloseClosesRelayRequests/the_terminal_SessionEnd (0.05s)",
+        "    --- PASS: TestCloseClosesRelayRequests/resume's_move_of_a_row_an_earlier_release_ended (0.06s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_the_main_agent's_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_a_subagent's_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_another_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/tool_ran,_no_tool_use_id (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end_after_A's_tool_ran (0.03s)",
+        "    --- PASS: TestProveRequestsGone/turn_end_from_another_process (0.03s)",
+        "    --- PASS: TestProveRequestsGone/an_unknown_proof (0.03s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/a_move_to_working/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/the_idle_prompt/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/unproven (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/its_tool_ran (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/a_subagent's_request,_the_main_agent's_turn_ended_after_it (0.02s)",
+        "    --- PASS: TestProvenGoneRequestHoldsNothing/find-missing's_repair/a_subagent's_request,_its_tool_ran (0.02s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/unchanged (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/stale_binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/row_refreshed (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/token_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/life_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_PID_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_start_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/subagent_close_failure (0.05s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/cursor_missing (0.02s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/find_missing (0.02s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/SessionEnd (0.03s)",
+        "    --- PASS: TestCursorTerminalClosePreservesRequestProof/resume_backstop (0.02s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_token (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/wrong_tool (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/independent_token_tool_mismatch (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/closed (0.03s)",
+        "    --- PASS: TestCursorTrailProofRefusalIsSilent/stale_binding (0.03s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/undecided (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/API_allow (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/operator_deny (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/timeout_deny (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/native_pane (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/outside_unknown (0.05s)",
+        "    --- PASS: TestCursorTrailProofFinalValuesAndDuplicate/incomplete_proof (0.05s)"
+      ],
+      "failures": [],
+      "log": {
+        "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/store.log",
+        "mode": "600",
+        "sha256": "a22a09cabbe120d3160a2337d8ecb924c15fe3f84ab9d5683acaa3a224f6935a"
+      }
+    },
+    "runtime": {
+      "exit": 0,
+      "actual_command": "See frozen selections and supplemental existing proof-control selection in sandbox-command.sh",
+      "top_level_passes": [
+        "--- PASS: TestCursorExecutionProofRequiresMatchingShellResult (1.07s)",
+        "--- PASS: TestCursorProofAndAdmissionRejectStaleAuthority (0.29s)",
+        "--- PASS: TestCursorUnknownRequestRejectsGenericLifecycleProof (0.05s)",
+        "--- PASS: TestCursorGenericToolProofCannotBypassControllerValidation (0.10s)",
+        "--- PASS: TestCursorE3FatalRunClosesMissing (0.36s)",
+        "--- PASS: TestCursorE3PublicReadsReconcileKilledGateway (1.07s)"
+      ],
+      "subtest_passes": [
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/captured_shell_result (0.37s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/nonzero_shell_result_synthetic (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/generic_completion (0.06s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/generic_failure (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/still_pending (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/wrong_authorization_kind (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/string_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/fractional_exit (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/missing_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/array_stdout (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/null_stderr (0.05s)",
+        "    --- PASS: TestCursorExecutionProofRequiresMatchingShellResult/duplicate_output (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/session (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/connection (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/token (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/life (0.05s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/runtime (0.04s)",
+        "    --- PASS: TestCursorProofAndAdmissionRejectStaleAuthority/retired (0.05s)",
+        "    --- PASS: TestCursorGenericToolProofCannotBypassControllerValidation/PostToolUse_close (0.05s)",
+        "    --- PASS: TestCursorGenericToolProofCannotBypassControllerValidation/generic_tool_proof (0.05s)",
+        "    --- PASS: TestCursorE3FatalRunClosesMissing/DIE (0.17s)",
+        "    --- PASS: TestCursorE3FatalRunClosesMissing/malformed_update (0.19s)",
+        "    --- PASS: TestCursorE3PublicReadsReconcileKilledGateway/Get (0.55s)",
+        "    --- PASS: TestCursorE3PublicReadsReconcileKilledGateway/Status (0.53s)"
+      ],
+      "failures": [],
+      "log": {
+        "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/runtime.log",
+        "mode": "600",
+        "sha256": "e9d2af1ee6a161f4779259de729414bbf9b6de99f0ebcd07986d2753616c395d"
+      }
+    },
+    "realtmux": {
+      "exit": 0,
+      "actual_command": "go test ./test/realtmux -run ^TestCursorRelayHeldCancellationDeadline$ -count=1 -v -timeout 120s",
+      "top_level_passes": [
+        "--- PASS: TestCursorRelayHeldCancellationDeadline (11.36s)"
+      ],
+      "subtest_passes": [
+        "    --- PASS: TestCursorRelayHeldCancellationDeadline/interrupt (3.78s)",
+        "    --- PASS: TestCursorRelayHeldCancellationDeadline/policy (3.64s)",
+        "    --- PASS: TestCursorRelayHeldCancellationDeadline/successful_release (3.93s)"
+      ],
+      "failures": [],
+      "log": {
+        "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/realtmux.log",
+        "mode": "600",
+        "sha256": "139d8a770dfccab66edc678108a53d394a4b046d7a8da51ed699c9e677427690"
+      }
+    }
+  },
+  "proof": {
+    "unchanged": true,
+    "changes": [],
+    "before_manifest_sha256": "5b0c19510f65bc7bafa335f5d73816631ae9850045a025be8f5e383b26eeb707",
+    "after_manifest_sha256": "5b0c19510f65bc7bafa335f5d73816631ae9850045a025be8f5e383b26eeb707",
+    "source_unchanged": true
+  },
+  "canonical_input_count": 1798,
+  "compiled_go_source_count": 1066,
+  "production_go_file_hashes": 369,
+  "source_unchanged_across_lane": true,
+  "frozen": {
+    "original_red_tests_and_runners": 9,
+    "protected_collectors_driver_and_cr": 30,
+    "legacy_close_and_named_cr_controls": 4,
+    "all_match_before_and_after": true
+  },
+  "canonical_files_changed": [
+    "test/realtmux/cursor_relay_boundary_linux_test.go"
+  ],
+  "authorized_test_delta": [
+    {
+      "path": "test/realtmux/cursor_relay_boundary_linux_test.go",
+      "before": "0fe1a9ed7f4fe48fb7872f0d17a57ebb3073e455cd7a3e9887cf5ffce7247cc7",
+      "after": "dc23e97e716559664123e8a18e2ca11d45f04fa52fd3618e6c5cc73b715f2b92"
+    }
+  ],
+  "independent_review": {
+    "result": "No further actionable test or source gap found in assigned scope",
+    "reviewed": [
+      "Correlated actual-spawn guard and shared terminal close callers",
+      "Frozen API Get/Status/List full request evidence retention and independent live hook",
+      "Store four terminal Cursor paths and delivered acknowledgement preservation",
+      "Fatal Run and gateway-only SIGKILL row/process truth",
+      "Existing legacy Claude/Codex close controls and validated exact-request execution-proof controls",
+      "Affected realtmux held cancellation boundary and adjacent E3 assertions"
+    ],
+    "oracle_correction": "Only terminal missing branch now requires zero ProvenGoneAt and empty ProvenGoneHow. Exact row/process proof, deadline, cancellation count, no replies, independent worker, identity, atomic closed/deny and successful-release controls remain unchanged."
+  },
+  "causality": {
+    "red_report": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/report.json",
+    "red_report_sha256": "0226f5c1a0704047e54380448656f6e452cc2359d9eae5e37ad061e9fc723626",
+    "new_red9_unchanged": true,
+    "focused_green": true,
+    "statement": "Frozen causal RED becomes independently GREEN with the Engineer source repair unchanged; legacy close/proof controls pass. The one additional newly added E3 realtmux wrong oracle was corrected to the same approved policy."
+  },
+  "raw_log": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/full.log",
+    "mode": "600",
+    "bytes": 49211,
+    "sha256": "19bbecdcb66204bdcd1267cb06fc5d23fa0a1d2eec96aa213d0fc6a6e88a68e3"
+  },
+  "start_utc": "2026-10-16T09:18:58Z",
+  "end_utc": "2026-10-16T09:23:08Z",
+  "full_run_seconds": 250,
+  "environment": {
+    "HOME": "/home/sandbox",
+    "TMPDIR": "unset",
+    "umask": "022",
+    "GOFLAGS": "unset",
+    "TMUX": "unset",
+    "TMUX_PANE": "unset",
+    "GIT_CONFIG_GLOBAL": "/work/tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/gitconfig",
+    "agent_director_variable_names": [
+      "AGENT_DIRECTOR_TEST_SANDBOX"
+    ],
+    "full_container_env_file": "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/green-full/container.env",
+    "removed_host_variable_names": [
+      "AGENT_DIRECTOR_AGENT",
+      "AGENT_DIRECTOR_INSTANCE_ID",
+      "AGENT_DIRECTOR_LABEL_HOST",
+      "AGENT_DIRECTOR_LABEL_TASK",
+      "AGENT_DIRECTOR_RELAY_MODE",
+      "GIT_CONFIG_GLOBAL",
+      "MAKEFLAGS",
+      "TMPDIR",
+      "TMUX",
+      "TMUX_PANE"
+    ],
+    "recursive_SANDBOX_CMD": false,
+    "GOFLAGS_override": false,
+    "parallelism_override": false
+  },
+  "justification": "Source/docs settled; independent assigned test correction completed and all focused sets passed before exactly one fresh bare make test-sandbox. No concurrent mutators, retry, deadline/default/retry loosening or global Go parallelism changes.",
+  "no_source_or_docs_modified_by_lane": true,
+  "prior_failed_full_evidence_preserved": true,
+  "old_manifests_immutable": true,
+  "deviations": [],
+  "failures": [],
+  "incomplete": [],
+  "questions": [],
+  "not_run": [
+    "integration suites",
+    "heavy Docker epic groups/collector/testplan/helper/testimage",
+    "TLC/java/formal/parser/scheduler",
+    "live Cursor/O4"
+  ],
+  "limitations": [
+    "Bare make output exposes aggregate make exit and suite summaries; individual numeric Go/Bun subprocess exit codes are not separately instrumented.",
+    "Go default successful output does not expose per-test skips."
+  ],
+  "recorded_utc": "2026-10-16T09:23:17.698Z"
+}

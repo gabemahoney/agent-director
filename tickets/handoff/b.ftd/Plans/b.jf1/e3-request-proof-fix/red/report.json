@@ -1,0 +1,188 @@
+{
+  "role": "sole RED Test Writer",
+  "idea": "b.ftd",
+  "plan": "b.jf1",
+  "epic": "t1.jf1.r8",
+  "task": "t2.jf1.r8.a8",
+  "statusesChanged": [],
+  "commits": [],
+  "head": "b63174070fb3c53a137a6cf413df368812b86a71",
+  "result": "causal RED established; Engineer repair and independent GREEN required",
+  "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/sandbox-command.sh red'",
+  "runs": {
+    "api": {
+      "exit": 1,
+      "failedTests": [
+        "--- FAIL: TestCursorReadsWithBlockedTrail (0.11s)",
+        "    --- FAIL: TestCursorReadsWithBlockedTrail/Get (0.04s)",
+        "    --- FAIL: TestCursorReadsWithBlockedTrail/Status (0.03s)",
+        "    --- FAIL: TestCursorReadsWithBlockedTrail/List (0.04s)",
+        "--- FAIL: TestCursorStartupAbsentBindingReads (0.30s)",
+        "    --- FAIL: TestCursorStartupAbsentBindingReads/Get/gone (0.04s)",
+        "    --- FAIL: TestCursorStartupAbsentBindingReads/Status/gone (0.03s)",
+        "    --- FAIL: TestCursorStartupAbsentBindingReads/List/gone (0.04s)",
+        "--- FAIL: TestCursorTerminalReadsPreserveRequestEvidence (0.17s)",
+        "    --- FAIL: TestCursorTerminalReadsPreserveRequestEvidence/Get (0.06s)",
+        "    --- FAIL: TestCursorTerminalReadsPreserveRequestEvidence/Status (0.06s)",
+        "    --- FAIL: TestCursorTerminalReadsPreserveRequestEvidence/List (0.06s)",
+        "--- FAIL: TestCursorListLostGatewayErrorsAndValidation (0.12s)",
+        "    --- FAIL: TestCursorListLostGatewayErrorsAndValidation/absent_binding (0.03s)"
+      ],
+      "passedControls": [
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Get/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/Status/unknown (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/alive (0.03s)",
+        "    --- PASS: TestCursorStartupAbsentBindingReads/List/unknown (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/request_close_fails (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/negative_limit_before_mutation (0.03s)",
+        "    --- PASS: TestCursorListLostGatewayErrorsAndValidation/invalid_label_before_mutation (0.03s)"
+      ],
+      "exactCausalAssertions": [
+        "    cursor_terminal_request_proof_test.go:82: undecided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:24.997 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: decided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:24.997 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: delivered: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:24.997 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: delivered: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.056 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: undecided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.056 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: decided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.056 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: delivered: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.116 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: undecided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.116 +0000 UTC",
+        "    cursor_terminal_request_proof_test.go:82: decided: gateway/runtime death invented request proof: before=/0001-01-01 00:00:00 +0000 UTC after=agent_gone/2026-10-16 09:10:25.116 +0000 UTC"
+      ],
+      "logSHA256": "0c29cf70209083befaff40fccf4c20c401d47dd0a29293a3084a3d81748f1235"
+    },
+    "store": {
+      "exit": 1,
+      "failedTests": [
+        "--- FAIL: TestCursorStartupMissingConditionalWrite (0.46s)",
+        "    --- FAIL: TestCursorStartupMissingConditionalWrite/unchanged (0.05s)",
+        "--- FAIL: TestCursorTerminalClosePreservesRequestProof (0.10s)",
+        "    --- FAIL: TestCursorTerminalClosePreservesRequestProof/cursor_missing (0.02s)",
+        "    --- FAIL: TestCursorTerminalClosePreservesRequestProof/find_missing (0.03s)",
+        "    --- FAIL: TestCursorTerminalClosePreservesRequestProof/SessionEnd (0.03s)",
+        "    --- FAIL: TestCursorTerminalClosePreservesRequestProof/resume_backstop (0.02s)"
+      ],
+      "passedControls": [
+        "--- PASS: TestCloseClosesRelayRequests (0.27s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_mark_of_a_Codex_row_with_no_end_report (0.06s)",
+        "    --- PASS: TestCloseClosesRelayRequests/find-missing's_move_of_a_Codex_row_with_an_end_report (0.05s)",
+        "    --- PASS: TestCloseClosesRelayRequests/the_terminal_SessionEnd (0.05s)",
+        "    --- PASS: TestCloseClosesRelayRequests/resume's_move_of_a_row_an_earlier_release_ended (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/stale_binding_inserted (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/row_refreshed (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/token_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/life_replaced (0.06s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_PID_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/gateway_start_replaced (0.05s)",
+        "    --- PASS: TestCursorStartupMissingConditionalWrite/subagent_close_failure (0.05s)"
+      ],
+      "exactCausalAssertions": [
+        "    cursor_terminal_request_proof_test.go:82: cursor missing invented proof or rewrote acknowledged request:",
+        "    cursor_terminal_request_proof_test.go:82: find missing invented proof or rewrote acknowledged request:",
+        "    cursor_terminal_request_proof_test.go:82: SessionEnd invented proof or rewrote acknowledged request:",
+        "    cursor_terminal_request_proof_test.go:82: resume backstop invented proof or rewrote acknowledged request:"
+      ],
+      "logSHA256": "0a3ccebbac253513ffb94494227ff376889a181be0dbb6b04940e31494cbb3e2"
+    },
+    "runtime": {
+      "exit": 1,
+      "failedTests": [
+        "--- FAIL: TestCursorE3FatalRunClosesMissing (0.73s)",
+        "    --- FAIL: TestCursorE3FatalRunClosesMissing/malformed_update (0.19s)",
+        "--- FAIL: TestCursorE3PublicReadsReconcileKilledGateway (1.09s)",
+        "    --- FAIL: TestCursorE3PublicReadsReconcileKilledGateway/Get (0.55s)",
+        "    --- FAIL: TestCursorE3PublicReadsReconcileKilledGateway/Status (0.53s)"
+      ],
+      "passedControls": [
+        "    --- PASS: TestCursorE3FatalRunClosesMissing/DIE (0.54s)"
+      ],
+      "exactCausalAssertions": [
+        "    session_e3_regression_linux_test.go:199: fatal Run fabricated request proof or delivery: {RequestID:1 InstanceID:report-row RequestToken:82bde2cade86c76196479236c3da16c3 ToolName:Synthetic action ToolInput:{\"options\":[{\"kind\":\"allow_once\",\"name\":\"Allow once\",\"optionId\":\"allow-once\"},{\"kind\":\"allow_always\",\"name\":\"Allow always\",\"optionId\":\"allow-always\"},{\"kind\":\"reject_once\",\"name\":\"Reject\",\"optionId\":\"reject-once\"}],\"sessionId\":\"synthetic-session-1\",\"toolCall\":{\"kind\":\"execute\",\"rawInput\":null,\"status\":\"pending\",\"title\":\"Synthetic action\",\"toolCallId\":\"genuine\"}} Decision:deny DecisionReason:find_missing DecidedAt:2026-10-16 09:10:28 +0000 UTC CreatedAt:2026-10-16 09:10:28 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 09:10:28.901 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:2026-10-16 09:10:28.933 +0000 UTC ProvenGoneAt:2026-10-16 09:10:28.933 +0000 UTC ProvenGoneHow:agent_gone}",
+        "    session_e3_regression_linux_test.go:350: gateway SIGKILL fabricated request proof or delivery: {RequestID:1 InstanceID:report-row RequestToken:919bc248717fa3eca4a7dc18c5c07f21 ToolName:Synthetic action ToolInput:{\"options\":[{\"kind\":\"allow_once\",\"name\":\"Allow once\",\"optionId\":\"allow-once\"},{\"kind\":\"allow_always\",\"name\":\"Allow always\",\"optionId\":\"allow-always\"},{\"kind\":\"reject_once\",\"name\":\"Reject\",\"optionId\":\"reject-once\"}],\"sessionId\":\"synthetic-session-1\",\"toolCall\":{\"kind\":\"execute\",\"rawInput\":null,\"status\":\"pending\",\"title\":\"Synthetic action\",\"toolCallId\":\"genuine\"}} Decision:deny DecisionReason:find_missing DecidedAt:2026-10-16 09:10:29 +0000 UTC CreatedAt:2026-10-16 09:10:29 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 09:10:29.438 +0000 UTC HookGoneAt:2026-10-16 09:10:29.456 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:2026-10-16 09:10:29.47 +0000 UTC ProvenGoneAt:2026-10-16 09:10:29.47 +0000 UTC ProvenGoneHow:agent_gone}",
+        "    session_e3_regression_linux_test.go:350: gateway SIGKILL fabricated request proof or delivery: {RequestID:1 InstanceID:report-row RequestToken:c6a8a8015e80cefd93b0d2d895d89146 ToolName:Synthetic action ToolInput:{\"options\":[{\"kind\":\"allow_once\",\"name\":\"Allow once\",\"optionId\":\"allow-once\"},{\"kind\":\"allow_always\",\"name\":\"Allow always\",\"optionId\":\"allow-always\"},{\"kind\":\"reject_once\",\"name\":\"Reject\",\"optionId\":\"reject-once\"}],\"sessionId\":\"synthetic-session-1\",\"toolCall\":{\"kind\":\"execute\",\"rawInput\":null,\"status\":\"pending\",\"title\":\"Synthetic action\",\"toolCallId\":\"genuine\"}} Decision:deny DecisionReason:find_missing DecidedAt:2026-10-16 09:10:30 +0000 UTC CreatedAt:2026-10-16 09:10:29 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 09:10:29.972 +0000 UTC HookGoneAt:2026-10-16 09:10:29.99 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:2026-10-16 09:10:30.004 +0000 UTC ProvenGoneAt:2026-10-16 09:10:30.004 +0000 UTC ProvenGoneHow:agent_gone}"
+      ],
+      "logSHA256": "51396e1269ae2755c13771aa4800bba27e12be07ffe18963b1d48a0907d10c9e"
+    }
+  },
+  "productionGoFilesFrozen": 337,
+  "protectedCollectorDriverFilesFrozen": 30,
+  "productionSourcesUnchanged": true,
+  "collectorsUnchanged": true,
+  "frozenTestsAndRunners": {
+    "internal/cursorhost/session_e3_regression_linux_test.go": "c43d994aa36969701ca6fe31407797a7c5ae8bc696666d94c476dbf1506ea1e1",
+    "internal/store/cursor_startup_liveness_test.go": "d0ed60aa3c76a32d9a3083ffc59fa159fcb4e5081ec8d7583044de6f96b48236",
+    "internal/store/cursor_terminal_request_proof_test.go": "04ab4fa8b31f70523cf73998e04c3406d2c46994f464af3a0cc3981b98cb0650",
+    "pkg/api/cursor_liveness_list_test.go": "f6f68b32a06367a1da3d2aa162fb031914edf223f39b2e8f36cbe26bec9baef4",
+    "pkg/api/cursor_liveness_trail_deadline_test.go": "6275619a21833537a75250117d6524fb6489f27d34ca682105accdbe61dba67c",
+    "pkg/api/cursor_startup_liveness_test.go": "a60b69f1784b46cd526ea119a10f2e90e4e24a103af46bb4be74d5f2c5b0ce18",
+    "pkg/api/cursor_terminal_request_proof_test.go": "6fab650d65146115a04a480d5e9422c573e2ec4d9d7bfcbe53c6de155ade0da3",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/freeze.cjs": "ae33a6cc37890bac3b2fb77c0433ab0fe215606deb4ddf7f1193997c9d054757",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-request-proof-fix/red/sandbox-command.sh": "3aaebedff064cc26441ddc687c41236ab4e99c3cbd66c25c0e6c55c069a24251"
+  },
+  "unchangedControlSHA256": {
+    "internal/store/relay_close_test.go": "8b7a4a7beee2983b497c01cba3ba717bc0a2aa6539d129fa806e3733586e0708",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.05/t2.jf1.cr.05.md": "392487e2ed6b958aad94706702098675db7fb1fea4fb5290b2d75bef490e28f6",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.09/t2.jf1.cr.09.md": "98ac35f0211e6ea646ae42f77033500203e4eb2d3d6e33a5a50df9cbcfc3403b",
+    "tickets/testplans/b.jf1/t1.jf1.cr/t2.jf1.cr.10/t2.jf1.cr.10.md": "10dca1a480a7ebe9048892af2b11ca9c317ff5042de81eb75ec9ff2bb6b69cce"
+  },
+  "testFilesChanged": [
+    "internal/cursorhost/session_e3_regression_linux_test.go",
+    "internal/store/cursor_startup_liveness_test.go",
+    "pkg/api/cursor_liveness_list_test.go",
+    "pkg/api/cursor_liveness_trail_deadline_test.go",
+    "pkg/api/cursor_startup_liveness_test.go",
+    "pkg/api/cursor_terminal_request_proof_test.go",
+    "internal/store/cursor_terminal_request_proof_test.go"
+  ],
+  "oracleCorrections": [
+    {
+      "file": "pkg/api/cursor_startup_liveness_test.go",
+      "old": "required requestAfter.ProvenGone()",
+      "new": "requires !requestAfter.ProvenGone() and empty ProvenGoneHow"
+    },
+    {
+      "file": "pkg/api/cursor_liveness_list_test.go",
+      "old": "required pr.ProvenGone()",
+      "new": "requires !pr.ProvenGone() and empty ProvenGoneHow"
+    },
+    {
+      "file": "pkg/api/cursor_liveness_trail_deadline_test.go",
+      "old": "required ProvenGoneHow == agent_gone",
+      "new": "requires no ProvenGoneAt and empty ProvenGoneHow"
+    },
+    {
+      "file": "internal/store/cursor_startup_liveness_test.go",
+      "old": "required requestAfter.ProvenGone()",
+      "new": "requires !requestAfter.ProvenGone() and empty ProvenGoneHow"
+    }
+  ],
+  "oracleCorrectionReason": "Only newly added E3 gateway-loss assertions were corrected. Row terminal truth and atomic orphan close/deny do not establish request-hook death or Cursor receipt; E2 request-proof uncertainty survives gateway/runtime death. Original missing row/version, failure, SIGKILL, deadlines/retries and cr tests remain strict and unchanged.",
+  "causalFindings": [
+    "Public Get, Status and List reach missing exactly once and close undecided/decided requests, while wrongly stamping agent_gone on undecided, decided and delivered-unproven requests.",
+    "Delivered acknowledgement timestamp remains set and unchanged; gateway loss adds the unsupported proof only. Whole PermissionRow comparison otherwise checks ack, decision, attempted-decision, hook, pane/sender and existing verified proof metadata.",
+    "Previously verified tool_ran proof remains unchanged; independent real hook process remains alive before and after public reconciliation.",
+    "Store MarkCursorMissingIfSameLaunch, MarkMissingIfSameLife, authenticated terminated-runtime SessionEnd and resume backstop all add unsupported proof to delivered-unproven Cursor requests.",
+    "Actual malformed-update fatal Run and gateway-only SIGKILL regressions retain strict missing/owned-death assertions and newly fail only for fabricated request proof. DIE control passes.",
+    "Legacy TestCloseClosesRelayRequests passes all five Claude/Codex controls, retaining agent_gone behavior and existing tool proof."
+  ],
+  "sourceInsight": {
+    "path": "MarkCursorMissingIfSameLaunch -> terminalMarkWithoutWait -> terminalMarkOnConn -> closeOrphanedRequests -> proveAgentGoneSQL",
+    "sharedCallers": [
+      "internal/store/find_missing_writes.go",
+      "internal/store/hook_writes.go",
+      "internal/store/resume_writes.go"
+    ],
+    "requiredBoundary": "Keep row terminal and atomic close/deny semantics; prevent shared unconditional proof stamp for Cursor without changing Claude/Codex proof controls. Existing correlated proof must not be erased or overwritten. Engineer chooses implementation scope."
+  },
+  "limitations": [
+    "No GREEN/source repair claimed.",
+    "No full suite or heavy Docker groups, collector/parser execution, formal jobs, scheduler or live/auth work run.",
+    "Public API proof fixture uses a synthetic persisted binding/process checker plus a real independent hook process; real gateway/runtime death additionally covered by unchanged strict SIGKILL fixture."
+  ],
+  "deviations": [],
+  "questions": [],
+  "TLA": "not applicable: no model inputs changed"
+}

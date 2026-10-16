@@ -230,6 +230,8 @@ during reconciliation, including a stale binding, refuses that close. Existing
 stale bindings are not treated as absent. A changed launch is protected from
 stale cleanup; an unresolved conflict on the same dead launch or failed request
 closure returns an error.
+Terminal closure leaves Cursor request proof unchanged, including after
+`delivered`; see [Cursor permission lifetimes](permissions.md#cursor-spawns).
 These reconciliation writes do not wait for the store's write lock:
 contention returns `ErrStoreBusy` without a partial transition or automatic
 retry. Finished rows are not checked again. These reads do not sweep outside
