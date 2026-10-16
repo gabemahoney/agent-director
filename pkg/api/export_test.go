@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -153,3 +154,10 @@ func (s StartingSessionCheck) UnavailableError() error { return s.c.unavailableE
 
 // OwnIDConflictError returns step 3's own-id conflict.
 func (s StartingSessionCheck) OwnIDConflictError() error { return s.c.ownIDConflictError() }
+
+// SetStoreContextForTest scopes this Client's existing store until restore is called.
+func SetStoreContextForTest(c *Client, ctx context.Context) (restore func()) {
+	original := c.st
+	c.st = original.WithContext(ctx)
+	return func() { c.st = original }
+}

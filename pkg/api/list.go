@@ -260,11 +260,12 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // hook-written change shows only once it has held that long, the last
 // settled state until then; terminal states and command-driven changes show
 // at once. The permission requests and launch_started_at follow the live
-// state. Before applying State and Limit, List reconciles lost Cursor gateways
-// in the requested label/parent/cwd/tmux scope using the guarded terminal write.
-// List never waits for a state to settle or for the store's write lock.
-// Lost Cursor gateway reconciliation returns ErrStoreBusy on contention;
-// relay-delivery writes remain best effort.
+// state. Before applying State and Limit, List projects lost Cursor gateways
+// as missing in the requested label/parent/cwd/tmux scope, guarded by the
+// examined launch and binding. It then attempts the atomic terminal write.
+// Unavailable best-effort persistence leaves the read projection valid; other
+// write errors fail the read. List never waits for a state to settle or for
+// the store's write lock. Relay-delivery writes remain best effort.
 //
 // CLI: agent-director list
 //
@@ -292,13 +293,25 @@ func (c *Client) List(params ListParams) (ListResult, error) {
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
+	var proofs []store.CursorMissingProof
 	for _, row := range rows {
 		if row.Agent != store.AgentCursor || row.State == store.StateEnded || row.State == store.StateMissing {
 			continue
 		}
-		if err := c.reconcileCursorGateway(row.InstanceID); err != nil {
+		proof, err := c.reconcileCursorGateway(row.InstanceID)
+		if err != nil {
 			return ListResult{Spawns: []ListRow{}}, err
 		}
+		if proof != nil {
+			proofs = append(proofs, *proof)
+		}
 	}
-	return listFiltered(c.st, c.relayView(), filters)
+	out, err := listFiltered(c.st.WithCursorMissingReads(proofs), c.relayView(), filters)
+	if err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
+	}
+	if err := c.persistCursorMissing(proofs); err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
+	}
+	return out, nil
 }

@@ -3,7 +3,6 @@ package api_test
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
 
-func TestCursorReadsRefuseWriterContention(t *testing.T) {
+func TestCursorReadsProjectMissingDuringWriterContention(t *testing.T) {
 	// Serial: deadline-sensitive held-writer fixture runs outside the parallel API fixture wave.
 	for _, verb := range []string{"Get", "Status", "List"} {
 		t.Run(verb, func(t *testing.T) {
@@ -95,6 +94,9 @@ func TestCursorReadsRefuseWriterContention(t *testing.T) {
 				case "List":
 					rows, err := c.List(api.ListParams{})
 					r.err, r.count, r.nilList = err, len(rows.Spawns), rows.Spawns == nil
+					if len(rows.Spawns) == 1 {
+						r.state = rows.Spawns[0].State
+					}
 				}
 				r.elapsed = time.Since(start)
 				done <- r
@@ -127,10 +129,10 @@ func TestCursorReadsRefuseWriterContention(t *testing.T) {
 				t.Error("contended read partially changed launch or permission request while writer held")
 			}
 			if returnedWhileHeld {
-				if !errors.Is(r.err, api.ErrStoreBusy) {
-					t.Errorf("read error while lock held = %v; want ErrStoreBusy", r.err)
+				if r.err != nil {
+					t.Errorf("read error while lock held = %v; want truthful missing projection", r.err)
 				}
-				if r.state != "" || r.count != 0 || verb == "List" && r.nilList {
+				if r.state != "missing" || verb == "List" && (r.count != 1 || r.nilList) {
 					t.Errorf("failed read exposed stale/partial output: %+v", r)
 				}
 				t.Logf("returned while writer held: elapsed=%v err=%v observed=%s", r.elapsed, r.err, time.Now().Format(time.RFC3339Nano))

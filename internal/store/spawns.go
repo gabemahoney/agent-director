@@ -390,16 +390,36 @@ func (s *Store) GetSpawnWithin(instanceID string, maxWait time.Duration) (Spawn,
 // settle time it is GetSpawn exactly, the same statement, and ReportedState is
 // State. It never waits for a state to settle. Guards read GetSpawn instead.
 func (s *Store) GetSpawnSettled(instanceID string, r SettleRead) (Spawn, error) {
-	if !r.on() {
+	return s.getSpawnSettled(instanceID, r, nil)
+}
+
+func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []CursorMissingProof) (Spawn, error) {
+	if !r.on() && len(proofs) == 0 {
 		return s.GetSpawn(instanceID)
 	}
-	expr, args := r.stateExpr()
-	q := `SELECT ` + spawnColumns + `, ` + expr + ` FROM spawns WHERE instance_id = ?`
-	sp, err := scanSpawnRow(s.db.QueryRow(q, append(args, instanceID)...), getSpawnErrs, true)
+	cols, args, err := cursorMissingColumns(proofs)
+	if err != nil {
+		return Spawn{}, err
+	}
+	q := `SELECT ` + cols
+	if r.on() {
+		expr, stateArgs := r.stateExpr()
+		expr, stateArgs, err = cursorMissingState(expr, stateArgs, proofs)
+		if err != nil {
+			return Spawn{}, err
+		}
+		q += `, ` + expr
+		args = append(args, stateArgs...)
+	}
+	q += ` FROM spawns WHERE instance_id = ?`
+	sp, err := scanSpawnRow(s.db.QueryRowContext(s.readContext(), q, append(args, instanceID)...), getSpawnErrs, r.on())
 	if errors.Is(err, sql.ErrNoRows) {
 		return Spawn{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	if err != nil {
+		return Spawn{}, err
+	}
+	if err := validateCursorMissingRead(sp, proofs); err != nil {
 		return Spawn{}, err
 	}
 	return sp, nil
@@ -553,6 +573,14 @@ func (s *Store) SpawnStatus(instanceID string) (state string, launchStartedAtMil
 // is the row's raw state. With no settle time the statement is SpawnStatus's
 // exactly and reported is raw. It never waits for a state to settle.
 func (s *Store) SpawnStatusSettled(instanceID string, r SettleRead) (reported, raw string, launchStartedAtMillis int64, err error) {
+	return s.spawnStatusSettled(instanceID, r, nil)
+}
+
+func (s *Store) spawnStatusSettled(instanceID string, r SettleRead, proofs []CursorMissingProof) (reported, raw string, launchStartedAtMillis int64, err error) {
+	if len(proofs) > 0 {
+		row, err := s.getSpawnSettled(instanceID, r, proofs)
+		return row.ReportedState, row.State, row.LaunchStartedAtMillis, err
+	}
 	var (
 		launchStartedAt any
 		q               = `SELECT state, launch_started_at FROM spawns WHERE instance_id = ?`

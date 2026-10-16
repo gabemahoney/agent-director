@@ -99,10 +99,22 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
-	if err := c.reconcileCursorGateway(instanceID); err != nil {
+	proof, err := c.reconcileCursorGateway(instanceID)
+	if err != nil {
 		return StatusResult{}, err
 	}
-	return statusSettled(c.st, c.settleRead(), instanceID)
+	var proofs []store.CursorMissingProof
+	if proof != nil {
+		proofs = append(proofs, *proof)
+	}
+	out, err := statusSettled(c.st.WithCursorMissingReads(proofs), c.settleRead(), instanceID)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	if err := c.persistCursorMissing(proofs); err != nil {
+		return StatusResult{}, err
+	}
+	return out, nil
 }
 
 // Compile-time assertion that *store.Store provides the optional narrow read

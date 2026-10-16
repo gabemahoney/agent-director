@@ -48,11 +48,23 @@ type ListFilters struct {
 // and no extra column, so the query plan, row order and LIMIT subset are
 // unchanged, and ReportedState is State. It never waits for a state to settle.
 func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
+	return s.listSpawns(f, nil)
+}
+
+func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn, error) {
 	var where []string
 	var args []any
 
 	stateExpr, stateArgs := f.Settle.stateExpr()
-	selectCols := spawnColumns
+	stateExpr, stateArgs, err := cursorMissingState(stateExpr, stateArgs, proofs)
+	if err != nil {
+		return nil, err
+	}
+	selectCols, columnArgs, err := cursorMissingColumns(proofs)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, columnArgs...)
 	if f.Settle.on() {
 		// The select list comes first in the statement, so its arguments do.
 		selectCols += `, ` + stateExpr
@@ -108,7 +120,7 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 		args = append(args, f.Limit)
 	}
 
-	rows, err := s.db.Query(q, args...)
+	rows, err := s.db.QueryContext(s.readContext(), q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: list spawns query: %w", err)
 	}
@@ -118,6 +130,9 @@ func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	for rows.Next() {
 		sp, err := scanSpawnRow(rows, listSpawnsErrs, f.Settle.on())
 		if err != nil {
+			return nil, err
+		}
+		if err := validateCursorMissingRead(sp, proofs); err != nil {
 			return nil, err
 		}
 		out = append(out, sp)

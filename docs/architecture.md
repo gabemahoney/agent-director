@@ -225,56 +225,88 @@ runtime, then independently call `VerifyRuntime` for terminated evidence while
 the gateway's registered ownership descriptors remain open. Only that proof
 permits failure cleanup to publish `missing`; preserve both the original failure
 and any cleanup error. Do not manufacture intentional SessionEnd,
-`prompt_input_exit` or turn success for this path.
+`prompt_input_exit` or turn success for this path. Keep SIGINT/SIGHUP/SIGTERM
+capture installed through terminal restoration (including ISIG), runtime/binding/
+store cleanup and final failure-event emission. `signal.Stop` must run after
+those defers; `signal.Notify` keeps its existing activation point. Repeated
+signals do not extend cancellation deadlines or supply death evidence.
 
-Public `Client.Get` and `Client.Status` call `reconcileCursorGateway` before their
-settled projections. `Client.List` validates filters before store access, selects
-candidates within `Labels`/`Parent`/`Cwd`/`TmuxSessionName` with `State` and `Limit`
-removed, and reconciles each live Cursor candidate before applying the original
-settled `State`, `Limit` and projection. Unrelated rows remain outside that
-candidate scope. CLI, MCP, Go and the Bun public verbs reach these methods.
-The helper selects only the requested live Cursor row and judges its recorded gateway
-PID/start-time with `tmux.JudgeProcess`. A different start time proves the old
-identity gone; alive or unknown evidence is conservative. Positive gateway loss
-permits `missing` even when the runtime is alive or unknown: missing does not
-prove runtime death and cannot authorize intentional `ended`. Only after this
-positive exact gateway loss and `ReadCursorRuntime` returning `sql.ErrNoRows`
-may the helper carry an examined-absence descriptor: retain the row's instance,
+Public `Client.Get` and `Client.Status` collect fresh launch-scoped gateway
+loss evidence through `reconcileCursorGateway`. `Client.List` validates filters
+before store access, selects candidates within `Labels`/`Parent`/`Cwd`/
+`TmuxSessionName` with `State` and `Limit` removed, and examines each live Cursor
+candidate. CLI, MCP, Go and Bun public verbs reach these methods. The helper
+judges the recorded gateway PID/start-time with `tmux.JudgeProcess`; a different
+start time proves the old identity gone. Alive or unknown evidence leaves the
+row unchanged. Positive gateway loss permits a read-scoped `missing` projection
+even when the runtime is alive or unknown; it cannot authorize intentional
+`ended`. Only after exact gateway loss and `ReadCursorRuntime` returning
+`sql.ErrNoRows` may the helper carry examined absence, retaining instance,
 token/life, gateway PID/start and session with every runtime field empty.
-Alive or unknown gateway evidence never reaches this branch. An existing stale
-binding is not absence; an unresolved conflict on the same dead launch returns
-an error. A replacement or terminal row is reread normally.
-Already terminal and non-Cursor rows incur
-no process probe or mutation. Standalone package-level `api.Get`/`api.Status`/`api.List`
-remain database projections; they do not perform these public Client checks.
+An existing stale binding is not absence. Evidence is never cached across calls
+or reused for a replacement launch. Already terminal and non-Cursor rows incur
+no process probe or mutation. Standalone package-level `api.Get`/`api.Status`/
+`api.List` remain database projections without these Client checks.
 
-Both failure cleanup and read reconciliation MUST reuse
-`Store.MarkCursorMissingIfSameLaunch` and `terminalMarkWithoutWait`, which reuses
-`inWriteTxContext(ctx, 0)` and the common `terminalMarkOnConn` SQL payload.
-The write repeats the examined full row snapshot, launch token/life and gateway
-PID/start-time. For a registered runtime it also repeats the complete runtime
-PID/start-time, connection, pipes/fds, session and terminated binding. For
-examined absence, the conditional terminal UPDATE instead requires
-`NOT EXISTS` for **any** `cursor_runtimes` row for that instance in the same
-transaction. A binding inserted after observation, including a stale binding,
-defeats this close; a still-live row of the same dead launch returns the safe
-reconciliation error. No runtime identity, runtime death, retirement flag or
-intentional SessionEnd is fabricated. It atomically closes requests and running
-subagents and applies an immediate terminal state, bypassing settle delay.
-Transaction errors propagate, and changed guards cannot close a newer launch.
-One `operationContext(0)` carries the existing one-second immediate-work
-allowance through reconciliation SQL, connection cleanup and fail-open
-post-commit audit. It does not wait for a write lock: contention returns typed
-`ErrStoreBusy` without retry or a partial transition. Context-aware request-deny
-and orphan-tick emitters preserve values, order and pending/failed/rejected
-accounting; a confirmed commit remains confirmed if the post-commit audit
-reaches the deadline. Reuse these bounded entrypoints for Cursor reconciliation;
-do not substitute the legacy background transaction or start a new audit budget.
-The allowance is not a whole-read deadline: preceding reads/process probes and
-multiple List candidates have separate costs. Legacy `FindMissing`/`MarkEnded`
-retain their background transaction contracts through the shared SQL payload.
-Repeated terminal reads are idempotent. There is no full-store sweep on reads;
-explicit `find-missing` and other agents retain their existing contracts.
+**Must use:** `Store.WithCursorMissingReads` (`internal/store/cursor_missing_read.go`)
+is the read adapter for this evidence. Its `cursorMissingGuard` is also the
+terminal write's guard: full row snapshot, agent, token/life, gateway PID/start,
+session and complete runtime PID/start, connection, pipes/fds, session and
+terminated binding, or `NOT EXISTS` for **any** runtime binding for examined
+absence. Raw and reported state become `missing` only
+while that guard matches in the SELECT. List applies the guarded state inside
+SQL before settled/raw `State` filtering and `LIMIT`; missing bypasses settle
+delay. The existing JSON1 support carries one bound proof array per expression,
+with at most two predicate shapes generated from the shared guard. Bind count
+and expression depth do not grow with proof count; there is no new durable
+table or proof-count ceiling. Correlated proof traversal still grows with data;
+this is no general performance claim. A changed same-launch snapshot or binding
+cannot be returned as working; unsafe live results fail validation. A replacement
+launch retains its own state.
+
+The Client assembles the complete public result, including permission lists,
+BEFORE attempting terminal persistence. No required result read follows a
+write timeout that may leave native work holding the store's sole connection.
+The projection changes only raw/reported state. `ended_at`, liveness and other
+timestamps remain the durable facts read, so this first missing result may lack
+`ended_at` even if the subsequent write succeeds. `launch_started_at` is omitted
+because the projected raw state is terminal. Terminal permission lists are
+empty by the existing read rule; this is no per-request proof of dialog absence,
+delivery, receipt, decision or runtime death. Projection invents no durable
+request facts or trail events.
+
+Both fatal cleanup and the read's separate persistence attempt MUST reuse
+`Store.MarkCursorMissingIfSameLaunch` and `terminalMarkWithoutWait`, through
+`inWriteTxContext(ctx, 0)` and the common `terminalMarkOnConn` payload. The write
+repeats the shared guard and atomically closes requests and running subagents,
+advances row version and applies terminal state. An inserted binding, including
+a stale one after examined absence, defeats the close. Changed guards cannot
+close a newer launch; an unresolved live conflict on the same dead launch fails.
+No runtime identity, retirement or intentional SessionEnd is fabricated, and
+Cursor per-request proof rules remain unchanged. Context-aware request-deny and
+orphan-tick emitters preserve event values, order and pending/failed/rejected
+accounting within the same operation context.
+
+After assembly, attempt each examined launch's terminal write once with the
+unchanged zero-lock-wait, fixed one-second `operationContext(0)` allowance,
+capped by the caller context through SQL, cleanup and fail-open post-commit
+audit. Only this write's `ErrStoreBusy` or `context.DeadlineExceeded` may be
+deferred while the caller context remains valid. Read failures, non-deadline
+write failures and caller cancellation/exhaustion propagate with the existing
+empty failure shapes (`Get`/`Status` zero results; `List.Spawns` non-nil empty).
+`persistCursorMissing` checks caller context again after the whole persistence
+loop, including successful cleanup/audit. A confirmed store commit stays
+confirmed even if the public call fails on its caller budget. A timed-out COMMIT
+remains unconfirmed; a successful missing read certifies neither commit nor
+rollback. No retry, new audit budget, deadline extension or uncertain replay is
+allowed. Fatal cleanup retains its error propagation; it does not adopt the
+public read's deferral rule. The allowance is not a whole-read deadline:
+preceding reads/process probes and multiple candidates have separate costs.
+Legacy `FindMissing`/`MarkEnded` retain their background transaction contracts.
+Repeated terminal reads are idempotent; explicit `find-missing` and other agents
+retain their contracts. Public held-writer/trail coverage and fixture-backed
+native store COMMIT coverage exercise separate boundaries; they do not establish
+an end-to-end public Client native-COMMIT test.
 
 The v9→v10 hop adds only `cursor_runtimes`, the current launch/life gateway and
 runtime pid/start-time, connection, private pipe/fd, session and retirement
@@ -2440,6 +2472,15 @@ still the one it read, so it knows the row has not changed since. As built:
     that work and retains its slot/lease until disposal completes. Caller
     return does not require that native work to finish, but process
     descheduling still prevents a hard real-time wall-clock guarantee.
+
+    Cursor public reads MUST use the shared guarded
+    [missing read adapter](#cursor-gateway-and-current-launch-binding) before
+    their separate bounded terminal write. Its projection is not a durable
+    closeout or a change to confirmed/unconfirmed COMMIT classification.
+
+    Diagnostic observation of these boundaries must use the frozen, revision-pinned
+    [Decide/COMMIT timing components](#decidecommit-timing-diagnostic-toolsmeasure-decide),
+    including their separate acquisition/admission and operation-context facts.
 
     Its users: the relay hook's first write
     (`InsertRelayRequest`), ack (`AckRelayDecision`) and timeout deny
@@ -11141,6 +11182,10 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 "no bound") and MCP's and the TS client's `max_wait_ms` reach
 `DecideParams.MaxWaitMs`; the CLI refuses a negative value itself.
 
+The frozen [diagnostic baseline](#decidecommit-timing-diagnostic-toolsmeasure-decide)
+describes the helper and Client timing boundaries and its revision/execution
+limits. Whole-test elapsed time does not identify a Decide or COMMIT duration.
+
 ### Readers never wait (problem 4)
 
 `get`, `list` and `get-permission` judge every request they return
@@ -11174,8 +11219,11 @@ raw state, never the settled one (see
 
 Public `get`, `status` and `list` also perform the separate guarded
 [Cursor gateway reconciliation](#cursor-gateway-and-current-launch-binding)
-before projecting results; its write contention is an error, not a best-effort
-relay-delivery update.
+using fresh launch/binding evidence in the read statement. The complete result
+precedes its separate best-effort terminal write; only that write's busy/deadline
+failure is deferrable with a valid caller context. Read failures, other write
+failures and caller cancellation/exhaustion propagate. See the linked lifecycle
+owner for guards, unchanged budgets and the distinction from durable closeout.
 
 ### The row after the last answer (rule 9, problem 3)
 
@@ -13112,6 +13160,11 @@ MCP hosts retain process-lifetime ownership of the singleton rather than
 closing it for each Client. The Bun subprocess client scans stderr lines for
 the error JSON envelope among notices; an audit diagnostic after that
 envelope does not replace its structured error or verdict exit code.
+
+The frozen [Decide/COMMIT diagnostic](#decidecommit-timing-diagnostic-toolsmeasure-decide)
+baseline records row-mutation and deferred Client audit jobs separately through
+this writer, subject to its revision/execution limits; queue acceptance,
+write/Sync, result publication and caller return are distinct observations.
 
 ## Resume
 
@@ -17047,6 +17100,108 @@ stand-in and fires the hook through `pane-hook.sh`; never hand-roll the
 before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
+
+### Decide/COMMIT timing diagnostic (`tools/measure-decide/`)
+
+`tools/measure-decide/` is a frozen, revision-pinned diagnostic baseline for
+the earlier source revision, not a runnable observer of the current repaired
+source. Current source changes do not match its pins; do not silently repin it
+or reinterpret its retained traces as observations of the repair. **Must use:**
+any separately authorized diagnostic extension must reuse its overlay, recorder
+and driver rather than introduce competing observers, with fresh provenance and
+review. The component descriptions below apply to that frozen baseline.
+`source-overlay.mjs` verifies exact source hashes/anchors and emits
+nine source mappings plus a virtual `internal/decideobserve` package.
+`diagnostic-overlay.mjs` and `calibration-overlay.mjs` add disposable test
+instrumentation using the existing fixtures and boundary oracles. Preserve all
+source mappings and stamp the final formatted compiler inputs. Source drift
+refuses generation. The overlay itself does not modify canonical product/tests;
+ordinary builds do not import or initialize the recorder. The current
+read reconciliation repair is described in the lifecycle owner above.
+
+Actual helper/Client Decide and Client List entries create source roots;
+returns occur after existing cancellation/audit defers and retain the actual
+returned error. List binds a per-call view through `Store.WithContext`, retaining
+the original context, pool, cleanup lane, driver and path without shared Client
+mutation or a new deadline. Its terminal write retains `operationContext(0)`.
+The immutable diagnostic-only params value carries `Invocation` process, test,
+fixture-lifecycle and call IDs (`json:"-"`). External call/export/readback owners
+must join that complete tuple one-to-one to the actual source root within its
+recorder process, then verify the exact complete `operation.store_identity`
+from the opened `Store.Path()`. Repeated calls need distinct call IDs; parallel
+duplicate-token fixtures need distinct lifecycles. Missing, invalid, truncated,
+conflicting or ambiguous metadata/path/source entry/return rejects attribution;
+time or instance/token alone cannot supply it. Path aliases/reuse need external
+lifecycle validation; the source does not attest supplied IDs' uniqueness.
+
+The recorder separates admission, acquisition/setup, SQL callback, BEGIN and
+guarded UPDATE from COMMIT. Acquisition/admission events sample their actual
+short contexts alongside the original operation context at the same instant.
+`commit.started_locked` is the existing flag assignment, `commit.exec` brackets
+the actual native-driver-backed `database/sql` call, synchronized SQL publication
+precedes cleanup, and final worker publication/completion follows cleanup.
+Operation caller return and guard state/error sampled under the existing mutex
+are separate facts; timestamp adjacency does not establish a guard branch.
+COMMIT call timing includes scheduling/driver work, not isolated fsync service.
+Rollback/restoration/disposal/lease release and the two trail-job routes retain
+their original ownership. Trail acceptance/result-send markers can race dequeue
+or caller return and bound events rather than prove their ordering.
+
+Monotonic timestamps and actual absolute context deadlines measure execution;
+injected relay-clock deadlines/sleeps describe relay policy only. Cancellation
+after return defers is not the returned error. No observer renews a deadline or
+changes assertions, the semantic setup allowance, fixed one-second zero-wait
+budget, retry policy or `commit_exec`/`operation_guard` error semantics.
+
+`recorder.go.in` owns 65,536 process-lifetime atomic-reserved slots with immutable
+ready publication, no reuse/reset, recorder mutex or timed-path I/O. Export is
+outside measured calls, streams bounded metadata/error chains and never waits
+for unpublished slots. Explicit process/snapshot inventories retain caller and
+separately bounded eventual-worker cutoffs. Snapshots are reservation prefixes,
+not quiescence; merge by process/slot. Overflow, missing/partial exports, unfinished
+calls and unmatched phases remain incomplete/censored, never zero-duration
+success. `check-traces.mjs` inventories missing expected processes and missing or
+nonarray call exports, marks per-process and aggregate counts unknown where
+needed, and retains independently known call prefixes and joins. It validates
+export coverage, started/completed/unfinished counts and authoritative joins.
+Independent bounded read-only transactions capture coherent cross-table durable
+state before fixture cleanup/subsequent calls; unavailable readback remains
+unknown. A late worker result does not replace the caller error or authorize retry.
+
+`supervise.mjs` has no live recorder `Counts` consumer: exported snapshot headers
+cannot detect slot overflow during an unfinished call. Live slot coverage is
+**INCOMPLETE**, so all target execution routes, including observer-off, refuse
+admission. Only the exact driver compile-only command shapes are allowlisted;
+a build label alone cannot bypass refusal. The reusable runner is not currently
+available for target execution. Earlier pass-03 live-overflow claims are qualified
+by the [current tooling report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-04/test-writer-report.json):
+trace-byte-cap checks do not validate recorder slot-overflow coverage; original
+receipts remain retained.
+
+The supervisor preserves its first trigger and provides bounded process-group
+termination and a later-natural-admission stop. Its resource checks cover
+wall/aggregate, PID/memory, output, retained artifacts and per-process trace bytes
+across snapshots; unavailable accounting refuses admission. Fixture storage
+requires an 8 GiB tmpfs hard bound, which differs from canonical temporary
+storage. Full-route writes outside that namespace, including `/work`, also lack
+provable quota coverage. These bounds do not supply missing live slot coverage.
+A stopped process is not a successful completed call.
+
+The [measurement disposition](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/measurement-disposition.json)
+and [reviewed diagnostic report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/test-writer-report.json)
+own experimental results, provenance and resource/revision qualifications, subject
+to the current tooling report's coverage corrections. Historical cause remains
+**UNKNOWN**. The preserved
+[earlier canonical receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/final-unit/test-writer-report.json)
+for List `gone_working` (`operation_guard`) contains no phase timings that can
+attribute SQL versus COMMIT, cleanup or scheduling. Its flag establishes
+commit-start bookkeeping, not native COMMIT duration; whole-test duration is
+not operation duration. Fault-boundary regressions do not identify that historical
+cause. The corrected source/tests passed the
+[canonical sandbox gate](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/gate-repair/tests/test-writer-report.json).
+Earlier failed receipts remain immutable. This does not complete diagnostic
+measurement, make the frozen runner executable, or establish later Epic 4
+resume work; Tasks 2 and 3 have not started.
 
 ### Exit-time measurement harness (`tools/measure-exit/`)
 

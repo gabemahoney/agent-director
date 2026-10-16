@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -17,8 +18,16 @@ import (
 // Confirmed terminal writes must return within their original budget even when audit I/O stalls.
 func TestCursorReadsWithBlockedTrail(t *testing.T) {
 	// Serial: it holds the process-wide trail singleton's mutex and reads the shared trail.
-	for _, verb := range []string{"Get", "Status", "List"} {
-		t.Run(verb, func(t *testing.T) {
+	for _, tc := range []struct {
+		verb          string
+		callerContext string
+	}{
+		{"Get", "none"}, {"Status", "none"}, {"List", "none"},
+		{"Get", "deadline"}, {"Status", "deadline"}, {"List", "deadline"},
+		{"Get", "cancel"}, {"Status", "cancel"}, {"List", "cancel"},
+	} {
+		verb := tc.verb
+		t.Run(fmt.Sprintf("%s/caller=%s", verb, tc.callerContext), func(t *testing.T) {
 			e, c, b, token := cursorReadLaunch(t)
 			e.pc.Set(b.GatewayPID, procfix.Gone())
 			e.pc.Set(b.RuntimePID, procfix.Alive(b.RuntimeStart))
@@ -63,13 +72,22 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 				switch verb {
 				case "Get":
 					row, err := c.Get(b.InstanceID)
+					if err != nil && !reflect.DeepEqual(row, api.SpawnRow{AgentArgs: []string{}, Labels: map[string]string{}, PermissionRequests: []api.PermissionRequestInfo{}, UnprovenRequests: []api.PermissionRequestInfo{}, PriorSessions: []api.PriorSession{}}) {
+						t.Errorf("Get failure shape: %+v", row)
+					}
 					return row.State, err
 				case "Status":
 					row, err := c.Status(b.InstanceID)
+					if err != nil && !reflect.DeepEqual(row, api.StatusResult{}) {
+						t.Errorf("Status failure shape: %+v", row)
+					}
 					return row.State, err
 				default:
 					rows, err := c.List(api.ListParams{})
 					if err != nil {
+						if !reflect.DeepEqual(rows, api.ListResult{Spawns: []api.ListRow{}}) {
+							t.Errorf("List failure shape: %+v", rows)
+						}
 						return "", err
 					}
 					if len(rows.Spawns) != 1 || rows.Spawns[0].InstanceID != b.InstanceID {
@@ -95,6 +113,22 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 					}
 				}
 			}()
+			restore := func() {}
+			cancelCaller := func() {}
+			var wantErr error
+			if tc.callerContext != "none" {
+				var ctx context.Context
+				if tc.callerContext == "deadline" {
+					ctx, cancelCaller = context.WithTimeout(context.Background(), 500*time.Millisecond)
+					wantErr = context.DeadlineExceeded
+				} else {
+					ctx, cancelCaller = context.WithCancel(context.Background())
+					wantErr = context.Canceled
+				}
+				defer cancelCaller()
+				restore = api.SetStoreContextForTest(c, ctx)
+				defer restore()
+			}
 			start := time.Now()
 			go func() {
 				state, err := read()
@@ -123,6 +157,9 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 					t.Fatalf("independent terminal commit: row=%+v request=%+v", row, pr)
 				}
 				committed = true
+				if tc.callerContext == "cancel" {
+					cancelCaller()
+				}
 				t.Logf("independent connection observed missing/version+1/closed deny at +%v while mutex held", time.Since(start))
 			}
 			var got outcome
@@ -146,15 +183,20 @@ func TestCursorReadsWithBlockedTrail(t *testing.T) {
 			if !committed {
 				t.Fatal("missing was not independently committed while trail mutex held")
 			}
-			if got.err != nil || got.state != store.StateMissing || got.took > limit {
+			if wantErr != nil {
+				if !errors.Is(got.err, wantErr) || got.state != "" || got.took > limit {
+					t.Fatalf("public read = %+v; want deadline/empty result within %v despite confirmed commit", got, limit)
+				}
+			} else if got.err != nil || got.state != store.StateMissing || got.took > limit {
 				t.Fatalf("public read = %+v; want confirmed success/missing within %v", got, limit)
 			}
+			restore()
 			pending := writer.Status()
 			if pending.Pending != 2 || pending.Failed != baseline.Failed || pending.Rejected != baseline.Rejected {
 				t.Fatalf("held audit status = %+v; want exactly deny and tick pending without failures/rejections", pending)
 			}
 			terminal := e.columns(t, b.InstanceID)
-			t.Logf("%s returned success/missing in %v; real mutex still held for %v; pending=%d", verb, got.took, time.Since(heldAt), pending.Pending)
+			t.Logf("%s returned in %v; real mutex still held for %v; pending=%d", verb, got.took, time.Since(heldAt), pending.Pending)
 			release()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

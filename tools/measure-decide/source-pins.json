@@ -1,0 +1,11 @@
+{
+  "revision": "8decf0d46914fef350c1fca0ba6af9348ba43a1a",
+  "sha256": {
+    "pkg/api/decide.go": "4275c4c1e332b2376cfbfbe7750bdea32bf14ddf8fd8ab92c4d1a9bbcd703de7",
+    "internal/store/lockwait.go": "dfe2a5e255543d9b53bc965a88cf7e8135ed53fc815031a4d18f1f2c11ef5456",
+    "internal/store/connection_cleanup.go": "f9a606f4efeb6a2b1215a9c9a8c4ca3306c92bbeb646bee772ef41078d9fe2ce",
+    "internal/store/permission.go": "af61fc61e2b1b4c7e73eabac6ef2710a12d2019be45b3ab4c4920080badaa194",
+    "internal/trail/deadline.go": "ded79e5b1d13ef5e5a7033a03b12a580a829ed828fe1ab362cdfaad885399a22",
+    "internal/trail/trail.go": "b8a7e3f12ae561663e875d75f252c3be2433eba728ced4ed937be2f3b63217dd"
+  }
+}

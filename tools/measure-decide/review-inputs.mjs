@@ -1,0 +1,20 @@
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+const base='tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03';
+const sha=b=>crypto.createHash('sha256').update(b).digest('hex');
+const safe=p=>{if(p.split(/[\\/]/).includes('.claude'))throw Error('forbidden component');return p};
+const read=p=>fs.readFileSync(safe(p));
+const canonical=read('tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/engineer/canonical-tests.sha256').toString().trim().split('\n');
+for(const line of canonical){const file=line.slice(66);if(sha(read(file))!==line.slice(0,64))throw Error('canonical test changed: '+file)}
+const latest=JSON.parse(read('tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/engineer-list-observation/source-provenance.json'));
+const sourcePins=latest.baseline_sha256;
+for(const [file,expected]of Object.entries(sourcePins))if(sha(read(file))!==expected)throw Error('source drift '+file);
+for(const [file,expected]of Object.entries(latest.identity_authority_sha256||{}))if(sha(read(file))!==expected)throw Error('source authority drift '+file);
+if(sha(read('tools/measure-decide/source-overlay.mjs'))!==latest.generator_sha256)throw Error('Engineer generator changed');
+if(sha(read('tools/measure-decide/recorder.go.in'))!==latest.recorder_template_sha256)throw Error('Engineer recorder changed');
+const tools=['calibration-overlay.mjs','calibration-export.go.in','calibrate-acquisition.sh','diagnostic-api.go.in','diagnostic-io.go.in','diagnostic-overlay.mjs','diagnose.sh','supervise.mjs','check-traces.mjs','review-calibration.mjs','analyze-matrix.mjs','analyze-list.mjs','review.sh','review-inputs.mjs'];
+const sources=['source-overlay.mjs','recorder.go.in','source-pins.json','check-source.sh'];
+const quality={result:'PASS',canonical_test_files_checked:canonical.length,source_files_checked:Object.keys(sourcePins).length,authority_files_checked:Object.keys(latest.identity_authority_sha256||{}).length,canonical_source_diff_empty:read(base+'/canonical-diff.patch').length===0,testwriter_artifacts:Object.fromEntries(tools.map(p=>[p,sha(read('tools/measure-decide/'+p))])),engineer_owned_artifacts:Object.fromEntries(sources.map(p=>[p,sha(read('tools/measure-decide/'+p))]))};
+if(!quality.canonical_source_diff_empty)throw Error('canonical source diff');
+fs.writeFileSync(base+'/preservation-review.json',JSON.stringify(quality,null,2)+'\n');
+console.log(JSON.stringify(quality,null,2));

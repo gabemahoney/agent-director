@@ -29,14 +29,16 @@ func liveStateGuardArgs() []any {
 // version advance, guarded by a live state and the examined row snapshot
 // (SR-5.2, SR-5.3, SR-11.3, SR-11.6). missing is an immediate write
 // (immediateStateSet, b.3ie): it reports at once.
-var markMissingIfSameLifeSQL = `UPDATE spawns
+var markMissingSetSQL = `UPDATE spawns
     SET ` + immediateStateSet + `,
         ended_at                  = CURRENT_TIMESTAMP,
         last_seen_at              = CURRENT_TIMESTAMP,
         liveness_unverified_since = NULL,
         liveness_note             = NULL,
         ` + launchStartClear + `,
-        ` + rowVersionAdvance + `
+        ` + rowVersionAdvance
+
+var markMissingIfSameLifeSQL = markMissingSetSQL + `
   WHERE instance_id = ? AND ` + liveStateGuardSQL + ` AND ` + snapshotMatchSQL
 
 // setLivenessNoteIfSameLifeSQL is SetLivenessNoteIfSameLife's one statement:

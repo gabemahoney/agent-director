@@ -206,6 +206,14 @@ fields, and every verb that acts on a row, follow its live state. The
 package-level `api.Status`, `api.Get` and `api.List` functions use no
 settle time.
 
+For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
+launch-guarded `missing` read result even when the separate terminal write is
+busy or reaches its deadline. This does not confirm durable closure;
+`ended_at` remains the stored timestamp read and may be absent. The
+[caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
+defines caller-budget errors, request proof and recovery. Package-level
+`api.Status`, `api.Get` and `api.List` do not check gateway liveness.
+
 ---
 
 ### List

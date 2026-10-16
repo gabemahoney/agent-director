@@ -53,6 +53,10 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	if len(options.InitialPrompt) > maxFrameBytes/2 {
 		return fmt.Errorf("Cursor input exceeds limit")
 	}
+	signals := make(chan os.Signal, 2)
+	// Keep repeated terminal signals captured through runtime/store cleanup and
+	// the final failure event, including after the terminal restores ISIG.
+	defer signal.Stop(signals)
 	ownedID := ""
 	defer func() {
 		if err != nil && ownedID != "" {
@@ -180,9 +184,7 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		return admission.take()
 	}, requests.key)
 	defer restore()
-	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
-	defer signal.Stop(signals)
 	fmt.Fprint(writer, "Cursor gateway: starting a fresh conversation\r\n")
 	if _, err = protocol.request("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false}, "clientInfo": map[string]any{"name": "agent-director", "version": version.Version}}); err != nil {
 		return err

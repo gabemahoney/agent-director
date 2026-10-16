@@ -221,22 +221,33 @@ gateway process identity. Public `list` checks live Cursor candidates within its
 label, parent, working-directory and tmux-session filters before applying the
 settled-state filter and limit. Invalid filters are refused before any store
 read or mutation. A reused PID with a different start time means the
-recorded gateway is gone. A confirmed lost gateway marks the row `missing`
+recorded gateway is gone. A confirmed lost gateway is reported as `missing`
 without waiting for `find-missing` or the state settle delay, even if its runtime
 is still alive. Alive or unknown process evidence leaves the row unchanged.
-A gateway lost before runtime registration can also be marked `missing`, but
-only while no runtime binding exists for that instance. A binding appearing
-during reconciliation, including a stale binding, refuses that close. Existing
-stale bindings are not treated as absent. A changed launch is protected from
-stale cleanup; an unresolved conflict on the same dead launch or failed request
-closure returns an error.
-Terminal closure leaves Cursor request proof unchanged, including after
-`delivered`; see [Cursor permission lifetimes](permissions.md#cursor-spawns).
-These reconciliation writes do not wait for the store's write lock:
-contention returns `ErrStoreBusy` without a partial transition or automatic
-retry. Finished rows are not checked again. These reads do not sweep outside
-their requested scope or change other agents' read behavior; explicit
-`find-missing` remains available.
+The result is guarded by the examined launch and runtime binding. A gateway
+lost before runtime registration can also be reported missing while no binding
+exists for that instance; a stale binding is not absence. A replacement launch
+retains its own state. An unresolved conflict on the same dead launch returns
+an error rather than reporting it as working.
+
+The complete read result is assembled before a separate attempt to persist
+terminal closure. That write does not wait for the store's write lock and keeps
+its fixed one-second allowance, capped by the caller's remaining budget. A busy
+store or deadline reached by this write alone can still return the guarded
+`missing` result while the caller's context remains valid. Other write errors,
+including failed request closure, read errors and caller cancellation or deadline
+exhaustion return an error with empty results. There is no automatic retry.
+A successful read does not confirm whether terminal closure committed.
+
+Only state is projected: `ended_at` and other timestamps remain the stored
+facts read, so the first missing result may omit `ended_at` even if closure
+subsequently commits. Terminal permission lists are empty; they prove no request
+gone, decision, receipt or delivery. Terminal closure leaves Cursor request proof
+unchanged, including after `delivered`; see
+[Cursor permission lifetimes](permissions.md#cursor-spawns).
+Finished rows are not checked again. These reads do not sweep outside their
+requested scope or change other agents' read behavior; explicit `find-missing`
+remains available.
 
 A Cursor `missing` row is not proof that its runtime has exited. Resolve any
 surviving work through the existing ownership and

@@ -88,7 +88,12 @@ func TestCursorRotationHeldCapacityIsProvisional(t *testing.T) {
 				// Follow the capacity advice: after publication and completed turns,
 				// only a later explicit submission delivers the refused text.
 				rotationNoBytes(t, c, excess)
-				i.submit(t, excess)
+				input := terminalInput{text: excess}
+				c.wait(t, "explicit capacity submission authority", func() bool {
+					input.accepted = i.admit()
+					return input.accepted
+				})
+				i.emit(input)
 				c.wait(t, "explicit capacity retry completes", func() bool { return rotationRecordCount(c, t, "turn_outcome") == len(texts)+1 })
 				want = append(want, rotationPrompt{"synthetic-session-2", excess})
 				if !reflect.DeepEqual(rotationPrompts(c, t), want) {

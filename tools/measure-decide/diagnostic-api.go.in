@@ -1,0 +1,28 @@
+package api_test
+import (
+ "flag"
+ "runtime"
+ "strings"
+ "testing"
+ "time"
+ "github.com/gabemahoney/agent-director/pkg/api"
+)
+var diagnosticInitialGOMAXPROCS=runtime.GOMAXPROCS(0)
+func diagnosticTimed(t *testing.T,path string,call func(diagnosticInvocation)(api.DecideResult,error)) (api.DecideResult,error) {
+ t.Helper()
+ id:=diagnosticBegin(t,path,"helper")
+ begin:=time.Now();result,err:=call(id);end:=time.Now()
+ diagnosticReturned(id,begin,end,err,false)
+ if err!=nil && (t.Name()=="TestDecideAbsoluteContextSurvivesParkedPhase" || strings.HasPrefix(t.Name(),"TestRepairCheckPermission/") || strings.HasPrefix(t.Name(),"TestDecideKeepsDurableOrigin/")) {diagnosticUncertain(t,path,id)}
+ return result,err
+}
+func diagnosticUncertain(t *testing.T,path string,ids ...diagnosticInvocation) {
+ diagnosticStop.Store(true)
+ diagnosticCapture(t,path,"caller");diagnosticReadback(t,path,"caller",ids...)
+ time.Sleep(100*time.Millisecond)
+ diagnosticCapture(t,path,"eventual-100ms");diagnosticReadback(t,path,"eventual-100ms",ids...)
+}
+func diagnosticExport() error {
+ if err:=diagnosticWrite("runtime",map[string]any{"initial_gomaxprocs":diagnosticInitialGOMAXPROCS,"final_gomaxprocs":runtime.GOMAXPROCS(0),"num_cpu":runtime.NumCPU(),"test_parallel":flag.Lookup("test.parallel").Value.String(),"test_timeout":flag.Lookup("test.timeout").Value.String()});err!=nil{return err}
+ return diagnosticFinish()
+}

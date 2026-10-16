@@ -499,10 +499,22 @@ func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
 	}
-	if err := c.reconcileCursorGateway(instanceID); err != nil {
+	proof, err := c.reconcileCursorGateway(instanceID)
+	if err != nil {
 		return emptySpawnRow(), err
 	}
-	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
+	var proofs []store.CursorMissingProof
+	if proof != nil {
+		proofs = append(proofs, *proof)
+	}
+	out, err := getSettled(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
+	if err != nil {
+		return emptySpawnRow(), err
+	}
+	if err := c.persistCursorMissing(proofs); err != nil {
+		return emptySpawnRow(), err
+	}
+	return out, nil
 }
 
 // Compile-time assertion that *store.Store provides the settled read the

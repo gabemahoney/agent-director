@@ -126,15 +126,15 @@ func TestCursorStartupAbsentBindingFailures(t *testing.T) {
 				callStart := time.Now()
 				state, err := cursorStartupRead(c, verb, b.InstanceID)
 				t.Logf("startup read start=%s elapsed=%v", callStart.Format(time.RFC3339Nano), time.Since(callStart))
-				if failure == "held writer" && !errors.Is(err, api.ErrStoreBusy) {
-					t.Errorf("held writer error=%v want ErrStoreBusy", err)
+				if failure == "held writer" && (err != nil || state != "missing") {
+					t.Errorf("held writer state=%q error=%v want missing without error", state, err)
 				}
 				if failure == "request close" && (err == nil || !strings.Contains(err.Error(), "injected write failure: "+storefix.WriteFailPermissionDecision.String())) {
 					t.Errorf("close failure error=%v want injected failure", err)
 				}
 				// The operation allowance excludes preceding reads and process probes.
 				// Frozen held-SQL/trail tests cover its deadline; this checks rollback.
-				if state != "" {
+				if failure == "request close" && state != "" {
 					t.Errorf("failed startup close exposed state=%q", state)
 				}
 				requestAfter, readErr := e.st.GetPermissionRequest(b.InstanceID, token)
