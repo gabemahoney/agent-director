@@ -3,6 +3,7 @@
 source /work/source/test/driver/cursor-resume-life.sh
 
 ir_install() {
+ trap ir_install_exit EXIT
  local mode=$1 h="$case_dir/install-home" toolbox="$case_dir/install-tools" name dir program rc
  mkdir -m 700 -p "$h/.config/agent-director" "$toolbox" "$case_dir/loose"
  # Only explicitly selected fixture agents can appear on this installer PATH.
@@ -28,7 +29,7 @@ ir_install() {
  cp "$SOURCE_DIR/skills/install-agent-director/install.sh" "$case_dir/loose/install.sh"
  cp -R "$SOURCE_DIR/skills/install-agent-director/schedule" "$case_dir/loose/schedule"
  rc=0
- HOME="$h" PATH="$toolbox" bash "$case_dir/loose/install.sh" --from-bin /usr/local/bin/agent-director --admin-from-bin /opt/bin/agent-director-admin --no-hooks --no-symlink --register-mcp > "$case_dir/install-out" 2> "$case_dir/install-err" || rc=$?
+ HOME="$h" PATH="$toolbox" bash "$case_dir/loose/install.sh" --binary /usr/local/bin/agent-director --admin-binary /opt/bin/agent-director-admin --no-hooks --no-symlink --register-mcp > "$case_dir/install-out" 2> "$case_dir/install-err" || rc=$?
  check installer.never-probed test ! -e "$case_dir/installer-ran"
  check installer.config-preserved cmp "$case_dir/config-before" "$h/.config/agent-director/config.toml"
  if [[ $mode == editor ]]; then
@@ -43,6 +44,36 @@ ir_install() {
   check installer.skip-mcp grep -qF 'mcp     : --register-mcp skipped because Claude Code is not installed' "$case_dir/install-out"
  fi
  jq -cn --arg case "$2" --arg mode "$mode" '{case:$case,status:"pass",checks:["presence-only","config-preserved","accurate-skips-or-no-mutation"],provenance:{runtime:"recording-standin-never-executed",authenticated_cursor:false},facts:{mode:$mode}}'
+}
+
+ir_install_exit() {
+ local rc=$? evidence_rc=0 cleanup_rc=0 item
+ trap - EXIT
+ set +e
+ artifact_dir="/tmp/cursor-resume-life-artifacts/$id"
+ mkdir -m 700 -p "$artifact_dir" || evidence_rc=$?
+ for item in install-out install-err config-before; do
+  if [[ -f $case_dir/$item ]]; then cp "$case_dir/$item" "$artifact_dir/$item" || evidence_rc=$?; fi
+ done
+ if ((rc)); then
+  printf 'INSTALLER_CASE_EXIT exit=%s check=%s dir=%s\n' "$rc" "$check_id" "$case_dir" >&2
+  if [[ -f $case_dir/install-err ]]; then cat "$case_dir/install-err" >&2; fi
+ fi
+ # Installer-only cases never open the runtime override store. Preserve the
+ # original error above and clean up without querying that nonexistent store.
+ printf 'INSTALLER_EVIDENCE_EXIT exit=%s\n' "$evidence_rc" >&2
+ cleanup_cursor_case || cleanup_rc=$?
+ printf 'INSTALLER_CLEANUP_EXIT exit=%s\n' "$cleanup_rc" >&2
+ exit "$rc"
+}
+
+ir_launch() {
+ local surface=$1 call=$2 params=$3
+ if [[ $surface != CLI ]]; then pc_public "$surface" "$call" "$params"
+ elif [[ $call == resume ]]; then rl_public CLI resume
+ elif [[ $(jq -r .reuse_finished <<<"$params") == true ]]; then rl_reuse_call CLI cursor
+ else ad spawn --instance-id "$id" --agent cursor --cwd "$case_dir/cwd" --no-pre-trust
+ fi
 }
 
 ir_runtime() {
@@ -76,7 +107,7 @@ ir_runtime() {
   if [[ $verb == spawn ]]; then id="new-$id"; fi
   params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" --arg verb "$verb" '{instance_id:$id,agent:"cursor",cwd:$cwd,no_pre_trust:true,reuse_finished:($verb=="reuse")}')
  fi
- pc_public "$surface" "$call" "$params" > "$case_dir/public.json"
+ ir_launch "$surface" "$call" "$params" > "$case_dir/public.json"
  check runtime.launch-result jq -e --arg id "$id" '.instance_id==$id and .pre_trust=="skipped"' "$case_dir/public.json" >/dev/null
  if [[ $selection == missing || $selection == nonexec ]]; then
   check runtime.process-backed-missing wait_until ir_missing
@@ -102,7 +133,13 @@ ir_runtime() {
  pc_export_evidence
 }
 ir_missing() { [[ $(ad get --instance-id "$id" | jq -r .state) == missing ]]; }
-ir_waiting() { [[ $(row_state) == waiting ]]; }
+ir_waiting() {
+ local path
+ path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$id';")
+ # pc_ready reads this dynamically scoped current path, including fresh/reuse
+ # launches whose transcript differs from the stopped seed's retained path.
+ pc_ready 1
+}
 ir_finish() {
  jq -cn --arg case "$1" --arg id "$id" '{case:$case,status:"pass",checks:["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"],provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id}}'
 }

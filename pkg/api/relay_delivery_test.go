@@ -240,8 +240,9 @@ func (g getPermissionReadsTwice) GetPermissionRequestByToken(token string) (stor
 func TestReaderJudgesTheHookBeforeItsRecord(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, relayEnvHook)
-	if _, err := api.DecideWithSleep(e.s, e.view(), func(time.Duration) {}, api.DecideParams{InstanceID: e.id,
-		RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: ptr(int64(0))}); err != nil {
+	setupBudget := int64(5000)
+	if _, err := api.DecideWithSleep(e.s, e.view(), func(d time.Duration) { e.now = e.now.Add(d) }, api.DecideParams{InstanceID: e.id,
+		RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: &setupBudget}); err != nil {
 		t.Fatalf("decide: %v", err)
 	}
 	reads := 0
