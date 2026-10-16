@@ -1,0 +1,17 @@
+{
+  "task": "e3-integration-fixes-read-only-triage",
+  "status": "complete",
+  "source_commit": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "ticket_status_changes": [],
+  "source_test_doc_changes": [],
+  "artifact": "analysis.md",
+  "tests_run": [],
+  "commits": [],
+  "findings": [
+    "Observed update-session-mismatch branch conflates nested decoding errors with attribution; earlier gate already excludes a differing top-level session. Tool content array is a concrete synthetic RED candidate, not a captured rejected envelope.",
+    "Fatal gateway return terminates owned runtime without terminal row publication; Get/Status do not reconcile. Existing explicit FindMissing would judge the recorded dead gateway and mark missing. External SIGKILL requires independent read-time or sweep reconciliation, not only a defer."
+  ],
+  "incomplete_work": ["Implementation and RED/GREEN verification belong to subsequent authorized execution lanes."],
+  "deviations": [],
+  "questions": []
+}

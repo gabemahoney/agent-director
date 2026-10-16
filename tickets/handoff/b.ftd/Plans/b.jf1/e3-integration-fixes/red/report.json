@@ -1,0 +1,117 @@
+{
+  "status": "deterministic RED frozen before source fix",
+  "source_commit": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "recorded_utc": "2026-10-16T07:04:49.506750+00:00",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "internal/cursorhost/session_e3_regression_linux_test.go",
+    "internal/testsupport/cursorfix/cursorfix.go",
+    "internal/testsupport/cursorfix/runtime.js"
+  ],
+  "evidence_directory": "/home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red",
+  "test_command": "go test ./internal/cursorhost -run '^(TestCursorE3ToolUpdateBeforePlanAdmission|TestCursorE3FatalRunClosesMissing|TestCursorE3PublicReadsReconcileKilledGateway)$' -count=1 -v -timeout 90s",
+  "sandbox_command": "make sandbox CMD=bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/sandbox-command.sh",
+  "run_receipt": "final-red-run.json",
+  "raw_log": "final-red.log",
+  "go_test_exit_code": 1,
+  "make_exit_code": 2,
+  "red_subtest_count": 6,
+  "passing_control_count": 5,
+  "failed_subtests": [
+    "TestCursorE3ToolUpdateBeforePlanAdmission/tool_array",
+    "TestCursorE3ToolUpdateBeforePlanAdmission/tool_empty_array",
+    "TestCursorE3FatalRunClosesMissing/DIE",
+    "TestCursorE3FatalRunClosesMissing/malformed_update",
+    "TestCursorE3PublicReadsReconcileKilledGateway/Get",
+    "TestCursorE3PublicReadsReconcileKilledGateway/Status"
+  ],
+  "passing_controls": [
+    "TestCursorE3ToolUpdateBeforePlanAdmission/tool_null",
+    "TestCursorE3ToolUpdateBeforePlanAdmission/tool_omitted",
+    "TestCursorE3ToolUpdateBeforePlanAdmission/ordinary_text",
+    "TestCursorE3ToolUpdateBeforePlanAdmission/foreign_update",
+    "TestCursorE3ToolUpdateBeforePlanAdmission/malformed_text"
+  ],
+  "budgets": {
+    "gateway_readiness_seconds": 8,
+    "session_predicate_seconds": 3,
+    "fatal_Run_seconds": 3,
+    "owned_process_gone_seconds": 5,
+    "cleanup_seconds": 5,
+    "go_test_seconds": 90
+  },
+  "causal_failures": [
+    {
+      "test": "TestCursorE3ToolUpdateBeforePlanAdmission/tool_array",
+      "actual": "real Run returns Cursor update session mismatch before captured plan authorization can be admitted",
+      "expected": "survive synthetic same-session tool array, retain raw update with current launch/turn binding, admit real store token; no decision/execution/completion"
+    },
+    {
+      "test": "TestCursorE3ToolUpdateBeforePlanAdmission/tool_empty_array",
+      "actual": "same schema error for empty tool content array",
+      "expected": "same-session array is valid tool content"
+    },
+    {
+      "test": "TestCursorE3FatalRunClosesMissing/DIE",
+      "actual": "Run returns fatal transport error and exact owned runtime is gone; row stays working",
+      "expected": "missing without fabricated intentional session_end"
+    },
+    {
+      "test": "TestCursorE3FatalRunClosesMissing/malformed_update",
+      "actual": "Run returns fatal decode error and exact owned runtime is gone; row stays check_permission and admitted request remains open",
+      "expected": "missing with request closure, no successful turn/session end"
+    },
+    {
+      "test": "TestCursorE3PublicReadsReconcileKilledGateway/Get and /Status",
+      "actual": "gateway-only SIGKILL joined; exact gateway/runtime independently gone; both public reads in either order still check_permission and request open",
+      "expected": "missing without explicit FindMissing, transactional closure and idempotent repeated reads; sentinel and same-store live launch unchanged"
+    }
+  ],
+  "reproduction_confidence": "High for concrete causal defects on unchanged product code; synthetic update is not claimed to recover absent rejected live wire bytes.",
+  "product_hashes": {
+    "before": "product-before.json",
+    "after": "product-after.json",
+    "equal": true,
+    "scope": "Tracked non-test Go product files in internal/cursorhost, internal/store, internal/probe, internal/tmux and pkg/api, excluding apitest/testdata; no whole-tree archive/hash and no .claude access."
+  },
+  "frozen_regressions_and_fixtures": "frozen-sha256.json",
+  "attempts": [
+    {
+      "receipt": "attempt-1-run.json",
+      "log": "attempt-1.log",
+      "classification": "invalid harness attempt, excluded from causal RED counts",
+      "errors": [
+        "zero-length non-nil RawMessage treated as omitted JSON and failed fixture marshaling",
+        "CursorRuntime has json:- fields, so crash receipt serialized empty binding; parent could not establish gateway identity"
+      ],
+      "resolved": "use len(content)>0 for omission; read real binding from supplied isolated store using explicit receipt instance"
+    },
+    {
+      "receipt": "attempt-2-run.json",
+      "log": "attempt-2.log",
+      "classification": "valid intermediate RED; final adds alive-process control and same-store sibling guard; not counted separately"
+    }
+  ],
+  "deviations": [
+    "Captured plan authorization fixture is cursor/create_plan, not session/request_permission; reused its actual method/payload unmodified rather than inventing a captured permission envelope.",
+    "An admitted permission truthfully changes working to check_permission. External-kill test therefore proves committed check_permission/open request rather than artificially forcing working; DIE case separately reproduces stale working.",
+    "Shared existing cursorfix Scenario/runtime.js received one optional BeforeRequests fixture field; no product source changes."
+  ],
+  "not_run": [
+    "full unit suite",
+    "integration suites",
+    "live Cursor/O4",
+    "Docker epic suites",
+    "scheduler/formal/models"
+  ],
+  "incomplete_work": [
+    "Engineer source fixes and independent GREEN pass remain.",
+    "Additional GREEN guard matrix remains: unknown/recycled gateway PID, dead gateway with live runtime, stale launch/life/session/connection binding, concurrent row replacement/end/rotation, transaction close failure and settle-delay bypass. Existing tests were not duplicated."
+  ],
+  "questions": []
+}

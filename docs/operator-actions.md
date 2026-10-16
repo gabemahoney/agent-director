@@ -52,8 +52,14 @@ Cursor failure reasons and the fresh-instance recovery boundary are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Use the
 same inspection and ownership procedures above for a Cursor launch. A
 transport failure alone does not authorize deleting a row or adopting an
-unrelated process. The resume/reuse retry procedures below apply to Claude
-and Codex; Cursor refuses those operations before mutation.
+unrelated process. Public `get`, `status` and scoped `list` can reconcile a lost
+gateway, including one lost before runtime registration; their scope, binding
+conflict refusals and `ErrStoreBusy` behavior are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
+If a Cursor row is `missing`, check for surviving work
+before starting its replacement; follow the
+[Cursor recovery boundary](caller-contract.md#cursor-operation-boundaries).
+The resume/reuse retry procedures below apply to Claude and Codex; Cursor refuses those operations before mutation.
 
 ## A finished row's own old session
 

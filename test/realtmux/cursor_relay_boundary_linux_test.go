@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"golang.org/x/sys/unix"
 )
@@ -242,21 +244,37 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 			assertPreserved := func() {
 				t.Helper()
 				row := readRow(t, f.DBPath, id)
-				if row.SessionID != before.SessionID || row.LaunchToken != before.LaunchToken || row.PanePID != before.PanePID || (!completed && row.State != store.StateCheckPermission) {
-					t.Fatalf("conversation/hold changed before termination: %+v", row)
+				pc := probe.NewProcChecker()
+				gatewayStart, gatewayAlive, gatewayKnown := pc.StartTime(binding.GatewayPID)
+				runtimeStart, runtimeAlive, runtimeKnown := pc.StartTime(binding.RuntimePID)
+				provenGone := (gatewayKnown && (!gatewayAlive || gatewayStart != binding.GatewayStart)) || (runtimeKnown && (!runtimeAlive || runtimeStart != binding.RuntimeStart))
+				missing := row.State == store.StateMissing && provenGone
+				if row.SessionID != before.SessionID || row.LaunchToken != before.LaunchToken || row.LifeNumber != before.LifeNumber || row.PanePID != before.PanePID || row.PaneStarttime != before.PaneStarttime || (!completed && row.State != store.StateCheckPermission && !missing) {
+					t.Fatalf("conversation/hold changed without exact death: row=%+v gateway known/alive/start=%v/%v/%q runtime=%v/%v/%q", row, gatewayKnown, gatewayAlive, gatewayStart, runtimeKnown, runtimeAlive, runtimeStart)
 				}
 				if pidGone(worker) {
 					t.Fatal("cancellation killed independent worker sentinel")
 				}
 				if mode != "successful release" {
-					got, err := st.GetPermissionRequest(id, permission.RequestToken)
-					if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
-						t.Fatalf("cancellation released independent permission: %+v %v", got, err)
-					}
+					held := []store.PermissionRow{permission}
 					if mode == "policy" {
-						got, err = st.GetPermissionRequest(id, plan.RequestToken)
-						if err != nil || got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
-							t.Fatalf("policy cancellation released independent plan: %+v %v", got, err)
+						held = append(held, plan)
+					}
+					for _, request := range held {
+						got, err := st.GetPermissionRequest(id, request.RequestToken)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if got.Closed() && provenGone {
+							// The atomic terminal close may commit between these raw reads.
+							missing = readRow(t, f.DBPath, id).State == store.StateMissing
+						}
+						if missing {
+							if got.Decision != "deny" || !got.ProvenGone() || !got.Closed() || !got.DeliveredAt.IsZero() || got.PaneAnswered() {
+								t.Fatalf("missing did not atomically close held request: row=%+v request=%+v", row, got)
+							}
+						} else if got.Decision != "" || !got.DeliveredAt.IsZero() || got.ProvenGone() || got.Closed() || got.PaneAnswered() {
+							t.Fatalf("cancellation released independent request without exact death: row=%+v request=%+v gateway=%v/%v/%q runtime=%v/%v/%q", row, got, gatewayKnown, gatewayAlive, gatewayStart, runtimeKnown, runtimeAlive, runtimeStart)
 						}
 					}
 				}
@@ -288,7 +306,8 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 			} else {
 				lastInterrupt := time.Time{}
 				waitForObserved(t, 5*time.Second, "original cancellation deadline retires gateway and runtime", func() bool {
-					if pidGone(binding.GatewayPID) && pidGone(binding.RuntimePID) {
+					pc := probe.NewProcChecker()
+					if tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.GatewayPID, Starttime: binding.GatewayStart}) == tmux.ProcGone && tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.RuntimePID, Starttime: binding.RuntimeStart}) == tmux.ProcGone {
 						return true
 					}
 					assertPreserved()
@@ -300,6 +319,7 @@ func TestCursorRelayHeldCancellationDeadline(t *testing.T) {
 				}, func() string {
 					return fmt.Sprintf("gateway=%s runtime=%s", procState(binding.GatewayPID), procState(binding.RuntimePID))
 				})
+				assertPreserved()
 				failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
 				if len(failures) != 1 || !strings.Contains(fmt.Sprint(failures[0]["reason"]), "operation timed out") {
 					t.Fatalf("expected original finite operation timeout: %v", failures)

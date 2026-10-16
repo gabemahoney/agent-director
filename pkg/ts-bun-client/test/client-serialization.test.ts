@@ -12,7 +12,7 @@ import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SpawnParams, MakeTemplateParams, GetResult, ListRow } from "../src/index.js";
-import { homeStore, openClient, seedOuterParent, spawnClaude, withProcessEnv } from "./internal/helper.js";
+import { homeStore, openClient, runHelper, seedOuterParent, spawnClaude, withProcessEnv } from "./internal/helper.js";
 import { withTempHome } from "./internal/tempHome.js";
 
 const RECORDER = path.resolve(import.meta.dir, "fixtures/epic-a/serialization-recorder.js");
@@ -27,7 +27,7 @@ test("5 parallel version() calls on one Client never overlap: the CLI log altern
   });
 }, 30_000);
 
-// Fake tmux does not execute Cursor: this covers generic client transport and results.
+// Fake tmux does not execute Cursor; a controlled real process owns its pending pane identity.
 test.each([
   ["direct, empty args", false, []],
   ["direct, model args", false, ["--model", "auto"]],
@@ -35,6 +35,10 @@ test.each([
   ["template, empty args", true, []],
 ] as [string, boolean, string[] | undefined][])("Cursor %s uses existing spawn/get/list/status/subagent methods", async (_label, template, agentArgs) => {
   await withTempHome(async (homeDir) => {
+    await withProcessEnv({ TMUX_TMPDIR: homeDir, FAKE_TMUX_TABLES: path.join(homeDir, "fake-tmux-tables") }, async () => {
+    const owner = Bun.spawn(["sleep", "3600"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    try {
+    const identity = runHelper("fake-pane-owner", { pid: String(owner.pid) });
     const storePath = homeStore(homeDir);
     seedOuterParent(storePath);
     using client = await openClient(storePath);
@@ -62,6 +66,12 @@ test.each([
     expect(status.state).toBe("pending");
     expect(Object.keys(status).sort()).toEqual(["launch_started_at", "state"]);
     expect(await client.listSubagents({ instance_id: spawned.instance_id })).toEqual({ tracked: false, subagents: [] });
+    expect(runHelper("fake-pane-owner", { pid: String(owner.pid), store: storePath, id: spawned.instance_id })).toEqual(identity);
+    } finally {
+      owner.kill();
+      await owner.exited;
+    }
+    });
   });
 }, 30_000);
 

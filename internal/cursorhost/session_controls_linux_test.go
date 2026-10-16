@@ -38,18 +38,37 @@ func TestCursorFIFOExactTextAndLifecycle(t *testing.T) {
 	if got := c.prompts(t); !reflect.DeepEqual(got, texts[:1]) {
 		t.Fatalf("overlap before initial outcome: %q", got)
 	}
+	var admitted []submissionRecord
+	for _, r := range c.records(t) {
+		if r.Kind == "submission_accepted" {
+			admitted = append(admitted, r)
+		}
+	}
+	defer func() {
+		if t.Failed() {
+			t.Logf("FIFO accepted before release=%+v records=%+v peer=%+v", admitted, c.records(t), c.e.runtime.Frames(t))
+		}
+	}()
 	if err := os.WriteFile(c.e.runtime.Release, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	c.wait(t, "all FIFO outcomes", func() bool {
-		n := 0
-		for _, r := range c.records(t) {
-			if r.Kind == "turn_outcome" {
-				n++
+	for _, accepted := range admitted {
+		c.wait(t, "FIFO outcome for "+accepted.Data.ID+" text="+fmt.Sprintf("%q", accepted.Data.Text), func() bool {
+			request := ""
+			for _, r := range c.records(t) {
+				if r.Data.ID != accepted.Data.ID {
+					continue
+				}
+				if r.Kind == "submission_started" {
+					request = r.Data.Request
+				}
+				if r.Kind == "turn_outcome" && request != "" && r.Data.Request == request {
+					return true
+				}
 			}
-		}
-		return n == 4
-	})
+			return false
+		})
+	}
 	c.stop(t)
 	if got := c.prompts(t); !reflect.DeepEqual(got, texts) {
 		t.Fatalf("FIFO exact text: %q want %q", got, texts)
@@ -88,6 +107,9 @@ func TestCursorFIFOExactTextAndLifecycle(t *testing.T) {
 				t.Fatalf("uncorrelated output %+v", r)
 			}
 			if r.Kind == "turn_outcome" {
+				if outcomes[r.Data.ID] {
+					t.Fatalf("duplicate outcome %+v", r)
+				}
 				outcomes[r.Data.ID] = true
 			}
 		}

@@ -1,0 +1,6 @@
+{
+  "reviewer": "/root/apiary_code_reviewer_e3_bounded_closeout",
+  "source_findings": [],
+  "checked": "Zero-write-lock-wait, shareddeadline, atomicclosure, confirmed/unconfirmedCOMMITpublication, boundedworkerpayloadsynchronization, failopenauditorder, Listfilter/limitafterreconcile",
+  "limitation": "Read-only/no execution; heldtrailpublicreadtestownedindependentTestWriter;TLA notapplicable no modelschanged"
+}

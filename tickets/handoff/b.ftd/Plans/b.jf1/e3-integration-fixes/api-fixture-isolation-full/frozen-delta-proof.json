@@ -1,0 +1,146 @@
+{
+  "original": [
+    {
+      "path": "internal/cursorhost/session_e3_regression_linux_test.go",
+      "old": "a3e01f5e863957b990f20dc74e42b9915240ef8788533e41e2b3706043a9612b",
+      "actual": "a3e01f5e863957b990f20dc74e42b9915240ef8788533e41e2b3706043a9612b",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "internal/testsupport/cursorfix/cursorfix.go",
+      "old": "56060e8925cd9d25ced035f7329d6edfd0b182f38d624ac6a3300b2a7c0dbae8",
+      "actual": "56060e8925cd9d25ced035f7329d6edfd0b182f38d624ac6a3300b2a7c0dbae8",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "internal/testsupport/cursorfix/runtime.js",
+      "old": "1c4f2c5226dd4c5b8823877745c03640bc78f504cefb0b37f33b52b37081facb",
+      "actual": "1c4f2c5226dd4c5b8823877745c03640bc78f504cefb0b37f33b52b37081facb",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "internal/testsupport/cursorfix/testdata/authorizations.json",
+      "old": "6b3557dd7fab4833c3b50511ecce9661a647fbcc49f025c42104f6dd57bd2baa",
+      "actual": "6b3557dd7fab4833c3b50511ecce9661a647fbcc49f025c42104f6dd57bd2baa",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/sandbox-command.sh",
+      "old": "c6dda21d057036b0806bdbb3d8d3914e0a91f692a3452fff037d188e902c0f10",
+      "actual": "c6dda21d057036b0806bdbb3d8d3914e0a91f692a3452fff037d188e902c0f10",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/launch.py",
+      "old": "98ec753e02bedc730837f6bbe23fa0773b793e53018e9194f2e79e8e3363c457",
+      "actual": "98ec753e02bedc730837f6bbe23fa0773b793e53018e9194f2e79e8e3363c457",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/container.env",
+      "old": "aa5a89307d3b4de46e2deab502044f0e55e5aa261375ed31f8297df24053cbd7",
+      "actual": "aa5a89307d3b4de46e2deab502044f0e55e5aa261375ed31f8297df24053cbd7",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "pkg/api/cursor_liveness_lock_test.go",
+      "old": "e3caa9162cec48db15fde5dcfce40149594866dc1f14c4e36fd7ac78ccf10122",
+      "actual": "3c4e775ee0a589756f8a839e3c856fe86e3255717945fca1c9f62999d0f80271",
+      "unchanged": false,
+      "authorized_exception": "current explicitly accepted test-only correction"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/read-lock-red/sandbox-command.sh",
+      "old": "d600799d6d5df5a8ae4a04a94c8e4c513fce01324c4726b79bc9fd207f04dc52",
+      "actual": "d600799d6d5df5a8ae4a04a94c8e4c513fce01324c4726b79bc9fd207f04dc52",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "pkg/api/cursor_liveness_list_test.go",
+      "old": "e745e2baaec66e43fcdb05975821c2f97340d72a6f19870e983c076ac8518ac5",
+      "actual": "cfe4c22e8715adff038d3c4ee447d28a7e25190b1941f9a79c959ee03abbd9c4",
+      "unchanged": false,
+      "authorized_exception": "prior List absence control"
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/list-red/sandbox-command.sh",
+      "old": "70e89bec7f1350f524b290538dca7283fedccc56706184ead26b61eb0630b52e",
+      "actual": "70e89bec7f1350f524b290538dca7283fedccc56706184ead26b61eb0630b52e",
+      "unchanged": true,
+      "authorized_exception": null
+    }
+  ],
+  "new_red": [
+    {
+      "path": "pkg/api/cursor_liveness_test.go",
+      "old": "11fbac87051bb024b9a6dc2c2669fe27de0ac5f896db7483fa8e65c138a08306",
+      "actual": "11fbac87051bb024b9a6dc2c2669fe27de0ac5f896db7483fa8e65c138a08306",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "pkg/api/cursor_liveness_list_test.go",
+      "old": "cfe4c22e8715adff038d3c4ee447d28a7e25190b1941f9a79c959ee03abbd9c4",
+      "actual": "cfe4c22e8715adff038d3c4ee447d28a7e25190b1941f9a79c959ee03abbd9c4",
+      "unchanged": true,
+      "authorized_exception": "prior List absence control"
+    },
+    {
+      "path": "pkg/api/cursor_startup_liveness_test.go",
+      "old": "517bcef67ad911348fb077ac1e8e757ef9797f2723adcc5a0ee8b03562fbe389",
+      "actual": "e7f251e44a7d67da1b2ca53639bc1c33a5daab91c312060e432ba021759cb596",
+      "unchanged": false,
+      "authorized_exception": "current explicitly accepted test-only correction"
+    },
+    {
+      "path": "internal/store/cursor_startup_liveness_test.go",
+      "old": "da747331c90e48ee3d4a331930be204f1ec3fe0bba9b4f161dfdc9ddc9b8a17c",
+      "actual": "da747331c90e48ee3d4a331930be204f1ec3fe0bba9b4f161dfdc9ddc9b8a17c",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "test/realtmux/cursor_startup_liveness_linux_test.go",
+      "old": "503f33743ff1de0bf3413250e073e96e8ea9e6a517910b6140180ac3beb13178",
+      "actual": "503f33743ff1de0bf3413250e073e96e8ea9e6a517910b6140180ac3beb13178",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/sandbox-command.sh",
+      "old": "a6637e1f4ad7f5772f8e3cfbc13aecf93aaa80378eba2c91f26574b1d85bdcc0",
+      "actual": "a6637e1f4ad7f5772f8e3cfbc13aecf93aaa80378eba2c91f26574b1d85bdcc0",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/targeted-command.sh",
+      "old": "4c12ab6df34eb12e5d91e0321976c8d56910eca32db7d3c16abf8d81c3d6338e",
+      "actual": "4c12ab6df34eb12e5d91e0321976c8d56910eca32db7d3c16abf8d81c3d6338e",
+      "unchanged": true,
+      "authorized_exception": null
+    },
+    {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/proof.cjs",
+      "old": "8bee2371af40df31103c324f097b2bd45130fa073234ddf11d4078d14e9166db",
+      "actual": "8bee2371af40df31103c324f097b2bd45130fa073234ddf11d4078d14e9166db",
+      "unchanged": true,
+      "authorized_exception": null
+    }
+  ],
+  "old_manifests_modified": false,
+  "sendkeys_baseline": {
+    "path": "pkg/api/sendkeys_hold_test.go",
+    "old": "e3e9a8bcd482320a9af63052bee60d2bf079b3563f0659e1e9a754bf1f608cd7",
+    "new": "a2ff0b124d752b75272a41ea4e1b786e4183a1955c32520c0f86502f44dedc01"
+  },
+  "note": "sendkeys_hold_test.go is outside the 11-entry original RED manifest; its exact pre-edit hash and scheduling-only patch are recorded separately."
+}

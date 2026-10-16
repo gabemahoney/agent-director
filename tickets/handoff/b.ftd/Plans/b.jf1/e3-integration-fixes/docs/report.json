@@ -1,0 +1,45 @@
+{
+  "status": "settled documentation pass complete",
+  "ticket_ids_handled": [
+    "t1.ftd.hj"
+  ],
+  "ticket_status_changes": [],
+  "SRD_append": {
+    "result": "success; exact chunk read back as body suffix",
+    "status_preserved": "defined",
+    "chunk": "srd-chunk.md"
+  },
+  "files_changed": [
+    "docs/caller-contract.md",
+    "docs/operator-actions.md",
+    "docs/architecture.md"
+  ],
+  "evidence_reviewed": [
+    "triage/analysis.md",
+    "red/report.json",
+    "engineer/report.json",
+    "engineer/proposed-decisions.json",
+    "green-guards/report.json",
+    "code-review.json"
+  ],
+  "verification": [
+    "Read exact five product-source changes and settled evidence reports",
+    "Documentation diff inspected",
+    "git diff --check for three documentation files passed",
+    "SRD exact appended suffix and unchanged defined status verified"
+  ],
+  "deviations": [],
+  "incomplete_work": [],
+  "not_run": [
+    "tests/full suite (later role owns)",
+    "live Cursor/O4 (awaits user gate)"
+  ],
+  "source_or_test_files_modified": [],
+  "commits": [],
+  "questions": [],
+  "limitations": [
+    "Rejected live update envelope remains absent; synthetic fixture proves source defect, not historical wire shape",
+    "Scoped RED/GREEN and guard receipts do not establish full suite or live O4 acceptance",
+    "No forbidden paths read/copied/hashed or host runtime data inspected"
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "status": "failed or incomplete",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "canonical_files_changed": [],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full",
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "full_run_count": 1,
+  "head": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "make_exit": 2,
+  "go": {
+    "passed": 66,
+    "cached": 40,
+    "fresh": 26,
+    "failed": 2,
+    "no_test_files": 13,
+    "packages_reported": 81,
+    "test_skips": "Not observable in default nonverbose successful go test output; no skip count claimed."
+  },
+  "bun": {
+    "passed": 426,
+    "failed": 4,
+    "skipped": null,
+    "todo": null,
+    "summary": "Ran 430 tests across 57 files. [16.23s]"
+  },
+  "missing_package_results": [],
+  "proof": {
+    "unchanged": true,
+    "changes": [],
+    "before_manifest_sha256": "f99b4d4937789a2e0c85d17b72c0b202eb37f3f4492cc07b7c46cbfbfbf56eb1",
+    "after_manifest_sha256": "f99b4d4937789a2e0c85d17b72c0b202eb37f3f4492cc07b7c46cbfbfbf56eb1",
+    "frozen_matches": 11,
+    "source_matches": 11,
+    "trail_unchanged": true
+  },
+  "held_trail_test": {
+    "path": "pkg/api/cursor_liveness_trail_deadline_test.go",
+    "sha256": "e4835ae2ea9808d1ee0b468b69d3d6487a51e7c7d46fe6c55f3dd88107650a21"
+  },
+  "raw_log": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full/full.log",
+    "mode": "600",
+    "bytes": 55887,
+    "sha256": "f29f0ff64eb046ef6f8b3e42ec980e722cfc4d816091b6c8c13abb04ab7c5ad2"
+  },
+  "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full/run.json",
+  "deviations": [
+    "Initial explicit read-only checkout/report reads used host inspection before switching metadata execution to make sandbox; no repo tests/builds/binaries ran on host, and no .claude or host agent-director store path was accessed."
+  ],
+  "limitations": [
+    "Bare make output does not expose individual Go/Bun numeric exit codes; make aggregate exit is directly captured.",
+    "Successful nonverbose Go output does not expose per-test skip counts.",
+    "No live Cursor/O4, integration suites, Docker epic groups, formal/model jobs or retries run."
+  ],
+  "incomplete_work": [
+    "Caller must route actual captured failures; no unchanged rerun performed."
+  ],
+  "questions": [],
+  "failure_assertions": [
+    "--- FAIL: TestCursorFIFOExactTextAndLifecycle (4.07s)",
+    "    session_controls_linux_test.go:44: all FIFO outcomes: frame count=5 pane tail=\u001b[?2004hCursor gateway: starting a fresh conversation\r",
+    "--- FAIL: TestCursorIndependentPaneVerifierRejectsChangedOwnership (2.83s)",
+    "    --- FAIL: TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced (0.67s)",
+    "        cursor_launch_test.go:562: verifier mutated row",
+    "--- FAIL: TestCursorRelayHeldCancellationDeadline (12.58s)",
+    "    --- FAIL: TestCursorRelayHeldCancellationDeadline/interrupt (4.69s)",
+    "        cursor_relay_boundary_linux_test.go:294: conversation/hold changed before termination: {ParentID:<nil> State:missing CWD:/tmp/TestCursorRelayHeldCancellationDeadlineinterrupt1199948908/003 TmuxSessionName:003-cursor-5 AgentArgs:[] RelayMode:on JSONLPath:/tmp/TestCursorRelayHeldCancellationDeadlineinterrupt1199948908/001/.config/agent-director/cursor-transcripts/70b27b841e78908463b1b27f85167a55.jsonl SessionID:8808822c-5a2b-4be6-8406-405cd727229e Labels:{} StartedAt:2026-10-16 07:46:55 LastSeenAt:2026-10-16 07:46:58 EndedAt:2026-10-16 07:46:58 PID:171207 ProcStarttime:442759701 LivenessUnverifiedSince:<nil> LivenessNote:<nil> ExtraEnv:{} RowVersion:6 LaunchStartedAt:<nil> LifeNumber:0 NoPreTrust:1 LaunchToken:8c8aba3eeae459f2 TmuxSocket:/tmp/rt2785907498/tmux-1000/default TmuxServerPID:171206 TmuxServerStarted:1792136815 TmuxServerStarttime:442759701 PaneID:%0 PanePID:171207 PaneStarttime:442759701 LaunchOwnerPID:<nil> LaunchOwnerStarttime:<nil> LaunchOwnerPIDNS:<nil> IdleSince:<nil> Agent:cursor EndReportedAt:<nil> SubagentTracking:0}",
+    "ErrInternal: ErrInternal: Cursor lost gateway has no current runtime binding",
+    "(fail) Cursor direct, empty args uses existing spawn/get/list/status/subagent methods [32.00ms]",
+    "ErrInternal: ErrInternal: Cursor lost gateway has no current runtime binding",
+    "(fail) Cursor direct, model args uses existing spawn/get/list/status/subagent methods [27.00ms]",
+    "ErrInternal: ErrInternal: Cursor lost gateway has no current runtime binding",
+    "(fail) Cursor template, absent args uses existing spawn/get/list/status/subagent methods [31.00ms]",
+    "ErrInternal: ErrInternal: Cursor lost gateway has no current runtime binding",
+    "(fail) Cursor template, empty args uses existing spawn/get/list/status/subagent methods [32.00ms]",
+    "(fail) Cursor direct, empty args uses existing spawn/get/list/status/subagent methods [32.00ms]",
+    "(fail) Cursor direct, model args uses existing spawn/get/list/status/subagent methods [27.00ms]",
+    "(fail) Cursor template, absent args uses existing spawn/get/list/status/subagent methods [31.00ms]",
+    "(fail) Cursor template, empty args uses existing spawn/get/list/status/subagent methods [32.00ms]"
+  ],
+  "failure_evidence": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full/failure-excerpts.json",
+  "failure_classification": "Observed behavioral failures only; caller routes source or test corrections. No fixes or reruns performed in this dispatch.",
+  "bun_failure_file": "pkg/ts-bun-client/test/client-serialization.test.ts",
+  "bun_observed_skip_lines": 0,
+  "compiled_inventory": {
+    "go_source_files": 1060,
+    "canonical_go_files_excluded": 55,
+    "policy": "go list selected files only; underscore snapshots, historical Go files and platform-excluded files are not claimed as compiled"
+  },
+  "integration_run": "Not dispatched; no integration suite command run."
+}

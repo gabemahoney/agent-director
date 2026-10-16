@@ -1,0 +1,91 @@
+BUILDAH_ISOLATION=chroot docker build \
+	--network=host \
+	-t agent-director-sandbox \
+	-f test/sandbox/Dockerfile \
+	test/sandbox
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 8.30kB done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/debian:bookworm-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+#3 DONE 0.0s
+
+#4 [1/3] FROM docker.io/library/debian:bookworm-slim
+#4 DONE 0.0s
+
+#5 [2/3] RUN apt-get update  && apt-get install -y --no-install-recommends         build-essential         ca-certificates         curl         git         jq         make         procps         sqlite3         tmux         unzip         xz-utils  && rm -rf /var/lib/apt/lists/*  && arch=$(dpkg --print-architecture)  && case "$arch" in         amd64) node_arch="x64";   node_sha256="315046739a513a70e03a4a55a8afda8cf979f30852e576075c340084e3f8ac0f" ;;         arm64) node_arch="arm64"; node_sha256="d462267863ae8ee556039ebdf559055a8ec562c633889ef1403f3adb449ba1dd" ;;         *) echo "ERROR: no pinned NODE_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v20.19.5/node-v20.19.5-linux-${node_arch}.tar.xz"  && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c -  && tar -C /usr/local --strip-components=1 -xJf /tmp/node.tar.xz  && rm /tmp/node.tar.xz  && node --version  && case "$arch" in         amd64) go_sha256="736ce492a19d756a92719a6121226087ccd91b652ed5caec40ad6dbfb2252092" ;;         arm64) go_sha256="5213c5e32fde3bd7da65516467b7ffbfe40d2bb5a5f58105e387eef450583eec" ;;         *) echo "ERROR: no pinned GO_SHA256 for arch=$arch" >&2; exit 1 ;;     esac  && curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go1.22.10.linux-${arch}.tar.gz"  && echo "${go_sha256}  /tmp/go.tgz" | sha256sum -c -  && tar -C /usr/local -xzf /tmp/go.tgz  && rm /tmp/go.tgz  && ln -s /usr/local/go/bin/go /usr/local/bin/go  && go version  && curl -fsSL -o /tmp/bun-install.sh https://bun.sh/install  && echo "04882bf41679d49d9af108657a1e5515bf04fdf2940d12c0d0b1e5d79dc53be8  /tmp/bun-install.sh" | sha256sum -c -  && BUN_INSTALL=/opt/bun bash /tmp/bun-install.sh "bun-v1.3.13"  && rm /tmp/bun-install.sh  && ln -s /opt/bun/bin/bun /usr/local/bin/bun  && bun --version  && useradd --create-home --shell /bin/bash --uid 1000 sandbox  && mkdir -p /home/sandbox/go /home/sandbox/.cache/go-build /home/sandbox/.bun/install/cache  && chgrp -R 0 /home/sandbox  && chmod -R g=u /home/sandbox
+#5 CACHED
+
+#6 [3/3] WORKDIR /work
+#6 CACHED
+
+#7 exporting to image
+#7 exporting layers done
+#7 writing image sha256:aa4a3e37e9b2c3200102e2c6d7ed274fe88035a7308c4591c16cef3356ea46ca done
+#7 naming to docker.io/library/agent-director-sandbox done
+#7 DONE 0.0s
+[sandbox] engine=docker net='--network=host' pid='' uidmap='--user 1000:1000 --group-add 0' extra='--env-file /home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/container.env -e AGENT_DIRECTOR_SANDBOX_CMD'
+docker run --rm --network=host  --user 1000:1000 --group-add 0 -e AGENT_DIRECTOR_TEST_SANDBOX=1 -v "/home/horde/ad-codex/project/agent-director-ftd":/work -v "/home/horde/ad-codex/project/agent-director-bssz/.git:/home/horde/ad-codex/project/agent-director-bssz/.git" -v "/home/horde/go/pkg/mod":/go/pkg/mod -v "/home/horde/.cache/go-build":/home/sandbox/.cache/go-build -v "/home/horde/.bun":/home/sandbox/.bun --env-file /home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/container.env -e AGENT_DIRECTOR_SANDBOX_CMD -w /work agent-director-sandbox bash -c 'exec bash -c "${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/tool_array
+    session_e3_regression_linux_test.go:87: real plan token after same-session update: session ended Cursor update session mismatch; pane=[?2004hCursor gateway: starting a fresh conversation
+        Cursor ready
+        > [2K> s[2K> sc[2K> scr[2K> scri[2K> scrip[2K> script[2K> scripte[2K> scripted
+        Cursor submission 1 accepted
+        [?2004l
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/tool_empty_array
+    session_e3_regression_linux_test.go:87: real plan token after same-session update: session ended Cursor update session mismatch; pane=[?2004hCursor gateway: starting a fresh conversation
+        Cursor ready
+        > [2K> s[2K> sc[2K> scr[2K> scri[2K> scrip[2K> script[2K> scripte[2K> scripted
+        Cursor submission 1 accepted
+        [?2004l
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/tool_null
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/tool_omitted
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/ordinary_text
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/foreign_update
+=== RUN   TestCursorE3ToolUpdateBeforePlanAdmission/malformed_text
+--- FAIL: TestCursorE3ToolUpdateBeforePlanAdmission (1.67s)
+    --- FAIL: TestCursorE3ToolUpdateBeforePlanAdmission/tool_array (0.54s)
+    --- FAIL: TestCursorE3ToolUpdateBeforePlanAdmission/tool_empty_array (0.17s)
+    --- PASS: TestCursorE3ToolUpdateBeforePlanAdmission/tool_null (0.20s)
+    --- PASS: TestCursorE3ToolUpdateBeforePlanAdmission/tool_omitted (0.20s)
+    --- PASS: TestCursorE3ToolUpdateBeforePlanAdmission/ordinary_text (0.21s)
+    --- PASS: TestCursorE3ToolUpdateBeforePlanAdmission/foreign_update (0.17s)
+    --- PASS: TestCursorE3ToolUpdateBeforePlanAdmission/malformed_text (0.18s)
+=== RUN   TestCursorE3FatalRunClosesMissing
+=== RUN   TestCursorE3FatalRunClosesMissing/DIE
+    session_e3_regression_linux_test.go:180: fatal Run returned: Cursor ACP transport failed; child termination must be confirmed separately
+    session_e3_regression_linux_test.go:191: fatal Run completed and owned runtime gone but row=working; want missing
+=== RUN   TestCursorE3FatalRunClosesMissing/malformed_update
+    session_e3_regression_linux_test.go:180: fatal Run returned: Cursor update session mismatch
+    session_e3_regression_linux_test.go:191: fatal Run completed and owned runtime gone but row=check_permission; want missing
+    session_e3_regression_linux_test.go:196: fatal Run did not close admitted request: [{RequestID:1 InstanceID:report-row RequestToken:23fef1a7ccb69add0b8d08de6fdd1aba ToolName:Synthetic action ToolInput:{"options":[{"kind":"allow_once","name":"Allow once","optionId":"allow-once"},{"kind":"allow_always","name":"Allow always","optionId":"allow-always"},{"kind":"reject_once","name":"Reject","optionId":"reject-once"}],"sessionId":"synthetic-session-1","toolCall":{"kind":"execute","rawInput":null,"status":"pending","title":"Synthetic action","toolCallId":"genuine"}} Decision: DecisionReason: DecidedAt:0001-01-01 00:00:00 +0000 UTC CreatedAt:2026-10-16 07:04:07 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 07:04:07.638 +0000 UTC HookGoneAt:0001-01-01 00:00:00 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}] <nil>
+--- FAIL: TestCursorE3FatalRunClosesMissing (0.36s)
+    --- FAIL: TestCursorE3FatalRunClosesMissing/DIE (0.17s)
+    --- FAIL: TestCursorE3FatalRunClosesMissing/malformed_update (0.19s)
+=== RUN   TestCursorE3PublicReadsReconcileKilledGateway
+=== RUN   TestCursorE3PublicReadsReconcileKilledGateway/Get
+    session_e3_regression_linux_test.go:321: exact gateway 2340/442502947 and runtime 2743/442502983 gone after gateway-only SIGKILL
+    session_e3_regression_linux_test.go:336: Get after exact owned death=check_permission err=<nil>; want missing without FindMissing
+    session_e3_regression_linux_test.go:338: Status after exact owned death=check_permission err=<nil>; want missing without FindMissing
+    session_e3_regression_linux_test.go:344: dead launch request not transactionally closed: [{RequestID:1 InstanceID:report-row RequestToken:de30a5922950b4a755a3e8d2628bbd4a ToolName:Synthetic action ToolInput:{"options":[{"kind":"allow_once","name":"Allow once","optionId":"allow-once"},{"kind":"allow_always","name":"Allow always","optionId":"allow-always"},{"kind":"reject_once","name":"Reject","optionId":"reject-once"}],"sessionId":"synthetic-session-1","toolCall":{"kind":"execute","rawInput":null,"status":"pending","title":"Synthetic action","toolCallId":"genuine"}} Decision: DecisionReason: DecidedAt:0001-01-01 00:00:00 +0000 UTC CreatedAt:2026-10-16 07:04:08 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 07:04:08.161 +0000 UTC HookGoneAt:2026-10-16 07:04:08.179 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}] <nil>
+    session_e3_regression_linux_test.go:350: Get after exact owned death=check_permission err=<nil>; want missing without FindMissing
+=== RUN   TestCursorE3PublicReadsReconcileKilledGateway/Status
+    session_e3_regression_linux_test.go:321: exact gateway 2866/442503001 and runtime 3281/442503035 gone after gateway-only SIGKILL
+    session_e3_regression_linux_test.go:336: Status after exact owned death=check_permission err=<nil>; want missing without FindMissing
+    session_e3_regression_linux_test.go:340: Get after exact owned death=check_permission err=<nil>; want missing without FindMissing
+    session_e3_regression_linux_test.go:344: dead launch request not transactionally closed: [{RequestID:1 InstanceID:report-row RequestToken:dc8c5e48a2368cfadd3c96bcecabd103 ToolName:Synthetic action ToolInput:{"options":[{"kind":"allow_once","name":"Allow once","optionId":"allow-once"},{"kind":"allow_always","name":"Allow always","optionId":"allow-always"},{"kind":"reject_once","name":"Reject","optionId":"reject-once"}],"sessionId":"synthetic-session-1","toolCall":{"kind":"execute","rawInput":null,"status":"pending","title":"Synthetic action","toolCallId":"genuine"}} Decision: DecisionReason: DecidedAt:0001-01-01 00:00:00 +0000 UTC CreatedAt:2026-10-16 07:04:08 +0000 UTC Hook:{PID:0 Starttime: PIDNamespace:} ToolUseID:genuine AgentID: MainTurnEndEligible:false DeliveredAt:0001-01-01 00:00:00 +0000 UTC SettledAt:2026-10-16 07:04:08.679 +0000 UTC HookGoneAt:2026-10-16 07:04:08.699 +0000 UTC AttemptedDecision: AttemptedAt:0001-01-01 00:00:00 +0000 UTC PaneAnswer:none PaneAs: PaneSender:{PID:0 Starttime: PIDNamespace:} PaneIntentAt:0001-01-01 00:00:00 +0000 UTC ClosedAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneAt:0001-01-01 00:00:00 +0000 UTC ProvenGoneHow:}] <nil>
+    session_e3_regression_linux_test.go:350: Status after exact owned death=check_permission err=<nil>; want missing without FindMissing
+--- FAIL: TestCursorE3PublicReadsReconcileKilledGateway (1.06s)
+    --- FAIL: TestCursorE3PublicReadsReconcileKilledGateway/Get (0.54s)
+    --- FAIL: TestCursorE3PublicReadsReconcileKilledGateway/Status (0.52s)
+FAIL
+FAIL	github.com/gabemahoney/agent-director/internal/cursorhost	3.094s
+FAIL
+make: *** [Makefile:735: sandbox] Error 1

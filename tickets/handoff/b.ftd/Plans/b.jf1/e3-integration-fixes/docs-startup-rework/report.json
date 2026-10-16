@@ -1,0 +1,64 @@
+{
+  "status": "Documentation rework complete; exact proposed SRD chunk pending root append and verification",
+  "ticket_ids_context": ["b.jf1", "t1.jf1.r8", "t2.jf1.r8.a8", "t1.ftd.hj"],
+  "ticket_status_changes": [],
+  "files_changed": [
+    "docs/caller-contract.md",
+    "docs/operator-actions.md",
+    "docs/architecture.md"
+  ],
+  "handoff_files_created": [
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/docs-startup-rework/srd-chunk.md",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/docs-startup-rework/report.json"
+  ],
+  "behavior_documented": [
+    "Exact recorded gateway Gone plus observed no registration permits the explicit pre-registration missing path; Alive/Unknown remains untouched.",
+    "Complete examined snapshot/token/life/gateway/session guards and transactional NOT EXISTS for ANY runtime binding protect the absent-binding close, including binding insertion races and stale registrations.",
+    "Existing nonempty stale bindings and unresolved conflicts on the same dead launch continue to refuse; replacement/terminal rows use normal reread.",
+    "Missing proves gateway loss only; no fabricated runtime identity/death/retirement, intentional ended or SessionEnd.",
+    "Existing nonblocking bounded common transaction, atomic request/subagent closure, rollback and fail-open ordered audit retained; no whole-read deadline promise.",
+    "Existing variant-scoped tool/unknown-content decode, fatal verified-death cleanup and public Get/Status/List descriptions preserved."
+  ],
+  "evidence_reviewed": [
+    "docs-rework/report.json",
+    "docs-rework/srd-chunk.md",
+    "full-state-triage/report.json",
+    "full-fifo-triage/report.json",
+    "full-fixture-startup-red/report.json",
+    "startup-engineer/report.json",
+    "startup-code-review.json",
+    "full/report.json"
+  ],
+  "source_reviewed": ["pkg/api/cursor_liveness.go", "internal/store/cursor_runtime.go"],
+  "fixture_evidence_reviewed": [
+    "Named test/fixture symbols and assertions in internal/cursorhost/session_controls_linux_test.go, test/realtmux/cursor_launch_test.go, test/realtmux/cursor_relay_boundary_linux_test.go, pkg/ts-bun-client/test/client-serialization.test.ts, test/smoke/ts-helper/fake_pane_owner.go, pkg/api/cursor_startup_liveness_test.go, internal/store/cursor_startup_liveness_test.go and test/realtmux/cursor_startup_liveness_linux_test.go.",
+    "SRD chunk records controlled live fake-pane identity, post-shutdown strict verifier baseline, permission holds until independent exact process-loss proof and per-outcome FIFO waits with all follow-ups admitted before HOLD release."
+  ],
+  "checks": [
+    "Read root CLAUDE.md and user/readme/architecture documentation guides.",
+    "Reviewed documentation diff and preserved existing integration changes.",
+    "git diff --check for three documentation files passed through literal make sandbox with sanitized environment; no tests or product binaries executed.",
+    "Final sandbox metadata checks validate handoff trailing whitespace/final newlines and parse report JSON."
+  ],
+  "SRD_append": {
+    "ticket": "t1.ftd.hj",
+    "chunk": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/docs-startup-rework/srd-chunk.md",
+    "status": "proposed; pending root append and exact readback verification",
+    "executor": "root using authorized host Bees",
+    "supersedes": "Previous blanket absent-binding error wording only; existing stale/nonempty binding checks remain strict"
+  },
+  "deviations": [
+    "Named read-only host cat/rg/git inspections used for documentation, source and handoff evidence; repository code/scripts/tests/binaries were not executed on host. File edits used apply_patch. Repository verification ran only through sanitized literal make sandbox.",
+    "No ticket status changes per explicit dispatch. Bees not attempted or installed; root owns the SRD append and verification.",
+    "Initial final-check command stopped at git diff --no-index --check because a new-file comparison returns 1; no whitespace diagnostic appeared. Replaced that handoff check with explicit whitespace validation and JSON parsing."
+  ],
+  "incomplete_work": ["Root must append the exact proposed SRD chunk and verify readback; this lane does not claim the ticket metadata has been updated."],
+  "not_run": ["tests or full suite", "integration Docker groups/collector/testimage", "TLC/java/formal/parser/scheduler", "live Cursor/O4"],
+  "limitations": [
+    "First full failed/incomplete run remains retained; focused GREEN is not full-suite/integration/live acceptance.",
+    "Rejected historical live envelope is unavailable; exact historical wire shape remains UNKNOWN and no live-fix PASS is claimed."
+  ],
+  "source_or_test_files_modified": [],
+  "commits": [],
+  "questions": []
+}

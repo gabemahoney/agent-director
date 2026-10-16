@@ -128,6 +128,11 @@ func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (
 func (s *Store) withConn(maxWait time.Duration, fn func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error) error {
 	ctx, cancel := s.operationContext(maxWait)
 	defer cancel()
+	return s.withConnContext(ctx, maxWait, fn)
+}
+
+// withConnContext retains an operation's deadline through SQL and cleanup.
+func (s *Store) withConnContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn, int, *connectionCleanup) error) error {
 	if ctx.Done() != nil {
 		return s.runConnectionOperation(ctx, maxWait, func(op *connectionOperation) error {
 			return s.withConnOperation(ctx, maxWait, op, fn)
@@ -218,7 +223,14 @@ func (s *Store) readWithin(maxWait time.Duration, errPrefix string, fn func(ctx 
 // read the durable request rather than assume that nothing was written. fn
 // must use conn alone (see withConn).
 func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, conn *sql.Conn) error) error {
-	return s.withConn(maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
+	ctx, cancel := s.operationContext(maxWait)
+	defer cancel()
+	return s.inWriteTxContext(ctx, maxWait, fn)
+}
+
+// inWriteTxContext allows post-commit work to share the transaction's deadline.
+func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
+	return s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
 		if err := beginWithin(ctx, conn, busyMs); err != nil {
 			if isBusy(err) || ctx.Err() != nil {
 				return fmt.Errorf("%w: the write lock was not free within %d ms: %w", ErrStoreBusy, busyMs, err)

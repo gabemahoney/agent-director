@@ -1,0 +1,53 @@
+{
+  "baseline": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "branch": "feature/b.ftd",
+  "scope": "User-authorized Epic3 live defects; Epic remains active, Task3 stays done",
+  "plan_update": {
+    "cause": "Nested session/update decoded every content variant as a text struct; same-session tool_call_update arrays caused JSON decoding errors mislabeled session mismatch. Decode text only for actual text variants; preserve protected tool/unknown content and existing session/connection attribution gates.",
+    "historical_limit": "Protected records reach same-main createPlan then submission_unconfirmed; rejected raw envelope absent. Exact historical wire shape remains unknown; fixture proves a concrete matching error mechanism, not recovered wire.",
+    "red_green": "red/report.json -> engineer/report.json and green-guards/report.json; frozen causal tool/fatal/SIGKILL regressions unchanged"
+  },
+  "gateway_death": {
+    "fix": "Fatal Run verifies exact runtime termination and conditionally closes missing; public Client Get/Status/List reconcile exact recorded gateway loss using guarded atomic row/request/subagent closure. No screen inference or fabricated intentional ended.",
+    "startup": "Exact dead gateway before registration uses examined absence and transactional NOT EXISTS ANY binding. Alive/unknown, stale binding, replacement and newly inserted binding are protected.",
+    "deadline": "No writer-lock wait; existing single operation context spans SQL/cleanup/fail-open postcommit audit. Confirmed commits remain confirmed. No whole-read one-second promise.",
+    "proof": "red, list-red, read-lock-red, full-fixture-startup-red reports retain RED; green-guards, bounded-green, startup-engineer reports retain GREEN"
+  },
+  "full_validation": {
+    "result": "PASS",
+    "receipt": "api-fixture-isolation-full/report.json",
+    "make_exit": 0,
+    "go_packages_passed": 68,
+    "go_cached": 62,
+    "go_fresh": 6,
+    "go_no_tests": 13,
+    "bun_passed": 430,
+    "bun_failed": 0,
+    "canonical_inputs": 1796,
+    "manifest_sha256": "47dbf66debdcb6c9700c29b2bd1ad79fc5c070019b8231645aa4c2868e71cdd1",
+    "inputs_unchanged": true,
+    "prior_failed_runs_retained": [
+      "full/report.json",
+      "startup-final-full/report.json",
+      "expiry-fixture-full/report.json"
+    ]
+  },
+  "fixture_corrections": "Controlled live fake pane identity; verifier baseline after independently committed shutdown; cancellation terminal boundary backed by exact process evidence; per-correlated-outcome FIFO waits after all prompts queued; fixed-deadline expiry oracle; isolated deadline-sensitive real-SQL fixtures/prewarmed WAL reader; removed unsupported whole-API timing assertion. Product deadlines and no-retry contract unchanged. Historical resource cause unproven; all frozen exceptions have exact deltas.",
+  "review": "code-review.json, bounded-code-review.json and startup-code-review.json report no unresolved source findings",
+  "srd": "t1.ftd.hj technical decisions appended and exact readback verified; status defined",
+  "next_gate": {
+    "owner": "User scheduler",
+    "docker": "All existing 17 groups / 172 cases at containing commit",
+    "tla": "Not applicable: no spec/tla model inputs changed",
+    "live": "ONLY O4 after user gate confirmation; no live rerun performed"
+  },
+  "claude_copy_explanation": {
+    "files": [
+      ".claude/settings.json",
+      ".claude/skills/repair-orphaned-transcript/SKILL.md",
+      ".claude/skills/run-tests/SKILL.md"
+    ],
+    "historical_operation": "git archive wrote copies of tracked Git blobs into private staged source. Host originals/HOME stayed read-only unchanged; staged copies were written, not inspected afterward or included in Bee evidence. No further .claude access in repair work."
+  },
+  "commit_binding": "Containing local commit; never pushed"
+}

@@ -14,8 +14,10 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorhost"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -542,6 +544,10 @@ func TestCursorIndependentPaneVerifierRejectsChangedOwnership(t *testing.T) {
 			if err = cursorhost.VerifyPane(st, row, cfg); err != nil {
 				t.Fatalf("original pane: %v", err)
 			}
+			binding, err := st.ReadCursorRuntime(launch.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			switch change {
 			case "moved":
 				other := launch.rt.startSession(t, uniqueName())
@@ -555,11 +561,23 @@ func TestCursorIndependentPaneVerifierRejectsChangedOwnership(t *testing.T) {
 				waitFor(t, "old server gone", func() bool { return pidGone(row.Identity.ServerPID) }, func() string { return procState(row.Identity.ServerPID) })
 				launch.rt.startSession(t, uniqueName())
 			}
+			if change == "server replaced" || change == "respawned" {
+				pc := probe.NewProcChecker()
+				waitFor(t, "old gateway/runtime gone and terminal close committed", func() bool {
+					gateway := tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.GatewayPID, Starttime: binding.GatewayStart})
+					runtime := tmux.JudgeProcess(pc, tmux.ProcIdentity{PID: binding.RuntimePID, Starttime: binding.RuntimeStart})
+					state := readRow(t, f.DBPath, launch.ID).State
+					return gateway == tmux.ProcGone && runtime == tmux.ProcGone && (state == store.StateEnded || state == store.StateMissing)
+				}, func() string {
+					return fmt.Sprintf("gateway=%s runtime=%s row=%+v", procState(binding.GatewayPID), procState(binding.RuntimePID), readRow(t, f.DBPath, launch.ID))
+				})
+			}
+			beforeVerify := readRow(t, f.DBPath, launch.ID)
 			if err = cursorhost.VerifyPane(st, row, cfg); err == nil {
 				t.Fatal("changed pane accepted by independent verifier")
 			}
-			if got, err := st.GetSpawn(launch.ID); err != nil || !reflect.DeepEqual(got, row) {
-				t.Fatal("verifier mutated row")
+			if got := readRow(t, f.DBPath, launch.ID); !reflect.DeepEqual(got, beforeVerify) {
+				t.Fatalf("verifier mutated raw row: before=%+v after=%+v", beforeVerify, got)
 			}
 		})
 	}

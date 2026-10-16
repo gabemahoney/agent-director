@@ -1,0 +1,76 @@
+{
+  "status": "independent frozen GREEN and focused guard tests passed",
+  "recorded_utc": "2026-10-16T07:14:52.815703+00:00",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "pkg/api/cursor_liveness_test.go",
+    "internal/store/cursor_runtime_liveness_test.go"
+  ],
+  "frozen_run": {
+    "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/green-guards/frozen-command.sh'",
+    "result": "passed",
+    "exit_code": 0,
+    "log": "frozen-green.log",
+    "top_level_tests": 3,
+    "subtests": 11
+  },
+  "guard_run": {
+    "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/green-guards/guards-command.sh'",
+    "result": "passed",
+    "exit_code": 0,
+    "log": "guards-green.log",
+    "top_level_tests": 4,
+    "subtests": 17
+  },
+  "new_coverage": [
+    "Public Status/Get: exact same-start alive or ProcUnknown leaves full row and open request unchanged; settled working projection remains working.",
+    "Recycled gateway PID with different start, and dead gateway with live owned runtime, report missing immediately despite max settle delay; only one row-version increment and request closure across repeated Status/Get; sibling Cursor row and non-Cursor sentinel unchanged.",
+    "Terminal repeated Get does not probe processes again.",
+    "Positive gateway death with absent binding, stale session or stale life returns errors from both public reads and preserves full row/request.",
+    "Actual SQLite permission-close failure trigger returns public errors, rolls back full row and request, with no partial cleanup.",
+    "Deterministic process-check boundary commits a concurrent row-version refresh or replacement token/life: same-dead-launch conflict returns error; replacement is reread normally, neither replacement nor its request closed.",
+    "Store conditional missing refuses stale connection, session, runtime PID/start, terminated flag, launch token/life and row snapshot; current full row/runtime binding and shared subagent close mix/bystander unchanged."
+  ],
+  "dispatch_trace": {
+    "CLI": "cmd/agent-director/spawn_cmd.go statusHandlerWith calls client.Status at line 102; getHandlerWith calls client.Get at line 454.",
+    "MCP": "internal/mcp/dispatch.go status/get branches call d.client.Status at line 133 and d.client.Get at line 142.",
+    "Go": "pkg/api/get.go Client.Get and pkg/api/status.go Client.Status reconcile; standalone store-surface functions unchanged as reported by Engineer.",
+    "finding": "No CLI/MCP dispatch gap. Public frozen tests exercise real Client methods."
+  },
+  "reused_coverage": [
+    "Frozen real SIGKILL regression covers Get-first/Status-first, exact process-death evidence, gateway alive control, live same-store sibling, sentinel and repeated row version.",
+    "Existing TestCursorRuntimeConditionalBindingWrites and hook authority tests cover complete field-level registration/session/retirement guards; new tests focus missing transition.",
+    "Existing common find-missing snapshot matrix and atomic subagent/request close tests remain authoritative; reused cursorRowBinding, seedCloseMix/assertMixUnchanged, killEnv, settleClient, procfix and InjectWriteFailure."
+  ],
+  "frozen_proof": {
+    "before": "frozen-before.json",
+    "after": "frozen-after.json",
+    "expected": "../red/frozen-sha256.json",
+    "equal": true,
+    "explicit_artifact_count": 7
+  },
+  "source_proof": {
+    "before": "source-before.json",
+    "after": "source-after.json",
+    "equal": true,
+    "scope": "Exact five Engineer-modified product source files; all other frozen files verified in seven-artifact proof."
+  },
+  "deviations": [
+    "First focused guard attempt had an incorrect test assertion that missing must have nil ended_at. Existing common terminal semantics populate ended_at for missing; corrected test to assert missing lifecycle state, retaining max settle/idempotence/live runtime guards. Initial test-side failure retained as guards-attempt-1.log; not a source defect."
+  ],
+  "remaining_source_findings": [],
+  "incomplete_work": [],
+  "not_run": [
+    "full unit suite",
+    "integration suites",
+    "live Cursor/O4",
+    "heavy Docker epic suites",
+    "formal/model jobs"
+  ],
+  "questions": []
+}

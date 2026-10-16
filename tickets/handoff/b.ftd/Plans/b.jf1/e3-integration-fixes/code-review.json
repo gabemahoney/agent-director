@@ -1,0 +1,7 @@
+{
+  "reviewer": "/root/apiary_code_reviewer_e3_plan_death",
+  "source_findings": [],
+  "public_path_verification": "CLI spawn_cmd.go102,454 and MCP dispatch.go133,142 invoke ClientGet/Status; Bun reaches CLI. Same captured installedBun path covered.",
+  "known_limit": "Standalone api.Get(get.go362)/api.Status(status.go52) remain DB projection reads, no production caller; package docs Client is public verb entrypoint. Not identified captured publicpath failure.",
+  "coverage": "Decoder attribution gates; cleanup descriptor ordering; exactPID/start proof; transactional row/runtime guard; request/subagent close; no tests executed by readonlyReviewer"
+}

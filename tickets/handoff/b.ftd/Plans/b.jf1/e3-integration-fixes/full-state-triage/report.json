@@ -1,0 +1,60 @@
+{
+  "status": "read-only source and fixture diagnosis complete; no executions or retries",
+  "ticket_status_changes": [],
+  "commits": [],
+  "canonical_files_changed": [],
+  "files_created": ["tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-state-triage/report.json"],
+  "receipt_scope": "Read requested engineer, green-guards, list-engineer, read-lock-engineer, bounded-green, docs-rework and full report.json plus full/failure-excerpts.json. Named checkout source/test/docs only; no host stores, protected directories, live Cursor or archived trees.",
+  "findings": [
+    {
+      "failure": "TestCursorIndependentPaneVerifierRejectsChangedOwnership/server_replaced",
+      "classification": "Test conflates independent gateway shutdown mutation with verifier mutation; public-read reconciliation hypothesis disproven by actual call graph.",
+      "proven": [
+        "test/realtmux/cursor_launch_test.go:523-562 reads row via Store.GetSpawn before ownership mutation, kills the tmux server, waits only for old server death, starts replacement server, calls VerifyPane with the old row and compares current raw Store.GetSpawn to the old row.",
+        "internal/cursorhost/ownership.go:16 VerifyPane only performs tmux lookup/list and independent process checks. It has no store write, public Client.Get or reconciliation call.",
+        "test/realtmux/spawn_test.go:94 readRow calls apitest.ReadSpawnColumns; pkg/api/apitest/storeread.go:74 is a raw SELECT, not Client.Get.",
+        "internal/cursorhost/session.go:183-185 registers HUP/TERM/INT; server shutdown can close pane input or signal the gateway. The fatal cleanup defer at :98-114 terminates runtime, verifies exact runtime death and closes failed launch. Store.GetSpawn also is a projection, not public Client.Get."
+      ],
+      "inference": "Server shutdown races old gateway shutdown and its new legitimate terminal close against the assertion's baseline. Failure text lacks the actual changed row, so whether this particular row became missing via fatal input close or ended via intentional signal handling is not observable from the receipt. Do not label this a public observer mutation.",
+      "minimal_correction": "Keep VerifyPane rejection and strict no-mutation invariant. Isolate gateway shutdown from the verification interval: for server-replaced wait for old gateway and runtime shutdown and committed terminal close before taking a raw full-row baseline; call VerifyPane with the originally examined ownership row and compare raw rows immediately before/after the call. For other modes, likewise avoid comparing against a baseline predating external lifecycle mutation. If shutdown is intentionally prevented instead, use deterministic process control with cleanup, not timing sleeps. Log full before/after raw snapshots on mismatch.",
+      "must_preserve": "Do not remove or relax strict VerifyPane no-write assertion, and do not change verifier production behavior."
+    },
+    {
+      "failure": "TestCursorRelayHeldCancellationDeadline/interrupt",
+      "classification": "Test's termination boundary is broader than runtime death and now includes legitimate missing publication while gateway remains alive completing cleanup.",
+      "proven": [
+        "test/realtmux/cursor_relay_boundary_linux_test.go:290-294 assertPreserved requires check_permission whenever !completed. The cancellation poll at :321 onward calls it until BOTH gateway and runtime satisfy pidGone.",
+        "pidGone in test/realtmux/harness_proc_test.go:78 checks absence/zombie only; it neither checks recorded start time nor distinguishes unknown evidence from absence.",
+        "On ACP operation timeout internal/cursorhost/session.go:775 returns an error. Its defer :98-114 calls p.terminate, then VerifyRuntime(binding,true), then closeFailedLaunch before closing registered pipe descriptors or returning from Run.",
+        "internal/cursorhost/identity_linux.go:43 requires live exact-start gateway and its registered pipe descriptors, then known runtime evidence and either absent/dead runtime or a different start time. Unknown runtime evidence and same-start live runtime both refuse. Thus successful missing cleanup necessarily occurs while gateway is still alive; observing it before gateway PID exits is expected.",
+        "Store.MarkCursorMissingIfSameLaunch closes admitted requests atomically, so preserving unclosed permission requests after legitimate missing is also inconsistent with the new terminal close contract. No intentional session_end is emitted on this fatal path."
+      ],
+      "inference": "The observed missing at roughly the three-second cancellation bound is consistent with proven runtime termination followed by gateway cleanup. The receipt does not contain exact runtime PID/start proof sampled at failure, so source establishes the guarded path, not a captured per-process postmortem.",
+      "minimal_correction": "Retain strict identity, independent worker preservation, fixed cancellation deadline, exactly-one cancel and no permission reply assertions. Require check_permission and open held requests while exact runtime identity is alive or unknown and gateway loss is unproven. Permit missing only after an independent known-gone verdict for the registered runtime identity (including exact start-time mismatch), or separately proven exact gateway loss; assert original launch/session remain unchanged and requests close correctly at that boundary. Continue waiting for both processes to terminate. Never infer runtime death merely from missing, EOF, timeout or failed proc read. Capture known/alive/start alongside raw row/request snapshots to diagnose any premature publication.",
+      "must_preserve": "No allowance for missing with both exact gateway/runtime alive or unknown; no fabricated ended, SessionEnd or successful completion."
+    },
+    {
+      "failure": "Bun client-serialization Cursor direct/template four cases",
+      "classification": "Proven synthetic fixture lifecycle mismatch, plus a separate real product gap for pre-registration gateway death.",
+      "proven": [
+        "pkg/ts-bun-client/test/client-serialization.test.ts:31 explicitly says fake tmux does not execute Cursor. :39-75 expects pending from spawn/get/list/status and args retention.",
+        "test/internal/helper.ts openClient uses FAKE_TMUX_BIN; test/fake-tmux/commands.go:295-304 sets default server and pane PID to os.Getppid(), i.e. the spawn CLI process, not a long-lived gateway. NewPanePID permits an explicit override.",
+        "internal/spawn/launch.go:193-202 RecordLaunchIdentity records the currently alive spawn CLI PID/start. Once spawn returns, this CLI exits. The subsequent get runs another CLI and correctly judges recorded identity gone; no Cursor runtime was ever launched or registered.",
+        "pkg/api/cursor_liveness.go:24-31 proves exact recorded gateway death before ReadCursorRuntime. Its sql.ErrNoRows branch returns an error without closing the row. Thus the captured four ErrInternal failures are expected from this fixture; they are not evidence of actual runtime executable failure.",
+        "A real pre-registration gap independently exists: internal/cursorhost/session.go:92 starts the runtime before :129 RegisterCursorRuntime, and startProcess failure returns immediately. cleanupBinding is set only after successful registration at :133. Missing executable, failed lifetime setup or other pre-registration startup failure can therefore leave an actual dead recorded gateway with no runtime binding and a live pending row."
+      ],
+      "fixture_correction": "For these transport/serialization tests, configure fake tmux NewPanePID to a controlled long-lived process with real PID/start identity, keep it alive through spawn/get/list/status, and join/clean it afterward. Use the existing shared faketmuxfix table API through a focused ts-helper seam if Bun cannot set it today. The stable Bun runner PID is another controlled alive owner for a pure fake transport fixture, provided explicit identity proof and fixture semantics are documented. Do not rely on the short-lived spawn CLI PID, arbitrary waits, blanket error catches, missing start times, or weakening product liveness checks. Preserve pending and all public args/wire assertions.",
+      "product_gap_recommendation": "Implement a separate absent-binding missing branch after positive exact gateway death. Reuse the bounded common atomic terminal close and complete examined row snapshot/token/life/gateway PID/start guards; additionally require NOT EXISTS for ANY cursor_runtimes row for this instance inside the same write transaction. Binding appearing between read and write must refuse; an existing stale binding must continue to error rather than being treated as absent. Alive/unknown gateway must remain untouched. This proves gateway loss only; do not invent runtime identity, runtime death, termination flag or intentional ended. The absence guard replaces an inapplicable runtime binding guard only for genuinely absent registration.",
+      "focused_red_proposal": [
+        "Sandbox-only real startup regression: launch synthetic Cursor gateway with nonexistent runtime executable (no real Cursor invocation); wait for independently confirmed exact gateway death, assert no runtime binding, then public Get/Status/List must return and persist missing with args retained. Current code should fail with ErrInternal/live pending row. Keep real launch identity evidence and isolated store.",
+        "Smaller API RED: seed pending Cursor with complete recorded gateway identity but no runtime row, process checker returns Gone; assert all public reads transition once, return missing, retain args, and atomically close any common request/subagent fixtures. This proves product state logic but not actual startup ordering; use with the source proof or real startup regression.",
+        "Alive and unknown gateway/no-binding controls remain pending unchanged. Deterministic insert-binding race and row/token/life/gateway replacement races must reject stale close. Stale existing binding keeps error/no mutation. Held writer remains typed ErrStoreBusy; SQL close failure rolls back row and related cleanup; repeated missing reads remain idempotent."
+      ],
+      "existing_guard_update": "pkg/api/cursor_liveness_test.go:143 TestCursorReadLostGatewayRefusesUnsafeSuccess currently lumps absent binding with stale session/life. Split absence into a positive exact-gateway-death missing test and keep stale existing binding errors. This intentionally changes an overly strict newly added guard; review docs/architecture.md and corresponding caller/operator docs and SRD wording that currently promise an absent-binding error.",
+      "known_unknown": "No persisted failing Bun temp HOME or actual host store was inspected. Exact numeric fixture PID from receipt is absent, but default fake new-session source plus passing spawn then failing get makes the synthetic lifetime cause direct and deterministic."
+    }
+  ],
+  "deviations": ["Read-only named checkout source/docs/report shell reads ran on host; no repository scripts, tests, built binaries or live-process probes executed. No protected path was accessed."],
+  "incomplete_work": ["No fixes or RED executions authorized in this lane; caller must route narrowly scoped fixture/test corrections and product no-binding startup-death regression/fix."],
+  "questions": []
+}

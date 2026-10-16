@@ -1,0 +1,128 @@
+{
+  "status": "Source fix complete; unchanged startup REDs now GREEN; all requested targeted regression guards GREEN",
+  "ticket_ids_context": [
+    "t1.ftd.y5",
+    "t1.ftd.hj",
+    "t1.jf1.r8",
+    "t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "internal/store/cursor_runtime.go",
+    "pkg/api/cursor_liveness.go"
+  ],
+  "test_or_doc_files_modified": [],
+  "behavior": [
+    "Only after exact recorded gateway ProcGone and ReadCursorRuntime sql.ErrNoRows does public reconciliation create an examined-absence descriptor carrying row instance/token/life/gateway/session and genuinely empty runtime fields.",
+    "The existing common terminal transaction repeats complete snapshot, agent, token, life, gateway PID/start guards. The absence branch also requires NOT EXISTS for ANY binding for this instance inside the conditional UPDATE, including stale binding inserted after observation.",
+    "Existing nonempty binding branch retains complete runtime, connection, pipe/fd, session and terminated predicates unchanged. Stale session/life errors and same-dead-launch CondChanged safe error remain; replacement/terminal row uses normal reread.",
+    "Both branches reuse terminalMarkWithoutWait, typed ErrStoreBusy, single existing bounded context, atomic request/subagent close, rollback and fail-open ordered audit. No retries or deadline changes.",
+    "No runtime identity, runtime death, termination flag, SessionEnd or intentional ended is manufactured; unknown/alive gateway with no registration remains untouched; repeated terminal reads are idempotent."
+  ],
+  "commands": [
+    "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/sandbox-command.sh startup'",
+    "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/sandbox-command.sh guards'",
+    "Sandbox-only gofmt -w internal/store/cursor_runtime.go pkg/api/cursor_liveness.go",
+    "Sandbox-only named source/docs/handoff reads; Node hash/proof/report generation; diff -u of pre-edit files; git diff --check for the two source files"
+  ],
+  "results": {
+    "startup-real-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/startup-real-green.log",
+      "sha256": "1ec45918fc3d0e04793390d1c3984649e288d6f9f90467028bb3969534fb8684",
+      "mode": "600",
+      "top_level_passes": 1,
+      "subtest_passes": 3,
+      "failures": 0
+    },
+    "startup-api-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/startup-api-green.log",
+      "sha256": "a41deba33e9c6d93050dfa32f8a86409ef737ea02d207728c8b64cc5905b4a63",
+      "mode": "600",
+      "top_level_passes": 4,
+      "subtest_passes": 22,
+      "failures": 0
+    },
+    "startup-store-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/startup-store-green.log",
+      "sha256": "199b2cfd3f4c4e97c655b54f7b0d9af454545f12e51cbb8ba53bb37cc4395a47",
+      "mode": "600",
+      "top_level_passes": 1,
+      "subtest_passes": 9,
+      "failures": 0
+    },
+    "original-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/original-green.log",
+      "sha256": "4f99516823e9c1bfa132d4c87b3323df9070a735b2f4463c02ceb1290d60c471",
+      "mode": "600",
+      "top_level_passes": 3,
+      "subtest_passes": 11,
+      "failures": 0
+    },
+    "api-guards-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/api-guards-green.log",
+      "sha256": "d336c76f9f1dd5bf21041fb2743d76f4f05c14c982d3591bdd01031378bf64ae",
+      "mode": "600",
+      "top_level_passes": 5,
+      "subtest_passes": 18,
+      "failures": 0
+    },
+    "store-guards-green": {
+      "exit_code": 0,
+      "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/store-guards-green.log",
+      "sha256": "5be740bff96778a491795b9f2640c0200dbee2386f502a35a107dd5d3b2c0c8e",
+      "mode": "600",
+      "top_level_passes": 1,
+      "subtest_passes": 7,
+      "failures": 0
+    }
+  },
+  "frozen_proof": {
+    "file": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/frozen-proof.json",
+    "original_count": 11,
+    "new_red_count": 8,
+    "all_authorized_hashes_match": true,
+    "prior_authorized_list_exception_preserved": true
+  },
+  "source_patch": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-engineer/source.patch",
+  "source_hashes": {
+    "internal/store/cursor_runtime.go": "2b63797d6df8833eb67932438c8a47c7b549394c82256e38a6047cdd45682547",
+    "pkg/api/cursor_liveness.go": "d1480700adf513abd03be8d1cdb68c5948b04cf565a2d6c4c2900a1d6e8a4edb"
+  },
+  "other_inherited_source_files_unchanged": [
+    "internal/cursorhost/session.go",
+    "internal/store/find_missing_writes.go",
+    "internal/store/lockwait.go",
+    "internal/store/request_close.go",
+    "internal/store/recovery.go",
+    "internal/store/permission.go",
+    "pkg/api/get.go",
+    "pkg/api/status.go",
+    "pkg/api/list.go"
+  ],
+  "proposed_srd_decision": "Document the explicit pre-registration exception: positive exact recorded gateway loss plus examined no-registration permits missing through the full snapshot/launch guarded common terminal write with transactional NOT EXISTS for ANY binding. It proves gateway loss only. Existing stale/nonempty binding errors and strict connection/session/termination guards remain. Replace the blanket absent-binding error promise in SRD/caller/architecture wording accordingly; no docs edited in this source-only lane.",
+  "environment": "All repository execution, inspection, edits, tests, formatting and hashes were inside literal make sandbox. Test runner sanitizes AD*/AGENT_DIRECTOR_* except guard, TMUX/TMUX_PANE/TMPDIR/GIT_CONFIG_GLOBAL; HOME=/home/sandbox, umask022 and per-run Git config. No recursive sandbox command. No protected directories or host stores/auth/config inspected.",
+  "deviations": [
+    "First sandbox pwd and early named read-only inspection preceded full environment sanitization; no product/tests/binaries ran in those commands.",
+    "Attempt to reuse prior sanitizer for inline bash inspection failed because it accepts script paths, before executing inspection or tests. Later commands used explicit sanitation and a dedicated runner.",
+    "CODEX-SHIM and CODEX-SHIM.md were not present at root; no protected directory was searched. Bees tool/CLI was unavailable in this lane, so requirements were read from the dispatch and exact handoff contracts, not newly fetched from the ticket server. No ticket statuses changed.",
+    "Sandbox does not include rg; after the initial rg command failed, named sed/grep reads were used. One overly broad handoff filename listing was limited to repository tickets and did not open archived source trees."
+  ],
+  "incomplete_work": [],
+  "deferred_to_caller": [
+    "Independent review; align SRD/docs with examined-absence exception; fresh authorized full acceptance and commit remain caller-owned; O4 only after future user gate"
+  ],
+  "not_run": [
+    "full unit or integration suite",
+    "heavy Docker groups/collector/testimage",
+    "TLC/java/formal/parser/scheduler",
+    "live Cursor/O4"
+  ],
+  "questions": [],
+  "recorded_utc": "2026-10-16T08:12:49.893Z"
+}

@@ -1,0 +1,182 @@
+{
+  "status": "failed or incomplete",
+  "ticket_ids_context": [
+    "b.jf1",
+    "t1.jf1.r8",
+    "t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "canonical_files_changed": [
+    "internal/cursorhost/request_boundary_linux_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full",
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "full_run_count": 1,
+  "head": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "make_exit": 2,
+  "go": {
+    "passed": 67,
+    "cached": 62,
+    "fresh": 5,
+    "failed": 1,
+    "no_test_files": 13,
+    "packages_reported": 81,
+    "test_skips": "Not observable in default nonverbose successful go test output; no skip count claimed."
+  },
+  "bun": {
+    "passed": 430,
+    "failed": 0,
+    "skipped": null,
+    "todo": null,
+    "summary": "Ran 430 tests across 57 files. [20.83s]"
+  },
+  "missing_package_results": [],
+  "proof": {
+    "unchanged": true,
+    "changes": [],
+    "before_manifest_sha256": "c256e77f6b70f8e99b86495c2ffaee1deb5080af71283315d8c4b67462fb492c",
+    "after_manifest_sha256": "c256e77f6b70f8e99b86495c2ffaee1deb5080af71283315d8c4b67462fb492c",
+    "frozen_matches": 11,
+    "new_red_matches": 8,
+    "original_frozen_unchanged": 10,
+    "authorized_list_exception": true,
+    "source_matches": 11,
+    "trail_unchanged": true
+  },
+  "held_trail_test": {
+    "path": "pkg/api/cursor_liveness_trail_deadline_test.go",
+    "sha256": "e4835ae2ea9808d1ee0b468b69d3d6487a51e7c7d46fe6c55f3dd88107650a21"
+  },
+  "raw_log": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/full.log",
+    "mode": "600",
+    "bytes": 64860,
+    "sha256": "2fe89c4afc173236eb8832ce84e2e0052ee4f3f5d35511df1540a503c9958052"
+  },
+  "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/run.json",
+  "deviations": [
+    "Named read-only host inspections of docs/source/tests/reports; edits via apply_patch. All repository scripts/tests/builds/format/hashes executed only through literal make sandbox or bare make test-sandbox. No protected paths accessed."
+  ],
+  "limitations": [
+    "Bare make output does not expose individual Go/Bun numeric exit codes; make aggregate exit is directly captured.",
+    "Successful nonverbose Go output does not expose per-test skip counts.",
+    "No live Cursor/O4, integration suites, Docker epic groups, formal/model jobs or retries run."
+  ],
+  "incomplete_work": [
+    "Caller must route actual captured failures; no unchanged rerun performed."
+  ],
+  "questions": [],
+  "failure_assertions": [
+    "--- FAIL: TestCursorReadsRefuseWriterContention (14.20s)",
+    "    --- FAIL: TestCursorReadsRefuseWriterContention/Status (3.51s)",
+    "--- FAIL: TestUnknownOriginHoldAfterReopen (0.10s)",
+    "    --- FAIL: TestUnknownOriginHoldAfterReopen/cursor/answered_at_the_pane_(pane_answer_sent) (19.09s)",
+    "--- FAIL: TestCursorStartupAbsentBindingFailures (40.74s)",
+    "    --- FAIL: TestCursorStartupAbsentBindingFailures/Status/request_close (9.99s)",
+    "--- FAIL: TestCursorStartupAbsentBindingReads (47.44s)",
+    "    --- FAIL: TestCursorStartupAbsentBindingReads/Status/gone (13.49s)"
+  ],
+  "failure_evidence": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/failure-excerpts.json",
+  "failure_classification": "Actual captured failures; stopped after original full run without rerun or further fixes.",
+  "independent_review": {
+    "result": "Reviewed assigned test against expiry-triage contract and existing authority assertions; no source change indicated",
+    "scope": "Expiry oracle and holder/guard handshake only"
+  },
+  "recorded_utc": "2026-10-16T08:37:46.607Z",
+  "bun_observed_skip_lines": 0,
+  "compiled_inventory": {
+    "go_source_files": 1064,
+    "canonical_go_files_excluded": 27,
+    "policy": "go list selected files only; underscore snapshots, historical Go files and platform-excluded files are not claimed as compiled"
+  },
+  "integration_run": "Not dispatched; integration suites and heavy Docker groups not run.",
+  "proof_artifacts": {
+    "before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/input-manifest-before.json",
+    "after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/input-manifest-after.json",
+    "frozen_before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/frozen-before.json",
+    "frozen_after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/frozen-after.json",
+    "new_red_before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/new-red-frozen-before.json",
+    "new_red_after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/new-red-frozen-after.json"
+  },
+  "evidence_hashes": {
+    "before": "c256e77f6b70f8e99b86495c2ffaee1deb5080af71283315d8c4b67462fb492c",
+    "after": "c256e77f6b70f8e99b86495c2ffaee1deb5080af71283315d8c4b67462fb492c",
+    "frozen_before": "1923a670eee874bd4cfd6b44598958d6331ab92646071158ef9648232cdba9f6",
+    "frozen_after": "1923a670eee874bd4cfd6b44598958d6331ab92646071158ef9648232cdba9f6",
+    "new_red_before": "583cc224d39f623155fab25330091f5b365782ce1345cf22bad41799a05f9628",
+    "new_red_after": "583cc224d39f623155fab25330091f5b365782ce1345cf22bad41799a05f9628"
+  },
+  "justification": "Necessary expiry fixture oracle correction after diagnosed invalid 40ms lower bound; one focused affected test passed before exactly one new bare make test-sandbox on settled inputs.",
+  "fixture_correction": {
+    "cutoff": "same 200ms established at original setup point",
+    "frame_budget": "unchanged 3s",
+    "watchdog": "unchanged 400ms safety release for expiry",
+    "observation": "First actual guard entry, immutable frame deadline, return and original error; holder entered before writer release and withheld until observed guard completion, with finite watchdog.",
+    "assertions": "Guard entry strictly before deadline; exit at or after deadline; ErrStoreBusy wrapping context.DeadlineExceeded; writer error and zero bytes; durable acknowledgement/no-proof/no-close/no-replay retained. Other losses retain 40ms lower bound.",
+    "precondition": "Entry at or after deadline is an explicit failure; no skip/retry/reset/slack or product changes."
+  },
+  "technical_note": "Fixture oracle/handshake correction only, with no material documentation contract change; root may record this note. Source and existing authority/deadline policy unchanged.",
+  "canonical_inventory_count": 1796,
+  "package_inventory_count": 81,
+  "environment": {
+    "container_HOME": "/home/sandbox",
+    "container_TMPDIR": "unset",
+    "umask": "022",
+    "git_config": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/gitconfig",
+    "host_inherited_variables_removed": [
+      "AGENT_DIRECTOR_AGENT",
+      "AGENT_DIRECTOR_INSTANCE_ID",
+      "AGENT_DIRECTOR_LABEL_HOST",
+      "AGENT_DIRECTOR_LABEL_TASK",
+      "AGENT_DIRECTOR_RELAY_MODE",
+      "GIT_CONFIG_GLOBAL",
+      "MAKEFLAGS",
+      "TMPDIR",
+      "TMUX",
+      "TMUX_PANE"
+    ],
+    "recursive_sandbox_CMD": false
+  },
+  "frozen_proof": {
+    "original_files": 11,
+    "original_unchanged": 10,
+    "authorized_list_control_exception": true,
+    "new_red_files": 8,
+    "before_all_match": true,
+    "after_all_match": true
+  },
+  "manifest_policy": "Reused startup-final-full canonical policy: Git tracked plus standard untracked root and cmd/internal/pkg/test/skills/scripts/docs/tools/.github/tickets inputs, excluding tickets/handoff and archive/underscore components by name; .claude excluded by name before file access; no symlink target reads.",
+  "source_unchanged": true,
+  "focused": {
+    "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/targeted.sh'",
+    "test_command": "go test -timeout 30m ./internal/cursorhost -run '^TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention$' -count=1 -v",
+    "exit": 0,
+    "log": {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/targeted.log",
+      "sha256": "7d925e54d9187670ff192e014f694f5aa0b4c128f8858273a00f108c88b659ce",
+      "bytes": 8617,
+      "mode": "600"
+    },
+    "top_level_passes": 1,
+    "subtest_passes": 14
+  },
+  "not_run": [
+    "integration suites",
+    "heavy Docker testplan/collector/testimage",
+    "TLC/java/formal/parser/scheduler commands",
+    "live Cursor/O4"
+  ],
+  "live_or_future_gate_claim": false,
+  "expiry_package_result": "ok  \tgithub.com/gabemahoney/agent-director/internal/cursorhost\t115.712s",
+  "failure_details": [
+    "        cursor_liveness_lock_test.go:64: WAL read while writer held: state=\"\" err=context deadline exceeded",
+    "        sendkeys_hold_test.go:332: authenticated Cursor store proof: store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): context deadline exceeded",
+    "        cursor_startup_liveness_test.go:129: failed startup close exposed state=\"\" or exceeded immediate bound: 1.098120759s",
+    "        cursor_startup_liveness_test.go:67: Status gateway=gone no runtime binding: state=\"\" err=store: close lost Cursor launch: store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): context deadline exceeded want=missing"
+  ],
+  "failure_diagnosis": "Four captured pkg/api leaves require caller triage; no source-versus-fixture attribution made in this lane. No further tests or fixes after this failed full run."
+}

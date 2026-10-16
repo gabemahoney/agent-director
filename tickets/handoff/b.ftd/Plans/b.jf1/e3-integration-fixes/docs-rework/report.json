@@ -1,0 +1,37 @@
+{
+  "status": "batched documentation rework and SRD append complete",
+  "ticket_ids_handled": ["t1.ftd.hj"],
+  "ticket_status_changes": [],
+  "files_changed": ["docs/caller-contract.md", "docs/operator-actions.md", "docs/architecture.md"],
+  "handoff_files": ["docs-rework/srd-chunk.md", "docs-rework/report.json", "docs-rework/srd-append-root.json (root-owned receipt)"],
+  "behavior_documented": [
+    "Public Client.List reconciles live Cursor candidates within Labels/Parent/Cwd/TmuxSessionName before final settled State/Limit; invalid filters precede store reads/mutations.",
+    "Public Get/Status/List reuse exact gateway loss and full snapshot/runtime/token/life/connection/session/PID-start guards; missing binding and close failure propagate errors.",
+    "Cursor terminalMarkWithoutWait uses inWriteTxContext(ctx,0) and one operationContext(0) across SQL, cleanup and fail-open post-commit audit; write contention returns ErrStoreBusy with no retry or partial transition.",
+    "One-second immediate-work allowance is per reconciliation work, not an aggregate whole-read/List promise; confirmed commits survive post-commit audit deadline exhaustion with truthful pending/failed/rejected audit accounting.",
+    "Standalone api.Get/Status/List remain projections; legacy FindMissing/MarkEnded background contracts stay unchanged; missing does not prove runtime death."
+  ],
+  "evidence_reviewed": [
+    "docs/report.json", "docs/srd-chunk.md", "engineer/report.json", "green-guards/report.json",
+    "list-red/report.json", "list-engineer/report.json", "list-engineer/proposed-srd-decisions.json", "list-code-review.json",
+    "read-lock-red/report.json", "read-lock-engineer/report.json", "bounded-code-review.json", "bounded-green/report.json"
+  ],
+  "source_reviewed": ["pkg/api/cursor_liveness.go", "pkg/api/list.go", "internal/store/find_missing_writes.go", "internal/store/cursor_runtime.go"],
+  "checks": [
+    "Read CLAUDE.md Documentation Locations and user/readme/architecture writing guides.",
+    "Inspected documentation diff and related architecture state-projection/relay-read claims; narrowly linked them to Cursor reconciliation.",
+    "git diff --check for three documentation owners passed in sanitized make sandbox."
+  ],
+  "independent_evidence_scope": "bounded-green/report.json: 11 top-level tests/44 cases; held SQL writer 251.780-354.570 microseconds; held real trail writer success/missing 1000.769-1001.314 ms; 11 frozen artifacts and 11 source paths unchanged",
+  "SRD_append": {"ticket": "t1.ftd.hj", "chunk": "srd-chunk.md", "executor": "root", "result": "success; exact chunk read back, status defined unchanged", "receipt": "srd-append-root.json", "receipt_reviewed": true},
+  "deviations": [
+    "Initial read-only host inspection of explicitly named checkout docs/reports and command discovery preceded sandbox setup; no tests, built binaries, source scripts, .claude or host AD data accessed. Subsequent shell repository inspection/checks used make sandbox with canonical HOME, unset TMPDIR, stripped inherited AD/TMUX/config variables, umask 022 and run-local global git config.",
+    "Sandbox rg and bees unavailable; used grep/sed for focused reads. Root performed the authorized Bees metadata append and verified exact readback/status; reviewed its receipt."
+  ],
+  "incomplete_work": [],
+  "not_run": ["tests/full make (caller owns fresh run)", "live Cursor/O4 (user gate required)", "E4", "heavy Docker/formal/model work"],
+  "source_or_test_files_modified": [],
+  "commits": [],
+  "questions": [],
+  "limitations": ["Rejected live envelope absent; no exact historical wire shape or live-fix PASS claimed", "Targeted independent receipts are not full-suite acceptance"]
+}

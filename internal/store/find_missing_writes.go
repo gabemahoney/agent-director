@@ -230,47 +230,84 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		}
 	}()
 
-	var prior string
-	err = conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return "", CondAbsent, nil
-	case err != nil:
-		return "", 0, fmt.Errorf("%s: prior state: %w", errPrefix, err)
-	}
-
-	r, err := conn.ExecContext(ctx, stmt, args...)
-	if err != nil {
-		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return "", 0, fmt.Errorf("%s rows affected: %w", errPrefix, err)
-	}
-	if n == 0 {
-		// The row exists (read above, under the write lock), so the guard
-		// refused it.
-		return "", CondChanged, nil
-	}
-
-	at := storeNowMillis()
-	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
-	if err != nil {
-		return "", 0, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
-	}
-	if err := closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, at); err != nil {
-		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	prior, res, closed, err := terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+	if err != nil || res != CondApplied {
+		return "", res, err
 	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
 
-	for _, c := range closed {
-		c.emitDeny(instanceID, reason, WriterProcessFindMissing)
-		emitOrphanCloseoutTick(instanceID, c.token)
-	}
+	emitTerminalCloseout(ctx, closed, instanceID, reason)
 	return prior, CondApplied, nil
+}
+
+// terminalMarkWithoutWait is the Cursor reconciliation path. One operation
+// context bounds SQL, connection cleanup and post-commit audit; inWriteTxContext
+// preserves confirmed commits even when cleanup reaches that deadline.
+func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, instanceID, reason string) (string, CondResult, error) {
+	ctx, cancel := s.operationContext(0)
+	defer cancel()
+	var prior string
+	var res CondResult
+	var closed []closedRequest
+	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
+		var err error
+		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+		return err
+	})
+	if err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	if res == CondApplied {
+		emitTerminalCloseout(ctx, closed, instanceID, reason)
+	}
+	return prior, res, nil
+}
+
+// terminalMarkOnConn shares the guarded terminal update and atomic request /
+// subagent closure. The caller owns the transaction and emits only after commit.
+func terminalMarkOnConn(ctx context.Context, conn *sql.Conn, errPrefix, stmt string, args []any, instanceID, reason string) (string, CondResult, []closedRequest, error) {
+	var prior string
+	err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", CondAbsent, nil, nil
+	case err != nil:
+		return "", 0, nil, fmt.Errorf("%s: prior state: %w", errPrefix, err)
+	}
+
+	r, err := conn.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	if n == 0 {
+		// The row exists (read above, under the write lock), so the guard
+		// refused it.
+		return "", CondChanged, nil, nil
+	}
+
+	at := storeNowMillis()
+	closed, err := closeOrphanedRequests(ctx, conn, instanceID, reason, at)
+	if err != nil {
+		return "", 0, nil, fmt.Errorf("%s: close permission requests: %w", errPrefix, err)
+	}
+	if err := closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, at); err != nil {
+		return "", 0, nil, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	return prior, CondApplied, closed, nil
+}
+
+func emitTerminalCloseout(ctx context.Context, closed []closedRequest, instanceID, reason string) {
+	for _, c := range closed {
+		c.emitDenyContext(ctx, instanceID, reason, WriterProcessFindMissing)
+		emitOrphanCloseoutTickContext(ctx, instanceID, c.token)
+	}
 }
 
 // The two liveness notes the store itself names (b.kdf, b.146 rule 10).

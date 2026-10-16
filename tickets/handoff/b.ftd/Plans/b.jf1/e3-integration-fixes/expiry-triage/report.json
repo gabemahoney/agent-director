@@ -1,0 +1,59 @@
+{
+  "status": "Read-only diagnosis complete: observed failure is an invalid fixture lower bound, not demonstrated product deadline failure",
+  "ticket_ids_context": ["b.jf1", "t1.jf1.r8"],
+  "ticket_status_changes": [],
+  "commits": [],
+  "head": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "source_test_doc_files_changed": [],
+  "files_created": ["tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-triage/report.json"],
+  "tests_builds_repo_scripts_or_binaries_executed": false,
+  "evidence": {
+    "log": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-final-full/full.log:63",
+    "test": "TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention/allow/expiry",
+    "first_guard": "ErrStoreBusy: connection operation: context deadline exceeded",
+    "elapsed": "10.401484ms",
+    "remaining_frame_before_writer_release": "10.266763ms",
+    "configured_holder_release_timer": "400ms",
+    "remaining_approval_at_later_log": "-15.486652ms",
+    "durable_ack": true,
+    "first_bytes": "",
+    "failing_assertion": "request_boundary_linux_test.go:487-488 requires elapsed >= 40ms for every loss, including expiry"
+  },
+  "call_clock_phase_reasoning": [
+    "request_boundary_linux_test.go:359 establishes a wall deadline approximately 200ms ahead, truncated to milliseconds. Both first.timeout and first.settle equal that cutoff. This precedes SQL settlement update, writer barrier entry, api.Decide, c.tick and its real pane/runtime evidence and durable ack, an additional permission read, guard instrumentation/requeue, and holder acquisition/evidence.",
+    "requests.go:244-292 captures an immutable response deadline at enqueue: minimum of the 3s frame budget and applicable request cutoff. Both allow and deny expiry leaves use the same short cutoff here because the fixture sets settlement equal to timeout. No clock seam appears in this controller/store path: it uses time.Now/time.Until directly; api.RelayView.Now does not control these guards or database/sql contexts.",
+    "The holder is a real CheckCursorAnswer transaction. Its evidence callback first executes c.check, then closes entered and blocks on releaseStore. entered therefore establishes the same Store's operation slot/connection and transaction are held before releaseWriter. The holder uses the same first.timeout, so caller return can occur at expiry while its blocked native callback remains quarantined with its lease/operation slot.",
+    "At line444, before releaseWriter, only 10.266763ms remained. Approximately 189ms of the initial 200ms allowance had already been spent on the intervening setup. This is an almost-consumed pre-call budget, NOT evidence the cutoff was already past at guard entry.",
+    "originalGuard first checks current generation/retirement and the fixed deadline. Reaching CheckCursorAnswer and reporting a context deadline ErrStoreBusy supports entry before expiry. CheckCursorAnswer derives its maximum wait from time.Until(the fixed deadline); runConnectionOperation waits on operationGate with that same context. The holder owns that gate, so the error is specifically consistent with bounded operation admission exhausting the remaining allowance.",
+    "Completion took 10.401484ms, approximately 0.134721ms more than the 10.266763ms sampled remaining allowance. That matches waiting to the immutable cutoff. The test instead demanded at least 40ms although less than 11ms was legally available. Waiting 40ms here would exceed the response deadline.",
+    "remainingApproval is sampled much later at line482, after completion, holderDone handling and a fresh permission read. Its negative value cannot establish expiry before originalGuard. The nominal 400ms holder timer is also not the legal guard wait: the guard must return at the earlier cutoff, and the holder's own bounded caller can return before its blocked callback is released.",
+    "The observed durable acknowledgement, empty bytes and deadline error agree with the documented ack-before-enqueue, bounded acquisition, fail-closed expiry and no-retry contracts. Static review identifies no product bug causing this failure; no reproduction or broader race exclusion is claimed."
+  ],
+  "minimal_fixture_correction_for_test_writer": {
+    "scope": "internal/cursorhost/request_boundary_linux_test.go only; preserve source, request cutoff, transport bound, no retries, and durable authority lookup",
+    "steps": [
+      "Separate the expiry oracle from the 40ms lower bound used by cancellation/runtime-death/other loss cases. Do not merely delete expiry verification or extend its deadlines.",
+      "Extend the existing observational next.guard wrapper with a first-invocation buffered observation containing entry time, exit time, fixed next.deadline and originalGuard error. Publish a guard-entered handshake once; continue calling the untouched originalGuard exactly once per invocation. Keep the existing holder-entered handshake before writer release.",
+      "For expiry, prove the first guard began while its captured deadline was still future, the real holder had entered, and the holder's release channel was still closed to progress through that guard completion. Withhold holder release until observing that completion (retain a finite cleanup/watchdog release for failure safety). This removes reliance on a timer racing holder release against expiry.",
+      "Assert first guard completion is at or after its captured immutable deadline, with ErrStoreBusy wrapping context.DeadlineExceeded, and writer completion is an error with zero bytes. The correct lower bound is the remaining allowance at guard entry, not 40ms from an earlier test clock sample. Prefer direct absolute entry/deadline/exit comparisons to a newly invented slack constant.",
+      "Retain unchanged acknowledgement/no-proof/no-close, terminalization/no-replay, and independent later-answer checks in their existing cases. The none leaves still prove valid acknowledged answers survive finite contention and catch the original zero-wait regression.",
+      "Emit deadline-established, ack-complete, holder-entered, first-guard-entered/returned and frame-completed timestamps on failure. If setup consumes the entire cutoff before guard entry, report an explicit fixture precondition failure; do not call that an acquisition failure, skip, retry or move the already-fixed request cutoff."
+    ],
+    "determinism_limit": "The deadline-relative oracle and holder/guard handshake remove the observed invalid 40ms assumption without loosening product deadlines. Arbitrary OS starvation can still consume a 200ms wall cutoff before guard entry; this path has no existing injected clock. Eliminating that separate setup precondition under arbitrary starvation would require an explicitly approved new clock/acquisition seam or a different dedicated fixture, and must not be disguised as resetting an acknowledged request's deadline."
+  },
+  "routing": "Return to root; route this fixture-only correction to the Apiary Test Writer role before another full run. No Engineer source edit indicated by current evidence.",
+  "instructions_read": [
+    "/home/horde/.codex/apiary-agents/apiary-engineer.md",
+    "/home/horde/.agents/skills/CODEX-SHIM.md",
+    "CLAUDE.md",
+    "docs/engineering-guide.md",
+    "docs/test-writing-guide.md",
+    "docs/architecture.md Cursor authority/deadline sections"
+  ],
+  "deviations": [
+    "Initial named external shim candidates were absent; filename discovery located /home/horde/.agents/skills/CODEX-SHIM.md, which was then read. A /tmp filename discovery encountered a permission-denied runtime directory; no escalation or runtime access attempted.",
+    "An initial directory name listing of /home/horde/.codex printed filenames including auth/config/cache names; none of those files or directories was opened, inspected, copied or used. No host AD stores were accessed."
+  ],
+  "incomplete_work": ["No fixture edits, deterministic reproduction, targeted tests, full tests, builds, Docker/formal/parser/scheduler/live work or ticket mutations authorized or performed in this read-only lane"],
+  "questions": []
+}

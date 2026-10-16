@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -145,4 +146,42 @@ const cursorBindingMatchSQL = `bound_instance_id=? AND bound_launch_token=? AND 
 
 func cursorBindingArgs(b CursorRuntime) []any {
 	return []any{b.InstanceID, b.Token, b.Life, b.GatewayPID, b.GatewayStart, b.RuntimePID, b.RuntimeStart, b.Connection, b.InputPipe, b.OutputPipe, b.InputFD, b.OutputFD}
+}
+
+// MarkCursorMissingIfSameLaunch closes a lost gateway or a failed Run using
+// the common terminal transaction, including request and subagent closure.
+// The row snapshot and complete examined connection must still match. A descriptor
+// with every runtime field empty represents examined absence of registration;
+// that branch requires no binding for this instance at the terminal write.
+// It never waits for the write lock: contention returns ErrStoreBusy with no
+// writes. SQL, cleanup and fail-open post-commit audit share one bounded context.
+func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (string, CondResult, error) {
+	if row.Agent != AgentCursor || row.InstanceID != b.InstanceID || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart || row.SessionID != b.SessionID {
+		return "", CondChanged, nil
+	}
+	args := append(immediateStateArgs(StateMissing), row.InstanceID)
+	args = append(args, liveStateGuardArgs()...)
+	args = append(args, snapshotMatchArgs(row.Snapshot)...)
+	args = append(args, b.Token, b.Life, b.GatewayPID, b.GatewayStart)
+	stmt := markMissingIfSameLifeSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=?`
+	if b.RuntimePID == 0 && b.RuntimeStart == "" && b.Connection == "" && b.InputPipe == "" && b.OutputPipe == "" && b.InputFD == 0 && b.OutputFD == 0 && !b.Terminated {
+		// Even a stale binding inserted after observation defeats examined absence.
+		stmt += ` AND NOT EXISTS(SELECT 1 FROM cursor_runtimes WHERE bound_instance_id=?)`
+		args = append(args, row.InstanceID)
+	} else {
+		stmt += ` AND EXISTS(SELECT 1 FROM cursor_runtimes WHERE ` + cursorBindingMatchSQL + ` AND bound_session_id=? AND bound_terminated=?)`
+		args = append(args, cursorBindingArgs(b)...)
+		args = append(args, b.SessionID, b.Terminated)
+	}
+	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+}
+
+// ReadLiveCursorSpawn confines liveness reconciliation to one live Cursor row.
+// Other agents and terminal rows retain their normal public read paths.
+func (s *Store) ReadLiveCursorSpawn(id string) (Spawn, bool, error) {
+	row, err := scanSpawn(s.db.QueryRow(getSpawnSQL+` AND agent='cursor' AND `+liveStateGuardSQL, append([]any{id}, liveStateGuardArgs()...)...), getSpawnErrs)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Spawn{}, false, nil
+	}
+	return row, err == nil, err
 }

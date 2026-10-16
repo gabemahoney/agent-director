@@ -245,11 +245,10 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 
 // Unknown origin uses a NULL child ID and explicit false; closed records never upgrade it.
 func TestUnknownOriginHoldAfterReopen(t *testing.T) {
-	t.Parallel()
+	// Serial: deadline-sensitive real authenticated synthetic proof is not a concurrency requirement.
 	for _, agent := range []string{"claude", "cursor"} {
 		for _, closure := range holdClosures {
 			t.Run(agent+"/"+closure.name, func(t *testing.T) {
-				t.Parallel()
 				no := false
 				p := newPAEnvAgent(t, agent, "", &no)
 

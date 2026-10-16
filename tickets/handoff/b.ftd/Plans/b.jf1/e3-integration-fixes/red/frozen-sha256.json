@@ -1,0 +1,9 @@
+{
+  "internal/cursorhost/session_e3_regression_linux_test.go": "a3e01f5e863957b990f20dc74e42b9915240ef8788533e41e2b3706043a9612b",
+  "internal/testsupport/cursorfix/cursorfix.go": "56060e8925cd9d25ced035f7329d6edfd0b182f38d624ac6a3300b2a7c0dbae8",
+  "internal/testsupport/cursorfix/runtime.js": "1c4f2c5226dd4c5b8823877745c03640bc78f504cefb0b37f33b52b37081facb",
+  "internal/testsupport/cursorfix/testdata/authorizations.json": "6b3557dd7fab4833c3b50511ecce9661a647fbcc49f025c42104f6dd57bd2baa",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/sandbox-command.sh": "c6dda21d057036b0806bdbb3d8d3914e0a91f692a3452fff037d188e902c0f10",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/launch.py": "98ec753e02bedc730837f6bbe23fa0773b793e53018e9194f2e79e8e3363c457",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/red/container.env": "aa5a89307d3b4de46e2deab502044f0e55e5aa261375ed31f8297df24053cbd7"
+}

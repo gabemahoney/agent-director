@@ -99,6 +99,9 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err
 	}
+	if err := c.reconcileCursorGateway(instanceID); err != nil {
+		return StatusResult{}, err
+	}
 	return statusSettled(c.st, c.settleRead(), instanceID)
 }
 

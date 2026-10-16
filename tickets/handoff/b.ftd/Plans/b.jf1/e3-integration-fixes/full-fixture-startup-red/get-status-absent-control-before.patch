@@ -1,0 +1,12 @@
+diff --git a/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/get-status-absent-control-before.go.txt b/pkg/api/cursor_liveness_test.go
+index 3bd7f724..a57103dd 100644
+--- a/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/get-status-absent-control-before.go.txt
++++ b/pkg/api/cursor_liveness_test.go
+@@ -142,7 +142,6 @@ func TestCursorReadLostGatewayRefusesUnsafeSuccess(t *testing.T) {
+ 		name, query  string
+ 		closeFailure bool
+ 	}{
+-		{"absent binding", "DELETE FROM cursor_runtimes WHERE bound_instance_id=?", false},
+ 		{"stale session", "UPDATE cursor_runtimes SET bound_session_id='old-session' WHERE bound_instance_id=?", false},
+ 		{"stale life", "UPDATE cursor_runtimes SET bound_life_number=bound_life_number+1 WHERE bound_instance_id=?", false},
+ 		{name: "request close fails", closeFailure: true},

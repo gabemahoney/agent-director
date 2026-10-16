@@ -94,10 +94,18 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	}
 	// Only positive child exit evidence permits intentional end reporting.
 	intentional := false
+	var cleanupBinding *store.CursorRuntime
 	defer func() {
 		stopErr := p.terminate()
-		if stopErr != nil && err == nil {
-			err = stopErr
+		if stopErr != nil {
+			err = errors.Join(err, stopErr)
+		}
+		if err != nil && cleanupBinding != nil {
+			if proofErr := VerifyRuntime(*cleanupBinding, true); proofErr != nil {
+				err = errors.Join(err, proofErr)
+			} else if closeErr := closeFailedLaunch(s, *cleanupBinding); closeErr != nil {
+				err = errors.Join(err, closeErr)
+			}
 		}
 		p.input.Close()
 		p.output.Close()
@@ -122,12 +130,14 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 	if err != nil || !applied {
 		return fmt.Errorf("Cursor runtime binding was refused")
 	}
+	cleanupBinding = &b
 	tr, err := open(os.Getenv("HOME"), b)
 	if err != nil {
 		return err
 	}
 	defer tr.file.Close()
 	rep := &reporter{store: s, cfg: cfg, binding: b, exe: exe, path: tr.path}
+	cleanupBinding = &rep.binding
 	protocolInput, err := p.protocolInput()
 	if err != nil {
 		return err
@@ -905,16 +915,26 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 					var update struct {
 						SessionID string `json:"sessionId"`
 						Update    struct {
-							Kind    string `json:"sessionUpdate"`
-							Content struct {
-								Type string `json:"type"`
-								Text string `json:"text"`
-							} `json:"content"`
-							AgentID string `json:"agentId"`
+							Kind    string          `json:"sessionUpdate"`
+							Content json.RawMessage `json:"content"`
+							AgentID string          `json:"agentId"`
 						} `json:"update"`
 					}
-					if json.Unmarshal(f.Params, &update) != nil || update.SessionID != session {
+					if e := json.Unmarshal(f.Params, &update); e != nil {
+						return fmt.Errorf("invalid Cursor update schema: %w", e)
+					}
+					if update.SessionID != session {
 						return fmt.Errorf("Cursor update session mismatch")
+					}
+					var text struct {
+						Type string `json:"type"`
+						Text string `json:"text"`
+					}
+					textChunk := update.Update.Kind == "agent_message_chunk" || update.Update.Kind == "agent_thought_chunk"
+					if textChunk {
+						if e := json.Unmarshal(update.Update.Content, &text); e != nil {
+							return fmt.Errorf("invalid Cursor text update schema: %w", e)
+						}
 					}
 					// Unknown/child provenance is preserved without supplying lifecycle
 					// proof. Only correlated main text is rendered as main output.
@@ -928,8 +948,8 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 					if err = requests.execution(f.Params); err != nil {
 						return err
 					}
-					if update.Update.Content.Type == "text" {
-						fmt.Fprint(writer, safeText(update.Update.Content.Text))
+					if textChunk && update.Update.AgentID == "" && text.Type == "text" {
+						fmt.Fprint(writer, safeText(text.Text))
 					} else if update.Update.Kind == "tool_call" || update.Update.Kind == "tool_call_update" {
 						fmt.Fprint(writer, "\r\nCursor tool activity\r\n")
 					}
@@ -1180,4 +1200,27 @@ func runWithInput(options Options, in *os.File, out io.Writer, open func(string,
 		return nil
 	}
 	return fmt.Errorf("Cursor gateway stopped without termination evidence")
+}
+
+// A completed Run has relinquished admission even though its hosting process
+// may still be alive. Only independently proven runtime death permits this close.
+func closeFailedLaunch(s *store.Store, b store.CursorRuntime) error {
+	row, err := s.GetSpawn(b.InstanceID)
+	if err != nil {
+		return err
+	}
+	_, result, err := s.MarkCursorMissingIfSameLaunch(row, b)
+	if err != nil {
+		return err
+	}
+	if result == store.CondChanged {
+		current, e := s.GetSpawn(b.InstanceID)
+		if e != nil {
+			return e
+		}
+		if current.State != store.StateEnded && current.State != store.StateMissing && current.Identity.Token == b.Token && current.LifeNumber == b.Life {
+			return fmt.Errorf("Cursor failed launch changed during close")
+		}
+	}
+	return nil
 }

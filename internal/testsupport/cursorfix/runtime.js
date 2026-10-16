@@ -53,6 +53,7 @@ input.on('line', async line => {
  else if(frame.method==='session/prompt') {
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
+  if(scripted?.beforeRequests) for(const update of scripted.beforeRequests) send(update);
   if(scripted?.requests?.length) {
    const answers = new Promise(resolve=>{
     if(scripted.pauseAfterRequests) { input.pause(); process.stdin.pause(); }

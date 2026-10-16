@@ -169,20 +169,29 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
 func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListParams) (ListResult, error) {
+	filters, err := parseListFilters(params, settle)
+	if err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
+	}
+	return listFiltered(s, v, filters)
+}
+
+// parseListFilters validates before either candidate enumeration or projection.
+func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, error) {
 	if params.Limit < 0 {
-		return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: limit = %d is negative; pass 0 (or omit it) for no cap, or a positive number of rows",
+		return ListFilters{}, fmt.Errorf("%w: limit = %d is negative; pass 0 (or omit it) for no cap, or a positive number of rows",
 			ErrInvalidFlags, params.Limit)
 	}
 	labels := make(map[string]string, len(params.Labels))
 	for _, raw := range params.Labels {
 		idx := strings.IndexByte(raw, '=')
 		if idx <= 0 {
-			return ListResult{Spawns: []ListRow{}}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
+			return ListFilters{}, fmt.Errorf("%w: %q is not in key=value form", ErrListInvalidLabel, raw)
 		}
 		labels[raw[:idx]] = raw[idx+1:]
 	}
 
-	rows, err := s.ListSpawns(ListFilters{
+	return ListFilters{
 		State:           params.State,
 		Labels:          labels,
 		Parent:          params.Parent,
@@ -190,7 +199,11 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 		TmuxSessionName: params.TmuxSessionName,
 		Limit:           params.Limit,
 		Settle:          settle,
-	})
+	}, nil
+}
+
+func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
+	rows, err := s.ListSpawns(filters)
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
@@ -199,7 +212,7 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 	out := make([]ListRow, 0, len(rows))
 	for _, r := range rows {
 		reported := r.State
-		if settle.SettleMs > 0 {
+		if filters.Settle.SettleMs > 0 {
 			reported = r.ReportedState
 		}
 		row := ListRow{
@@ -247,8 +260,11 @@ func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListP
 // hook-written change shows only once it has held that long, the last
 // settled state until then; terminal states and command-driven changes show
 // at once. The permission requests and launch_started_at follow the live
-// state. List never waits for the store's write lock, nor for a state to
-// settle.
+// state. Before applying State and Limit, List reconciles lost Cursor gateways
+// in the requested label/parent/cwd/tmux scope using the guarded terminal write.
+// List never waits for a state to settle or for the store's write lock.
+// Lost Cursor gateway reconciliation returns ErrStoreBusy on contention;
+// relay-delivery writes remain best effort.
 //
 // CLI: agent-director list
 //
@@ -263,5 +279,26 @@ func (c *Client) List(params ListParams) (ListResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
-	return listSettled(c.st, c.relayView(), c.settleRead(), params)
+	filters, err := parseListFilters(params, c.settleRead())
+	if err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
+	}
+	// Reconcile the requested scope before state filtering and limit: a lost
+	// gateway must enter a missing filter and stop consuming a working limit.
+	candidates := filters
+	candidates.State = nil
+	candidates.Limit = 0
+	rows, err := c.st.ListSpawns(candidates)
+	if err != nil {
+		return ListResult{Spawns: []ListRow{}}, err
+	}
+	for _, row := range rows {
+		if row.Agent != store.AgentCursor || row.State == store.StateEnded || row.State == store.StateMissing {
+			continue
+		}
+		if err := c.reconcileCursorGateway(row.InstanceID); err != nil {
+			return ListResult{Spawns: []ListRow{}}, err
+		}
+	}
+	return listFiltered(c.st, c.relayView(), filters)
 }

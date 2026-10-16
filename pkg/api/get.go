@@ -499,6 +499,9 @@ func (c *Client) Get(instanceID string) (SpawnRow, error) {
 	if err := c.checkClosed(); err != nil {
 		return emptySpawnRow(), err
 	}
+	if err := c.reconcileCursorGateway(instanceID); err != nil {
+		return emptySpawnRow(), err
+	}
 	return getSettled(c.st, c.relayView(), c.settleRead(), instanceID)
 }
 

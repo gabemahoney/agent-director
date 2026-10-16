@@ -120,7 +120,11 @@ func queryClosedRequests(ctx context.Context, conn *sql.Conn, denied bool, q str
 // closed, whose verdict it kept. Called after the close's transaction
 // commits; fail-open.
 func (c closedRequest) emitDeny(instanceID, reason, writerProcess string) {
+	c.emitDenyContext(nil, instanceID, reason, writerProcess)
+}
+
+func (c closedRequest) emitDenyContext(ctx context.Context, instanceID, reason, writerProcess string) {
 	if c.denied {
-		emitDecisionCommitted(instanceID, c.token, c.requestID, c.toolName, "deny", reason, writerProcess)
+		emitDecisionCommittedContext(ctx, instanceID, c.token, c.requestID, c.toolName, "deny", reason, writerProcess)
 	}
 }

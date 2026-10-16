@@ -1,0 +1,12 @@
+{
+  "reviewer": "/root/apiary_code_reviewer_e3_list_fix",
+  "mandatory_findings": [
+    {
+      "file": "pkg/api/list.go:297",
+      "cause": "Read reconciliation MarkCursorMissingIfSameLaunch -> terminalMarkIfSameLife(find_missing_writes.go217-224) uses context.Background/plainBEGINIMMEDIATE;inheritsSQLitebusytimeout10sdefault",
+      "trigger": "Scoped Cursor gateway proven dead while independentSQLiteconnection holdswrite lock",
+      "contract": "Listexistingno-write-lock-wait; do not remove promisedbound tofixstate",
+      "action": "ReuseinWriteTx(0) nonblockingtransaction withsameatomicrow/binding/request/subagentguards; propagatecontentionerror, addheldlockpublicreadRED/GREEN"
+    }
+  ]
+}

@@ -189,6 +189,14 @@ Interrupt during rotation stops the owned runtime; it cannot resume the outgoing
 conversation. Exit and eligible public pause preempt supervised phases but still
 require real owned death and verified durable SessionEnd for intentional success.
 
+Cursor `session/update` decoding is variant-scoped: retain tool and unknown
+`content` as `json.RawMessage`; decode text content only for
+`agent_message_chunk` and `agent_thought_chunk`. Render text only for main-agent
+attribution. Raw retention supplies no lifecycle, authorization or execution
+proof; existing top-level session, retired-session and exact-request execution
+gates remain mandatory. Schema failures are diagnosed separately from session
+mismatches. Future update variants MUST preserve this separation.
+
 `paneDisplay` separates bounded rendering from input/control consumption; future
 rendering paths MUST reuse it. Pressure may omit pane output with a transcript
 inspection notice. Display content or loss never classifies AD state or authority.
@@ -211,6 +219,62 @@ shared surviving work retains the existing kill limits. EOF is transport
 failure, never child-death evidence; child loss stops the gateway rather than
 leaving a renderer classified live. Non-Linux lifetime/terminal operations
 fail closed.
+
+On a fatal `Run` return after registration, terminate and join the exact owned
+runtime, then independently call `VerifyRuntime` for terminated evidence while
+the gateway's registered ownership descriptors remain open. Only that proof
+permits failure cleanup to publish `missing`; preserve both the original failure
+and any cleanup error. Do not manufacture intentional SessionEnd,
+`prompt_input_exit` or turn success for this path.
+
+Public `Client.Get` and `Client.Status` call `reconcileCursorGateway` before their
+settled projections. `Client.List` validates filters before store access, selects
+candidates within `Labels`/`Parent`/`Cwd`/`TmuxSessionName` with `State` and `Limit`
+removed, and reconciles each live Cursor candidate before applying the original
+settled `State`, `Limit` and projection. Unrelated rows remain outside that
+candidate scope. CLI, MCP, Go and the Bun public verbs reach these methods.
+The helper selects only the requested live Cursor row and judges its recorded gateway
+PID/start-time with `tmux.JudgeProcess`. A different start time proves the old
+identity gone; alive or unknown evidence is conservative. Positive gateway loss
+permits `missing` even when the runtime is alive or unknown: missing does not
+prove runtime death and cannot authorize intentional `ended`. Only after this
+positive exact gateway loss and `ReadCursorRuntime` returning `sql.ErrNoRows`
+may the helper carry an examined-absence descriptor: retain the row's instance,
+token/life, gateway PID/start and session with every runtime field empty.
+Alive or unknown gateway evidence never reaches this branch. An existing stale
+binding is not absence; an unresolved conflict on the same dead launch returns
+an error. A replacement or terminal row is reread normally.
+Already terminal and non-Cursor rows incur
+no process probe or mutation. Standalone package-level `api.Get`/`api.Status`/`api.List`
+remain database projections; they do not perform these public Client checks.
+
+Both failure cleanup and read reconciliation MUST reuse
+`Store.MarkCursorMissingIfSameLaunch` and `terminalMarkWithoutWait`, which reuses
+`inWriteTxContext(ctx, 0)` and the common `terminalMarkOnConn` SQL payload.
+The write repeats the examined full row snapshot, launch token/life and gateway
+PID/start-time. For a registered runtime it also repeats the complete runtime
+PID/start-time, connection, pipes/fds, session and terminated binding. For
+examined absence, the conditional terminal UPDATE instead requires
+`NOT EXISTS` for **any** `cursor_runtimes` row for that instance in the same
+transaction. A binding inserted after observation, including a stale binding,
+defeats this close; a still-live row of the same dead launch returns the safe
+reconciliation error. No runtime identity, runtime death, retirement flag or
+intentional SessionEnd is fabricated. It atomically closes requests and running
+subagents and applies an immediate terminal state, bypassing settle delay.
+Transaction errors propagate, and changed guards cannot close a newer launch.
+One `operationContext(0)` carries the existing one-second immediate-work
+allowance through reconciliation SQL, connection cleanup and fail-open
+post-commit audit. It does not wait for a write lock: contention returns typed
+`ErrStoreBusy` without retry or a partial transition. Context-aware request-deny
+and orphan-tick emitters preserve values, order and pending/failed/rejected
+accounting; a confirmed commit remains confirmed if the post-commit audit
+reaches the deadline. Reuse these bounded entrypoints for Cursor reconciliation;
+do not substitute the legacy background transaction or start a new audit budget.
+The allowance is not a whole-read deadline: preceding reads/process probes and
+multiple List candidates have separate costs. Legacy `FindMissing`/`MarkEnded`
+retain their background transaction contracts through the shared SQL payload.
+Repeated terminal reads are idempotent. There is no full-store sweep on reads;
+explicit `find-missing` and other agents retain their existing contracts.
 
 The v9→v10 hop adds only `cursor_runtimes`, the current launch/life gateway and
 runtime pid/start-time, connection, private pipe/fd, session and retirement
@@ -1869,8 +1933,9 @@ guard reads. The writes and the derivation live in
   filter is the same expression, in the statement, ahead of its `LIMIT`).
   They fill `Spawn.ReportedState`, which every other read sets equal to
   `State`; `SpawnStatus`, `GetSpawn` and a `ListSpawns` with a zero
-  `Settle` are unchanged. A read is one SELECT and never waits for a state
-  to settle.
+  `Settle` are unchanged. This state projection is one SELECT and never waits
+  for a state to settle. Public Client reads first apply the
+  [Cursor gateway checks](#cursor-gateway-and-current-launch-binding).
 - **Must use:** every statement that writes `spawns.state` writes both
   settle columns in that same statement, through `hookWriteStateSet` (a
   hook's write or authenticated Cursor request admission) or
@@ -11073,7 +11138,7 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 ### Readers never wait (problem 4)
 
 `get`, `list` and `get-permission` judge every request they return
-through the Client's `relayView()`. Their one write is `hook_gone_at`, on
+through the Client's `relayView()`. Their relay-delivery write is `hook_gone_at`, on
 the requests they found fallen back with none recorded: one `recordGone`
 per call (`list` gathers every row's), through `RecordHookGone` with a
 lock wait of 0 (`readerLockWait`), so it writes only if the store's write
@@ -11100,6 +11165,11 @@ their own SELECT from the reader's clock (`SettleRead.stateExpr`), so
 settling adds no read, write or wait; the requests they list follow the
 raw state, never the settled one (see
 [Settle time (b.3ie)](#settle-time-b3ie)).
+
+Public `get`, `status` and `list` also perform the separate guarded
+[Cursor gateway reconciliation](#cursor-gateway-and-current-launch-binding)
+before projecting results; its write contention is an error, not a best-effort
+relay-delivery update.
 
 ### The row after the last answer (rule 9, problem 3)
 
@@ -16265,11 +16335,14 @@ Pause is one-shot; no incremental progress callback.
 
 ### kill vs find-missing
 
-`kill` never changes the row's state; `find-missing` is what marks it (a
-Codex row that reported its end is moved to `ended` instead).
+`kill` never changes the row's state; `find-missing` marks it (a
+Codex row that reported its end is moved to `ended` instead). Cursor also has
+[fatal cleanup and public read reconciliation](#cursor-gateway-and-current-launch-binding)
+that can mark its current launch `missing`.
 After a successful `kill`:
 
-1. The row stays in its live state (`waiting`, `pending` and so on).
+1. The row stays in its live state (`waiting`, `pending` and so on) until
+   a terminal writer applies; Cursor public reads can reconcile its lost gateway.
 2. `find-missing` marks it `missing` once it judges the agent process
    gone, from the row's recorded process identity. Only when that process
    cannot be checked (unreadable, a pid-only identity that reads alive, or

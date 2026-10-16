@@ -1,0 +1,41 @@
+{
+  "status": "source change complete; frozen List and targeted prior regressions GREEN",
+  "ticket_ids_context": ["t1.jf1.r8", "3t2.jf1.r8.a8"],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": ["pkg/api/list.go"],
+  "test_or_doc_files_modified": [],
+  "behavior": [
+    "Shared parseListFilters preserves negative-limit and label validation/error classifications before candidate reads or mutations.",
+    "Client.List enumerates candidates within Labels/Parent/Cwd/TmuxSessionName, removing only State and Limit; only live Cursor candidates invoke the existing guarded reconciliation helper.",
+    "After reconciliation the store reapplies original settled State and Limit and existing list projection, preserving wire shape, raw extras, permission presentation and non-Cursor behavior.",
+    "Existing exact gateway PID/start verdict, full snapshot/runtime binding transaction, request/subagent closure, conflict/error semantics reused without modification. Missing binding or close failure propagates an error and non-nil empty result.",
+    "Standalone api.List remains a lower-level database projection; only shared validation/projection extraction affects it."
+  ],
+  "validation": {
+    "list_green": {"log": "list-green.log", "top_level_tests": 2, "subtests": 10, "result": "PASS; six former causal failures plus four controls"},
+    "original_regressions": {"log": "original-green.log", "top_level_tests": 3, "subtests": 11, "result": "PASS"},
+    "api_targeted": {"log": "api-targeted-green.log", "top_level_tests": 12, "result": "PASS; includes ten API guard subtests, existing List filters/failures/shape, settled reads/raw extras, liveness and tmux fields"},
+    "store_guards": {"log": "store-guards-green.log", "top_level_tests": 1, "subtests": 7, "result": "PASS"},
+    "diff_check": "git diff --check -- pkg/api/list.go passed",
+    "raw_log_permissions": "0600 verified",
+    "frozen_proof": "frozen-proof.json: all nine explicit original and List artifacts match frozen hashes"
+  },
+  "dispatch_trace": {
+    "CLI": "cmd/agent-director/spawn_cmd.go:287 calls client.List(p)",
+    "MCP": "internal/mcp/dispatch.go:201 calls d.client.List(api.ListParams{...})",
+    "Bun": "pkg/ts-bun-client/src/client.ts:67 extends SubprocessClient; internal/subprocessClient.ts:496-498 list enqueues list verb; :262-270 builds argv and Bun.spawn invokes CLI"
+  },
+  "artifacts": ["source-changes.patch", "frozen-proof.json", "sandbox-command.sh", "targeted-command.sh", "frozen-proof.cjs", "proposed-srd-decisions.json"],
+  "deviations": [
+    "Initial host pwd command preceded sandbox setup; no repository content or host state was read by it. First sandbox read command omitted full environment sanitization and failed only because dispatch named nonexistent list-red/frozen-sha256.json; actual frozen artifact is frozen-sha256.txt. Subsequent test executions used canonical sandbox HOME, unset TMPDIR, sanitized AD/TMUX/config environment and run-local git config.",
+    "Sandbox lacks rg, so focused grep/sed reads were used after discovering that. No forbidden .claude path was accessed.",
+    "Evidence-only final dispatch grep initially matched no Bun list definition and yielded exit 1 after successful frozen proof and diff check; resolved by tracing inherited SubprocessClient method."
+  ],
+  "limitations": [
+    "Client.List now adds a candidate query and per-live-Cursor scoped reconciliation before final filtered projection.",
+    "No full suites, integration suites, heavy Docker epic groups, O4/live Cursor, auth/config operations, model/formal jobs or commits performed."
+  ],
+  "incomplete_work": [],
+  "questions": []
+}

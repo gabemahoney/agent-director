@@ -1,0 +1,10 @@
+{
+  "pkg/api/cursor_liveness_test.go": "11fbac87051bb024b9a6dc2c2669fe27de0ac5f896db7483fa8e65c138a08306",
+  "pkg/api/cursor_liveness_list_test.go": "cfe4c22e8715adff038d3c4ee447d28a7e25190b1941f9a79c959ee03abbd9c4",
+  "pkg/api/cursor_startup_liveness_test.go": "517bcef67ad911348fb077ac1e8e757ef9797f2723adcc5a0ee8b03562fbe389",
+  "internal/store/cursor_startup_liveness_test.go": "da747331c90e48ee3d4a331930be204f1ec3fe0bba9b4f161dfdc9ddc9b8a17c",
+  "test/realtmux/cursor_startup_liveness_linux_test.go": "503f33743ff1de0bf3413250e073e96e8ea9e6a517910b6140180ac3beb13178",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/sandbox-command.sh": "a6637e1f4ad7f5772f8e3cfbc13aecf93aaa80378eba2c91f26574b1d85bdcc0",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/targeted-command.sh": "4c12ab6df34eb12e5d91e0321976c8d56910eca32db7d3c16abf8d81c3d6338e",
+  "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/proof.cjs": "8bee2371af40df31103c324f097b2bd45130fa073234ddf11d4078d14e9166db"
+}

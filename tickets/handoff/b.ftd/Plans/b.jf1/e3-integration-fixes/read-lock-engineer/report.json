@@ -1,0 +1,101 @@
+{
+  "status": "source contention fix complete; requested targeted groups GREEN",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "internal/store/find_missing_writes.go",
+    "internal/store/lockwait.go",
+    "internal/store/request_close.go",
+    "internal/store/recovery.go",
+    "internal/store/cursor_runtime.go",
+    "pkg/api/list.go"
+  ],
+  "test_or_doc_files_modified": [],
+  "behavior": [
+    "Cursor missing reconciliation uses the existing bounded write-transaction machinery with zero lock wait. An independent held writer produces ErrStoreBusy immediately; no retry and no false working success.",
+    "Extracted one common in-transaction prior-state, conditional update, request-close and subagent-close payload. Legacy FindMissing/MarkEnded retain their background transaction, busy timeout, commit/rollback and post-commit behavior.",
+    "Full snapshot and full Cursor runtime/connection/session/termination/token/life/PID/start guards and CAS SQL are unchanged.",
+    "Extracted context-accepting internal connection/transaction entrypoints without changing existing duration-based callers. One operationContext(0), cut by Store.WithContext's parent, spans SQL, cleanup and post-commit audit, preserving existing confirmed/unconfirmed commit classification and connection quarantine.",
+    "Context-aware request deny and orphan tick emitters retain event values/order and existing fail-open policy. Bounded trail Emit uses the existing FIFO worker and pending/failed/rejected status; a blocked audit cannot turn confirmed missing into an error or renew the deadline. Legacy wrappers retain background behavior.",
+    "Restored Client.List's explicit no-write-lock-wait contract comment. Fatal Run uses the same corrected helper and retains its existing error joining."
+  ],
+  "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/read-lock-engineer/sandbox-command.sh'",
+  "validation": {
+    "held_lock": "PASS: 3 causal Get/Status/List cases, each returns typed ErrStoreBusy while independent SQLite WAL writer remains held; raw row/request unchanged; public calls return in 0.282610ms to 0.397289ms",
+    "original_frozen": "PASS: 3 tests / 11 leaves",
+    "list_frozen": "PASS: 2 tests / 10 leaves",
+    "guards": "PASS: 3 API tests / 10 leaves plus 1 store test / 7 leaves",
+    "related_store": "PASS: selected common terminal close atomicity/audit ordering, mark/ended refusal, column-scope and existing deadline/zero-wait transaction tests",
+    "raw_log_permissions": "0600",
+    "frozen_artifacts": "11 explicit files match expected before and after; see frozen-before.json, frozen-after.json and frozen-proof.json",
+    "diff_check": "passed"
+  },
+  "source_guard_limits": [
+    "No new tests authored in this source-only lane. Held-trail public Cursor read behavior follows existing context-aware Trail.Emit machinery but lacks a dedicated Cursor integration regression.",
+    "Recommend final Test Writer adapt trailEncodingGate in pkg/api/decide_trail_deadline_test.go: serially hold the real singleton writer mutex, call Get/Status/List for a dead gateway with an open request, independently observe committed missing and request closure before releasing the gate, assert return within the existing immediate-work allowance with success/missing rather than ErrStoreBusy or an ambiguous commit, inspect pending audit status, then release/join/drain and verify deny-before-tick values/order and one row-version change. No product hook or budget change is needed.",
+    "Patch is cumulative versus HEAD for the six named files; cursor_runtime.go and list.go include previously inherited edits. This lane changed only the missing helper call/comment and List contract comment in those two files."
+  ],
+  "deviations": [
+    "Initial read-only pwd/rg/cat/git inspection ran on host before switching repository execution to make sandbox; initial host reads omitted complete environment sanitization. No tests/builds/binaries or repository scripts ran on host, and no actual .claude or host AD data path was read. Subsequent repository executions used make sandbox with sanitized fresh HOME, unset TMPDIR/TMUX/AD variables and run-local git config.",
+    "Some read-only inspection commands returned nonzero for explicitly named nonexistent files/globs; these did not change product files or run tests."
+  ],
+  "incomplete_work": [],
+  "not_run": [
+    "full unit suite",
+    "integration suites",
+    "live Cursor/O4",
+    "heavy Docker groups",
+    "formal/model jobs"
+  ],
+  "questions": [],
+  "recorded_utc": "2026-10-16T07:32:22.214Z",
+  "actual_test_results": {
+    "held-lock-green": {
+      "exit_code": 0,
+      "raw_log_mode": "600",
+      "top_level_passes": 1,
+      "subtest_passes": 3
+    },
+    "original-green": {
+      "exit_code": 0,
+      "raw_log_mode": "600",
+      "top_level_passes": 3,
+      "subtest_passes": 11
+    },
+    "list-green": {
+      "exit_code": 0,
+      "raw_log_mode": "600",
+      "top_level_passes": 2,
+      "subtest_passes": 10
+    },
+    "api-guards-green": {
+      "exit_code": 0,
+      "raw_log_mode": "600",
+      "top_level_passes": 3,
+      "subtest_passes": 10
+    },
+    "store-targeted-green": {
+      "exit_code": 0,
+      "raw_log_mode": "600",
+      "top_level_passes": 10,
+      "subtest_passes": 147
+    }
+  },
+  "frozen_proof": {
+    "explicit_artifact_count": 11,
+    "all_match_expected": true,
+    "phase": "after"
+  },
+  "source_hashes": {
+    "internal/store/find_missing_writes.go": "88a296cf7011e2447934bcde607d9b36073c9c7113415d43ed02ddcfb20dfb09",
+    "internal/store/lockwait.go": "dfe2a5e255543d9b53bc965a88cf7e8135ed53fc815031a4d18f1f2c11ef5456",
+    "internal/store/request_close.go": "bf2272e356df774c639d7747092976cefb6726affebc1f4beff0e90aad9164df",
+    "internal/store/recovery.go": "aec233d9cb095bdb8e69eb4a27d54255fa5422f7963ea726496b57c06c5b07ee",
+    "internal/store/cursor_runtime.go": "7f303ee34d67f33ffe2209ddd0f1a2bab37200a9e30db84dae3b3c69ee9b8dd8",
+    "pkg/api/list.go": "07f88530c1f5f19ed48748ee273a79ce67e602a0acebe14d1c43eccf47f9c714"
+  }
+}

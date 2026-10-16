@@ -1,0 +1,206 @@
+[
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Get",
+    "observation": "cursor_liveness_lock_test.go:50: WAL prewarm start=2026-10-16T08:44:09.390513006Z elapsed=228.139µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Get",
+    "observation": "cursor_liveness_lock_test.go:70: held WAL read start=2026-10-16T08:44:09.390797005Z elapsed=29.74µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Get",
+    "observation": "cursor_liveness_lock_test.go:104: writer held; independent WAL read passed; exact gateway process check reached at 278.31µs; default busy timeout=10000ms; observed=2026-10-16T08:44:09.391111195Z"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Get",
+    "observation": "cursor_liveness_lock_test.go:136: returned while writer held: elapsed=307.8µs err=store: close lost Cursor launch: ErrStoreBusy: the write lock was not free within 0 ms: database is locked (5) (SQLITE_BUSY) observed=2026-10-16T08:44:09.394713223Z"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Status",
+    "observation": "cursor_liveness_lock_test.go:50: WAL prewarm start=2026-10-16T08:44:09.422919316Z elapsed=209.93µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Status",
+    "observation": "cursor_liveness_lock_test.go:70: held WAL read start=2026-10-16T08:44:09.423152666Z elapsed=20.4µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Status",
+    "observation": "cursor_liveness_lock_test.go:104: writer held; independent WAL read passed; exact gateway process check reached at 212.86µs; default busy timeout=10000ms; observed=2026-10-16T08:44:09.423390386Z"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/Status",
+    "observation": "cursor_liveness_lock_test.go:136: returned while writer held: elapsed=267.9µs err=store: close lost Cursor launch: ErrStoreBusy: the write lock was not free within 0 ms: database is locked (5) (SQLITE_BUSY) observed=2026-10-16T08:44:09.423906795Z"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/List",
+    "observation": "cursor_liveness_lock_test.go:50: WAL prewarm start=2026-10-16T08:44:09.450447289Z elapsed=249.46µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/List",
+    "observation": "cursor_liveness_lock_test.go:70: held WAL read start=2026-10-16T08:44:09.450720729Z elapsed=20.04µs"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/List",
+    "observation": "cursor_liveness_lock_test.go:104: writer held; independent WAL read passed; exact gateway process check reached at 635.529µs; default busy timeout=10000ms; observed=2026-10-16T08:44:09.451380778Z"
+  },
+  {
+    "test": "TestCursorReadsRefuseWriterContention/List",
+    "observation": "cursor_liveness_lock_test.go:136: returned while writer held: elapsed=688.139µs err=store: close lost Cursor launch: ErrStoreBusy: the write lock was not free within 0 ms: database is locked (5) (SQLITE_BUSY) observed=2026-10-16T08:44:09.452008328Z"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/gone",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.454438557Z elapsed=24.548455ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.482358669Z elapsed=4.110078ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.486485937Z elapsed=251.66µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/alive",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.489267055Z elapsed=23.643596ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.516503669Z elapsed=449.189µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.516972738Z elapsed=345.84µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/unknown",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.520088366Z elapsed=23.338706ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.54656293Z elapsed=455.32µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Get/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.54703899Z elapsed=344.91µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/gone",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.550583298Z elapsed=22.285276ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.576411172Z elapsed=4.259428ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.58068777Z elapsed=153.729µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/alive",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.583536198Z elapsed=23.065586ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.610313911Z elapsed=153.12µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.610485621Z elapsed=119.61µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/unknown",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.61320273Z elapsed=24.014705ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.640520863Z elapsed=202.66µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/Status/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.640745513Z elapsed=124.37µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/gone",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.643931441Z elapsed=25.132235ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.672225434Z elapsed=3.728137ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/gone",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.675972221Z elapsed=199.6µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/alive",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.67875041Z elapsed=23.450495ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.705525913Z elapsed=358.92µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/alive",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.705904633Z elapsed=281.55µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/unknown",
+    "observation": "cursor_startup_liveness_test.go:46: launch setup start=2026-10-16T08:44:09.709140341Z elapsed=23.555106ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.735835955Z elapsed=333.46µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingReads/List/unknown",
+    "observation": "cursor_startup_liveness_test.go:69: startup read start=2026-10-16T08:44:09.736190345Z elapsed=261.509µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Get/held_writer",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.739020243Z elapsed=24.283925ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Get/held_writer",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.765425397Z elapsed=248.57µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Get/request_close",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.768433835Z elapsed=23.731345ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Get/request_close",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.795429648Z elapsed=644.85µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Status/held_writer",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.799757436Z elapsed=22.901776ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Status/held_writer",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.824745421Z elapsed=228.489µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Status/request_close",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.827621479Z elapsed=23.777705ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/Status/request_close",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.854870872Z elapsed=647.11µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/List/held_writer",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.859269699Z elapsed=23.711396ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/List/held_writer",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.885874223Z elapsed=367.37µs"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/List/request_close",
+    "observation": "cursor_startup_liveness_test.go:104: launch setup start=2026-10-16T08:44:09.889088581Z elapsed=25.395855ms"
+  },
+  {
+    "test": "TestCursorStartupAbsentBindingFailures/List/request_close",
+    "observation": "cursor_startup_liveness_test.go:128: startup read start=2026-10-16T08:44:09.918031343Z elapsed=821.96µs"
+  }
+]

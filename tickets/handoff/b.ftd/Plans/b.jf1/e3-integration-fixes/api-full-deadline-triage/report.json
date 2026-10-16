@@ -1,0 +1,117 @@
+{
+  "status": "readonly diagnosis complete; no fixes or new execution performed",
+  "ticket_context": ["b.jf1", "t1.jf1.r8"],
+  "head_observed": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": ["tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-full-deadline-triage/report.json"],
+  "scope": "Read named source/docs, original evidence reports/log, git status/HEAD and safe host accounting only. No source/test/docs edits, repository execution, test/build/rerun, Docker, live store access, agents, messages or ticket mutations.",
+  "original_run": {
+    "evidence": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full",
+    "start_utc": "2026-10-16T08:31:47Z",
+    "end_utc": "2026-10-16T08:37:09Z",
+    "command": "make test-sandbox",
+    "make_exit": 2,
+    "go_packages_passed": 67,
+    "go_packages_failed": 1,
+    "api_package_elapsed_seconds": 216.448,
+    "cursorhost_package": "PASS, 115.712s",
+    "bun": "430 pass, 0 fail",
+    "timing_limitations": "Nonverbose log has no per-statement or per-goroutine timestamps, CPU profile, fsync duration, deadline-entry timestamp or contemporaneous pressure counters. Leaf durations include fixture construction and cleanup. Parent parallel-test elapsed times exclude time waiting for parallel children and are not additive."
+  },
+  "conclusion": {
+    "product_deadline_violation_demonstrated": false,
+    "product_bug_proven": false,
+    "load_as_sole_cause_proven": false,
+    "summary": "One failure is a preliminary raw WAL read, two are operation-guard unconfirmed-commit outcomes at an existing fixed deadline, and one is an invalid whole-API one-second oracle. Concurrent disk-backed fixtures and scheduling/I/O pressure are credible contributors, but the original run did not measure them. Preserve all product deadlines and safety assertions; isolate deadline-sensitive tests before attributing failures to production.",
+    "no_production_change_recommended": "Keep operationContext(0), immediateWorkBudget=1s, zero writer-lock wait, current commit uncertainty classification and no automatic retry. A timeout after COMMIT starts must not be recast as ErrStoreBusy/no-write."
+  },
+  "contract_and_code": [
+    {
+      "refs": ["docs/architecture.md:250-274", "pkg/api/cursor_liveness.go:14-39", "pkg/api/status.go:98-105", "internal/store/cursor_runtime.go:130-132,158-182"],
+      "finding": "Status first reads the live row, checks the exact process identity and reads the runtime binding. Only then does MarkCursorMissingIfSameLaunch start the terminal transaction. ReadLiveCursorSpawn and ReadCursorRuntime are ordinary s.db.QueryRow calls. The documented one-second allowance explicitly excludes preceding reads/process probes and multiple List candidates. No whole public API one-second deadline exists."
+    },
+    {
+      "refs": ["internal/store/find_missing_writes.go:246-266", "internal/store/lockwait.go:35-62,98-114,167-186,232-269,282-295"],
+      "finding": "terminalMarkWithoutWait creates one operationContext(0), shares it through transaction/cleanup/audit, and never renews it. Zero wait means a 1ms pool-acquisition allowance, busy timeout zero and immediate SQLITE_BUSY on independently held writer contention. immediateWorkBudget is one second of execution allowance, not a one-second lock retry."
+    },
+    {
+      "refs": ["internal/store/connection_cleanup.go:50-105", "internal/store/lockwait.go:244-268"],
+      "finding": "operation_guard is returned when the absolute operation deadline fires after commitStarted was set and before a completed result was published. This proves the guarded operation reached the COMMIT phase, not that COMMIT failed or rolled back. ErrStoreBusy is appropriate before COMMIT; uncertainty afterward is deliberately distinct. The branch alone does not measure time spent in fsync versus Go scheduling or driver/native work."
+    }
+  ],
+  "failures": [
+    {
+      "test": "TestCursorReadsRefuseWriterContention/Status",
+      "log_refs": "full.log:138-140",
+      "failure": "cursor_liveness_lock_test.go:64: WAL read while writer held: state=\"\" err=context deadline exceeded",
+      "classification": "Fixture precondition failure before product call; no evidence of reconciliation deadline violation.",
+      "code_path": "pkg/api/cursor_liveness_lock_test.go:29-64 opens independent writer, verifies WAL and holds BEGIN IMMEDIATE, then opens a fresh lazy raw reader and gives its first QueryRowContext only 250ms. Client Get/Status/List starts later at lines 77-93; it is not reached for this failed leaf.",
+      "inference": "The 250ms includes opening/initializing the fresh reader, OS/driver work and scheduling. WAL permits concurrent reads but does not promise all this work within 250ms under arbitrary host pressure. A separate database per fixture rules out direct cross-test SQLite lock sharing; shared storage and CPU remain possible.",
+      "minimal_test_only_proposal": "Remove top-level t.Parallel at line 17 so the intentional held-writer experiment runs outside the package's parallel fixture wave. Open and prewarm the independent reader with the same SELECT before acquiring BEGIN IMMEDIATE, then retain the existing bounded SELECT while held and all writer-held authority/no-write/error assertions. Do not simply raise 250ms or accept a failed precondition as a pass.",
+      "remaining_evidence_needed": "If prewarmed serial setup still fails, capture separate reader-open and held-read entry/exit timestamps in the sandbox and fail explicitly as invalid setup; do not infer a product regression from line 64."
+    },
+    {
+      "test": "TestUnknownOriginHoldAfterReopen/cursor/answered_at_the_pane_(pane_answer_sent)",
+      "log_refs": "full.log:153-155",
+      "failure": "sendkeys_hold_test.go:332: authenticated Cursor store proof: store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): context deadline exceeded",
+      "classification": "Existing semantic test's authenticated synthetic proof helper hit the real fixed deadline after COMMIT began. Not a held-writer/no-write failure and not proof of exceeding the guard deadline.",
+      "code_path": "sendkeys_hold_test.go:320-332 calls p.proveCursorTool after testing unmatched tool and token pairs. pane_answer_fixture_test.go:287-295 uses storefix.WithSeedPane and p.st.ProveCursorToolRan. cursor_permission.go:211-239 validates runtime authority and updates permission proof in inWriteTx(0), with the standard one-second operation context. WithSeedPane creates/restores a synthetic binding through additional connections (internal/testsupport/storefix/agent_hooks.go:67-125).",
+      "explicit_setup_budget_supported": false,
+      "budget_detail": "ProveCursorToolRan has no maxWait/until/context budget parameter. Store.WithContext can shorten the internal one-second context but cannot extend it because operationContext(0) derives another one-second timeout. The unrelated DecideParams.MaxWaitMs=5000 fixture precedent at decide_delivery_test.go:592-595 therefore cannot be transferred to this call without changing production API/default behavior.",
+      "minimal_test_only_proposal": "For this semantic test, remove both top-level t.Parallel at sendkeys_hold_test.go:248 and child t.Parallel at line 252 so it executes every closure and both agents serially outside the package parallel wave. Removing only child Parallel would still overlap other top-level API tests. Preserve every original proof/unknown-origin/hold/pane/reopen assertion and execute each proof once. Do not add retry/readback-as-success, skip, increased production budget or direct raw proof seeding that bypasses the authority path.",
+      "frozen_constraint": "This report makes no frozen-file edits. A scheduling-only edit to an original frozen file needs the caller's narrow scope authorization; it must leave all assertions intact. If that exception is unavailable, retain this failure as unresolved instead of hiding it through a global parallelism flag or changing ProveCursorToolRan.",
+      "remaining_evidence_needed": "Serial success would support fixture overlap as a contributor, not establish which resource caused the old timeout. If it repeats serially, record operation entry, authority callback, COMMIT start/return and independent durable-request observation before deciding whether a source defect exists."
+    },
+    {
+      "test": "TestCursorStartupAbsentBindingFailures/Status/request_close",
+      "log_refs": "full.log:156-158",
+      "failure": "cursor_startup_liveness_test.go:129: failed startup close exposed state=\"\" or exceeded immediate bound: 1.098120759s",
+      "classification": "Whole-API timing oracle exceeds documented scope; safe empty output observed. Captured log does not show a failure of the preceding expected injected-error assertion.",
+      "code_path": "cursor_startup_liveness_test.go:120 starts its timer before cursorStartupRead. That includes live-row read, process check and runtime absence read before the operation context is created. line 128 conflates empty-output safety and elapsed>1s. The injected permission-close failure returns before COMMIT and must roll the guarded row mutation back.",
+      "minimal_test_only_proposal": "First remove top-level t.Parallel at line 94, retaining existing error, empty-output and unchanged row/request assertions. Independently correct the oracle: separate state != empty from timing; the API semantic request-close branch must assert injected failure and rollback, not an unsupported whole-call <=1s contract. Do not substitute an arbitrary larger whole-call threshold and call it product compliance.",
+      "valid_timing_oracle": "If timing coverage is required in this test, obtain the actual operation-context creation/deadline and return observation through a test-only seam at terminalMarkWithoutWait, then check that the original deadline is retained through SQL/cleanup/audit. Keep the no-writer-wait behavior tested using the independently held writer and return-while-held oracle; a process-check barrier alone still precedes the runtime read and is not the exact operation budget start. Preserve existing held-trail proof unchanged. Real scheduler dispatch latency must not be mistaken for a renewed or extended product context.",
+      "frozen_constraint": "Any assertion correction needs explicit test-review acceptance as correction of an unsupported oracle. Serializing alone preserves the original assertion but does not make it a valid contractual guarantee."
+    },
+    {
+      "test": "TestCursorStartupAbsentBindingReads/Status/gone",
+      "log_refs": "full.log:161-163",
+      "failure": "cursor_startup_liveness_test.go:67: Status gateway=gone no runtime binding: state=\"\" err=store: close lost Cursor launch: store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): context deadline exceeded want=missing",
+      "classification": "Real bounded transaction could not confirm COMMIT inside its fixed one-second allowance; fail-closed API error is expected behavior in that condition. This semantic fixture assumes an uncontended transaction will complete successfully despite concurrent fixture load.",
+      "code_path": "cursor_startup_liveness_test.go:39-69 runs under top-level t.Parallel, constructs a complete real store/binding/request fixture, deletes binding and makes gateway gone. Status uses examined-absence MarkCursorMissingIfSameLaunch, whose guarded transaction atomically changes state, closes requests and subagents. The guard propagated its error and Status returned zero output.",
+      "minimal_test_only_proposal": "Remove top-level t.Parallel at line 40 to isolate the semantic missing/idempotence check from the API package's parallel database workers. Retain the strict successful missing result, version increment once, closed deny/proven-gone request, unchanged launch identity and absent runtime assertions, including both reads. Do not accept ErrStoreBusy or unconfirmed commit as success and do not turn the second read into a recovery retry.",
+      "remaining_evidence_needed": "A repeating serial failure needs operation/COMMIT timing and durable-state inspection in a purpose-built diagnostic test. Current nonverbose evidence cannot show whether COMMIT finished late, native I/O stalled, or the worker was descheduled."
+    }
+  ],
+  "concurrency_and_resource_evidence": {
+    "static": [
+      "All three new failing top-level tests call t.Parallel. Their child loops are sequential internally, but each overlaps the package's other parallel tests.",
+      "The existing unknown-origin test calls t.Parallel both at parent and each agent/closure child, multiplying concurrent disk-backed fixtures.",
+      "rg found 496 t.Parallel call sites in pkg/api test files. This is a static count, not the number executing simultaneously.",
+      "newKillEnv allocates its own t.TempDir/state.db, initializes and reopens the store and reads its store ID (kill_fixture_test.go:117-138). cursorReadLaunch adds synthetic binding/session/hook/request and API-client setup (cursor_liveness_test.go:18-52). These fixtures share host CPU and storage, not a database path.",
+      "Original make recipe ran ordinary go test -timeout 30m ./... with no -parallel/-p override; API and cursorhost were both fresh packages. Bun tests ran afterward, so Bun cannot explain concurrent load during these API failures.",
+      "The blocked-trail deadline test is already explicitly serial (cursor_liveness_trail_deadline_test.go:18-20), showing an established local isolation pattern; retain it unchanged."
+    ],
+    "post_run_host_snapshot": {
+      "observed_utc": "2026-10-16T08:38:57Z (date output; uptime's displayed clock uses local host timezone)",
+      "loadavg_earlier_same_read_batch": "9.73 14.38 12.05, runnable/total 9/8766",
+      "online_processors": 192,
+      "root_cgroup_cpu_max": "800000 100000 (8 CPU-equivalents at that ancestor)",
+      "root_cgroup_cpu_stat": {"nr_periods": 4159231, "nr_throttled": 519968, "throttled_usec": 200948247730},
+      "root_cgroup_memory_events": {"max": 3812950, "oom": 0, "oom_kill": 0},
+      "cpu_pressure": "some avg10=2.15 avg60=3.79 avg300=7.38; full=0",
+      "io_pressure": "some avg10=1.13 avg60=1.38 avg300=2.42; full avg10=1.13 avg60=1.36 avg300=2.35",
+      "limitation": "Host /proc and ancestor /sys/fs/cgroup snapshots were taken after the failure. Cumulative counters have no before/after delta for the run and aggregate other processes; /proc/self/cgroup reported /init.scope. They show resource constraints/pressure exist, not that throttling, memory pressure or fsync caused a specific leaf. Online CPU count is not a measurement of test GOMAXPROCS or container runtime scheduling."
+    },
+    "supported_inference": "Default Go test parallelism plus hundreds of real-store fixture sites can create CPU and storage contention. The 250ms first-read expiry and two one-second COMMIT-phase expiries are compatible with that mechanism. Original data cannot attribute the cause exclusively to load or establish an exact concurrency count."
+  },
+  "recommended_next_work": [
+    "Make the narrow scheduling-only changes to the three new top-level tests, and prewarm the raw WAL reader before holding the independent writer. Keep product code and all authority/deadline/fail-closed assertions unchanged.",
+    "For the original unknown-origin test, obtain a narrow scheduling-only frozen-file exception if needed; there is no existing supported larger proof budget. Never change the production one-second default to accommodate it.",
+    "Have test review separately assess the unsupported whole-API one-second startup-failure assertion and replace it only with an operation-scoped deadline oracle or a semantic-only injected-close assertion plus existing bounded fault coverage. This is not a blanket deadline increase.",
+    "After settled changes, the caller can authorize focused affected tests in the sandbox and review their measured evidence before any full gate. No global GOFLAGS/-parallel workaround, unchanged blind rerun, automatic proof retry or source deadline change is justified by this report."
+  ],
+  "incomplete_work": ["No proposed correction implemented or validated in this readonly lane. Resource causality and precise operation timing remain unmeasured for the original run."],
+  "deviations": [],
+  "questions": []
+}

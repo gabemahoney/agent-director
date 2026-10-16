@@ -1,0 +1,26 @@
+diff --git a/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/list-absent-control-before.go.txt b/pkg/api/cursor_liveness_list_test.go
+index 78f2476c..b127d9a9 100644
+--- a/tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fixture-startup-red/list-absent-control-before.go.txt
++++ b/pkg/api/cursor_liveness_list_test.go
+@@ -130,6 +130,21 @@ func TestCursorListLostGatewayErrorsAndValidation(t *testing.T) {
+ 			}
+ 			params := tc.params
+ 			params.TmuxSessionName = before.TmuxSessionName.(string)
++			if tc.absentBinding {
++				// Exact gateway loss is sufficient without a runtime registration.
++				for i := 0; i < 2; i++ {
++					got, err := c.List(params)
++					if err != nil || len(got.Spawns) != 1 || got.Spawns[0].InstanceID != b.InstanceID || got.Spawns[0].State != store.StateMissing {
++						t.Errorf("absent binding after exact gateway loss: rows=%+v err=%v; want missing", got.Spawns, err)
++					}
++				}
++				after := e.columns(t, b.InstanceID)
++				pr, err := e.st.GetPermissionRequest(b.InstanceID, token)
++				if err != nil || after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || !pr.Closed() || !pr.ProvenGone() || pr.Decision != "deny" || !pr.DeliveredAt.IsZero() {
++					t.Errorf("absent binding missing close not atomic/idempotent: before=%+v after=%+v request=%+v err=%v", before, after, pr, err)
++				}
++				return
++			}
+ 			got, err := c.List(params)
+ 			if err == nil {
+ 				t.Error("List reported success for known-dead unsafe launch")

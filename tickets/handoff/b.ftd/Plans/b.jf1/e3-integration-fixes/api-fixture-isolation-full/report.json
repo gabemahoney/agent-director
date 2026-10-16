@@ -1,0 +1,272 @@
+{
+  "status": "passed",
+  "ticket_ids_context": [
+    "b.jf1",
+    "t1.jf1.r8",
+    "t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "canonical_files_changed": [
+    "pkg/api/cursor_liveness_lock_test.go",
+    "pkg/api/cursor_startup_liveness_test.go",
+    "pkg/api/sendkeys_hold_test.go"
+  ],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full",
+  "command": [
+    "make",
+    "test-sandbox"
+  ],
+  "full_run_count": 1,
+  "head": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "make_exit": 0,
+  "go": {
+    "passed": 68,
+    "cached": 62,
+    "fresh": 6,
+    "failed": 0,
+    "no_test_files": 13,
+    "packages_reported": 81,
+    "test_skips": "Not observable in default nonverbose successful go test output; no skip count claimed."
+  },
+  "bun": {
+    "passed": 430,
+    "failed": 0,
+    "skipped": null,
+    "todo": null,
+    "summary": "Ran 430 tests across 57 files. [14.63s]"
+  },
+  "missing_package_results": [],
+  "proof": {
+    "unchanged": true,
+    "changes": [],
+    "before_manifest_sha256": "47dbf66debdcb6c9700c29b2bd1ad79fc5c070019b8231645aa4c2868e71cdd1",
+    "after_manifest_sha256": "47dbf66debdcb6c9700c29b2bd1ad79fc5c070019b8231645aa4c2868e71cdd1",
+    "frozen_matches": 11,
+    "new_red_matches": 8,
+    "original_frozen_unchanged": 9,
+    "authorized_list_exception": true,
+    "source_matches": 11,
+    "trail_unchanged": true,
+    "original_frozen_exceptions": [
+      {
+        "path": "pkg/api/cursor_liveness_lock_test.go",
+        "old": "e3caa9162cec48db15fde5dcfce40149594866dc1f14c4e36fd7ac78ccf10122",
+        "actual": "3c4e775ee0a589756f8a839e3c856fe86e3255717945fca1c9f62999d0f80271",
+        "unchanged": false,
+        "authorized_exception": "current explicitly accepted test-only correction"
+      },
+      {
+        "path": "pkg/api/cursor_liveness_list_test.go",
+        "old": "e745e2baaec66e43fcdb05975821c2f97340d72a6f19870e983c076ac8518ac5",
+        "actual": "cfe4c22e8715adff038d3c4ee447d28a7e25190b1941f9a79c959ee03abbd9c4",
+        "unchanged": false,
+        "authorized_exception": "prior List absence control"
+      }
+    ],
+    "new_red_unchanged": 7,
+    "new_red_exceptions": [
+      {
+        "path": "pkg/api/cursor_startup_liveness_test.go",
+        "old": "517bcef67ad911348fb077ac1e8e757ef9797f2723adcc5a0ee8b03562fbe389",
+        "actual": "e7f251e44a7d67da1b2ca53639bc1c33a5daab91c312060e432ba021759cb596",
+        "unchanged": false,
+        "authorized_exception": "current explicitly accepted test-only correction"
+      }
+    ]
+  },
+  "held_trail_test": {
+    "path": "pkg/api/cursor_liveness_trail_deadline_test.go",
+    "sha256": "e4835ae2ea9808d1ee0b468b69d3d6487a51e7c7d46fe6c55f3dd88107650a21"
+  },
+  "raw_log": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/full.log",
+    "mode": "600",
+    "bytes": 49222,
+    "sha256": "a431842abe2c4a0709d7a032814dc2fc2672ba56951478dbce38bf4ffe30ee10"
+  },
+  "receipt": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/run.json",
+  "deviations": [
+    "Initial make sandbox named read-only inspection preceded explicit environment sanitation; no tests/builds/product binaries ran in that initial inspection.",
+    "Sandbox rg unavailable; switched to named sed/grep/ls reads inside make sandbox.",
+    "Initial inline Node patch launcher quoting failed before the script ran or any edit occurred. Corrected shell quoting and applied the single actual edit pass before the focused run.",
+    "Preserved scheduling-only scope in sendkeys_hold_test.go; focused -v records each Cursor proof-bearing leaf at 0.07s including setup and all once-only proofs. Separate internal proof/setup/COMMIT timestamps are not available without additional instrumentation, which this lane did not add."
+  ],
+  "limitations": [
+    "Bare make output does not expose individual Go/Bun numeric exit codes; make aggregate exit is directly captured.",
+    "Successful nonverbose Go output does not expose per-test skip counts.",
+    "No live Cursor/O4, integration suites, Docker epic groups, formal/model jobs or retries run.",
+    "Focused timestamps record reader/prewarm starts, process-barrier observation and product elapsed time; the observed product-return timestamp is logged after unchanged-state inspection, not an exact COMMIT timestamp."
+  ],
+  "incomplete_work": [],
+  "questions": [],
+  "failure_assertions": [],
+  "failure_evidence": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/failure-excerpts.json",
+  "failure_classification": "This full run passed. Prior failed full receipts remain retained; no failed run was retried or overwritten.",
+  "independent_review": {
+    "result": "No new source/test gap found within assigned scope",
+    "scope": "Preserved strict semantic startup and unknown-origin assertions; operation-only one-second contract; existing frozen SQL/real-trail deadline checks and guards remain unchanged."
+  },
+  "recorded_utc": "2026-10-16T08:49:35.855Z",
+  "bun_observed_skip_lines": 0,
+  "compiled_inventory": {
+    "go_source_files": 1064,
+    "canonical_go_files_excluded": 27,
+    "policy": "go list selected files only; underscore snapshots, historical Go files and platform-excluded files are not claimed as compiled"
+  },
+  "integration_run": "Not dispatched as integration owner; integration suites not run.",
+  "proof_artifacts": {
+    "before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/input-manifest-before.json",
+    "after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/input-manifest-after.json",
+    "frozen_before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/frozen-before.json",
+    "frozen_after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/frozen-after.json",
+    "new_red_before": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/new-red-frozen-before.json",
+    "new_red_after": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/new-red-frozen-after.json"
+  },
+  "evidence_hashes": {
+    "before": "47dbf66debdcb6c9700c29b2bd1ad79fc5c070019b8231645aa4c2868e71cdd1",
+    "after": "47dbf66debdcb6c9700c29b2bd1ad79fc5c070019b8231645aa4c2868e71cdd1",
+    "frozen_before": "1a081043f6c48cb1054f04e1cb4ca2079da21b9e23771a1b059d8d5316bd42a1",
+    "frozen_after": "1a081043f6c48cb1054f04e1cb4ca2079da21b9e23771a1b059d8d5316bd42a1",
+    "new_red_before": "db4cfb59fd92b8374416b4183bb3bf0bfd77d8cb5cd79b765562744177aff3b5",
+    "new_red_after": "db4cfb59fd92b8374416b4183bb3bf0bfd77d8cb5cd79b765562744177aff3b5"
+  },
+  "authorized_test_delta": [
+    {
+      "path": "pkg/api/cursor_liveness_lock_test.go",
+      "old": "e3caa9162cec48db15fde5dcfce40149594866dc1f14c4e36fd7ac78ccf10122",
+      "new": "3c4e775ee0a589756f8a839e3c856fe86e3255717945fca1c9f62999d0f80271"
+    },
+    {
+      "path": "pkg/api/cursor_startup_liveness_test.go",
+      "old": "517bcef67ad911348fb077ac1e8e757ef9797f2723adcc5a0ee8b03562fbe389",
+      "new": "e7f251e44a7d67da1b2ca53639bc1c33a5daab91c312060e432ba021759cb596"
+    },
+    {
+      "path": "pkg/api/sendkeys_hold_test.go",
+      "old": "e3e9a8bcd482320a9af63052bee60d2bf079b3563f0659e1e9a754bf1f608cd7",
+      "new": "a2ff0b124d752b75272a41ea4e1b786e4183a1955c32520c0f86502f44dedc01"
+    }
+  ],
+  "test_corrections": [
+    "Writer-contention top-level fixture serial; independent same-SELECT WAL reader prewarmed before BEGIN IMMEDIATE; unchanged 250ms held-read deadline, exact authority and no-write assertions retained.",
+    "Absent-binding Reads/Failures top-level fixtures serial; all successful missing/version/closed-proof/idempotence/args/identity/Alive/Unknown/binding checks retained. Failure keeps empty output and exact injected decision-trigger text plus full raw row/request rollback. Removed unsupported whole-public-read <=1s assertion, with no replacement threshold. Held writer returns ErrStoreBusy before deferred release; frozen SQL/trail deadline coverage preserved.",
+    "UnknownOriginHoldAfterReopen parent and child t.Parallel removed with serial rationale; every closure/agent/reopen/unknown-origin/hold/proof/pane assertion and once-only authenticated proof call retained."
+  ],
+  "focused": {
+    "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/targeted.sh'",
+    "actual_test_command": "go test -timeout 30m ./pkg/api -run '^(TestCursorReadsRefuseWriterContention|TestCursorStartupAbsentBindingReads|TestCursorStartupAbsentBindingFailures|TestUnknownOriginHoldAfterReopen|TestEveryTestDeclaresParallelOrSerial)$' -count=1 -v",
+    "exit": 0,
+    "top_level_passes": 5,
+    "leaf_passes": 24,
+    "log": {
+      "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/targeted.log",
+      "mode": "600",
+      "sha256": "439593e889076caa3669feaccbb7710078e4040749c62bdb61ddebd74aa3ccb0"
+    },
+    "measurements": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/focused-measurements.json"
+  },
+  "focused_summary": {
+    "prewarm_microseconds": {
+      "Get": 228.139,
+      "Status": 209.93,
+      "List": 249.46
+    },
+    "held_WAL_read_microseconds": {
+      "Get": 29.74,
+      "Status": 20.4,
+      "List": 20.04
+    },
+    "held_writer_product_return_microseconds": {
+      "Get": 307.8,
+      "Status": 267.9,
+      "List": 688.139
+    },
+    "startup_fixture_setup_ms_range": [
+      22.285276,
+      25.395855
+    ],
+    "startup_gone_first_read_ms": {
+      "Get": 4.110078,
+      "Status": 4.259428,
+      "List": 3.728137
+    },
+    "request_close_failure_us": {
+      "Get": 644.85,
+      "Status": 647.11,
+      "List": 821.96
+    },
+    "unknown_origin_cursor_leaf_seconds": {
+      "delivered": 0.07,
+      "pane_answer_sent": 0.07,
+      "pane_answer_outside": 0.07
+    }
+  },
+  "frozen_proof": {
+    "path": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/frozen-delta-proof.json",
+    "original_count": 11,
+    "original_unchanged": 9,
+    "original_authorized_exceptions": [
+      "pkg/api/cursor_liveness_lock_test.go",
+      "pkg/api/cursor_liveness_list_test.go"
+    ],
+    "new_red_count": 8,
+    "new_red_unchanged": 7,
+    "new_red_authorized_exceptions": [
+      "pkg/api/cursor_startup_liveness_test.go"
+    ],
+    "all_current_authorized_hashes_match": true,
+    "original_tool_array_fatal_SIGKILL_tests_runners_unchanged": true
+  },
+  "source_unchanged": true,
+  "held_trail_unchanged": true,
+  "justification": "One focused affected-set run passed after the explicit scheduling/prewarm/incorrect-oracle corrections. Source and docs settled; then exactly one bare make test-sandbox ran with no concurrent mutators, no retry or global parallelism workaround.",
+  "environment": {
+    "container_HOME": "/home/sandbox",
+    "container_TMPDIR": "unset",
+    "umask": "022",
+    "git_config": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/gitconfig",
+    "removed_host_variables": [
+      "AGENT_DIRECTOR_AGENT",
+      "AGENT_DIRECTOR_INSTANCE_ID",
+      "AGENT_DIRECTOR_LABEL_HOST",
+      "AGENT_DIRECTOR_LABEL_TASK",
+      "AGENT_DIRECTOR_RELAY_MODE",
+      "GIT_CONFIG_GLOBAL",
+      "MAKEFLAGS",
+      "TMPDIR",
+      "TMUX",
+      "TMUX_PANE"
+    ],
+    "recursive_SANDBOX_CMD": false,
+    "GOFLAGS_override": false,
+    "parallelism_override": false
+  },
+  "causality": "GREEN after fixture isolation supports overlap as a plausible contributor. No measurement identifies which resource caused earlier failures; no product deadline violation or global resource cause is claimed.",
+  "prior_failed_full_evidence": [
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full/report.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/startup-final-full/report.json",
+    "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/expiry-fixture-full/report.json"
+  ],
+  "not_run": [
+    "integration suites",
+    "heavy Docker epic/collector/testimage groups",
+    "TLC/java/formal/parser/scheduler commands",
+    "live Cursor/O4"
+  ],
+  "commands": [
+    "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/targeted.sh'",
+    "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/metadata.sh before'",
+    "make test-sandbox",
+    "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/metadata.sh after'",
+    "make sandbox CMD='node tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/finalize.cjs; node tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/api-fixture-isolation-full/enrich.cjs'",
+    "Sandbox-only named inspections, Node evidence setup/patch generation, gofmt of the three assigned tests and git diff --check; full launcher recorded verbatim in full-command.txt"
+  ],
+  "start_utc": "2026-10-16T08:44:26Z",
+  "end_utc": "2026-10-16T08:48:04Z",
+  "full_run_seconds": 218,
+  "no_source_or_docs_modified": true,
+  "report_corrections": [
+    "Copied legacy metadata summary initially used an incorrect unchanged-original count; final proof computes it from immutable old manifests: 9 of 11 unchanged, with prior List and current held-writer exceptions. No new test run accompanied this evidence correction."
+  ]
+}

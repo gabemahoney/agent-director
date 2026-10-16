@@ -126,7 +126,11 @@ func (s *Store) ListLiveSpawnIdentities() ([]LiveSpawnIdentity, error) {
 // reason permission_orphan_closeout, carrying the request's token. A
 // trail-emit failure must not fail the store call (SR-A-3.2).
 func emitOrphanCloseoutTick(instanceID, requestToken string) {
-	_ = trail.Emit(context.Background(), "ad.find_missing.tick", map[string]any{
+	emitOrphanCloseoutTickContext(context.Background(), instanceID, requestToken)
+}
+
+func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken string) {
+	_ = trail.Emit(ctx, "ad.find_missing.tick", map[string]any{
 		"instance_id":           instanceID,
 		"request_token":         requestToken,
 		"prior_state":           nil,

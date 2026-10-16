@@ -6,7 +6,8 @@ error:
 
 - Only a GONE answer means a row's session is not there. Any other tmux error
   means "don't know", never "dead".
-- Row state, kept honest by `find-missing`, is the liveness authority. Poll a
+- Row state, reconciled by `find-missing` and the [Cursor read checks](#cursor-operation-boundaries),
+  is the liveness authority. Poll a
   launch with `status`; call `read-pane` only while the row is `pending`, at
   most once a second.
 - Run as the same user, in the same tmux environment, as the agents.
@@ -56,7 +57,7 @@ error:
 
 `kill` success on a live row verifies the process checks of that call. A
 finished-row call is a no-op without checking the process; it is not proof
-of exit. `missing` is the sweep's judgement on available evidence, not an
+of exit. `missing` is a judgement on available evidence, not an
 exit proof. Follow the sequence below before relaunching an id.
 
 A pending row noted `unreported` has an alive agent with no applied hook
@@ -195,16 +196,52 @@ outcomes. Display loss supplies no readiness, permission or termination evidence
 `spawn` returns before the runtime confirms startup. Missing programs,
 unsupported platforms, failed lifetime protection or unavailable ownership
 evidence cannot produce a ready report; a launch may remain `pending` until
-`find-missing` observes its absence. Runtime/protocol/reporting failures emit
-`ad.cursor.failed` with a reason when the gateway has identified its row.
+`find-missing` or a public read confirms gateway loss. Runtime/protocol/reporting
+failures emit `ad.cursor.failed` with a reason when the gateway has identified its row.
 Examples include an ACP operation timeout, unsupported ACP protocol,
 changed runtime/session binding, a refused report or transport failure.
 These are asynchronous launch failures, not new typed spawn errors.
 
-Pipe EOF is a transport failure, not proof of child death. Unexpected runtime
-loss stops the gateway and follows the existing `missing` sweep outcome.
-Local `/exit` and eligible `pause` can report termination only after the
-owned runtime is confirmed gone; a stop failure cannot report success.
+Tool and unknown updates retain their content in the protected transcript
+without treating it as main-agent text. Only main-agent text updates render as
+conversation text. Display content alone grants no permission, execution or
+completion authority; validated tool execution retains its separate proof checks. Invalid update schemas and
+session mismatches are distinct failures; accepting tool content does not relax
+session or authorization checks.
+
+Pipe EOF is a transport failure, not proof of child death. On fatal gateway
+failure, cleanup stops and joins the owned runtime and independently confirms
+its death before marking the current launch `missing` and closing its requests.
+This is not an intentional session end or a successful turn. Cleanup errors
+remain failures. Local `/exit` and eligible `pause` can report termination only
+after the owned runtime is confirmed gone; a stop failure cannot report success.
+
+For a live Cursor row, public `get` and `status` check only that row's recorded
+gateway process identity. Public `list` checks live Cursor candidates within its
+label, parent, working-directory and tmux-session filters before applying the
+settled-state filter and limit. Invalid filters are refused before any store
+read or mutation. A reused PID with a different start time means the
+recorded gateway is gone. A confirmed lost gateway marks the row `missing`
+without waiting for `find-missing` or the state settle delay, even if its runtime
+is still alive. Alive or unknown process evidence leaves the row unchanged.
+A gateway lost before runtime registration can also be marked `missing`, but
+only while no runtime binding exists for that instance. A binding appearing
+during reconciliation, including a stale binding, refuses that close. Existing
+stale bindings are not treated as absent. A changed launch is protected from
+stale cleanup; an unresolved conflict on the same dead launch or failed request
+closure returns an error.
+These reconciliation writes do not wait for the store's write lock:
+contention returns `ErrStoreBusy` without a partial transition or automatic
+retry. Finished rows are not checked again. These reads do not sweep outside
+their requested scope or change other agents' read behavior; explicit
+`find-missing` remains available.
+
+A Cursor `missing` row is not proof that its runtime has exited. Resolve any
+surviving work through the existing ownership and
+[human inspection procedures](operator-actions.md#inspect-and-end-a-session-by-hand)
+before a replacement launch, then use a fresh unique instance. Never replay an
+uncertain submission automatically.
+
 Unknown process evidence authorizes neither adoption nor a kill. Existing
 ownership errors and survivor limits still apply. Human inspection follows
 [Operator actions](operator-actions.md#inspect-and-end-a-session-by-hand).

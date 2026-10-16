@@ -1,0 +1,17 @@
+[
+  {
+    "path": "pkg/api/cursor_liveness_lock_test.go",
+    "old": "e3caa9162cec48db15fde5dcfce40149594866dc1f14c4e36fd7ac78ccf10122",
+    "new": "3c4e775ee0a589756f8a839e3c856fe86e3255717945fca1c9f62999d0f80271"
+  },
+  {
+    "path": "pkg/api/cursor_startup_liveness_test.go",
+    "old": "517bcef67ad911348fb077ac1e8e757ef9797f2723adcc5a0ee8b03562fbe389",
+    "new": "e7f251e44a7d67da1b2ca53639bc1c33a5daab91c312060e432ba021759cb596"
+  },
+  {
+    "path": "pkg/api/sendkeys_hold_test.go",
+    "old": "e3e9a8bcd482320a9af63052bee60d2bf079b3563f0659e1e9a754bf1f608cd7",
+    "new": "a2ff0b124d752b75272a41ea4e1b786e4183a1955c32520c0f86502f44dedc01"
+  }
+]

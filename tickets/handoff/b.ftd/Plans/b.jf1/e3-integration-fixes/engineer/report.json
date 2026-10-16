@@ -1,0 +1,82 @@
+{
+  "status": "source fixes complete; frozen regressions and targeted related tests GREEN",
+  "recorded_utc": "2026-10-16T07:10:00.132329+00:00",
+  "source_commit": "b5802c287210ba792a70e8de534d1c1e8cca5544",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "internal/cursorhost/session.go",
+    "internal/store/cursor_runtime.go",
+    "pkg/api/cursor_liveness.go",
+    "pkg/api/get.go",
+    "pkg/api/status.go"
+  ],
+  "test_or_doc_files_modified": [],
+  "raw_logs": [
+    "green.log",
+    "targeted.log"
+  ],
+  "receipts": [
+    "green-run.json",
+    "targeted-run.json"
+  ],
+  "final_sandbox_script": "sandbox-command.sh",
+  "initial_script_archive": "initial-green-sandbox-command.sh",
+  "targeted_top_level_pass_count": 27,
+  "targeted_top_level_passes": [
+    "--- PASS: TestFailedTerminationNeverReportsSuccess (0.00s)",
+    "--- PASS: TestCursorExecutionProofRequiresMatchingShellResult (1.56s)",
+    "--- PASS: TestCursorProofAndAdmissionRejectStaleAuthority (0.29s)",
+    "--- PASS: TestCursorQuestionPolicyPreservesIndependentHold (0.19s)",
+    "--- PASS: TestCursorRuntimeWaitsForIndependentPlanAndPermission (0.11s)",
+    "--- PASS: TestCursorE3ToolUpdateBeforePlanAdmission (1.37s)",
+    "--- PASS: TestCursorE3FatalRunClosesMissing (0.35s)",
+    "--- PASS: TestCursorE3PublicReadsReconcileKilledGateway (1.06s)",
+    "--- PASS: TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority (0.73s)",
+    "--- PASS: TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld (0.70s)",
+    "--- PASS: TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity (4.04s)",
+    "--- PASS: TestCursorRotationRejectsChangedExaminedAuthority (0.49s)",
+    "--- PASS: TestCursorHookRequiresCurrentRuntimeConnectionAndImmediateParent (1.08s)",
+    "--- PASS: TestCursorRuntimeStaleSessionAndReplacementRefused (0.02s)",
+    "--- PASS: TestCursorStaleReportCannotMutateReplacementLaunch (0.03s)",
+    "--- PASS: TestCursorRuntimeConditionalBindingWrites (0.40s)",
+    "--- PASS: TestCursorBindingDatabaseFailureIsObservable (0.05s)",
+    "--- PASS: TestAppliedWriteChangesOnlyItsColumns (1.60s)",
+    "--- PASS: TestFindMissingIfSameLifeRefused (1.30s)",
+    "--- PASS: TestAdviceFollow_A25_B14_CursorFreshInstanceRemedy (0.16s)",
+    "--- PASS: TestFindMissingChangedBetweenReadAndWrite (0.88s)",
+    "--- PASS: TestStatusHappy (0.01s)",
+    "--- PASS: TestGetReadsAndErrors (0.00s)",
+    "--- PASS: TestFindMissingProcessSelectionVerdict (0.00s)",
+    "--- PASS: TestFindMissingMarkCloseFailureLeavesRowLive (0.10s)",
+    "--- PASS: TestClientSettledReads (0.17s)",
+    "--- PASS: TestClientSettledReadsKeepRawExtras (0.24s)"
+  ],
+  "remaining_test_failures": [],
+  "frozen_proof": {
+    "before": "frozen-before.json",
+    "after": "frozen-after.json",
+    "equal": true,
+    "scope": "Exact seven explicit frozen regression/fixture/RED runner paths only; no whole-tree access/hash."
+  },
+  "source_hashes": "source-sha256.json",
+  "source_changes": "source-changes.patch",
+  "behavior": [
+    "Decode sessionUpdate discriminator and opaque tool/unknown content separately; only agent text chunk schemas decoded as text. Existing attribution/retirement/execution/authorization gates remain. Child/unknown/tool content cannot render as main text.",
+    "On fatal Run return, terminate/join owned runtime and independently verify exact death with gateway ownership descriptors still open. Conditionally mark missing via common terminal transaction, close requests/subagents atomically, preserve original fatal and cleanup errors.",
+    "Client.Get/Status reconcile only requested live Cursor row using exact recorded gateway pid/start-time through existing tmux.JudgeProcess. Alive or unknown gateways do not transition. Positive gateway loss marks missing even if runtime is alive/unknown. Full row snapshot and complete persisted runtime/connection/session/termination binding guard transaction. Guard conflict rereads current row; unresolved same-dead-launch conflict returns error. Missing binding after positive gateway death returns error. Non-Cursor and terminal rows stay on normal read path."
+  ],
+  "deviations": [],
+  "limitations": [
+    "No unit tests or docs authored in source-only lane; further guard matrix belongs to TestWriter.",
+    "Additional unknown/recycled gateway, dead gateway/live runtime, snapshot/session/connection replacement races, read-specific transaction failure, and terminal settle/idempotence tests remain for independent guard validation. Existing common-process, transaction-failure, settle-read and stale-authority targeted tests pass.",
+    "Rejected live envelope is absent. Tool array fixture is synthetic schema regression, not recovery of lost live wire bytes.",
+    "Only Client public Get/Status gain reconciliation; existing standalone store-surface Get/Status functions retain behavior and do not have process checker context.",
+    "No full suites, Docker epic groups, live Cursor/O4, models/formal work, host AD data or .claude access."
+  ],
+  "questions": []
+}

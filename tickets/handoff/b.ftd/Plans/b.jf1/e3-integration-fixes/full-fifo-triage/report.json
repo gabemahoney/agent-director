@@ -1,0 +1,25 @@
+{
+  "status": "read-only FIFO assessment complete; no reproduction or repair claimed",
+  "ticket_ids_context": ["t1.jf1.r8", "3t2.jf1.r8.a8"],
+  "ticket_status_changes": [],
+  "commits": [],
+  "source_test_doc_files_changed": [],
+  "files_created": ["tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fifo-triage/report.json", "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fifo-triage/analysis.md"],
+  "tests_or_repo_binaries_executed": false,
+  "observed": {
+    "test": "TestCursorFIFOExactTextAndLifecycle",
+    "failure": "session_controls_linux_test.go:44 all FIFO outcomes: frame count=5",
+    "test_duration_seconds": 4.07,
+    "aggregate_wait_seconds": 3,
+    "outcomes_awaited_in_one_wait": 4,
+    "pane": "Three queued acceptances; HOLD and Unicode follow-up visibly complete; paste follow-up reply visible; final follow-up absent"
+  },
+  "assessment": "Strongest static explanation is a whole-sequence fixture budget applied to four serial turn transitions. Product race/deadlock is neither demonstrated nor excluded. Admission-restoration race is not supported because all follow-ups were accepted while initial HOLD was active, before release.",
+  "recommendation": "Keep batch submission and queued-before-release proof. After release, wait per expected accepted submission ID and matching started request/turn_outcome, using existing fixture transition allowance; preserve exact text/order/once-only/binding assertions. Add bounded correlated failure diagnostics. Do not change product timeouts or probe admission by discarding successful claims.",
+  "bound": "Existing fixture 3 seconds per expected completion, four outstanding outcomes => maximum four such allowances; neighboring full-queue fixture already uses per-outcome waits. This is a fixture allowance, not a derived product-wide maximum: hooks allow 5 seconds and normal fsync has no bound.",
+  "missing_evidence": ["Actual failed-test trace entries, peer sent frames, protected records and timestamps were not retained in supplied failure artifacts; concrete temporary paths were not printed"],
+  "deviations": [],
+  "incomplete_work": ["No deterministic RED/GREEN, source repair, test edits, targeted or full tests performed in read-only lane"],
+  "questions": [],
+  "analysis": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/full-fifo-triage/analysis.md"
+}

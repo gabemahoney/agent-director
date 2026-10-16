@@ -67,6 +67,7 @@ var availableSubcmds = []string{
 	"seed-template",
 	"seed-empty-store",
 	"seed-row-session",
+	"fake-pane-owner",
 	"seed-read-surface-store",
 	"set-settle",
 	"json-schema",
@@ -98,6 +99,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedEmptyStore(args[1:], stdout, stderr)
 	case "seed-row-session":
 		return cmdSeedRowSession(args[1:], stdout, stderr)
+	case "fake-pane-owner":
+		return cmdFakePaneOwner(args[1:], stdout, stderr)
 	case "seed-read-surface-store":
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
@@ -467,6 +470,7 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 // result fields and their JSON types.  This is intentionally a simple
 // observability aid rather than a full JSON Schema document.
 var resultSchemas = map[string]map[string]string{
+	"fake-pane-owner": {"pid": "number", "start": "string"},
 	"seed-spawn": {
 		"instance_id": "string",
 	},

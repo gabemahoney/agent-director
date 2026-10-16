@@ -355,6 +355,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			first := e.admit(t, c, `"first"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "first", "execute"))
 			second := e.admit(t, c, `"second"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "second", "execute"))
 			holdFor := 80 * time.Millisecond
+			deadlineEstablished := time.Now()
 			if tc.loss == "expiry" {
 				first.timeout = time.UnixMilli(time.Now().Add(200 * time.Millisecond).UnixMilli())
 				first.settle = first.timeout
@@ -366,6 +367,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			if err := c.tick(); err != nil {
 				t.Fatal(err)
 			}
+			ackComplete := time.Now()
 			if e.request(t, first.token).DeliveredAt.IsZero() {
 				t.Fatal("first answer lacks durable acknowledgement")
 			}
@@ -374,9 +376,32 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			next := <-c.protocol.outgoing
 			originalGuard, originalDone := next.guard, next.done
 			guardErrors := make(chan error, 2)
+			entered, releaseStore := make(chan struct{}), make(chan struct{})
+			type guardObservation struct {
+				entry, exit, deadline time.Time
+				err                   error
+				holderReleased        bool
+			}
+			guardEntered := make(chan time.Time, 1)
+			guardReturned := make(chan guardObservation, 1)
+			var guardCalls atomic.Int32
 			finished := make(chan error, 1)
 			next.guard = func() error {
+				firstCall := guardCalls.Add(1) == 1
+				observation := guardObservation{entry: time.Now(), deadline: next.deadline}
+				if firstCall {
+					guardEntered <- observation.entry
+				}
 				err := originalGuard()
+				if firstCall {
+					observation.exit, observation.err = time.Now(), err
+					select {
+					case <-releaseStore:
+						observation.holderReleased = true
+					default:
+					}
+					guardReturned <- observation
+				}
 				select {
 				case guardErrors <- err:
 				default:
@@ -386,7 +411,6 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			next.done = func(err error) { originalDone(err); finished <- err }
 			c.protocol.outgoing <- next
 
-			entered, releaseStore := make(chan struct{}), make(chan struct{})
 			var once sync.Once
 			unhold := func() { once.Do(func() { close(releaseStore) }) }
 			t.Cleanup(unhold)
@@ -441,6 +465,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("store holder did not enter")
 			}
+			holderEntered := time.Now()
 			remaining := time.Until(next.deadline)
 			started := time.Now()
 			timer := time.AfterFunc(holdFor, unhold)
@@ -455,6 +480,31 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			}
 			defer timer.Stop()
 			releaseWriter()
+			if tc.loss == "expiry" {
+				var guardEntry time.Time
+				select {
+				case guardEntry = <-guardEntered:
+				case <-time.After(transportWriteWait + time.Second):
+					t.Fatalf("expiry guard did not enter: established=%s ack=%s holder=%s deadline=%s", deadlineEstablished, ackComplete, holderEntered, next.deadline)
+				}
+				var observation guardObservation
+				select {
+				case observation = <-guardReturned:
+				case <-time.After(transportWriteWait + time.Second):
+					t.Fatalf("expiry guard did not return: established=%s ack=%s holder=%s guardEntry=%s deadline=%s", deadlineEstablished, ackComplete, holderEntered, guardEntry, next.deadline)
+				}
+				t.Logf("expiry established=%s ack=%s holder=%s guardEntry=%s deadline=%s guardExit=%s holderReleased=%v guardErr=%v", deadlineEstablished, ackComplete, holderEntered, observation.entry, observation.deadline, observation.exit, observation.holderReleased, observation.err)
+				if !observation.entry.Before(observation.deadline) {
+					t.Errorf("fixture precondition failed: expiry guard entered after fixed deadline: entry=%s deadline=%s", observation.entry, observation.deadline)
+				}
+				if observation.holderReleased || observation.entry.Before(holderEntered) {
+					t.Error("expiry holder did not remain held throughout the first guard")
+				}
+				if observation.exit.Before(observation.deadline) || !errors.Is(observation.err, store.ErrStoreBusy) || !errors.Is(observation.err, context.DeadlineExceeded) {
+					t.Errorf("expiry guard did not exhaust its fixed deadline under contention: entry=%s deadline=%s exit=%s err=%v", observation.entry, observation.deadline, observation.exit, observation.err)
+				}
+				unhold()
+			}
 			var writeErr error
 			select {
 			case writeErr = <-finished:
@@ -462,6 +512,7 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				t.Fatal("answer did not finish within existing frame budget")
 			}
 			elapsed := time.Since(started)
+			frameComplete := time.Now()
 			if runtimeGone != nil {
 				if err := <-runtimeGone; err != nil {
 					t.Fatalf("runtime retirement: %v", err)
@@ -480,11 +531,14 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			}
 			pr := e.request(t, first.token)
 			t.Logf("first guard=%v storeBusy=%v completion=%v elapsed=%s finiteHold=%s remainingFrame=%s remainingApproval=%s durableAck=%v firstBytes=%q", guardErr, errors.Is(guardErr, store.ErrStoreBusy), writeErr, elapsed, holdFor, remaining, time.Until(first.timeout), !pr.DeliveredAt.IsZero(), firstBytes)
+			if tc.loss == "expiry" {
+				t.Logf("expiry frameComplete=%s", frameComplete)
+			}
 			if pr.DeliveredAt.IsZero() || pr.ProvenGone() || pr.Closed() {
 				t.Fatal("contention changed durable ack/proof")
 			}
 			if tc.loss != "none" {
-				if elapsed < 40*time.Millisecond {
+				if tc.loss != "expiry" && elapsed < 40*time.Millisecond {
 					t.Errorf("%s refused before the bounded acquisition wait: %s", tc.loss, elapsed)
 				}
 				if writeErr == nil {

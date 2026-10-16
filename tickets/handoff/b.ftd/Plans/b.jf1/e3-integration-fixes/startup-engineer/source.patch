@@ -1,0 +1,49 @@
+--- a/internal/store/cursor_runtime.go
++++ b/internal/store/cursor_runtime.go
+@@ -150,7 +150,9 @@
+ 
+ // MarkCursorMissingIfSameLaunch closes a lost gateway or a failed Run using
+ // the common terminal transaction, including request and subagent closure.
+-// Both the row snapshot and the complete examined connection must still match.
++// The row snapshot and complete examined connection must still match. A descriptor
++// with every runtime field empty represents examined absence of registration;
++// that branch requires no binding for this instance at the terminal write.
+ // It never waits for the write lock: contention returns ErrStoreBusy with no
+ // writes. SQL, cleanup and fail-open post-commit audit share one bounded context.
+ func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (string, CondResult, error) {
+@@ -161,9 +163,16 @@
+ 	args = append(args, liveStateGuardArgs()...)
+ 	args = append(args, snapshotMatchArgs(row.Snapshot)...)
+ 	args = append(args, b.Token, b.Life, b.GatewayPID, b.GatewayStart)
+-	args = append(args, cursorBindingArgs(b)...)
+-	args = append(args, b.SessionID, b.Terminated)
+-	stmt := markMissingIfSameLifeSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=? AND EXISTS(SELECT 1 FROM cursor_runtimes WHERE ` + cursorBindingMatchSQL + ` AND bound_session_id=? AND bound_terminated=?)`
++	stmt := markMissingIfSameLifeSQL + ` AND agent='cursor' AND launch_token=? AND life_number=? AND pane_pid=? AND pane_starttime=?`
++	if b.RuntimePID == 0 && b.RuntimeStart == "" && b.Connection == "" && b.InputPipe == "" && b.OutputPipe == "" && b.InputFD == 0 && b.OutputFD == 0 && !b.Terminated {
++		// Even a stale binding inserted after observation defeats examined absence.
++		stmt += ` AND NOT EXISTS(SELECT 1 FROM cursor_runtimes WHERE bound_instance_id=?)`
++		args = append(args, row.InstanceID)
++	} else {
++		stmt += ` AND EXISTS(SELECT 1 FROM cursor_runtimes WHERE ` + cursorBindingMatchSQL + ` AND bound_session_id=? AND bound_terminated=?)`
++		args = append(args, cursorBindingArgs(b)...)
++		args = append(args, b.SessionID, b.Terminated)
++	}
+ 	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+ }
+ 
+--- a/pkg/api/cursor_liveness.go
++++ b/pkg/api/cursor_liveness.go
+@@ -28,9 +28,10 @@
+ 	}
+ 	b, err := c.st.ReadCursorRuntime(instanceID)
+ 	if errors.Is(err, sql.ErrNoRows) {
+-		return fmt.Errorf("Cursor lost gateway has no current runtime binding")
+-	}
+-	if err != nil {
++		// Startup can fail before registration. Carry only the examined launch;
++		// the terminal transaction must still prove that no binding exists.
++		b = store.CursorRuntime{InstanceID: row.InstanceID, Token: row.Identity.Token, Life: row.LifeNumber, GatewayPID: row.Identity.PanePID, GatewayStart: row.Identity.PaneStarttime, SessionID: row.SessionID}
++	} else if err != nil {
+ 		return err
+ 	}
+ 	_, result, err := c.st.MarkCursorMissingIfSameLaunch(row, b)

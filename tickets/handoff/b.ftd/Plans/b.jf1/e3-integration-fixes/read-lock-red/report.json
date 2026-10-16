@@ -1,0 +1,68 @@
+{
+  "status": "focused causal RED confirmed; new test and runner frozen",
+  "ticket_ids_context": [
+    "t1.jf1.r8",
+    "3t2.jf1.r8.a8"
+  ],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": [
+    "pkg/api/cursor_liveness_lock_test.go"
+  ],
+  "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/read-lock-red/sandbox-command.sh'",
+  "go_test_exit_code": 1,
+  "make_exit_code": 2,
+  "top_level_tests": 1,
+  "failed_subtests": 3,
+  "failed_behaviors": [
+    "Get",
+    "Status",
+    "List"
+  ],
+  "causal_proof": [
+    "Each fixture contains a live Cursor launch with exact gone gateway, alive runtime, open permission request, and maximum settle delay.",
+    "Independent SQL connection holds BEGIN IMMEDIATE after client and fixture setup. WAL mode verified; separate context-bounded SELECT succeeds while writer remains held.",
+    "Reused cursorReadBarrier proves public read reaches exact gateway process check before watchdog begins; no readiness sleeps, retries, busy-timeout reductions or product-deadline changes.",
+    "All three calls still blocked after 1000ms while independent writer remains held. Full raw launch and permission request unchanged and request still open before release.",
+    "Cleanup only then rolls back held writer. Worker joins with success/missing (Get/Status) or one row (List) at about 1.035 seconds total. The contention did not produce required prompt typed ErrStoreBusy.",
+    "GREEN asserts typed API ErrStoreBusy while writer remains held, no stale state/rows, non-nil empty List, unchanged full raw row/request."
+  ],
+  "source_finding": {
+    "path": "internal/store/find_missing_writes.go",
+    "function": "terminalMarkIfSameLife",
+    "detail": "Uses context.Background and plain BEGIN IMMEDIATE, inherited default SQLite busy timeout 10000ms. New public Cursor gateway reconciliation invokes this through MarkCursorMissingIfSameLaunch."
+  },
+  "proof": {
+    "source_unchanged": true,
+    "nine_frozen_unchanged": true,
+    "nine_match_expected": true
+  },
+  "raw_log": "red.log",
+  "raw_log_permissions": "0600",
+  "artifacts": [
+    "sandbox-command.sh",
+    "source-before.json",
+    "source-after.json",
+    "frozen-before.json",
+    "frozen-after.json",
+    "proof.json",
+    "frozen-sha256.json",
+    "timings.json",
+    "go-test-exit-code.txt"
+  ],
+  "deviations": [
+    "Initial read-only inspection command unset TMPDIR and recursive AGENT_DIRECTOR_SANDBOX_CMD and set canonical HOME, but omitted full AD/TMUX/GIT_CONFIG_GLOBAL sanitization. It read only explicitly named checkout reports and CLAUDE.md; rg was unavailable. Every subsequent command fully stripped AD/TMUX/config variables; test runner uses a unique run-local git config. No tests ran before sanitization.",
+    "No tickets/subtask statuses updated per explicit focused dispatch."
+  ],
+  "incomplete_work": [
+    "Source correction and GREEN rerun remain for caller/Engineer; no source edits made."
+  ],
+  "not_run": [
+    "full unit suite",
+    "integration suites",
+    "live Cursor/O4",
+    "heavy Docker groups",
+    "formal/model jobs"
+  ],
+  "questions": []
+}

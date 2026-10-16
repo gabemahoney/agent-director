@@ -1,0 +1,55 @@
+{
+  "status": "focused causal RED confirmed; test and valid sandbox runner frozen",
+  "ticket_ids_context": ["t1.jf1.r8", "3t2.jf1.r8.a8"],
+  "ticket_status_changes": [],
+  "commits": [],
+  "files_changed": ["pkg/api/cursor_liveness_list_test.go"],
+  "evidence_directory": "tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/list-red",
+  "command": "make sandbox CMD='bash tickets/handoff/b.ftd/Plans/b.jf1/e3-integration-fixes/list-red/sandbox-command.sh'",
+  "runner": "sandbox-command.sh",
+  "raw_log": "red.log",
+  "raw_log_permissions": "0600",
+  "make_exit_code": 2,
+  "go_test_result": "FAIL: causal behavioral assertions; no build or fixture failures",
+  "top_level_tests": 2,
+  "failed_subtests": 6,
+  "passed_controls": 4,
+  "causal_failures": [
+    "gone working: direct List reports settled working rather than missing; raw row remains check_permission, version unchanged, request still awaits answer",
+    "recycled permission: List reports check_permission despite wrong gateway start time; raw row/version and request remain live",
+    "missing filter includes newly missing: List returns no target, while dead target should reconcile before state filtering",
+    "working limit excludes newly missing: List returns dead target occupying the one result instead of the live non-Cursor survivor; dead target remains unreconciled",
+    "absent binding: direct List returns success and a working row with an open request instead of an error and empty non-nil result",
+    "request close fails: direct List returns success and a working row with an open request instead of propagating atomic close failure and empty non-nil result"
+  ],
+  "passing_controls": [
+    "same-start alive gateway: complete target row and request unchanged",
+    "unknown gateway: complete target row and request unchanged",
+    "negative limit: ErrInvalidFlags, non-nil empty result, no process probe or row/request mutation",
+    "invalid label: ErrListInvalidLabel, non-nil empty result, no process probe or row/request mutation"
+  ],
+  "coverage_details": [
+    "All public calls are List first: no preceding Get, Status, or FindMissing",
+    "Maximum settle fixture reused; terminal missing must bypass settled working immediately",
+    "Dead gateway is paired with an alive runtime; death must report missing rather than ended",
+    "Repeated List requires exactly one row-version increment, missing projection with no open requests, and persisted request closure",
+    "Valid exact label scope and tmux-session scope; assertions use sets and counts, never an order contract",
+    "Same-store live Cursor bystander outside scope and non-Cursor in-scope survivor remain byte-for-byte unchanged",
+    "Failure and validation cases require full row and request rollback/preservation"
+  ],
+  "reused_helpers": ["cursorReadLaunch", "cursorReadSQL", "killEnv.columns", "apitest.SeedSpawn", "apitest.SetSettle", "procfix", "storefix.InjectWriteFailure"],
+  "source_proof": {
+    "before": "source-before.sha256",
+    "after": "source-after.sha256",
+    "equal": true,
+    "scope": "Exact six product paths: internal/cursorhost/session.go, internal/store/cursor_runtime.go, pkg/api/cursor_liveness.go, pkg/api/get.go, pkg/api/status.go, pkg/api/list.go"
+  },
+  "frozen_proof": {
+    "hashes": "frozen-sha256.txt",
+    "scope": "New List test file and valid sandbox-command.sh only; freeze recorded after causal RED run"
+  },
+  "deviations": [],
+  "incomplete_work": ["Engineer must implement Client.List reconciliation before state filtering and limit, preserving validation and error semantics; GREEN rerun remains for caller"],
+  "not_run": ["full unit suite", "integration suites", "Docker epic groups", "live Cursor/O4", "formal/model jobs"],
+  "questions": []
+}
