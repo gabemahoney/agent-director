@@ -1,0 +1,743 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "scope": "measurement and diagnosis only",
+  "result": "historical COMMIT failure not reproduced; root cause unproven",
+  "status_updates": [],
+  "commits": [],
+  "canonical_source_or_assertion_changes": [],
+  "revisions": {
+    "old": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+    "head": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db"
+  },
+  "original_test_function_blocks_identical": true,
+  "original_comparison_totals": {
+    "old": {
+      "leaf_cases": 36,
+      "repetitions_per_leaf": [
+        332
+      ],
+      "passed_leaf_outcomes": 11952,
+      "failed_leaf_outcomes": 0
+    },
+    "head": {
+      "leaf_cases": 36,
+      "repetitions_per_leaf": [
+        332
+      ],
+      "passed_leaf_outcomes": 11952,
+      "failed_leaf_outcomes": 0
+    }
+  },
+  "original_comparison_per_case": {
+    "old": {
+      "TestDecideKeepsDurableOrigin/claude": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestDecideKeepsDurableOrigin/codex": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestDecideKeepsDurableOrigin/cursor": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_no_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_no_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered": {
+        "pass": 332,
+        "fail": 0
+      }
+    },
+    "head": {
+      "TestDecideKeepsDurableOrigin/codex": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestDecideKeepsDurableOrigin/claude": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestDecideKeepsDurableOrigin/cursor": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/timeout_deny_delivered,_then_the_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_still_running;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/a_verdict_not_acked,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_before_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_its_hook_can't_be_checked,_at_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/delivered,_no_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/codex/idle_Notification_while_it_awaited,_then_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_still_running;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_proven_gone_by_a_turn_end,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/answered_at_the_pane,_no_turn_end_yet,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/answered_at_the_pane,_then_proven_gone_by_a_turn_end,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_before_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/undecided,_idle_Notification_while_it_awaited,_then_proven_gone,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/a_verdict_not_acked,_its_hook_gone": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_no_idle_Notification": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_still_running": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/delivered,_its_hook_can't_be_checked,_at_confirm_by": {
+        "pass": 332,
+        "fail": 0
+      },
+      "TestRepairCheckPermission/idle_Notification_while_it_awaited,_then_delivered": {
+        "pass": 332,
+        "fail": 0
+      }
+    }
+  },
+  "phase_duration_ms": {
+    "instrumented": {
+      "acquire/unbounded": {
+        "n": 2010,
+        "p50": 0.00087,
+        "p95": 0.00162,
+        "p99": 0.00235,
+        "max": 0.00949
+      },
+      "begin/unbounded": {
+        "n": 2010,
+        "p50": 0.01724,
+        "p95": 0.410419,
+        "p99": 0.887159,
+        "max": 3.068298
+      },
+      "transaction_sql/unbounded": {
+        "n": 2010,
+        "p50": 0.197619,
+        "p95": 2.016199,
+        "p99": 5.936606,
+        "max": 9.771004
+      },
+      "commit/unbounded": {
+        "n": 2010,
+        "p50": 2.254429,
+        "p95": 5.624997,
+        "p99": 12.750513,
+        "max": 24.674815
+      },
+      "cleanup/unbounded": {
+        "n": 2010,
+        "p50": 0.00067,
+        "p95": 0.00091,
+        "p99": 0.00106,
+        "max": 0.01253
+      },
+      "worker_scheduling/bounded": {
+        "n": 1950,
+        "p50": 0.00174,
+        "p95": 0.00562,
+        "p99": 0.00753,
+        "max": 0.34919
+      },
+      "acquire/bounded": {
+        "n": 1950,
+        "p50": 0.00166,
+        "p95": 0.00726,
+        "p99": 0.01032,
+        "max": 0.08339
+      },
+      "cleanup/bounded": {
+        "n": 1950,
+        "p50": 0.00447,
+        "p95": 0.01536,
+        "p99": 0.08113,
+        "max": 0.265
+      },
+      "begin/bounded": {
+        "n": 390,
+        "p50": 0.00445,
+        "p95": 0.01372,
+        "p99": 0.36273,
+        "max": 0.97752
+      },
+      "transaction_sql/bounded": {
+        "n": 390,
+        "p50": 0.11397,
+        "p95": 0.24109,
+        "p99": 0.82392,
+        "max": 3.498068
+      },
+      "commit/bounded": {
+        "n": 390,
+        "p50": 2.046119,
+        "p95": 4.428857,
+        "p99": 6.547456,
+        "max": 11.078644
+      },
+      "decide/bounded": {
+        "n": 390,
+        "p50": 91.989554,
+        "p95": 135.010788,
+        "p99": 147.42379,
+        "max": 149.573419
+      },
+      "repair/unbounded": {
+        "n": 990,
+        "p50": 8.964234,
+        "p95": 41.396065,
+        "p99": 61.964782,
+        "max": 79.090722
+      }
+    },
+    "instrumented_load": {
+      "acquire/unbounded": {
+        "n": 2680,
+        "p50": 0.00116,
+        "p95": 0.0023,
+        "p99": 0.00283,
+        "max": 0.04983
+      },
+      "begin/unbounded": {
+        "n": 2680,
+        "p50": 0.018959,
+        "p95": 0.64595,
+        "p99": 2.547838,
+        "max": 55.778666
+      },
+      "transaction_sql/unbounded": {
+        "n": 2680,
+        "p50": 0.20974,
+        "p95": 0.44943,
+        "p99": 1.01191,
+        "max": 31.700251
+      },
+      "commit/unbounded": {
+        "n": 2680,
+        "p50": 11.930473,
+        "p95": 24.210725,
+        "p99": 61.400152,
+        "max": 107.059115
+      },
+      "cleanup/unbounded": {
+        "n": 2680,
+        "p50": 0.00075,
+        "p95": 0.00118,
+        "p99": 0.00235,
+        "max": 0.09192
+      },
+      "worker_scheduling/bounded": {
+        "n": 2600,
+        "p50": 0.0017,
+        "p95": 0.00395,
+        "p99": 0.00684,
+        "max": 0.09918
+      },
+      "acquire/bounded": {
+        "n": 2600,
+        "p50": 0.00233,
+        "p95": 0.00944,
+        "p99": 0.01396,
+        "max": 0.02893
+      },
+      "sql_result_publication/bounded": {
+        "n": 2600,
+        "p50": 9e-05,
+        "p95": 0.00024,
+        "p99": 0.00038,
+        "max": 0.00077
+      },
+      "cleanup/bounded": {
+        "n": 2600,
+        "p50": 0.00473,
+        "p95": 0.01467,
+        "p99": 0.08224,
+        "max": 0.19145
+      },
+      "begin/bounded": {
+        "n": 520,
+        "p50": 0.00453,
+        "p95": 0.00686,
+        "p99": 0.01263,
+        "max": 0.10106
+      },
+      "transaction_sql/bounded": {
+        "n": 520,
+        "p50": 0.12064,
+        "p95": 0.17469,
+        "p99": 0.228989,
+        "max": 0.29063
+      },
+      "commit/bounded": {
+        "n": 520,
+        "p50": 11.398023,
+        "p95": 19.699718,
+        "p99": 22.298696,
+        "max": 24.861745
+      },
+      "repair/unbounded": {
+        "n": 1320,
+        "p50": 39.639215,
+        "p95": 211.347691,
+        "p99": 370.065385,
+        "max": 413.787628
+      },
+      "decision_trail/unbounded": {
+        "n": 920,
+        "p50": 121.627436,
+        "p95": 381.048959,
+        "p99": 410.049651,
+        "max": 424.938721
+      },
+      "decision_trail/bounded": {
+        "n": 520,
+        "p50": 587.192013,
+        "p95": 702.189924,
+        "p99": 747.138705,
+        "max": 755.125701
+      },
+      "decide/bounded": {
+        "n": 520,
+        "p50": 601.783904,
+        "p95": 715.948905,
+        "p99": 758.875599,
+        "max": 769.686712
+      }
+    },
+    "instrumented_high_load": {
+      "acquire/unbounded": {
+        "n": 6432,
+        "p50": 0.00198,
+        "p95": 0.00302,
+        "p99": 0.00742,
+        "max": 0.55125
+      },
+      "begin/unbounded": {
+        "n": 6432,
+        "p50": 0.02495,
+        "p95": 3.876728,
+        "p99": 29.756602,
+        "max": 266.015139
+      },
+      "transaction_sql/unbounded": {
+        "n": 6432,
+        "p50": 0.24889,
+        "p95": 0.46568,
+        "p99": 0.62915,
+        "max": 59.090924
+      },
+      "commit/unbounded": {
+        "n": 6432,
+        "p50": 48.946061,
+        "p95": 98.38679,
+        "p99": 242.665912,
+        "max": 457.042222
+      },
+      "cleanup/unbounded": {
+        "n": 6432,
+        "p50": 0.00101,
+        "p95": 0.00256,
+        "p99": 0.00943,
+        "max": 0.03277
+      },
+      "repair/unbounded": {
+        "n": 3168,
+        "p50": 280.904549,
+        "p95": 1159.007716,
+        "p99": 1486.102087,
+        "max": 1685.184885
+      },
+      "worker_scheduling/bounded": {
+        "n": 5006,
+        "p50": 0.00145,
+        "p95": 0.00618,
+        "p99": 0.01242,
+        "max": 0.27567
+      },
+      "acquire/bounded": {
+        "n": 5006,
+        "p50": 0.00137,
+        "p95": 0.00934,
+        "p99": 0.01567,
+        "max": 0.18058
+      },
+      "read_sql/bounded": {
+        "n": 3758,
+        "p50": 0.09609,
+        "p95": 0.47366,
+        "p99": 5.927996,
+        "max": 15.033771
+      },
+      "sql_result_publication/bounded": {
+        "n": 5006,
+        "p50": 7e-05,
+        "p95": 0.00022,
+        "p99": 0.00035,
+        "max": 0.02377
+      },
+      "cleanup/bounded": {
+        "n": 5006,
+        "p50": 0.00522,
+        "p95": 0.02336,
+        "p99": 0.07072,
+        "max": 0.24726
+      },
+      "begin/bounded": {
+        "n": 1248,
+        "p50": 0.00479,
+        "p95": 0.00696,
+        "p99": 0.01225,
+        "max": 0.03896
+      },
+      "transaction_sql/bounded": {
+        "n": 1248,
+        "p50": 0.13777,
+        "p95": 0.201319,
+        "p99": 0.25581,
+        "max": 0.84749
+      },
+      "commit/bounded": {
+        "n": 1248,
+        "p50": 48.91084,
+        "p95": 79.672781,
+        "p99": 87.255736,
+        "max": 122.389536
+      },
+      "decision_trail/bounded": {
+        "n": 1248,
+        "p50": 950.482002,
+        "p95": 973.274519,
+        "p99": 984.913362,
+        "max": 994.226136
+      },
+      "decide/bounded": {
+        "n": 1248,
+        "p50": 1000.562932,
+        "p95": 1001.043971,
+        "p99": 1001.079532,
+        "max": 1001.239371
+      },
+      "decision_trail/unbounded": {
+        "n": 2208,
+        "p50": 1005.164719,
+        "p95": 1615.102879,
+        "p99": 1685.617986,
+        "max": 2204.32445
+      }
+    }
+  },
+  "bounded_decide_budget_remaining_ms": {
+    "instrumented": {
+      "n": 390,
+      "p50": 907.998446,
+      "p95": 956.668017,
+      "p99": 979.583222,
+      "max": 981.995231
+    },
+    "instrumented_load": {
+      "n": 520,
+      "p50": 397.283896,
+      "p95": 861.869304,
+      "p99": 914.644562,
+      "max": 938.699747
+    },
+    "instrumented_high_load": {
+      "n": 1248,
+      "p50": -0.562892,
+      "p95": -0.057932,
+      "p99": 236.534334,
+      "max": 419.172373
+    }
+  },
+  "phase_errors": [],
+  "environment": {
+    "execution": "make sandbox CMD only for repository Go tests/builds; no host Go/Bun/binaries",
+    "go": "go1.22.10 linux/amd64",
+    "sqlite_module": "modernc.org/sqlite v1.34.0",
+    "logical_processors": 192,
+    "cpu_max": "max 100000",
+    "memory_max": "max",
+    "GOMAXPROCS": [
+      4,
+      192
+    ],
+    "parallel": [
+      4,
+      192
+    ],
+    "isolated_home": "new sandbox /tmp scratch for each process",
+    "environment_filter": "env -i: PATH, HOME, TMPDIR, GIT_CONFIG_GLOBAL, GOPATH=/go, GOCACHE, AGENT_DIRECTOR_TEST_SANDBOX=1, GOMAXPROCS only",
+    "cache": "same mounted module/build caches; reused, not cleared",
+    "source_filter": "explicit git-tree allowed-file list excludes every .claude path component and tickets/ before git archive content access"
+  },
+  "design": {
+    "baseline": "balanced old/head/head/old/old/head; count=10 each batch, parallel=4 GOMAXPROCS=4",
+    "high_concurrency": "balanced head/old/old/head/head/old; count=10 each batch, parallel=192 GOMAXPROCS=192",
+    "matching_load": "balanced old/head/head/old; eight simultaneous same-revision processes, count=5 each",
+    "high_load": "balanced head/old/old/head; 32 simultaneous same-revision processes, count=3 each",
+    "diagnostic": "HEAD only: 30 single-process repetitions (v1), 40 repetitions in eight processes (v2), 96 repetitions in 32 processes (v3). Instrumentation patches retained separately."
+  },
+  "proven_findings": [
+    "Historical Repair failures occur in the setup Decide before RepairCheckPermission runs.",
+    "Historical error text has two potential sources: COMMIT ExecContext failure, or reporting deadline with commitStarted and no completed result. Original logs do not distinguish them.",
+    "Sampled successful Decide time under load is dominated by post-COMMIT decision trail emission. This emission runs only after inWriteTx succeeds, so it cannot directly produce the same call's COMMIT error.",
+    "Current source publishes SQL result before cleanup; sampled cleanup and publication times are separately recorded."
+  ],
+  "not_established": [
+    "No failure-rate regression was demonstrated: both revisions had zero failures in these controlled samples.",
+    "No root cause established for historical COMMIT deadline failures.",
+    "No proof of blocked fsync, global filesystem serialization, or publication-race cause.",
+    "No full package/multi-package workload was reproduced exactly; bounded matching load is a surrogate."
+  ],
+  "proposed_fix": null,
+  "next_action": "Do not change deadline, retries, or assertions based on this sample. Capture branch-specific COMMIT/publication phase evidence during the actual failing package workload; then write a deterministic failing regression for the proven cause before implementing a fix.",
+  "limitations": [
+    "Zero observed failures does not prove absence of regression. Repeated samples share a host and filesystem and are correlated.",
+    "Diagnostic timing adds nonblocking buffered-channel observation and an asynchronous stderr writer. Phase records are process-wide; go test JSON may attribute stderr to the last active subtest, so that Test field is not a request correlation ID.",
+    "Worker scheduling records measure admitted-worker launch delay, not all scheduler delay inside native SQL. COMMIT elapsed does not by itself distinguish filesystem I/O from descheduling.",
+    "No syscall tracing was run. No failing native COMMIT was observed.",
+    "Whole-subtest durations include fixture setup/readback/teardown; only decide phase measures actual Decide.",
+    "No full unit/integration suite, Docker test group, scheduler helper, TLC, live Cursor, real credential/store or forbidden .claude content access performed."
+  ],
+  "files_changed": [
+    "Evidence only under /home/horde/ad-codex/project/agent-director-ftd/tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/deadline-measurement"
+  ],
+  "incomplete": [
+    "Root cause and evidence-backed product fix remain unresolved; no RED/GREEN/full-suite gate or commit performed in this measurement-only assignment."
+  ],
+  "questions_for_calling_agent": [],
+  "artifacts": {
+    "raw": "[01..24]*.jsonl and *.stderr; sandbox-*.log; *-runner.log",
+    "versions_and_hashes": "source-manifest.json, original-test-source-hashes.json, instrumentation-manifest.json, artifact-manifest.json",
+    "source_archives": "old-source.tar.gz, head-source.tar.gz",
+    "instrumentation": "instrumentation-v1.patch, instrumentation-v2.patch, instrumentation-v3.patch",
+    "complete_per_case_counts_phase_outliers": "measurement-summary.json",
+    "exact_commands": "run-*.sh"
+  }
+}

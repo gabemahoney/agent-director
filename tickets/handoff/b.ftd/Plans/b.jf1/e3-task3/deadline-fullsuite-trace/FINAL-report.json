@@ -1,0 +1,669 @@
+{
+  "scope": "Measurement only: maximum two full unit Go diagnostics; no integration run",
+  "result": "Historical API COMMIT deadline not reproduced. Corrected complete Go suite fails only tools/measure-exit/dryrun TestDryRun; cause unclassified. No canonical fix justified.",
+  "ticket_ids": [
+    "t2.jf1.r8.a8"
+  ],
+  "ticket_status_updates": [],
+  "commits": [],
+  "canonical_mutations": [],
+  "commands": [
+    "make sandbox CMD=...run.sh 01-natural: Bun install/build prerequisite once; go test -json -timeout 30m ./...",
+    "make sandbox CMD=...run-v2.sh 02-controlled: go test -count=1 -json -timeout 30m ./..."
+  ],
+  "runs": {
+    "01-natural": {
+      "exit": "1",
+      "api_process_attribution": "Inferred main API process: unique file with maximum decide_entry count; v1 has no executable field",
+      "leaf_outcomes": {
+        "pass": 17797,
+        "skip": 61,
+        "fail": 3
+      },
+      "api_leaf_outcomes": {
+        "pass": 9587,
+        "skip": 50
+      },
+      "failures": [
+        {
+          "Time": "2026-10-16T04:44:33.153417882Z",
+          "Action": "fail",
+          "Package": "github.com/gabemahoney/agent-director/internal/spawn",
+          "Test": "TestValidateCanonicalizesCwd",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-16T04:45:01.728478444Z",
+          "Action": "fail",
+          "Package": "github.com/gabemahoney/agent-director/tools/measure-exit/dryrun",
+          "Test": "TestDryRun",
+          "Elapsed": 27.78
+        },
+        {
+          "Time": "2026-10-16T04:46:25.769026844Z",
+          "Action": "fail",
+          "Package": "github.com/gabemahoney/agent-director/internal/cursorhost",
+          "Test": "TestTranscriptRefusesUnsafePaths/public_transcript_dir",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-16T04:46:25.769033214Z",
+          "Action": "fail",
+          "Package": "github.com/gabemahoney/agent-director/internal/cursorhost",
+          "Test": "TestTranscriptRefusesUnsafePaths",
+          "Elapsed": 0
+        }
+      ],
+      "api_telemetry": {
+        "records": 21378,
+        "phases_ms": {
+          "driver_commit_entry/unbounded": {
+            "n": 4463,
+            "p50": 0.00011,
+            "p99": 0.0004,
+            "max": 0.01182
+          },
+          "driver_commit_exit/unbounded": {
+            "n": 4463,
+            "p50": 1.938819,
+            "p99": 780.170586,
+            "max": 3037.822145
+          },
+          "decision_trail/unbounded": {
+            "n": 839,
+            "p50": 1.33093,
+            "p99": 1252.181069,
+            "max": 4501.847016
+          },
+          "repair/unbounded": {
+            "n": 132,
+            "p50": 19.851038,
+            "p99": 269.488217,
+            "max": 279.546711
+          },
+          "acquire/unbounded": {
+            "n": 816,
+            "p50": 0.00114,
+            "p99": 0.00313,
+            "max": 192.163043
+          },
+          "begin/unbounded": {
+            "n": 803,
+            "p50": 2.533289,
+            "p99": 98.17584,
+            "max": 583.514876
+          },
+          "transaction_sql/unbounded": {
+            "n": 802,
+            "p50": 18.005849,
+            "p99": 296.43892,
+            "max": 403.649895
+          },
+          "commit_exec_entry/unbounded": {
+            "n": 755,
+            "p50": 6e-05,
+            "p99": 0.00016,
+            "max": 0.00019
+          },
+          "commit/unbounded": {
+            "n": 755,
+            "p50": 6.741816,
+            "p99": 2171.398231,
+            "max": 2974.897713
+          },
+          "cleanup_entry/unbounded": {
+            "n": 816,
+            "p50": 0.00016,
+            "p99": 0.00028,
+            "max": 0.00039
+          },
+          "cleanup/unbounded": {
+            "n": 816,
+            "p50": 0.00142,
+            "p99": 6.019546,
+            "max": 95.438362
+          },
+          "admission_success/bounded": {
+            "n": 461,
+            "p50": 0.00049,
+            "p99": 27.602203,
+            "max": 47.409251
+          },
+          "operation_admitted/bounded": {
+            "n": 460,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00024
+          },
+          "worker_scheduling/bounded": {
+            "n": 460,
+            "p50": 0.00271,
+            "p99": 0.01034,
+            "max": 0.04693
+          },
+          "acquire/bounded": {
+            "n": 460,
+            "p50": 0.00113,
+            "p99": 85.244798,
+            "max": 500.124086
+          },
+          "read_sql/bounded": {
+            "n": 379,
+            "p50": 21.895347,
+            "p99": 197.1344,
+            "max": 314.671599
+          },
+          "publication_entry/bounded": {
+            "n": 453,
+            "p50": 6e-05,
+            "p99": 0.00017,
+            "max": 0.00033
+          },
+          "sql_result_publication/bounded": {
+            "n": 453,
+            "p50": 0.00152,
+            "p99": 0.02969,
+            "max": 0.05174
+          },
+          "cleanup_entry/bounded": {
+            "n": 453,
+            "p50": 5e-05,
+            "p99": 0.00019,
+            "max": 0.00025
+          },
+          "cleanup/bounded": {
+            "n": 453,
+            "p50": 0.24654,
+            "p99": 34.039549,
+            "max": 55.300866
+          },
+          "gate_release/bounded": {
+            "n": 460,
+            "p50": 5e-05,
+            "p99": 0.00016,
+            "max": 0.0002
+          },
+          "begin/bounded": {
+            "n": 74,
+            "p50": 4.516897,
+            "p99": 528.886998,
+            "max": 528.886998
+          },
+          "transaction_sql/bounded": {
+            "n": 59,
+            "p50": 11.928742,
+            "p99": 406.444713,
+            "max": 406.444713
+          },
+          "commit_exec_entry/bounded": {
+            "n": 58,
+            "p50": 6e-05,
+            "p99": 0.00016,
+            "max": 0.00016
+          },
+          "driver_commit_entry/bounded": {
+            "n": 58,
+            "p50": 0.0001,
+            "p99": 0.00043,
+            "max": 0.00043
+          },
+          "driver_commit_exit/bounded": {
+            "n": 58,
+            "p50": 7.133525,
+            "p99": 237.968216,
+            "max": 237.968216
+          },
+          "commit/bounded": {
+            "n": 58,
+            "p50": 7.136715,
+            "p99": 237.972806,
+            "max": 237.972806
+          },
+          "decision_trail/bounded": {
+            "n": 23,
+            "p50": 362.13802,
+            "p99": 969.254781,
+            "max": 969.254781
+          },
+          "decide_entry/bounded": {
+            "n": 49,
+            "p50": 0.00229,
+            "p99": 0.01792,
+            "max": 0.01792
+          },
+          "decide/bounded": {
+            "n": 49,
+            "p50": 500.163366,
+            "p99": 1020.082561,
+            "max": 1020.082561
+          },
+          "decide_entry/unbounded": {
+            "n": 133,
+            "p50": 0.0005,
+            "p99": 0.00153,
+            "max": 0.00781
+          },
+          "admission_success/unbounded": {
+            "n": 105,
+            "p50": 0.00081,
+            "p99": 0.00112,
+            "max": 0.00114
+          },
+          "operation_admitted/unbounded": {
+            "n": 105,
+            "p50": 6e-05,
+            "p99": 0.00023,
+            "max": 0.00024
+          },
+          "worker_scheduling/unbounded": {
+            "n": 105,
+            "p50": 0.00202,
+            "p99": 0.00407,
+            "max": 0.0043
+          },
+          "decide/unbounded": {
+            "n": 133,
+            "p50": 181.727289,
+            "p99": 2005.850031,
+            "max": 2057.32235
+          },
+          "publication_entry/unbounded": {
+            "n": 105,
+            "p50": 5e-05,
+            "p99": 0.00016,
+            "max": 0.00022
+          },
+          "sql_result_publication/unbounded": {
+            "n": 105,
+            "p50": 0.00059,
+            "p99": 0.04651,
+            "max": 0.04846
+          },
+          "gate_release/unbounded": {
+            "n": 105,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00019
+          },
+          "read_sql/unbounded": {
+            "n": 13,
+            "p50": 22.347356,
+            "p99": 79.206432,
+            "max": 79.206432
+          },
+          "outer_deadline_guard_entry/bounded": {
+            "n": 23,
+            "p50": 0.00026,
+            "p99": 0.01331,
+            "max": 0.01331
+          },
+          "admission_timeout/bounded": {
+            "n": 7,
+            "p50": 0.03682,
+            "p99": 1.02164,
+            "max": 1.02164
+          },
+          "outer_deadline_guard_completed/bounded": {
+            "n": 1,
+            "p50": 6e-05,
+            "p99": 6e-05,
+            "max": 6e-05
+          }
+        },
+        "minimum_remaining_before_bounded_commit_ms": 323.431268,
+        "commit_errors": [],
+        "outer_unconfirmed": [],
+        "driver_boundary_counts": {
+          "driver_commit_entry/unbounded": 4463,
+          "driver_commit_exit/unbounded": 4463,
+          "driver_commit_entry/bounded": 58,
+          "driver_commit_exit/bounded": 58
+        }
+      },
+      "package_outcomes": {
+        "skip": 13,
+        "pass": 64,
+        "fail": 4
+      },
+      "original36_outcomes": {
+        "pass": 36
+      },
+      "observed_sequence_gaps": 0,
+      "observed_max_drop_counter": 0,
+      "telemetry_records": 64534
+    },
+    "02-controlled": {
+      "exit": "1",
+      "api_process_attribution": "Explicit executable api.test (including helper-process events)",
+      "leaf_outcomes": {
+        "pass": 20033,
+        "skip": 61,
+        "fail": 1
+      },
+      "api_leaf_outcomes": {
+        "pass": 9587,
+        "skip": 50
+      },
+      "failures": [
+        {
+          "Time": "2026-10-16T04:49:35.201505346Z",
+          "Action": "fail",
+          "Package": "github.com/gabemahoney/agent-director/tools/measure-exit/dryrun",
+          "Test": "TestDryRun",
+          "Elapsed": 28.17
+        }
+      ],
+      "api_telemetry": {
+        "records": 21593,
+        "phases_ms": {
+          "driver_commit_entry/unbounded": {
+            "n": 4541,
+            "p50": 0.0001,
+            "p99": 0.00038,
+            "max": 0.0054
+          },
+          "driver_commit_exit/unbounded": {
+            "n": 4541,
+            "p50": 2.219569,
+            "p99": 219.707937,
+            "max": 2300.307412
+          },
+          "decision_trail/unbounded": {
+            "n": 843,
+            "p50": 1.48775,
+            "p99": 2574.136836,
+            "max": 5058.642916
+          },
+          "repair/unbounded": {
+            "n": 132,
+            "p50": 15.920421,
+            "p99": 1028.939085,
+            "max": 1244.149304
+          },
+          "acquire/unbounded": {
+            "n": 819,
+            "p50": 0.00121,
+            "p99": 0.00845,
+            "max": 211.945361
+          },
+          "begin/unbounded": {
+            "n": 806,
+            "p50": 1.965418,
+            "p99": 96.478632,
+            "max": 605.495402
+          },
+          "transaction_sql/unbounded": {
+            "n": 805,
+            "p50": 22.887136,
+            "p99": 397.713518,
+            "max": 898.092724
+          },
+          "commit_exec_entry/unbounded": {
+            "n": 755,
+            "p50": 6e-05,
+            "p99": 0.00017,
+            "max": 0.00025
+          },
+          "commit/unbounded": {
+            "n": 755,
+            "p50": 5.939067,
+            "p99": 496.131778,
+            "max": 2300.318062
+          },
+          "cleanup_entry/unbounded": {
+            "n": 819,
+            "p50": 0.00017,
+            "p99": 0.00029,
+            "max": 0.00268
+          },
+          "cleanup/unbounded": {
+            "n": 819,
+            "p50": 0.00141,
+            "p99": 8.177825,
+            "max": 95.560382
+          },
+          "admission_success/bounded": {
+            "n": 463,
+            "p50": 0.00049,
+            "p99": 8.731425,
+            "max": 32.72807
+          },
+          "operation_admitted/bounded": {
+            "n": 462,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00021
+          },
+          "worker_scheduling/bounded": {
+            "n": 462,
+            "p50": 0.00259,
+            "p99": 0.01233,
+            "max": 0.01538
+          },
+          "acquire/bounded": {
+            "n": 462,
+            "p50": 0.00102,
+            "p99": 45.943882,
+            "max": 500.168286
+          },
+          "read_sql/bounded": {
+            "n": 380,
+            "p50": 19.935008,
+            "p99": 179.731421,
+            "max": 300.753258
+          },
+          "publication_entry/bounded": {
+            "n": 454,
+            "p50": 6e-05,
+            "p99": 0.00021,
+            "max": 0.0003
+          },
+          "sql_result_publication/bounded": {
+            "n": 454,
+            "p50": 0.00147,
+            "p99": 0.03544,
+            "max": 0.12096
+          },
+          "cleanup_entry/bounded": {
+            "n": 454,
+            "p50": 5e-05,
+            "p99": 0.00021,
+            "max": 0.00032
+          },
+          "cleanup/bounded": {
+            "n": 454,
+            "p50": 0.30685,
+            "p99": 47.438122,
+            "max": 92.623173
+          },
+          "gate_release/bounded": {
+            "n": 462,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00022
+          },
+          "begin/bounded": {
+            "n": 74,
+            "p50": 4.395518,
+            "p99": 434.208936,
+            "max": 434.208936
+          },
+          "transaction_sql/bounded": {
+            "n": 59,
+            "p50": 13.940672,
+            "p99": 231.00788,
+            "max": 231.00788
+          },
+          "commit_exec_entry/bounded": {
+            "n": 59,
+            "p50": 6e-05,
+            "p99": 0.00012,
+            "max": 0.00012
+          },
+          "driver_commit_entry/bounded": {
+            "n": 59,
+            "p50": 9e-05,
+            "p99": 0.00042,
+            "max": 0.00042
+          },
+          "driver_commit_exit/bounded": {
+            "n": 59,
+            "p50": 5.125737,
+            "p99": 166.725438,
+            "max": 166.725438
+          },
+          "commit/bounded": {
+            "n": 59,
+            "p50": 5.128257,
+            "p99": 166.735708,
+            "max": 166.735708
+          },
+          "decision_trail/bounded": {
+            "n": 23,
+            "p50": 43.962354,
+            "p99": 827.878587,
+            "max": 827.878587
+          },
+          "decide_entry/bounded": {
+            "n": 49,
+            "p50": 0.00188,
+            "p99": 0.01451,
+            "max": 0.01451
+          },
+          "decide/bounded": {
+            "n": 49,
+            "p50": 500.019077,
+            "p99": 1037.55881,
+            "max": 1037.55881
+          },
+          "decide_entry/unbounded": {
+            "n": 133,
+            "p50": 0.00049,
+            "p99": 0.00207,
+            "max": 0.00219
+          },
+          "admission_success/unbounded": {
+            "n": 108,
+            "p50": 0.00085,
+            "p99": 267.872397,
+            "max": 319.022746
+          },
+          "operation_admitted/unbounded": {
+            "n": 108,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00017
+          },
+          "worker_scheduling/unbounded": {
+            "n": 108,
+            "p50": 0.00214,
+            "p99": 0.005619,
+            "max": 0.0105
+          },
+          "admission_timeout/bounded": {
+            "n": 9,
+            "p50": 0.2057,
+            "p99": 1.258759,
+            "max": 1.258759
+          },
+          "publication_entry/unbounded": {
+            "n": 108,
+            "p50": 6e-05,
+            "p99": 0.00023,
+            "max": 0.00023
+          },
+          "sql_result_publication/unbounded": {
+            "n": 108,
+            "p50": 0.00062,
+            "p99": 0.03238,
+            "max": 0.04127
+          },
+          "gate_release/unbounded": {
+            "n": 108,
+            "p50": 5e-05,
+            "p99": 0.00017,
+            "max": 0.00018
+          },
+          "read_sql/unbounded": {
+            "n": 13,
+            "p50": 28.838982,
+            "p99": 193.894333,
+            "max": 193.894333
+          },
+          "decide/unbounded": {
+            "n": 133,
+            "p50": 186.385996,
+            "p99": 5595.279909,
+            "max": 5966.526293
+          },
+          "outer_deadline_guard_entry/bounded": {
+            "n": 25,
+            "p50": 0.00026,
+            "p99": 0.00055,
+            "max": 0.00055
+          }
+        },
+        "minimum_remaining_before_bounded_commit_ms": 201.858456,
+        "commit_errors": [],
+        "outer_unconfirmed": [],
+        "driver_boundary_counts": {
+          "driver_commit_entry/unbounded": 4541,
+          "driver_commit_exit/unbounded": 4541,
+          "driver_commit_entry/bounded": 59,
+          "driver_commit_exit/bounded": 59
+        }
+      },
+      "package_outcomes": {
+        "skip": 13,
+        "pass": 67,
+        "fail": 1
+      },
+      "original36_outcomes": {
+        "pass": 36
+      },
+      "observed_sequence_gaps": 0,
+      "observed_max_drop_counter": 0,
+      "telemetry_records": 75993
+    }
+  },
+  "observer_corrections": [
+    "01 vet cannot open newly added virtual Go file;02 recorder merged into an existing overlay store.go, without disabling vet",
+    "01 noncanonical masked HOME caused spawn ~/ expectation mismatch;02 uses root-authorized fresh canonical sandbox HOME=/home/sandbox",
+    "01 umask077 perturbed cursorhost intentionally public-directory fixture;02 precreates only raw outputs0600 and runs canonical umask022",
+    "Recorder disabled when child processes strip telemetry env, never writes stdout/stderr; per-process0600 file sink, PID/sequence and02 executable fields"
+  ],
+  "environment": {
+    "head": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db",
+    "go": "go1.22.10 linux/amd64",
+    "workload": "canonical /work ./..., default192CPU parallelism and natural caches initially;02 -count=1; no filtering",
+    "sandbox": "make sandbox only, same cached image; fresh container HOME02, local TMPDIR/git config; env-i strips inherited AGENT_DIRECTOR_*/TMUX/TMUX_PANE",
+    "cgroup": "cpu.max=max100000; zero reported throttling before/after; no causal conclusion from host PSI aggregates"
+  },
+  "proven_findings": [
+    "Original36 target cases passed on both runs, including historical four",
+    "02 actual modernc COMMIT pairs complete in API:59 bounded and4541 unbounded, no API COMMIT errors and no outer guard unconfirmed branch",
+    "Least-budget02 API call entered with999.996ms and spent about798ms beforeCOMMIT (three reads,BEGIN,transaction SQL), then nativeCOMMIT4.631ms; publication0.001ms precedes cleanup92.623ms; it passed",
+    "Intentional store.test synthetic boundary tests account for observed store outer guard; intentional deferred-foreign-key tests account for native constraint errors, all associated tests pass",
+    "02 dryrun missing-session-label failure persists after observer corrections; no canonical green suite claim"
+  ],
+  "limitations": [
+    "No historical COMMIT failure, hence no causal defect/regression or product fix established",
+    "Nonblocking async telemetry can leave an unobserved tail at process exit; contiguous observed sequences and0drop counters are verified, not proof of complete exit flushing",
+    "01 API process inferred by unique maximum Decide-entry event file;02 executable identifies API explicitly",
+    "Deadline timestamp correlates real API/store/driver chain but does not uniquely label parallel test subcases; JSON stderr attribution is not used as call identity",
+    "Telemetry creates empty0600 files in child processes that import store; observer overhead exists",
+    "No syscall or scheduling trace distinguishes slow SQL I/O from descheduling; PSI/cgroup totals cannot prove per-call cause",
+    "Correct leaf counting excludes every proper slash-prefix ancestor; prior fullcontext next-sorted-name heuristic overcounts2 API parents, so correct API leaf passes are9587, not9589; total test assertions unchanged",
+    "Initial Python analysis command could not run because sandbox lacks Python3; Bun analysis completed instead"
+  ],
+  "next_minimal_causal_diagnostic": {
+    "proposal": "Do not repeat arbitrary pressure or change deadlines. On next authorized historical-workload run, retain current native/guard boundaries and add actual RequestToken/InstanceID plus caller location at Decide entry, then per-API-process Go runtime trace or native syscall entry/exit correlation for bounded COMMIT/read calls. Capture scheduler runnable delay versus filesystem sync latency with matching monotonic context and fd/database identity. Trigger retention when pre-COMMIT remaining budget is low or the unconfirmed guard fires.",
+    "reason_from_data": "02 demonstrates a successful call can spend798ms beforeCOMMIT while nativeCOMMIT is4.631ms; aggregate COMMIT maxima and subtest totals cannot locate budget consumption or prove fsync/scheduling. Request/caller identity and scheduler/syscall evidence distinguish those mechanisms if historical failure returns.",
+    "deterministic_test_after_capture": "Use the identified boundary to inject only that causal delay into the existing real-native boundary harness; prove unchanged original deadline/call semantics fail before an appropriate fix. Do not add retries or loosen assertions.",
+    "separate_dryrun_followup": "Inspect preserved dryrun printed launch/session-label evidence and its subprocess environment; all samples lack a labelled session in both runs. Source/environment/observer cause remains unclassified; no helper was launched separately."
+  },
+  "incomplete": [
+    "Historical root cause, deterministic RED/GREEN, evidence-backed source fix, canonical fullgreen and local commit remain for caller; no change authorized in measurement lane"
+  ],
+  "questions_for_caller": []
+}

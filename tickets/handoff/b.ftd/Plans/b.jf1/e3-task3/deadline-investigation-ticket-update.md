@@ -1,0 +1,9 @@
+
+
+## Task3 mandatory COMMIT investigation: unresolved
+
+User now blocks Task3 on three TestRepairCheckPermission setup-Decide failures and TestDecideKeepsDurableOrigin/cursor. Matched unchanged originals at 64a35baf and f0e9b48f each passed 345 repetitions of all36 target leaves (12420 outcomes each), including whole API runs and verified four-CPU quota. No historical COMMIT failure reproduced; regression status and root cause remain UNKNOWN. The three repair failures occur during setup Decide, before repair runs. Successful high-load Decide is mostly post-COMMIT trail; complete-suite bounded native COMMIT max166.725ms, publication max0.121ms, cleanup max92.623ms. A successful call spent798ms before COMMIT, then native COMMIT4.631ms. These do not establish the cause of failed calls. Error text can arise from driver COMMIT error or outer unpublished-result guard. No deadline/assertion loosening or retry added; no evidence-backed COMMIT repair/RED-GREEN claimed.
+
+Separate necessary uncached-unit repair proved: measure-exit omitted tmux -u under C locale, turning tab delimiters into underscores despite correct ownership labels. Original unchanged TestDryRun RED29 checks; one-flag source correction plus strict updated argv audit GREEN. Source review has no findings. Final one make test-sandbox PASS:68Go packages(6executed/62cached),13noTests;API freshly executed142.701s;430Bun PASS/0FAIL. No Docker groups/TLA/live acceptance.
+
+Evidence: tickets/handoff/b.ftd/Plans/b.jf1/e3-task3/DEADLINE-INVESTIGATION-RESULT.json and referenced phase reports; dryrun-utf8-fix/REPORT.md, dryrun-final-validation/REPORT.md. Local commit records this scoped harness fix and measurements, not a COMMIT fix. Task3 and Epic3 remain active; deadline blocker, scheduler gate and live acceptance remain open. No Epic4 work.

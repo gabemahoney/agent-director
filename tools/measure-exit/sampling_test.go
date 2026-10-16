@@ -145,7 +145,7 @@ func TestMeasureKill(t *testing.T) {
 	if s.Outcome != outcomeCompleted || *s.Millis != 200 || s.Polls != 3 {
 		t.Fatalf("sample %+v", s)
 	}
-	if r.ex.count("tmux", "-S", w.socket, "kill-pane", "-t", "%1") != 1 || !strings.Contains(r.log.String(), `"kind":"measured"`) {
+	if r.ex.count("tmux", "-u", "-S", w.socket, "kill-pane", "-t", "%1") != 1 || !strings.Contains(r.log.String(), `"kind":"measured"`) {
 		t.Errorf("calls %q, log %s", r.ex.calls, r.log)
 	}
 }

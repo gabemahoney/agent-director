@@ -1,0 +1,74 @@
+{
+  "task": "t2.jf1.r8.a8",
+  "base": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+  "head": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db",
+  "original_test_blocks_identical": true,
+  "matched_original_leaf_outcomes": {
+    "leaf_names": 36,
+    "repetitions_per_leaf_per_revision": 345,
+    "per_revision": 12420,
+    "old_failures": 0,
+    "head_failures": 0,
+    "composition": [
+      "332 targeted repetitions per leaf",
+      "2 full API runs per revision",
+      "10 targeted repetitions plus 1 full API run per revision under verified four-CPU quota"
+    ]
+  },
+  "regression_status": "UNKNOWN; no historical COMMIT error reproduced on either revision; zero observed failures cannot establish absence of regression",
+  "historical_repair_failures": "Three TestRepairCheckPermission subcases fail during setup Decide(max_wait_ms=0), before repair itself executes",
+  "measured_fullsuite_head_ms": {
+    "bounded_native_COMMIT_max": 166.725,
+    "result_publication_max": 0.121,
+    "cleanup_max": 92.623,
+    "remaining_before_COMMIT_min": 201.858
+  },
+  "least_budget_success_ms": {
+    "pre_COMMIT_approx": 798,
+    "native_COMMIT": 4.631,
+    "cleanup": 92.623,
+    "overall_Decide": 1000.439
+  },
+  "high_load_head_ms": {
+    "Decide_p50": 1000.563,
+    "post_COMMIT_trail_p50": 950.482,
+    "COMMIT_p50": 48.911,
+    "COMMIT_max": 122.39,
+    "cleanup_max": 0.247,
+    "repair_unbounded_max": 1685.185
+  },
+  "root_cause": "UNPROVEN; historical identical error text can arise from actual ExecContext COMMIT failure or outer operation return guard before result publication. Successful phase durations do not assign a cause to the historical failures.",
+  "required_outcome_incomplete": [
+    "Causal reproduction of original COMMIT failure",
+    "Evidence-backed deadline fix and unchanged-assertion RED/GREEN"
+  ],
+  "reports": [
+    "deadline-measurement/FINAL-report.json",
+    "deadline-fullcontext/FINAL-report.json",
+    "deadline-fullsuite-trace/FINAL-report.json",
+    "deadline-cpuquota/FINAL-report.json"
+  ],
+  "separate_dryrun_failure": "Proven missing forced UTF-8 tmux client flag under C locale: correct ownership labels had tab delimiter converted to underscore. Adding -u before -S fixes the harness; strict private-socket audits now require the new argv. Original RED29 checks; all behavioral assertions and whole TestDryRun now GREEN. Not a COMMIT cause or fix.",
+  "assertions_deadlines_retries": "unchanged",
+  "ticket_status": "active",
+  "historical_failure_tests": [
+    "TestDecideKeepsDurableOrigin/cursor",
+    "TestRepairCheckPermission/closed,_its_hook_can't_be_checked;_resumed,_idle_Notification_while_B_awaited,_then_B_delivered",
+    "TestRepairCheckPermission/closed,_its_hook_can't_be_checked,_before_confirm_by;_resumed_and_B_delivered",
+    "TestRepairCheckPermission/codex/a_verdict_closed_by_the_mark,_then_resumed_and_B_delivered"
+  ],
+  "final_make_test_sandbox": {
+    "result": "PASS",
+    "Go_exit": 0,
+    "Bun_exit": 0,
+    "Go_cached_packages": 62,
+    "Go_executed_packages": 6,
+    "Go_no_tests": 13,
+    "API_fresh_seconds": 142.701,
+    "Bun_pass": 430,
+    "Bun_fail": 0,
+    "report": "dryrun-final-validation/REPORT.md"
+  },
+  "additional_HEAD_fresh_API_run": "Final make test-sandbox includes one further unpaired HEAD API run; all original targets PASS. It is excluded from the balanced 12420-per-revision comparison.",
+  "disposition": "Task3 remains active and blocked on historical COMMIT causal capture. Local commit contains the independently proven harness fix and diagnostic results; it does not claim to fix the historical deadline error or fulfill its required RED/GREEN."
+}

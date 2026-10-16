@@ -192,12 +192,13 @@ func (inv *invoker) agentDirectorCall(caseID string, kind actionKind, args ...st
 }
 
 // tmuxCall runs one tmux command on socket, always with -S: no call ever
-// reaches a default socket.
+// reaches a default socket. -u preserves UTF-8 output and format delimiters
+// even when the child environment uses the C locale.
 func (inv *invoker) tmuxCall(caseID string, kind actionKind, socket string, args ...string) (callResult, error) {
 	if socket == "" {
 		return callResult{}, errors.New("tmux call without a socket refused")
 	}
-	argv := append([]string{inv.tmux, "-S", socket}, args...)
+	argv := append([]string{inv.tmux, "-u", "-S", socket}, args...)
 	return inv.run(caseID, kind, tmuxCallTimeout, inv.env, argv)
 }
 

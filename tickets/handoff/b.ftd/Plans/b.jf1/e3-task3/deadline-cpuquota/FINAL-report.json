@@ -1,0 +1,225 @@
+{
+  "scope": "Final controlled explicit 4-CPU quota diagnostic; no canonical source/test/assertion/deadline changes",
+  "revision_verification": {
+    "old": {
+      "revision": "64a35baf37a1c44eb576ea661f3c30b13708f6fa",
+      "archive_sha256": "2ec524488cdc7bfd0618fdfbb7fb238c4e5149299a65e066cea6694e63d35361",
+      "members": 2264,
+      "manifest_keys": [
+        "revision",
+        "archive_sha256",
+        "allowed_paths",
+        "file_sha256"
+      ],
+      "verified_file_count": 2029
+    },
+    "head": {
+      "revision": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db",
+      "archive_sha256": "453a4edaf3e6e0742eb1146c151a75a93445b9766a42fd43910c381fa1674642",
+      "members": 2286,
+      "manifest_keys": [
+        "revision",
+        "archive_sha256",
+        "allowed_paths",
+        "file_sha256"
+      ],
+      "verified_file_count": 2051
+    }
+  },
+  "sandbox": "make sandbox SANDBOX_FLAGS=--cpus=4; Go 1.22.10; cpu.max 400000 100000; 192 visible CPUs; GOMAXPROCS and -parallel left at Go default; fresh canonical HOME=/home/sandbox; TMPDIR unset; isolated local git config; no overlay/telemetry",
+  "observer_dryrun": {
+    "canonical_home": "/home/sandbox",
+    "TMPDIR": "unset",
+    "umask": "0022",
+    "exit": 1,
+    "test_seconds": 14.996,
+    "reported_failed_checks": 29,
+    "expected_socket_examples": [
+      {
+        "socket": "/tmp/mx-dry.LgecUy/mx-tmux-1109555482/tmux-1000/default",
+        "bytes": 55
+      },
+      {
+        "socket": "/tmp/mx-dry.LgecUy/mx-tmux-1246559538/tmux-1000/default",
+        "bytes": 55
+      },
+      {
+        "socket": "/tmp/mx-dry.LgecUy/mx-tmux-1957413508/tmux-1000/default",
+        "bytes": 55
+      },
+      {
+        "socket": "/tmp/mx-dry.LgecUy/mx-tmux-530658415/tmux-1000/default",
+        "bytes": 54
+      },
+      {
+        "socket": "/tmp/mx-dry.LgecUy/mx-tmux-831549243/tmux-1000/default",
+        "bytes": 54
+      }
+    ],
+    "conclusion": "Canonical targeted dryrun still fails. Long TMPDIR observer hypothesis not supported; missing labelled sessions remains unclassified. No fix attempted."
+  },
+  "runs": {
+    "01-old-narrow": {
+      "exit": 0,
+      "package_outcomes": [
+        {
+          "Time": "2026-10-16T04:57:33.07798929Z",
+          "Action": "pass",
+          "Package": "github.com/gabemahoney/agent-director/pkg/api",
+          "Elapsed": 4.096
+        }
+      ],
+      "leaf_names": 36,
+      "leaf_passes": 360,
+      "leaf_skips": 0,
+      "target_leaf_names": 36,
+      "target_leaf_passes": 360,
+      "fail_events": [],
+      "error_output": [],
+      "cgroup_cpu_before": {
+        "usage_usec": 40261,
+        "nr_periods": 1,
+        "nr_throttled": 0,
+        "throttled_usec": 0
+      },
+      "cgroup_cpu_after": {
+        "usage_usec": 32949389,
+        "nr_periods": 104,
+        "nr_throttled": 63,
+        "throttled_usec": 95231984
+      },
+      "cgroup_cpu_delta": {
+        "usage_usec": 32909128,
+        "nr_periods": 103,
+        "nr_throttled": 63,
+        "throttled_usec": 95231984
+      }
+    },
+    "02-head-narrow": {
+      "exit": 0,
+      "package_outcomes": [
+        {
+          "Time": "2026-10-16T04:57:48.89181264Z",
+          "Action": "pass",
+          "Package": "github.com/gabemahoney/agent-director/pkg/api",
+          "Elapsed": 4.125
+        }
+      ],
+      "leaf_names": 36,
+      "leaf_passes": 360,
+      "leaf_skips": 0,
+      "target_leaf_names": 36,
+      "target_leaf_passes": 360,
+      "fail_events": [],
+      "error_output": [],
+      "cgroup_cpu_before": {
+        "usage_usec": 40346,
+        "nr_periods": 1,
+        "nr_throttled": 0,
+        "throttled_usec": 0
+      },
+      "cgroup_cpu_after": {
+        "usage_usec": 33901377,
+        "nr_periods": 108,
+        "nr_throttled": 67,
+        "throttled_usec": 97480334
+      },
+      "cgroup_cpu_delta": {
+        "usage_usec": 33861031,
+        "nr_periods": 107,
+        "nr_throttled": 67,
+        "throttled_usec": 97480334
+      }
+    },
+    "03-old-package": {
+      "exit": 0,
+      "package_outcomes": [
+        {
+          "Time": "2026-10-16T05:00:13.644838638Z",
+          "Action": "pass",
+          "Package": "github.com/gabemahoney/agent-director/pkg/api",
+          "Elapsed": 135.383
+        }
+      ],
+      "leaf_names": 9628,
+      "leaf_passes": 9578,
+      "leaf_skips": 50,
+      "target_leaf_names": 36,
+      "target_leaf_passes": 36,
+      "fail_events": [],
+      "error_output": [],
+      "cgroup_cpu_before": {
+        "usage_usec": 41477,
+        "nr_periods": 0,
+        "nr_throttled": 0,
+        "throttled_usec": 0
+      },
+      "cgroup_cpu_after": {
+        "usage_usec": 234257794,
+        "nr_periods": 1293,
+        "nr_throttled": 468,
+        "throttled_usec": 1095818859
+      },
+      "cgroup_cpu_delta": {
+        "usage_usec": 234216317,
+        "nr_periods": 1293,
+        "nr_throttled": 468,
+        "throttled_usec": 1095818859
+      }
+    },
+    "04-head-package": {
+      "exit": 0,
+      "package_outcomes": [
+        {
+          "Time": "2026-10-16T05:02:33.428345087Z",
+          "Action": "pass",
+          "Package": "github.com/gabemahoney/agent-director/pkg/api",
+          "Elapsed": 135.182
+        }
+      ],
+      "leaf_names": 9637,
+      "leaf_passes": 9587,
+      "leaf_skips": 50,
+      "target_leaf_names": 36,
+      "target_leaf_passes": 36,
+      "fail_events": [],
+      "error_output": [],
+      "cgroup_cpu_before": {
+        "usage_usec": 42182,
+        "nr_periods": 1,
+        "nr_throttled": 0,
+        "throttled_usec": 0
+      },
+      "cgroup_cpu_after": {
+        "usage_usec": 229583961,
+        "nr_periods": 1277,
+        "nr_throttled": 458,
+        "throttled_usec": 1034679285
+      },
+      "cgroup_cpu_delta": {
+        "usage_usec": 229541779,
+        "nr_periods": 1276,
+        "nr_throttled": 458,
+        "throttled_usec": 1034679285
+      }
+    }
+  },
+  "conclusion": "Historical COMMIT failures not reproduced; root cause unproven. Explicit quota establishes throttling, not a historical failure cause or regression. No product fix justified; no additional pressure iteration authorized.",
+  "incomplete": [
+    "Historical root cause",
+    "Evidence-backed fix and deterministic RED/GREEN",
+    "Canonical fullgreen (dryrun unresolved)",
+    "Local commit"
+  ],
+  "ticket_status_updates": [],
+  "canonical_git_status": "",
+  "canonical_head": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db",
+  "diagnostic_status": "blocked: original COMMIT failures remain unreproduced under the authorized controlled comparison",
+  "limitations": [
+    "Only pkg/api ran under quota; no simultaneous other-package/full-suite workload or external pressure was added.",
+    "No failing native boundary was captured, so no CPU/SQL-I/O/publication causal classification is possible.",
+    "GOMAXPROCS and test parallelism were left unset: Go 1.22 defaults infer 192 from visible CPUs; no runtime probe was added.",
+    "No instrumented follow-up or resource-matched GOMAXPROCS4 comparison was run because no original failure reproduced.",
+    "Raw wall timestamps follow the sandbox clock and differ from supplied conversation date."
+  ]
+}

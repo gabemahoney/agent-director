@@ -313,10 +313,13 @@ func assertRunLog(t *testing.T, path, tmuxTmpdir string) {
 		}
 		verb := e.Argv[1]
 		if filepath.Base(e.Argv[0]) == "tmux" {
-			if e.Argv[1] != "-S" || !strings.HasPrefix(e.Argv[2], tmuxTmpdir+"/") {
+			if len(e.Argv) < 5 {
+				t.Fatalf("incomplete tmux call: %q", e.Argv)
+			}
+			if e.Argv[1] != "-u" || e.Argv[2] != "-S" || !strings.HasPrefix(e.Argv[3], tmuxTmpdir+"/") {
 				t.Errorf("tmux call off the private socket: %q", e.Argv)
 			}
-			verb = e.Argv[3]
+			verb = e.Argv[4]
 		}
 		ok := allowed[e.Kind]
 		switch e.Kind {

@@ -100,7 +100,7 @@ func TestSessionGone(t *testing.T) {
 			if gone != tc.gone || (err != nil) != tc.err {
 				t.Fatalf("gone=%t err=%v", gone, err)
 			}
-			if r.ex.count("tmux", "-S", a.Socket, "list-sessions") != 1 {
+			if r.ex.count("tmux", "-u", "-S", a.Socket, "list-sessions") != 1 {
 				t.Errorf("calls %q", r.ex.calls)
 			}
 		})

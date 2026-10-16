@@ -1,0 +1,11 @@
+{
+  "reviewer": "/root/apiary_code_reviewer_e3_dryrun_utf8",
+  "scope": "tools/measure-exit/runlog.go source diff only; test writer work still in flight",
+  "findings": [],
+  "result": "No findings. Adding -u before -S matches production tmux invocation and preserves explicit socket selection, timeout enforcement, logging.",
+  "tests_run": false,
+  "limitations": [
+    "Whole-TestDryRun pending argv audit updates and validation",
+    "Historical COMMIT deadline cause remains unproven; this is a separate harness fix"
+  ]
+}

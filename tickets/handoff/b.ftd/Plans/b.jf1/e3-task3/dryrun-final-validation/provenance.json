@@ -1,0 +1,27 @@
+{
+  "tools/measure-exit/capture_test.go": {
+    "head_sha256": "1b909076659301afdadaa6b4fdd96cab1b7e5a9ad87107a64db3d3ba94995774",
+    "worktree_sha256": "429c99b0df5ac27f2e777da8748f064d3e198661d348e278f384402044819447",
+    "role": "test-writer"
+  },
+  "tools/measure-exit/dryrun/dryrun_test.go": {
+    "head_sha256": "df8da1a6da33f6e1485ff8da4677a046e07f7f90ab475745e1d23ac6bdeeb992",
+    "worktree_sha256": "1dfca3d6549a1e45e29d8d2ead5a16d56ee0e3f4ff543e6a89eca893becb1c3e",
+    "role": "test-writer"
+  },
+  "tools/measure-exit/poll_test.go": {
+    "head_sha256": "7a448172f547fbfc791a18b81d787724482c5b8f2c78446b415c076eb1d00021",
+    "worktree_sha256": "801c24624d4005bcc12ff2a12d9932e328cb718e0bd8b97ea3d9782dd47e7a40",
+    "role": "test-writer"
+  },
+  "tools/measure-exit/sampling_test.go": {
+    "head_sha256": "026e7d823185bde4cff17feb2429c1d744d4d5593f431cae668546f51305f362",
+    "worktree_sha256": "cc00e0b43584d3b725f278a2e45ec9b6023fcdfae47f4b8b6cb217b9c3e44a70",
+    "role": "test-writer"
+  },
+  "tools/measure-exit/runlog.go": {
+    "head_sha256": "c47f3bb268ee0d4460c7b7b340b63f13e2f34b115f96db1638402811cafaf9d8",
+    "worktree_sha256": "5f65a3e746d5dfef77fa6b4b15edc984d48ebba9c1d6403dea7e882b2be8c136",
+    "role": "engineer-source"
+  }
+}

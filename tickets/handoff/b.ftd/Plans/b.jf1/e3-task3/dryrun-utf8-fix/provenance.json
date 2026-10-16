@@ -1,0 +1,25 @@
+{
+  "head": "f0e9b48f2ef03d0d5804b215d77d16f78108c5db",
+  "source_before": {
+    "tools/measure-exit/runlog.go": "c47f3bb268ee0d4460c7b7b340b63f13e2f34b115f96db1638402811cafaf9d8",
+    "tools/measure-exit/agent.go": "a035832cb93d999193e02aebe85a633162c9b3faefb116c465db3132c8609a41",
+    "tools/measure-exit/dryrun.sh": "eb3a9ab800d6399911755160eeec28035dd42e7b52d1677e46e7a19d0df5d512",
+    "tools/measure-exit/dryrun/dryrun_test.go": "df8da1a6da33f6e1485ff8da4677a046e07f7f90ab475745e1d23ac6bdeeb992",
+    "internal/tmux/invoke.go": "93efa283780ceb918625d74b06ca5da4c9e7248edb11556978705baa5d0f84fb"
+  },
+  "constraints": "No canonical edits before original vs overlay comparison; unchanged TestDryRun only; isolated sandbox; no .claude access or capture; no historical COMMIT causality claim.",
+  "source_after": {
+    "tools/measure-exit/runlog.go": "5f65a3e746d5dfef77fa6b4b15edc984d48ebba9c1d6403dea7e882b2be8c136",
+    "tools/measure-exit/agent.go": "a035832cb93d999193e02aebe85a633162c9b3faefb116c465db3132c8609a41",
+    "tools/measure-exit/dryrun.sh": "eb3a9ab800d6399911755160eeec28035dd42e7b52d1677e46e7a19d0df5d512",
+    "tools/measure-exit/dryrun/dryrun_test.go": "df8da1a6da33f6e1485ff8da4677a046e07f7f90ab475745e1d23ac6bdeeb992",
+    "internal/tmux/invoke.go": "93efa283780ceb918625d74b06ca5da4c9e7248edb11556978705baa5d0f84fb"
+  },
+  "unchanged_inputs": {
+    "tools/measure-exit/agent.go": true,
+    "tools/measure-exit/dryrun.sh": true,
+    "tools/measure-exit/dryrun/dryrun_test.go": true,
+    "internal/tmux/invoke.go": true
+  },
+  "overlay_replacement_sha256": "604f9e6b25ca4bbee9c1f20647bb90c3f69feffa2a01af86179454505911de0e"
+}

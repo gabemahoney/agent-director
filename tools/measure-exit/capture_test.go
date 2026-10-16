@@ -79,7 +79,7 @@ func TestWaitInputReady(t *testing.T) {
 		if err := d.waitInputReady(); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"tmux", "-S", d.a.Socket, "capture-pane", "-p", "-J", "-t", "%1"}
+		want := []string{"tmux", "-u", "-S", d.a.Socket, "capture-pane", "-p", "-J", "-t", "%1"}
 		if !reflect.DeepEqual(r.ex.calls[0], want) || r.clk.Now().Sub(clockStart) != inputReadyGrace {
 			t.Errorf("first call %q, elapsed %s", r.ex.calls[0], r.clk.Now().Sub(clockStart))
 		}
@@ -144,11 +144,11 @@ func TestCapturePanes(t *testing.T) {
 	swarm := filepath.Join(filepath.Dir(sock), "claude-swarm-77")
 	writeFile(t, swarm, "")
 	r.ex.reply = func(argv []string) (string, string, int) {
-		on, last := argv[2], argv[len(argv)-1]
+		on, last := argv[3], argv[len(argv)-1]
 		switch {
-		case argv[3] == "list-panes" && on == sock:
+		case argv[4] == "list-panes" && on == sock:
 			return "%1\n%2\n%3\n", "", 0
-		case argv[3] == "list-panes":
+		case argv[4] == "list-panes":
 			return "%0\n", "", 0
 		case last == "%3":
 			return "", "can't find pane", 1
@@ -166,7 +166,7 @@ func TestCapturePanes(t *testing.T) {
 	if !reflect.DeepEqual(files, want) {
 		t.Fatalf("captures %q, want %q", files, want)
 	}
-	if !reflect.DeepEqual(notes, []string{"pane %3 (teammate-p3): capture failed: tmux -S " + sock + " capture-pane: exit 1: can't find pane"}) {
+	if !reflect.DeepEqual(notes, []string{"pane %3 (teammate-p3): capture failed: tmux -u -S " + sock + ": exit 1: can't find pane"}) {
 		t.Errorf("notes %q", notes)
 	}
 	text := readFile(t, filepath.Join(r.h.cfg.outDir, want[2]))
@@ -183,7 +183,7 @@ func TestCapturePanes(t *testing.T) {
 func TestCapturePanesNotes(t *testing.T) {
 	r := newRig(t, modeDry)
 	r.ex.reply = func(argv []string) (string, string, int) {
-		if argv[3] == "list-panes" {
+		if argv[4] == "list-panes" {
 			return "", "no server running", 1
 		}
 		return "lead screen\n", "", 0
