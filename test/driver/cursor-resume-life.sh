@@ -244,12 +244,12 @@ rl_reuse_call() {
 rl_reuse_fixture() {
  pc_start
  older=$session
- cp "$path" "$case_dir/protected-before"
  sql -json "SELECT session_id,jsonl_path,life_number,agent_args,extra_env,no_pre_trust FROM spawns WHERE instance_id='$id';" > "$case_dir/saved.json"
  rl_public CLI pause >/dev/null
  check stopped.runtime wait_gone "$runtime"
  check stopped.gateway wait_gone "$gateway"
  check stopped.state test "$(row_state)" = ended
+ cp "$path" "$case_dir/protected-before"
 }
 rl_reuse_fresh() {
  local surface=$1 old_life
@@ -320,7 +320,7 @@ OTHERAGENT
   first=cursor; second=claude
  else first=codex; second=cursor; fi
  child="$id-child"
- AGENT_DIRECTOR_INSTANCE_ID="$id" ad spawn --agent claude --instance-id "$child" --cwd "$case_dir/cwd" --no-pre-trust >/dev/null
+ AGENT_DIRECTOR_INSTANCE_ID="$id" ad spawn --agent claude --instance-id "$child" --cwd "$case_dir/cwd" --tmux-session-name "$child" --no-pre-trust >/dev/null
  old_life=$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")
  for target in "$first" "$second"; do
   jq -cn --arg session "$older-$target-fresh" '{sessionId:$session}' > "$case_dir/scenario"
