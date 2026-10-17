@@ -61,8 +61,9 @@ session field. Accept and reject use the supported plan outcomes.
 `decide --decision allow` selects only allow-once, or accepts this plan once;
 `deny` selects rejection. It never grants a persistent rule. An explicitly
 offered persistent permission choice can be selected deliberately at the pane;
-it can affect later requests using that Cursor policy. agent-director adds no
-group isolation for that effect. Read the actual request and displayed choices.
+it can affect later requests using that Cursor policy. See
+[Cursor group policy limits](multi-account.md#cursor-configuration-and-data-directories)
+for the shared-policy consequences. Read the actual request and displayed choices.
 Unknown, malformed or ambiguous authorization shapes fail closed visibly within a bound, rather than becoming answerable
 permissions. This does not promise approval schemas for operations Cursor
 runs without asking.

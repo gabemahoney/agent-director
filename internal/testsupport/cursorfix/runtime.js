@@ -1,9 +1,35 @@
 // Synthetic ACP protocol 1 stand-in; never invokes or authenticates Cursor.
 const fs = require('fs');
 const readline = require('readline');
+const selection = Object.fromEntries(['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR','CURSOR_API_KEY','AGENT_CLI_CREDENTIAL_STORE'].map(key=>[key,process.env[key] ?? null]));
+function artifact(operation, input) {
+ const result={operation,input,result:'Synthetic reply: '+input,pid:process.pid,cwd:process.cwd(),selection};
+ for(const key of ['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR']) if(selection[key]) {
+  fs.mkdirSync(selection[key],{recursive:true});
+  fs.writeFileSync(require('path').join(selection[key],process.pid+'-'+operation+'.json'),JSON.stringify(result));
+ }
+ return result;
+}
 if(process.argv[2]==='worker-server') {
  fs.writeFileSync(SETTINGS.workerPID,String(process.pid));
- setInterval(()=>{if(fs.existsSync(SETTINGS.workerRelease)) process.exit(0);},10);
+ fs.writeFileSync(SETTINGS.workerPID+'.selection.json',JSON.stringify(selection));
+ let last='';
+ setInterval(()=>{
+  if(fs.existsSync(SETTINGS.workerRelease)) process.exit(0);
+  const request=SETTINGS.workerPID+'.request.json';
+  if(!fs.existsSync(request)) return;
+  const op=JSON.parse(fs.readFileSync(request,'utf8'));
+  if(typeof op.operation!=='string' || !/^[a-z0-9-]{1,64}$/.test(op.operation) || typeof op.input!=='string' || op.input.length>256) throw Error('invalid synthetic worker operation');
+  if(op.operation===last) return;
+  last=op.operation;
+  let result=artifact(op.operation,op.input);
+  if(op.hook) {
+   const child=require('child_process').spawnSync(op.hook.program,op.hook.args,{input:JSON.stringify(op.hook.payload),encoding:'utf8',env:{...process.env,...op.hook.env}});
+   result.hook={status:child.status,stdout:child.stdout,stderr:child.stderr};
+  }
+  fs.writeFileSync(SETTINGS.workerPID+'.result.json.tmp',JSON.stringify(result));
+  fs.renameSync(SETTINGS.workerPID+'.result.json.tmp',SETTINGS.workerPID+'.result.json');
+ },10);
 } else {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
 fs.writeFileSync(SETTINGS.pid+'.selection.json',JSON.stringify(Object.fromEntries(
@@ -105,6 +131,7 @@ input.on('line', async line => {
    send({id:'plan',method:'cursor/create_plan',params:{}});
   }
 
+  if(scripted?.recordArtifacts) artifact(String(frame.id),text);
   send({method:'session/update',params:{sessionId:frame.params.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'Synthetic reply: '+text}}}});
   send({id:frame.id,result:{stopReason:'end_turn'}});
  }

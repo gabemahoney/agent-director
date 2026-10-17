@@ -197,12 +197,20 @@ reuse takes the new resolved call/template selection and starts fresh.
 personal login nor establishes credential, account or operating-system
 isolation.
 
+Multiple launches can select the same config/data directories at the same cwd,
+or select distinct directory pairs there. Each retains its own launch and
+conversation authority; shared directories remain shared Cursor storage.
+Stopping one owned launch does not grant it authority over another launch or
+an independent worker. A worker's survival or useful work does not establish
+separate credentials, account isolation or permission-policy isolation.
+
 The Cursor credential profile is unreleased. Explicit `CURSOR_API_KEY` or
 `AGENT_CLI_CREDENTIAL_STORE`, including empty or incomplete selections, is
 refused; there is no approved memory-store account recipe. Second-account
 isolation, API-key exchange/renewal, expiry/invalid keys, personal-auth
-preservation, cross-account workers and macOS account behavior remain
-unverified pending authorized account/platform acceptance. Directory selection
+preservation and cross-account workers remain unverified pending authorized
+account acceptance. Cursor's protected gateway is Linux-only; macOS needs a
+protected-runtime implementation before platform acceptance. Directory selection
 does not establish those capabilities or policy isolation. Handling a structured
 rejection does not establish that AD can reliably detect native malformed-policy
 repair or silent fallback. Refusals are in the
@@ -214,6 +222,29 @@ Saved `extra_env` remains in the owner-only database and is omitted from public
 spawn views; template environment remains plaintext TOML. See
 [Configuration](configuration.md) for storage protections and
 [Settings](settings.md#templates-and-per-call-merge) for merging.
+
+Cursor's local project rules can override its global lists. The retained Linux
+`2026.10.12-d47ca18` observation for `Shell(printf)` found project deny blocked
+global allow, and project allow overrode global deny. This is a limited
+local-list observation: organization rules, hooks, other permission kinds,
+configuration repair and full policy layering are unverified. A global/group
+deny is not an immutable boundary against writable project policy, and a group
+is not an operating-system security boundary.
+
+An explicitly offered persistent pane approval may affect later requests using
+the applicable shared Cursor policy; its storage and full scope are unverified.
+AD's `decide` grants only a one-shot decision. The request and pane decision
+mechanics are in [Cursor permissions](permissions.md#cursor-spawns).
+
+Models available to the authenticated account are selected through normal
+[agent arguments](usage.md#fresh-cursor-use), including template arguments.
+Availability depends on that account and environment; AD supplies no model
+catalog or availability guarantee. Cursor account/team usage follows
+[Cursor's billing terms](https://cursor.com/docs/models-and-pricing).
+An independently configured provider can bill the model cost directly;
+[Cursor's provider-key terms](https://prod.cursor.com/help/models-and-usage/api-keys)
+describe any additional applicable Cursor charges. This does not enable the
+refused AD credential profile. AD adds no billing controls or account administration.
 
 ## References
 

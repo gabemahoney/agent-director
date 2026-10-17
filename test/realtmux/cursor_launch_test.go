@@ -29,6 +29,7 @@ func newCursorPane(t *testing.T, disableQuestions bool) (*spawnFix, cursorfix.Ru
 }
 
 type cursorPaneOptions struct {
+	Shared       *spawnFix
 	Script       *cursorfix.Scenario
 	Relay        string
 	Timeout      int
@@ -43,16 +44,22 @@ type cursorPaneOptions struct {
 
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
 	t.Helper()
-	f := newSpawnFix(t)
+	var opts cursorPaneOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	var f *spawnFix
+	if opts.Shared == nil {
+		f = newSpawnFix(t)
+	} else {
+		copy := *opts.Shared
+		f = &copy
+	}
 	r := cursorfix.NewWithWorker(t, scenario == "independent-worker")
 	if scenario != "" {
 		if err := os.WriteFile(r.Scenario, []byte(scenario), 0600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	var opts cursorPaneOptions
-	if len(options) > 0 {
-		opts = options[0]
 	}
 	selection := opts.ExtraEnv
 	if selection == nil && !opts.Unconfigured {
@@ -83,13 +90,17 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	if err := os.MkdirAll(filepath.Dir(installed), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(bin, installed); err != nil {
+	if err := os.Symlink(bin, installed); err != nil && !os.IsExist(err) {
 		t.Fatal(err)
 	}
 	configPath := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "config.toml")
 	cfg, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if opts.Shared != nil {
+		// Keep one HOME/store/server and select the next executable before spawn.
+		cfg = cfg[:strings.Index(string(cfg), "\n[defaults]")]
 	}
 	cfg = append(cfg, []byte("\n[defaults]\ndisable_ask_user = "+fmt.Sprint(disableQuestions)+"\n")...)
 	if opts.Timeout > 0 {
@@ -103,7 +114,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	}
 
 	// A caller store override must reach the gateway and its direct hook children.
-	f.DBPath = filepath.Join(t.TempDir(), "override-state.db")
+	if opts.Shared == nil {
+		f.DBPath = filepath.Join(t.TempDir(), "override-state.db")
+	}
 	client, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: configPath, CreateIfMissing: true})
 	if err != nil {
 		t.Fatal(err)
@@ -112,6 +125,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	f.API = client
 	id := newInstanceID("cursor")
 	args := []string{"spawn", "--store-path", f.DBPath, "--agent", "cursor", "--instance-id", id, "--cwd", f.CWD, "--no-pre-trust"}
+	if opts.Shared != nil {
+		args = append(args, "--tmux-session-name", id)
+	}
 	for key, value := range selection {
 		args = append(args, "--extra-env", key+"="+value)
 	}

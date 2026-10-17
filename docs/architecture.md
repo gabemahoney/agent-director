@@ -867,12 +867,48 @@ selectors with absence distinct from empty. Synthetic native history requires
 the actually received config root to match its scripted root; `NativeConfigRoot`
 alone is not proof. Existing launch/resume factories and public caller adapters
 carry explicit selection. The single `cursor-groups` collector uses these shared
-helpers for ten cases and is registered once among the 20 integration groups.
+helpers for twelve cases and is registered once among the 20 integration groups.
 Its selected new/load rejection and template fresh-recovery cases extend that
 same collector; static validation alone is not executed integration acceptance.
 Received environment observations are synthetic runtime evidence; new/existing
 server isolation checks use actual tmux. Neither proves native accounts,
-renewal, configuration repair, worker isolation or macOS acceptance.
+renewal, configuration repair, native cross-account worker isolation or macOS acceptance.
+
+Composed concurrency tests MUST reuse `cursorPaneOptions.Shared` through
+`newCursorPaneScenario` for one HOME/store/server/cwd with independent runtimes
+and explicit unique session names. `TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker`
+owns the same-selection pair and distinct-selection peer: actual received
+selectors, PID/starttime/current bindings, selected per-launch artifacts that
+coexist, correlated successful results before public stop or auth rejection,
+and useful peer work afterward. `Scenario.RecordArtifacts` opts into these
+observations; ordinary scenarios retain their previous behavior. Extend this
+parameterized owner rather than copy the individual selection/failure matrices.
+
+`NewWithWorker` retains the recognized detached `index.js worker-server` shape
+without either ACP pipe. Its designated selection record and bounded operation
+channel establish useful independent operations before/after origin exit,
+including exact input/result/cwd/PID. Release/reap belongs to fixture cleanup
+after observations. This supplies no native account/renewal proof or authority
+to adopt workers or signal a process group. The worker's actual shipped-hook
+attempt against a peer's outstanding permission leaves the complete target
+row/binding/request unchanged, followed by legitimate current continuation.
+That hook can reject at immediate-parent verification. The separate
+`TestCursorRotatedAuthorityRejectsStaleReportAndPermissionProof` MUST remain the
+owner for a real verified `RotateCursorSession` and captured obsolete binding
+exercising actual stale report SQL, permission admission and execution-proof
+guards, unchanged target/request and legitimate current continuation; its direct
+store report check is not a full CLI hook.
+
+Collector compositions MUST reuse `test/driver/cursor-groups.sh` and
+`cursor-groups-records.cjs` for observed results/artifacts, kernel identities,
+current bindings and final inventories, plus the existing public caller and SQL
+helpers. Cases .11/.12 retain obsolete claims across public `/new` and use the
+foreign worker's actual hook; parent refusal alone does not isolate stale SQL
+proof. Authored/static collector checks are not executed scheduler acceptance.
+All these observations establish synthetic selection, AD authority and owned
+cleanup. They do not establish native credentials, policy repair, renewal,
+expiry or cross-account workers. Non-Linux protected operations are absent and
+refused; macOS needs protected-runtime implementation/review before acceptance.
 
 Capability and failure tests MUST reuse `Scenario.InitializeReply`,
 `FirstNewReply`/`NewReplies`, `LoadReply`, `ModeReply` and `PromptReply` on this

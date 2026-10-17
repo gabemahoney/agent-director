@@ -10,6 +10,9 @@ import (
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -278,55 +281,274 @@ func TestCursorHumanAdminDeleteLeavesRunningPaneUntracked(t *testing.T) {
 
 func TestCursorStoppingOneLaunchPreservesOtherLaunchAndWorker(t *testing.T) {
 	if testing.Short() {
-		t.Skip("independent real launch survivors")
+		t.Skip("concurrent real launches")
 	}
-	f1, r1, launch1 := newCursorPaneScenario(t, false, "independent-worker")
-	waitFor(t, "first waiting", func() bool { return readRow(t, f1.DBPath, launch1.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f1.DBPath, launch1.ID)) })
-	workerPID := 0
-	waitFor(t, "independent worker", func() bool {
-		raw, err := os.ReadFile(r1.WorkerPID)
-		if err == nil {
-			fmt.Sscan(string(raw), &workerPID)
+	for _, outcome := range []string{"stop", "correlated rejection"} {
+		t.Run(outcome, func(t *testing.T) { cursorConcurrentSurvivors(t, outcome) })
+	}
+}
+
+type cursorOperationArtifact struct {
+	Operation string             `json:"operation"`
+	Input     string             `json:"input"`
+	Result    string             `json:"result"`
+	PID       int                `json:"pid"`
+	CWD       string             `json:"cwd"`
+	Selection map[string]*string `json:"selection"`
+	Hook      *struct {
+		Status int `json:"status"`
+	} `json:"hook"`
+}
+
+func cursorConcurrentSurvivors(t *testing.T, outcome string) {
+	selected := map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "data")}
+	f, a, first := newCursorPaneScenario(t, false, "independent-worker", cursorPaneOptions{ExtraEnv: selected, Script: &cursorfix.Scenario{RecordArtifacts: true}})
+	_, b, second := newCursorPaneScenario(t, false, "", cursorPaneOptions{Shared: f, ExtraEnv: selected, Relay: "on", Script: &cursorfix.Scenario{SessionID: "peer-b", RecordArtifacts: true}})
+	distinct := map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "data")}
+	_, c, third := newCursorPaneScenario(t, false, "", cursorPaneOptions{Shared: f, ExtraEnv: distinct, Script: &cursorfix.Scenario{SessionID: "peer-c", RecordArtifacts: true}})
+	st, err := store.Open(f.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	runtimes := []cursorfix.Runtime{a, b, c}
+	launches := []spawned{first, second, third}
+	bindings := make([]store.CursorRuntime, 3)
+	starts := make([]procStat, 3)
+	for i, r := range runtimes {
+		bindings[i], err = st.ReadCursorRuntime(launches[i].ID)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return workerPID > 0
-	}, func() string { return "worker pid not announced" })
-	workerIdentity, ok := readStat(workerPID)
-	if !ok || workerIdentity.gone() {
-		t.Fatal("worker not independently alive before stop")
+		pid, _ := strconv.Atoi(readFileTrim(t, r.PID))
+		var ok bool
+		starts[i], ok = readStat(pid)
+		if !ok || starts[i].gone() || bindings[i].RuntimePID != pid || bindings[i].RuntimeStart != starts[i].start {
+			t.Fatal("overlapping runtime absent")
+		}
+		for j := 0; j < i; j++ {
+			if bindings[j].RuntimePID == pid || bindings[j].Connection == bindings[i].Connection || bindings[j].GatewayPID == bindings[i].GatewayPID || bindings[j].Token == bindings[i].Token {
+				t.Fatal("launch identities not independent")
+			}
+		}
+		want := selected
+		if i == 2 {
+			want = distinct
+		}
+		got := r.Selection(t)
+		for key, value := range want {
+			if got[key] == nil || *got[key] != value {
+				t.Fatalf("received selection %v", got)
+			}
+		}
+		if got["CURSOR_API_KEY"] != nil || got["AGENT_CLI_CREDENTIAL_STORE"] != nil {
+			t.Fatal("credential selector inherited")
+		}
+		cursorUsefulTurn(t, f, r, launches[i].ID, fmt.Sprintf("before-%d", i), want)
 	}
-	launch1.rt.trackPane(workerPID)
-	f2, r2, launch2 := newCursorPane(t, false)
-	waitFor(t, "second waiting", func() bool { return readRow(t, f2.DBPath, launch2.ID).State == store.StateWaiting }, func() string { return fmt.Sprint(readRow(t, f2.DBPath, launch2.ID)) })
-	before := readRow(t, f2.DBPath, launch2.ID)
-	secondRuntime := readFileTrim(t, r2.PID)
-	if _, err := f1.API.Pause(context.Background(), api.PauseParams{InstanceID: launch1.ID}); err != nil {
+	worker, _ := strconv.Atoi(readFileTrim(t, a.WorkerPID))
+	workerStart, ok := readStat(worker)
+	if !ok || workerStart.gone() {
+		t.Fatal("worker absent")
+	}
+	first.rt.trackPane(worker)
+	cursorWorkerOperation(t, a, "worker-before", "independent before", nil, f.CWD, selected)
+	// This real worker invokes the shipped hook with B's exact current claim.
+	b.Configure(t, cursorfix.Scenario{RecordArtifacts: true, Requests: []json.RawMessage{relayFrame("foreign-held", "session/request_permission", cursorfix.Permission(bindings[1].SessionID, "foreign-held", "execute"))}, AfterAnswers: []json.RawMessage{json.RawMessage(`{"method":"session/update","params":{"sessionId":"peer-b","update":{"sessionUpdate":"tool_call_update","toolCallId":"foreign-held","status":"completed","rawOutput":{"exitCode":0,"stdout":"synthetic current result","stderr":""}}}}`)}})
+	if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: second.ID, Text: "held-target"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "first gateway completely exited", func() bool { return pidGone(int(launch1.Row.PanePID.(int64))) }, func() string { return procState(int(launch1.Row.PanePID.(int64))) })
-	observed, alive := readStat(workerPID)
-	if !alive || observed.gone() || observed.start != workerIdentity.start {
-		t.Fatalf("independent worker disappeared or changed after gateway exit: %s", procState(workerPID))
+	requests := relayRequests(t, f, second.ID, 1)
+	before := readRow(t, f.DBPath, second.ID)
+	claim := map[string]any{"program": buildHookCLI(t, t.TempDir()), "args": []string{"hook", "--agent", "cursor"}, "env": map[string]string{"AGENT_DIRECTOR_INSTANCE_ID": second.ID, "AGENT_DIRECTOR_AGENT": "cursor", "AGENT_DIRECTOR_CURSOR_STORE_PATH": f.DBPath}, "payload": map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": bindings[1].SessionID, "cursor_connection": bindings[1].Connection, "origin": "main", "transcript_path": before.JSONLPath}}
+	cursorWorkerOperation(t, a, "foreign-report", "foreign claim", claim, f.CWD, selected)
+	bound, err := st.ReadCursorRuntime(second.ID)
+	afterRequests, requestErr := st.PermissionRequestsForSpawn(second.ID)
+	if err != nil || requestErr != nil || !reflect.DeepEqual(requests, afterRequests) || bound != bindings[1] || readRow(t, f.DBPath, second.ID) != before {
+		t.Fatal("foreign worker changed target authority")
 	}
-	after := readRow(t, f2.DBPath, launch2.ID)
-	if before != after || secondRuntime != readFileTrim(t, r2.PID) {
-		t.Fatal("another row or runtime changed by first stop")
-	}
-	if _, err := f2.API.SendKeys(api.SendKeysParams{InstanceID: launch2.ID, Text: "other row remains usable"}); err != nil {
+	if _, err = f.API.Decide(api.DecideParams{InstanceID: second.ID, RequestToken: requests[0].RequestToken, Decision: "allow"}); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "other row turn completes", func() bool {
-		for _, frame := range r2.Frames(t) {
-			if strings.Contains(string(frame["params"]), "other row remains usable") {
-				return readRow(t, f2.DBPath, launch2.ID).State == store.StateWaiting
+	waitFor(t, "legitimate target continues", func() bool { return readRow(t, f.DBPath, second.ID).State == store.StateWaiting }, nil)
+	b.Configure(t, cursorfix.Scenario{RecordArtifacts: true})
+	if outcome == "stop" {
+		if _, err = f.API.Pause(context.Background(), api.PauseParams{InstanceID: first.ID}); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		a.Configure(t, cursorfix.Scenario{PromptReply: json.RawMessage(`{"error":{"code":-32000,"message":"Authentication required"}}`)})
+		if _, err = f.API.SendKeys(api.SendKeysParams{InstanceID: first.ID, Text: "affected-rejection"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "affected gateway gone", func() bool { return pidGone(int(first.Row.PanePID.(int64))) }, nil)
+	wantState := store.StateEnded
+	if outcome != "stop" {
+		wantState = store.StateMissing
+	}
+	if got := readRow(t, f.DBPath, first.ID); got.State != wantState {
+		t.Fatalf("affected outcome %s; want %s", got.State, wantState)
+	}
+	for i := 1; i < 3; i++ {
+		bound, err := st.ReadCursorRuntime(launches[i].ID)
+		pid, _ := strconv.Atoi(readFileTrim(t, runtimes[i].PID))
+		observed, ok := readStat(pid)
+		if err != nil || bound != bindings[i] || !ok || observed.gone() || observed.start != starts[i].start {
+			t.Fatal("peer authority or runtime changed")
+		}
+		want := selected
+		if i == 2 {
+			want = distinct
+		}
+		cursorUsefulTurn(t, f, runtimes[i], launches[i].ID, fmt.Sprintf("after-%d", i), want)
+	}
+	cursorWorkerOperation(t, a, "worker-after", "independent after", nil, f.CWD, selected)
+	observed, ok := readStat(worker)
+	if !ok || observed.gone() || observed.start != workerStart.start {
+		t.Fatal("worker replaced")
+	}
+	for i, r := range runtimes {
+		if i > 0 {
+			if _, err = f.API.Pause(context.Background(), api.PauseParams{InstanceID: launches[i].ID}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		waitFor(t, "runtime ended", func() bool { return pidGone(bindings[i].RuntimePID) }, nil)
+		methods := map[string]int{}
+		for _, frame := range r.Frames(t) {
+			var method string
+			json.Unmarshal(frame["method"], &method)
+			if method != "" {
+				methods[method]++
+			}
+		}
+		prompts := 2
+		if i == 1 {
+			prompts = 3
+		}
+		if i == 0 && outcome == "stop" {
+			prompts = 1
+		}
+		if !reflect.DeepEqual(methods, map[string]int{"initialize": 1, "session/new": 1, "session/prompt": prompts}) {
+			t.Fatalf("unexpected retry/fallback frames: %v", methods)
+		}
+		// Shared-directory artifacts must coexist; none may appear in the other selection.
+		intended, other := selected, distinct
+		if i == 2 {
+			intended, other = distinct, selected
+		}
+		for _, p := range panePrompts(t, r) {
+			if p.Text == "affected-rejection" {
+				continue
+			}
+			var operation any
+			if err = json.Unmarshal([]byte(p.Request), &operation); err != nil {
+				t.Fatal(err)
+			}
+			name := fmt.Sprintf("%d-%v.json", bindings[i].RuntimePID, operation)
+			for _, dir := range intended {
+				if _, err = os.Stat(filepath.Join(dir, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, dir := range other {
+				if _, err = os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+					t.Fatal("artifact crossed directory selection")
+				}
+			}
+		}
+	}
+}
+
+func cursorUsefulTurn(t *testing.T, f *spawnFix, r cursorfix.Runtime, id, text string, selected map[string]string) {
+	t.Helper()
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: id, Text: text}); err != nil {
+		t.Fatal(err)
+	}
+	var prompt panePrompt
+	waitFor(t, "correlated completed useful work", func() bool {
+		for _, p := range panePrompts(t, r) {
+			if p.Text == text {
+				prompt = p
+			}
+		}
+		if prompt.Request == "" || readRow(t, f.DBPath, id).State != store.StateWaiting {
+			return false
+		}
+		var request any
+		if json.Unmarshal([]byte(prompt.Request), &request) != nil {
+			return false
+		}
+		completed := false
+		for _, record := range paneRecords(t, readRow(t, f.DBPath, id).JSONLPath.(string)) {
+			if record.Kind == "turn_outcome" && record.Data.Request == fmt.Sprint(request) && record.Session == prompt.Session && record.Instance == id {
+				completed = true
+			}
+		}
+		if !completed {
+			return false
+		}
+		pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
+		if err != nil || !strings.Contains(pane.Pane, "Synthetic reply: "+text) {
+			return false
+		}
+		for _, frame := range r.SentFrames(t) {
+			if string(frame["id"]) == prompt.Request && string(frame["result"]) == `{"stopReason":"end_turn"}` {
+				return true
 			}
 		}
 		return false
-	}, func() string { return fmt.Sprint(readRow(t, f2.DBPath, launch2.ID)) })
-	if _, err := f2.API.Pause(context.Background(), api.PauseParams{InstanceID: launch2.ID}); err != nil {
+	}, nil)
+	var operation any
+	if err := json.Unmarshal([]byte(prompt.Request), &operation); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(r1.WorkerRelease, nil, 0600); err != nil {
+	op := fmt.Sprint(operation)
+	pid, _ := strconv.Atoi(readFileTrim(t, r.PID))
+	for _, dir := range selected {
+		raw, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%d-%s.json", pid, op)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got cursorOperationArtifact
+		if err = json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Input != text || got.Result != "Synthetic reply: "+text || got.PID != pid || got.CWD != f.CWD || !reflect.DeepEqual(got.Selection, r.Selection(t)) {
+			t.Fatalf("misattributed useful result %+v", got)
+		}
+	}
+}
+
+func cursorWorkerOperation(t *testing.T, r cursorfix.Runtime, op, input string, hook map[string]any, cwd string, selected map[string]string) {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]any{"operation": op, "input": input, "hook": hook})
+	request := r.WorkerPID + ".request.json"
+	if err := os.WriteFile(request+".tmp", raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "released independent worker", func() bool { return pidGone(workerPID) }, func() string { return procState(workerPID) })
+	if err := os.Rename(request+".tmp", request); err != nil {
+		t.Fatal(err)
+	}
+	var got cursorOperationArtifact
+	waitFor(t, "worker operation result", func() bool {
+		raw, err := os.ReadFile(r.WorkerPID + ".result.json")
+		return err == nil && json.Unmarshal(raw, &got) == nil && got.Operation == op
+	}, nil)
+	pid, _ := strconv.Atoi(readFileTrim(t, r.WorkerPID))
+	if got.Input != input || got.Result != "Synthetic reply: "+input || got.PID != pid || got.CWD != cwd || got.Selection["CURSOR_API_KEY"] != nil || got.Selection["AGENT_CLI_CREDENTIAL_STORE"] != nil {
+		t.Fatalf("worker result %+v", got)
+	}
+	if hook != nil && (got.Hook == nil || got.Hook.Status != 0) {
+		t.Fatalf("real hook failed %+v", got)
+	}
+	for key, dir := range selected {
+		if got.Selection[key] == nil || *got.Selection[key] != dir {
+			t.Fatal("worker selection changed")
+		}
+		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("%d-%s.json", pid, op))); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

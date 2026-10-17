@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
@@ -85,6 +87,63 @@ func TestCursorProofAndAdmissionRejectStaleAuthority(t *testing.T) {
 				t.Fatal("stale admission answered or mutated")
 			}
 		})
+	}
+}
+
+func TestCursorRotatedAuthorityRejectsStaleReportAndPermissionProof(t *testing.T) {
+	// Serial: shared verified runtime/pane fixture owns HOME and PATH.
+	e := newRequestEnv(t, "off", "outgoing-session")
+	old := e.binding
+	stale := e.controller(t, &observedWire{}, io.Discard)
+	request := e.admit(t, stale, `1`, "session/request_permission", cursorfix.Permission(old.SessionID, "outgoing-shell", "execute"))
+	row, err := e.s.GetSpawn(old.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := store.HookGate{Event: "SessionStart", ParentPID: old.GatewayPID, ParentStart: old.GatewayStart, SessionID: old.SessionID, Cursor: &old}
+	check := func(row store.Spawn) error {
+		if err := VerifyRuntime(old, false); err != nil {
+			return err
+		}
+		return VerifyPane(e.s, row, config.Default())
+	}
+	if ok, err := e.s.RotateCursorSession(row, gate, "current-session", e.tr.path, time.Now().Add(time.Second), check); err != nil || !ok {
+		t.Fatalf("verified real rotation %v %v", ok, err)
+	}
+	before, err := e.s.GetSpawn(old.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound, err := e.s.ReadCursorRuntime(old.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := e.request(t, request.token)
+	// The captured outgoing binding reaches the real SQL report/permission guards.
+	gate.Event = "UserPromptSubmit"
+	if _, result, err := e.s.ApplyHookTransitionResult(old.InstanceID, gate, store.StateWorking, false, "UserPromptSubmit", e.tr.path, true); err != nil || result.Applied {
+		t.Fatalf("stale report applied %+v %v", result, err)
+	}
+	if err := stale.execution(executionUpdate(old.SessionID, "outgoing-shell", "completed", `{"exitCode":0,"stdout":"obsolete","stderr":""}`)); err == nil {
+		t.Fatal("stale proof accepted")
+	}
+	if err := stale.admit(frame{ID: []byte(`2`), Method: "session/request_permission", Params: cursorfix.Permission(old.SessionID, "obsolete", "execute")}, old.SessionID); err == nil {
+		t.Fatal("stale permission admitted")
+	}
+	after, _ := e.s.GetSpawn(old.InstanceID)
+	current, _ := e.s.ReadCursorRuntime(old.InstanceID)
+	if !reflect.DeepEqual(before, after) || current != bound || !reflect.DeepEqual(previous, e.request(t, request.token)) {
+		t.Fatal("stale authority mutated current target/request")
+	}
+	e.binding = bound
+	e.rep.binding = bound
+	legitimate := e.controller(t, &observedWire{}, io.Discard)
+	next := e.admit(t, legitimate, `3`, "session/request_permission", cursorfix.Permission(bound.SessionID, "current-shell", "execute"))
+	if err := legitimate.execution(executionUpdate(bound.SessionID, "current-shell", "completed", `{"exitCode":0,"stdout":"current","stderr":""}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !e.request(t, next.token).ProvenGone() {
+		t.Fatal("current useful proof failed")
 	}
 }
 
