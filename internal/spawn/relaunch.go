@@ -79,11 +79,17 @@ type ComposedRelaunch struct {
 // here opens no new exposure tier. Permissions, by contrast, is NOT stored,
 // so it cannot be reconstructed and stays nil; the caller's shell env
 // propagates auth via tmux's default behavior for anything not captured in
-// ExtraEnv. AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
+// ExtraEnv, except Cursor's explicit-only configuration/credential selectors.
+// AGENT_DIRECTOR_INSTANCE_ID reaches the create argv exactly once,
 // as for a plain spawn (the client drops the environment's copy).
 func ComposeRelaunch(in RelaunchInput, cfg config.Config) (ComposedRelaunch, error) {
 	if err := launchAgentError(in.Row.Agent); err != nil {
 		return ComposedRelaunch{}, err
+	}
+	if in.Row.Agent == store.AgentCursor {
+		if err := ValidateCursorEnv(in.Row.ExtraEnv); err != nil {
+			return ComposedRelaunch{}, err
+		}
 	}
 	// Synthesize a Resolved for the env/settings helpers. Permissions is
 	// intentionally nil: it isn't stored on the row, so a resume can't carry

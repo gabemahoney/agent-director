@@ -1,6 +1,11 @@
 package tmux
 
-import "strings"
+import (
+	"os"
+	"strings"
+
+	"github.com/gabemahoney/agent-director/internal/cursorenv"
+)
 
 // createReplyFormat is the create's -P -F reply format (SR-2.1).
 const createReplyFormat = "#{session_id} #{pid} #{start_time} #{pane_id} #{pane_pid}"
@@ -48,7 +53,9 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // are passed as given (other AGENT_DIRECTOR_* keys included); an
 // AGENT_DIRECTOR_INSTANCE_ID key in envs is dropped, the -e entry from
 // instanceID being the only one. The client's own environment has every
-// AGENT_DIRECTOR_* variable removed, as for every call.
+// AGENT_DIRECTOR_* variable removed, as for every call. A Cursor create also
+// excludes ambient Cursor selection from the client and marks absent selectors
+// removed in this session, defeating existing-server inheritance.
 //
 // name, cwd, every -e entry and every command element are passed to tmux as
 // written, an element ending in ";" included: each argv element but the
@@ -67,7 +74,11 @@ func NeedsLabelByID(name string) bool { return strings.ContainsAny(name, `$\`) }
 // apart for the caller.
 func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string) (CreateReply, error) {
 	chained := !NeedsLabelByID(name)
-	res := c.invoke(CallCreate, socket, createCommands(name, cwd, envs, command, token, instanceID, storeID, chained)...)
+	environ := clientEnv(os.Environ())
+	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
+		environ = cursorenv.WithoutSelection(environ)
+	}
+	res := c.invokeEnv(CallCreate, socket, environ, createCommands(name, cwd, envs, command, token, instanceID, storeID, chained)...)
 	if res.Status == RunNotStarted || res.Status == RunTimedOut {
 		return CreateReply{}, c.runFailure(CallCreate, res)
 	}
@@ -107,6 +118,15 @@ func (c *Client) NewSession(socket, name, cwd string, envs map[string]string, co
 // against the name it stores, which is the unescaped name.
 func createCommands(name, cwd string, envs map[string]string, command []string, token, instanceID, storeID string, chained bool) [][]string {
 	create := []string{"new-session", "-d", "-s", name, "-c", escapeFormat(cwd), "-e", instanceIDEnv + "=" + instanceID}
+	if envs["AGENT_DIRECTOR_AGENT"] == "cursor" {
+		// A bare -e name removes that variable from this session, including a
+		// value inherited from an existing server. Never alter server globals.
+		for _, key := range cursorenv.Selectors() {
+			if _, explicit := envs[key]; !explicit {
+				create = append(create, "-e", key)
+			}
+		}
+	}
 	rest := make(map[string]string, len(envs))
 	for k, v := range envs {
 		if k != instanceIDEnv {

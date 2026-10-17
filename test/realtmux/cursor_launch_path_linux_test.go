@@ -59,10 +59,15 @@ func TestCursorCurrentRuntimePublicPaths(t *testing.T) {
 				}
 				caller := newPaneCaller(t, f, surface, filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
 				params := map[string]any{"instance_id": launch.ID, "agent": "cursor", "cwd": before.CWD.(string), "no_pre_trust": true}
+				selection := map[string]string{"CURSOR_CONFIG_DIR": "/new-request/config", "CURSOR_DATA_DIR": "/new-request/data"}
+				params["extra_env"] = selection
 				call := "spawn"
 				if verb == "resume" {
 					call = "resume"
 					params = map[string]any{"instance_id": launch.ID}
+					if err := json.Unmarshal([]byte(before.ExtraEnv.(string)), &selection); err != nil {
+						t.Fatal(err)
+					}
 				} else if verb == "reuse" {
 					params["reuse_finished"] = true
 				} else {
@@ -72,6 +77,12 @@ func TestCursorCurrentRuntimePublicPaths(t *testing.T) {
 				id := params["instance_id"].(string)
 				waitFor(t, "selected runtime protocol effect", func() bool { return len(second.Frames(t)) >= 2 }, func() string { return fmt.Sprint(second.Frames(t)) })
 				assertCursorRuntimeProgram(t, second, selected)
+				received := second.Selection(t)
+				for key, value := range selection {
+					if received[key] == nil || *received[key] != value {
+						t.Fatalf("current executable lost %s selection", key)
+					}
+				}
 				frames := second.Frames(t)
 				method := "session/new"
 				if verb == "resume" {

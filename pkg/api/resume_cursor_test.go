@@ -20,17 +20,23 @@ import (
 )
 
 // Synthetic gateway-only history: native layout/recall provenance is not established here.
-func seedCursorResume(t *testing.T, e *resumeEnv, state string) (string, cursorfix.GatewayHistory) {
+func seedCursorResume(t *testing.T, e *resumeEnv, state string, selections ...map[string]string) (string, cursorfix.GatewayHistory) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	installCursorFixtureGateway(t)
 	id := "resume-cursor-" + uuid.NewString()
 	h := cursorfix.NewGatewayHistory(t, id, 3, "latest-cursor", "older-cursor")
+	selected := map[string]string{"SAVED_CURSOR_ENV": "retained", "AGENT_DIRECTOR_GROUP": "saved-group"}
+	for _, selection := range selections {
+		for key, value := range selection {
+			selected[key] = value
+		}
+	}
 	_, err := apitest.SeedSpawn(e.dbPath, id, state, t.TempDir(), "off", "latest-cursor", false,
 		apitest.WithAgent(store.AgentCursor), apitest.WithJsonlPath(h.Latest), apitest.WithLifeNumber(3),
 		apitest.WithTmuxSocket(e.socket), apitest.WithNoPreTrust(),
 		apitest.WithRawAgentArgs(`["--model","saved-model","--plan","saved initial"]`),
-		apitest.WithExtraEnv(map[string]string{"SAVED_CURSOR_ENV": "retained", "AGENT_DIRECTOR_GROUP": "saved-group"}),
+		apitest.WithExtraEnv(selected),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "older-cursor", JSONLPath: h.Older, Life: 3}))
 	if err != nil {
 		t.Fatal(err)
@@ -280,8 +286,7 @@ func TestCursorResumeNativeArtifactsRemainRuntimeOwned(t *testing.T) {
 					id, gateway := seedCursorResume(t, e, entry.state)
 					before := e.columns(t, id)
 					native := cursorfix.NewNativeHistory(t, before.CWD.(string), "latest-cursor", "older-cursor")
-					// Point a hypothetical native probe at the isolated store. Production preflight owns only the protected transcript.
-					t.Setenv("CURSOR_CONFIG_DIR", native.ConfigRoot)
+					cursorReadSQL(t, e.dbPath, "UPDATE spawns SET extra_env=? WHERE instance_id=?", cursorSelectionJSON(map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot}), id)
 					if missing {
 						native.Latest.RemoveDatabase(t)
 					}

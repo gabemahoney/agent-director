@@ -77,6 +77,11 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err
 	}
+	if r.Agent == store.AgentCursor {
+		if err := ValidateExtraEnv(r.ExtraEnv, r.Agent); err != nil {
+			return ComposedLaunch{}, err
+		}
+	}
 	var command []string
 	var carried PreTrustOutcome
 	if r.Agent == store.AgentCursor {

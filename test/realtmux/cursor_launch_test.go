@@ -36,6 +36,9 @@ type cursorPaneOptions struct {
 	ProgramName  string
 	UnsetPath    bool
 	AgentArgs    []string
+	ExtraEnv     map[string]string
+	Unconfigured bool
+	BeforeLaunch func(*spawnFix)
 }
 
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
@@ -50,6 +53,13 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	var opts cursorPaneOptions
 	if len(options) > 0 {
 		opts = options[0]
+	}
+	selection := opts.ExtraEnv
+	if selection == nil && !opts.Unconfigured {
+		selection = map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "cursor-config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "cursor-data")}
+	}
+	if opts.BeforeLaunch != nil {
+		opts.BeforeLaunch(f)
 	}
 	if opts.ProgramName != "" {
 		whole := filepath.Join(filepath.Dir(r.Program), opts.ProgramName)
@@ -102,6 +112,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	f.API = client
 	id := newInstanceID("cursor")
 	args := []string{"spawn", "--store-path", f.DBPath, "--agent", "cursor", "--instance-id", id, "--cwd", f.CWD, "--no-pre-trust"}
+	for key, value := range selection {
+		args = append(args, "--extra-env", key+"="+value)
+	}
 	if opts.Relay != "" {
 		args = append(args, "--relay-mode", opts.Relay)
 	}
@@ -119,14 +132,14 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 const options = {storePath: %q, home: %q, _cliPath: %q};
 const c = await Client.create(options);
 const started = performance.now();
-const result = await c.spawn({agent:"cursor", instance_id:%q, cwd:%q, no_pre_trust:true, agent_args:["HOLD"]});
+const result = await c.spawn({agent:"cursor", instance_id:%q, cwd:%q, no_pre_trust:true, extra_env:%s, agent_args:["HOLD"]});
 const elapsed = performance.now()-started;
 if (!(elapsed < 30000)) throw new Error("default launch timeout exceeded");
 await c.close();
 const recreated = await Client.create(options);
 await recreated.get({instance_id:result.instance_id});
 await recreated.close();
-console.log(JSON.stringify({...result,fixture_whole_call_ms:elapsed}));`, clientSource, f.DBPath, os.Getenv("HOME"), bin, id, f.CWD)
+console.log(JSON.stringify({...result,fixture_whole_call_ms:elapsed}));`, clientSource, f.DBPath, os.Getenv("HOME"), bin, id, f.CWD, func() []byte { raw, _ := json.Marshal(selection); return raw }())
 		path := filepath.Join(t.TempDir(), "caller.ts")
 		if e := os.WriteFile(path, []byte(js), 0600); e != nil {
 			t.Fatal(e)
@@ -138,7 +151,7 @@ console.log(JSON.stringify({...result,fixture_whole_call_ms:elapsed}));`, client
 	var out []byte
 	if opts.StandaloneGo {
 		caller := newPaneCaller(t, f, "Go release wrapper", bin)
-		out, err = caller.call("spawn", map[string]any{"agent": "cursor", "instance_id": id, "cwd": f.CWD, "no_pre_trust": true})
+		out, err = caller.call("spawn", map[string]any{"agent": "cursor", "instance_id": id, "cwd": f.CWD, "no_pre_trust": true, "extra_env": selection})
 	} else {
 		out, err = cmd.CombinedOutput()
 	}

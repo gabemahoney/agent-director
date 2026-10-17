@@ -77,6 +77,17 @@ starts a fresh conversation under the documented
 [life rules](usage.md#naming-the-agent); do not substitute an older session or
 repair saved identity by hand.
 
+For a Cursor selection refusal, decide whether the intended account is the
+existing personal login with separate configuration/data directories, as in
+[Multi-Account](multi-account.md#cursor-configuration-and-data-directories).
+The credential profile is unreleased; do not discard account intent merely to
+make a launch succeed. Resume cannot edit saved selection. Preserve the original
+row, life, history and artifacts; use the caller contract's fresh-instance
+procedure only when a supported selection meets the intended account and
+configuration, after resolving survivors through the procedures above. Do not
+repair protected stored environment by hand. Automated input correction belongs
+in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
+
 ## A finished row's own old session
 
 `resume` or `spawn --reuse-finished` refuses with `ErrTmuxSessionConflict`

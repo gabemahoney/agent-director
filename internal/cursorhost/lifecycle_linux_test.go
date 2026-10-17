@@ -48,7 +48,7 @@ func TestOwnedRuntimeProtectedAndTerminated(t *testing.T) {
 					program = wrapper
 				}
 			}
-			p, err := startProcess(program, []string{"acp"}, t.TempDir())
+			p, err := startProcess(program, []string{"acp"}, t.TempDir(), os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -95,7 +95,7 @@ func TestOwnedRuntimeUnexpectedDeathAndTransportEOF(t *testing.T) {
 			if err := os.WriteFile(path, []byte(script), 0700); err != nil {
 				t.Fatal(err)
 			}
-			p, err := startProcess(path, nil, t.TempDir())
+			p, err := startProcess(path, nil, t.TempDir(), os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -178,7 +178,7 @@ func TestGatewayCrashHelper(t *testing.T) {
 	if path == "" {
 		t.Skip("subprocess helper")
 	}
-	p, err := startProcess(path, []string{"acp"}, os.TempDir())
+	p, err := startProcess(path, []string{"acp"}, os.TempDir(), os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestSecondACPOwnerRefusedAndSentinelSurvives(t *testing.T) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 30\n: AfterChild\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	p, err := startProcess(path, nil, t.TempDir())
+	p, err := startProcess(path, nil, t.TempDir(), os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestSecondACPOwnerRefusedAndSentinelSurvives(t *testing.T) {
 
 func TestRuntimeBindingRequiresIndependentKernelFacts(t *testing.T) {
 	r := cursorfix.New(t)
-	p, err := startProcess(r.Program, []string{"acp"}, t.TempDir())
+	p, err := startProcess(r.Program, []string{"acp"}, t.TempDir(), os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestRuntimeBindingRequiresIndependentKernelFacts(t *testing.T) {
 
 func TestIndependentCursorWorkerSurvivesRuntimeTermination(t *testing.T) {
 	r := cursorfix.NewWithWorker(t, true)
-	p, err := startProcess(r.Program, []string{"acp"}, t.TempDir())
+	p, err := startProcess(r.Program, []string{"acp"}, t.TempDir(), os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestCursorExecStartCauseAndLiteralRepair(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p, err := startProcess(program, nil, cwd)
+			p, err := startProcess(program, nil, cwd, os.Environ())
 			if p != nil || err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "SYNTHETIC-SECRET") || strings.Contains(err.Error(), program) || strings.ContainsAny(err.Error(), "\n\r\x1b") {
 				t.Fatalf("start=%v err=%v", p, err)
 			}
@@ -381,7 +381,7 @@ func TestCursorExecStartCauseAndLiteralRepair(t *testing.T) {
 			if err := os.Chmod(program, 0700); err != nil {
 				t.Fatal(err)
 			}
-			p, err = startProcess(program, []string{"acp"}, cwd)
+			p, err = startProcess(program, []string{"acp"}, cwd, os.Environ())
 			if err != nil {
 				t.Fatal(err)
 			}

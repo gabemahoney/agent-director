@@ -48,7 +48,7 @@ pc_finish() {
  jq -cn --arg case "$1" --argjson checks "$2" --arg id "$id" --arg session "$session" --arg path "$path" --argjson runtime "$runtime" --argjson gateway "$gateway" \
   '{case:$case,status:"pass",checks:$checks,provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",clients:"shipped-CLI/MCP-or-explicit-installed-Bun",authenticated_cursor:false,human_terminal:false},facts:{instance_id:$id,initial_session_id:$session,transcript:$path,runtime_pid:$runtime,gateway_pid:$gateway,raw_artifacts:("/tmp/cursor-pane-controls-artifacts/"+$id)}}'
 }
-pc_public() { local surface=$1 verb=$2; shift 2; timeout 35s bun --no-install "$SOURCE_DIR/test/driver/cursor-pane-public.mjs" "$surface" "$verb" "$HOME" "$STORE" "$@"; }
+pc_public() { local surface=$1 verb=$2; shift 2; local params=$1; if [[ $verb == spawn ]]; then params=$(jq -c --arg config "$CURSOR_CONFIG_DIR" --arg data "$CURSOR_DATA_DIR" 'if has("extra_env") then . else .extra_env={CURSOR_CONFIG_DIR:$config,CURSOR_DATA_DIR:$data} end' <<<"$params"); fi; timeout 35s bun --no-install "$SOURCE_DIR/test/driver/cursor-pane-public.mjs" "$surface" "$verb" "$HOME" "$STORE" "$params"; }
 pc_send() { pc_public "$1" send-keys "$(jq -cn --arg id "$id" --arg text "$2" --argjson pending "${3:-false}" '{instance_id:$id,text:$text,allow_pending:$pending}')"; }
 pc_terminal() { tmux -S "$socket" send-keys -t "$pane" -l -- "$1"; tmux -S "$socket" send-keys -t "$pane" Enter; }
 pc_count() { jq -s --arg kind "$1" '[.[]|select(.kind==$kind)]|length' "$path"; }

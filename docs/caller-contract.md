@@ -186,9 +186,17 @@ project directory, omitting `instance_id` so AD generates a unique id:
 agent-director spawn --agent cursor --cwd "$PWD"
 ```
 
-This is an explicit fresh conversation. For `ErrReservedEnvKey`, omit the
-refused saved environment key from the new launch. Cursor retains the caller's
-`HOME`; it has no supported config-directory override.
+This is an explicit fresh conversation using the existing personal login when
+no selection is supplied. Use supported explicit `extra_env` only if it
+preserves the intended account and configuration. Cursor retains the caller's
+`HOME`; [Cursor directories](multi-account.md#cursor-configuration-and-data-directories)
+select configuration/data without relocating or isolating login credentials.
+For saved `ErrReservedEnvKey`, resume cannot change the saved environment.
+Preserve the original row, session, transcript and saved artifacts. A new
+instance is an option only with a supported selection matching the intended
+account/configuration; never remove account intent and retry under the personal
+login. If no supported selection meets that intent, retain the refusal for an
+[operator decision](operator-actions.md#inspect-and-end-a-session-by-hand).
 
 Cursor `agent_args` accept the model, mode and single-prompt forms in
 [Fresh Cursor use](usage.md#fresh-cursor-use). Unsupported or malformed
@@ -422,6 +430,27 @@ Each of these is refused before anything is written: no row, session, trust
 entry or template. Fix the input and re-issue the call. How `agent` and a
 template's `agent_args` combine is in
 [Settings](settings.md#templates-and-per-call-merge).
+
+For effective `cursor`, `ErrReservedEnvKey` also refuses explicit
+`CURSOR_API_KEY` or `AGENT_CLI_CREDENTIAL_STORE` by presence, even empty or
+incomplete, because the credential profile is unreleased. It also refuses
+invalid explicit `CURSOR_CONFIG_DIR` or `CURSOR_DATA_DIR`; the exact directory
+requirements are in [Multi-Account](multi-account.md#cursor-configuration-and-data-directories).
+Existing `HOME`, reserved `AGENT_DIRECTOR_*` and malformed-key checks run first,
+in that order; Cursor then checks `CURSOR_API_KEY`,
+`AGENT_CLI_CREDENTIAL_STORE`, `CURSOR_CONFIG_DIR`, `CURSOR_DATA_DIR` in order.
+Cursor-specific diagnostics name the key, never its value. Agent-independent
+templates defer these checks until the effective agent is resolved.
+
+Correct invalid directory values to the intended literal supported paths;
+keep `HOME` unchanged. Do not remove credential-profile intent to obtain a
+personal-login launch. If that intended account cannot be selected by supported
+means, stop and retain the refusal for an operator decision. Fresh/reuse calls
+and Cursor template creation refuse before row, trust, template or launch
+changes and before transporting credentials. Resume checks saved selection
+after its existing HOME/malformed-key guards, before transcript lookup or
+lifecycle changes; it preserves historical saved AD variables. Resume cannot
+repair that selection; follow the [fresh-instance boundary](#cursor-operation-boundaries).
 
 - `ErrAgentMissing`: the call gives no `agent` and its template names none.
   Name `claude`, `codex` or `cursor` per call (`--agent` on the CLI), or put `agent` in

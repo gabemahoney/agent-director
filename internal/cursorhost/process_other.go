@@ -14,7 +14,7 @@ type ownedProcess struct {
 	done          chan error
 }
 
-func startProcess(string, []string, string) (*ownedProcess, error) {
+func startProcess(string, []string, string, []string) (*ownedProcess, error) {
 	return nil, fmt.Errorf("Cursor protected runtime is unsupported on this platform")
 }
 func (p *ownedProcess) terminate() error {

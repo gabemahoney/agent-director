@@ -233,6 +233,8 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 					t.Fatal(err)
 				}
 				e.runtime.Configure(t, cursorfix.Scenario{LoadSupport: true, NativeConfigRoot: native.ConfigRoot})
+				selected, _ := json.Marshal(map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot})
+				e.exec(t, `UPDATE spawns SET extra_env=? WHERE instance_id=?`, string(selected), e.binding.InstanceID)
 			})
 			select {
 			case err := <-c.done:

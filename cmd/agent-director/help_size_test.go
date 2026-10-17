@@ -44,6 +44,8 @@ import "testing"
 // On 2026-10-12 latest-spawn wording trimmed it to 14662 (free downward step).
 // On 2026-10-13 caller wording trimmed it to 14642 (free downward step).
 // On 2026-10-16 b.jf1 resume wording trimmed it to 14637 (free downward step).
+// On 2026-10-17 b.jf1 E6 Task 1 lossless spawn/resume wording trims lowered
+// it to 14634 (free downward step).
 //
 // SR-20.6: this guard checks growth only, with no slack: help stdout one byte
 // over this count fails. Re-recording it downward, to the newly measured
@@ -51,7 +53,7 @@ import "testing"
 // it upward needs the user's approval before the commit and a recorded reason
 // in the commit message (what grew, by how many bytes, why it cannot be
 // shorter); never to make a failing guard pass.
-const helpStdoutBytes = 14637
+const helpStdoutBytes = 14634
 
 // helpHardCap is the user's hard cap on `agent-director help` stdout, in
 // bytes. Help stdout must stay at or under it, with no slack.

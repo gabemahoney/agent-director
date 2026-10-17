@@ -1,10 +1,11 @@
 # Multi-Account
 
 Launching a Spawn against a different Claude or Codex account than the
-operator's default. Everything up to "Codex group folders" covers spawns whose
-agent is `claude`; that section covers `codex`.
-agent-director's `extra_env` parameter is the
-single mechanism for this — no file mounts, no profile directories.
+operator's default, and selecting Cursor configuration/data directories.
+Everything up to "Codex group folders" covers spawns whose agent is `claude`;
+the later sections cover `codex` and `cursor` separately.
+Selection uses agent-director's existing `extra_env` parameter; AD adds no
+separate profile mechanism.
 If `CLAUDE_CONFIG_DIR` is supplied via `extra_env`, it must be an
 absolute path. The pretrust write then targets
 `<CLAUDE_CONFIG_DIR>/.claude.json` instead of the operator's
@@ -167,6 +168,48 @@ and `CODEX_HOME` moves it. Agents that share an account share a group folder.
 - **agent-director's MCP server and help entry are set up by hand in each
   group folder,** as in the default one (see [Set up agent-director in a Codex
   folder](settings.md#set-up-agent-director-in-a-codex-folder)).
+
+## Cursor configuration and data directories
+
+Use `CURSOR_CONFIG_DIR` and `CURSOR_DATA_DIR` through `extra_env` or a
+[template](settings.md#templates-and-per-call-merge) to select Cursor's
+configuration and data directories with the existing personal login. Each is
+optional independently. For example, when that login is the intended account:
+
+```sh
+agent-director spawn --cwd /work/project-foo --agent cursor \
+  --extra-env CURSOR_CONFIG_DIR=/work/cursor-config \
+  --extra-env CURSOR_DATA_DIR=/work/cursor-data
+```
+
+A supplied directory must be nonempty, absolute and lexically clean, without
+ASCII control bytes (0x00–0x1f or 0x7f). Relative paths, leading `~` or `$VAR`,
+dot/dot-dot components, redundant separators and trailing separators other
+than `/` are refused. Accepted values pass unchanged: `$` or `~` inside an
+otherwise valid absolute path stays literal. AD does no expansion, filesystem
+validation or directory creation.
+
+A launch without explicit selection does not inherit these directories or
+Cursor credential selectors from its caller, parent agent or tmux server.
+[Resume](usage.md#pause-and-resume) retains the saved selection; finished-id
+reuse takes the new resolved call/template selection and starts fresh.
+`HOME` stays unchanged. Selecting these directories neither relocates the
+personal login nor establishes credential, account or operating-system
+isolation.
+
+The Cursor credential profile is unreleased. Explicit `CURSOR_API_KEY` or
+`AGENT_CLI_CREDENTIAL_STORE`, including empty or incomplete selections, is
+refused; there is no approved memory-store account recipe. Second-account
+isolation, API-key exchange/renewal, expiry/invalid keys, personal-auth
+preservation, cross-account workers and macOS account behavior remain
+unverified pending authorized account/platform acceptance. Directory selection
+does not establish those capabilities. Refusals and intent-preserving recovery
+are in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
+
+Saved `extra_env` remains in the owner-only database and is omitted from public
+spawn views; template environment remains plaintext TOML. See
+[Configuration](configuration.md) for storage protections and
+[Settings](settings.md#templates-and-per-call-merge) for merging.
 
 ## References
 

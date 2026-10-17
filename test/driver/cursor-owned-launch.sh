@@ -58,7 +58,7 @@ cleanup_cursor_case() {
  if [[ -n ${lock_owner:-} ]]; then touch "$case_dir/unlock"; kill "$lock_owner" 2>/dev/null || true; wait "$lock_owner" 2>/dev/null || true; fi
 }
 trap cleanup_cursor_case EXIT
-ad() { local verb=$1; shift; agent-director "$verb" --home "$HOME" --store-path "$STORE" "$@"; }
+ad() { local verb=$1; shift; local selection=(); if [[ $verb == spawn ]]; then selection=(--extra-env "CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" --extra-env "CURSOR_DATA_DIR=$CURSOR_DATA_DIR"); fi; agent-director "$verb" --home "$HOME" --store-path "$STORE" "${selection[@]}" "$@"; }
 sql() { /opt/driver/sql.sh "$STORE" "$@"; }
 row_state() { sql "SELECT state FROM spawns WHERE instance_id='$id';"; }
 wait_state() { local want=$1 deadline=$((SECONDS+15)); while [[ $(row_state) != "$want" ]]; do (( SECONDS < deadline )); sleep 0.05; done; }

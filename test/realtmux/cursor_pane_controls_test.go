@@ -35,7 +35,7 @@ func newPaneCaller(t *testing.T, f *spawnFix, surface, bin string) *paneCaller {
 		source := filepath.Join(t.TempDir(), "main.go")
 		program := `package main
 import("encoding/json";"fmt";"os";"github.com/gabemahoney/agent-director/pkg/api")
-func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)};defer c.Close(); var p map[string]any;if e=json.Unmarshal([]byte(os.Args[3]),&p);e!=nil{panic(e)};var r any;switch os.Args[2]{case "resume":r,e=c.Resume(api.ResumeParams{InstanceID:p["instance_id"].(string)});case "spawn":r,e=c.Spawn(api.SpawnParams{InstanceID:p["instance_id"].(string),Agent:p["agent"].(string),CWD:p["cwd"].(string),NoPreTrust:p["no_pre_trust"].(bool)});default:panic("unsupported wrapper verb")};if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)};json.NewEncoder(os.Stdout).Encode(r)}
+func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)};defer c.Close(); var p map[string]any;if e=json.Unmarshal([]byte(os.Args[3]),&p);e!=nil{panic(e)};var extra map[string]string;b,_:=json.Marshal(p["extra_env"]);json.Unmarshal(b,&extra);var r any;switch os.Args[2]{case "resume":r,e=c.Resume(api.ResumeParams{InstanceID:p["instance_id"].(string)});case "spawn":r,e=c.Spawn(api.SpawnParams{InstanceID:p["instance_id"].(string),Agent:p["agent"].(string),CWD:p["cwd"].(string),NoPreTrust:p["no_pre_trust"].(bool),ExtraEnv:extra});default:panic("unsupported wrapper verb")};if e!=nil{fmt.Fprintln(os.Stderr,e);os.Exit(1)};json.NewEncoder(os.Stdout).Encode(r)}
 `
 		if err := os.WriteFile(source, []byte(program), 0600); err != nil {
 			t.Fatal(err)
@@ -60,6 +60,11 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 	case "CLI":
 		c.call = func(verb string, p map[string]any) ([]byte, error) {
 			args := []string{verb, "--store-path", f.DBPath}
+			if extra, ok := p["extra_env"].(map[string]string); ok {
+				for key, value := range extra {
+					args = append(args, "--extra-env", key+"="+value)
+				}
+			}
 			for _, key := range []string{"instance_id", "text", "key", "n_lines", "request_token", "decision", "expect_pane_sha256", "agent", "cwd", "parent"} {
 				if v, ok := p[key]; ok {
 					args = append(args, "--"+strings.ReplaceAll(key, "_", "-"), fmt.Sprint(v))
@@ -107,7 +112,8 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 				reuse, _ := p["reuse_finished"].(bool)
 				noTrust, _ := p["no_pre_trust"].(bool)
 				args, _ := p["agent_args"].([]string)
-				result, err = client.Spawn(api.SpawnParams{InstanceID: p["instance_id"].(string), Agent: p["agent"].(string), CWD: p["cwd"].(string), ReuseFinished: reuse, NoPreTrust: noTrust, AgentArgs: args})
+				extra, _ := p["extra_env"].(map[string]string)
+				result, err = client.Spawn(api.SpawnParams{InstanceID: p["instance_id"].(string), Agent: p["agent"].(string), CWD: p["cwd"].(string), ReuseFinished: reuse, NoPreTrust: noTrust, AgentArgs: args, ExtraEnv: extra})
 			case "list":
 				parent, _ := p["parent"].(string)
 				result, err = client.List(api.ListParams{Parent: parent})

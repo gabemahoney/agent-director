@@ -38,7 +38,7 @@ func newRequestEnv(t *testing.T, relay, session string) *requestEnv {
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", faketmuxfix.Dir(t)+":"+os.Getenv("PATH"))
 	runtime := cursorfix.New(t)
-	process, err := startProcess(runtime.Program, []string{"acp"}, t.TempDir())
+	process, err := startProcess(runtime.Program, []string{"acp"}, t.TempDir(), os.Environ())
 	if err != nil {
 		t.Fatal(err)
 	}

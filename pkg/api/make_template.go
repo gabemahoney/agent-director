@@ -280,13 +280,17 @@ func validateTemplateRelayMode(m string) error {
 //     "HOME=/x") with any value. The message quotes the key. Set the
 //     agent's absolute folder variable instead to give it its own config:
 //     CLAUDE_CONFIG_DIR for claude, CODEX_HOME for codex, and the message
-//     names both when Agent is empty. Also returned, after those checks, for a key that is not a
+//     names both when Agent is empty. Cursor uses CURSOR_CONFIG_DIR and
+//     CURSOR_DATA_DIR for configuration/data with existing personal login,
+//     without account isolation. Also returned, after those checks, for a key that is not a
 //     valid env-var name: it is empty, or it contains '=' or a NUL byte. The
 //     key is refused, never rewritten; the message quotes it, says it is not
 //     a valid env-var name and says what is wrong with it. A key that is both
 //     reserved and malformed (such as "HOME=/x") gets the reserved-name
 //     message. It is spawn's own check, so no template is saved that spawn
-//     would refuse; nothing is written or replaced.
+//     would refuse; nothing is written or replaced. Effective Cursor templates
+//     also refuse explicit credential-profile selectors and invalid directory
+//     paths. Agent-independent templates defer these checks until resolution.
 //
 // Nondeterminism: .path — the absolute path reflects the host's templates
 // directory (~/.config/agent-director/templates/) and varies across environments.

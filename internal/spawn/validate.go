@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/cursorenv"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -57,7 +58,7 @@ const ReservedHomeReason = "the agent's hook resolves agent-director's config an
 // ReservedHomeAlternative is what a caller who set HOME in extra_env sets
 // instead, shared like ReservedHomeReason. It names the folder variable of the
 // agent the call is for (SR-4.4): CLAUDE_CONFIG_DIR for claude, CODEX_HOME for
-// codex; Cursor keeps HOME and has no supported directory override. Both
+// codex; CURSOR_CONFIG_DIR and CURSOR_DATA_DIR for Cursor configuration/data.
 // Claude/Codex variables are named when no agent is known (make-template
 // with no agent).
 func ReservedHomeAlternative(agent string) string {
@@ -67,7 +68,7 @@ func ReservedHomeAlternative(agent string) string {
 	case config.AgentCodex:
 		return "to give the agent its own Codex config, set an absolute CODEX_HOME in extra_env instead"
 	case config.AgentCursor:
-		return "keep HOME unchanged for Cursor; no Cursor-specific config-directory environment override is supported"
+		return "keep HOME unchanged; for Cursor configuration/data with the existing personal login, set absolute CURSOR_CONFIG_DIR and CURSOR_DATA_DIR in extra_env; these directories do not isolate account credentials"
 	}
 	return "to give the agent its own config, set an absolute CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex) in extra_env instead"
 }
@@ -391,8 +392,8 @@ func refuseClaudePrint(args []string) error {
 // HOME, whatever its value, an empty one included, is refused, the message
 // quoting the key as given and saying it sets HOME, why that is refused
 // (ReservedHomeReason) and what to set instead (ReservedHomeAlternative,
-// which names the folder variable of agent, explains Cursor's lack of an
-// override, or names both Claude/Codex variables when no agent is known).
+// which names the folder variables of agent, or both Claude/Codex variables
+// when no agent is known).
 // Then a key whose name has the AGENT_DIRECTOR_ prefix is refused, quoted.
 // Last, a key that is not a valid env-var name (InvalidEnvKey, bug b.vpb:
 // empty, or holding '=' or a NUL byte) is refused, also with
@@ -408,6 +409,9 @@ func refuseClaudePrint(args []string) error {
 // make-template checked its keys), is refused too. make-template passes the
 // template's own extra_env, before it creates the templates directory or
 // writes anything, so a refused template leaves no file, new or replaced.
+// For effective Cursor only, explicit credential-profile selectors and invalid
+// directory selections are then refused, without values in the error. Generic
+// templates defer this check until their effective agent is resolved.
 func ValidateExtraEnv(env map[string]string, agent string) error {
 	if k, ok := ReservedHomeKey(env); ok {
 		return fmt.Errorf("%w: extra_env key %q sets %s, which is reserved: %s; remove %q from extra_env, and %s",
@@ -419,6 +423,18 @@ func ValidateExtraEnv(env map[string]string, agent string) error {
 	if k, ok := InvalidEnvKey(env); ok {
 		return fmt.Errorf("%w: extra_env key %q is not a valid env-var name: %s; remove %q from extra_env, and %s",
 			ErrReservedEnvKey, k, EnvKeyProblem(k), k, InvalidEnvKeyAlternative)
+	}
+	if agent == config.AgentCursor {
+		return ValidateCursorEnv(env)
+	}
+	return nil
+}
+
+// ValidateCursorEnv is also used for saved rows after resume's historical
+// HOME/malformed-key guards. It intentionally does not revalidate saved AD keys.
+func ValidateCursorEnv(env map[string]string) error {
+	if err := cursorenv.Validate(env); err != nil {
+		return fmt.Errorf("%w: %v", ErrReservedEnvKey, err)
 	}
 	return nil
 }

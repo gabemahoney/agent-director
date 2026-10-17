@@ -329,6 +329,9 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 		return ResumeResult{}, invalidEnvKeyError(row.InstanceID, key, row.Agent)
 	}
 	if row.Agent == store.AgentCursor {
+		if err := spawn.ValidateCursorEnv(row.ExtraEnv); err != nil {
+			return ResumeResult{}, fmt.Errorf("%w; nothing was written and nothing was launched; resume cannot change the saved environment; start a new instance with a supported explicit selection only if it matches the intended account and configuration", err)
+		}
 		if err := cursortranscript.VerifyAppend(row.JSONLPath); err != nil {
 			return ResumeResult{}, fmt.Errorf("%w: latest protected Cursor transcript unavailable; %s", ErrJsonlMissing, cursorFreshRecovery)
 		}
@@ -873,8 +876,11 @@ func launchInProgressError(row Spawn) error {
 //     CLAUDE_CONFIG_DIR gives Claude its own config; CODEX_HOME gives Codex
 //     its own config (the error names the row's agent's variable). Cursor keeps
 //     HOME unchanged, omits the refused key on a fresh unique instance, and
-//     preserves the original row/session/transcript/artifacts; no Cursor config
-//     directory override is supported.
+//     preserves the original row/session/transcript/artifacts. Explicit absolute
+//     CURSOR_CONFIG_DIR/CURSOR_DATA_DIR select configuration/data with the
+//     existing personal login; they do not isolate account credentials. Cursor
+//     also refuses saved credential-profile selectors and invalid directory
+//     selections before mutation; resume cannot change that saved environment.
 //   - [ErrJsonlMissing]: the latest protected Cursor transcript is unavailable,
 //     or no other-agent current-session transcript path stats successfully.
 //     Claude tries the recorded path and its config-dir-aware recomputation;

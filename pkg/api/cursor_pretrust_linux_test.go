@@ -37,14 +37,13 @@ func checkCursorPreTrust(t *testing.T, result any, warning string, off bool, com
 	}
 }
 
-func cursorTrustSentinel(t *testing.T) {
+func cursorTrustSentinel(t *testing.T) map[string]string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "cursor-settings.json")
 	raw := []byte(`{"workspaceTrust":false,"token":"synthetic-only"}`)
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("CURSOR_CONFIG_DIR", filepath.Dir(path))
 	t.Cleanup(func() {
 		got, err := os.ReadFile(path)
 		if err != nil || !reflect.DeepEqual(got, raw) {
@@ -55,6 +54,7 @@ func cursorTrustSentinel(t *testing.T) {
 			t.Errorf("Cursor config directory changed: %v %v", entries, err)
 		}
 	})
+	return map[string]string{"CURSOR_CONFIG_DIR": filepath.Dir(path)}
 }
 
 func TestCursorSpawnPreTrust(t *testing.T) {
@@ -62,11 +62,11 @@ func TestCursorSpawnPreTrust(t *testing.T) {
 	for _, off := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unsupported", true: "opted out"}[off], func(t *testing.T) {
 			e := newSpawnEnv(t)
-			cursorTrustSentinel(t)
+			selection := cursorTrustSentinel(t)
 			var result api.SpawnResult
 			var err error
 			warning := captureStderr(t, func() {
-				result, err = e.c.Spawn(api.SpawnParams{Agent: "cursor", InstanceID: "cursor-trust-" + uuid.NewString(), CWD: t.TempDir(), NoPreTrust: off})
+				result, err = e.c.Spawn(api.SpawnParams{Agent: "cursor", InstanceID: "cursor-trust-" + uuid.NewString(), CWD: t.TempDir(), NoPreTrust: off, ExtraEnv: selection})
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -98,12 +98,13 @@ func TestCursorReusePreTrustReplacesSavedChoice(t *testing.T) {
 			t.Run(strings.Join([]string{map[bool]string{false: "attempt", true: "skip"}[off], map[bool]string{false: "success", true: "restore"}[fail]}, "/"), func(t *testing.T) {
 				t.Setenv("HOME", t.TempDir())
 				installCursorFixtureGateway(t)
-				cursorTrustSentinel(t)
+				selection := cursorTrustSentinel(t)
 				e := newReuseEnv(t)
 				r := e.seedReusable(t, agentGone, reuseRowSpec{Bare: true, NoPreTrust: !off, Opts: []apitest.SpawnOption{apitest.WithAgent("cursor"), apitest.WithRawAgentArgs(`[]`)}})
 				before := e.columns(t, r.ID)
 				p := reuseParams(t, r, reuseRequest{NoPreTrust: off})
 				p.Agent = "cursor"
+				p.ExtraEnv = selection
 				if fail {
 					e.rec.Script(tmuxfix.AnySocket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
 				}
@@ -150,7 +151,8 @@ func TestCursorResumePreTrustRetainsSavedChoice(t *testing.T) {
 			t.Run(strings.Join([]string{map[bool]string{false: "attempt", true: "skip"}[off], map[bool]string{false: "success", true: "restore retry"}[retry]}, "/"), func(t *testing.T) {
 				e := newResumeEnv(t)
 				id, _ := seedCursorResume(t, e, store.StateEnded)
-				cursorTrustSentinel(t)
+				selection := cursorTrustSentinel(t)
+				cursorReadSQL(t, e.dbPath, "UPDATE spawns SET extra_env=? WHERE instance_id=?", cursorSelectionJSON(selection), id)
 				choice := 0
 				if off {
 					choice = 1

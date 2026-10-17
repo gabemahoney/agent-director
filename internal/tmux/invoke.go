@@ -30,7 +30,8 @@ type Invocation struct {
 	// call's command(s).
 	Args []string
 	// Env is the client's whole environment: the process environment with
-	// every AGENT_DIRECTOR_* variable removed, nothing added.
+	// every AGENT_DIRECTOR_* variable removed. Cursor creates additionally
+	// exclude ambient Cursor selection; no call adds client environment values.
 	Env []string
 	// Timeout is the call class's timeout (SR-13.1).
 	Timeout time.Duration
@@ -196,6 +197,12 @@ func escapeFinalSemicolon(text string) string {
 // escaped: it is -S's option argument, which tmux's own option parsing
 // consumes before the command parser sees the argv.
 func (c *Client) invoke(call Call, socket string, cmds ...[]string) RunResult {
+	return c.invokeEnv(call, socket, clientEnv(os.Environ()), cmds...)
+}
+
+// invokeEnv permits a launch to narrow only its own client environment.
+// Other calls and shared servers retain their existing environment policy.
+func (c *Client) invokeEnv(call Call, socket string, environ []string, cmds ...[]string) RunResult {
 	argv := append([]string{"-u", "-S", socket}, commandArgv(cmds...)...)
 	run := c.runCall
 	if run == nil {
@@ -204,7 +211,7 @@ func (c *Client) invoke(call Call, socket string, cmds ...[]string) RunResult {
 	return run(Invocation{
 		Binary:    c.binaryPath(),
 		Args:      argv,
-		Env:       clientEnv(os.Environ()),
+		Env:       environ,
 		Timeout:   c.timeoutFor(call),
 		WaitDelay: c.timeouts.WaitDelay,
 	})

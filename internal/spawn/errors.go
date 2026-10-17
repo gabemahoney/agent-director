@@ -76,7 +76,10 @@ var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 // replaced; resume returns it, wrapped, for a row whose stored extra env has
 // such a key (spawned before the refusal); spawn and resume before anything
 // is written or launched. One error name covers every refused extra_env key,
-// so callers match one name.
+// so callers match one name. Effective Cursor selection additionally returns
+// it for any explicit CURSOR_API_KEY or AGENT_CLI_CREDENTIAL_STORE (including
+// empty values), and for invalid explicit configuration/data directory paths.
+// Those diagnostics name the selector without disclosing its value.
 var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 
 // ErrAgentMissing is returned by spawn when it resolves no agent: the call

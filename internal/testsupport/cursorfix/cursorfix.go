@@ -15,6 +15,20 @@ var scripts embed.FS
 // Runtime records received frames without accessing Cursor or authentication.
 type Runtime struct{ Program, Trace, PID, Release, WorkerPID, WorkerRelease, Scenario, Raw, Observer, Sent, Paused, NewRelease string }
 
+// Selection reads only designated synthetic selectors, preserving absent versus empty.
+func (r Runtime) Selection(t testing.TB) map[string]*string {
+	t.Helper()
+	raw, err := os.ReadFile(r.PID + ".selection.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected map[string]*string
+	if err := json.Unmarshal(raw, &selected); err != nil {
+		t.Fatal(err)
+	}
+	return selected
+}
+
 func New(t testing.TB) Runtime { return NewWithWorker(t, false) }
 
 // NewWithWorker uses a separate terminal session for the independent worker with neither ACP pipe.

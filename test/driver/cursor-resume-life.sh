@@ -8,7 +8,7 @@ rl_public() {
 }
 rl_send() { if [[ $1 == CLI ]]; then local flags=(); if [[ ${3:-false} == true ]]; then flags+=(--allow-pending); fi; ad send-keys --instance-id "$id" --text "$2" "${flags[@]}"; else pc_send "$1" "$2" "${3:-false}"; fi; }
 rl_native() {
- local target=$1 dir="$case_dir/native/acp-sessions/$1"
+ local target=$1 dir="$CURSOR_CONFIG_DIR/acp-sessions/$1"
  mkdir -m 700 -p "$dir"
  cursor-resume-native sql "$case_dir/cwd" "$target" | /opt/driver/sql.sh "$dir/store.db" >/dev/null
  cursor-resume-native metadata "$case_dir/cwd" "$target" > "$dir/meta.json"
@@ -29,8 +29,8 @@ rl_fixture() {
  sql "UPDATE session_history SET jsonl_path='$older_path' WHERE instance_id='$id' AND session_id='$older';"
  rl_native "$older"
  rl_native "$session"
- latest_db="$case_dir/native/acp-sessions/$session/store.db"
- older_db="$case_dir/native/acp-sessions/$older/store.db"
+ latest_db="$CURSOR_CONFIG_DIR/acp-sessions/$session/store.db"
+ older_db="$CURSOR_CONFIG_DIR/acp-sessions/$older/store.db"
  rl_public CLI pause >/dev/null
  check stopped.runtime wait_gone "$runtime"
  check stopped.gateway wait_gone "$gateway"
@@ -42,7 +42,7 @@ rl_fixture() {
  : > "$case_dir/trace.jsonl"
  : > "$case_dir/raw"
  : > "$case_dir/sent.jsonl"
- jq -cn --arg root "$case_dir/native" '{loadSupport:true,nativeConfigRoot:$root}' > "$case_dir/scenario"
+ jq -cn --arg root "$CURSOR_CONFIG_DIR" '{loadSupport:true,nativeConfigRoot:$root}' > "$case_dir/scenario"
 }
 rl_rotated() { [[ $(sql "SELECT session_id FROM spawns WHERE instance_id='$id';") != "$older" ]] && pc_start_ready; }
 rl_loaded() { ad read-pane --instance-id "$id" --n-lines 200 | jq -e '.pane|contains("conversation loaded")' >/dev/null; }
@@ -148,7 +148,7 @@ rl_default_bun() {
  sql -json "SELECT session_id,jsonl_path,life_number,agent_args,extra_env,no_pre_trust FROM spawns WHERE instance_id='$id';" > "$case_dir/saved.json"
  if [[ $hold == permission ]]; then
   relay_scenario permission
-  jq --arg session "$session" --arg root "$case_dir/native" '.+{loadSupport:true,nativeConfigRoot:$root}|.requests[0].params.sessionId=$session' "$case_dir/scenario" > "$case_dir/scenario-next"
+  jq --arg session "$session" --arg root "$CURSOR_CONFIG_DIR" '.+{loadSupport:true,nativeConfigRoot:$root}|.requests[0].params.sessionId=$session' "$case_dir/scenario" > "$case_dir/scenario-next"
   mv "$case_dir/scenario-next" "$case_dir/scenario"
  fi
  rl_resume Bun
@@ -168,7 +168,7 @@ rl_default_bun() {
 rl_replay() {
  rl_fixture
  relay_scenario questions
- jq --arg session "$session" --arg root "$case_dir/native" '{loadSupport:true,waitForLoad:true,nativeConfigRoot:$root,beforeLoadReply:((.requests|map(.params.sessionId=$session)) + [{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"user_message_chunk",content:{type:"text",text:"historic resume user"}}}},{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"historic resume agent"}}}},{id:"historic-plan",method:"cursor/create_plan",params:{sessionId:$session}}])}' "$case_dir/scenario" > "$case_dir/scenario-next"
+ jq --arg session "$session" --arg root "$CURSOR_CONFIG_DIR" '{loadSupport:true,waitForLoad:true,nativeConfigRoot:$root,beforeLoadReply:((.requests|map(.params.sessionId=$session)) + [{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"user_message_chunk",content:{type:"text",text:"historic resume user"}}}},{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"historic resume agent"}}}},{id:"historic-plan",method:"cursor/create_plan",params:{sessionId:$session}}])}' "$case_dir/scenario" > "$case_dir/scenario-next"
  mv "$case_dir/scenario-next" "$case_dir/scenario"
  rl_resume MCP
  check replay.denials wait_until rl_replay_denied

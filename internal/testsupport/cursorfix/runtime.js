@@ -6,6 +6,8 @@ if(process.argv[2]==='worker-server') {
  setInterval(()=>{if(fs.existsSync(SETTINGS.workerRelease)) process.exit(0);},10);
 } else {
 fs.writeFileSync(SETTINGS.pid, String(process.pid));
+fs.writeFileSync(SETTINGS.pid+'.selection.json',JSON.stringify(Object.fromEntries(
+ ['CURSOR_CONFIG_DIR','CURSOR_DATA_DIR','CURSOR_API_KEY','AGENT_CLI_CREDENTIAL_STORE'].map(key=>[key,process.env[key] ?? null]))));
 if(SETTINGS.worker) require('child_process').spawn(process.execPath,[__filename,'worker-server'],{stdio:'ignore',detached:true}).unref();
 function send(frame) {
  const line=JSON.stringify({jsonrpc:'2.0',...frame});
@@ -42,7 +44,7 @@ input.on('line', async line => {
   if(scripted?.waitForLoad)
    while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
   // Source-derived synthetic agent-store.ts existence check; success remains scripted ACP, never authenticated recall.
-  const nativeMissing=scripted?.nativeConfigRoot && !fs.existsSync(require('path').join(scripted.nativeConfigRoot,'acp-sessions',frame.params.sessionId,'store.db'));
+  const nativeMissing=scripted?.nativeConfigRoot && (process.env.CURSOR_CONFIG_DIR!==scripted.nativeConfigRoot || !fs.existsSync(require('path').join(process.env.CURSOR_CONFIG_DIR,'acp-sessions',frame.params.sessionId,'store.db')));
   send({id:frame.id,...(nativeMissing ? {error:{code:-32603,message:'Session "'+frame.params.sessionId+'" not found'}} : (scripted?.loadReply || {result:{...(scripted?.modes ? {modes:scripted.modes} : {})}}))});
   if(scripted?.afterLoadReply) for(const event of scripted.afterLoadReply) send(event);
  }

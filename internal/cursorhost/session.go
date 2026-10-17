@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/cursorenv"
 	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -122,6 +123,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return err
 	}
 	ownedID = row.InstanceID
+	if err := cursorenv.Validate(row.ExtraEnv); err != nil {
+		return err
+	}
 	if options.LoadSession != "" {
 		if row.SessionID != options.LoadSession || len(options.LoadSession) > 512 || strings.TrimSpace(options.LoadSession) != options.LoadSession || strings.ContainsAny(options.LoadSession, "\x00\r\n") || row.JSONLPath == "" {
 			return fmt.Errorf("Cursor latest conversation changed")
@@ -134,7 +138,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	if err != nil {
 		return fmt.Errorf("Cursor reporting executable unavailable")
 	}
-	p, err := startProcess(options.Runtime, append(options.RuntimeArgs, "acp"), row.CWD)
+	p, err := startProcess(options.Runtime, append(options.RuntimeArgs, "acp"), row.CWD, cursorenv.Runtime(os.Environ(), row.ExtraEnv))
 	if err != nil {
 		return err
 	}

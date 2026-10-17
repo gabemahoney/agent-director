@@ -55,13 +55,13 @@ type processReady struct {
 	err error
 }
 
-func startProcess(program string, args []string, cwd string) (*ownedProcess, error) {
+func startProcess(program string, args []string, cwd string, environ []string) (*ownedProcess, error) {
 	ready := make(chan processReady, 1)
-	go traceProcess(program, args, cwd, ready)
+	go traceProcess(program, args, cwd, environ, ready)
 	r := <-ready
 	return r.p, r.err
 }
-func traceProcess(program string, args []string, cwd string, ready chan<- processReady) {
+func traceProcess(program string, args []string, cwd string, environ []string, ready chan<- processReady) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	childIn, parentIn, err := os.Pipe()
@@ -78,6 +78,7 @@ func traceProcess(program string, args []string, cwd string, ready chan<- proces
 	}
 	cmd := exec.Command(program, args...)
 	cmd.Dir = cwd
+	cmd.Env = environ
 	cmd.Stdin = childIn
 	cmd.Stdout = childOut
 	// Runtime stderr may contain internal/auth diagnostics. The gateway shows

@@ -39,11 +39,23 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 			before := readRow(t, f.DBPath, id)
 			assertResumeGatewayProcess(t, f, id, filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"), "")
 			native := cursorfix.NewNativeHistory(t, f.CWD, before.SessionID.(string), "older-retained")
+			db, openErr := sql.Open("sqlite", f.DBPath)
+			if openErr != nil {
+				t.Fatal(openErr)
+			}
+			selection, _ := json.Marshal(map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot})
+			_, updateErr := db.Exec("UPDATE spawns SET extra_env=? WHERE instance_id=?", string(selection), id)
+			db.Close()
+			if updateErr != nil {
+				t.Fatal(updateErr)
+			}
 			if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: id}); err != nil {
 				t.Fatal(err)
 			}
 			waitFor(t, "original gateway exited", func() bool { return pidGone(int(before.PanePID.(int64))) }, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
 			runtime.Configure(t, cursorfix.Scenario{LoadSupport: true, WaitForLoad: true, NativeConfigRoot: native.ConfigRoot})
+			t.Setenv("CURSOR_CONFIG_DIR", "/changed-caller/config")
+			t.Setenv("CURSOR_API_KEY", "synthetic-changed-caller-key")
 			callerBin := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director")
 			if surface == "CLI" {
 				callerBin = buildHookCLI(t, t.TempDir())
@@ -78,6 +90,10 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 				return false
 			}, func() string { return fmt.Sprint(runtime.Frames(t)) })
 			assertResumeGatewayProcess(t, f, id, callerBin, before.SessionID.(string))
+			received := runtime.Selection(t)
+			if received["CURSOR_CONFIG_DIR"] == nil || *received["CURSOR_CONFIG_DIR"] != native.ConfigRoot || received["CURSOR_API_KEY"] != nil || received["AGENT_CLI_CREDENTIAL_STORE"] != nil {
+				t.Fatal("resume substituted changed caller selection")
+			}
 			var pending map[string]any
 			if err := json.Unmarshal(caller.must("get", map[string]any{"instance_id": id}), &pending); err != nil || pending["state"] != "pending" || pending["session_id"] != before.SessionID {
 				t.Fatalf("load manufactured readiness: %v %v", pending, err)
