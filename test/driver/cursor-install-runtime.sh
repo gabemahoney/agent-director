@@ -1,5 +1,40 @@
 #!/usr/bin/env bash
 # E5 Task1 composes the existing installer and synthetic Cursor public helpers.
+# Bound this collector's entire shell, including a blocked predicate or EXIT
+# trap. The inner shell keeps the driver's command and diagnostic descriptors.
+if [[ ${IR_CASE_GUARDED:-} != 1 ]]; then
+ ir_guard_dir=$(mktemp -d /tmp/ir-guard-XXXXXX)
+ export IR_CASE_GUARDED=1 IR_CASE_STAGE="$ir_guard_dir/stage"
+ ir_guard_rc=0
+ ir_guard_started=$SECONDS
+ ir_guard_shell_flags=()
+ [[ $- != *x* ]] || ir_guard_shell_flags+=(-x)
+ if [[ -n ${BASH_EXECUTION_STRING:-} ]]; then
+  ir_guard_command=(bash "${ir_guard_shell_flags[@]}" -c "$BASH_EXECUTION_STRING")
+ else
+  ir_guard_command=(bash "${ir_guard_shell_flags[@]}" "$0" "$@")
+ fi
+ # Keep the process-group leader alive until KILL even if its case shell
+ # exits on TERM while a child still holds the driver's capture pipe open.
+ timeout --kill-after=3s 240s bash -c 'trap "sleep 4" TERM; "$@" & child=$!; wait "$child"' ir-case-guard "${ir_guard_command[@]}" || ir_guard_rc=$?
+ if (( ir_guard_rc == 124 || ir_guard_rc == 137 )); then
+  ir_guard_elapsed=$((SECONDS-ir_guard_started))
+  printf 'CASE_GUARD_EXIT collector=cursor-install-runtime limit_seconds=240 elapsed_seconds=%s exit=%s deadline_reached=%s\n' "$ir_guard_elapsed" "$ir_guard_rc" "$((ir_guard_elapsed>=240))" >&2
+  ir_stage_rc=0
+  timeout --kill-after=1s 1s cat "$IR_CASE_STAGE" >&2 || ir_stage_rc=$?
+  printf 'CASE_GUARD_STAGE exit=%s\n' "$ir_stage_rc" >&2
+  # Retain synthetic workspaces before the driver's next reset. Capture has
+  # its own kill bound and cannot replace the original case failure.
+  ir_items=()
+  for ir_item in /tmp/co-*; do [[ ! -d $ir_item ]] || ir_items+=("${ir_item#/tmp/}"); done
+  ir_capture_rc=0
+  timeout --kill-after=1s 5s bash -c 'trap "sleep 2" TERM; "$@" & child=$!; wait "$child"' ir-evidence tar --exclude=.claude --exclude=.git --exclude=node_modules --exclude=.cache --exclude=auth.json --exclude=credentials.json --exclude=.env -C /tmp -czf "$ir_guard_dir/workspaces.tar.gz" "${ir_items[@]}" || ir_capture_rc=$?
+  printf 'CASE_TIMEOUT_CAPTURE exit=%s dir=%s\n' "$ir_capture_rc" "$ir_guard_dir" >&2
+ fi
+ exit "$ir_guard_rc"
+fi
+set -T
+trap 'printf "case=%s stage=%s dir=%s command=%q\n" "${id:-setup}" "${check_id:-setup}" "${case_dir:-}" "$BASH_COMMAND" > "$IR_CASE_STAGE"' DEBUG
 ir_harness=${AGENT_DIRECTOR_TEST_HARNESS:-}
 for ir_env_key in "${!AGENT_DIRECTOR_@}"; do unset "$ir_env_key"; done
 unset TMUX TMUX_PANE GIT_CONFIG_GLOBAL

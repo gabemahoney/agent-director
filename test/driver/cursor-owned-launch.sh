@@ -17,7 +17,7 @@ AD_CURSOR_FIX_SETTINGS=$(jq -cn --arg dir "$case_dir" '{trace:($dir+"/trace.json
 export AD_CURSOR_FIX_SOURCE="$SOURCE_DIR/internal/testsupport/cursorfix/runtime.js"
 cat > "$case_dir/index.js" <<'RUNTIME'
 #!/bin/sh
-exec node -e 'global.SETTINGS=JSON.parse(process.env.AD_CURSOR_FIX_SETTINGS);require(process.env.AD_CURSOR_FIX_SOURCE)' "$@"
+exec node -e 'global.SETTINGS=JSON.parse(process.env.AD_CURSOR_FIX_SETTINGS);require(process.env.AD_CURSOR_FIX_SOURCE)' -- "$@"
 RUNTIME
 chmod 700 "$case_dir/index.js"
 cat > "$HOME/.config/agent-director/config.toml" <<CONFIG
@@ -81,7 +81,18 @@ evidence() {
 }
 
 # Shared relay actions. Only public callers create/admit requests; SQL is observation/fault injection.
-wait_until() { local deadline=$((SECONDS+20)); until "$@"; do (( SECONDS < deadline )); sleep 0.02; done; }
+wait_until() {
+ local deadline=$((SECONDS+20))
+ until "$@"; do
+  if (( SECONDS >= deadline )); then
+   printf 'WAIT_TIMEOUT case=%s stage=%s predicate=' "${id:-}" "${check_id:-}" >&2
+   printf '%q ' "$@" >&2
+   printf '\n' >&2
+   return 1
+  fi
+  sleep 0.02
+ done
+}
 request_count_is() { [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id='$id';") == "$1" ]]; }
 request_token() { sql "SELECT request_token FROM permission_requests WHERE instance_id='$id' AND tool_use_id='$1';"; }
 raw_size() { if [[ -f $case_dir/raw ]]; then wc -c < "$case_dir/raw"; else echo 0; fi; }
