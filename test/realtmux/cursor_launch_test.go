@@ -207,30 +207,33 @@ func stopCursorPaneGateways(t testing.TB, f *spawnFix, launch spawned) {
 	t.Helper()
 	gateways := []tmux.ProcIdentity{{PID: int(launch.Row.PanePID.(int64)), Starttime: launch.Row.PaneStarttime.(string)}}
 	server := tmux.ProcIdentity{PID: int(launch.Row.TmuxServerPID.(int64)), Starttime: launch.Row.TmuxServerStarttime.(string)}
-	serverAbsent := func(result rawResult) bool {
+	// These exact transport observations can arrive before the server process
+	// has retired. They permit proceeding to the bounded death proof below;
+	// none is itself proof that the server or its gateways have exited.
+	serverRetiring := func(result rawResult) bool {
 		_, err := os.Stat(launch.rt.Socket)
 		noServer := result.Stderr == "no server running on "+launch.rt.Socket+"\n"
 		missingSocket := os.IsNotExist(err) && result.Stderr == "error connecting to "+launch.rt.Socket+" (No such file or directory)\n"
-		return result.Exit == 1 && result.Stdout == "" && (noServer || missingSocket) && tmux.JudgeProcess(f.PC, server) == tmux.ProcGone
+		lostReply := result.Stderr == "server exited unexpectedly\n"
+		return result.Exit == 1 && result.Stdout == "" && (noServer || missingSocket || lostReply)
 	}
 	panes := launch.rt.run(t, "list-panes", "-a", "-F", "#{pane_pid}")
 	if panes.Exit != 0 {
-		if !serverAbsent(panes) {
+		if !serverRetiring(panes) {
 			t.Errorf("snapshot fixture panes: %+v", panes)
-		} else {
-			// A dead server does not prove that a replacement gateway exited.
-			row, err := apitest.ReadSpawnColumns(f.DBPath, launch.ID)
-			if err != nil {
-				t.Errorf("read current fixture gateway after server exit: %v", err)
-			} else if pid, ok := row.PanePID.(int64); ok && pid > 0 {
-				if start, ok := row.PaneStarttime.(string); ok && start != "" {
-					gateways = append(gateways, tmux.ProcIdentity{PID: int(pid), Starttime: start})
-				} else {
-					t.Errorf("unknown current fixture gateway start time: %+v", row)
-				}
+		}
+		// A dead server does not prove that a replacement gateway exited.
+		row, err := apitest.ReadSpawnColumns(f.DBPath, launch.ID)
+		if err != nil {
+			t.Errorf("read current fixture gateway after server exit: %v", err)
+		} else if pid, ok := row.PanePID.(int64); ok && pid > 0 {
+			if start, ok := row.PaneStarttime.(string); ok && start != "" {
+				gateways = append(gateways, tmux.ProcIdentity{PID: int(pid), Starttime: start})
 			} else {
-				t.Errorf("unpublished current fixture gateway identity after server exit: %+v", row)
+				t.Errorf("unknown current fixture gateway start time: %+v", row)
 			}
+		} else {
+			t.Errorf("unpublished current fixture gateway identity after server exit: %+v", row)
 		}
 	} else {
 		for _, raw := range strings.Fields(panes.Stdout) {
@@ -249,10 +252,9 @@ func stopCursorPaneGateways(t testing.TB, f *spawnFix, launch spawned) {
 		}
 	}
 	result := launch.rt.run(t, "kill-server")
-	lostReply := result.Exit == 1 && result.Stdout == "" && result.Stderr == "server exited unexpectedly\n"
 	if result.Exit != 0 {
 		t.Logf("stop fixture server raw result: %+v", result)
-		if !serverAbsent(result) && !lostReply {
+		if !serverRetiring(result) {
 			t.Errorf("stop fixture server: %+v", result)
 		}
 	}

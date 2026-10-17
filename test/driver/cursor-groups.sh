@@ -29,6 +29,7 @@ cg_unconfigured() {
  local server=$1 key
  export CURSOR_CONFIG_DIR=/synthetic/client-config CURSOR_DATA_DIR=/synthetic/client-data CURSOR_API_KEY=synthetic-client-key AGENT_CLI_CREDENTIAL_STORE=synthetic-client-store
  if [[ $server == existing ]]; then
+  mkdir -m 700 -p "${socket%/*}"
   tmux -S "$socket" new-session -d -s unrelated 'sleep 300'
   for key in CURSOR_CONFIG_DIR CURSOR_DATA_DIR CURSOR_API_KEY AGENT_CLI_CREDENTIAL_STORE; do tmux -S "$socket" set-environment -g "$key" "synthetic-server-$key"; tmux -S "$socket" set-environment -t unrelated "$key" "synthetic-unrelated-$key"; tmux -S "$socket" show-environment -g "$key"; tmux -S "$socket" show-environment -t unrelated "$key"; done > "$case_dir/server-before"
  fi
@@ -79,7 +80,10 @@ cg_resume_reuse() {
  check saved.loaded wait_until rl_loaded
  check saved.runtime cg_selection "$saved_config" "$saved_data"
  rl_preserved
- rl_public CLI pause >/dev/null
+ # Loading keeps the row pending until its first real resumed turn completes.
+ rl_send CLI 'saved selection resumed prompt' true >/dev/null
+ check saved.completed wait_until pc_ready 1
+ check saved.pause rl_public CLI pause >/dev/null
  check saved.stopped wait_gone "$resumed_gateway"
  ad spawn --agent cursor --instance-id "$id" --cwd "$case_dir/cwd" --no-pre-trust --reuse-finished --extra-env "CURSOR_CONFIG_DIR=$case_dir/new-config" --extra-env "CURSOR_DATA_DIR=$case_dir/new-data" > "$case_dir/public.json"
  check reuse.ready wait_until pc_start_ready
