@@ -1,7 +1,7 @@
 package store_test
 
 // The row's agent write rule (SR-3.1, SR-3.6): an insert or a reuse reset names
-// exactly claude or codex, else it is refused with ErrRowAgentInvalid and
+// exactly claude, codex or cursor, else it is refused with ErrRowAgentInvalid and
 // writes nothing. Over reuse_test.go's seedReuseRow and reuseFresh and
 // reuse_refused_test.go's reuseStateOf.
 

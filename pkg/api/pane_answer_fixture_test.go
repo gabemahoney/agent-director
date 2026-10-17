@@ -50,7 +50,7 @@ type paEnv struct {
 	sks      api.SendKeysStore
 	agentID  string
 	eligible *bool
-	agent    string // "claude" (the default) or "codex": the row's agent
+	agent    string // "claude" (the default), "codex" or synthetic "cursor": the row's agent
 }
 
 // paSubagentID is the agent_id of a background subagent's requests (newSubagentPAEnv).

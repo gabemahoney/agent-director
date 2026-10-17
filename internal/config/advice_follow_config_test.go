@@ -17,8 +17,8 @@ package config_test
 // template's old claude_args likewise. G6 (SR-5.0): a refused [launch] value
 // says "must be an absolute path or start with "~/"" (and, without HOME, "use
 // an absolute path"); rewriting the value as it says must load. G7 (SR-1.3): a
-// template whose agent_args name no agent says "add agent = "claude" or "codex",
-// or remove agent_args"; either step must make it load.
+// template whose agent_args name no agent says "add agent = "claude", "codex" or "cursor",
+// or remove agent_args"; each step must make it load.
 
 import (
 	"errors"
@@ -602,13 +602,13 @@ func TestAdviceFollow_G6_LaunchValueAbsoluteOrTilde(t *testing.T) {
 }
 
 // advTemplateAgentAdvice matches the agent a template without one is told to
-// add: "add agent = "claude" or "codex", or remove agent_args".
+// add: "add agent = "claude", "codex" or "cursor", or remove agent_args".
 var advTemplateAgentAdvice = regexp.MustCompile(`add agent = "(\w+)", "(\w+)" or "(\w+)", or remove agent_args$`)
 
 // TestAdviceFollow_G7_TemplateAgentArgsWithoutAgent: G7 (SR-1.3) "<name>:
-// agent_args are set but the template names no agent; add agent = "claude" or
-// "codex", or remove agent_args". Each way out of the advice must make the
-// template load: add either agent and keep the arguments, or drop agent_args.
+// agent_args are set but the template names no agent; add agent = "claude",
+// "codex" or "cursor", or remove agent_args". Each way must make the
+// template load: add an agent and keep the arguments, or drop agent_args.
 func TestAdviceFollow_G7_TemplateAgentArgsWithoutAgent(t *testing.T) {
 	args := []string{"--model", "opus"}
 	refused := apitest.TemplateFields{AgentArgs: args, CWD: "/tmp", RelayMode: "on"}

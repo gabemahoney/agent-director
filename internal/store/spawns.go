@@ -29,7 +29,7 @@ var ErrPrimaryKeyCollision = errors.New("store: primary key collision")
 // sentinel, and is never aliased in pkg/api (SR-1.5).
 var ErrReuseArchive = errors.New("store: reuse archive failed")
 
-// The two agents a row can record (spawns.agent, schema v9, SR-3.1).
+// The agents a row can record (spawns.agent, introduced in schema v9, SR-3.1).
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
@@ -37,7 +37,7 @@ const (
 )
 
 // ErrRowAgentInvalid is returned, wrapped, by InsertPending and ResetForReuse
-// when the row's agent is not exactly claude or codex (SR-3.1, SR-3.6). The
+// when the row's agent is not exactly claude, codex or cursor (SR-3.1, SR-3.6). The
 // check runs before anything is written, so the database is unchanged. It is
 // the store's own marker, not a catalogued sentinel, and is never aliased in
 // pkg/api (the public agent errors come with the agent input). Callers use
@@ -45,7 +45,7 @@ const (
 var ErrRowAgentInvalid = errors.New("store: row agent must be claude, codex or cursor")
 
 // validateRowAgent returns an error wrapping ErrRowAgentInvalid unless agent
-// is exactly AgentClaude or AgentCodex. The empty string, which is the column
+// is exactly AgentClaude, AgentCodex or AgentCursor. The empty string, which is the column
 // default and no agent, and any other spelling are refused.
 func validateRowAgent(agent string) error {
 	if agent != AgentClaude && agent != AgentCodex && agent != AgentCursor {
@@ -189,7 +189,7 @@ type Spawn struct {
 	// repair of a stale check_permission row picks waiting when it is set.
 	IdleSince string
 
-	// Agent is the schema-v9 agent column (SR-3.1): claude or codex. Every read
+	// Agent is the schema-v9 agent column (SR-3.1): claude, codex or cursor. Every read
 	// that returns a Spawn fills it; InsertPending and ResetForReuse write it
 	// from a Spawn, refusing any other value (ErrRowAgentInvalid). Rows that
 	// existed at the v9 migration read claude.
@@ -253,7 +253,7 @@ func boolInt(b bool) int {
 // (SRD §7.4 step 2). The caller is expected to have already validated the
 // row and minted any defaults — InsertPending does no semantic checks
 // beyond what SQLite's constraints enforce, and the row's agent: sp.Agent must
-// be exactly claude or codex, or it returns an error wrapping
+// be exactly claude, codex or cursor, or it returns an error wrapping
 // ErrRowAgentInvalid before writing anything (SR-3.1, SR-3.6). The insert
 // writes the agent explicitly and leaves end_reported_at NULL.
 //
@@ -282,7 +282,7 @@ func boolInt(b bool) int {
 // an immediate write (b.3ie): settled_state is pending and state_changed_ms
 // the statement's own clock, so the new row reports pending at once whatever
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
-// launch it begins, from sp.Agent: 1 for claude, 0 for codex
+// launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
 // (subagentTrackedParamSQL).
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {

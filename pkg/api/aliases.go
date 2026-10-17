@@ -272,13 +272,13 @@ var ErrTmuxCaptureFailed = tmux.ErrTmuxCaptureFailed
 
 // ErrAgentMissing is returned by spawn when it resolves no agent: the call
 // gives none (SpawnParams.Agent; agent over MCP and in the TypeScript client;
-// --agent on the CLI) and its template names none. The caller names claude or
-// codex in the call or in the template; no config key, environment variable
+// --agent on the CLI) and its template names none. The caller names claude,
+// codex or cursor in the call or in the template; no config key, environment variable
 // or default supplies one. Nothing was written or launched.
 var ErrAgentMissing = spawn.ErrAgentMissing
 
-// ErrAgentInvalid is returned by spawn when the call's agent is neither
-// claude nor codex (compared case-sensitively; the empty string is not a
+// ErrAgentInvalid is returned by spawn when the call's agent is not
+// claude, codex or cursor (compared case-sensitively; the empty string is not a
 // value, it is no agent given). The description quotes the value. Nothing was
 // written or launched. A bad agent in a template is ErrTemplateMalformed.
 var ErrAgentInvalid = spawn.ErrAgentInvalid

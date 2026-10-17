@@ -9,7 +9,7 @@ package config
 //   - tmux_session_name   — must be per-invocation (derived from id).
 //   - reuse_finished      — applies to one spawn call only (SR-18.10).
 //
-// Agent (claude or codex, case-sensitive) is the agent the template's
+// Agent (claude, codex or cursor, case-sensitive) is the agent the template's
 // agent_args belong to and the one a spawn that names none takes (SR-1.2,
 // SR-2.1); a template that names none supplies none.
 //
@@ -44,17 +44,17 @@ type TemplatePermissions struct {
 	Ask   []string `toml:"ask,omitempty"`
 }
 
-// The two agents a template, a spawn call or a row can name. The values are
-// the store's row values (store.AgentClaude, store.AgentCodex); config cannot
-// import the store, so it holds its own copy for validating template and call
-// input.
+// The agents a template, a spawn call or a row can name. The values are
+// the store's row values (store.AgentClaude, store.AgentCodex, store.AgentCursor);
+// config cannot import the store, so it holds its own copy for validating
+// template and call input.
 const (
 	AgentClaude = "claude"
 	AgentCodex  = "codex"
 	AgentCursor = "cursor"
 )
 
-// ValidAgent reports whether a is exactly claude or codex. The match is
+// ValidAgent reports whether a is exactly claude, codex or cursor. The match is
 // case-sensitive and the empty string is not an agent (it means none given).
 func ValidAgent(a string) bool {
 	return a == AgentClaude || a == AgentCodex || a == AgentCursor

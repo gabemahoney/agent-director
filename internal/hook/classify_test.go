@@ -3,6 +3,7 @@ package hook
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -106,8 +107,8 @@ func TestClassifyEventSRDTable(t *testing.T) {
 
 // TestClassifyEventAgentSelection (SR-6.1): the agent picks the table and the
 // result's flags: an absent --agent is Claude; only Claude's hooks feed subagent
-// capture, only a Codex hook without an agent_id heals a transcript path; any other
-// agent is ErrInvalidAgent.
+// capture, only a Codex hook without an agent_id heals a transcript path;
+// Cursor is accepted, and an unknown agent is ErrInvalidAgent.
 func TestClassifyEventAgentSelection(t *testing.T) {
 	cases := []struct {
 		name, agent, raw string
@@ -121,6 +122,7 @@ func TestClassifyEventAgentSelection(t *testing.T) {
 		{"codex", "codex", `{"hook_event_name":"Stop"}`, "codex", false, true},
 		{"codex with agent_id", "codex", `{"hook_event_name":"PreToolUse","agent_id":"a1"}`, "codex", false, false},
 		{"codex, empty payload", "codex", ``, "codex", false, false},
+		{"cursor", "cursor", `{"hook_event_name":"Stop","origin":"main"}`, "cursor", false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,8 +138,12 @@ func TestClassifyEventAgentSelection(t *testing.T) {
 	}
 	for _, agent := range []string{"gemini", "Codex", " codex", "(no value)"} {
 		t.Run("invalid "+agent, func(t *testing.T) {
-			if _, err := ClassifyEvent(agent, json.RawMessage(`{"hook_event_name":"Stop"}`)); !errors.Is(err, ErrInvalidAgent) {
+			_, err := ClassifyEvent(agent, json.RawMessage(`{"hook_event_name":"Stop"}`))
+			if !errors.Is(err, ErrInvalidAgent) {
 				t.Errorf("ClassifyEvent(%q) error = %v; want ErrInvalidAgent", agent, err)
+			}
+			if want := fmt.Sprintf("hook: invalid --agent: %q (want claude, codex or cursor)", agent); err == nil || err.Error() != want {
+				t.Errorf("ClassifyEvent(%q) error = %v; want %q", agent, err, want)
 			}
 		})
 	}

@@ -83,8 +83,9 @@ type jsonlHealer interface {
 type HandleConfig struct {
 	// Agent is the hook verb's raw --agent value (SR-6.1): "" (the argument is
 	// absent) and "claude" select Claude's classification table, "codex"
-	// Codex's. Any other value is a hook failure (fail-open; closed for a
-	// relayed PermissionRequest), found after ad.hook.fired is armed.
+	// Codex's, and "cursor" Cursor's. Any other value is a hook failure
+	// (fail-open; closed for a relayed PermissionRequest), found after
+	// ad.hook.fired is armed.
 	Agent string
 	Env   func(string) string
 	Cfg   config.Relay

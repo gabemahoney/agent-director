@@ -56,7 +56,7 @@ type SpawnColumns struct {
 	// idle-prompt Notification last landed, as stored text.
 	IdleSince any
 
-	// The two schema-v9 spawns columns: the row's agent (claude or codex) and
+	// The two schema-v9 spawns columns: the row's agent (claude, codex or cursor) and
 	// when its agent's SessionEnd was reported (Unix ms; nil = no end report).
 	Agent         any
 	EndReportedAt any

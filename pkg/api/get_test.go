@@ -79,8 +79,8 @@ func assertOptionalString(t *testing.T, out any, key string, got *string, want s
 }
 
 // TestGetShowsRowAgent (SR-1.5, SR-7.5): get's agent is the agent the row runs,
-// claude or codex, whether the seed names it or takes the default; the row's
-// labels are shown the same for either.
+// using Claude and Codex examples and the seed's default; the row's labels
+// are shown the same for either example.
 func TestGetShowsRowAgent(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

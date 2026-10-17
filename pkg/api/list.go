@@ -68,7 +68,7 @@ type ListRow struct {
 	State string `json:"state"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
-	// Agent is the agent the row runs, "claude" or "codex": set by the spawn
+	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
 	// that most recently launched the row, followed by
 	// resume, never changed by anything else (SR-1.5).
 	Agent string `json:"agent"`

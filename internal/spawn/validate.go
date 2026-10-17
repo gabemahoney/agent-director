@@ -391,8 +391,8 @@ func refuseClaudePrint(args []string) error {
 // HOME, whatever its value, an empty one included, is refused, the message
 // quoting the key as given and saying it sets HOME, why that is refused
 // (ReservedHomeReason) and what to set instead (ReservedHomeAlternative,
-// which names the folder variable of agent, or both when agent is neither
-// claude nor codex: make-template with no agent).
+// which names the folder variable of agent, explains Cursor's lack of an
+// override, or names both Claude/Codex variables when no agent is known).
 // Then a key whose name has the AGENT_DIRECTOR_ prefix is refused, quoted.
 // Last, a key that is not a valid env-var name (InvalidEnvKey, bug b.vpb:
 // empty, or holding '=' or a NUL byte) is refused, also with

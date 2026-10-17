@@ -50,7 +50,7 @@ var LaunchCases = append(append(append(launchKeyCases("claude", "claude_path"), 
 }...)
 
 // launchKeyCases is the matrix of one [launch] key, written under its own
-// prefix: key is claude_path or codex_path.
+// prefix: key is claude_path, codex_path or cursor_path.
 func launchKeyCases(prefix, key string) []Case {
 	kv := func(v string) string { return "[launch]\n" + key + " = " + v + "\n" }
 	upper := strings.ToUpper(key)

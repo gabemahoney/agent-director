@@ -82,16 +82,16 @@ var ErrReservedEnvKey = errors.New("ErrReservedEnvKey")
 // ErrAgentMissing is returned by spawn when it resolves no agent: the call
 // gives no agent and its template, if any, names none. No config key,
 // environment variable or default supplies one (SR-1.1), so the caller names
-// the agent, claude or codex, in the call (agent; --agent on the CLI) or in
+// the agent, claude, codex or cursor, in the call (agent; --agent on the CLI) or in
 // its template. It comes after the cwd and relay_mode checks and before
 // every check that depends on the agent, extra_env included; nothing was
 // written or launched.
 var ErrAgentMissing = errors.New("ErrAgentMissing")
 
-// ErrAgentInvalid is returned by spawn when the call's agent is neither
-// claude nor codex. The match is case-sensitive ("Claude" is refused) and the
+// ErrAgentInvalid is returned by spawn when the call's agent is not
+// claude, codex or cursor. The match is case-sensitive ("Claude" is refused) and the
 // empty string counts as no agent given (ErrAgentMissing, when the template
-// names none either). The message quotes the value and names both accepted
+// names none either). The message quotes the value and names all accepted
 // values; nothing was written or launched. A bad agent in a template is
 // ErrTemplateMalformed, whatever agent the call gives.
 var ErrAgentInvalid = errors.New("ErrAgentInvalid")

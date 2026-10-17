@@ -1,5 +1,5 @@
 // Package dbpathfix runs install.sh's [store] db_path reader (b.2io), which
-// also reads [log] error_log_path and [launch] claude_path and codex_path, its
+// also reads [log] error_log_path and [launch] claude_path, codex_path and cursor_path, its
 // [store] busy_timeout_ms reader (b.c7f) and its agent-rename migration
 // (b.ssz) on their own, and holds the matrices of config.toml contents and
 // HOME values that the drift guards run through them and through Go's own

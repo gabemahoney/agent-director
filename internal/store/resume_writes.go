@@ -85,7 +85,7 @@ const moveToPendingSQL = `UPDATE spawns
 // last_seen_at, agent and the request fields) is unchanged, and session_history
 // is not touched. It also sets subagent_tracking, the flag of the launch it
 // begins (SR-9; subagentTrackedColumnSQL, no parameter): from the row's own
-// agent, which the move keeps, 1 for claude and 0 for codex, over whatever the
+// agent, which the move keeps, 1 for claude and 0 for codex or cursor, over whatever the
 // row held. The statement itself touches no subagent entry; the close below does.
 //
 // The close (closeOrphanedRequests, as the ended transition's): every request

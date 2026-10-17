@@ -438,8 +438,8 @@ func (s Store) EffectiveDbPath() (string, error) {
 // Launch holds the optional launch path of each agent (SR-5.0): the program
 // the first element of the pane's command is, for every launch of that agent
 // (spawn, reuse_finished, resume). A key that is unset or empty means the
-// program is launched by its name, claude or codex, found on the PATH of the
-// pane's environment.
+// program is launched by its name, claude, codex or agent (Cursor), found on
+// the PATH of the pane's environment.
 //
 // A value is an absolute path, or "~/" followed by a path, which Load joins
 // onto HOME (as [store] db_path's "~/" is). Load refuses anything else with
@@ -461,7 +461,7 @@ type Launch struct {
 }
 
 // launchRefusals returns the description of each refused [launch] value, in
-// key order (claude_path, codex_path), or nil when every value loads. home is
+// key order (claude_path, codex_path, cursor_path), or nil when every value loads. home is
 // the user's home directory as Load read it ("" when unset), which a "~/"
 // value needs.
 func (l Launch) launchRefusals(home string) []string {
@@ -582,7 +582,7 @@ func (e *ConfigError) Unwrap() error {
 // of a table setting different keys, load as before. This refusal comes
 // first, alone, so its text never depends on which value the decoder kept.
 //
-// Load also refuses a [launch] claude_path or codex_path that is neither
+// Load also refuses a [launch] claude_path, codex_path or cursor_path that is neither
 // empty, an absolute path nor "~/..." with HOME set (launchRefusal, SR-5.0),
 // and joins a "~/" value onto HOME (resolvePaths).
 //

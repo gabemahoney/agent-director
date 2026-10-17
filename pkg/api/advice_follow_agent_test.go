@@ -94,7 +94,7 @@ func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex: a spawn naming an agent that is neither claude nor codex
+// TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex: a spawn naming an agent other than claude, codex or cursor
 // (any other word, or another case) is refused with its value quoted; the call again with claude, codex or cursor, as
 // the advice says, launches.
 // A17 (SR-4.4): "agent \"gemini\" (want claude, codex or cursor)"
@@ -151,7 +151,7 @@ func TestAdviceFollow_A18_AgentArgsMismatchOwnArgsOrTemplateAgent(t *testing.T) 
 // TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs: a template with agent_args and no agent is
 // refused at spawn, whatever agent the call names; adding agent to the template, or removing agent_args, as the
 // advice says, lets the spawn through.
-// A19 (SR-4.4): "add agent = \"claude\" or \"codex\", or remove agent_args"
+// A19 (SR-4.4): "add agent = \"claude\", \"codex\" or \"cursor\", or remove agent_args"
 func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	broken := apitest.TemplateFields{AgentArgs: []string{"--model", "opus"}}

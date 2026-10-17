@@ -31,7 +31,7 @@ func agentSpawnArgs(t *testing.T, cwd string, c ptConfig, extra map[string]any) 
 }
 
 // TestMCPSpawnAgentReachesRow: an MCP spawn's agent is recorded on its row, and
-// the get and list tools show it; an agent that is not claude or codex is
+// the get and list tools show it; an agent other than claude, codex or cursor is
 // ErrAgentInvalid naming it, with nothing created.
 func TestMCPSpawnAgentReachesRow(t *testing.T) {
 	for _, agent := range []string{"claude", "codex", "cursor"} {
@@ -42,16 +42,16 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 			callToolText(t, e.d, "spawn", agentSpawnArgs(t, t.TempDir(), c, map[string]any{"instance_id": id, "agent": agent, "no_pre_trust": true}))
 
 			if got := readColumns(t, e.storePath, id).Agent; got != agent {
-				t.Errorf("row agent = %v; want claude", got)
+				t.Errorf("row agent = %v; want %s", got, agent)
 			}
 			if got := string(callToolText(t, e.d, "get", paramJSON(t, map[string]any{"instance_id": id}))["agent"]); got != `"`+agent+`"` {
-				t.Errorf("get agent = %s; want \"claude\"", got)
+				t.Errorf("get agent = %s; want %q", got, agent)
 			}
 			var rows []struct {
 				Agent string `json:"agent"`
 			}
 			if err := json.Unmarshal(callToolText(t, e.d, "list", `{}`)["spawns"], &rows); err != nil || len(rows) != 1 || rows[0].Agent != agent {
-				t.Errorf("list spawns = %+v (%v); want one row of agent claude", rows, err)
+				t.Errorf("list spawns = %+v (%v); want one row of agent %s", rows, err, agent)
 			}
 		})
 	}

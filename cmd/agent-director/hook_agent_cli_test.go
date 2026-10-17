@@ -160,8 +160,8 @@ func TestHookCLIAgentWithTimeoutHonoursEitherOrder(t *testing.T) {
 	}
 }
 
-// TestHookCLIInvalidAgentFailsOpen: an --agent value that is neither claude
-// nor codex (a wrong name, a wrong case, an empty value, no value) exits 0
+// TestHookCLIInvalidAgentFailsOpen: an --agent value other than claude,
+// codex or cursor (a wrong name, a wrong case, an empty value, no value) exits 0
 // with nothing printed and writes nothing, and a relayed PermissionRequest
 // gets the deny envelope, with no request recorded.
 func TestHookCLIInvalidAgentFailsOpen(t *testing.T) {

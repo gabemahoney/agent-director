@@ -454,7 +454,7 @@ func withNote(note string) fmRowOpt {
 	return func(r *store.LiveSpawnIdentity) { r.LivenessNote = note }
 }
 
-// withAgent sets the row's agent (store.AgentClaude or store.AgentCodex).
+// withAgent sets the row's agent (store.AgentClaude, store.AgentCodex or store.AgentCursor).
 func withAgent(agent string) fmRowOpt {
 	return func(r *store.LiveSpawnIdentity) { r.Agent = agent }
 }

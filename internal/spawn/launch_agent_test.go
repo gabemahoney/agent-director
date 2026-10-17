@@ -33,7 +33,7 @@ func setLaunchPath(cfg *config.Config, agent, path string) {
 
 // TestLaunchProgram (SR-5.0): a launch's argv starts with the agent's
 // [launch] path when set, as one unchanged argument, else with the program
-// named claude or codex; the path is read from the config at each launch and
+// named claude or codex in these two-agent fixtures; the path is read at each launch and
 // never stored on the row. Reuse composes through ComposeLaunch, as spawn
 // does (pkg/api/spawn_reuse.go).
 func TestLaunchProgram(t *testing.T) {

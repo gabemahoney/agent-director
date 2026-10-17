@@ -3543,9 +3543,9 @@ test_J25_MoveFailedFixCauseAndRerun() {
 # key that reaches outside the old directory through a link inside it, so it gives
 # no advice to follow; the move rewrites the key (TestMovePathKeyOutwardRewritten).
 
-# ---- J27: neither Claude Code nor Codex found (SR-11.1) -----------------------------
+# ---- J27: no supported agent found (SR-11.1) -----------------------------
 
-# j27_toolbox: a TOOLBOX without claude or codex, in $ROOT/toolbox-no-agents, for
+# j27_toolbox: a TOOLBOX without Claude, Codex or Cursor, in $ROOT/toolbox-no-agents, for
 # a test that makes it its own with `local TOOLBOX`; every other tool is the
 # same link or fake.
 j27_toolbox() {
@@ -3624,11 +3624,12 @@ test_J27_MoveDueNeitherAgentOldConfigAdvice() {
     done
 }
 
-# J27: "neither Claude Code nor Codex was found; refusing to install." (exit 2)
+# J27: "no supported agent (Claude Code, Codex or Cursor) was found; refusing to install." (exit 2)
 # with a reason per agent, then the ways to put one in place: Claude Code with
 # claude on PATH, or its absolute path as claude_path under [launch] in
 # config.toml; Codex with codex on PATH, or its absolute path as codex_path
-# there. Each way is followed in a new home with neither on PATH, and the re-run
+# there; Cursor with agent on PATH or cursor_path there. Each way is followed
+# in a new home with no agent on PATH, and the re-run
 # installs, naming the agent it found (the program for Claude Code, its path and
 # "version not checked" for Codex, which is never run). The Requirements section
 # the Codex advice points at (docs/install.md) is there.

@@ -109,7 +109,7 @@ func TestSpawnAgentRefusals(t *testing.T) {
 		{name: "no agent from the call or a template", want: "ErrAgentMissing", text: agentMissingText},
 		{name: "no agent, the template names none either", tmpl: &apitest.TemplateFields{RelayMode: "on"},
 			want: "ErrAgentMissing", text: agentMissingText},
-		{name: "per-call agent not claude or codex", p: api.SpawnParams{Agent: "gemini"}, want: "ErrAgentInvalid",
+		{name: "per-call agent not claude, codex or cursor", p: api.SpawnParams{Agent: "gemini"}, want: "ErrAgentInvalid",
 			text: strings.Replace(agentInvalidTextFmt, "%q", `"gemini"`, 1)},
 		{name: "cursor agent in another case", p: api.SpawnParams{Agent: "Cursor"}, want: "ErrAgentInvalid", text: strings.Replace(agentInvalidTextFmt, "%q", `"Cursor"`, 1)},
 		{name: "per-call agent in another case", p: api.SpawnParams{Agent: "Claude"}, want: "ErrAgentInvalid",

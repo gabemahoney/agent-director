@@ -15,7 +15,7 @@ import (
 // make-template leaves it out. To add a template field, add it here and copy it
 // in TemplateBody's config.TemplateFile literal.
 type TemplateFields struct {
-	Agent       string                      // agent ("claude" or "codex"; any other text builds a body the loader refuses)
+	Agent       string                      // agent ("claude", "codex" or "cursor"; any other non-empty text builds a body the loader refuses)
 	AgentArgs   []string                    // agent_args
 	CWD         string                      // cwd
 	RelayMode   string                      // relay_mode ("on" or "off"; any other text builds a body the loader refuses)

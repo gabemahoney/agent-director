@@ -333,14 +333,14 @@ type hookArgs struct {
 }
 
 // parseHookArgs parses the hook verb's arguments in one pass, --agent and
-// --timeout in either order (b.146 rule 4; SR-6.1): --agent claude|codex names
+// --timeout in either order (b.146 rule 4; SR-6.1): --agent claude|codex|cursor names
 // the agent whose hook table applies and --timeout N is the per-hook timeout in
 // seconds spawn writes on the relay hook's settings entry. The hook path never
 // fails on its arguments (SRD §3.2): --timeout absent, unparseable or not
 // positive gives 0, and an argument it does not know, a positional one
 // included, is skipped without costing --agent or --timeout its value, which
 // the rest of the line still gives. --agent's value is not checked here:
-// Handle rejects one that is neither claude nor codex, as a hook failure.
+// Handle rejects one other than claude, codex or cursor, as a hook failure.
 func parseHookArgs(args []string) hookArgs {
 	var seconds int
 	var agent agentFlag

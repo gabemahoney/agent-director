@@ -104,7 +104,7 @@ func TestListFailures(t *testing.T) {
 }
 
 // TestListShowsRowAgent (SR-1.5, SR-7.5): each list row carries the agent its
-// row runs, claude or codex, and the label filter returns a Codex row as it
+// row runs; these Claude/Codex examples show the label filter returns a Codex row as it
 // does a Claude one.
 func TestListShowsRowAgent(t *testing.T) {
 	t.Parallel()

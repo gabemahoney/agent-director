@@ -52,7 +52,7 @@ type SpawnParams struct {
 	// labels also persist into the spawns.labels JSON column.
 	AgentDirectorLabels map[string]string
 
-	// Agent is the agent the spawn is for: "claude" or "codex", compared
+	// Agent is the agent the spawn is for: "claude", "codex" or "cursor", compared
 	// case-sensitively; empty means not given. As the caller sets it, it is
 	// the per-call agent; Resolve fills an empty one from the template's
 	// agent, so after Resolve it is the resolved agent (SR-1.2) and empty

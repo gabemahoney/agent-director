@@ -66,11 +66,12 @@ type ComposedLaunch struct {
 // entry carries it too and the client drops the environment's copy, so it
 // reaches the create argv exactly once (tmux.NewSession).
 //
-// The argv starts with the agent's launch path (claudeProgram, codexProgram).
+// Claude and Codex argv start with the agent's launch path (claudeProgram,
+// codexProgram). Cursor starts the owned gateway, passing its runtime path.
 // A codex agent's composition also writes nothing in any Codex folder: its
 // settings travel on the command line, and its pre-trust outcome is decided
 // here (CodexPreTrust) because the folder trust is in the argv only on ok. An
-// agent that is neither claude nor codex gets store.ErrRowAgentInvalid.
+// agent other than claude, codex or cursor gets store.ErrRowAgentInvalid.
 func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 	if err := launchAgentError(r.Agent); err != nil {
 		return ComposedLaunch{}, err

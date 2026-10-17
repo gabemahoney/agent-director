@@ -130,7 +130,7 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		createStore        = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket             = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
-		agent              = fs.String("agent", "", "the row's agent (claude|codex); empty keeps SeedSpawn's claude (apitest.WithAgent)")
+		agent              = fs.String("agent", "", "the row's agent (claude|codex|cursor); empty keeps SeedSpawn's claude (apitest.WithAgent)")
 		noSubagentTracking = fs.Bool("no-subagent-tracking", false, "disable subagent tracking on the row (apitest.WithNoSubagentTracking); default keeps tracking enabled")
 		noIdentity         = fs.Bool("no-launch-identity", false, "seed a row from before the release: no launch token, socket or identity (apitest.WithNoLaunchToken); not with --socket")
 	)

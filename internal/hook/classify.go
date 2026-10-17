@@ -104,12 +104,12 @@ func (p payload) eventName() string {
 }
 
 // ErrInvalidAgent is returned (wrapped) by ResolveAgent and ClassifyEvent for
-// an agent value that is neither empty, "claude" nor "codex".
+// an agent value other than empty, "claude", "codex" or "cursor".
 var ErrInvalidAgent = errors.New("hook: invalid --agent")
 
 // ResolveAgent maps the hook verb's raw --agent value to the agent whose
 // classification table applies (SR-6.1): the empty string, which a hook entry
-// written before --agent existed carries, is claude; claude and codex are
+// written before --agent existed carries, is claude; claude, codex and cursor are
 // themselves; anything else is ErrInvalidAgent (a hook failure).
 func ResolveAgent(raw string) (string, error) {
 	switch raw {
@@ -120,15 +120,15 @@ func ResolveAgent(raw string) (string, error) {
 	case store.AgentCursor:
 		return store.AgentCursor, nil
 	}
-	return "", fmt.Errorf("%w: %q (want claude or codex)", ErrInvalidAgent, raw)
+	return "", fmt.Errorf("%w: %q (want claude, codex or cursor)", ErrInvalidAgent, raw)
 }
 
 // ClassifyResult is the typed outcome of one classification pass. Callers
 // use NewState / SoftRefresh / SessionID to drive the gated row write, and
 // EventName for telemetry / log lines on unknown events.
 type ClassifyResult struct {
-	// Agent is the agent whose table classified the hook: store.AgentClaude or
-	// store.AgentCodex.
+	// Agent is the agent whose table classified the hook: store.AgentClaude,
+	// store.AgentCodex or store.AgentCursor.
 	Agent string
 
 	// SubagentCapture is true when the hook feeds subagent capture (b.xjn;
@@ -285,14 +285,15 @@ func PeekEventName(raw []byte) string {
 	return p.eventName()
 }
 
-// ClassifyEvent applies the hook-event → state table of agent (store.AgentClaude
-// or store.AgentCodex; "" is claude): SRD §5.2's for Claude, SR-6.2's for
-// Codex. The function never returns a typed error for unknown / malformed
-// payloads — state-tracking is fail-open, so the result's SoftRefresh /
+// ClassifyEvent applies the hook-event → state table of agent (store.AgentClaude,
+// store.AgentCodex or store.AgentCursor; "" is claude): SRD §5.2's for Claude,
+// SR-6.2's for Codex, or Cursor's gateway reports. The function never returns
+// a typed error for unknown / malformed payloads — state-tracking is fail-open,
+// so the result's SoftRefresh /
 // UnknownEvent flags carry the decision and the handler treats it as a no-op
 // write.
 //
-// A JSON parse failure and an agent that is neither claude nor codex
+// A JSON parse failure and an agent other than claude, codex or cursor
 // (ErrInvalidAgent) are the only errors returned: the handler logs them and
 // exits 0 silently, except that a relayed PermissionRequest is denied.
 func ClassifyEvent(agent string, raw json.RawMessage) (ClassifyResult, error) {
