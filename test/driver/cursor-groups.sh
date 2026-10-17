@@ -221,7 +221,7 @@ cg_composed() {
   mkdir -m 700 -p "$case_dir"
   settings=$(jq -cn --arg dir "$case_dir" --argjson worker "$([[ $label == a ]] && echo true || echo false)" '{trace:($dir+"/trace.jsonl"),pid:($dir+"/runtime-pid"),release:($dir+"/release"),worker:$worker,workerPID:($dir+"/worker-pid"),workerRelease:($dir+"/worker-release"),scenario:($dir+"/scenario"),raw:($dir+"/raw"),sent:($dir+"/sent.jsonl"),newRelease:($dir+"/new-release")}')
   program="$case_dir/index.js"
-  { printf '#!/usr/local/bin/node\nconst SETTINGS = %s;\n' "$settings"; cat "$AD_CURSOR_FIX_SOURCE"; } > "$program"
+  { printf '#!%s\nconst SETTINGS = %s;\n' "$(command -v node)" "$settings"; cat "$AD_CURSOR_FIX_SOURCE"; } > "$program"
   chmod 700 "$program"
   sed -i "s|^cursor_path = .*|cursor_path = \"$program\"|" "$HOME/.config/agent-director/config.toml"
   jq -cn --arg session "composed-$label" '{sessionId:$session,recordArtifacts:true}' > "$case_dir/scenario"
@@ -243,7 +243,7 @@ cg_composed() {
  cg_worker_op worker-before 'independent before'
  # Retain an actual outstanding permission while the detached worker claims B.
  cg_enter b; load_identity
- jq -cn --arg session "$session" '{recordArtifacts:true,requests:[{jsonrpc:"2.0",id:"foreign-held",method:"session/request_permission",params:{sessionId:$session,toolCall:{toolCallId:"foreign-held",title:"Synthetic action",kind:"execute",status:"pending",rawInput:null},options:[{optionId:"allow-once",name:"Allow",kind:"allow_once"}]}}],afterAnswers:[{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"tool_call_update",toolCallId:"foreign-held",status:"completed",rawOutput:{exitCode:0,stdout:"synthetic current result",stderr:""}}}}]}' > "$case_dir/scenario"
+ jq -cn --arg session "$session" '{recordArtifacts:true,requests:[{jsonrpc:"2.0",id:"foreign-held",method:"session/request_permission",params:{sessionId:$session,toolCall:{toolCallId:"foreign-held",title:"Synthetic action",kind:"execute",status:"pending",rawInput:null},options:[{optionId:"allow-once",name:"Allow once",kind:"allow_once"},{optionId:"allow-always",name:"Allow always",kind:"allow_always"},{optionId:"reject-once",name:"Reject",kind:"reject_once"}]}}],afterAnswers:[{method:"session/update",params:{sessionId:$session,update:{sessionUpdate:"tool_call_update",toolCallId:"foreign-held",status:"completed",rawOutput:{exitCode:0,stdout:"synthetic current result",stderr:""}}}}]}' > "$case_dir/scenario"
  rl_send CLI held-target >/dev/null
  check foreign.request wait_until request_count_is 1
  saved_b=$(cg_snapshot)
