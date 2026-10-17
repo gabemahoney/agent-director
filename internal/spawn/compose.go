@@ -48,6 +48,7 @@ func ParentIDFromEnv() string {
 // by CodexPreTrust before composition; "" for a claude launch, whose pre-trust
 // is a file write that follows composition. The caller hands it to RunPreTrust,
 // so the outcome reported is the one the argv carries.
+// Cursor carries failed (no validated grant), or skipped for NoPreTrust.
 type ComposedLaunch struct {
 	Create   CreateRequest
 	Row      store.Spawn

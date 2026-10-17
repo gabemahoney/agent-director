@@ -142,16 +142,18 @@ func main(){ c,e:=api.New(api.Options{StorePath:os.Args[1]});if e!=nil{panic(e)}
 			raw, e := json.Marshal(result)
 			return raw, e
 		}
-	case "MCP", "Bun":
+	case "MCP", "Bun", "Bun installed":
 		command, args := bin, []string{"serve", "--stdio", "--store-path", f.DBPath}
-		if surface == "Bun" {
+		if surface == "Bun" || surface == "Bun installed" {
 			// Bundle the package's public export, exactly as its build does, outside the source tree.
 			entry, err := filepath.Abs("../../pkg/ts-bun-client/src/index.ts")
 			if err != nil {
 				t.Fatal(err)
 			}
 			bundle := filepath.Join(t.TempDir(), "client.js")
-			if out, err := exec.Command("bun", "build", entry, "--target=bun", "--outfile", bundle).CombinedOutput(); err != nil {
+			if surface == "Bun installed" {
+				bundle = installedCursorClient(t)
+			} else if out, err := exec.Command("bun", "build", entry, "--target=bun", "--outfile", bundle).CombinedOutput(); err != nil {
 				t.Fatalf("build Bun public export: %v %s", err, out)
 			}
 			js := fmt.Sprintf(`import {Client} from %q;

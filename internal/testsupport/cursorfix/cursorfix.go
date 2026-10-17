@@ -77,6 +77,9 @@ func splitLines(raw []byte) [][]byte {
 
 // Scenario scripts synthetic peer traffic; captured envelopes retain separate provenance.
 type Scenario struct {
+	InitializeReply       json.RawMessage   `json:"initializeReply,omitempty"`
+	FirstNewReply         json.RawMessage   `json:"firstNewReply,omitempty"`
+	PromptReply           json.RawMessage   `json:"promptReply,omitempty"`
 	Modes                 json.RawMessage   `json:"modes,omitempty"`
 	ModeReply             json.RawMessage   `json:"modeReply,omitempty"`
 	BeforeModeReply       []json.RawMessage `json:"beforeModeReply,omitempty"`

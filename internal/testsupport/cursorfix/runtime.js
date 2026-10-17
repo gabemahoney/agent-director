@@ -35,7 +35,7 @@ input.on('line', async line => {
   if(pendingScenario.ids.size===0) {pendingScenario.resolve();pendingScenario=null;}
   return;
  }
- if(frame.method==='initialize') send({id:frame.id,result:{protocolVersion:1,agentCapabilities:{askQuestion:true,...(scenario()?.loadSupport ? {loadSession:true} : {})}}});
+ if(frame.method==='initialize') send({id:frame.id,...(scenario()?.initializeReply || {result:{protocolVersion:1,agentCapabilities:{askQuestion:true,...(scenario()?.loadSupport ? {loadSession:true} : {})}}})});
  else if(frame.method==='session/load') {
   const scripted=scenario();
   if(scripted?.beforeLoadReply) for(const event of scripted.beforeLoadReply) send(event);
@@ -56,7 +56,7 @@ input.on('line', async line => {
   const count = ++newCount;
   if(count > 1 && scripted?.waitForNew)
    while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
-  const reply = count > 1 ? scripted?.newReplies?.[count-2] : null;
+  const reply = count > 1 ? scripted?.newReplies?.[count-2] : scripted?.firstNewReply;
   send({id:frame.id,...(reply || {result:{sessionId:count===1 ? (scripted?.sessionId || 'synthetic-session-1') : 'synthetic-session-'+count,...(scripted?.modes ? {modes:scripted.modes} : {})}})});
   if(count > 1 && scripted?.afterNew) for(const event of scripted.afterNew) send(event);
  }
@@ -71,6 +71,7 @@ input.on('line', async line => {
  else if(frame.method==='session/prompt') {
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
+  if(scripted?.promptReply) { send({id:frame.id,...scripted.promptReply}); return; }
   if(scripted?.beforeRequests) for(const update of scripted.beforeRequests) send(update);
   if(scripted?.requests?.length) {
    const answers = new Promise(resolve=>{

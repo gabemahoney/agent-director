@@ -145,6 +145,14 @@ does not establish execution or dialog closure.
 
 ## Cursor operation boundaries
 
+Runtime compatibility is checked during asynchronous initialization. The exact
+JSON keys `protocolVersion` and `agentCapabilities` must contain integer `1`
+and a non-null object. Optional capabilities may be omitted; unknown extensions
+remain opaque. A minimal capability object permits fresh text sessions.
+`loadSession: true` is required only for load. Accepted initialization does not
+prove that creating or loading a session, selecting a requested mode or submitting
+a prompt succeeded; each operation needs its own authoritative response.
+
 `resume` accepts only `instance_id` (`--instance-id` on the CLI) for an
 `ended` or `missing` Cursor row. It loads only the latest durably reported
 session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).
@@ -289,6 +297,25 @@ failures emit `ad.cursor.failed` with a reason when the gateway has identified i
 Examples include an ACP operation timeout, unsupported ACP protocol,
 changed runtime/session binding, a refused report or transport failure.
 These are asynchronous launch failures, not new typed spawn errors.
+
+Failure reasons identify the initiating operation (`initialize`, `session/new`,
+`session/load`, `session/set_mode` or `session/prompt`) with bounded, sanitized
+text. Structured ACP errors require exact `code` (an integer in the signed
+32-bit range) and `message` (a string) keys. Only the numeric code supplies the
+cause: unsupported operation, rejected format or parameters, cancellation,
+authentication required or missing resource. Malformed errors and unknown
+codes do not establish a cause; runtime internal errors also leave the cause
+unknown. Authentication-looking messages, stderr and exit alone never establish
+an authentication or configuration diagnosis. Raw runtime message/data,
+environment, paths and credentials are not included in these failure reasons.
+Process-start reasons separately distinguish unavailable executable or cwd,
+operating-system permission denial and an unknown start failure. Human checks
+are in [Operator actions](operator-actions.md#inspect-and-end-a-session-by-hand).
+
+A successful `spawn` or `resume` return, including `pending`, confirms launch
+acceptance only. It does not confirm initialization, load, requested mode or
+prompt success. There is no automatic alternate runtime, account, session or
+mode selection and no automatic replay of uncertain input.
 
 Tool and unknown updates retain their content in the protected transcript
 without treating it as main-agent text. Only main-agent text updates render as

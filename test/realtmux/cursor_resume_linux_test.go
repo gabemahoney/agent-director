@@ -30,7 +30,7 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real tmux synthetic ACP public resume")
 	}
-	for _, surface := range []string{"Go", "Go release wrapper", "Go release wrapper fresh", "CLI", "MCP"} {
+	for _, surface := range []string{"Go", "Go release wrapper", "Go release wrapper fresh", "CLI", "MCP", "Bun installed"} {
 		t.Run(surface, func(t *testing.T) {
 			f, runtime, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{StandaloneGo: surface == "Go release wrapper fresh"})
 			diagnostics := cursorFailureDiagnostics{t: t, f: f, peer: runtime, id: launch.ID, home: os.Getenv("HOME")}

@@ -114,10 +114,7 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	}
 	cmd := exec.Command(bin, args...)
 	if scenario == "ts-default-hold" {
-		clientSource, e := filepath.Abs("../../pkg/ts-bun-client/src/client.ts")
-		if e != nil {
-			t.Fatal(e)
-		}
+		clientSource := installedCursorClient(t)
 		js := fmt.Sprintf(`import {Client} from %q;
 const options = {storePath: %q, home: %q, _cliPath: %q};
 const c = await Client.create(options);
@@ -129,9 +126,9 @@ await c.close();
 const recreated = await Client.create(options);
 await recreated.get({instance_id:result.instance_id});
 await recreated.close();
-console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME"), bin, id, f.CWD)
+console.log(JSON.stringify({...result,fixture_whole_call_ms:elapsed}));`, clientSource, f.DBPath, os.Getenv("HOME"), bin, id, f.CWD)
 		path := filepath.Join(t.TempDir(), "caller.ts")
-		if e = os.WriteFile(path, []byte(js), 0600); e != nil {
+		if e := os.WriteFile(path, []byte(js), 0600); e != nil {
 			t.Fatal(e)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
@@ -147,6 +144,9 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 	}
 	if err != nil {
 		t.Fatalf("production CLI spawn: %v %s", err, out)
+	}
+	if scenario == "ts-default-hold" {
+		t.Logf("installed default spawn receipt=%s", out)
 	}
 	var spawnResult api.SpawnResult
 	if err := json.Unmarshal(out, &spawnResult); err != nil || spawnResult.InstanceID != id {

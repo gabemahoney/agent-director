@@ -18,6 +18,8 @@ const protocolWait = 45 * time.Second
 const cancelWait = 3 * time.Second
 const transportWriteWait = 3 * time.Second
 
+var errMalformedACPFrame = errors.New("malformed ACP frame")
+
 type frame struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -62,7 +64,7 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 			for {
 				part, e := r.ReadSlice('\n')
 				if len(raw)+len(part) > maxFrameBytes {
-					p.deliver(incoming{err: fmt.Errorf("ACP frame exceeds limit")})
+					p.deliver(incoming{err: errMalformedACPFrame})
 					return
 				}
 				raw = append(raw, part...)
@@ -71,7 +73,7 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 				}
 				if e != nil {
 					if len(raw) > 0 {
-						e = fmt.Errorf("ACP partial frame")
+						e = errMalformedACPFrame
 					}
 					p.deliver(incoming{err: e})
 					return
@@ -80,7 +82,7 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 			}
 			var f frame
 			if e := json.Unmarshal(raw, &f); e != nil || uniqueJSON(raw) != nil || f.JSONRPC != "2.0" {
-				p.deliver(incoming{err: fmt.Errorf("invalid ACP frame")})
+				p.deliver(incoming{err: errMalformedACPFrame})
 				return
 			}
 			if len(f.ID) > 0 {
@@ -88,18 +90,18 @@ func newProtocol(in io.Writer, out io.Reader) *protocol {
 				decoder := json.NewDecoder(bytes.NewReader(f.ID))
 				decoder.UseNumber()
 				if e := decoder.Decode(&id); e != nil {
-					p.deliver(incoming{err: fmt.Errorf("invalid ACP id")})
+					p.deliver(incoming{err: errMalformedACPFrame})
 					return
 				}
 				switch id.(type) {
 				case string, json.Number:
 				default:
-					p.deliver(incoming{err: fmt.Errorf("invalid ACP id")})
+					p.deliver(incoming{err: errMalformedACPFrame})
 					return
 				}
 			}
 			if f.Method == "" && (len(f.ID) == 0 || ((len(f.Result) == 0) == (len(f.Error) == 0))) {
-				p.deliver(incoming{err: fmt.Errorf("invalid ACP response")})
+				p.deliver(incoming{err: errMalformedACPFrame})
 				return
 			}
 			p.deliver(incoming{frame: f})
@@ -306,13 +308,57 @@ func (p *protocol) response(f frame) (json.RawMessage, error) {
 	if f.Method != "" || string(bytes.TrimSpace(f.ID)) != p.pendingID || p.pendingID == "" {
 		return nil, fmt.Errorf("uncorrelated ACP response")
 	}
+	method := p.pendingMethod
 	p.retiredThrough = p.next
 	p.pendingID = ""
 	p.pendingMethod = ""
 	if len(f.Error) > 0 {
-		return nil, fmt.Errorf("Cursor ACP request failed; check the selected runtime and existing login")
+		return nil, acpResponseFailure(method, f.Error)
 	}
 	return f.Result, nil
+}
+
+// Only documented ACP error codes supply causes. Message and data are untrusted
+// runtime diagnostics and must never reach the pane or ad.cursor.failed trail.
+// https://agentclientprotocol.com/protocol/v1/schema#errorcode
+func acpResponseFailure(method string, raw json.RawMessage) error {
+	method = acpOperation(method)
+	// Case variants are unknown properties, never replacements for the exact
+	// required keys or evidence for a different structured failure cause.
+	var failure map[string]json.RawMessage
+	var code *int32
+	var message *string
+	if json.Unmarshal(raw, &failure) != nil || json.Unmarshal(failure["code"], &code) != nil || code == nil ||
+		json.Unmarshal(failure["message"], &message) != nil || message == nil {
+		return fmt.Errorf("Cursor ACP %s failed: malformed error response", method)
+	}
+	cause := "runtime rejected the request; cause unknown"
+	switch *code {
+	case -32601:
+		cause = "operation unsupported by the selected runtime"
+	case -32700, -32600, -32602:
+		cause = "runtime rejected the request format or parameters"
+	case -32603:
+		cause = "runtime internal error; cause unknown"
+	case -32800:
+		cause = "runtime cancelled the request"
+	case -32000:
+		cause = "authentication required; check the selected runtime's existing login"
+	case -32002:
+		cause = "requested resource not found"
+	}
+	return fmt.Errorf("Cursor ACP %s failed: %s", method, cause)
+}
+
+func acpOperation(method string) string {
+	// Operation names come only from this host. Bound future internal callers
+	// too, so no runtime-supplied method or arbitrary label can be rendered.
+	switch method {
+	case "initialize", "session/new", "session/load", "session/set_mode", "session/prompt":
+		return method
+	default:
+		return "request"
+	}
 }
 
 func (p *protocol) retiredResponse(f frame) bool {

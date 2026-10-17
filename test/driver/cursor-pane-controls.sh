@@ -13,7 +13,7 @@ pc_export_evidence() {
  # retention; the standard driver's short details field is not a raw archive.
  artifact_dir="/tmp/cursor-pane-controls-artifacts/$id"
  mkdir -m 700 -p "$artifact_dir"
- for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json held-ids refused-ids; do
+ for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json task3-timing.jsonl held-ids refused-ids; do
   if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$artifact_dir/$name"; chmod 600 "$artifact_dir/$name"; fi
  done
  if [[ -n ${path:-} && -f $path ]]; then cp "$path" "$artifact_dir/protected.jsonl"; chmod 600 "$artifact_dir/protected.jsonl"; fi

@@ -72,6 +72,13 @@ expand its config path `~/.config/agent-director/config.toml`.
 
 Set them when the consumer needs to override that field's CLI default.
 
+`callTimeoutMs` defaults to 30,000 ms per subprocess call. Cursor's separate
+45-second ACP operation bound does not extend that client budget. Spawn and
+resume do not wait for initialization, load, generation, a dialog answer or
+readiness. For a deliberately longer
+configured `pause.timeout_seconds`, give the client enough `callTimeoutMs`
+for that wait and reply overhead; 30 seconds is not a universal operation cap.
+
 By default, the first call that opens the store creates it when it does not
 exist (parent directories, file and schema). With `createIfMissing: false`,
 such a call rejects with `ErrStoreOpen` (`database not initialized`) and
@@ -104,6 +111,11 @@ removed original argument tokens in argv order; it is omitted when empty.
 The switch starts fresh and resumes nothing. Selector lists and reporting
 rules are in the
 [caller contract](../../docs/caller-contract.md#spawn-and-template-input-refusals).
+
+`pre_trust` uses the existing `"ok"`, `"skipped"` and `"failed"` values.
+Cursor reports `"failed"` for unsupported pre-trust or `"skipped"` for its saved
+opt-out, never a validated `"ok"`; see
+[Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
 
 For all agents, same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.

@@ -30,6 +30,8 @@ type RelaunchInput struct {
 // of the row's extra env and recorded opt-out; "" for a claude launch, whose
 // pre-trust is a file write that follows composition). The caller hands it to
 // RunPreTrust.
+// Cursor carries failed, or skipped for the row's saved NoPreTrust choice;
+// neither result represents a trust grant.
 type ComposedRelaunch struct {
 	Create   CreateRequest
 	PreTrust PreTrustOutcome

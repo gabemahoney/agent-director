@@ -239,5 +239,56 @@ frames_task2_order() {
 frames_task2_prompts() { frames | jq -se --arg prompt "$1" '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]==[$prompt,$prompt,"replacement prompt"]' >/dev/null; }
 frames_task2_modes() { frames | jq -se '[.[]|select(.method=="session/set_mode")|.params.modeId]==["plan","plan","ask"] and ([.[]|select(.method=="session/new")]|length)==2 and ([.[]|select(.method=="session/load")]|length)==1' >/dev/null; }
 ir_finish() {
- jq -cn --arg case "$1" --arg id "$id" --argjson task2 "${ir_task2_ran:-false}" '{case:$case,status:"pass",checks:(["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"]+(if $task2 then ["Task2-AC2-AC3-AC7-SR1.2","authoritative-fresh-load-reuse-modes","saved-initial-exact-once-per-launch","static-refusal-no-row"] else [] end)),provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id,task2:$task2}}'
+ jq -cn --arg case "$1" --arg id "$id" --argjson task2 "${ir_task2_ran:-false}" --argjson task3 "${ir_task3_ran:-false}" '{case:$case,status:"pass",checks:(["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"]+(if $task2 then ["Task2-AC2-AC3-AC7-SR1.2","authoritative-fresh-load-reuse-modes","saved-initial-exact-once-per-launch","static-refusal-no-row"] else [] end)+(if $task3 then ["Task3-AC4-AC5-AC6-AC7","minimal-capabilities-and-malformed-refusal","truthful-trust-saved-choice","installed-default-spawn-resume-whole-call"] else [] end)),provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id,task2:$task2,task3:$task3}}'
 }
+
+# One installed representative connects capability, trust and whole-call timing.
+# Exhaustive malformed/error/lifecycle matrices belong to their unit owners.
+ir_task3() {
+ local surface=$1 params started elapsed
+ id="capabilities-$id"
+ : > "$case_dir/trace.jsonl"
+ : > "$case_dir/raw"
+ : > "$case_dir/sent.jsonl"
+ jq -cn '{initializeReply:{result:{protocolVersion:1,agentCapabilities:{sessionCapabilities:{fork:true,systemPrompt:[]}}}}}' > "$case_dir/scenario"
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" '{instance_id:$id,agent:"cursor",cwd:$cwd,agent_args:["HOLD"]}')
+ started=$(date +%s%N)
+ ir_launch "$surface" spawn "$params" > "$case_dir/public.json"
+ elapsed=$(( ($(date +%s%N)-started)/1000000 ))
+ check task3.spawn-whole-call-default-bound test "$elapsed" -lt 30000
+ check task3.unsupported-trust jq -e '.pre_trust=="failed"' "$case_dir/public.json" >/dev/null
+ check task3.generation-independent wait_until ir_task3_working
+ jq -cn --arg surface "$surface" --argjson elapsed "$elapsed" '{verb:"spawn",surface:$surface,whole_call_ms:$elapsed,client_timeout_ms:30000,timeout_override:false}' > "$case_dir/task3-timing.jsonl"
+ touch "$case_dir/release"
+ check task3.initial-completed wait_until ir_waiting
+ rl_public "$surface" pause >/dev/null
+ jq -cn '{initializeReply:{result:{protocolVersion:1,agentCapabilities:{loadSession:true}}},waitForLoad:true}' > "$case_dir/scenario"
+ rm -f "$case_dir/new-release"
+ started=$(date +%s%N)
+ ir_launch "$surface" resume "$(jq -cn --arg id "$id" '{instance_id:$id}')" > "$case_dir/public.json"
+ elapsed=$(( ($(date +%s%N)-started)/1000000 ))
+ check task3.resume-whole-call-default-bound test "$elapsed" -lt 30000
+ check task3.saved-trust-choice jq -e '.pre_trust=="failed"' "$case_dir/public.json" >/dev/null
+ check task3.load-received wait_until ir_task3_load_seen
+ check task3.load-still-pending test "$(row_state)" = pending
+ jq -cn --arg surface "$surface" --argjson elapsed "$elapsed" '{verb:"resume",surface:$surface,whole_call_ms:$elapsed,client_timeout_ms:30000,timeout_override:false}' >> "$case_dir/task3-timing.jsonl"
+ touch "$case_dir/new-release"
+ check task3.loaded wait_until rl_loaded
+ check task3.saved-prompt-completed wait_until ir_task2_completed 2
+ rl_public "$surface" pause >/dev/null
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" '{instance_id:$id,agent:"cursor",cwd:$cwd,reuse_finished:true,no_pre_trust:true}')
+ ir_launch "$surface" spawn "$params" > "$case_dir/public.json"
+ check task3.reuse-opt-out jq -e '.pre_trust=="skipped"' "$case_dir/public.json" >/dev/null
+ check task3.reuse-ready wait_until pc_start_ready
+ rl_public "$surface" pause >/dev/null
+ id="invalid-$id"
+ jq -cn '{initializeReply:{result:{protocolVersion:1,agentCapabilities:null}}}' > "$case_dir/scenario"
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" '{instance_id:$id,agent:"cursor",cwd:$cwd,no_pre_trust:true,agent_args:["never admitted"]}')
+ ir_launch "$surface" spawn "$params" > "$case_dir/public.json"
+ check task3.invalid-init-process-backed-missing wait_until ir_missing
+ check task3.sanitized-failure jq -se --arg id "$id" '[.[]|select(.event=="ad.cursor.failed" and .instance_id==$id and (.reason|contains("malformed agent capabilities")))]|length==1' "$HOME/.config/agent-director/ad-trail.jsonl" >/dev/null
+ ir_task3_ran=true
+ pc_export_evidence
+}
+ir_task3_working() { [[ $(row_state) == working ]] && frames | jq -se '[.[]|select(.method=="session/prompt")]|length==1' >/dev/null; }
+ir_task3_load_seen() { frames | jq -se '[.[]|select(.method=="session/load")]|length==1' >/dev/null; }

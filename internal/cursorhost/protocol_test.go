@@ -46,6 +46,9 @@ func TestProtocolFraming(t *testing.T) {
 		{"no outcome", `{"jsonrpc":"2.0","id":1}` + "\n", true},
 		{"no response id", `{"jsonrpc":"2.0","result":{}}` + "\n", true},
 		{"both outcomes", `{"jsonrpc":"2.0","id":1,"result":{},"error":{}}` + "\n", true},
+		{"duplicate exact code", `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"code":-32000,"message":"secret"}}` + "\n", true},
+		{"duplicate exact message", `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"one","message":"two"}}` + "\n", true},
+		{"duplicate exact capabilities", `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":null,"agentCapabilities":{}}}` + "\n", true},
 		{"oversize", strings.Repeat("x", maxFrameBytes+1) + "\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -300,5 +303,97 @@ func TestProtocolCloseCompletesAcceptedFramesExactlyOnce(t *testing.T) {
 				t.Fatalf("closed transport replayed queued frames: %d writes", wire.calls.Load())
 			}
 		})
+	}
+}
+
+func TestProtocolStructuredFailureCauses(t *testing.T) {
+	for _, method := range []string{"initialize", "session/new", "session/load", "session/set_mode", "session/prompt"} {
+		for _, tc := range []struct{ code, want string }{
+			{"-32601", "operation unsupported"}, {"-32700", "format or parameters"}, {"-32600", "format or parameters"}, {"-32602", "format or parameters"},
+			{"-32603", "internal error; cause unknown"}, {"-32800", "cancelled"}, {"-32000", "authentication required"}, {"-32002", "resource not found"},
+			{"99", "cause unknown"}, {"null", "malformed"}, {"1.5", "malformed"}, {"2147483648", "malformed"}, {`"-32000"`, "malformed"},
+		} {
+			t.Run(method+"/"+tc.code, func(t *testing.T) {
+				p := newProtocol(&bytes.Buffer{}, strings.NewReader(""))
+				defer p.close()
+				id, err := p.request(method, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = completedWrite(t, p); err != nil {
+					t.Fatal(err)
+				}
+				raw := json.RawMessage(`{"code":` + tc.code + `,"message":"SYNTHETIC-SECRET\nlogin required\u001b","data":{"secret":"SYNTHETIC-SECRET"}}`)
+				_, err = p.response(frame{ID: json.RawMessage(id), Error: raw})
+				if err == nil || !strings.Contains(err.Error(), method+" failed:") || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "SYNTHETIC-SECRET") || strings.ContainsAny(err.Error(), "\n\r\x1b") {
+					t.Fatalf("failure=%v", err)
+				}
+				if _, err = p.response(frame{ID: json.RawMessage(id), Error: raw}); err == nil {
+					t.Fatal("replayed failure accepted")
+				}
+				if _, err = p.request("session/new", nil); err != nil {
+					t.Fatalf("failure did not retire pending request: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestProtocolFailureExactKeys(t *testing.T) {
+	for _, field := range []struct {
+		name, valid, other string
+		invalid            []string
+	}{
+		{"code", `-32603`, `"message":"SYNTHETIC-SECRET"`, []string{"", "null", `"-32000"`, `1.5`, `2147483648`}},
+		{"message", `"SYNTHETIC-SECRET"`, `"code":-32603`, []string{"", "null", "1", "{}"}},
+	} {
+		for _, alias := range []string{strings.ToUpper(field.name), strings.ToUpper(field.name[:1]) + field.name[1:]} {
+			for _, reverse := range []bool{false, true} {
+				for _, exact := range append(field.invalid, field.valid) {
+					variant := field.valid
+					if exact == field.valid {
+						variant = `null`
+						if field.name == "code" {
+							variant = `-32000`
+						}
+					}
+					members := `"` + alias + `":` + variant
+					if exact != "" {
+						member := `"` + field.name + `":` + exact
+						if reverse {
+							members += "," + member
+						} else {
+							members = member + "," + members
+						}
+					}
+					raw := json.RawMessage("{" + field.other + "," + members + "}")
+					err := acpResponseFailure("initialize", raw)
+					want := "malformed"
+					if exact == field.valid {
+						want = "internal error; cause unknown"
+					}
+					if !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "authentication required") || strings.Contains(err.Error(), "SYNTHETIC-SECRET") {
+						t.Fatalf("%s reverse=%v exact=%s: %v", alias, reverse, exact, err)
+					}
+				}
+				members := `"code":-32000,"` + alias + `":-32603`
+				if field.name == "code" {
+					if reverse {
+						members = `"` + alias + `":-32603,"code":-32000`
+					}
+					err := acpResponseFailure("initialize", json.RawMessage(`{"message":"secret",`+members+`}`))
+					if !strings.Contains(err.Error(), "authentication required") {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestProtocolUnknownOperationCannotSupplyDiagnostic(t *testing.T) {
+	err := acpResponseFailure("SYNTHETIC-SECRET\n\x1b", json.RawMessage(`{"code":99,"message":"login required"}`))
+	if err.Error() != "Cursor ACP request failed: runtime rejected the request; cause unknown" {
+		t.Fatal(err)
 	}
 }

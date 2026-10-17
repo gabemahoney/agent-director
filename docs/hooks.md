@@ -150,6 +150,10 @@ process. Pane text is never classified to produce state.
 Cursor startup confirms a conversation before the row becomes `waiting`;
 accepted input yields `working`, a confirmed completion yields `waiting`,
 and intentional termination yields `ended` only after the runtime is gone.
+Launch return and pre-trust `failed` or `skipped` do not confirm startup.
+Reporting is required independently of the saved pre-trust choice and native
+permission policy. Initialization, load, mode or prompt failures cannot supply
+a successful startup or turn report.
 Rotation reporting authenticates the outgoing conversation and publishes the
 fresh current identity with required outgoing history in one operation; an
 old or child report cannot replace the main conversation. The interaction and

@@ -13,6 +13,12 @@
   does not count. The Cursor gateway currently runs on Linux only; no minimum
   Cursor version or macOS Cursor runtime support is established. The recorded
   Linux candidate, `2026.10.12-d47ca18`, is not a minimum-version guarantee.
+  Compatibility requires ACP protocol 1 with a non-null `agentCapabilities`
+  object. Optional capabilities may be omitted for a fresh text session;
+  resume additionally requires `loadSession: true`. Requested session, mode
+  and prompt operations must receive valid authoritative responses. Presence
+  discovery does not check those operations; see
+  [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
 - For Claude Code: `claude` (Claude Code) 2.1.296 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.

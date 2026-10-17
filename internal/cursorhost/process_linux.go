@@ -3,6 +3,7 @@
 package cursorhost
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -88,7 +89,13 @@ func traceProcess(program string, args []string, cwd string, ready chan<- proces
 		childOut.Close()
 		parentIn.Close()
 		parentOut.Close()
-		ready <- processReady{err: fmt.Errorf("Cursor runtime could not start")}
+		reason := "Cursor runtime could not start; cause unknown"
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			reason = "Cursor runtime executable or working directory unavailable; check cursor_path and project cwd"
+		} else if errors.Is(err, os.ErrPermission) {
+			reason = "Cursor runtime start denied by the operating system; check executable and project directory permissions"
+		}
+		ready <- processReady{err: fmt.Errorf("%s", reason)}
 		return
 	}
 	childIn.Close()

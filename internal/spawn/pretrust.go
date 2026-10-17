@@ -19,6 +19,8 @@ import (
 // (PreTrust). For a codex agent it writes nothing: the outcome is decided
 // from the launch's inputs alone (CodexPreTrust) and the folder trust travels
 // on the launch's command line.
+// Cursor has no validated ACP trust grant: its composition carries failed,
+// or skipped when opted out. This outcome never changes permission policy.
 type PreTrustOutcome string
 
 const (
@@ -39,6 +41,7 @@ const (
 	// Codex: the extra env's CODEX_HOME is set but not an absolute path (see
 	// CodexPreTrust), and the launch carries neither the folder trust nor the
 	// bypass. The launch proceeds; the agent may stop at the prompt.
+	// Cursor: ACP pre-trust is unsupported; no trust grant was made.
 	PreTrustFailed PreTrustOutcome = "failed"
 )
 
@@ -77,6 +80,8 @@ const envCodexHome = "CODEX_HOME"
 // for PreTrustFailed it prints one warning line to preTrustWarn naming
 // CODEX_HOME and its value and saying the agent may stop at Codex's folder-trust
 // prompt. It never returns an error and never fails a launch.
+// For Cursor it reports carried without any trust I/O: failed prints the
+// unsupported warning; skipped stays silent. Neither grants approval or trust.
 func RunPreTrust(agent string, carried PreTrustOutcome, cwd string, extraEnv map[string]string, off bool, cfg config.PreTrust) PreTrustOutcome {
 	if agent == config.AgentCursor {
 		if carried == PreTrustFailed {

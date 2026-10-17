@@ -95,6 +95,8 @@ type SpawnParams struct {
 	// prompt must be answered for an unseen cwd. The choice is recorded on
 	// the row (no_pre_trust) until the next spawn or reuse, and every resume
 	// follows it: no resume pre-trusts over an opt-out (SR-22.6).
+	// Cursor grants no trust: false reports failed (ACP pre-trust unsupported),
+	// true reports skipped. Reporting and permission policy are independent.
 	NoPreTrust bool
 
 	// ReuseFinished opts in to reusing an explicit InstanceID whose

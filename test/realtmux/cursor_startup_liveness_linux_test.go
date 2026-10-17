@@ -11,10 +11,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -103,5 +105,74 @@ func TestCursorStartupExecutableFailurePublicReads(t *testing.T) {
 	}
 	if got := readRow(t, f.DBPath, id); !reflect.DeepEqual(got, after) {
 		t.Errorf("terminal inspection changed raw row: %+v", got)
+	}
+}
+
+func TestCursorAsyncCapabilityFailureAndSyntheticLoginRepair(t *testing.T) {
+	for _, tc := range []struct{ name, reply, want string }{
+		{"malformed initialize", `{"result":{"protocolVersion":1,"agentCapabilities":null}}`, "malformed agent capabilities"},
+		{"structured authentication", `{"error":{"code":-32000,"message":"SYNTHETIC-SECRET\n\u001b","data":"SYNTHETIC-SECRET"}}`, "authentication required; check the selected runtime's existing login"},
+		{"text is not authentication", `{"error":{"code":-32603,"message":"SYNTHETIC-SECRET login required\n\u001b"}}`, "internal error; cause unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, r, launch := newCursorPane(t, false)
+			caller := newPaneCaller(t, f, "CLI", filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
+			caller.must("pause", map[string]any{"instance_id": launch.ID})
+			r.Configure(t, cursorfix.Scenario{InitializeReply: json.RawMessage(tc.reply)})
+			id := newInstanceID("capability-failure")
+			caller.must("spawn", map[string]any{"instance_id": id, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": false, "agent_args": []string{"never admitted"}})
+			waitFor(t, "exact failed gateway gone", func() bool {
+				row := readRow(t, f.DBPath, id)
+				pid, ok := row.PanePID.(int64)
+				return ok && pidGone(int(pid))
+			}, nil)
+			failures := hookTrailRecords(t, os.Getenv("HOME"), "ad.cursor.failed", id)
+			raw, err := json.Marshal(failures)
+			if err != nil || len(failures) != 1 || !strings.Contains(string(raw), tc.want) || strings.Contains(string(raw), "SYNTHETIC-SECRET") {
+				t.Fatalf("failure trail=%s err=%v", raw, err)
+			}
+			if tc.name != "structured authentication" && strings.Contains(string(raw), "authentication required") {
+				t.Fatal("text invented authentication")
+			}
+			for _, verb := range []string{"Get", "Status", "List"} {
+				var state string
+				switch verb {
+				case "Get":
+					row, e := f.API.Get(id)
+					state, err = row.State, e
+				case "Status":
+					row, e := f.API.Status(id)
+					state, err = row.State, e
+				case "List":
+					rows, e := f.API.List(api.ListParams{})
+					err = e
+					for _, row := range rows.Spawns {
+						if row.InstanceID == id {
+							state = row.State
+						}
+					}
+				}
+				if err != nil || state != store.StateMissing {
+					t.Fatalf("%s=%s err=%v", verb, state, err)
+				}
+			}
+			failed := readRow(t, f.DBPath, id)
+			if failed.SessionID != nil {
+				t.Fatalf("failed init published session: %+v", failed)
+			}
+			// Model completion of the selected runtime's login check solely by repairing
+			// its scripted ACP reply. No login command/account/credential is accessed.
+			r.Configure(t, cursorfix.Scenario{InitializeReply: json.RawMessage(`{"result":{"protocolVersion":1,"agentCapabilities":{}}}`)})
+			repaired := newInstanceID("capability-repaired")
+			caller.must("spawn", map[string]any{"instance_id": repaired, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": true, "agent_args": []string{"repaired prompt"}})
+			waitFor(t, "repaired synthetic runtime completed", func() bool {
+				pane, e := f.API.ReadPane(api.ReadPaneParams{InstanceID: repaired, NLines: 100})
+				return e == nil && strings.Contains(pane.Pane, "Cursor turn complete")
+			}, nil)
+			caller.must("pause", map[string]any{"instance_id": repaired})
+			if after := readRow(t, f.DBPath, id); !reflect.DeepEqual(after, failed) {
+				t.Fatal("repair rewrote failed launch")
+			}
+		})
 	}
 }

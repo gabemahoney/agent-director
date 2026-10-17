@@ -50,8 +50,13 @@ The enforced behavior and permission-list handling are owned by
 no Cursor session guidance.
 
 Cursor pre-trust never reports `ok`: `no_pre_trust` yields `skipped`, otherwise
-it yields `failed` with a warning and launch continues. No Cursor trust grant
-is made. Fresh launch and account limits are in
+the unsupported attempt yields `failed` with a warning and launch continues.
+No validated Cursor trust grant is made. Each spawn or reuse saves its own
+`no_pre_trust` choice; resume preserves it until the next spawn or reuse.
+Pre-trust reads or writes no Cursor authentication or configuration files,
+adds no policy bypass and approves no dialog. Reporting remains mandatory;
+neither outcome proves readiness or changes the applicable permission policy.
+Fresh launch and account limits are in
 [Usage](usage.md#fresh-cursor-use).
 
 ## What a Codex launch carries

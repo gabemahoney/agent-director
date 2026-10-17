@@ -532,6 +532,8 @@ func formatJsonlAttempts(attempts []jsonlAttempt) string {
 //     effort: the outcome never changes resume's control flow or error, and a
 //     failure prints the "pre-trust failed" line and the launch proceeds.
 //     The outcome is reported as ResumeResult.PreTrust on success.
+//     Cursor reports failed (ACP pre-trust unsupported, no grant), or skipped
+//     for the stored opt-out; its permission policy is unchanged.
 //  6. The move to pending (MoveToPending): one conditional write with the
 //     snapshot of the row as read, the launch start from one read of now in
 //     milliseconds, the token, the socket, the parent id re-derived from
@@ -743,9 +745,11 @@ func launchInProgressError(row Spawn) error {
 		ErrSpawnNotResumable, row.InstanceID, began, next)
 }
 
-// Resume relaunches a finished (ended/missing) row by launching
-// `claude --resume` in a fresh tmux session pointed at the same JSONL
-// transcript. The instance_id is preserved; the result returns it and
+// Resume relaunches a finished (ended/missing) row's latest conversation in a
+// fresh tmux session using its saved agent, arguments and transcript.
+// Cursor loads the saved latest session asynchronously, with no fresh fallback;
+// returning does not confirm runtime, load or requested mode success.
+// The instance_id is preserved; the result returns it and
 // pre_trust (what the launch's pre-trust did: ok, skipped or failed). A
 // finished row is not proof that its agent is dead: missing is the sweep's
 // judgement on the evidence available to it, not proof that the agent has
@@ -791,13 +795,12 @@ func launchInProgressError(row Spawn) error {
 // touched. Only a holder that vanished before that lookup gives
 // ErrTmuxSessionCreate.
 //
-// Before its launch, Resume pre-trusts the row's working directory (marks it
-// trusted in the .claude.json file of the row's CLAUDE_CONFIG_DIR, or
-// ~/.claude.json) so the agent skips Claude Code's folder-trust prompt, as a
-// spawn does, unless the row's latest spawn turned pre-trust off
-// (SpawnParams.NoPreTrust); then nothing is pre-trusted on every resume of
-// the id until the next spawn or reuse, and pre_trust is skipped. A pre-trust failure never fails the
-// launch. A resume refused before its move to pending writes no trust entry.
+// Before its launch, Resume runs the same agent-specific best-effort pre-trust
+// step as spawn. Claude writes folder trust; Codex carries it in argv. Cursor
+// ACP pre-trust is unsupported and reports failed without a grant. If the row's
+// latest spawn turned pre-trust off (SpawnParams.NoPreTrust), every resume
+// skips pre-trust until the next spawn or reuse. A pre-trust failure never
+// fails the launch. A resume refused before its move to pending writes no trust entry.
 //
 // A row whose stored extra env sets HOME, by the key HOME or by a key such as
 // "HOME=/x" whose name before the first '=' (the name tmux sets) is HOME

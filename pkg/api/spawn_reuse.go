@@ -260,6 +260,8 @@ func reuseLostRace(rs reuseStore, instanceID string, examined RowSnapshot) error
 //     argv was built for it), printing the one warning only for failed.
 //     Best effort: it never refuses, and its outcome is the result's
 //     pre_trust.
+//     Cursor carries failed (unsupported, no grant), or skipped for this
+//     request's NoPreTrust. Conditional failure restore retains the old choice.
 //  6. One reading of the Client clock: the fresh row's started_at and
 //     last_seen_at, and its launch start in milliseconds.
 //  7. The reset (ResetForReuse), conditional on the row still being finished

@@ -24,6 +24,8 @@ type SpawnResult struct {
 	InstanceID string `json:"instance_id"`
 	// PreTrust is what the launch's folder-trust pre-trust did, always one
 	// of three values (SR-22.6):
+	// Cursor grants no trust: failed by default (ACP pre-trust unsupported),
+	// skipped with NoPreTrust; never ok. Permission policy is independent.
 	//   - "ok": the folder trust took effect (a claude agent: the entry was
 	//     written to .claude.json; a codex agent: the launch carries the
 	//     folder trust and the hook-trust bypass).
@@ -192,8 +194,11 @@ func hasControlChar(id string) bool {
 // the launch's
 // folder-trust pre-trust did: ok, skipped or failed; a failure never fails
 // the spawn) without waiting for the agent; the row is pending from its
-// insert until the agent reports in (its SessionStart hook), then
-// waiting. Use [Client.Status] or [Client.Get] to observe progress. The
+// insert until the agent reports in (Cursor: verified first prompt), then
+// waiting. Cursor initialization, session creation and requested mode validation
+// happen asynchronously; this result confirms none of them. Later runtime
+// failure is reported in the pane and ad.cursor.failed; missing still requires
+// independent process evidence. Use [Client.Status] or [Client.Get] to observe progress. The
 // session is labelled for this launch when it is created, and the
 // session-creating call is bounded by the create timeout. If it times out,
 // Spawn returns ErrTmuxUnresponsive (UNAVAILABLE, transient): the session may

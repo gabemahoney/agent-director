@@ -180,8 +180,11 @@ switching reuse, which starts fresh and resumes nothing. JSON omits
 `.PreTrust` is
 `"ok"`, `"skipped"` or `"failed"`: what the folder-trust pre-trust did, for
 the selected agent (a failed pre-trust never fails the spawn; see the
-`SpawnResult.PreTrust` godoc and
-[docs/settings.md](../../docs/settings.md#pre-trust-for-codex)). Most-likely sentinel errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
+`SpawnResult.PreTrust` godoc,
+[Codex pre-trust](../../docs/settings.md#pre-trust-for-codex) and
+[Cursor launch settings](../../docs/settings.md#cursor-launch-settings)).
+Cursor reports `failed` for unsupported pre-trust or `skipped` for the saved
+opt-out, never a validated `ok`. Neither outcome proves readiness. Most-likely sentinel errors: `ErrCwdNotFound`, `ErrCwdNotADirectory`,
 `ErrRelayModeInvalid`, `ErrTmuxNotAvailable`, `ErrTmuxSessionCreate`,
 `ErrTmuxUnresponsive` and `ErrTmuxSessionConflict`. Timeout and held-name
 recovery are owned by the [caller contract](../../docs/caller-contract.md#caller-contract)

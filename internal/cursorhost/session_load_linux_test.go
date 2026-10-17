@@ -206,6 +206,7 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 		reply     string
 	}{
 		{"unsupported", false, ``},
+		{"explicitly disabled", false, ``},
 		{"missing native", true, ``},
 		{"null", true, `{"result":null}`},
 		{"array", true, `{"result":[]}`},
@@ -217,6 +218,9 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 			var protected cursorfix.GatewayHistory
 			var currentPrefix []byte
 			c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: tc.supported, LoadReply: json.RawMessage(tc.reply)}, "must not dispatch", terminalLoop, func(e *requestEnv) {
+				if tc.name == "explicitly disabled" {
+					e.runtime.Configure(t, cursorfix.Scenario{InitializeReply: json.RawMessage(`{"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}`)})
+				}
 				if tc.name != "missing native" {
 					return
 				}

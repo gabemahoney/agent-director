@@ -51,7 +51,15 @@ tmux -u -S '<socket>' kill-pane -t '<pane id>'
 Cursor failure reasons and the latest-resume/fresh-instance recovery boundary are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Use the
 same inspection and ownership procedures above for a Cursor launch. A
-transport failure alone does not authorize deleting a row or adopting an
+process-start reason naming an unavailable executable or cwd calls for checking
+the selected [`cursor_path`](configuration.md) and project directory; an
+operating-system permission denial calls for checking executable and project
+directory permissions. A structured authentication-required reason calls for
+checking the selected runtime's existing login; it does not authorize AD to
+sign in, sign out or change credentials. An unknown reason does not establish
+an authentication or configuration fault. Resolve surviving work using the
+steps above before the caller contract's explicit fresh-instance procedure.
+A transport failure alone does not authorize deleting a row or adopting an
 unrelated process. Public `get`, `status` and scoped `list` can reconcile a lost
 gateway, including one lost before runtime registration; their scope, binding
 conflict refusals and `ErrStoreBusy` behavior are in the

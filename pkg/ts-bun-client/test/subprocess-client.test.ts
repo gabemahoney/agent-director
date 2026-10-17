@@ -90,3 +90,20 @@ test.each([
     expect(argv.join("\n")).not.toContain(os.homedir());
   });
 });
+
+// The CLI stand-in holds a configured pause past the default launch budget.
+test("an explicitly configured long pause keeps its larger client budget", async () => {
+  const cli = path.join(tmp, `${crypto.randomUUID()}-long-pause.sh`);
+  fs.writeFileSync(cli, `#!/bin/sh
+case " $* " in
+  *" version "*) printf '{"version":"0.0.0-dev","commit":"pause-fixture"}\\n';;
+  *" pause "*) sleep 31; printf '{}\\n';;
+  *) exit 71;;
+esac
+`, { mode: 0o700 });
+  using client = await openClient(path.join(tmp, `${crypto.randomUUID()}.db`), { _cliPath: cli, callTimeoutMs: 45_000 });
+  const started = performance.now();
+  expect(await client.pause({ instance_id: "synthetic-long-pause" })).toEqual({});
+  expect(performance.now() - started).toBeGreaterThanOrEqual(30_000);
+  expect(performance.now() - started).toBeLessThan(45_000);
+}, 50_000);

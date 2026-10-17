@@ -899,11 +899,14 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 		case writeErr := <-protocol.writes:
 			if writeErr != nil {
-				return writeErr
+				return fmt.Errorf("Cursor ACP %s transport write failed; delivery unconfirmed", acpOperation(protocol.pendingMethod))
 			}
 		case next := <-protocol.frames:
 			if next.err != nil {
-				return fmt.Errorf("Cursor ACP transport failed; child termination must be confirmed separately")
+				if errors.Is(next.err, errMalformedACPFrame) {
+					return fmt.Errorf("Cursor ACP %s received a malformed frame", acpOperation(protocol.pendingMethod))
+				}
+				return fmt.Errorf("Cursor ACP %s transport failed; child termination must be confirmed separately", acpOperation(protocol.pendingMethod))
 			}
 			f := next.frame
 			if err = VerifyRuntime(rep.binding, false); err != nil {
@@ -1137,21 +1140,15 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if options.LoadSession != "" && (!cancelAt.IsZero() || !inputs.current(loadEpoch)) {
 					return fmt.Errorf("Cursor initialization retired by control")
 				}
-				var init struct {
-					Version      int             `json:"protocolVersion"`
-					Capabilities json.RawMessage `json:"agentCapabilities"`
-				}
-				if json.Unmarshal(raw, &init) != nil || init.Version != 1 || len(init.Capabilities) == 0 {
-					return fmt.Errorf("Cursor runtime does not support ACP protocol 1")
+				loadSupported, e := initializeCapabilities(raw)
+				if e != nil {
+					return e
 				}
 				method := "session/new"
 				params := map[string]any{"cwd": row.CWD, "mcpServers": []any{}}
 				phase = "new"
 				if options.LoadSession != "" {
-					var capabilities struct {
-						Load bool `json:"loadSession"`
-					}
-					if json.Unmarshal(init.Capabilities, &capabilities) != nil || !capabilities.Load {
+					if !loadSupported {
 						return fmt.Errorf("Cursor runtime does not support session/load")
 					}
 					method, phase = "session/load", "load"

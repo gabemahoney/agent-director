@@ -87,6 +87,8 @@ export interface ClientOptions {
   logger?: Logger;
   /**
    * Per-call timeout for the subprocess Client, in milliseconds. Default: 30000 (30 s).
+   * Cursor launch returns before ACP readiness; initialize and session creation/load
+   * have separate 45 s bounds. Generation or an unanswered dialog is not the launch call.
    *
    * When a subprocess call exceeds this threshold the Client sends SIGTERM,
    * waits up to 2 seconds for a graceful exit, then sends SIGKILL. The
@@ -400,7 +402,9 @@ export interface SpawnParams {
    * folder-trust entry (into `<CLAUDE_CONFIG_DIR>/.claude.json` when `extra_env` sets
    * `CLAUDE_CONFIG_DIR`, otherwise `~/.claude.json`). For a codex agent, it is putting the
    * folder trust and the hook-trust bypass on the launch's command line (no file is
-   * written). The choice is recorded on the row until the next spawn or reuse,
+   * written). Cursor grants no trust: default false reports `failed` (ACP
+   * pre-trust unsupported); true reports `skipped`. Permission policy is independent.
+   * The choice is recorded on the row until the next spawn or reuse,
    * and every `resume` follows it. The result then reports
    * `pre_trust: "skipped"`. Default false.
    */
@@ -424,13 +428,18 @@ export interface SpawnParams {
 
 /**
  * The launch result. The row is `pending` from its insert until
- * the agent reports in (its SessionStart hook), then `waiting`.
+ * the agent reports in (Cursor: verified first prompt), then `waiting`.
+ * Cursor initialization, session creation and requested mode validation happen
+ * asynchronously. This result does not confirm them; later failure appears in
+ * the pane and ad.cursor.failed. Missing still requires process evidence.
  */
 export interface SpawnResult {
   /** The id the new Spawn is tracked under. */
   instance_id: string;
   /**
-   * What the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
+   * Cursor grants no trust: `"failed"` by default (ACP pre-trust unsupported),
+   * `"skipped"` with `no_pre_trust`; never `"ok"`. Permission policy is independent.
+   * For Claude/Codex, what the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
    * (claude: the entry was written to `.claude.json`; codex: the launch carries the folder
    * trust and the hook-trust bypass). `"skipped"`: pre-trust was off for this launch because the caller passed
    * `no_pre_trust`; nothing was attempted. `"failed"`: pre-trust was attempted and the
@@ -894,14 +903,19 @@ export interface ResumeParams {
  * are re-encoded, only when needed to preserve their original parsed meaning;
  * otherwise their order and spelling survive. Stored agent_args are unchanged.
  * Resume moved the row to `pending`, keeping
- * its session id and history, until the agent reports in (its SessionStart hook),
+ * its session id and history, until the agent reports in (Cursor: verified first prompt),
  * then `waiting`.
+ * Cursor loads the latest saved session asynchronously with no fresh fallback;
+ * returning does not confirm runtime, load or requested mode success.
  */
 export interface ResumeResult {
   /** Same id that was passed in (resume preserves it). */
   instance_id: string;
   /**
-   * What the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
+   * Cursor grants no trust: `"failed"` by default (ACP pre-trust unsupported),
+   * `"skipped"` with the stored opt-out; never `"ok"`. Resume preserves that choice
+   * until the next spawn or reuse. Permission policy is independent.
+   * For Claude/Codex, what the launch's folder-trust pre-trust did. `"ok"`: the folder trust took effect
    * (claude: the entry was written to `.claude.json`; codex: the launch carries the folder
    * trust and the hook-trust bypass). `"skipped"`: pre-trust was off for this launch because the row records that
    * the row's latest spawn turned it off (`no_pre_trust`); nothing was attempted.

@@ -343,3 +343,67 @@ func TestIndependentCursorWorkerSurvivesRuntimeTermination(t *testing.T) {
 	}
 	awaitProcessGone(t, workerPID)
 }
+
+func TestCursorExecStartCauseAndLiteralRepair(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"missing executable", "executable or working directory unavailable; check cursor_path and project cwd"},
+		{"missing cwd", "executable or working directory unavailable; check cursor_path and project cwd"},
+		{"permission", "start denied by the operating system; check executable and project directory permissions"},
+		{"unknown", "could not start; cause unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := cursorfix.New(t)
+			program, cwd := r.Program, t.TempDir()
+			switch tc.name {
+			case "missing executable":
+				program += "-absent"
+			case "missing cwd":
+				cwd += "/absent"
+			case "permission":
+				if err := os.Chmod(program, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "unknown":
+				if err := os.WriteFile(program, []byte("SYNTHETIC-SECRET\nlogin required\x1b"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p, err := startProcess(program, nil, cwd)
+			if p != nil || err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "SYNTHETIC-SECRET") || strings.Contains(err.Error(), program) || strings.ContainsAny(err.Error(), "\n\r\x1b") {
+				t.Fatalf("start=%v err=%v", p, err)
+			}
+			if tc.name == "unknown" {
+				return
+			}
+			// Follow the actual path/cwd/permission advice against the synthetic runtime.
+			program = r.Program
+			cwd = t.TempDir()
+			if err := os.Chmod(program, 0700); err != nil {
+				t.Fatal(err)
+			}
+			p, err = startProcess(program, []string{"acp"}, cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.terminate()
+			defer p.input.Close()
+			defer p.output.Close()
+			rpc := newProtocol(p.input, p.output)
+			defer rpc.close()
+			if _, err = rpc.request("initialize", map[string]any{"protocolVersion": 1}); err != nil {
+				t.Fatal(err)
+			}
+			f := nextFrame(t, rpc)
+			if f.err != nil {
+				t.Fatal(f.err)
+			}
+			raw, err := rpc.response(f.frame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = initializeCapabilities(raw); err != nil {
+				t.Fatalf("literal repair failed: %v", err)
+			}
+		})
+	}
+}
