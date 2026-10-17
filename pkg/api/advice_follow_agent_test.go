@@ -3,7 +3,7 @@ package api_test
 // advice_follow_agent_test.go follows, literally, the advice the agent
 // refusals give (SR-4.4, SR-14.4): trigger the refusal, pin its description,
 // do what it says as an automated caller would, and check the promised
-// outcome. A claude and a codex agent that pass every check both launch
+// outcome. A supported agent that pass every check both launch
 // (SR-5.1, SR-5.5). The refusals
 // and their order are covered in spawn_agent_test.go and
 // make_template_agent_test.go.
@@ -27,8 +27,8 @@ type advAgentFollow struct {
 	agent string // the agent the followed spawn launches
 }
 
-// advAgentFollows are the two agents a caller can follow the advice with.
-var advAgentFollows = []advAgentFollow{{"claude", "claude"}, {"codex", "codex"}}
+// advAgentFollows are the three agents a caller can follow the advice with.
+var advAgentFollows = []advAgentFollow{{"claude", "claude"}, {"codex", "codex"}, {"cursor", "cursor"}}
 
 // advAgentSpawn runs p on env, expecting the followed spawn's outcome for agent: one create launching it and a
 // pending row recording it.
@@ -42,8 +42,15 @@ func advAgentSpawn(t *testing.T, env spawnEnv, p api.SpawnParams, agent string) 
 		assertCodexLaunch(t, env.rec.SocketCallsOf(tmux.CallCreate), env.dbPath, res.InstanceID, codexProgram)
 		return
 	}
-	if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Command[0] != "claude" {
-		t.Errorf("creates = %+v; want one, launching claude", creates)
+	if agent == "cursor" {
+		creates := env.rec.SocketCallsOf(tmux.CallCreate)
+		if len(creates) != 1 || len(creates[0].Command) < 2 || creates[0].Command[1] != "cursor-host" {
+			t.Fatalf("followed Cursor advice did not launch gateway: %+v", creates)
+		}
+	} else {
+		if creates := env.rec.SocketCallsOf(tmux.CallCreate); len(creates) != 1 || creates[0].Command[0] != "claude" {
+			t.Errorf("creates = %+v; want one, launching claude", creates)
+		}
 	}
 	if cols, err := apitest.ReadSpawnColumns(env.dbPath, res.InstanceID); err != nil || cols.Agent != agent || cols.State != store.StatePending {
 		t.Errorf("row {agent %v, state %v}, %v; want pending, agent %s", cols.Agent, cols.State, err, agent)
@@ -51,9 +58,9 @@ func advAgentSpawn(t *testing.T, env spawnEnv, p api.SpawnParams, agent string) 
 }
 
 // TestAdviceFollow_A16_AgentMissingPassAgent: a spawn naming no agent whose template names none is refused;
-// passing agent claude or codex, as the advice says, launches; so does putting the
+// passing agent claude, codex or cursor, as the advice says, launches; so does putting the
 // agent in the template.
-// A16 (SR-4.4): "pass agent claude or codex (--agent on the CLI), or put agent in the template"
+// A16 (SR-4.4): "pass agent claude, codex or cursor (--agent on the CLI), or put agent in the template"
 func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	adviceAssertGoDoc(t, "spawn.go", "Spawn", "ErrAgentMissing: the call gives no Agent and its template names none")
@@ -88,9 +95,9 @@ func TestAdviceFollow_A16_AgentMissingPassAgent(t *testing.T) {
 }
 
 // TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex: a spawn naming an agent that is neither claude nor codex
-// (any other word, or another case) is refused with its value quoted; the call again with claude or codex, as
+// (any other word, or another case) is refused with its value quoted; the call again with claude, codex or cursor, as
 // the advice says, launches.
-// A17 (SR-4.4): "agent \"gemini\" (want claude or codex)"
+// A17 (SR-4.4): "agent \"gemini\" (want claude, codex or cursor)"
 func TestAdviceFollow_A17_AgentInvalidNameClaudeOrCodex(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	for _, bad := range []string{"gemini", "Claude", "CODEX"} {
@@ -155,8 +162,10 @@ func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 	}{
 		{"add claude", "claude", apitest.TemplateFields{Agent: "claude", AgentArgs: broken.AgentArgs}},
 		{"add codex", "codex", apitest.TemplateFields{Agent: "codex", AgentArgs: broken.AgentArgs}},
+		{"add cursor", "cursor", apitest.TemplateFields{Agent: "cursor", AgentArgs: broken.AgentArgs}},
 		{"remove agent_args, the call names claude", "claude", apitest.TemplateFields{}},
 		{"remove agent_args, the call names codex", "codex", apitest.TemplateFields{}},
+		{"remove agent_args, the call names cursor", "cursor", apitest.TemplateFields{}},
 	}
 	for _, fix := range fixes {
 		t.Run(fix.name, func(t *testing.T) {
@@ -175,9 +184,9 @@ func TestAdviceFollow_A19_TemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 }
 
 // TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs: make-template with agent_args and no agent is
-// refused and writes no templates dir; passing agent claude or codex, or removing agent_args, as the advice
+// refused and writes no templates dir; passing agent claude, codex or cursor, or removing agent_args, as the advice
 // says, saves the template.
-// A20 (SR-4.4): "pass agent claude or codex, or remove agent_args"
+// A20 (SR-4.4): "pass agent claude, codex or cursor, or remove agent_args"
 func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.T) {
 	// Serial: it sets HOME with t.Setenv.
 	adviceAssertGoDoc(t, "make_template.go", "MakeTemplate", "ErrTemplateAgentMissing")
@@ -188,6 +197,7 @@ func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.
 	}{
 		{"pass claude", func(p *api.MakeTemplateParams) { p.Agent = "claude" }, config.TemplateFile{Agent: "claude", AgentArgs: []string{"--model", "x"}}},
 		{"pass codex", func(p *api.MakeTemplateParams) { p.Agent = "codex" }, config.TemplateFile{Agent: "codex", AgentArgs: []string{"--model", "x"}}},
+		{"pass cursor", func(p *api.MakeTemplateParams) { p.Agent = "cursor" }, config.TemplateFile{Agent: "cursor", AgentArgs: []string{"--model", "x"}}},
 		{"remove agent_args", func(p *api.MakeTemplateParams) { p.AgentArgs = nil }, config.TemplateFile{}},
 	}
 	for _, fix := range fixes {
@@ -219,7 +229,7 @@ func TestAdviceFollow_A20_MakeTemplateAgentMissingAddAgentOrDropArgs(t *testing.
 // A21 (SR-5.5): "a codex agent takes no allow, deny or ask entries; set permission rules in the rules/ folder of the group's Codex folder and use Codex's own permission controls"
 func TestAdviceFollow_A21_PermissionsUnsupportedDropTheLists(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	adviceAssertGoDoc(t, "spawn.go", "Spawn", "ErrPermissionsUnsupported: a codex spawn carries Permissions")
+	adviceAssertGoDoc(t, "spawn.go", "Spawn", "ErrPermissionsUnsupported: a codex or cursor spawn carries Permissions")
 	entry := []string{"Bash(ls)"}
 	cases := []struct {
 		name string

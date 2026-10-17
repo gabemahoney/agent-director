@@ -12,50 +12,74 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 )
 
-// CursorArgs deliberately supports the small fresh-launch subset. Everything
-// else is refused before writing a row, rather than silently changing policy.
+// CursorArgs validates the same interpretation used by the private gateway.
 func CursorArgs(args []string) (runtime []string, prompt string, err error) {
+	runtime, prompt, _, err = CursorLaunchArgs(args)
+	return
+}
+
+// CursorLaunchArgs extracts startup behavior from runtime argv. Explicit mode
+// is configured through ACP, because the verified runtime ignores mode flags
+// before acp. Model identifiers pass through without a catalog or substitution.
+func CursorLaunchArgs(args []string) (runtime []string, prompt, mode string, err error) {
 	for _, token := range args {
 		if strings.IndexByte(token, 0) >= 0 || !utf8.ValidString(token) {
-			return nil, "", fmt.Errorf("%w: invalid Cursor argument", ErrSpawnDeniedFlag)
+			return nil, "", "", fmt.Errorf("%w: invalid Cursor argument", ErrSpawnDeniedFlag)
 		}
 	}
-	for i := 0; i < len(args); i++ {
-		token := args[i]
-		if strings.IndexByte(token, 0) >= 0 || !utf8.ValidString(token) {
-			return nil, "", fmt.Errorf("%w: invalid Cursor argument", ErrSpawnDeniedFlag)
+	read := ReadCursorArgs(args)
+	for _, o := range read.Options {
+		fail := func(reason string) ([]string, string, string, error) {
+			advice := "remove this argument and retry"
+			if len(o.ValueIndices) > 0 {
+				advice = "remove this option and its following value, then retry"
+			}
+			return nil, "", "", fmt.Errorf("%w: %s (%s); %s", ErrSpawnDeniedFlag, o.Name, reason, advice)
 		}
-		key, value, equals := strings.Cut(token, "=")
-		switch key {
-		case "--model", "-m":
-			if !equals {
-				i++
-				if i >= len(args) {
-					return nil, "", fmt.Errorf("%w: %s requires a value", ErrSpawnDeniedFlag, key)
-				}
-				value = args[i]
+		switch o.Canonical {
+		case "--model", "--mode":
+			if len(o.Values) != 1 || o.Values[0] == "" || strings.HasPrefix(o.Values[0], "-") {
+				return fail("requires a value")
 			}
-			if value == "" || strings.HasPrefix(value, "-") {
-				return nil, "", fmt.Errorf("%w: %s requires a model", ErrSpawnDeniedFlag, key)
+			if o.Canonical == "--model" {
+				runtime = append(runtime, "--model", o.Values[0])
+				continue
 			}
-			runtime = append(runtime, "--model", value)
+			if !CursorMode(o.Values[0]) {
+				return fail("unsupported Cursor mode")
+			}
+			if mode != "" && mode != o.Values[0] {
+				return fail("conflicting Cursor modes")
+			}
+			mode = o.Values[0]
+		case "--plan":
+			if len(o.Values) != 0 {
+				return fail("does not take a value")
+			}
+			if mode != "" && mode != "plan" {
+				return fail("conflicting Cursor modes")
+			}
+			mode = "plan"
 		default:
-			// A single positional initial prompt is submitted through ACP exactly
-			// once. It must not become a runtime subcommand or operating-mode flag.
-			if key == "--" && !equals && i+1 < len(args) && i+2 == len(args) {
-				prompt = args[i+1]
-				i++
-				continue
-			}
-			if !strings.HasPrefix(token, "-") && len(args)-i == 1 && prompt == "" && token != "acp" && token != "resume" && token != "chat" {
-				prompt = token
-				continue
-			}
-			return nil, "", fmt.Errorf("%w: %s (unsupported Cursor argument)", ErrSpawnDeniedFlag, key)
+			return fail("unsupported Cursor argument")
 		}
 	}
-	return runtime, prompt, nil
+	if len(read.Positionals) > 1 || (read.DoubleDash >= 0 && (read.DoubleDash != len(args)-2 || len(read.Positionals) != 1 || read.Positionals[0] != read.DoubleDash+1)) {
+		return nil, "", "", fmt.Errorf("%w: Cursor requires one initial prompt; supply it as one argument after --", ErrSpawnDeniedFlag)
+	}
+	if len(read.Positionals) == 1 {
+		p := read.Positionals[0]
+		if read.DoubleDash < 0 && (p != len(args)-1 || args[p] == "acp" || args[p] == "chat" || args[p] == "resume") {
+			return nil, "", "", fmt.Errorf("%w: unsupported Cursor operand; use -- before a literal initial prompt", ErrSpawnDeniedFlag)
+		}
+		prompt = args[p]
+	}
+	return runtime, prompt, mode, nil
 }
+
+// CursorMode names the modes observed on the verified ACP candidate. Runtime
+// availability is checked again against each new or loaded session's modes.
+func CursorMode(mode string) bool { return mode == "agent" || mode == "plan" || mode == "ask" }
 
 func RefuseCursorPermissions(allow, deny, ask []string) error {
 	if len(allow)+len(deny)+len(ask) == 0 {
@@ -94,7 +118,7 @@ func composeCursorCommand(r Resolved, cfg config.Config) ([]string, error) {
 	if program == "" {
 		program = "agent"
 	}
-	args, prompt, err := CursorArgs(r.AgentArgs)
+	args, prompt, mode, err := CursorLaunchArgs(r.AgentArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -102,5 +126,9 @@ func composeCursorCommand(r Resolved, cfg config.Config) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []string{exe, "cursor-host", "--runtime", program, "--runtime-args", string(encoded), "--initial-prompt", prompt}, nil
+	command := []string{exe, "cursor-host", "--runtime", program, "--runtime-args", string(encoded), "--initial-prompt", prompt}
+	if mode != "" {
+		command = append(command, "--requested-mode", mode)
+	}
+	return command, nil
 }

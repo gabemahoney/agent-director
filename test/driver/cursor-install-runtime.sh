@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # E5 Task1 composes the existing installer and synthetic Cursor public helpers.
+ir_harness=${AGENT_DIRECTOR_TEST_HARNESS:-}
+for ir_env_key in "${!AGENT_DIRECTOR_@}"; do unset "$ir_env_key"; done
+unset TMUX TMUX_PANE GIT_CONFIG_GLOBAL
+export AGENT_DIRECTOR_TEST_HARNESS=$ir_harness
 source /work/source/test/driver/cursor-resume-life.sh
+export GIT_CONFIG_GLOBAL="$case_dir/gitconfig"
+: > "$GIT_CONFIG_GLOBAL"
 
 ir_install() {
  trap ir_install_exit EXIT
@@ -71,8 +77,11 @@ ir_launch() {
  local surface=$1 call=$2 params=$3
  if [[ $surface != CLI ]]; then pc_public "$surface" "$call" "$params"
  elif [[ $call == resume ]]; then rl_public CLI resume
- elif [[ $(jq -r .reuse_finished <<<"$params") == true ]]; then rl_reuse_call CLI cursor
- else ad spawn --instance-id "$id" --agent cursor --cwd "$case_dir/cwd" --no-pre-trust
+ elif [[ $(jq -r .reuse_finished <<<"$params") == true ]]; then rl_reuse_call CLI cursor "$(jq -c '.agent_args // []' <<<"$params")"
+ else
+  local values=()
+  mapfile -d '' -t values < <(jq -j '.agent_args[]? | ., "\u0000"' <<<"$params")
+  ad spawn --instance-id "$id" --agent cursor --cwd "$case_dir/cwd" --no-pre-trust -- "${values[@]}"
  fi
 }
 
@@ -140,6 +149,60 @@ ir_waiting() {
  # launches whose transcript differs from the stopped seed's retained path.
  pc_ready 1
 }
+
+# Task2 assembled effects stay in this collector; token/protocol edge matrices are units.
+ir_task2() {
+ local surface=$1 args params saved_args prompt=$'--resume\n多行 🦋'
+ id="mode-$id"
+ jq -cn --arg session "session-$id" '{sessionId:$session,loadSupport:true,modes:{currentModeId:"agent",availableModes:[{id:"agent",name:"Agent"},{id:"plan",name:"Plan"},{id:"ask",name:"Ask"}]}}' > "$case_dir/scenario"
+ : > "$case_dir/trace.jsonl"
+ : > "$case_dir/raw"
+ : > "$case_dir/sent.jsonl"
+ args=$(jq -cn --arg prompt "$prompt" '["--model=opaque/account","--plan","--",$prompt]')
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" --argjson args "$args" '{instance_id:$id,agent:"cursor",cwd:$cwd,no_pre_trust:true,agent_args:$args}')
+ ir_launch "$surface" spawn "$params" > "$case_dir/public.json"
+ check task2.initial-completion wait_until ir_task2_completed 1
+ check task2.fresh-mode-order frames_task2_order fresh
+ saved_args=$(sql "SELECT agent_args FROM spawns WHERE instance_id='$id';")
+ rl_public "$surface" pause >/dev/null
+ ir_launch "$surface" resume "$(jq -cn --arg id "$id" '{instance_id:$id}')" > "$case_dir/public.json"
+ check task2.saved-initial-completion wait_until ir_task2_completed 2
+ check task2.resume-mode-order frames_task2_order resume
+ check task2.saved-args-retained test "$(sql "SELECT agent_args FROM spawns WHERE instance_id='$id';")" = "$saved_args"
+ rl_public "$surface" pause >/dev/null
+ jq --arg session "reuse-$id" '.sessionId=$session' "$case_dir/scenario" > "$case_dir/scenario-next"
+ mv "$case_dir/scenario-next" "$case_dir/scenario"
+ args='["--mode=ask","replacement prompt"]'
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" --argjson args "$args" '{instance_id:$id,agent:"cursor",cwd:$cwd,no_pre_trust:true,reuse_finished:true,agent_args:$args}')
+ ir_launch "$surface" spawn "$params" > "$case_dir/public.json"
+ check task2.reuse-completion wait_until ir_task2_completed 1
+ check task2.exact-prompts frames_task2_prompts "$prompt"
+ check task2.authoritative-modes frames_task2_modes
+ rl_public "$surface" pause >/dev/null
+ local accepted_id=$id
+ id="refused-$id"
+ params=$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" '{instance_id:$id,agent:"cursor",cwd:$cwd,no_pre_trust:true,agent_args:["acp","--"]}')
+ if ir_launch "$surface" spawn "$params" > "$case_dir/refusal-out" 2> "$case_dir/refusal-error"; then echo 'malformed Cursor delimiter launched' >&2; return 1; fi
+ check task2.static-named-refusal grep -qF ErrSpawnDeniedFlag "$case_dir/refusal-error"
+ check task2.static-no-row test "$(sql "SELECT count(*) FROM spawns WHERE instance_id='$id';")" = 0
+ id=$accepted_id
+ ir_task2_ran=true
+ pc_export_evidence
+}
+ir_task2_completed() {
+ local path
+ path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$id';")
+ [[ -n $path && -f $path && $(row_state) == waiting ]] || return 1
+ [[ $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$path") == "$1" ]] || return 1
+ ad read-pane --instance-id "$id" --n-lines 200 | jq -e '.pane|contains("Cursor turn complete")' >/dev/null
+}
+frames_task2_order() {
+ local want='["initialize","session/new","session/set_mode","session/prompt"]'
+ if [[ $1 == resume ]]; then want='["initialize","session/new","session/set_mode","session/prompt","initialize","session/load","session/set_mode","session/prompt"]'; fi
+ frames | jq -se --argjson want "$want" '[.[]|select(has("method"))|.method]==$want' >/dev/null
+}
+frames_task2_prompts() { frames | jq -se --arg prompt "$1" '[.[]|select(.method=="session/prompt")|.params.prompt[0].text]==[$prompt,$prompt,"replacement prompt"]' >/dev/null; }
+frames_task2_modes() { frames | jq -se '[.[]|select(.method=="session/set_mode")|.params.modeId]==["plan","plan","ask"] and ([.[]|select(.method=="session/new")]|length)==2 and ([.[]|select(.method=="session/load")]|length)==1' >/dev/null; }
 ir_finish() {
- jq -cn --arg case "$1" --arg id "$id" '{case:$case,status:"pass",checks:["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"],provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id}}'
+ jq -cn --arg case "$1" --arg id "$id" --argjson task2 "${ir_task2_ran:-false}" '{case:$case,status:"pass",checks:(["current-runtime-effect","no-config-rewrite","saved-resume-values-or-fresh-conversation","bad-path-never-falls-back"]+(if $task2 then ["Task2-AC2-AC3-AC7-SR1.2","authoritative-fresh-load-reuse-modes","saved-initial-exact-once-per-launch","static-refusal-no-row"] else [] end)),provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",authenticated_cursor:false,native_capture:false},facts:{instance_id:$id,task2:$task2}}'
 }

@@ -21,8 +21,8 @@ import (
 // The make-template descriptions that open each refusal.
 const (
 	mtRelayStart      = `ErrTemplateMalformed: relay_mode "maybe" (want on/off)`
-	mtAgentStart      = `ErrTemplateMalformed: agent "gemini" (want claude or codex)`
-	mtAgentMissingTxt = "ErrTemplateAgentMissing: agent_args are set but no agent is given; pass agent claude or codex, or remove agent_args"
+	mtAgentStart      = `ErrTemplateMalformed: agent "gemini" (want claude, codex or cursor)`
+	mtAgentMissingTxt = "ErrTemplateAgentMissing: agent_args are set but no agent is given; pass agent claude, codex or cursor, or remove agent_args"
 	mtReservedHome    = `ErrReservedEnvKey: extra_env key "HOME" sets HOME, which is reserved: `
 )
 
@@ -52,8 +52,10 @@ func TestMakeTemplateAgentCheckOrder(t *testing.T) {
 		{"cursor allow", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Allow: []string{"Bash"}}}},
 		{"cursor deny", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Deny: []string{"Bash"}}}},
 		{"cursor ask", "ErrPermissionsUnsupported", "ErrPermissionsUnsupported:", api.MakeTemplateParams{Name: "n", Agent: "cursor", Permissions: &api.MakeTemplatePermissions{Ask: []string{"Bash"}}}},
+		{"cursor split flag before env", "ErrSpawnDeniedFlag", "ErrSpawnDeniedFlag: --sandbox", api.MakeTemplateParams{Name: "n", Agent: "cursor", AgentArgs: []string{"--sandbox", "sensitive-value"}, ExtraEnv: homeEnv}},
+		{"cursor malformed delimiter", "ErrSpawnDeniedFlag", "ErrSpawnDeniedFlag:", api.MakeTemplateParams{Name: "n", Agent: "cursor", AgentArgs: []string{"chat", "--mode", "plan", "--"}}},
 		{"a reserved env key with a valid agent", "ErrReservedEnvKey", mtReservedHome, api.MakeTemplateParams{Name: "n", Agent: "claude", ExtraEnv: homeEnv}},
-		{"an upper-case agent", "ErrTemplateMalformed", `ErrTemplateMalformed: agent "Claude" (want claude or codex)`, api.MakeTemplateParams{Name: "n", Agent: "Claude"}},
+		{"an upper-case agent", "ErrTemplateMalformed", `ErrTemplateMalformed: agent "Claude" (want claude, codex or cursor)`, api.MakeTemplateParams{Name: "n", Agent: "Claude"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -94,6 +96,8 @@ func TestMakeTemplateStoresTheAgent(t *testing.T) {
 		{"codex with an empty permissions struct", api.MakeTemplateParams{Agent: "codex", CWD: "/w", Permissions: &api.MakeTemplatePermissions{}},
 			config.TemplateFile{Agent: "codex", CWD: "/w", Permissions: &config.TemplatePermissions{}}, true, `agent = "codex"`},
 		{"cursor", api.MakeTemplateParams{Agent: "cursor", CWD: "/w", AgentArgs: args}, config.TemplateFile{Agent: "cursor", CWD: "/w", AgentArgs: args}, true, `agent = "cursor"`},
+		{"cursor mode and literal prompt", api.MakeTemplateParams{Agent: "cursor", AgentArgs: []string{"--plan", "--", "--resume\n多行 🦋"}}, config.TemplateFile{Agent: "cursor", AgentArgs: []string{"--plan", "--", "--resume\n多行 🦋"}}, true, `agent = "cursor"`},
+		{"cursor empty permission lists", api.MakeTemplateParams{Agent: "cursor", Permissions: &api.MakeTemplatePermissions{}}, config.TemplateFile{Agent: "cursor", Permissions: &config.TemplatePermissions{}}, true, `agent = "cursor"`},
 		{"no agent", api.MakeTemplateParams{CWD: "/w"}, config.TemplateFile{CWD: "/w"}, false, ""},
 	}
 	for _, tc := range cases {

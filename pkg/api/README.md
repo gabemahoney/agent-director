@@ -143,8 +143,11 @@ and no agent: give it one; `MakeTemplate` returns it too) and
 `ErrPermissionsUnsupported` (a `"codex"` or `"cursor"` spawn or template carrying an allow,
 deny or ask entry; `MakeTemplate` returns it too).
 
-`ErrSpawnDeniedFlag` refuses an `AgentArgs` entry the supervisor must own,
-before anything is written. Claude always refuses `--settings`,
+`ErrSpawnDeniedFlag` refuses an unsupported `AgentArgs` entry before anything
+is written; `MakeTemplate` returns it for unsupported Cursor arguments too.
+Cursor's supported model/mode/prompt forms and asynchronous configuration
+failures are in [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
+Claude always refuses `--settings`,
 `--output-format` and print (`--print`, `-p`, parsed clusters included).
 Session selectors and their owned values are refused except on a verified
 finished-agent switch, where they are removed from launch and storage and the

@@ -26,7 +26,7 @@ type MakeTemplateParams struct {
 	// CWD is an optional default working directory to bake into the template.
 	// Per-call cwd overrides at spawn time.
 	CWD string
-	// Agent is the template's agent, claude or codex (case-sensitive), or ""
+	// Agent is the template's agent, claude, codex or cursor (case-sensitive), or ""
 	// for none: no agent key is stored then. It is the agent the template's
 	// agent_args belong to and the agent a spawn that names none takes (SR-1.2,
 	// SR-2.1). Any other value is refused with ErrTemplateMalformed.
@@ -93,11 +93,12 @@ type MakeTemplateResult struct {
 //
 //   - Name safety: validated via config.ValidateTemplateName.
 //   - RelayMode (when non-empty) must be "on" or "off".
-//   - Agent (when non-empty) must be "claude" or "codex", else
+//   - Agent (when non-empty) must be "claude", "codex" or "cursor", else
 //     ErrTemplateMalformed; a non-empty AgentArgs with no Agent is
-//     ErrTemplateAgentMissing; a codex template with any allow, deny or ask
-//     entry is ErrPermissionsUnsupported (SR-1.4), in that order, after
-//     RelayMode and before ExtraEnv.
+//     ErrTemplateAgentMissing; Cursor arguments are validated with
+//     ErrSpawnDeniedFlag on refusal; a codex or cursor template with any allow,
+//     deny or ask entry is ErrPermissionsUnsupported (SR-1.4), in that order,
+//     after RelayMode and before ExtraEnv.
 //   - ExtraEnv: spawn's whole extra_env check (spawn.ValidateExtraEnv, bug
 //     b.66q), in spawn's order: a key that sets HOME, then one with the
 //     AGENT_DIRECTOR_ prefix, then one that is not a valid env-var name, all
@@ -212,20 +213,21 @@ func MakeTemplate(params MakeTemplateParams) (MakeTemplateResult, error) {
 }
 
 // validateTemplateAgent is make-template's agent checks, in SR-1.4's order
-// (steps 3 to 5): a value other than claude or codex is ErrTemplateMalformed,
+// (steps 3 to 5): a value other than claude, codex or cursor is ErrTemplateMalformed,
 // as a bad relay_mode is; a non-empty AgentArgs with no Agent is
-// ErrTemplateAgentMissing; a codex template with an allow, deny or ask entry
-// is ErrPermissionsUnsupported (spawn's own refusal, spawn.RefuseCodexPermissions).
+// ErrTemplateAgentMissing; Cursor argument validation follows; a codex or
+// cursor template with an allow, deny or ask entry is ErrPermissionsUnsupported
+// (spawn.RefuseCodexPermissions or spawn.RefuseCursorPermissions).
 // All run before the templates directory is created, so a refused call
 // writes nothing.
 func validateTemplateAgent(params MakeTemplateParams) error {
 	if params.Agent != "" && !config.ValidAgent(params.Agent) {
-		return fmt.Errorf("%w: agent %q (want %s or %s)", config.ErrTemplateMalformed,
-			params.Agent, config.AgentClaude, config.AgentCodex)
+		return fmt.Errorf("%w: agent %q (want %s, %s or %s)", config.ErrTemplateMalformed,
+			params.Agent, config.AgentClaude, config.AgentCodex, config.AgentCursor)
 	}
 	if params.Agent == "" && len(params.AgentArgs) > 0 {
-		return fmt.Errorf("%w: agent_args are set but no agent is given; pass agent %s or %s, or remove agent_args",
-			config.ErrTemplateAgentMissing, config.AgentClaude, config.AgentCodex)
+		return fmt.Errorf("%w: agent_args are set but no agent is given; pass agent %s, %s or %s, or remove agent_args",
+			config.ErrTemplateAgentMissing, config.AgentClaude, config.AgentCodex, config.AgentCursor)
 	}
 	if params.Agent == config.AgentCursor {
 		if _, _, err := spawn.CursorArgs(params.AgentArgs); err != nil {
@@ -264,14 +266,14 @@ func validateTemplateRelayMode(m string) error {
 //     separators, leading dot, or "..").
 //   - ErrTemplateExists: a template with that name already exists.
 //   - ErrTemplateMalformed: RelayMode is not "on", "off", or "", or Agent
-//     is not "claude", "codex" or "" (the message quotes the value).
+//     is not "claude", "codex", "cursor" or "" (the message quotes the value).
 //   - ErrTemplateAgentMissing: AgentArgs is non-empty and Agent is empty;
 //     nothing is written. Give the template's agent or drop AgentArgs.
-//   - ErrPermissionsUnsupported: Agent is "codex" and Permissions holds an
-//     allow, deny or ask entry. Codex has no counterpart of Claude Code's
-//     permission lists; the message points to the rules/ folder of the
-//     group's Codex folder and Codex's own permission controls. Nothing is
-//     written. The question-tool setting's deny entry is not one of these.
+//   - ErrSpawnDeniedFlag: a Cursor template has unsupported or malformed
+//     agent arguments. Remove the named argument and any owned value, then retry; nothing is written.
+//   - ErrPermissionsUnsupported: Agent is "codex" or "cursor" and Permissions
+//     holds an allow, deny or ask entry. Empty lists are allowed; no template
+//     is written on refusal.
 //   - ErrReservedEnvKey: ExtraEnv contains a key whose name before the
 //     first '=' (the name tmux sets) is reserved: it starts with
 //     AGENT_DIRECTOR_, or it is HOME (the key HOME, or one such as

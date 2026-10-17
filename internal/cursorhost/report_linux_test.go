@@ -3,12 +3,14 @@
 package cursorhost
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +157,45 @@ func TestReporterHeldLifecycleRequiresIndependentEvidence(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestReporterRetirementCannotRestartExpiredControlDeadline(t *testing.T) {
+	// Serial: real direct-child report helper and isolated runtime set environment.
+	for _, delayed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "already expired", true: "expires during retirement"}[delayed], func(t *testing.T) {
+			e := newRequestEnv(t, "off", "report-session-id")
+			exe, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			payloads := filepath.Join(t.TempDir(), "reports")
+			t.Setenv("AD_TEST_CURSOR_REPORT_HELPER", "1")
+			t.Setenv("AD_TEST_CURSOR_REPORT_DB", e.path)
+			t.Setenv("AD_TEST_CURSOR_REPORT_PAYLOADS", payloads)
+			if err = e.process.terminate(); err != nil {
+				t.Fatal(err)
+			}
+			rep := *e.rep
+			rep.exe = exe
+			rep.terminationUntil = time.Now().Add(-time.Millisecond)
+			if delayed {
+				rep.terminationUntil = time.Now().Add(cancelWait)
+				rep.afterRuntimeRetired = func() { <-time.After(time.Until(rep.terminationUntil)) }
+			}
+			err = rep.report("SessionEnd")
+			if err == nil || !strings.Contains(err.Error(), "end report deadline passed") {
+				t.Fatalf("expired report=%v", err)
+			}
+			raw, readErr := os.ReadFile(payloads)
+			if !os.IsNotExist(readErr) || bytes.Contains(raw, []byte("SessionEnd")) {
+				t.Fatalf("expired worker launched helper: %s %v", raw, readErr)
+			}
+			binding, readErr := e.s.ReadCursorRuntime(e.binding.InstanceID)
+			if readErr != nil || !binding.Terminated || rep.binding != e.binding {
+				t.Fatalf("retirement proof leaked into controller binding: %+v %v", binding, readErr)
+			}
+		})
 	}
 }
 

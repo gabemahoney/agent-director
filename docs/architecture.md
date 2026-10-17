@@ -124,8 +124,18 @@ or PATH fallback: startup uses the existing process launch, with inherited
 asynchronous failure and process-backed missing detection. Installed-gateway
 validation above is a separate dependency check. Installer presence discovery
 below must never change this runtime selection or rewrite launch config.
-`CursorArgs` extracts one initial prompt for
-ACP and supports model selection; other arguments fail before row writes.
+`ReadCursorArgs` is the shared, I/O-free Cursor token reader for validation,
+composition, private gateway parsing and selector extraction. Its `ArgOption`
+metadata preserves original indices, spellings and owned values, including
+dashed required values; unknown options are valueless and still refused.
+`CursorLaunchArgs` validates that reading and separates canonical model runtime
+argv, one exact initial prompt and requested mode. `CursorArgs` is its existing
+validation wrapper. Model identifiers remain opaque, without a catalog or
+substitution. Supported modes are `agent`, `plan` and `ask`, including `--plan`;
+all unsupported/malformed arguments fail before row writes. A prompt is the
+sole final operand or exactly one element after an unowned `--`; an operand
+before a trailing delimiter cannot bypass validation. Original saved arguments
+remain unchanged except deliberate switching sanitization.
 `pkg/api` retains all public control operations. Cursor reuse and agent switches
 MUST use the shared fresh composition and finished-row lifecycle below. No
 generic ACP framework,
@@ -231,10 +241,39 @@ The real prompt reports UserPromptSubmit through the unchanged direct-parent
 hook. Saved initial text remains once per launch after successful load and hold
 checks; transient queued, held and editable draft input is never reconstructed.
 
+Explicit mode is private launch configuration, carried by `RequestedMode` and
+the internal gateway's `--requested-mode`, never a public spawn/template field
+or MCP control. `runtime-args` contains model arguments only; mode and prompt
+cannot enter runtime argv through private parsing. `mode.go` validates the
+target session's advertised current/available mode state and the requested ID.
+The sole controller adds `new_mode`, `load_mode` or `rotate_new_mode` after the
+corresponding response, before the original publication/admission branch.
+It sends one correlated `session/set_mode`; a valid object `{}` suffices.
+Optional echoed session/mode IDs must agree, and contradictory main mode
+updates fail. Unsolicited, retired or child metadata cannot replace the response.
+Configuration re-enters the original validated response branch once; rotation
+must not issue another `session/new` while configuration is pending.
+
+Before confirmed configuration and publication, target traffic supplies no
+prompt, permission or lifecycle authority; authorization attempts are denied
+through the existing owner. Each mode write checks captured input epoch and
+the original absolute deadline both before and after independent runtime
+verification. Acknowledgement/record completion rechecks them, then the usual
+binding, life, session, process and pane guards still apply. Fresh configuration
+uses the original creation bound, load shares `loadUntil`, and rotation shares
+the first control's `cancelAt + cancelWait` (three seconds). No phase renews time.
+Unavailable state, rejected/malformed acknowledgement, interruption or authority
+loss remains a truthful asynchronous failure, with no default-mode retry.
+Successful startup configuration is not a permanent lock: legitimate later
+mode changes, including plan approval, remain allowed. Initial text is delivered
+once per launch after configuration and durable holds; same-launch rotation
+never replays it.
+
 The gateway is the recorded pane/main process, starts one selected runtime
 with `acp`, and owns both protocol pipes. The runtime never reads terminal
 input. `protocol.go` bounds frames, correlates one outstanding initialize,
-session/new, session/load or session/prompt request, validates protocol 1 and completions,
+session/new, session/load, session/set_mode or session/prompt request, validates
+protocol 1 and completions,
 and rejects stale/mismatched responses. Its bounded FIFO and single outbound
 writer serialize frames without blocking the controller. Enqueueing is not
 delivery: each frame has a fixed write deadline from enqueue, independent of
@@ -402,13 +441,19 @@ empty by the existing read rule; this is no per-request proof of dialog absence,
 delivery, receipt, decision or runtime death. Projection invents no durable
 request facts or trail events.
 
-Both fatal cleanup and the read's separate persistence attempt MUST reuse
-`Store.MarkCursorMissingIfSameLaunch` and `terminalMarkWithoutWait`, through
+The read's separate persistence attempt MUST reuse
+`Store.MarkCursorMissingIfSameLaunch`; fatal cleanup MUST use
+`Store.MarkFailedCursorRuntimeMissing`. Both use `terminalMarkWithoutWait`, through
 `inWriteTxContext(ctx, 0)` and the common `terminalMarkOnConn` payload. The write
 repeats the shared guard and atomically closes requests and running subagents,
 advances row version and applies terminal state. An inserted binding, including
 a stale one after examined absence, defeats the close. Changed guards cannot
 close a newer launch; an unresolved live conflict on the same dead launch fails.
+Fatal cleanup requires exact owned termination and independent
+`VerifyRuntime(binding, true)`. Its guard permits only the matching binding's monotonic
+termination-bit advancement, retaining every other complete identity/snapshot
+predicate and requiring the row's token/life/gateway to match the proven-dead
+runtime. Public missing reconciliation keeps its strict termination-bit check.
 No runtime identity, retirement or intentional SessionEnd is fabricated, and
 Cursor per-request proof rules remain unchanged. Context-aware request-deny and
 orphan-tick emitters preserve event values, order and pending/failed/rejected
@@ -456,6 +501,11 @@ The CLI's `hookCursorVerifier` independently composes `VerifyRuntime`,
 report. `internal/hook.HandleConfig.VerifyCursor` injects this evidence seam
 without adding probe/tmux/cursorhost dependencies to `internal/hook`.
 Conditional store writes repeat the binding predicates after verification.
+SessionEnd uses a reporter copy so retirement cannot race cleanup's binding.
+The final report and direct child hook share the original first-control
+absolute deadline; an expired worker cannot start a fresh reporting window
+or launch a late helper. Genuine expiry remains an error; fatal missing cleanup
+never supplies per-request death proof or a delivery receipt.
 Startup `SetCursorRuntimeSession` is not rotation authority. Same-launch rotation
 MUST use `Store.RotateCursorSession` in `internal/store/cursor_rotation.go`, via
 the direct-parent SessionStart report carrying `cursor_previous_session` and the
@@ -650,14 +700,17 @@ unknown request origin into eligible main-turn proof, nor close independent
 holds. Both guarded answer writers and acknowledgement-before-output remain
 mandatory across identity changes.
 
-Reuse/switches, expanded runtime setup, group profiles and
-session help remain outside the current route. Linux protected lifetime and
+Expanded runtime acceptance, group profiles and session help remain outside
+this bounded argument/configuration change. Linux protected lifetime and
 account limits remain; synthetic controller evidence does not establish
 runtime/version/platform acceptance or all interleavings. Existing formal
 models do not prove this controller; its formal assessment remains separate.
 
 **Must use:** Cursor launch composition and argument checks use the existing
-`internal/spawn` seams and `CursorArgs`; no surface builds another launch.
+`internal/spawn` seams, `ReadCursorArgs` and `CursorLaunchArgs` (or its
+`CursorArgs` validation wrapper); no surface builds another launch or token parser.
+Session configuration extends `mode.go` and the existing controller phases,
+correlation and guarded writer rather than introducing another ACP controller.
 Runtime/report checks use `VerifyRuntime`, `VerifyTranscriptPath`, `VerifyPane`
 and `HandleConfig.VerifyCursor`, keeping immediate-parent and conditional
 store guards mandatory. New Cursor record writes use the existing
@@ -665,7 +718,8 @@ store guards mandatory. New Cursor record writes use the existing
 `BindLoadedCursorSession`, `CheckLoadedCursorPrompt`,
 `RotateCursorSession`, `ObserveCursorRotation`, `ReconcileCursorRotation`,
 `MarkCursorRuntimeGone`
-and conditional hook store paths. Authorization changes MUST extend
+and conditional hook store paths; missing cleanup uses the distinct strict-read
+and proven-dead fatal methods above. Authorization changes MUST extend
 `parseAuthorization`, `authorization.result` and the single `requestController`;
 reuse `InsertCursorRequest`, `AckCursorDecision`, `ClaimCursorPaneAnswer`,
 `CheckCursorAnswer` and `ProveCursorToolRan` with mandatory `CursorCheck`, rather
@@ -708,6 +762,20 @@ resume, installed-Bun and `/opt/driver/sql.sh` helpers; do not add another
 collector or runtime framework. These fixtures remain synthetic ACP even with
 actual Linux tmux/client processes, and establish no native compatibility,
 minimum version, authentication, trust or other-platform acceptance.
+
+Argument/mode tests MUST extend the existing parser/Resolve/template tables,
+public caller adapters and this same peer's `Modes`, `ModeReply`,
+`BeforeModeReply`, `AfterModeReply` and `WaitForMode` controls. Existing
+session/load/rotation starters own publication and prompt ordering; the private
+per-run mode-write verification seam controls the real writer's
+final-verification race. Retirement tests reuse the actual plan flow,
+per-run `afterRuntimeRetired` observer and real report helper, preserving strict
+ordinary shutdown assertions. These private nil-in-production observers control
+scheduling, not authority. The existing runtime guard/request-proof owners
+cover fatal cleanup and unchanged public reconciliation; no second matrix or
+mock controller is needed. The same `cursor-install-runtime` collector owns
+assembled CLI/MCP/installed-Bun fresh, saved-resume and reuse configuration and
+static no-row refusals, without establishing native mode or account effects.
 
 `SourceDerivedQuestions` reads the shared `testdata/questions.json` through the
 authorization fixture reader, substitutes the configured session and retains
@@ -6186,9 +6254,12 @@ set. Codex command names in option values or prompt text are not selectors.
 `--last` makes the first operand the prompt instead of a session id.
 Codex extraction protects surviving prompt tokens behind an unowned `--`,
 keeping each original token intact; it never joins or splits prompt text.
-Cursor extraction preserves required `--model`/`-m` ownership and operands
-after `--`, assumes no short selector aliases and leaves saved arguments
-unchanged. Its public selector contract is owned by
+Cursor extraction uses `ReadCursorArgs`, preserving model/mode and recognized
+required-value ownership even for refused sandbox/auth/header/exclusion
+options, and literal operands after `--`. Required values own dashed tokens;
+optional `--resume` consumes only a following non-dashed token. It assumes no
+short selector aliases and leaves saved arguments unchanged. Its public
+selector contract is owned by
 [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
 
 `ExtractResumeArgs(agent, args)` returns copied surviving `Args`, `Dropped`
@@ -6254,7 +6325,7 @@ no general spawn validation. Codex's per-launch settings follow surviving
 options before the protected prompt, retaining their settings precedence.
 
 **Must use:** future argument processing uses `ReadClaudeArgs` /
-`ReadCodexArgs` and their ownership metadata, and selector removal uses
+`ReadCodexArgs` / `ReadCursorArgs` and their ownership metadata, and selector removal uses
 `ExtractResumeArgs` and these shared sets. Any filtered Claude replay uses the
 shared rendering: preserve surviving parsed roles when original required values
 are complete, and apply literal filtering only when any is missing. Keep rendered

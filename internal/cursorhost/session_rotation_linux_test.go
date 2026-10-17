@@ -358,29 +358,40 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 
 func TestCursorRotationRepeatedControlsPreserveFirstDeadline(t *testing.T) {
 	// Serial: actual three-second controller cancellation deadline and isolated processes.
-	c := postBootstrapCursorSession(t, "")
-	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
-	first := time.Now()
-	c.keys(t, "/new\r")
-	c.wait(t, "fresh request", func() bool { return rotationNewCount(c, t) == 2 })
-	c.keys(t, "deadline-held\r")
-	c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
-	// Repeat aliases under finite ordinary-input pressure at half the original budget.
-	timer := time.NewTimer(time.Until(first.Add(1500 * time.Millisecond)))
-	<-timer.C
-	c.keys(t, strings.Repeat("/clear\r/new\r", 20))
-	c.awaitFailure(t, time.Until(first.Add(cancelWait+time.Second)))
-	elapsed := time.Since(first)
-	if elapsed > cancelWait+time.Second || elapsed < cancelWait-100*time.Millisecond {
-		t.Fatalf("cancel bound changed: %s", elapsed)
-	}
-	if rotationNewCount(c, t) != 2 {
-		t.Fatal("repeated controls issued extra session creation")
-	}
-	rotationNoBytes(t, c, "deadline-held")
-	row, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
-	if row.SessionID != "synthetic-session-1" || row.State == store.StateEnded {
-		t.Fatalf("late/unconfirmed creation fabricated publication/end: %+v", row)
+	for _, phase := range []string{"new", "mode"} {
+		t.Run(phase, func(t *testing.T) {
+			var c *cursorSession
+			if phase == "mode" {
+				c = beginCursorSessionWithOptions(t, Options{RequestedMode: "plan"}, cursorfix.Scenario{Modes: advertisedCursorModes()}, openTranscript, terminalLoop)
+				c.wait(t, "configured startup ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+				c.e.runtime.Configure(t, cursorfix.Scenario{Modes: advertisedCursorModes(), WaitForMode: true})
+			} else {
+				c = postBootstrapCursorSession(t, "")
+				c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
+			}
+			first := time.Now()
+			c.keys(t, "/new\r")
+			c.wait(t, "fresh request", func() bool { return rotationNewCount(c, t) == 2 })
+			c.keys(t, "deadline-held\r")
+			c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
+			// Repeat aliases under finite ordinary-input pressure at half the original budget.
+			timer := time.NewTimer(time.Until(first.Add(1500 * time.Millisecond)))
+			<-timer.C
+			c.keys(t, strings.Repeat("/clear\r/new\r", 20))
+			c.awaitFailure(t, time.Until(first.Add(cancelWait+time.Second)))
+			elapsed := time.Since(first)
+			if elapsed > cancelWait+time.Second || elapsed < cancelWait-100*time.Millisecond {
+				t.Fatalf("cancel bound changed: %s", elapsed)
+			}
+			if rotationNewCount(c, t) != 2 {
+				t.Fatal("repeated controls issued extra session creation")
+			}
+			rotationNoBytes(t, c, "deadline-held")
+			row, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
+			if row.SessionID != "synthetic-session-1" || row.State == store.StateEnded {
+				t.Fatalf("late/unconfirmed creation fabricated publication/end: %+v", row)
+			}
+		})
 	}
 }
 

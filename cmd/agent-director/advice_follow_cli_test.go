@@ -466,11 +466,11 @@ func TestAdviceFollow_I4_CLILiteralReuseSpelling(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_H10_AgentMissingFlag: H10 ErrAgentMissing "pass agent claude or codex (--agent on the CLI)".
+// TestAdviceFollow_H10_AgentMissingFlag: H10 ErrAgentMissing "pass agent claude, codex or cursor (--agent on the CLI)".
 // A spawn naming no agent is refused with nothing written; re-run with the flag
 // copied from the parenthesis and the first agent listed, it launches that agent.
 func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
-	const advice = "pass agent claude or codex (--agent on the CLI)"
+	const advice = "pass agent claude, codex or cursor (--agent on the CLI)"
 	fakeDir := buildFakeTmux(t)
 	home := t.TempDir()
 	argv := []string{"spawn", "--cwd", t.TempDir(), "--no-pre-trust"}
@@ -485,8 +485,8 @@ func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
 		t.Fatalf("rows after the refusal = %v; want none", ids)
 	}
 
-	flag := advCLIQuoted(t, env.ErrDescription, "pass agent claude or codex (", " on the CLI)")
-	agent := strings.Fields(advCLIQuoted(t, env.ErrDescription, "pass agent ", " or codex"))[0]
+	flag := advCLIQuoted(t, env.ErrDescription, "pass agent claude, codex or cursor (", " on the CLI)")
+	agent := strings.TrimSuffix(strings.Fields(advCLIQuoted(t, env.ErrDescription, "pass agent ", " or cursor"))[0], ",")
 	stdout, stderr, code = runSpawnCLI(t, home, fakeDir, append(argv, flag, agent)...)
 	var res spawnResult
 	if code != 0 || json.Unmarshal([]byte(stdout), &res) != nil {

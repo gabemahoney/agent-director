@@ -365,6 +365,13 @@ func TestExtractCursorSelectorsAndOwnership(t *testing.T) {
 		args, want, dropped []string
 	}{
 		{"resume id", []string{"--resume", "OLD", "--model", "x"}, []string{"--model", "x"}, []string{"--resume", "OLD"}},
+		{"mode owns selector", []string{"--mode", "--resume", "--continue"}, []string{"--mode", "--resume"}, []string{"--continue"}},
+		{"mode owns delimiter", []string{"--mode", "--", "--continue"}, []string{"--mode", "--"}, []string{"--continue"}},
+		{"sandbox owns selector", []string{"--sandbox", "--continue", "--resume=OLD"}, []string{"--sandbox", "--continue"}, []string{"--resume=OLD"}},
+		{"auth owns selector", []string{"--api-key", "--resume", "--continue"}, []string{"--api-key", "--resume"}, []string{"--continue"}},
+		{"header owns selector", []string{"--header", "--continue", "--resume=OLD"}, []string{"--header", "--continue"}, []string{"--resume=OLD"}},
+		{"tool exclusion owns selector", []string{"--exclude-tools", "--resume", "--continue"}, []string{"--exclude-tools", "--resume"}, []string{"--continue"}},
+		{"mode alias survives selectors in order", []string{"--resume=OLDER", "--plan", "--continue", "--mode=plan", "--resume", "OLD", "多行\n🦋"}, []string{"--plan", "--mode=plan", "多行\n🦋"}, []string{"--resume=OLDER", "--continue", "--resume", "OLD"}},
 		{"resume equals", []string{"--resume=OLD", "hello"}, []string{"hello"}, []string{"--resume=OLD"}},
 		{"resume picker", []string{"--resume"}, nil, []string{"--resume"}},
 		{"resume before option", []string{"--resume", "--model", "x"}, []string{"--model", "x"}, []string{"--resume"}},

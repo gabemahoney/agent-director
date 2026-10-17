@@ -134,13 +134,25 @@ func beginCursorSession(t *testing.T, initial string, opener func(string, store.
 }
 
 func beginCursorSessionWithInput(t *testing.T, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, afterRecoveryReport ...func()) *cursorSession {
+	return beginCursorSessionWithOptions(t, Options{InitialPrompt: initial}, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}}, opener, starter, afterRecoveryReport...)
+}
+
+func beginCursorSessionWithOptions(t *testing.T, options Options, scenario cursorfix.Scenario, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, afterRecoveryReport ...func()) *cursorSession {
 	t.Helper()
 	e := newRequestEnv(t, "off", "synthetic-session-1")
-	e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}})
+	e.runtime.Configure(t, scenario)
 	master, slave := e.prepareRunPTY(t)
 	c := &cursorSession{e: e, master: master, pane: &observedWire{}, done: make(chan error, 1)}
+	options.Runtime = e.runtime.Program
+	observe := options.beforeControllerCleanup
+	options.beforeControllerCleanup = func(err error) {
+		c.observeControllerReturn(err)
+		if observe != nil {
+			observe(err)
+		}
+	}
 	go func() {
-		c.done <- runWithInput(Options{Runtime: e.runtime.Program, InitialPrompt: initial}, slave, c.pane, opener, starter, afterRecoveryReport...)
+		c.done <- runWithInput(options, slave, c.pane, opener, starter, afterRecoveryReport...)
 	}()
 	t.Cleanup(func() {
 		if !c.ended {
@@ -249,6 +261,7 @@ func (c *cursorSession) stop(t *testing.T) {
 	select {
 	case err := <-c.done:
 		c.ended = true
+		c.endErr = err
 		if err != nil {
 			t.Fatalf("exit: %v", err)
 		}

@@ -195,6 +195,7 @@ func TestResolveCursorSwitchSelectorsAndTemplateOwnership(t *testing.T) {
 	withTemplates(t, map[string]apitest.TemplateFields{
 		"cursor-select": {CWD: "/tmp", Agent: "cursor", AgentArgs: []string{"--resume", "old", "--model", "sonnet", "hello"}},
 		"claude-select": {CWD: "/tmp", Agent: "claude", AgentArgs: []string{"--resume", "old"}},
+		"cursor-mode":   {CWD: "/tmp", Agent: "cursor", AgentArgs: []string{"--resume=old", "--plan", "--", "--resume\n多行 🦋"}},
 	})
 	for _, tc := range []struct {
 		name, template    string
@@ -202,11 +203,14 @@ func TestResolveCursorSwitchSelectorsAndTemplateOwnership(t *testing.T) {
 		refused           error
 	}{
 		{"inherit matching template", "cursor-select", nil, []string{"--model", "sonnet", "hello"}, []string{"--resume", "old"}, nil},
+		{"inherited mode and literal prompt survive sanitization", "cursor-mode", nil, []string{"--plan", "--", "--resume\n多行 🦋"}, []string{"--resume=old"}, nil},
+		{"own mode replaces foreign args", "claude-select", []string{"--mode=ask", "hello\n🦋"}, []string{"--mode=ask", "hello\n🦋"}, nil, nil},
 		{"explicit empty replaces foreign args", "claude-select", []string{}, []string{}, nil, nil},
 		{"own list replaces foreign args", "claude-select", []string{"--continue", "hello"}, []string{"hello"}, []string{"--continue"}, nil},
 		{"foreign inherited args refused before drop", "claude-select", nil, []string{"--resume", "old"}, nil, spawn.ErrAgentArgsMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			before := slices.Clone(tc.args)
 			r, err := spawn.Resolve(spawn.SpawnParams{Template: tc.template, Agent: "cursor", AgentArgs: tc.args, ReuseFinished: true}, config.Default())
 			if err != nil {
 				t.Fatal(err)
@@ -218,6 +222,9 @@ func TestResolveCursorSwitchSelectorsAndTemplateOwnership(t *testing.T) {
 			err = spawn.Validate(&r)
 			if !errors.Is(err, tc.refused) || (err == nil) != (tc.refused == nil) || !slices.Equal(r.AgentArgs, tc.want) || !slices.Equal(r.DroppedArgs, tc.drops) {
 				t.Fatalf("resolved switch args=%q drops=%q error=%v; want %q / %q / %v", r.AgentArgs, r.DroppedArgs, err, tc.want, tc.drops, tc.refused)
+			}
+			if !slices.Equal(tc.args, before) {
+				t.Fatal("resolve/sanitize mutated caller arguments")
 			}
 		})
 	}

@@ -67,6 +67,8 @@ type SpawnParams struct {
 	// check rejects supervisor-owned flags. For codex they precede
 	// agent-director's per-launch settings block, which sits before the
 	// first "--"; CheckCodexArgs refuses what would fight those settings.
+	// Cursor extracts one initial prompt and explicit mode into the private
+	// gateway; only validated model arguments reach the ACP executable.
 	// Nil means not supplied (a template's
 	// are inherited); a supplied empty list inherits nothing.
 	AgentArgs []string

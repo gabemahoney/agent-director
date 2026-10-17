@@ -3,6 +3,7 @@
 package realtmux_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime/pprof"
 	"slices"
 	"strings"
 	"testing"
@@ -31,6 +33,8 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 	for _, surface := range []string{"Go", "Go release wrapper", "Go release wrapper fresh", "CLI", "MCP"} {
 		t.Run(surface, func(t *testing.T) {
 			f, runtime, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{StandaloneGo: surface == "Go release wrapper fresh"})
+			diagnostics := cursorFailureDiagnostics{t: t, f: f, peer: runtime, id: launch.ID, home: os.Getenv("HOME")}
+			defer diagnostics.capture()
 			id := launch.ID
 			before := readRow(t, f.DBPath, id)
 			assertResumeGatewayProcess(t, f, id, filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"), "")
@@ -49,6 +53,13 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 				adapter = "Go release wrapper"
 			}
 			caller := newPaneCaller(t, f, adapter, callerBin)
+			call := caller.call
+			caller.call = func(verb string, params map[string]any) ([]byte, error) {
+				started := time.Now()
+				raw, err := call(verb, params)
+				diagnostics.record(verb, started, raw, err)
+				return raw, err
+			}
 			started := time.Now()
 			raw := caller.must("resume", map[string]any{"instance_id": id})
 			if time.Since(started) >= 30*time.Second {
@@ -285,4 +296,134 @@ func assertResumeGatewayProcess(t *testing.T, f *spawnFix, id, bin, session stri
 	if path, ok := envValue(procEnviron(t, pid), "AGENT_DIRECTOR_CURSOR_STORE_PATH"); !ok || path != f.DBPath {
 		t.Fatalf("gateway store=%q want actual override %q", path, f.DBPath)
 	}
+}
+
+// cursorFailureDiagnostics retains only synthetic fixture evidence before cleanup.
+type cursorFailureDiagnostics struct {
+	t          *testing.T
+	f          *spawnFix
+	peer       cursorfix.Runtime
+	id, home   string
+	operations []string
+}
+
+func (d *cursorFailureDiagnostics) record(operation string, started time.Time, result any, err error) {
+	if raw, ok := result.([]byte); ok {
+		result = string(raw)
+	}
+	d.operations = append(d.operations, fmt.Sprintf("start=%s end=%s elapsed=%s operation=%s result=%v error=%v", started.Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), time.Since(started), operation, result, err))
+}
+
+func (d *cursorFailureDiagnostics) capture() {
+	if !d.t.Failed() {
+		return
+	}
+	// This repository-mounted ignored directory survives sandbox and TempDir cleanup.
+	root := filepath.Join("..", "..", "tmpbin")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		d.t.Logf("FAILURE CAPTURE ERROR creating artifact root: %v", err)
+		return
+	}
+	dir, err := os.MkdirTemp(root, "realtmux-failure-")
+	if err != nil {
+		d.t.Logf("FAILURE CAPTURE ERROR creating artifact directory: %v", err)
+		return
+	}
+	d.t.Logf("failure evidence before cleanup: %s", dir)
+	var captureErrors []string
+	note := func(operation string, err error) {
+		if err != nil {
+			captureErrors = append(captureErrors, fmt.Sprintf("%s: %v", operation, err))
+			d.t.Logf("FAILURE CAPTURE ERROR %s: %v", operation, err)
+		}
+	}
+	write := func(name string, raw []byte) { note("write "+name, os.WriteFile(filepath.Join(dir, name), raw, 0600)) }
+	write("operations.txt", []byte(fmt.Sprintf("test=%s instance=%s capture=%s\n%s\n", d.t.Name(), d.id, time.Now().Format(time.RFC3339Nano), strings.Join(d.operations, "\n"))))
+	read := func(name, source string) {
+		// Explicit files only; never traverse HOME, native history or private config trees.
+		if slices.Contains(strings.Split(filepath.Clean(source), string(os.PathSeparator)), ".claude") {
+			note("read "+name, fmt.Errorf("excluded path component"))
+			return
+		}
+		raw, err := os.ReadFile(source)
+		note("read "+name, err)
+		if err == nil {
+			write(name, raw)
+		}
+	}
+	pane, paneErr := d.f.API.ReadPane(api.ReadPaneParams{InstanceID: d.id, NLines: 1000})
+	write("pane.txt", []byte(fmt.Sprintf("pane=%+v\nread_error=%v\n", pane, paneErr)))
+	note("read pane", paneErr)
+	for _, file := range []struct{ name, source string }{
+		{"peer-received.jsonl", d.peer.Trace}, {"peer-sent.jsonl", d.peer.Sent},
+		{"peer-raw", d.peer.Raw}, {"peer-observer", d.peer.Observer},
+		{"peer-scenario", d.peer.Scenario}, {"peer-pid", d.peer.PID},
+		{"trail.jsonl", filepath.Join(d.home, ".config", "agent-director", "ad-trail.jsonl")},
+	} {
+		read(file.name, file.source)
+	}
+	var stacks bytes.Buffer
+	note("goroutine stacks", pprof.Lookup("goroutine").WriteTo(&stacks, 2))
+	write("goroutines.txt", stacks.Bytes())
+	db, err := sql.Open("sqlite", d.f.DBPath)
+	note("open synthetic SQL", err)
+	if err == nil {
+		// Failure-only bounded raw reads, without reconciliation or public read projection.
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		for _, table := range []string{"spawns", "cursor_runtimes", "permission_requests", "session_history"} {
+			rows, err := db.QueryContext(ctx, "SELECT * FROM "+table)
+			note("query "+table, err)
+			if err != nil {
+				continue
+			}
+			cols, err := rows.Columns()
+			note("columns "+table, err)
+			var records []map[string]any
+			if err == nil {
+				for rows.Next() {
+					values, targets := make([]any, len(cols)), make([]any, len(cols))
+					for i := range values {
+						targets[i] = &values[i]
+					}
+					if err := rows.Scan(targets...); err != nil {
+						note("scan "+table, err)
+						break
+					}
+					record := map[string]any{}
+					for i, key := range cols {
+						record[key] = values[i]
+					}
+					records = append(records, record)
+				}
+			}
+			note("iterate "+table, rows.Err())
+			note("close rows "+table, rows.Close())
+			raw, err := json.MarshalIndent(records, "", "  ")
+			note("encode "+table, err)
+			if err == nil {
+				write("sql-"+table+".json", raw)
+			}
+			if table == "spawns" {
+				for _, row := range records {
+					if row["instance_id"] == d.id {
+						if path, ok := row["jsonl_path"].(string); ok && path != "" {
+							relative, err := filepath.Rel(d.home, path)
+							if err != nil {
+								note("transcript path", err)
+							} else if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+								note("transcript path", fmt.Errorf("outside synthetic HOME: %s", path))
+							} else {
+								read("transcript.jsonl", path)
+							}
+						} else {
+							note("transcript path", fmt.Errorf("absent for %s", d.id))
+						}
+					}
+				}
+			}
+		}
+		note("close synthetic SQL", db.Close())
+	}
+	write("capture-errors.txt", []byte(strings.Join(captureErrors, "\n")+"\n"))
 }

@@ -1,12 +1,15 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 func TestCursorReuseRetiresOldBindingAndPublicationDefeatsRestore(t *testing.T) {
@@ -104,49 +107,202 @@ func TestCursorReuseRetiresOldBindingAndPublicationDefeatsRestore(t *testing.T) 
 }
 
 func TestCursorMissingRefusesReplacedAuthority(t *testing.T) {
-	for _, tc := range []struct{ name, query string }{
-		{"connection rotated", "UPDATE cursor_runtimes SET bound_connection_id='replacement' WHERE bound_instance_id=?"},
-		{"session rotated", "UPDATE cursor_runtimes SET bound_session_id='replacement' WHERE bound_instance_id=?"},
-		{"runtime PID replaced", "UPDATE cursor_runtimes SET bound_runtime_pid=bound_runtime_pid+1 WHERE bound_instance_id=?"},
-		{"runtime start replaced", "UPDATE cursor_runtimes SET bound_runtime_start='replacement' WHERE bound_instance_id=?"},
-		{"runtime termination changed", "UPDATE cursor_runtimes SET bound_terminated=1 WHERE bound_instance_id=?"},
-		{"launch replaced", "UPDATE spawns SET launch_token='replacement',life_number=life_number+1 WHERE instance_id=?"},
-		{"row refreshed", "UPDATE spawns SET row_version=row_version+1 WHERE instance_id=?"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, row, b := cursorRowBinding(t)
-			mix := f.seedCloseMix(row.InstanceID)
-			// The examined snapshot includes the committed setup, before the replacement.
-			row, err := f.s.GetSpawn(row.InstanceID)
-			if err != nil {
-				t.Fatal(err)
+	for _, fatal := range []bool{false, true} {
+		for _, tc := range []struct{ name, query string }{
+			{"connection rotated", "UPDATE cursor_runtimes SET bound_connection_id='replacement' WHERE bound_instance_id=?"},
+			{"session rotated", "UPDATE cursor_runtimes SET bound_session_id='replacement' WHERE bound_instance_id=?"},
+			{"runtime PID replaced", "UPDATE cursor_runtimes SET bound_runtime_pid=bound_runtime_pid+1 WHERE bound_instance_id=?"},
+			{"runtime start replaced", "UPDATE cursor_runtimes SET bound_runtime_start='replacement' WHERE bound_instance_id=?"},
+			{"runtime termination changed", "UPDATE cursor_runtimes SET bound_terminated=1 WHERE bound_instance_id=?"},
+			{"launch replaced", "UPDATE spawns SET launch_token='replacement',life_number=life_number+1 WHERE instance_id=?"},
+			{"row refreshed", "UPDATE spawns SET row_version=row_version+1 WHERE instance_id=?"},
+			{"token replaced", "UPDATE spawns SET launch_token='replacement' WHERE instance_id=?"},
+			{"life replaced", "UPDATE spawns SET life_number=life_number+1 WHERE instance_id=?"},
+			{"gateway replaced", "UPDATE spawns SET pane_pid=pane_pid+1 WHERE instance_id=?"},
+			{"gateway start replaced", "UPDATE spawns SET pane_starttime='replacement' WHERE instance_id=?"},
+			{"input pipe replaced", "UPDATE cursor_runtimes SET bound_input_pipe='replacement' WHERE bound_instance_id=?"},
+			{"output pipe replaced", "UPDATE cursor_runtimes SET bound_output_pipe='replacement' WHERE bound_instance_id=?"},
+			{"input fd replaced", "UPDATE cursor_runtimes SET bound_input_fd=bound_input_fd+1 WHERE bound_instance_id=?"},
+			{"output fd replaced", "UPDATE cursor_runtimes SET bound_output_fd=bound_output_fd+1 WHERE bound_instance_id=?"},
+			{"pane replaced", "UPDATE spawns SET pane_id='%replacement' WHERE instance_id=?"},
+			{"socket replaced", "UPDATE spawns SET tmux_socket='replacement' WHERE instance_id=?"},
+			{"server pid replaced", "UPDATE spawns SET tmux_server_pid=COALESCE(tmux_server_pid,0)+1 WHERE instance_id=?"},
+			{"server start replaced", "UPDATE spawns SET tmux_server_started=COALESCE(tmux_server_started,0)+1 WHERE instance_id=?"},
+			{"server starttime replaced", "UPDATE spawns SET tmux_server_starttime='replacement' WHERE instance_id=?"},
+			{"transcript replaced", "UPDATE spawns SET jsonl_path='replacement' WHERE instance_id=?"},
+			{"row session replaced", "UPDATE spawns SET session_id='replacement' WHERE instance_id=?"},
+			{"descriptor token replaced", "UPDATE cursor_runtimes SET bound_launch_token='replacement' WHERE bound_instance_id=?"},
+			{"descriptor life replaced", "UPDATE cursor_runtimes SET bound_life_number=bound_life_number+1 WHERE bound_instance_id=?"},
+			{"descriptor gateway replaced", "UPDATE cursor_runtimes SET bound_gateway_pid=bound_gateway_pid+1 WHERE bound_instance_id=?"},
+			{"descriptor gateway start replaced", "UPDATE cursor_runtimes SET bound_gateway_start='replacement' WHERE bound_instance_id=?"},
+		} {
+			if fatal && tc.name == "runtime termination changed" {
+				continue
 			}
+			name := map[bool]string{false: "strict/", true: "fatal/"}[fatal] + tc.name
+			t.Run(name, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				mix := f.seedCloseMix(row.InstanceID)
+				if _, err := apitest.SeedPermissionRequest(f.path, row.InstanceID, "Bash"); err != nil {
+					t.Fatal(err)
+				}
+				// The examined snapshot includes the committed setup, before the replacement.
+				row, err := f.s.GetSpawn(row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				db, err := sql.Open("sqlite", f.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if _, err := db.Exec(tc.query, row.InstanceID); err != nil {
+					t.Fatal(err)
+				}
+				before := f.rawColumns(row.InstanceID)
+				bindingBefore, err := f.s.ReadCursorRuntime(row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestsBefore, err := f.s.PermissionRequestsForSpawn(row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				closeMissing := f.s.MarkCursorMissingIfSameLaunch
+				if fatal {
+					closeMissing = f.s.MarkFailedCursorRuntimeMissing
+				}
+				prior, result, err := closeMissing(row, b)
+				if err != nil || result != store.CondChanged || prior != "" {
+					t.Fatalf("stale missing: %q %v %v", prior, result, err)
+				}
+				if !reflect.DeepEqual(before, f.rawColumns(row.InstanceID)) {
+					t.Fatal("stale close changed current launch")
+				}
+				bindingAfter, err := f.s.ReadCursorRuntime(row.InstanceID)
+				if err != nil || !reflect.DeepEqual(bindingBefore, bindingAfter) {
+					t.Fatalf("stale close changed binding: %+v %v", bindingAfter, err)
+				}
+				f.assertMixUnchanged(mix)
+				requestsAfter, err := f.s.PermissionRequestsForSpawn(row.InstanceID)
+				if err != nil || !reflect.DeepEqual(requestsBefore, requestsAfter) {
+					t.Fatalf("refused close changed requests: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestFailedCursorRuntimeMissingTerminationAndTerminalGuards(t *testing.T) {
+	for _, state := range []string{store.StatePending, store.StateWaiting, store.StateEnded, store.StateMissing} {
+		for _, bits := range []struct {
+			name           string
+			durable, proof bool
+		}{
+			{"unretired", false, false}, {"retirement advanced", true, false}, {"retired", true, true}, {"proof ahead of durable", false, true},
+		} {
+			t.Run(state+"/"+bits.name, func(t *testing.T) {
+				f, row, b := cursorRowBinding(t)
+				db, err := sql.Open("sqlite", f.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer db.Close()
+				if _, err = db.Exec("UPDATE spawns SET state=? WHERE instance_id=?", state, row.InstanceID); err != nil {
+					t.Fatal(err)
+				}
+				if bits.durable {
+					if ok, err := f.s.MarkCursorRuntimeGone(b); err != nil || !ok {
+						t.Fatalf("retire %v %v", ok, err)
+					}
+				}
+				row, err = f.s.GetSpawn(row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := f.rawColumns(row.InstanceID)
+				b.Terminated = bits.proof
+				prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b)
+				if store.IsLiveState(state) && (!bits.proof || bits.durable) {
+					after, readErr := f.s.GetSpawn(row.InstanceID)
+					if err != nil || result != store.CondApplied || prior != state || readErr != nil || after.State != store.StateMissing || after.RowVersion != row.RowVersion+1 {
+						t.Fatalf("fatal close: prior=%s result=%v err=%v after=%+v read=%v", prior, result, err, after, readErr)
+					}
+				} else if err != nil || result != store.CondChanged || prior != "" || !reflect.DeepEqual(before, f.rawColumns(row.InstanceID)) {
+					t.Fatalf("terminal no-op: %s %v %v", prior, result, err)
+				}
+			})
+		}
+	}
+}
+
+func TestFailedCursorRuntimeCannotCloseRetainedObsoleteDescriptor(t *testing.T) {
+	for _, query := range []string{
+		"UPDATE spawns SET launch_token='replacement' WHERE instance_id=?",
+		"UPDATE spawns SET life_number=life_number+1 WHERE instance_id=?",
+		"UPDATE spawns SET pane_pid=pane_pid+1 WHERE instance_id=?",
+		"UPDATE spawns SET pane_starttime='replacement' WHERE instance_id=?",
+	} {
+		t.Run(query, func(t *testing.T) {
+			f, row, b := cursorRowBinding(t)
 			db, err := sql.Open("sqlite", f.path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			if _, err := db.Exec(tc.query, row.InstanceID); err != nil {
+			if _, err = db.Exec(query, row.InstanceID); err != nil {
 				t.Fatal(err)
 			}
-			before := f.rawColumns(row.InstanceID)
-			bindingBefore, err := f.s.ReadCursorRuntime(row.InstanceID)
+			row, err = f.s.GetSpawn(row.InstanceID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			prior, result, err := f.s.MarkCursorMissingIfSameLaunch(row, b)
-			if err != nil || result != store.CondChanged || prior != "" {
-				t.Fatalf("stale missing: %q %v %v", prior, result, err)
+			before := f.rawColumns(row.InstanceID)
+			if prior, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b); err != nil || result != store.CondChanged || prior != "" {
+				t.Fatalf("old runtime closed replacement: %s %v %v", prior, result, err)
 			}
 			if !reflect.DeepEqual(before, f.rawColumns(row.InstanceID)) {
-				t.Fatal("stale close changed current launch")
+				t.Fatal("old runtime changed replacement")
 			}
-			bindingAfter, err := f.s.ReadCursorRuntime(row.InstanceID)
-			if err != nil || !reflect.DeepEqual(bindingBefore, bindingAfter) {
-				t.Fatalf("stale close changed binding: %+v %v", bindingAfter, err)
-			}
-			f.assertMixUnchanged(mix)
 		})
+	}
+}
+
+func TestFailedCursorRuntimeMissingDoesNotWaitForWriter(t *testing.T) {
+	e := newCursorTrailEnv(t)
+	e.insert(t, "held")
+	row, err := e.f.s.GetSpawn(e.b.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := e.f.rawColumns(row.InstanceID)
+	request := e.read(t, "held")
+	db, err := sql.Open("sqlite", e.f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	start := time.Now()
+	prior, result, err := e.f.s.MarkFailedCursorRuntimeMissing(row, e.b)
+	if !errors.Is(err, store.ErrStoreBusy) || prior != "" || result == store.CondApplied || time.Since(start) > 250*time.Millisecond {
+		t.Fatalf("no-wait close: %s %v %v elapsed=%s", prior, result, err, time.Since(start))
+	}
+	view := e.f.s.WithCursorMissingReads([]store.CursorMissingProof{{Row: row, Binding: e.b}})
+	projected, err := view.GetSpawn(row.InstanceID)
+	if err != nil || projected.State != store.StateMissing {
+		t.Fatalf("busy read projection: %+v %v", projected, err)
+	}
+	if !reflect.DeepEqual(before, e.f.rawColumns(row.InstanceID)) || !reflect.DeepEqual(request, e.read(t, "held")) {
+		t.Fatal("busy close mutated row/request")
 	}
 }
 

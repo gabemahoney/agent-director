@@ -661,7 +661,7 @@ func TestResumeHasSRDErrorNames(t *testing.T) {
 // ErrTemplateAgentMissing and ErrPermissionsUnsupported (SR-1.6).
 func TestMakeTemplateHasErrorNames(t *testing.T) {
 	assertErrorNames(t, "make-template", "MakeTemplate", true, "ErrTemplateNameUnsafe", "ErrTemplateExists",
-		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported")
+		"ErrTemplateMalformed", "ErrReservedEnvKey", "ErrTemplateAgentMissing", "ErrPermissionsUnsupported", "ErrSpawnDeniedFlag")
 }
 
 // TestSendKeysHasInteractErrorNames pins send-keys' to exactly SR-1.7's seven

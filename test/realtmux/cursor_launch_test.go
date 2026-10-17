@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ type cursorPaneOptions struct {
 	StandaloneGo bool
 	ProgramName  string
 	UnsetPath    bool
+	AgentArgs    []string
 }
 
 func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string, options ...cursorPaneOptions) (*spawnFix, cursorfix.Runtime, spawned) {
@@ -103,6 +105,10 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 	if opts.Relay != "" {
 		args = append(args, "--relay-mode", opts.Relay)
 	}
+	if len(opts.AgentArgs) > 0 {
+		args = append(args, "--")
+		args = append(args, opts.AgentArgs...)
+	}
 	if scenario == "blocked-input" {
 		args = append(args, "--", strings.Repeat("\x01", 12*1024))
 	}
@@ -156,9 +162,7 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 	}
 	// Wait for the gateway's final writes as well as the peer before removing files.
 	t.Cleanup(func() {
-		launch.rt.run(t, "kill-server")
-		gatewayPID := int(launch.Row.PanePID.(int64))
-		waitFor(t, "fixture gateway gone before temporary files", func() bool { return pidGone(gatewayPID) }, func() string { return procState(gatewayPID) })
+		stopCursorPaneGateways(t, f, launch)
 		for _, path := range []string{r.PID, r.WorkerPID} {
 			raw, e := os.ReadFile(path)
 			if os.IsNotExist(e) {
@@ -182,6 +186,81 @@ console.log(JSON.stringify(result));`, clientSource, f.DBPath, os.Getenv("HOME")
 		}
 	})
 	return f, r, launch
+}
+
+// Snapshot the private server before stopping it: a resumed gateway can still
+// be pending, with no current identity published in the row/runtime binding.
+func stopCursorPaneGateways(t testing.TB, f *spawnFix, launch spawned) {
+	t.Helper()
+	gateways := []tmux.ProcIdentity{{PID: int(launch.Row.PanePID.(int64)), Starttime: launch.Row.PaneStarttime.(string)}}
+	server := tmux.ProcIdentity{PID: int(launch.Row.TmuxServerPID.(int64)), Starttime: launch.Row.TmuxServerStarttime.(string)}
+	serverAbsent := func(result rawResult) bool {
+		_, err := os.Stat(launch.rt.Socket)
+		noServer := result.Stderr == "no server running on "+launch.rt.Socket+"\n"
+		missingSocket := os.IsNotExist(err) && result.Stderr == "error connecting to "+launch.rt.Socket+" (No such file or directory)\n"
+		return result.Exit == 1 && result.Stdout == "" && (noServer || missingSocket) && tmux.JudgeProcess(f.PC, server) == tmux.ProcGone
+	}
+	panes := launch.rt.run(t, "list-panes", "-a", "-F", "#{pane_pid}")
+	if panes.Exit != 0 {
+		if !serverAbsent(panes) {
+			t.Errorf("snapshot fixture panes: %+v", panes)
+		} else {
+			// A dead server does not prove that a replacement gateway exited.
+			row, err := apitest.ReadSpawnColumns(f.DBPath, launch.ID)
+			if err != nil {
+				t.Errorf("read current fixture gateway after server exit: %v", err)
+			} else if pid, ok := row.PanePID.(int64); ok && pid > 0 {
+				if start, ok := row.PaneStarttime.(string); ok && start != "" {
+					gateways = append(gateways, tmux.ProcIdentity{PID: int(pid), Starttime: start})
+				} else {
+					t.Errorf("unknown current fixture gateway start time: %+v", row)
+				}
+			} else {
+				t.Errorf("unpublished current fixture gateway identity after server exit: %+v", row)
+			}
+		}
+	} else {
+		for _, raw := range strings.Fields(panes.Stdout) {
+			pid, err := strconv.Atoi(raw)
+			if err != nil || pid <= 0 {
+				t.Errorf("invalid fixture pane PID %q: %v", raw, err)
+				continue
+			}
+			start, alive, known := f.PC.StartTime(pid)
+			if !known {
+				t.Errorf("unknown fixture pane identity: %s", procState(pid))
+			}
+			if alive || !known {
+				gateways = append(gateways, tmux.ProcIdentity{PID: pid, Starttime: start})
+			}
+		}
+	}
+	result := launch.rt.run(t, "kill-server")
+	lostReply := result.Exit == 1 && result.Stdout == "" && result.Stderr == "server exited unexpectedly\n"
+	if result.Exit != 0 {
+		t.Logf("stop fixture server raw result: %+v", result)
+		if !serverAbsent(result) && !lostReply {
+			t.Errorf("stop fixture server: %+v", result)
+		}
+	}
+	// All gateway identities share the existing single wait budget.
+	waitFor(t, "fixture gateways gone before temporary files", func() bool {
+		if tmux.JudgeProcess(f.PC, server) != tmux.ProcGone {
+			return false
+		}
+		for _, gateway := range gateways {
+			if tmux.JudgeProcess(f.PC, gateway) != tmux.ProcGone {
+				return false
+			}
+		}
+		return true
+	}, func() string {
+		states := []string{fmt.Sprintf("server=%+v judge=%v %s; kill=%+v", server, tmux.JudgeProcess(f.PC, server), procState(server.PID), result)}
+		for _, gateway := range gateways {
+			states = append(states, fmt.Sprintf("%+v judge=%v %s", gateway, tmux.JudgeProcess(f.PC, gateway), procState(gateway.PID)))
+		}
+		return strings.Join(states, "; ")
+	})
 }
 
 // Synthetic runtime through the production CLI, row, gateway, and actual tmux pane.

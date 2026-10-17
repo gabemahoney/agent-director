@@ -182,10 +182,35 @@ This is an explicit fresh conversation. For `ErrReservedEnvKey`, omit the
 refused saved environment key from the new launch. Cursor retains the caller's
 `HOME`; it has no supported config-directory override.
 
-Only model selection (`--model`, `-m`, with a separate or `=` value) and a
-single initial prompt are accepted in Cursor `agent_args`. Unsupported
-arguments return `ErrSpawnDeniedFlag` before writing or launching. Cursor
-permission-list refusals are in [Permissions](permissions.md#cursor-spawns).
+Cursor `agent_args` accept the model, mode and single-prompt forms in
+[Fresh Cursor use](usage.md#fresh-cursor-use). Unsupported or malformed
+arguments return `ErrSpawnDeniedFlag` before writing or launching;
+`make-template` applies the same check before writing a Cursor template.
+Remove the named argument and any owned value, then retry. Conflicting modes,
+unknown aliases, route-changing arguments and ordinary force/yolo/sandbox/trust
+flags are refused. No compatible additional permission flag is supported.
+Cursor permission-list refusals are in [Permissions](permissions.md#cursor-spawns);
+argument replacement and empty-list semantics are in
+[Settings](settings.md#the-agent-and-its-arguments).
+
+A prompt must be one final argument, or exactly one argument after an
+argument-list `--` (a second `--` on the CLI). An earlier operand followed by
+a trailing `--` is refused. To protect flag-like or command-like prompt text,
+place that single prompt after the argument-list `--`.
+
+An accepted mode argument does not confirm runtime configuration. Each fresh,
+loaded or rotated conversation must advertise the requested mode and confirm
+its selection before publication, readiness or prompt submission. Missing mode
+state, an unavailable requested mode, a rejected or invalid acknowledgement,
+timeout or lost authority fails asynchronously, with no automatic fallback.
+Inspect the pane, row and `ad.cursor.failed` reason as for other gateway failures.
+If choosing to launch without an unavailable mode, remove `--plan`, or `--mode`
+and its value, and use the fresh generated-id procedure above to preserve the
+failed row. This deliberately chooses the runtime's default mode; it does not
+establish that the requested mode worked. A successful `spawn` or `resume`
+result confirms launch only. Model availability is likewise not established
+by launch success.
+
 Cursor session selectors are `--resume [chatId]`, `--continue`, command-position
 `resume` as the first non-option word, and `--new-session-id` with its required
 value. Plain spawn and same-agent reuse refuse them. Only reuse with an
@@ -196,7 +221,7 @@ Removed original tokens are reported in `dropped_args` in argv order; the
 field is omitted when empty. Missing, live, unreadable or same-agent rows
 grant no selector-removal authority. Resume filters recognized selectors and
 their owned values from a copy of saved `agent_args`, leaving the stored list intact.
-Values owned by `--model`/`-m` and prompt operands after `--` remain values or
+Values owned by model/mode options and prompt operands after `--` remain values or
 prompt text even when they spell a selector; no `-r` or `-c` alias is assumed.
 Normal input ordering and limits are in
 [Fresh Cursor use](usage.md#fresh-cursor-use). A successful `send-keys`

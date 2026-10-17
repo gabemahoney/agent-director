@@ -89,7 +89,7 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     callers spawning into /foo/bar and /foo/./bar end up with the same
 //     row.
 //  2. relay_mode is "on" / "off" / "" if set.
-//  3. The agent (SR-1.3 step 5): the resolved agent is claude or codex,
+//  3. The agent (SR-1.3 step 5): the resolved agent is claude, codex or cursor,
 //     else ErrAgentInvalid for a given value and ErrAgentMissing for none.
 //  4. Argument ownership (SR-2.1): inherited template agent_args belong to
 //     the resolved agent, else ErrAgentArgsMismatch.
@@ -100,7 +100,7 @@ const InvalidEnvKeyAlternative = "give each variable its own name as the key (no
 //     CheckCodexArgs (subcommands, --remote, and the hooks, paste-burst and
 //     question-tool settings agent-director owns), which reads the
 //     question-tool setting from r.DisableAskUser.
-//  6. A codex spawn carries no allow, deny or ask entry
+//  6. A codex or cursor spawn carries no allow, deny or ask entry
 //     (ErrPermissionsUnsupported).
 //  7. extra_env contains no key whose env-var name (the part before the
 //     first '=', the name tmux sets) is HOME or starts with AGENT_DIRECTOR_,
@@ -146,17 +146,17 @@ func Validate(r *Resolved) error {
 }
 
 // validateAgent applies SR-1.3 step 5 to r.Agent, the resolved agent (the
-// call's own, else its template's; Resolve). A value other than claude or
-// codex, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
+// call's own, else its template's; Resolve). A value other than claude,
+// codex or cursor, case-sensitively, is ErrAgentInvalid; none is ErrAgentMissing. A
 // template's own bad agent never gets here: loading it is
 // ErrTemplateMalformed (config.LoadTemplate).
 func validateAgent(r *Resolved) error {
 	switch {
 	case r.Agent == "":
-		return fmt.Errorf("%w: the call gives no agent and its template names none; pass agent %s or %s (--agent on the CLI), or put agent in the template",
-			ErrAgentMissing, config.AgentClaude, config.AgentCodex)
+		return fmt.Errorf("%w: the call gives no agent and its template names none; pass agent %s, %s or %s (--agent on the CLI), or put agent in the template",
+			ErrAgentMissing, config.AgentClaude, config.AgentCodex, config.AgentCursor)
 	case !config.ValidAgent(r.Agent):
-		return fmt.Errorf("%w: agent %q (want %s or %s)", ErrAgentInvalid, r.Agent, config.AgentClaude, config.AgentCodex)
+		return fmt.Errorf("%w: agent %q (want %s, %s or %s)", ErrAgentInvalid, r.Agent, config.AgentClaude, config.AgentCodex, config.AgentCursor)
 	}
 	return nil
 }

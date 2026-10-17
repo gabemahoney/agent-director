@@ -31,8 +31,10 @@ test("5 parallel version() calls on one Client never overlap: the CLI log altern
 test.each([
   ["direct, empty args", false, []],
   ["direct, model args", false, ["--model", "auto"]],
+  ["direct, mode and literal prompt", false, ["--plan", "-m=account/模型", "--", "--resume\n多行 🦋"]],
   ["template, absent args", true, undefined],
   ["template, empty args", true, []],
+  ["template, replacement args", true, ["--mode=ask", "--", "--resume\n多行 🦋"]],
 ] as [string, boolean, string[] | undefined][])("Cursor %s uses existing spawn/get/list/status/subagent methods", async (_label, template, agentArgs) => {
   await withTempHome(async (homeDir) => {
     await withProcessEnv({ TMUX_TMPDIR: homeDir, FAKE_TMUX_TABLES: path.join(homeDir, "fake-tmux-tables") }, async () => {
@@ -58,7 +60,7 @@ test.each([
     const row: GetResult = await client.get({ instance_id: spawned.instance_id });
     expect(row).toMatchObject({
       instance_id: spawned.instance_id, agent: "cursor", state: "pending",
-      agent_args: template ? ["--model", "auto"] : agentArgs,
+      agent_args: template && !agentArgs?.length ? ["--model", "auto"] : agentArgs,
     });
     const listed: ListRow | undefined = (await client.list({})).spawns.find((r) => r.instance_id === spawned.instance_id);
     expect(listed).toMatchObject({ instance_id: spawned.instance_id, agent: "cursor", state: "pending" });

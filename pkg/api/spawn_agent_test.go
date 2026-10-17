@@ -30,9 +30,9 @@ import (
 
 // The refusal descriptions, as the Catalog name and the verb's text give them.
 const (
-	agentMissingText       = "ErrAgentMissing: the call gives no agent and its template names none; pass agent claude or codex (--agent on the CLI), or put agent in the template"
-	agentInvalidTextFmt    = "ErrAgentInvalid: agent %q (want claude or codex)"
-	templateNoAgentText    = `ErrTemplateAgentMissing: t: agent_args are set but the template names no agent; add agent = "claude" or "codex", or remove agent_args`
+	agentMissingText       = "ErrAgentMissing: the call gives no agent and its template names none; pass agent claude, codex or cursor (--agent on the CLI), or put agent in the template"
+	agentInvalidTextFmt    = "ErrAgentInvalid: agent %q (want claude, codex or cursor)"
+	templateNoAgentText    = `ErrTemplateAgentMissing: t: agent_args are set but the template names no agent; add agent = "claude", "codex" or "cursor", or remove agent_args`
 	agentArgsMismatchStart = `ErrAgentArgsMismatch: template "t"'s agent_args are for agent %s and this spawn's agent is %s, so they are not inherited; spawn agent %s, or pass this call's own non-empty agent_args, which replace the template's`
 	permissionsText        = "ErrPermissionsUnsupported: a codex agent takes no allow, deny or ask entries; set permission rules in the rules/ folder of the group's Codex folder and use Codex's own permission controls"
 )
@@ -117,7 +117,7 @@ func TestSpawnAgentRefusals(t *testing.T) {
 		{name: "invalid per-call agent over a valid template agent", tmpl: &apitest.TemplateFields{Agent: "claude"},
 			p: api.SpawnParams{Agent: "gpt"}, want: "ErrAgentInvalid", text: strings.Replace(agentInvalidTextFmt, "%q", `"gpt"`, 1)},
 		{name: "template with an invalid agent, valid call agent", tmpl: &apitest.TemplateFields{Agent: "gemini"},
-			p: api.SpawnParams{Agent: "claude"}, want: "ErrTemplateMalformed", text: `ErrTemplateMalformed: t: agent="gemini" (want claude or codex)`},
+			p: api.SpawnParams{Agent: "claude"}, want: "ErrTemplateMalformed", text: `ErrTemplateMalformed: t: agent="gemini" (want claude, codex or cursor)`},
 		{name: "template agent_args with no agent, the call names claude", tmpl: &apitest.TemplateFields{AgentArgs: args},
 			p: api.SpawnParams{Agent: "claude"}, want: "ErrTemplateAgentMissing", text: templateNoAgentText},
 		{name: "template agent_args with no agent, the call names codex", tmpl: &apitest.TemplateFields{AgentArgs: args},
@@ -145,6 +145,9 @@ func TestSpawnAgentRefusals(t *testing.T) {
 		{name: "cursor ask template", tmpl: &apitest.TemplateFields{Agent: "cursor", Permissions: &config.TemplatePermissions{Ask: allowOne}}, want: "ErrPermissionsUnsupported", text: "ErrPermissionsUnsupported:"},
 		{name: "cursor ownership", tmpl: &apitest.TemplateFields{Agent: "claude", AgentArgs: args}, p: api.SpawnParams{Agent: "cursor"}, want: "ErrAgentArgsMismatch", text: fmt.Sprintf(agentArgsMismatchStart, "claude", "cursor", "claude")},
 		{name: "cursor denied arg before permission", p: api.SpawnParams{Agent: "cursor", AgentArgs: []string{"--resume=x"}, Permissions: perms(allowOne, nil, nil)}, want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag:"},
+		{name: "cursor malformed delimiter before mutation", p: api.SpawnParams{Agent: "cursor", AgentArgs: []string{"acp", "--"}}, want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag:"},
+		{name: "cursor mode and malformed delimiter before mutation", p: api.SpawnParams{Agent: "cursor", AgentArgs: []string{"chat", "--mode", "plan", "--"}}, want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag:"},
+		{name: "cursor merged allow remains refused", tmpl: &apitest.TemplateFields{Agent: "claude", Permissions: &config.TemplatePermissions{Allow: allowOne}}, p: api.SpawnParams{Agent: "cursor", Permissions: perms(nil, nil, []string{})}, want: "ErrPermissionsUnsupported", text: "ErrPermissionsUnsupported:"},
 		// A refused Codex argument: the Codex half of the denied-argument check, with the same nothing-written result.
 		{name: "a refused argument on a codex spawn", p: api.SpawnParams{Agent: "codex", AgentArgs: []string{"--remote", "ws://x"}},
 			want: "ErrSpawnDeniedFlag", text: "ErrSpawnDeniedFlag: --remote: it attaches the agent to a remote or shared service"},

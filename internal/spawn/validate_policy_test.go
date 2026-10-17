@@ -101,10 +101,10 @@ func TestValidateCursorSwitchResumePolicy(t *testing.T) {
 		{"verified selectors in order", []string{"--resume", "OLD", "--continue", "--new-session-id", "NEW", "resume", "--model", "x", "hello"}, []string{"--model", "x", "hello"}, []string{"--resume", "OLD", "--continue", "--new-session-id", "NEW", "resume"}, ""},
 		{"required model owns command", []string{"-m", "resume", "--continue", "hello"}, []string{"-m", "resume", "hello"}, []string{"--continue"}, ""},
 		{"empty prompt", []string{"--resume=OLD", "--", ""}, []string{"--", ""}, []string{"--resume=OLD"}, ""},
-		{"malformed survivor", []string{"--continue", "--model"}, nil, nil, "--model requires a value"},
-		{"owned selector is invalid model", []string{"--model", "--resume", "--continue"}, nil, nil, "--model requires a model"},
-		{"mode survivor remains refused", []string{"--resume", "OLD", "--mode=plan"}, nil, nil, "--mode (unsupported Cursor argument)"},
-		{"unverified alias", []string{"--continue", "-r", "OLD"}, nil, nil, "-r (unsupported Cursor argument)"},
+		{"malformed survivor", []string{"--continue", "--model"}, nil, nil, "--model (requires a value); remove this argument and retry"},
+		{"owned selector is invalid model", []string{"--model", "--resume", "--continue"}, nil, nil, "--model (requires a value); remove this option and its following value, then retry"},
+		{"verified mode survives selector removal", []string{"--resume", "OLD", "--mode=plan"}, []string{"--mode=plan"}, []string{"--resume", "OLD"}, ""},
+		{"unverified alias", []string{"--continue", "-r", "OLD"}, nil, nil, "-r (unsupported Cursor argument); remove this argument and retry"},
 	} {
 		t.Run(tc.name, func(t *testing.T) { validatePolicy(t, "cursor", tc.args, true, tc.want, tc.dropped, tc.refused) })
 	}

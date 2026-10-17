@@ -40,6 +40,8 @@ test.each([
     ["spawn", "--cwd", "/ws", "--template", "cursor"]],
   ["spawn: explicit Cursor with empty args omits --", "spawn", { cwd: "/ws", agent: "cursor", agent_args: [] },
     ["spawn", "--cwd", "/ws", "--agent", "cursor"]],
+  ["spawn: Cursor mode and literal prompt retain exact ownership", "spawn", { cwd: "/ws", agent: "cursor", agent_args: ["--mode=plan", "-m", "account/模型", "--", "--resume\n多行 🦋"] },
+    ["spawn", "--cwd", "/ws", "--agent", "cursor", "--", "--mode=plan", "-m", "account/模型", "--", "--resume\n多行 🦋"]],
   ["spawn: an empty agent counts as not given", "spawn", { cwd: "/ws", agent: "" }, ["spawn", "--cwd", "/ws"]],
   ["spawn: agent_args follow --, after every flag", "spawn", { cwd: "/ws", agent: "claude", agent_args: ["--model", "x"] },
     ["spawn", "--cwd", "/ws", "--agent", "claude", "--", "--model", "x"]],

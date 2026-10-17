@@ -345,7 +345,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent",
 				Type:          "string",
-				Description:   "The agent to launch: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's own non-empty agent_args replace them). A codex or cursor spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
+				Description:   "The agent to launch: claude (Claude Code), codex (Codex) or cursor (Cursor fresh Linux ACP), case-sensitive; empty or absent means not given. A per-call agent overrides the template's; with neither, ErrAgentMissing; any other value, ErrAgentInvalid. A template's non-empty agent_args are inherited only when the template's agent is this agent, else ErrAgentArgsMismatch (this call's supplied agent_args replace them, including an explicit empty Go/MCP array; CLI/TypeScript empty arrays are omitted). A codex or cursor spawn with any allow, deny or ask entry, from the call or the template, is refused with ErrPermissionsUnsupported. The row records the agent for life; get and list show it.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -417,7 +417,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks, and --disable hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat.",
+				Description:   "Pass-through argv to the agent program, one argument per array element (on the CLI, the arguments after --). Claude refuses --settings, --output-format and print (-p/--print, clusters included). Session selectors/owned values are refused except on a finished-agent switch: dropped_args reports their removal; the agent starts fresh and resumes nothing. Exact denied long tokens owned as values always refuse. For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position, --remote, --remote-auth-token-env, -c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks, and --disable hooks; with disable_ask_user on, also --enable default_mode_request_user_input and the question-tool keys. agent-director adds no second --no-daemon, --dangerously-bypass-hook-trust (pre-trust ok) or --enable write_stdin_approval when the arguments already carry one before any --; Codex rejects a flag the arguments themselves repeat. Cursor accepts --model/-m (split or equals), --mode agent|plan|ask, --plan and one final initial prompt (use -- before a flag-like prompt). Explicit mode is configured through ACP before prompt admission; launch success alone does not confirm it. Other or malformed Cursor arguments return ErrSpawnDeniedFlag; remove the named argument and any owned value, then retry.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1064,7 +1064,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "agent_args",
 				Type:          "[]string",
-				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat).",
+				Description:   "Bake default agent argv. Per-call agent_args (on the CLI, spawn's arguments after --) REPLACES the template's array wholesale (not concat). Cursor uses spawn's supported model/mode/initial-prompt subset; unsupported or malformed arguments return ErrSpawnDeniedFlag before writing.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,
@@ -1133,6 +1133,7 @@ var Verbs = []VerbDef{
 			"ErrTemplateExists",
 			"ErrTemplateMalformed",
 			"ErrTemplateAgentMissing",
+			"ErrSpawnDeniedFlag",
 			"ErrPermissionsUnsupported",
 			"ErrReservedEnvKey",
 		},
@@ -1396,6 +1397,7 @@ var Verbs = []VerbDef{
 			{Name: "runtime_args", Type: "string", Description: "Validated Cursor model argv as JSON (internal)."},
 			{Name: "initial_prompt", Type: "string", Description: "Fresh initial prompt (internal)."},
 			{Name: "load_session", Type: "string", Description: "Latest saved conversation to load, checked against the owned row (internal)."},
+			{Name: "requested_mode", Type: "string", Description: "Validated startup session mode to confirm before prompt admission (internal)."},
 		}, ResultFields: []FieldDef{}, ErrorNames: []string{},
 	},
 	{

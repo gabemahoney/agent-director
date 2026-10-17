@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -28,6 +29,10 @@ func beginCursorLoad(t *testing.T, scenario cursorfix.Scenario, initial string, 
 }
 
 func beginObservedCursorLoad(t *testing.T, scenario cursorfix.Scenario, initial string, starter inputStarter, observe func(context.Context, *requestEnv), before ...func(*requestEnv)) *cursorSession {
+	return beginCursorLoadWithOptions(t, scenario, Options{InitialPrompt: initial}, starter, observe, before...)
+}
+
+func beginCursorLoadWithOptions(t *testing.T, scenario cursorfix.Scenario, options Options, starter inputStarter, observe func(context.Context, *requestEnv), before ...func(*requestEnv)) *cursorSession {
 	t.Helper()
 	e := newRequestEnv(t, "off", "synthetic-session-1")
 	if setting := os.Getenv("AD_TEST_LOAD_DISABLE_ASK_USER"); setting != "" {
@@ -42,7 +47,7 @@ func beginObservedCursorLoad(t *testing.T, scenario cursorfix.Scenario, initial 
 		fn(e)
 	}
 	c := &cursorSession{e: e, master: master, pane: &observedWire{}, done: make(chan error, 1)}
-	options := Options{Runtime: e.runtime.Program, InitialPrompt: initial}
+	options.Runtime = e.runtime.Program
 	// The same behavioral test also runs against the pre-load controller via a source overlay.
 	if field := reflect.ValueOf(&options).Elem().FieldByName("LoadSession"); field.IsValid() {
 		field.SetString("synthetic-session-1")
@@ -69,7 +74,7 @@ func beginObservedCursorLoad(t *testing.T, scenario cursorfix.Scenario, initial 
 
 func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 	var token string
-	c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: true}, "saved initial", terminalLoop, func(e *requestEnv) {
+	c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: true, Modes: advertisedCursorModes()}, Options{InitialPrompt: "saved initial", RequestedMode: "plan"}, terminalLoop, nil, func(e *requestEnv) {
 		p, err := apitest.SeedPermissionRequest(e.path, e.binding.InstanceID, "Bash")
 		if err != nil {
 			t.Fatal(err)
@@ -92,7 +97,7 @@ func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 	c.wait(t, "initial completed", func() bool {
 		for _, r := range c.records(t) {
 			if r.Kind == "turn_outcome" {
-				return true
+				return bytes.Contains(c.pane.bytes(), []byte("Cursor turn complete"))
 			}
 		}
 		return false
@@ -101,6 +106,15 @@ func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 		t.Fatalf("initial replay: %v", got)
 	}
 	c.stop(t)
+	var methods []string
+	for _, f := range c.e.runtime.Frames(t) {
+		if len(f["method"]) > 0 {
+			methods = append(methods, string(f["method"]))
+		}
+	}
+	if got := strings.Join(methods, ","); got != `"initialize","session/load","session/set_mode","session/prompt"` {
+		t.Fatalf("saved initial mode/load order: %s", got)
+	}
 }
 
 func TestCursorLoadQueuedControlPreventsPublicationAndSavedPrompt(t *testing.T) {
@@ -286,42 +300,17 @@ func TestCursorLoadWithheldReplyExpiresOriginalProtocolBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("retains actual 45-second protocol bound")
 	}
-	c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: true, WaitForLoad: true}, "never dispatch", terminalLoop)
-	c.wait(t, "load dispatched", func() bool {
-		for _, f := range c.e.runtime.Frames(t) {
-			if string(f["method"]) == `"session/load"` {
-				return true
+	for _, phase := range []string{"load", "mode"} {
+		t.Run(phase, func(t *testing.T) {
+			scenario := cursorfix.Scenario{LoadSupport: true, WaitForLoad: true}
+			options := Options{InitialPrompt: "never dispatch"}
+			if phase == "mode" {
+				scenario.Modes = advertisedCursorModes()
+				scenario.WaitForMode = true
+				options.RequestedMode = "plan"
 			}
-		}
-		return false
-	})
-	started := time.Now()
-	select {
-	case err := <-c.done:
-		c.ended = true
-		if err == nil {
-			t.Fatal("withheld response succeeded")
-		}
-	case <-time.After(protocolWait + time.Second):
-		t.Fatal("load renewed original protocol deadline")
-	}
-	if time.Since(started) < protocolWait-time.Second {
-		t.Fatal("withheld load failed before original bound")
-	}
-	for _, f := range c.e.runtime.Frames(t) {
-		if string(f["method"]) == `"session/new"` || string(f["method"]) == `"session/prompt"` {
-			t.Fatal("timed-out load created/dispatched")
-		}
-	}
-}
-
-func TestCursorLoadCanceledReplyCannotPublish(t *testing.T) {
-	for _, control := range []string{"interrupt", "exit", "runtime death"} {
-		t.Run(control, func(t *testing.T) {
-			input := &completeInput{ready: make(chan struct{})}
-			c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: true, WaitForLoad: true}, "never dispatch", input.start)
-			<-input.ready
-			c.wait(t, "load before cancellation", func() bool {
+			c := beginCursorLoadWithOptions(t, scenario, options, terminalLoop, nil)
+			c.wait(t, "load dispatched", func() bool {
 				for _, f := range c.e.runtime.Frames(t) {
 					if string(f["method"]) == `"session/load"` {
 						return true
@@ -329,42 +318,110 @@ func TestCursorLoadCanceledReplyCannotPublish(t *testing.T) {
 				}
 				return false
 			})
-			if control == "runtime death" {
-				raw, err := os.ReadFile(c.e.runtime.PID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var pid int
-				if _, err := fmt.Sscan(string(raw), &pid); err != nil {
-					t.Fatal(err)
-				}
-				if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				v := terminalInput{interrupt: true}
-				if control == "exit" {
-					v = terminalInput{text: "/exit"}
-				}
-				input.emit(v)
-			}
-			// Epoch retirement happens synchronously in the mailbox before the peer is released.
-			if err := os.WriteFile(c.e.runtime.NewRelease, []byte("release after retirement"), 0600); err != nil {
-				t.Fatal(err)
+			started := time.Now()
+			if phase == "mode" {
+				// Consume part of loadUntil before moving to configuration; a fresh
+				// mode-relative 45s timer would exceed the unchanged outer bound below.
+				<-time.After(2 * time.Second)
+				rotationRelease(t, c.e.runtime.NewRelease)
+				c.wait(t, "load mode dispatched", func() bool {
+					for _, f := range c.e.runtime.Frames(t) {
+						if string(f["method"]) == `"session/set_mode"` {
+							return true
+						}
+					}
+					return false
+				})
 			}
 			select {
-			case <-c.done:
+			case err := <-c.done:
 				c.ended = true
-			case <-time.After(cancelWait + time.Second):
-				t.Fatal("canceled load not bounded")
+				if err == nil {
+					t.Fatal("withheld response succeeded")
+				}
+			case <-time.After(time.Until(started.Add(protocolWait + time.Second))):
+				t.Fatal("load renewed original protocol deadline")
 			}
-			for _, r := range c.records(t) {
-				if r.Kind == "session_loaded" || r.Kind == "submission_dispatched" {
-					t.Fatalf("late response granted publication/admission: %+v", r)
+			if time.Since(started) < protocolWait-time.Second {
+				t.Fatal("withheld load failed before original bound")
+			}
+			for _, f := range c.e.runtime.Frames(t) {
+				if string(f["method"]) == `"session/new"` || string(f["method"]) == `"session/prompt"` {
+					t.Fatal("timed-out load created/dispatched")
 				}
 			}
-			if len(c.prompts(t)) != 0 {
-				t.Fatal("canceled load dispatched saved initial")
+		})
+	}
+}
+
+func TestCursorLoadCanceledReplyCannotPublish(t *testing.T) {
+	for _, phase := range []string{"load", "mode"} {
+		t.Run(phase, func(t *testing.T) {
+			for _, control := range []string{"interrupt", "exit", "runtime death"} {
+				t.Run(control, func(t *testing.T) {
+					input := &completeInput{ready: make(chan struct{})}
+					scenario := cursorfix.Scenario{LoadSupport: true, WaitForLoad: true}
+					options := Options{InitialPrompt: "never dispatch"}
+					method := `"session/load"`
+					if phase == "mode" {
+						scenario.WaitForLoad = false
+						scenario.Modes = advertisedCursorModes()
+						scenario.WaitForMode = true
+						options.RequestedMode = "plan"
+						method = `"session/set_mode"`
+					}
+					c := beginCursorLoadWithOptions(t, scenario, options, input.start, nil)
+					<-input.ready
+					c.wait(t, "load before cancellation", func() bool {
+						for _, f := range c.e.runtime.Frames(t) {
+							if string(f["method"]) == method {
+								return true
+							}
+						}
+						return false
+					})
+					if control == "runtime death" {
+						raw, err := os.ReadFile(c.e.runtime.PID)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var pid int
+						if _, err := fmt.Sscan(string(raw), &pid); err != nil {
+							t.Fatal(err)
+						}
+						if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						v := terminalInput{interrupt: true}
+						if control == "exit" {
+							v = terminalInput{text: "/exit"}
+						}
+						input.emit(v)
+					}
+					// Epoch retirement happens synchronously in the mailbox before the peer is released.
+					release := c.e.runtime.NewRelease
+					if phase == "mode" {
+						release = c.e.runtime.Release
+					}
+					if err := os.WriteFile(release, []byte("release after retirement"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					select {
+					case <-c.done:
+						c.ended = true
+					case <-time.After(cancelWait + time.Second):
+						t.Fatal("canceled load not bounded")
+					}
+					for _, r := range c.records(t) {
+						if r.Kind == "session_loaded" || r.Kind == "submission_dispatched" {
+							t.Fatalf("late response granted publication/admission: %+v", r)
+						}
+					}
+					if len(c.prompts(t)) != 0 {
+						t.Fatal("canceled load dispatched saved initial")
+					}
+				})
 			}
 		})
 	}

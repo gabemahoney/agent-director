@@ -603,7 +603,7 @@ func TestAdviceFollow_G6_LaunchValueAbsoluteOrTilde(t *testing.T) {
 
 // advTemplateAgentAdvice matches the agent a template without one is told to
 // add: "add agent = "claude" or "codex", or remove agent_args".
-var advTemplateAgentAdvice = regexp.MustCompile(`add agent = "(\w+)" or "(\w+)", or remove agent_args$`)
+var advTemplateAgentAdvice = regexp.MustCompile(`add agent = "(\w+)", "(\w+)" or "(\w+)", or remove agent_args$`)
 
 // TestAdviceFollow_G7_TemplateAgentArgsWithoutAgent: G7 (SR-1.3) "<name>:
 // agent_args are set but the template names no agent; add agent = "claude" or

@@ -13,15 +13,17 @@ import (
 )
 
 type reporter struct {
-	store              *store.Store
-	cfg                config.Config
-	binding            store.CursorRuntime
-	exe                string
-	path               string
-	loaded             bool
-	rotationContext    context.Context
-	rotationObserved   func(store.CursorRuntime)
-	rotationReconciled func()
+	store               *store.Store
+	cfg                 config.Config
+	binding             store.CursorRuntime
+	exe                 string
+	path                string
+	loaded              bool
+	rotationContext     context.Context
+	rotationObserved    func(store.CursorRuntime)
+	rotationReconciled  func()
+	afterRuntimeRetired func()
+	terminationUntil    time.Time
 }
 
 // A locally retired authorization is not evidence that the durable dialog is
@@ -47,6 +49,12 @@ func (r *reporter) report(event string) error {
 // reportWaiting lets Enter independently confirm the committed waiting report
 // while its hook is finishing. It never grants admission before that commit.
 func (r *reporter) reportWaiting(event string, waiting func(func() bool)) error {
+	if event == "SessionEnd" {
+		// Retirement can outlive the controller's await. Keep its local proof
+		// separate from the binding used by concurrent fatal cleanup.
+		snapshot := *r
+		return snapshot.reportIdentity(event, waiting, "")
+	}
 	return r.reportIdentity(event, waiting, "")
 }
 
@@ -76,6 +84,9 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 		if e != nil || !ok {
 			return fmt.Errorf("Cursor retirement binding changed")
 		}
+		if r.afterRuntimeRetired != nil {
+			r.afterRuntimeRetired()
+		}
 		r.binding.Terminated = true
 	}
 	payload := map[string]any{"hook_event_name": event, "session_id": r.binding.SessionID, "transcript_path": r.path, "cursor_connection": r.binding.Connection, "origin": "main"}
@@ -95,6 +106,12 @@ func (r *reporter) reportIdentity(event string, waiting func(func() bool), next 
 		return err
 	}
 	reportUntil := time.Now().Add(5 * time.Second)
+	if terminated && !r.terminationUntil.IsZero() && r.terminationUntil.Before(reportUntil) {
+		reportUntil = r.terminationUntil
+	}
+	if !time.Now().Before(reportUntil) {
+		return fmt.Errorf("Cursor end report deadline passed")
+	}
 	if next != "" && rotationUntil[0].Before(reportUntil) {
 		reportUntil = rotationUntil[0]
 	}

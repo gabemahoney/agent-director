@@ -43,7 +43,7 @@ input.on('line', async line => {
    while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
   // Source-derived synthetic agent-store.ts existence check; success remains scripted ACP, never authenticated recall.
   const nativeMissing=scripted?.nativeConfigRoot && !fs.existsSync(require('path').join(scripted.nativeConfigRoot,'acp-sessions',frame.params.sessionId,'store.db'));
-  send({id:frame.id,...(nativeMissing ? {error:{code:-32603,message:'Session "'+frame.params.sessionId+'" not found'}} : (scripted?.loadReply || {result:{}}))});
+  send({id:frame.id,...(nativeMissing ? {error:{code:-32603,message:'Session "'+frame.params.sessionId+'" not found'}} : (scripted?.loadReply || {result:{...(scripted?.modes ? {modes:scripted.modes} : {})}}))});
   if(scripted?.afterLoadReply) for(const event of scripted.afterLoadReply) send(event);
  }
  else if(frame.method==='session/new') {
@@ -57,8 +57,16 @@ input.on('line', async line => {
   if(count > 1 && scripted?.waitForNew)
    while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
   const reply = count > 1 ? scripted?.newReplies?.[count-2] : null;
-  send({id:frame.id,...(reply || {result:{sessionId:count===1 ? (scripted?.sessionId || 'synthetic-session-1') : 'synthetic-session-'+count}})});
+  send({id:frame.id,...(reply || {result:{sessionId:count===1 ? (scripted?.sessionId || 'synthetic-session-1') : 'synthetic-session-'+count,...(scripted?.modes ? {modes:scripted.modes} : {})}})});
   if(count > 1 && scripted?.afterNew) for(const event of scripted.afterNew) send(event);
+ }
+ else if(frame.method==='session/set_mode') {
+  const scripted=scenario();
+  if(scripted?.beforeModeReply) for(const event of scripted.beforeModeReply) send(event);
+  if(scripted?.waitForMode)
+   while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
+  send({id:frame.id,...(scripted?.modeReply || {result:{}})});
+  if(scripted?.afterModeReply) for(const event of scripted.afterModeReply) send(event);
  }
  else if(frame.method==='session/prompt') {
   const text=frame.params.prompt[0].text;

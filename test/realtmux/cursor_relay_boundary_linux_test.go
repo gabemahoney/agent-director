@@ -21,6 +21,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/errnames"
 	"golang.org/x/sys/unix"
 )
 
@@ -107,6 +108,8 @@ func TestCursorRelayQueuedVerdictsNeverReplay(t *testing.T) {
 		script.Requests = append(script.Requests, relayFrame("queued-"+decision, "session/request_permission", cursorfix.Permission(session, "queue-tool-"+decision, "execute")))
 	}
 	f, r, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{Script: &script, Relay: "on", Timeout: 30})
+	diagnostics := cursorFailureDiagnostics{t: t, f: f, peer: r, id: launch.ID, home: os.Getenv("HOME")}
+	defer diagnostics.capture()
 	st, e := store.Open(f.DBPath)
 	if e != nil {
 		t.Fatal(e)
@@ -146,9 +149,40 @@ func TestCursorRelayQueuedVerdictsNeverReplay(t *testing.T) {
 	for _, row := range rows {
 		decision := strings.TrimPrefix(row.ToolUseID, "queue-tool-")
 		waitFor(t, "public decision under contention", func() bool {
-			_, e = f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: row.RequestToken, Decision: decision, MaxWaitMs: &bound})
+			started := time.Now()
+			result, decideErr := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: row.RequestToken, Decision: decision, MaxWaitMs: &bound})
+			e = decideErr
+			diagnostics.record("Decide "+decision, started, result, e)
 			if e != nil && !errors.Is(e, api.ErrStoreBusy) {
-				t.Fatal(e)
+				name, description := errnames.Classify(e)
+				if name != "ErrInternal" || !strings.HasPrefix(description, "store: commit outcome unconfirmed; read the request before retrying (") {
+					t.Fatal(e)
+				}
+				// An uncertain commit is never replayed or a delivery receipt.
+				started = time.Now()
+				verdict, readErr := f.API.GetPermission(api.GetPermissionParams{RequestToken: row.RequestToken})
+				diagnostics.record("GetPermission after uncertain "+decision, started, verdict, readErr)
+				t.Logf("uncertain decision: %v; public readback: %+v; error: %v", e, verdict, readErr)
+				reasonMatches := verdict.DecisionReason == nil
+				if decision == "deny" {
+					reasonMatches = verdict.DecisionReason != nil && *verdict.DecisionReason == "operator"
+				}
+				if readErr != nil || verdict.RequestToken != row.RequestToken || verdict.RequestID != row.RequestID || verdict.ToolInput != row.ToolInput || verdict.Decision == nil || *verdict.Decision != decision || !reasonMatches || verdict.DecidedAt == nil || verdict.DecidedAt.IsZero() {
+					t.Fatalf("uncertain decision has no exact public recorded verdict: original=%v readback=%+v read_error=%v", e, verdict, readErr)
+				}
+				started = time.Now()
+				owner, ownerErr := f.API.Get(launch.ID)
+				diagnostics.record("Get owner after uncertain "+decision, started, owner, ownerErr)
+				owned := false
+				for _, request := range owner.UnprovenRequests {
+					if request.RequestToken == verdict.RequestToken && request.RequestID == verdict.RequestID {
+						owned = true
+					}
+				}
+				if ownerErr != nil || owner.InstanceID != launch.ID || !owned {
+					t.Fatalf("uncertain decision public ownership mismatch: original=%v owner=%+v read_error=%v", e, owner, ownerErr)
+				}
+				return true
 			}
 			return e == nil
 		}, func() string { return fmt.Sprint(e) })

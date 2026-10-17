@@ -235,7 +235,7 @@ rl_reuse_call() {
  local surface=$1 target=$2 args=${3:-'[]'}
  if [[ $surface == CLI ]]; then
   local values=()
-  mapfile -t values < <(jq -r '.[]' <<<"$args")
+  mapfile -d '' -t values < <(jq -j '.[] | ., "\u0000"' <<<"$args")
   ad spawn --agent "$target" --instance-id "$id" --cwd "$case_dir/cwd" --reuse-finished --no-pre-trust -- "${values[@]}"
  else
   pc_public "$surface" spawn "$(jq -cn --arg id "$id" --arg cwd "$case_dir/cwd" --arg agent "$target" --argjson args "$args" '{instance_id:$id,cwd:$cwd,agent:$agent,agent_args:$args,reuse_finished:true,no_pre_trust:true}')"

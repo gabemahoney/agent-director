@@ -128,20 +128,33 @@ func TestSpawnCLITmuxSessionNameSupplied(t *testing.T) {
 func TestSpawnCLITemplateAgentArgs(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
 	for _, tc := range []struct {
-		name       string
-		extra      []string
-		want, gone string
+		name               string
+		extra              []string
+		want, gone         string
+		agent, templateArg string
 	}{
-		{"template args when none follow --", nil, "--foo", ""},
-		{"args after -- replace the template's", []string{"--", "--bar"}, "--bar", "--foo"},
+		{"template args when none follow --", nil, "--foo", "", "claude", "--foo"},
+		{"args after -- replace the template's", []string{"--", "--bar"}, "--bar", "--foo", "claude", "--foo"},
+		{"Cursor omission inherits", nil, "--plan", "", "cursor", "--plan"},
+		{"Cursor bare delimiter inherits", []string{"--"}, "--plan", "", "cursor", "--plan"},
+		{"Cursor nonempty replaces", []string{"--", "--mode=ask"}, "--mode=ask", "--plan", "cursor", "--plan"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
-			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: "claude", AgentArgs: []string{"--foo"}})
-			id := spawnOK(t, home, fakeDir, append([]string{"--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
+			seedTemplate(t, home, "tpl", apitest.TemplateFields{Agent: tc.agent, AgentArgs: []string{tc.templateArg}})
+			id := spawnOK(t, home, fakeDir, append([]string{"--agent", tc.agent, "--cwd", t.TempDir(), "--template", "tpl", "--no-pre-trust"}, tc.extra...)...)
 
 			argv := assertInvocationKinds(t, home, "new-session")[0]
-			if !slices.Contains(argv, tc.want) || (tc.gone != "" && slices.Contains(argv, tc.gone)) {
+			if tc.agent == "cursor" {
+				mode := strings.TrimPrefix(tc.want, "--mode=")
+				if mode == "--plan" {
+					mode = "plan"
+				}
+				at := slices.Index(argv, "--requested-mode")
+				if at < 0 || at+1 >= len(argv) || argv[at+1] != mode {
+					t.Fatalf("private mode forwarding=%q; want %s", argv, mode)
+				}
+			} else if !slices.Contains(argv, tc.want) || (tc.gone != "" && slices.Contains(argv, tc.gone)) {
 				t.Errorf("create argv = %q; want %s and not %q", argv, tc.want, tc.gone)
 			}
 			if got := jsonOf(t, getRow(t, home, fakeDir, id)["agent_args"]); got != `["`+tc.want+`"]` {
@@ -213,7 +226,7 @@ func TestSpawnCLIAgentRefusals(t *testing.T) {
 		name, errName, desc string
 		flags               []string
 	}{
-		{"wrong case", "ErrAgentInvalid", `agent "Claude" (want claude or codex)`, []string{"--agent", "Claude"}},
+		{"wrong case", "ErrAgentInvalid", `agent "Claude" (want claude, codex or cursor)`, []string{"--agent", "Claude"}},
 		{"empty counts as not given", "ErrAgentMissing", "--agent on the CLI", []string{"--agent="}},
 		{"codex allow", "ErrPermissionsUnsupported", noPerms, []string{"--agent", "codex", "--allow", "Bash"}},
 		{"codex deny", "ErrPermissionsUnsupported", noPerms, []string{"--agent", "codex", "--deny", "Bash"}},

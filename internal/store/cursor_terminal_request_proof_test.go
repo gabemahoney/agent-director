@@ -12,7 +12,7 @@ import (
 
 // b.ftd: all Cursor callers of the shared terminal close retain unproven relay acknowledgements.
 func TestCursorTerminalClosePreservesRequestProof(t *testing.T) {
-	for _, path := range []string{"cursor missing", "find missing", "SessionEnd", "resume backstop"} {
+	for _, path := range []string{"cursor missing", "fatal unretired", "fatal retired", "find missing", "SessionEnd", "resume backstop"} {
 		t.Run(path, func(t *testing.T) {
 			f, row, b := cursorRowBinding(t)
 			request, err := apitest.SeedPermissionRequest(f.path, row.InstanceID, "Bash")
@@ -42,6 +42,15 @@ func TestCursorTerminalClosePreservesRequestProof(t *testing.T) {
 			}
 			wantState := store.StateMissing
 			switch path {
+			case "fatal unretired", "fatal retired":
+				if path == "fatal retired" {
+					if ok, err := f.s.MarkCursorRuntimeGone(b); err != nil || !ok {
+						t.Fatalf("retire %v %v", ok, err)
+					}
+				}
+				if _, result, err := f.s.MarkFailedCursorRuntimeMissing(row, b); err != nil || result != store.CondApplied {
+					t.Fatalf("fatal missing: %v %v", result, err)
+				}
 			case "cursor missing":
 				if _, result, err := f.s.MarkCursorMissingIfSameLaunch(row, b); err != nil || result != store.CondApplied {
 					t.Fatalf("cursor missing: %v %v", result, err)

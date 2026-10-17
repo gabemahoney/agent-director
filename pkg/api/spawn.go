@@ -204,7 +204,7 @@ func hasControlChar(id string) bool {
 // description names it, and get shows it): without ReuseFinished, the spawn
 // collides with the id's finished row (ErrInstanceIdCollision).
 //
-// The spawn names its agent, claude or codex (case-sensitive): SpawnParams.Agent,
+// The spawn names its agent, claude, codex or cursor (case-sensitive): SpawnParams.Agent,
 // else the template's agent, else the call is refused with ErrAgentMissing; no
 // config key or environment variable supplies one. Agent_args inherited from
 // a template belong to the template's agent: a spawn of another agent that
@@ -254,7 +254,7 @@ func hasControlChar(id string) bool {
 //   - ErrCwdNotADirectory: CWD exists but is a file, not a directory.
 //   - ErrRelayModeInvalid: RelayMode is not "on", "off", or "".
 //   - ErrAgentMissing: the call gives no Agent and its template names none.
-//   - ErrAgentInvalid: Agent is neither claude nor codex (case-sensitive).
+//   - ErrAgentInvalid: Agent is not claude, codex or cursor (case-sensitive).
 //   - ErrAgentArgsMismatch: the template's agent_args are for another agent
 //     than this spawn's and the call supplies no AgentArgs of its own.
 //   - ErrSpawnDeniedFlag: a refused argument was passed in AgentArgs: for a
@@ -266,7 +266,11 @@ func hasControlChar(id string) bool {
 //     -c/--config key at, above or under hooks, tui.disable_paste_burst or
 //     features.hooks, --disable hooks, and while disable_ask_user is on the
 //     question-tool keys and --enable default_mode_request_user_input).
-//   - ErrPermissionsUnsupported: a codex spawn carries Permissions allow,
+//     Cursor accepts model selection, explicit agent/plan/ask mode and one
+//     initial prompt. Unsupported or malformed Cursor arguments are refused;
+//     remove the named argument and any owned value, then retry. Explicit mode is established through
+//     ACP before prompt admission; later runtime failures are asynchronous.
+//   - ErrPermissionsUnsupported: a codex or cursor spawn carries Permissions allow,
 //     deny or ask entries (merged with the template's).
 //   - ErrReservedEnvKey: ExtraEnv (merged with the template's) contains a
 //     key whose name before the first '=' (the name tmux sets) is reserved:
@@ -372,8 +376,8 @@ func hasControlChar(id string) bool {
 //   - ErrTemplateNotFound: the named template file does not exist.
 //   - ErrTemplateMalformed: the template TOML could not be parsed, or it
 //     sets an unknown key, one key under names differing only in letter
-//     case, a relay_mode other than on/off, or an agent other than claude
-//     or codex.
+//     case, a relay_mode other than on/off, or an agent other than claude,
+//     codex or cursor.
 //   - ErrTemplateAgentMissing: the template sets agent_args but names no
 //     agent.
 //   - ErrTemplateNameUnsafe: the template name contains path-unsafe characters.

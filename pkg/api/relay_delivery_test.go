@@ -309,7 +309,13 @@ func TestReadersNeverWaitForTheWriteLock(t *testing.T) {
 	}
 
 	first := e.now
-	if got := e.getPermission(t, slow).HookGoneAt; got == nil || !got.Equal(first) {
+	trace := &hookGoneTrace{Store: slow}
+	started := time.Now()
+	if got := e.getPermission(t, trace).HookGoneAt; got == nil || !got.Equal(first) {
+		publicElapsed := time.Since(started)
+		hookGoneFailureDiagnostics(t, e.dbPath, trace)
+		t.Logf("first free public read elapsed=%v; RecordHookGone calls=%d at=%v maxWait=%v requestIDs=%v stored=%v elapsed=%v error=(%T) %v; GOMAXPROCS=%d NumCPU=%d",
+			publicElapsed, trace.calls, trace.at, trace.maxWait, trace.requestIDs, trace.stored, trace.elapsed, trace.err, trace.err, runtime.GOMAXPROCS(0), runtime.NumCPU())
 		t.Errorf("get-permission with the lock free: hook_gone_at = %v; want %v recorded", got, first)
 	}
 	e.now = e.now.Add(time.Minute)

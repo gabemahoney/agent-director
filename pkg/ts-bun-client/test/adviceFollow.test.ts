@@ -162,28 +162,29 @@ for (const { verb, outcome, call } of [
   }, 10_000);
 }
 
-// K5 (SR-1.1): "pass agent claude or codex (--agent on the CLI), or put agent in the template"
+// K5 (SR-1.1): "pass agent claude, codex or cursor (--agent on the CLI), or put agent in the template"
 test("K5 spawn with no agent: passing agent as advised launches a row that runs it", async () => {
   await withTempHome(async (homeDir) => {
     seedOuterParent(homeStore(homeDir));
     using client = await openClient(homeStore(homeDir));
-    const phrase = "pass agent claude or codex (--agent on the CLI), or put agent in the template";
+    const phrase = "pass agent claude, codex or cursor (--agent on the CLI), or put agent in the template";
 
     const refusal = await rejection(client.spawn({ cwd: homeDir, instance_id: "k5-id" }));
 
     expect(refusal).toBeInstanceOf(ErrAgentMissing);
     expect((refusal as ErrAgentMissing).errDescription).toContain(phrase);
     // The advice names the param ("agent") and its values; the first is passed as told.
-    const [, param, value] = /pass (\w+) (\w+) or \w+ \(--agent/.exec((refusal as ErrAgentMissing).errDescription)!;
+    const [, param, value] = /pass (\w+) (\w+), codex or cursor \(--agent/.exec((refusal as ErrAgentMissing).errDescription)!;
     const spawned = await client.spawn({ cwd: homeDir, instance_id: "k5-id", [param!]: value } as never);
     expect(spawned.instance_id).toBe("k5-id");
     expect((await client.get({ instance_id: "k5-id" })).agent).toBe(value);
   });
 }, 10_000);
 
-// K6 (SR-1.6): make-template's "agent_args are set but no agent is given; pass agent claude or codex, or remove agent_args"
+// K6 (SR-1.6): make-template's "agent_args are set but no agent is given; pass agent claude, codex or cursor, or remove agent_args"
 const k6Fixes: [string, { agent?: string; agent_args?: string[] }][] = [
   ["pass agent", { agent: "claude", agent_args: ["--model", "opus"] }],
+  ["pass cursor", { agent: "cursor", agent_args: ["--plan", "--", "--resume\n多行 🦋"] }],
   ["remove agent_args", {}],
 ];
 test.each(k6Fixes)("K6 make-template agent_args with no agent: to %s, as advised, saves the template", async (_label, fix) => {
@@ -195,7 +196,7 @@ test.each(k6Fixes)("K6 make-template agent_args with no agent: to %s, as advised
 
     expect(refusal).toBeInstanceOf(ErrTemplateAgentMissing);
     expect((refusal as ErrTemplateAgentMissing).errDescription).toContain(
-      "agent_args are set but no agent is given; pass agent claude or codex, or remove agent_args",
+      "agent_args are set but no agent is given; pass agent claude, codex or cursor, or remove agent_args",
     );
     const saved = await client.makeTemplate({ name: "k6", cwd: homeDir, ...fix });
     expect(fs.existsSync(saved.path)).toBe(true);

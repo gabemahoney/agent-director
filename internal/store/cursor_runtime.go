@@ -206,6 +206,32 @@ func (s *Store) MarkCursorMissingIfSameLaunch(row Spawn, b CursorRuntime) (strin
 	return s.terminalMarkWithoutWait("store: close lost Cursor launch", stmt, args, row.InstanceID, DecisionReasonFindMissing)
 }
 
+// MarkFailedCursorRuntimeMissing closes a failed gateway after its caller has
+// independently verified the exact owned runtime is dead. A concurrent end
+// report may retire that same binding while cleanup runs; either termination
+// bit is compatible with that death proof. Every identity, session and examined
+// row guard remains exact. Public lost-gateway reconciliation keeps the stricter
+// MarkCursorMissingIfSameLaunch predicate above.
+func (s *Store) MarkFailedCursorRuntimeMissing(row Spawn, b CursorRuntime) (string, CondResult, error) {
+	if cursorRuntimeAbsent(b) || row.Identity.Token != b.Token || row.LifeNumber != b.Life || row.Identity.PanePID != b.GatewayPID || row.Identity.PaneStarttime != b.GatewayStart {
+		return "", CondChanged, nil
+	}
+	guard, guardArgs := cursorMissingGuard(row, b)
+	if guard == "" {
+		return "", CondChanged, nil
+	}
+	if !b.Terminated {
+		retired := b
+		retired.Terminated = true
+		retiredGuard, retiredArgs := cursorMissingGuard(row, retired)
+		guard = "(" + guard + ") OR (" + retiredGuard + ")"
+		guardArgs = append(guardArgs, retiredArgs...)
+	}
+	args := append(immediateStateArgs(StateMissing), guardArgs...)
+	stmt := markMissingSetSQL + ` WHERE ` + guard
+	return s.terminalMarkWithoutWait("store: close failed Cursor runtime", stmt, args, row.InstanceID, DecisionReasonFindMissing)
+}
+
 // ReadLiveCursorSpawn confines liveness reconciliation to one live Cursor row.
 // Other agents and terminal rows retain their normal public read paths.
 func (s *Store) ReadLiveCursorSpawn(id string) (Spawn, bool, error) {

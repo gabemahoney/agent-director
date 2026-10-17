@@ -23,12 +23,19 @@ import (
 )
 
 var errPromptRetired = errors.New("Cursor prompt retired before write")
+var errACPOperationTimeout = errors.New("Cursor ACP operation timed out")
 
 type Options struct {
 	Runtime       string
 	RuntimeArgs   []string
 	InitialPrompt string
 	LoadSession   string
+	RequestedMode string
+
+	// verifyModeRuntime replaces only the mode writer's runtime verification.
+	// Tests can delay a real VerifyRuntime result to order a control during its
+	// verification window. Production leaves it nil and uses VerifyRuntime.
+	verifyModeRuntime func(store.CursorRuntime, bool) error
 
 	// afterStartupQueueEnabled observes successful epoch-owned startup admission.
 	// It runs once on the session goroutine, outside mailbox locks, and must
@@ -40,6 +47,10 @@ type Options struct {
 	// not observed. It runs on the session goroutine, outside locks, and must
 	// return promptly. Production leaves it nil.
 	beforeControllerCleanup func(error)
+
+	// afterRuntimeRetired observes the durable retirement before the reporting
+	// worker updates its local proof. Production leaves it nil.
+	afterRuntimeRetired func()
 }
 
 // Run owns a fresh or latest-loaded Cursor conversation. Follow-ups remain
@@ -176,7 +187,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return err
 	}
 	defer tr.file.Close()
-	rep := &reporter{store: s, cfg: cfg, binding: b, exe: exe, path: tr.path}
+	rep := &reporter{store: s, cfg: cfg, binding: b, exe: exe, path: tr.path, afterRuntimeRetired: options.afterRuntimeRetired}
 	cleanupBinding = &rep.binding
 	protocolInput, err := p.protocolInput()
 	if err != nil {
@@ -235,6 +246,11 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	session := ""
 	phase := "initialize"
 	var loadUntil time.Time
+	var sessionUntil time.Time
+	var modeResponse json.RawMessage
+	var modePhase, modeSession string
+	var modeEpoch uint64
+	var modeUntil time.Time
 	busy := false
 	requestDeadlineHeld := false
 	cancelled := false
@@ -282,6 +298,41 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	idleControl := false
 	var pendingControl map[string]any
 	var stopPublication context.CancelFunc
+	verifyModeRuntime := VerifyRuntime
+	if options.verifyModeRuntime != nil {
+		verifyModeRuntime = options.verifyModeRuntime
+	}
+	configureMode := func(raw json.RawMessage, target string) error {
+		if err := requestedSessionMode(raw, options.RequestedMode); err != nil {
+			return err
+		}
+		modeResponse, modePhase, modeSession = raw, phase, target
+		modeEpoch, modeUntil = loadEpoch, sessionUntil
+		if phase == "load" {
+			modeUntil = loadUntil
+		}
+		if phase == "rotate_new" {
+			modeEpoch, modeUntil = rotationEpoch, cancelAt.Add(cancelWait)
+		}
+		epoch, until := modeEpoch, modeUntil
+		if _, err := protocol.requestGuarded("session/set_mode", map[string]any{"sessionId": target, "modeId": options.RequestedMode}, func() error {
+			if !inputs.current(epoch) || !time.Now().Before(until) {
+				return errPromptRetired
+			}
+			if err := verifyModeRuntime(rep.binding, false); err != nil {
+				return err
+			}
+			// Kernel reads cannot renew authority retired during verification.
+			if !inputs.current(epoch) || !time.Now().Before(until) {
+				return errPromptRetired
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		phase = modePhase + "_mode"
+		return nil
+	}
 	handleControl := func(input terminalInput) error {
 		if runtimeEnded {
 			return nil
@@ -400,7 +451,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					return e
 				}
 			case <-deadline.C:
-				return fmt.Errorf("Cursor ACP operation timed out")
+				return errACPOperationTimeout
 			case <-childDone:
 				if intentional {
 					runtimeEnded = true
@@ -421,7 +472,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		}
 		return e
 	}
-	report := func(event string) error { return await(func() error { return rep.report(event) }) }
+	report := func(event string) error {
+		e := await(func() error { return rep.report(event) })
+		if errors.Is(e, errACPOperationTimeout) {
+			return fmt.Errorf("%w (phase=%s, report=%s)", e, phase, event)
+		}
+		return e
+	}
 	reportWaiting := func(event string, check func(func() bool)) error {
 		return await(func() error { return rep.reportWaiting(event, check) })
 	}
@@ -715,7 +772,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			held = held[1:]
 		}
-		if rotating && !busy && !intentional && phase != "rotate_new" {
+		if rotating && !busy && !intentional && phase != "rotate_new" && phase != "rotate_new_mode" {
 			if !inputs.current(rotationEpoch) {
 				return fmt.Errorf("Cursor rotation authority retired")
 			}
@@ -824,7 +881,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 		case <-deadline.C:
 			requests.cancel()
-			return fmt.Errorf("Cursor ACP operation timed out")
+			return errACPOperationTimeout
 		case <-inputs.controlWake:
 			if v := inputs.takeControl(); v != nil {
 				if err = handleControl(*v); err != nil {
@@ -851,6 +908,34 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			f := next.frame
 			if err = VerifyRuntime(rep.binding, false); err != nil {
 				return err
+			}
+			if modeResponse != nil && f.Method != "" {
+				var attribution struct {
+					Session string `json:"sessionId"`
+				}
+				if json.Unmarshal(f.Params, &attribution) != nil {
+					return fmt.Errorf("invalid Cursor mode event attribution")
+				}
+				if attribution.Session == modeSession {
+					if f.Method == "session/update" {
+						if err = modeUpdate(f.Params, modeSession, options.RequestedMode); err != nil {
+							return err
+						}
+					}
+					if len(f.ID) > 0 {
+						cancel, e := protocol.deny(f)
+						if e != nil {
+							return e
+						}
+						if cancel {
+							return fmt.Errorf("unsupported authorization during Cursor mode configuration")
+						}
+					}
+					if err = record("session_configuration_update", map[string]any{"origin": "unknown", "params": json.RawMessage(f.Params)}); err != nil {
+						return err
+					}
+					continue
+				}
 			}
 			// session/load replays history before its response. Historical frames
 			// never reach recording, request admission, execution proof or state.
@@ -1025,7 +1110,27 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			raw, e := protocol.response(f)
 			if e != nil {
+				if modeResponse != nil {
+					return fmt.Errorf("Cursor requested mode configuration failed; remove --plan, or --mode and its value, then retry: %w", e)
+				}
 				return e
+			}
+			modeConfirmed := false
+			if modeResponse != nil {
+				if !inputs.current(modeEpoch) || intentional || !time.Now().Before(modeUntil) {
+					return fmt.Errorf("Cursor mode configuration authority retired; no prompt admitted")
+				}
+				if err = confirmSessionMode(raw, modeSession, options.RequestedMode); err != nil {
+					return err
+				}
+				if err = record("session_mode_configured", map[string]any{"configured_session_id": modeSession, "mode_id": options.RequestedMode, "request_id": json.RawMessage(f.ID)}); err != nil {
+					return err
+				}
+				if !inputs.current(modeEpoch) || intentional || !time.Now().Before(modeUntil) {
+					return fmt.Errorf("Cursor mode configuration authority retired; no prompt admitted")
+				}
+				raw, phase, modeResponse = modeResponse, modePhase, nil
+				modeConfirmed = true
 			}
 			switch phase {
 			case "initialize":
@@ -1059,6 +1164,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if phase == "load" {
 					resetDeadline(time.Until(loadUntil))
 				} else {
+					sessionUntil = time.Now().Add(protocolWait)
 					resetDeadline(protocolWait)
 				}
 			case "rotate_new":
@@ -1067,6 +1173,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				if json.Unmarshal(raw, &created) != nil || created.ID == "" || strings.TrimSpace(created.ID) != created.ID || len(created.ID) > 512 || strings.ContainsAny(created.ID, "\x00\r\n") || confirmedSessions[created.ID] || len(confirmedSessions) >= maxConnectionRequests {
 					return fmt.Errorf("Cursor did not confirm a genuinely fresh session; held input refused")
+				}
+				if options.RequestedMode != "" && !modeConfirmed {
+					if err = configureMode(raw, created.ID); err != nil {
+						return err
+					}
+					continue
 				}
 				if err = record("rotation_confirmed", map[string]any{"previous_session_id": rotationOld, "confirmed_session_id": created.ID}); err != nil {
 					return err
@@ -1165,6 +1277,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				}
 				if (!loaded && json.Unmarshal(raw, &created) != nil) || created.ID == "" || len(created.ID) > 512 || strings.TrimSpace(created.ID) != created.ID || strings.ContainsAny(created.ID, "\x00\r\n") {
 					return fmt.Errorf("Cursor did not confirm a fresh session")
+				}
+				if options.RequestedMode != "" && !modeConfirmed {
+					if err = configureMode(raw, created.ID); err != nil {
+						return err
+					}
+					continue
 				}
 				waitingEpoch := inputs.epochValue()
 				expected := b
@@ -1349,6 +1467,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			return err
 		}
 		if session != "" {
+			rep.terminationUntil = cancelAt.Add(cancelWait)
 			if err = report("SessionEnd"); err != nil {
 				return err
 			}
@@ -1366,7 +1485,7 @@ func closeFailedLaunch(s *store.Store, b store.CursorRuntime) error {
 	if err != nil {
 		return err
 	}
-	_, result, err := s.MarkCursorMissingIfSameLaunch(row, b)
+	_, result, err := s.MarkFailedCursorRuntimeMissing(row, b)
 	if err != nil {
 		return err
 	}

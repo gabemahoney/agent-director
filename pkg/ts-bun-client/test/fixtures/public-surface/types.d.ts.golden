@@ -363,6 +363,11 @@ export interface SpawnParams {
      * adds no second `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust ok) or
      * `--enable write_stdin_approval` when the arguments already carry one before any `--`;
      * Codex rejects a flag the arguments themselves repeat.
+     * Cursor accepts `--model`/`-m` (split or equals), `--mode` (agent/plan/ask),
+     * `--plan`, and one final initial prompt (use `--` before a flag-like prompt).
+     * Explicit mode is configured through ACP before prompt admission; launch
+     * success alone does not confirm it. Other or malformed arguments are refused
+     * with `ErrSpawnDeniedFlag`; remove the named argument and any owned value, then retry.
      */
     agent_args?: string[];
     /**
@@ -947,7 +952,7 @@ export interface MakeTemplateParams {
     /**
      * The agent the template belongs to: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor);
      * case-sensitive, empty or absent means not given. Required when the template bakes in
-     * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex template cannot bake in
+     * `agent_args` (otherwise `ErrTemplateAgentMissing`); a Codex or Cursor template cannot bake in
      * `allow`, `deny` or `ask` (`ErrPermissionsUnsupported`). Any other value is refused
      * with `ErrTemplateMalformed` (`ErrAgentInvalid` is spawn's per-call refusal). A spawn
      * that names no agent takes it from the template.
@@ -955,7 +960,7 @@ export interface MakeTemplateParams {
     agent?: string;
     /** Default relay mode: "on" | "off" | "" (inherit). */
     relay_mode?: string;
-    /** Default agent argv. Per-call `agent_args` replaces wholesale. */
+    /** Default agent argv. Per-call `agent_args` replaces wholesale. Cursor uses the same supported argument subset as spawn; unsupported forms return `ErrSpawnDeniedFlag` before writing. */
     agent_args?: string[];
     /**
      * Env-var overrides to bake in. A key spawn would refuse is refused here with

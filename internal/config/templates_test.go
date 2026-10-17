@@ -205,7 +205,7 @@ func TestLoadTemplateRefusesOldKeys(t *testing.T) {
 	}
 }
 
-// TestLoadTemplateLoadsAgent: agent loads as claude or codex, in any letter
+// TestLoadTemplateLoadsAgent: agent loads as claude, codex or cursor, in any letter
 // case of the key, with or without agent_args (SR-1.1, SR-1.3 step 2); a
 // template naming no agent supplies none, an empty agent_args needing no
 // agent. agent_args load as the template's agent arguments, alone or beside
@@ -248,14 +248,14 @@ func TestLoadTemplateLoadsAgent(t *testing.T) {
 	}
 }
 
-// TestLoadTemplateRefusesAgent: an agent other than exactly claude or codex is
+// TestLoadTemplateRefusesAgent: an agent other than exactly claude, codex or cursor is
 // ErrTemplateMalformed, and agent_args with no agent is ErrTemplateAgentMissing
 // (never ErrTemplateMalformed), each with its exact text (SR-1.3 step 2). The
 // checks run in load order, relay_mode then agent then agent_args without an
 // agent, so each row beside an earlier failure reports the earlier one.
 func TestLoadTemplateRefusesAgent(t *testing.T) {
 	const missingText = "agent_args are set but the template names no agent; " +
-		`add agent = "claude" or "codex", or remove agent_args`
+		`add agent = "claude", "codex" or "cursor", or remove agent_args`
 	args := []string{"--model", "opus"}
 	cases := []struct {
 		name   string
@@ -263,14 +263,14 @@ func TestLoadTemplateRefusesAgent(t *testing.T) {
 		want   error
 		text   string // what follows "<name>: "
 	}{
-		{"cursor_wrong_case", apitest.TemplateFields{Agent: "Cursor"}, config.ErrTemplateMalformed, `agent="Cursor" (want claude or codex)`},
-		{"wrong_case", apitest.TemplateFields{Agent: "Claude"}, config.ErrTemplateMalformed, `agent="Claude" (want claude or codex)`},
-		{"upper_case_value", apitest.TemplateFields{Agent: "CODEX"}, config.ErrTemplateMalformed, `agent="CODEX" (want claude or codex)`},
-		{"padded_before", apitest.TemplateFields{Agent: " claude"}, config.ErrTemplateMalformed, `agent=" claude" (want claude or codex)`},
-		{"padded_after", apitest.TemplateFields{Agent: "codex "}, config.ErrTemplateMalformed, `agent="codex " (want claude or codex)`},
-		{"unknown", apitest.TemplateFields{Agent: "gpt"}, config.ErrTemplateMalformed, `agent="gpt" (want claude or codex)`},
+		{"cursor_wrong_case", apitest.TemplateFields{Agent: "Cursor"}, config.ErrTemplateMalformed, `agent="Cursor" (want claude, codex or cursor)`},
+		{"wrong_case", apitest.TemplateFields{Agent: "Claude"}, config.ErrTemplateMalformed, `agent="Claude" (want claude, codex or cursor)`},
+		{"upper_case_value", apitest.TemplateFields{Agent: "CODEX"}, config.ErrTemplateMalformed, `agent="CODEX" (want claude, codex or cursor)`},
+		{"padded_before", apitest.TemplateFields{Agent: " claude"}, config.ErrTemplateMalformed, `agent=" claude" (want claude, codex or cursor)`},
+		{"padded_after", apitest.TemplateFields{Agent: "codex "}, config.ErrTemplateMalformed, `agent="codex " (want claude, codex or cursor)`},
+		{"unknown", apitest.TemplateFields{Agent: "gpt"}, config.ErrTemplateMalformed, `agent="gpt" (want claude, codex or cursor)`},
 		{"unknown_with_agent_args", apitest.TemplateFields{Agent: "gpt", AgentArgs: args}, config.ErrTemplateMalformed,
-			`agent="gpt" (want claude or codex)`},
+			`agent="gpt" (want claude, codex or cursor)`},
 		{"agent_args_without_agent", apitest.TemplateFields{AgentArgs: args}, config.ErrTemplateAgentMissing, missingText},
 		{"agent_args_beside_empty_agent", apitest.TemplateFields{AgentArgs: args, RawKeys: []string{`agent = ""`}},
 			config.ErrTemplateAgentMissing, missingText},

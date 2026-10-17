@@ -36,7 +36,7 @@ import (
 //     MetaData.Undecoded() result and reject if any survive).
 //   - relay_mode validation: must be "" / "on" / "off" — anything else
 //     is ErrTemplateMalformed at load time, before merge.
-//   - agent validation, after relay_mode: a value other than claude or codex
+//   - agent validation, after relay_mode: a value other than claude, codex or cursor
 //     (case-sensitive) → ErrTemplateMalformed, whatever agent the spawn
 //     names; then a non-empty agent_args with no agent →
 //     ErrTemplateAgentMissing (SR-1.3, SR-2.1).
@@ -93,13 +93,13 @@ func LoadTemplate(name string) (TemplateFile, error) {
 	}
 
 	if tf.Agent != "" && !ValidAgent(tf.Agent) {
-		return TemplateFile{}, fmt.Errorf("%w: %s: agent=%q (want %s or %s)",
-			ErrTemplateMalformed, name, tf.Agent, AgentClaude, AgentCodex)
+		return TemplateFile{}, fmt.Errorf("%w: %s: agent=%q (want %s, %s or %s)",
+			ErrTemplateMalformed, name, tf.Agent, AgentClaude, AgentCodex, AgentCursor)
 	}
 	if tf.Agent == "" && len(tf.AgentArgs) > 0 {
 		return TemplateFile{}, fmt.Errorf("%w: %s: agent_args are set but the template names no agent; "+
-			"add agent = %q or %q, or remove agent_args",
-			ErrTemplateAgentMissing, name, AgentClaude, AgentCodex)
+			"add agent = %q, %q or %q, or remove agent_args",
+			ErrTemplateAgentMissing, name, AgentClaude, AgentCodex, AgentCursor)
 	}
 
 	return tf, nil

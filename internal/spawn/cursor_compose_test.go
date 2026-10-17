@@ -140,6 +140,18 @@ func TestCursorArgsSupportedAndRefused(t *testing.T) {
 		{"no prompt", nil, nil, "", false},
 		{"split model", []string{"-m", "x"}, []string{"--model", "x"}, "", false},
 		{"equals model", []string{"--model=x", "hello"}, []string{"--model", "x"}, "hello", false},
+		{"short equals opaque model", []string{"-m=account/模型:β", "first\n多行 🦋"}, []string{"--model", "account/模型:β"}, "first\n多行 🦋", false},
+		{"repeated model", []string{"-m", "first", "--model=second"}, []string{"--model", "first", "--model", "second"}, "", false},
+		{"literal command", []string{"--", "acp"}, nil, "acp", false},
+		{"operand before empty delimiter", []string{"acp", "--"}, nil, "", true},
+		{"mode and operand before empty delimiter", []string{"chat", "--mode", "plan", "--"}, nil, "", true},
+		{"empty delimiter", []string{"--"}, nil, "", true},
+		{"owned delimiter", []string{"--model", "--"}, nil, "", true},
+		{"policy force", []string{"--force"}, nil, "", true},
+		{"policy yolo", []string{"--yolo"}, nil, "", true},
+		{"policy sandbox", []string{"--sandbox", "disabled"}, nil, "", true},
+		{"policy trust", []string{"--trust"}, nil, "", true},
+		{"unknown alias", []string{"-p"}, nil, "", true},
 		{"explicit prompt", []string{"--", "--looks-like-flag"}, nil, "--looks-like-flag", false},
 		{"session", []string{"--resume", "s"}, nil, "", true},
 		{"resume picker", []string{"--resume"}, nil, "", true},
@@ -155,7 +167,11 @@ func TestCursorArgsSupportedAndRefused(t *testing.T) {
 		{"NUL", []string{"x\x00y"}, nil, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			before := slices.Clone(tc.in)
 			args, prompt, err := CursorArgs(tc.in)
+			if !slices.Equal(tc.in, before) {
+				t.Fatal("argument parsing mutated caller input")
+			}
 			if tc.refuse {
 				if !errors.Is(err, ErrSpawnDeniedFlag) {
 					t.Fatalf("expected refusal: %v", err)
@@ -164,6 +180,60 @@ func TestCursorArgsSupportedAndRefused(t *testing.T) {
 			}
 			if err != nil || prompt != tc.prompt || !reflect.DeepEqual(args, tc.want) {
 				t.Fatalf("CursorArgs = %q %q %v", args, prompt, err)
+			}
+		})
+	}
+}
+
+func TestCursorRequestedModeComposition(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		args   []string
+		mode   string
+		refuse bool
+	}{
+		{"split agent", []string{"--mode", "agent"}, "agent", false},
+		{"equals ask", []string{"--mode=ask"}, "ask", false},
+		{"plan alias", []string{"--plan"}, "plan", false},
+		{"same mode repeats", []string{"--plan", "--mode", "plan", "--mode=plan"}, "plan", false},
+		{"conflict", []string{"--plan", "--mode", "ask"}, "", true},
+		{"conflicting explicit modes", []string{"--mode=agent", "--mode=plan"}, "", true},
+		{"missing", []string{"--mode"}, "", true},
+		{"empty", []string{"--mode="}, "", true},
+		{"unsupported", []string{"--mode", "sensitive-mode"}, "", true},
+		{"alias value", []string{"--plan=true"}, "", true},
+		{"owned selector", []string{"--mode", "--continue"}, "", true},
+		{"owned delimiter", []string{"--mode", "--"}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newLaunchEnv(t)
+			installCompositionGateway(t)
+			e.r.Agent = store.AgentCursor
+			e.r.AgentArgs = append(slices.Clone(tc.args), "--model=account/模型:β", "--", "--resume\n多行 🦋")
+			before := slices.Clone(e.r.AgentArgs)
+			err := Validate(&e.r)
+			if tc.refuse {
+				if !errors.Is(err, ErrSpawnDeniedFlag) || strings.Contains(err.Error(), "sensitive-mode") {
+					t.Fatalf("static mode refusal: %v", err)
+				}
+				if _, _, launchErr := e.launch(); !errors.Is(launchErr, ErrSpawnDeniedFlag) {
+					t.Fatalf("launch refusal: %v", launchErr)
+				}
+				if _, rowErr := e.s.GetSpawn(e.r.InstanceID); !errors.Is(rowErr, store.ErrSpawnNotFound) || len(e.rec.SocketCalls()) != 0 {
+					t.Fatalf("refusal mutated runtime/store: %v", rowErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, err := ComposeLaunch(e.r, e.cfg)
+				want := []string{"cursor-host", "--runtime", "agent", "--runtime-args", `["--model","account/模型:β"]`, "--initial-prompt", "--resume\n多行 🦋", "--requested-mode", tc.mode}
+				if err != nil || !slices.Equal(c.Create.Command[1:], want) {
+					t.Fatalf("private mode composition=%q err=%v; want %q", c.Create.Command, err, want)
+				}
+			}
+			if !slices.Equal(e.r.AgentArgs, before) {
+				t.Fatal("mode validation changed saved/caller args")
 			}
 		})
 	}

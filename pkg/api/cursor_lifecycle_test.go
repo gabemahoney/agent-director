@@ -91,6 +91,7 @@ func TestSpawnReuseCursorSelectorsStartFresh(t *testing.T) {
 		{"continue owns no prompt", []string{"--continue", "hello"}, []string{"hello"}, []string{"--continue"}},
 		{"required model owns command spelling", []string{"--model", "resume", "--continue"}, []string{"--model", "resume"}, []string{"--continue"}},
 		{"explicit empty prompt", []string{"--resume=old", "--", ""}, []string{"--", ""}, []string{"--resume=old"}},
+		{"mode survives switch selectors", []string{"--resume=old", "--mode", "plan", "--continue", "--", "--resume\n多行 🦋"}, []string{"--mode", "plan", "--", "--resume\n多行 🦋"}, []string{"--resume=old", "--continue"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newReuseEnv(t)
@@ -169,6 +170,42 @@ func TestSpawnReuseCursorSelectorAuthority(t *testing.T) {
 			e.assertWroteNothing(t, before)
 			if len(e.rec.SocketCalls()) != before.calls {
 				t.Fatal("selector refusal called tmux")
+			}
+		})
+	}
+}
+
+func TestSpawnReuseCursorPermissionListsRefuseBeforeReset(t *testing.T) {
+	// Serial: reuse snapshots inspect every append to the shared trail.
+	installCursorFixtureGateway(t)
+	for _, kind := range []string{"allow", "deny", "ask", "empty"} {
+		t.Run(kind, func(t *testing.T) {
+			e := newReuseEnv(t)
+			r := e.seedReusable(t, agentGone, reuseRowSpec{Bare: true, Opts: agentRowOpts("cursor")})
+			p := reuseParams(t, r, reuseRequest{Args: []string{"--plan", "replacement initial"}})
+			p.Agent = "cursor"
+			p.Permissions = &api.Permissions{}
+			switch kind {
+			case "allow":
+				p.Permissions.Allow = []string{"Bash"}
+			case "deny":
+				p.Permissions.Deny = []string{"Bash"}
+			case "ask":
+				p.Permissions.Ask = []string{"Bash"}
+			}
+			before := e.snapshotReuse(t, r)
+			_, _, err := e.reuse(t, p)
+			if kind != "empty" {
+				assertOneName(t, err, "ErrPermissionsUnsupported")
+				e.assertWroteNothing(t, before)
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				row := rlfRow(t, e, r.ID)
+				if row.Agent != "cursor" || row.SessionID != "" || !slices.Equal(row.AgentArgs, p.AgentArgs) {
+					t.Fatalf("reuse lost explicit configuration: %+v", row)
+				}
 			}
 		})
 	}

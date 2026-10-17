@@ -29,7 +29,7 @@ func seedCursorResume(t *testing.T, e *resumeEnv, state string) (string, cursorf
 	_, err := apitest.SeedSpawn(e.dbPath, id, state, t.TempDir(), "off", "latest-cursor", false,
 		apitest.WithAgent(store.AgentCursor), apitest.WithJsonlPath(h.Latest), apitest.WithLifeNumber(3),
 		apitest.WithTmuxSocket(e.socket), apitest.WithNoPreTrust(),
-		apitest.WithRawAgentArgs(`["--model","saved-model","saved initial"]`),
+		apitest.WithRawAgentArgs(`["--model","saved-model","--plan","saved initial"]`),
 		apitest.WithExtraEnv(map[string]string{"SAVED_CURSOR_ENV": "retained", "AGENT_DIRECTOR_GROUP": "saved-group"}),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "older-cursor", JSONLPath: h.Older, Life: 3}))
 	if err != nil {
@@ -152,6 +152,10 @@ func TestCursorResumeLatestGateway(t *testing.T) {
 			at := slices.Index(creates[0].Command, "--runtime")
 			if at < 0 || at+1 >= len(creates[0].Command) || creates[0].Command[at+1] != wantRuntime {
 				t.Fatalf("current whole runtime lost: %q; want %q", creates[0].Command, wantRuntime)
+			}
+			modeAt := slices.Index(creates[0].Command, "--requested-mode")
+			if modeAt < 0 || modeAt+1 >= len(creates[0].Command) || creates[0].Command[modeAt+1] != "plan" {
+				t.Fatalf("saved requested mode lost: %q", creates[0].Command)
 			}
 			if creates[0].Envs["SAVED_CURSOR_ENV"] != "retained" || creates[0].Envs["AGENT_DIRECTOR_GROUP"] != "saved-group" || after.CWD != before.CWD {
 				t.Fatalf("saved cwd/env/group lost: %+v", creates[0])

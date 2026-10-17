@@ -60,7 +60,7 @@ func TestMCPSpawnAgentReachesRow(t *testing.T) {
 
 		data := toolErrorData(t, callTool(t, e.d, "spawn", spawnArgs(t, t.TempDir(), c, map[string]any{"agent": "Claude"})))
 
-		if want := `agent "Claude" (want claude or codex)`; data.ErrName != "ErrAgentInvalid" || !strings.Contains(data.ErrDescription, want) {
+		if want := `agent "Claude" (want claude, codex or cursor)`; data.ErrName != "ErrAgentInvalid" || !strings.Contains(data.ErrDescription, want) {
 			t.Errorf("refusal = %s: %q; want ErrAgentInvalid carrying %q", data.ErrName, data.ErrDescription, want)
 		}
 		assertNothingCreated(t, e.d, e.rec)
@@ -102,19 +102,24 @@ func TestMCPSpawnAgentArgsInheritance(t *testing.T) {
 	cases := []struct {
 		name          string
 		templateAgent string
+		agent         string
 		agentArgs     any // the call's agent_args; nil for absent
 		want          string
 	}{
-		{"absent inherits", config.AgentClaude, nil, `["--model","opus"]`},
-		{"empty replaces", config.AgentClaude, []string{}, `[]`},
-		{"empty against another agent's template inherits nothing", config.AgentCodex, []string{}, `[]`},
+		{"absent inherits", config.AgentClaude, "claude", nil, `["--model","opus"]`},
+		{"empty replaces", config.AgentClaude, "claude", []string{}, `[]`},
+		{"empty against another agent's template inherits nothing", config.AgentCodex, "claude", []string{}, `[]`},
+		{"Cursor absent inherits", "cursor", "cursor", nil, `["--model","opus"]`},
+		{"Cursor empty replaces", "cursor", "cursor", []string{}, `[]`},
+		{"Cursor foreign empty replaces", "claude", "cursor", []string{}, `[]`},
+		{"Cursor nonempty exact replacement", "claude", "cursor", []string{"--mode=ask", "--", "--resume\n多行 🦋"}, `["--mode=ask","--","--resume\n多行 🦋"]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
 			seedTemplate(t, "tpl", apitest.TemplateFields{Agent: tc.templateAgent, AgentArgs: []string{"--model", "opus"}})
 			id := "agent-" + uuid.NewString()[:8]
-			extra := map[string]any{"template": "tpl", "agent": "claude", "instance_id": id}
+			extra := map[string]any{"template": "tpl", "agent": tc.agent, "instance_id": id}
 			if tc.agentArgs != nil {
 				extra["agent_args"] = tc.agentArgs
 			}

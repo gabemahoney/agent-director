@@ -142,11 +142,30 @@ is reported only after the owned runtime is gone. Refusal, interruption and
 shutdown recovery follow the
 [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
 
-Model selection (`--model` or `-m`) and one initial prompt are supported:
+Cursor arguments support model selection (`--model VALUE`, `-m VALUE`, or
+either spelling with `=VALUE`), an explicit mode (`--mode agent`,
+`--mode plan`, `--mode ask`, or the corresponding `=` form), and `--plan`
+for plan mode. Model identifiers pass through unchanged; availability depends
+on the configured Cursor account. Each new, loaded or rotated conversation
+must confirm the requested mode before publication or prompt submission.
+The requested mode is initial configuration; later plan approval may change it.
+
+One initial prompt may be the final argument:
 
 ```sh
 agent-director spawn --cwd "$PWD" --agent cursor -- "Describe this project's entry points"
 ```
+
+For a prompt beginning with a flag or equal to `acp`, `chat` or `resume`,
+put another `--` before the single prompt argument:
+
+```sh
+agent-director spawn --cwd "$PWD" --agent cursor -- -- "--explain this project's entry points"
+```
+
+The initial prompt preserves Unicode and newlines. It is submitted once per
+launch after session configuration and decision holds permit it, including
+saved-argument replay on resume; `/clear` and `/new` do not submit it again.
 
 Other arguments and lifecycle limitations are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries). Permission

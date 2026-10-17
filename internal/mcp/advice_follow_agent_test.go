@@ -18,11 +18,11 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// TestAdviceFollow_I9_AgentMissingPassAgent: I9 ErrAgentMissing's "pass agent claude or codex (--agent on the CLI),
+// TestAdviceFollow_I9_AgentMissingPassAgent: I9 ErrAgentMissing's "pass agent claude, codex or cursor (--agent on the CLI),
 // or put agent in the template": the param and agent it names copied literally into the same spawn, or the agent put in
 // the template it names, launch the row with that agent.
 func TestAdviceFollow_I9_AgentMissingPassAgent(t *testing.T) {
-	const phrase = "pass agent claude or codex (--agent on the CLI), or put agent in the template"
+	const phrase = "pass agent claude, codex or cursor (--agent on the CLI), or put agent in the template"
 	for _, tc := range []string{"pass agent", "put agent in the template"} {
 		t.Run(tc, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
@@ -42,8 +42,8 @@ func TestAdviceFollow_I9_AgentMissingPassAgent(t *testing.T) {
 			assertNothingCreated(t, e.d, e.rec)
 			if tc == "pass agent" {
 				_, rest, _ := strings.Cut(data.ErrDescription, "pass ")
-				words := strings.Fields(rest) // agent claude or codex ...
-				extra[words[0]] = words[1]
+				words := strings.Fields(rest) // agent claude, codex or cursor ...
+				extra[words[0]] = strings.TrimSuffix(words[1], ",")
 				args = agentSpawnArgs(t, t.TempDir(), c, extra)
 			} else {
 				seedTemplate(t, "i9-tpl", apitest.TemplateFields{Agent: config.AgentClaude, RelayMode: "off"})

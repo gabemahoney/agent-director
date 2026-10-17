@@ -268,6 +268,13 @@ Stopping a held spawn and handling these refusals are in the
 
 Save a reusable spawn preset. Pass `agent` to bake in the template's agent; a template with `agent_args` needs one. Pass `overwrite: true` to atomically replace an existing template; omit the field to keep the default rejection on collision.
 
+Cursor templates use the same argument validation as `spawn` and can throw
+`ErrSpawnDeniedFlag` before writing. Supported arguments and asynchronous mode
+configuration failures are in
+[Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries).
+Argument replacement, including TypeScript's empty-list omission, is defined in
+[Settings](../../docs/settings.md#the-agent-and-its-arguments).
+
 ```ts
 await client.makeTemplate({ name: "dev", cwd: "/repos/widget", agent: "claude", overwrite: true });
 ```
