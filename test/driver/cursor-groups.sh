@@ -135,9 +135,9 @@ cg_recovery_intent() {
  sql -json "SELECT * FROM spawns WHERE instance_id='$id';" > "$case_dir/original-before.json"
  if ad resume --instance-id "$id" > "$case_dir/refused" 2> "$case_dir/error"; then return 1; fi
  check recovery.named grep -q ErrNoSessionId "$case_dir/error"
- check recovery.public-advice grep -Fq 'use agent-director get --instance-id <id>' "$case_dir/error"
- check recovery.intent-advice grep -Fq 'add caller-known supported extra_env' "$case_dir/error"
- check recovery.human-bound grep -Fq 'docs/operator-actions.md#inspect-and-end-a-session-by-hand before any fresh launch' "$case_dir/error"
+ check recovery.public-advice jq -e '.err_description|contains("use agent-director get --instance-id <id>")' "$case_dir/error" >/dev/null
+ check recovery.intent-advice jq -e '.err_description|contains("add caller-known supported extra_env")' "$case_dir/error" >/dev/null
+ check recovery.human-bound jq -e '.err_description|contains("docs/operator-actions.md#inspect-and-end-a-session-by-hand before any fresh launch")' "$case_dir/error" >/dev/null
  ad get --instance-id "$id" | jq -e '.state=="ended"' >/dev/null
  ad kill --instance-id "$id" | jq -e '.kill_sent==false' >/dev/null
  # Finished kill is no death proof: the fixture already waited for both exact processes.
