@@ -64,8 +64,10 @@ unrelated process. Public `get`, `status` and scoped `list` can reconcile a lost
 gateway, including one lost before runtime registration; their scope, binding
 conflict refusals and `ErrStoreBusy` behavior are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
-If a Cursor row is `missing`, check for surviving work
-before starting its replacement; follow the
+Missing state or a finished-row public `kill` no-op does not prove that a Cursor
+runtime exited. When public operations cannot resolve survivors, the caller
+must STOP for a human to follow [Inspect and end a session by hand](#inspect-and-end-a-session-by-hand)
+before any fresh launch; follow the
 [Cursor recovery boundary](caller-contract.md#cursor-operation-boundaries).
 The resume and reuse ownership and conflict procedures below also apply to
 Cursor, including switches. A failed-label error may report a restored row
@@ -85,7 +87,12 @@ make a launch succeed. Resume cannot edit saved selection. Preserve the original
 row, life, history and artifacts; use the caller contract's fresh-instance
 procedure only when a supported selection meets the intended account and
 configuration, after resolving survivors through the procedures above. Do not
-repair protected stored environment by hand. Automated input correction belongs
+read, export or edit the protected saved environment to reconstruct a launch.
+If intent is unavailable or requires protected data, retain the refusal for a
+human decision. The fresh procedure uses caller-known supported `extra_env` or
+template intent, the same `HOME` and a generated unique id; no selection is
+appropriate only for deliberate personal login without custom directories.
+Automated input correction belongs
 in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
 ## A finished row's own old session

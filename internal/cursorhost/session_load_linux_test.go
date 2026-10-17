@@ -233,8 +233,10 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 					t.Fatal(err)
 				}
 				e.runtime.Configure(t, cursorfix.Scenario{LoadSupport: true, NativeConfigRoot: native.ConfigRoot})
-				selected, _ := json.Marshal(map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot})
+				selected, _ := json.Marshal(map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot, "CURSOR_DATA_DIR": "/saved/rejected-load-data"})
 				e.exec(t, `UPDATE spawns SET extra_env=? WHERE instance_id=?`, string(selected), e.binding.InstanceID)
+				t.Setenv("CURSOR_CONFIG_DIR", "/different/caller-config")
+				t.Setenv("CURSOR_DATA_DIR", "/different/caller-data")
 			})
 			select {
 			case err := <-c.done:
@@ -270,6 +272,12 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 				}
 				if loads != 1 {
 					t.Fatalf("latest load attempts=%d", loads)
+				}
+				received := c.e.runtime.Selection(t)
+				for key, want := range map[string]string{"CURSOR_CONFIG_DIR": native.ConfigRoot, "CURSOR_DATA_DIR": "/saved/rejected-load-data"} {
+					if received[key] == nil || *received[key] != want {
+						t.Fatalf("failed latest load substituted %s: %v want %q", key, received[key], want)
+					}
 				}
 				missingReply := false
 				for _, frame := range c.e.runtime.SentFrames(t) {

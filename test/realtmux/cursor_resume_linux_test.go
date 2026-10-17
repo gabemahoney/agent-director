@@ -122,6 +122,163 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 	}
 }
 
+// Synthetic rejection composes actual saved selection with public asynchronous lifecycle.
+func TestCursorRejectedLaunchSelectionAndSavedLifecycle(t *testing.T) {
+	// Serial: real-pane fixtures own HOME/PATH and the private tmux environment.
+	for _, operation := range []string{"resume", "reuse"} {
+		t.Run(operation, func(t *testing.T) {
+			saved := map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "saved config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "saved data")}
+			f, peer, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{ExtraEnv: saved})
+			initial := readRow(t, f.DBPath, launch.ID)
+			if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "/new"}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "latest rotation published", func() bool {
+				row := readRow(t, f.DBPath, launch.ID)
+				return row.State == store.StateWaiting && row.SessionID != nil && row.SessionID != initial.SessionID
+			}, nil)
+			before := readRow(t, f.DBPath, launch.ID)
+			if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: launch.ID}); err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "old gateway gone", func() bool { return pidGone(int(before.PanePID.(int64))) }, nil)
+			prefix, err := os.ReadFile(before.JSONLPath.(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Rotations share the protected journal. Seed a separate retained
+			// older artifact through the existing history factory for exact checks.
+			artifacts := cursorfix.NewGatewayHistory(t, launch.ID, before.LifeNumber.(int64), before.SessionID.(string), initial.SessionID.(string))
+			db, err := sql.Open("sqlite", f.DBPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec("UPDATE session_history SET jsonl_path=? WHERE instance_id=? AND session_id=?", artifacts.Older, launch.ID, initial.SessionID)
+			closeErr := db.Close()
+			if err != nil || closeErr != nil {
+				t.Fatalf("older artifact setup: %v %v", err, closeErr)
+			}
+			history, err := apitest.ReadSessionHistoryAllLives(f.DBPath, launch.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("CURSOR_CONFIG_DIR", "/different/caller/config")
+			t.Setenv("CURSOR_DATA_DIR", "/different/caller/data")
+			rejection := json.RawMessage(`{"error":{"code":-32000,"message":"SYNTHETIC-PRIVATE"}}`)
+			scenario := cursorfix.Scenario{LoadSupport: true, LoadReply: rejection, WaitForLoad: true}
+			selected := saved
+			params := map[string]any{"instance_id": launch.ID}
+			verb := "resume"
+			if operation == "reuse" {
+				selected = map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "new config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "new data")}
+				scenario = cursorfix.Scenario{FirstNewReply: rejection}
+				verb = "spawn"
+				params = map[string]any{"instance_id": launch.ID, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": true, "reuse_finished": true, "extra_env": selected}
+			}
+			peer.Configure(t, scenario)
+			mark := len(peer.Frames(t))
+			caller := newPaneCaller(t, f, "CLI", filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
+			var result struct {
+				InstanceID string `json:"instance_id"`
+			}
+			if err := json.Unmarshal(caller.must(verb, params), &result); err != nil || result.InstanceID != launch.ID {
+				t.Fatalf("public launch result: %+v %v", result, err)
+			}
+			if operation == "resume" {
+				waitFor(t, "latest load received", func() bool {
+					for _, frame := range peer.Frames(t)[mark:] {
+						if string(frame["method"]) == `"session/load"` {
+							return true
+						}
+					}
+					return false
+				}, nil)
+				row, err := f.API.Get(launch.ID)
+				if err != nil || row.State != store.StatePending || row.SessionID != before.SessionID {
+					t.Fatalf("load manufactured readiness: %+v %v", row, err)
+				}
+				if err := os.WriteFile(peer.NewRelease, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitFor(t, "asynchronous failure reconciled", func() bool { row, err := f.API.Get(launch.ID); return err == nil && row.State == store.StateMissing }, nil)
+			for key, want := range selected {
+				got := peer.Selection(t)[key]
+				if got == nil || *got != want {
+					t.Fatalf("%s received=%v want=%q", key, got, want)
+				}
+			}
+			var methods []string
+			for _, frame := range peer.Frames(t)[mark:] {
+				if len(frame["method"]) > 0 {
+					methods = append(methods, string(frame["method"]))
+				}
+				if string(frame["method"]) == `"session/load"` {
+					var p struct {
+						SessionID string `json:"sessionId"`
+					}
+					if json.Unmarshal(frame["params"], &p) != nil || p.SessionID != before.SessionID {
+						t.Fatalf("not latest: %s", frame["params"])
+					}
+				}
+			}
+			wantMethod := `"session/load"`
+			if operation == "reuse" {
+				wantMethod = `"session/new"`
+			}
+			if strings.Join(methods, ",") != `"initialize",`+wantMethod {
+				t.Fatalf("dependent work/fallback: %v", methods)
+			}
+			after := readRow(t, f.DBPath, launch.ID)
+			if after.LifeNumber != before.LifeNumber {
+				t.Fatal("failed launch changed life")
+			}
+			if operation == "resume" && (after.SessionID != before.SessionID || after.JSONLPath != before.JSONLPath || after.ExtraEnv != before.ExtraEnv) {
+				t.Fatalf("failed resume changed saved identity: %+v", after)
+			}
+			if operation == "reuse" && (after.SessionID != nil || after.ExtraEnv == before.ExtraEnv) {
+				t.Fatalf("accepted asynchronous reuse restored old selection: %+v", after)
+			}
+			afterHistory, err := apitest.ReadSessionHistoryAllLives(f.DBPath, launch.ID)
+			if operation == "reuse" {
+				var retained []apitest.HistoryEntry
+				archived := 0
+				for _, entry := range afterHistory {
+					if entry.SessionID == before.SessionID {
+						archived++
+						if !entry.JSONLPath.Valid || entry.JSONLPath.String != before.JSONLPath || entry.LifeNumber != before.LifeNumber {
+							t.Fatalf("wrong accepted-reuse archive: %+v", entry)
+						}
+					} else {
+						retained = append(retained, entry)
+					}
+				}
+				if archived != 1 {
+					t.Fatalf("accepted reuse archived latest %d times", archived)
+				}
+				afterHistory = retained
+				var persisted map[string]string
+				if json.Unmarshal([]byte(after.ExtraEnv.(string)), &persisted) != nil || !reflect.DeepEqual(persisted, selected) {
+					t.Fatalf("async reuse restored/dropped selection: %v", after.ExtraEnv)
+				}
+			}
+			if err != nil || !reflect.DeepEqual(history, afterHistory) {
+				t.Fatalf("failed launch changed older history: %v", err)
+			}
+			for path, want := range map[string][]byte{before.JSONLPath.(string): prefix, artifacts.Older: artifacts.OlderBytes} {
+				got, err := os.ReadFile(path)
+				unchanged := bytes.HasPrefix(got, want)
+				if path == artifacts.Older {
+					unchanged = bytes.Equal(got, want)
+				}
+				if err != nil || !unchanged {
+					t.Fatalf("artifact rewritten: %s %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 // E4 AC5/6: actual gateways reuse fresh; the final switch starts from a labelled synthetic Claude row.
 func TestCursorReusePublicFreshConversationParity(t *testing.T) {
 	if testing.Short() {

@@ -21,7 +21,7 @@ cg_selection() {
 cg_finish() {
  local artifacts="/tmp/cursor-groups-artifacts/$id"
  mkdir -m 700 -p "$artifacts"
- for item in runtime-pid.selection.json trace.jsonl scenario saved.json history.json error; do if [[ -f $case_dir/$item ]]; then cp "$case_dir/$item" "$artifacts/$item"; fi; done
+ for item in runtime-pid.selection.json trace.jsonl scenario saved.json history.json error public.json resume.json original-before.json retained-sha256 protected-before; do if [[ -f $case_dir/$item ]]; then cp "$case_dir/$item" "$artifacts/$item"; fi; done
  sql -readonly -json "SELECT instance_id,agent,state,session_id,life_number,extra_env FROM spawns; SELECT * FROM session_history;" > "$artifacts/authority.jsonl"
  evidence "$1" "$2"
 }
@@ -90,3 +90,75 @@ cg_resume_reuse() {
  check reuse.runtime cg_selection "$case_dir/new-config" "$case_dir/new-data"
  cg_finish saved-resume-new-reuse 'AC11/AC12 SR-2.2/SR-6.2 saved selection survives caller change; reuse new selection'
 }
+
+cg_rejected_selection() {
+ local selected_config=$CURSOR_CONFIG_DIR selected_data=$CURSOR_DATA_DIR
+ jq -cn '{firstNewReply:{error:{code:-32000,message:"SYNTHETIC-PRIVATE"}}}' > "$case_dir/scenario"
+ spawn_cursor
+ check rejection.runtime-started wait_until test -s "$case_dir/runtime-pid"
+ runtime=$(cat "$case_dir/runtime-pid")
+ gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$id';")
+ check rejection.runtime-gone wait_gone "$runtime"
+ check rejection.gateway-gone wait_gone "$gateway"
+ check rejection.actual-selection cg_selection "$selected_config" "$selected_data"
+ check rejection.public-missing ad get --instance-id "$id" > "$case_dir/public.json"
+ check rejection.missing jq -e '.state=="missing" and .session_id==""' "$case_dir/public.json" >/dev/null
+ check rejection.no-retry frames | jq -se '[.[]|select(has("method"))|.method]==["initialize","session/new"]' >/dev/null
+ check rejection.no-secret bash -c '! grep -q SYNTHETIC-PRIVATE "$1"' cg "$HOME/.config/agent-director/ad-trail.jsonl"
+ cg_finish selected-new-rejection 'AC12 SR-7.1 actual selected failure; launch admission is asynchronous; no prompt/account retry'
+}
+cg_rejected_latest() {
+ rl_fixture
+ local selected_config=$CURSOR_CONFIG_DIR selected_data=$CURSOR_DATA_DIR
+ export CURSOR_CONFIG_DIR="$case_dir/changed-caller-config" CURSOR_DATA_DIR="$case_dir/changed-caller-data"
+ jq -cn '{loadSupport:true,waitForLoad:true,loadReply:{error:{code:-32000,message:"SYNTHETIC-PRIVATE"}}}' > "$case_dir/scenario"
+ rl_resume MCP
+ check rejected-load.actual-selection cg_selection "$selected_config" "$selected_data"
+ check rejected-load.pending test "$(row_state)" = pending
+ touch "$case_dir/new-release"
+ check rejected-load.gateway-gone wait_gone "$resumed_gateway"
+ check rejected-load.final-latest-load rl_load_seen
+ check rejected-load.public-get ad get --instance-id "$id" > "$case_dir/public.json"
+ check rejected-load.missing jq -e --arg session "$session" '.state=="missing" and .session_id==$session' "$case_dir/public.json" >/dev/null
+ check rejected-load.no-fresh rl_no_new
+ check rejected-load.no-prompt pc_prompts_is 0
+ rl_preserved
+ cg_finish selected-latest-rejection 'AC11/12 SR-6.2/SR-7.1 saved runtime selection; latest-only rejection keeps older/artifacts; no fallback'
+}
+cg_recovery_intent() {
+ pc_install_bun
+ rl_fixture
+ local selected_config=$CURSOR_CONFIG_DIR selected_data=$CURSOR_DATA_DIR original_id=$id fresh_id
+ ad make-template --name recovery-intent --agent cursor --extra-env "CURSOR_CONFIG_DIR=$selected_config" --extra-env "CURSOR_DATA_DIR=$selected_data" >/dev/null
+ # Fault injection only: lose the session pointer; never a user recovery step.
+ sql "UPDATE spawns SET session_id=NULL WHERE instance_id='$id';"
+ sql -json "SELECT * FROM spawns WHERE instance_id='$id';" > "$case_dir/original-before.json"
+ if ad resume --instance-id "$id" > "$case_dir/refused" 2> "$case_dir/error"; then return 1; fi
+ check recovery.named grep -q ErrNoSessionId "$case_dir/error"
+ check recovery.public-advice grep -Fq 'use agent-director get --instance-id <id>' "$case_dir/error"
+ check recovery.intent-advice grep -Fq 'add caller-known supported extra_env' "$case_dir/error"
+ check recovery.human-bound grep -Fq 'docs/operator-actions.md#inspect-and-end-a-session-by-hand before any fresh launch' "$case_dir/error"
+ ad get --instance-id "$id" | jq -e '.state=="ended"' >/dev/null
+ ad kill --instance-id "$id" | jq -e '.kill_sent==false' >/dev/null
+ # Finished kill is no death proof: the fixture already waited for both exact processes.
+ check recovery.old-gateway-gone wait_gone "$gateway"
+ check recovery.old-runtime-gone wait_gone "$runtime"
+ export CURSOR_CONFIG_DIR="$case_dir/changed-caller-config" CURSOR_DATA_DIR="$case_dir/changed-caller-data"
+ printf '{}\n' > "$case_dir/scenario"
+ : > "$case_dir/trace.jsonl"
+ pc_public Bun spawn "$(jq -cn --arg cwd "$case_dir/cwd" '{agent:"cursor",cwd:$cwd,no_pre_trust:true,template:"recovery-intent",extra_env:{}}')" > "$case_dir/public.json"
+ fresh_id=$(jq -r '.instance_id' "$case_dir/public.json")
+ check recovery.unique test -n "$fresh_id"
+ check recovery.different test "$fresh_id" != "$original_id"
+ id=$fresh_id
+ check recovery.ready wait_until pc_start_ready
+ check recovery.actual-selection cg_selection "$selected_config" "$selected_data"
+ check recovery.no-load cg_recovery_no_load
+ id=$original_id
+ check recovery.original-unchanged test "$(sql -json "SELECT * FROM spawns WHERE instance_id='$id';")" = "$(cat "$case_dir/original-before.json")"
+ check recovery.history-unchanged test "$(sql -json "SELECT * FROM session_history WHERE instance_id='$id';")" = "$(cat "$case_dir/history.json")"
+ check recovery.native-and-older sha256sum -c "$case_dir/retained-sha256" >/dev/null
+ check recovery.transcript-prefix cmp "$case_dir/protected-before" <(head -c "$(wc -c < "$case_dir/protected-before")" "$path")
+ cg_finish recovery-known-template 'AC11/12 SR-2.2/SR-6.2 supported known template preserves intent/HOME; public get/kill and exact prior death; fresh unique id; originals retained'
+}
+cg_recovery_no_load() { frames | jq -se '[.[]|select(.method=="session/load")]|length==0' >/dev/null; }

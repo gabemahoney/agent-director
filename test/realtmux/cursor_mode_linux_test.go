@@ -28,6 +28,8 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 			modes := json.RawMessage(`{"currentModeId":"agent","availableModes":[{"id":"agent","name":"Agent"},{"id":"plan","name":"Plan"}]}`)
 			f, r, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{AgentArgs: []string{"--plan", "--", initial}, Script: &cursorfix.Scenario{Modes: modes}})
 			caller := newPaneCaller(t, f, surface, filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"))
+			selected := map[string]string{"CURSOR_CONFIG_DIR": filepath.Join(t.TempDir(), "repair config"), "CURSOR_DATA_DIR": filepath.Join(t.TempDir(), "repair data")}
+			preserveSelection := false
 			// Follow the final product commands verbatim. The function only routes
 			// the CLI to this fixture's private store; cwd/PWD is the project dir.
 			docSpawn := func(doc, command string) api.SpawnResult {
@@ -38,9 +40,13 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 				}
 				script := `agent-director() { local verb="$1"; shift; "$E5_POSTDOC_CLI" "$verb" --store-path "$E5_POSTDOC_STORE" "$@"; }
 ` + command
+				if preserveSelection {
+					script += ` --extra-env "CURSOR_CONFIG_DIR=$E6_RECOVERY_CONFIG" --extra-env "CURSOR_DATA_DIR=$E6_RECOVERY_DATA"`
+				}
 				cmd := exec.Command("bash", "-c", script)
 				cmd.Dir = f.CWD
 				cmd.Env = append(os.Environ(), "E5_POSTDOC_CLI="+filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "bin", "agent-director"), "E5_POSTDOC_STORE="+f.DBPath)
+				cmd.Env = append(cmd.Env, "E6_RECOVERY_CONFIG="+selected["CURSOR_CONFIG_DIR"], "E6_RECOVERY_DATA="+selected["CURSOR_DATA_DIR"])
 				var stderr bytes.Buffer
 				cmd.Stderr = &stderr
 				out, err := cmd.Output()
@@ -119,7 +125,7 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 				}
 				r.Configure(t, scenario)
 				failedID := newInstanceID("mode-failed")
-				caller.must("spawn", map[string]any{"instance_id": failedID, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": true, "agent_args": modeArgs})
+				caller.must("spawn", map[string]any{"instance_id": failedID, "agent": "cursor", "cwd": f.CWD, "no_pre_trust": true, "agent_args": modeArgs, "extra_env": selected})
 				waitFor(t, "late failed launch reconciled", func() bool { row, e := f.API.Get(failedID); return e == nil && row.State == store.StateMissing }, func() string { return fmt.Sprint(readRow(t, f.DBPath, failedID)) })
 				trail, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "ad-trail.jsonl"))
 				if err != nil || !strings.Contains(string(trail), want) {
@@ -137,11 +143,18 @@ func TestCursorModePublicSavedReplayAndDeliberateRepair(t *testing.T) {
 				}
 				r.Configure(t, cursorfix.Scenario{})
 				beforeRepair := len(r.Frames(t))
+				preserveSelection = true
 				repairedID := docSpawn("docs/caller-contract.md", `agent-director spawn --agent cursor --cwd "$PWD"`).InstanceID
 				if repairedID == failedID {
 					t.Fatal("fresh procedure reused failed id")
 				}
 				waitFor(t, "fresh default-mode ready", func() bool { row, err := f.API.Get(repairedID); return err == nil && row.State == store.StateWaiting }, nil)
+				for key, want := range selected {
+					got := r.Selection(t)[key]
+					if got == nil || *got != want {
+						t.Fatalf("mode remedy dropped %s: %v want %q", key, got, want)
+					}
+				}
 				pause(repairedID)
 				for _, frame := range r.Frames(t)[beforeRepair:] {
 					if string(frame["method"]) == `"session/set_mode"` || string(frame["method"]) == `"session/prompt"` {

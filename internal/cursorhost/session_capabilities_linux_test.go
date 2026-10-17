@@ -5,6 +5,7 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -71,11 +72,13 @@ func TestCursorMinimalCapabilitiesAllowFreshPrompt(t *testing.T) {
 
 func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 	reply := json.RawMessage(`{"error":{"code":-32603,"CODE":-32000,"message":"SYNTHETIC-SECRET\n\u001b login required","data":{"token":"SYNTHETIC-SECRET"}}}`)
-	for _, operation := range []string{"session/new", "session/load", "session/set_mode", "session/prompt"} {
+	for _, operation := range []string{"initialize", "session/new", "session/load", "session/set_mode", "session/prompt"} {
 		t.Run(operation, func(t *testing.T) {
 			scenario := cursorfix.Scenario{Modes: advertisedCursorModes()}
 			options := Options{InitialPrompt: "initial"}
 			switch operation {
+			case "initialize":
+				scenario.InitializeReply = reply
 			case "session/new":
 				scenario.FirstNewReply = reply
 			case "session/load":
@@ -88,10 +91,15 @@ func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 				scenario.PromptReply = reply
 			}
 			var c *cursorSession
+			selected := map[string]string{"CURSOR_CONFIG_DIR": "/selected/failure config", "CURSOR_DATA_DIR": "/selected/failure data"}
+			before := func(e *requestEnv) {
+				raw, _ := json.Marshal(selected)
+				e.exec(t, `UPDATE spawns SET extra_env=? WHERE instance_id=?`, string(raw), e.binding.InstanceID)
+			}
 			if operation == "session/load" {
-				c = beginCursorLoad(t, scenario, "initial", terminalLoop)
+				c = beginCursorLoad(t, scenario, "initial", terminalLoop, before)
 			} else {
-				c = beginCursorSessionWithOptions(t, options, scenario, openTranscript, terminalLoop)
+				c = beginConfiguredCursorSession(t, options, scenario, openTranscript, terminalLoop, before)
 			}
 			err := c.awaitFailure(t, 3*time.Second)
 			if !strings.Contains(err.Error(), operation+" failed:") || !strings.Contains(err.Error(), "internal error; cause unknown") || strings.Contains(err.Error(), "SYNTHETIC-SECRET") {
@@ -102,6 +110,65 @@ func TestCursorCorrelatedOperationFailureSanitized(t *testing.T) {
 			}
 			if operation != "session/prompt" && len(c.prompts(t)) != 0 {
 				t.Fatal("startup refusal dispatched prompt")
+			}
+			for key, want := range selected {
+				got := c.e.runtime.Selection(t)[key]
+				if got == nil || *got != want {
+					t.Fatalf("received %s=%v; want %q", key, got, want)
+				}
+			}
+			wantMethods := []string{`"initialize"`}
+			if operation != "initialize" {
+				next := "session/new"
+				if operation == "session/load" {
+					next = operation
+				}
+				wantMethods = append(wantMethods, `"`+next+`"`)
+				if operation == "session/set_mode" || operation == "session/prompt" {
+					wantMethods = append(wantMethods, `"`+operation+`"`)
+				}
+			}
+			var methods []string
+			for _, frame := range c.e.runtime.Frames(t) {
+				if len(frame["method"]) != 0 {
+					methods = append(methods, string(frame["method"]))
+				}
+			}
+			if !reflect.DeepEqual(methods, wantMethods) {
+				t.Fatalf("failure retried/dependent work escaped: %v want %v", methods, wantMethods)
+			}
+		})
+	}
+}
+
+func TestCursorCorrelatedModeAdviceAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name, reply, cause string
+		remedy             bool
+	}{
+		{"authentication", `{"error":{"code":-32000,"message":"SYNTHETIC-SECRET"}}`, "authentication required", false},
+		{"unknown", `{"error":{"code":-32099,"message":"unsupported SYNTHETIC-SECRET"}}`, "cause unknown", false},
+		{"internal", `{"error":{"code":-32603,"message":"SYNTHETIC-SECRET"}}`, "internal error", false},
+		{"format", `{"error":{"code":-32602,"message":"SYNTHETIC-SECRET"}}`, "format or parameters", false},
+		{"cancelled", `{"error":{"code":-32800,"message":"SYNTHETIC-SECRET"}}`, "cancelled", false},
+		{"resource", `{"error":{"code":-32002,"message":"SYNTHETIC-SECRET"}}`, "resource not found", false},
+		{"malformed", `{"error":{"code":"-32601","message":"SYNTHETIC-SECRET"}}`, "malformed", false},
+		{"unsupported", `{"error":{"code":-32601,"message":"SYNTHETIC-SECRET"}}`, "unsupported", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := beginCursorSessionWithOptions(t, Options{RequestedMode: "plan", InitialPrompt: "never admit"}, cursorfix.Scenario{Modes: advertisedCursorModes(), ModeReply: json.RawMessage(tc.reply)}, openTranscript, terminalLoop)
+			err := c.awaitFailure(t, 3*time.Second)
+			if !strings.Contains(err.Error(), "session/set_mode failed:") || !strings.Contains(err.Error(), tc.cause) || strings.Contains(err.Error(), "SYNTHETIC-SECRET") {
+				t.Fatalf("wrong sanitized cause: %v", err)
+			}
+			if strings.Contains(err.Error(), "remove --plan, or --mode and its value, then retry") != tc.remedy {
+				t.Fatalf("mode-removal authority=%v: %v", tc.remedy, err)
+			}
+			if len(c.prompts(t)) != 0 {
+				t.Fatal("mode failure admitted prompt")
+			}
+			if bytes.Contains(c.pane.bytes(), []byte("SYNTHETIC-SECRET")) {
+				t.Fatal("raw runtime diagnostic leaked")
 			}
 		})
 	}

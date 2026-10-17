@@ -235,21 +235,47 @@ func TestCursorResumeProtectedPathRefusesBeforeMutation(t *testing.T) {
 
 func TestCursorResumeCreateFailureRestoresExaminedRow(t *testing.T) {
 	// Serial: the protected transcript fixture sets HOME.
-	e := newResumeEnv(t)
-	id, _ := seedCursorResume(t, e, store.StateEnded)
-	before := e.columns(t, id)
-	e.rec.Script(e.socket, tmuxfix.Script{Failure: tmux.FailUnrecognized, ExitStatus: 1, Times: 1}, tmux.CallCreate)
-	_, err := e.resume(id)
-	if err == nil {
-		t.Fatal("injected create failure ignored")
-	}
-	after := e.columns(t, id)
-	if after.RowVersion != before.RowVersion.(int64)+2 {
-		t.Fatalf("restore version=%v want %d", after.RowVersion, before.RowVersion.(int64)+2)
-	}
-	before.RowVersion = after.RowVersion
-	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("restore changed saved row: before=%+v after=%+v", before, after)
+	for _, timeout := range []bool{false, true} {
+		t.Run(map[bool]string{false: "determinate restore", true: "indeterminate pending"}[timeout], func(t *testing.T) {
+			e := newResumeEnv(t)
+			selected := map[string]string{"CURSOR_CONFIG_DIR": "/saved/failure-config", "CURSOR_DATA_DIR": "/saved/failure-data"}
+			id, _ := seedCursorResume(t, e, store.StateEnded, selected)
+			before := e.columns(t, id)
+			failure := tmux.FailUnrecognized
+			if timeout {
+				failure = tmux.FailTimeout
+			}
+			e.rec.Script(e.socket, tmuxfix.Script{Failure: failure, ExitStatus: 1, Times: 1}, tmux.CallCreate)
+			_, err := e.resume(id)
+			want := "ErrTmuxSessionCreate"
+			if timeout {
+				want = "ErrTmuxUnresponsive"
+			}
+			assertOneName(t, err, want)
+			calls := e.rec.SocketCallsOf(tmux.CallCreate)
+			if len(calls) != 1 {
+				t.Fatalf("create calls=%d", len(calls))
+			}
+			for key, want := range selected {
+				if calls[0].Envs[key] != want {
+					t.Fatalf("failed create dropped %s", key)
+				}
+			}
+			after := e.columns(t, id)
+			if timeout {
+				if after.State != store.StatePending || after.ExtraEnv != before.ExtraEnv || after.SessionID != before.SessionID || after.JSONLPath != before.JSONLPath {
+					t.Fatalf("indeterminate launch restored/lost selection: %+v", after)
+				}
+				return
+			}
+			if after.RowVersion != before.RowVersion.(int64)+2 {
+				t.Fatalf("restore version=%v want %d", after.RowVersion, before.RowVersion.(int64)+2)
+			}
+			before.RowVersion = after.RowVersion
+			if !reflect.DeepEqual(before, after) {
+				t.Fatalf("restore changed saved row: before=%+v after=%+v", before, after)
+			}
+		})
 	}
 }
 

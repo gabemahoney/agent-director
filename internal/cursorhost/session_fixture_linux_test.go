@@ -138,10 +138,17 @@ func beginCursorSessionWithInput(t *testing.T, initial string, opener func(strin
 }
 
 func beginCursorSessionWithOptions(t *testing.T, options Options, scenario cursorfix.Scenario, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, afterRecoveryReport ...func()) *cursorSession {
+	return beginConfiguredCursorSession(t, options, scenario, opener, starter, nil, afterRecoveryReport...)
+}
+
+func beginConfiguredCursorSession(t *testing.T, options Options, scenario cursorfix.Scenario, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, before func(*requestEnv), afterRecoveryReport ...func()) *cursorSession {
 	t.Helper()
 	e := newRequestEnv(t, "off", "synthetic-session-1")
 	e.runtime.Configure(t, scenario)
 	master, slave := e.prepareRunPTY(t)
+	if before != nil {
+		before(e)
+	}
 	c := &cursorSession{e: e, master: master, pane: &observedWire{}, done: make(chan error, 1)}
 	options.Runtime = e.runtime.Program
 	observe := options.beforeControllerCleanup

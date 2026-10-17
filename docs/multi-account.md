@@ -203,8 +203,12 @@ refused; there is no approved memory-store account recipe. Second-account
 isolation, API-key exchange/renewal, expiry/invalid keys, personal-auth
 preservation, cross-account workers and macOS account behavior remain
 unverified pending authorized account/platform acceptance. Directory selection
-does not establish those capabilities. Refusals and intent-preserving recovery
-are in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
+does not establish those capabilities or policy isolation. Handling a structured
+rejection does not establish that AD can reliably detect native malformed-policy
+repair or silent fallback. Refusals are in the
+[caller contract](caller-contract.md#spawn-and-template-input-refusals);
+[fresh recovery](caller-contract.md#cursor-operation-boundaries) must preserve
+caller-known supported account/configuration intent or stop for a human.
 
 Saved `extra_env` remains in the owner-only database and is omitted from public
 spawn views; template environment remains plaintext TOML. See

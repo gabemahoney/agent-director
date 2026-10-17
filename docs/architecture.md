@@ -169,6 +169,12 @@ no credential/account isolation. No credential transport or account framework
 is introduced; the profile remains unreleased pending external acceptance.
 Protected `ExtraEnv`, public omission and plaintext template visibility retain
 their existing owners and protections.
+Directory selection supplies no policy isolation. Handling structured rejection
+does not prove AD can reliably detect native malformed-policy repair or silent
+fallback in the permitted personal-login route. The unreleased profile and
+second-account, key-exchange/renewal, expiry, personal-auth preservation,
+cross-account worker and macOS acceptance remain independently conditional and
+unmeasured by synthetic fixtures.
 
 For each Cursor create, `tmux.NewSession` uses `invokeEnv` with
 `WithoutSelection` applied to the create client's environment. `createCommands`
@@ -213,6 +219,13 @@ cancellation, authentication-required and missing-resource causes respectively.
 Malformed errors remain malformed, with no authentication/configuration
 inference from message, data, stderr or exit. Runtime-supplied secrets,
 paths, environment and control text never enter these diagnostics.
+Exact structured -32601 also carries the private `errACPOperationUnsupported`
+marker. Future consumers MUST reuse `errors.Is` on this wrapped cause rather
+than classify diagnostic text. Only while `modeResponse` is pending may this
+authority attach the existing complete-mode-removal advice; advertised
+unavailable modes retain their independent correction. Authentication, unknown,
+internal, malformed, format, cancellation and missing-resource failures do not
+offer that remedy. No public typed-error API or automatic retry is introduced.
 `startProcess` separately bounds OS-start reasons to missing executable/cwd,
 permission denial or unknown. No executable/version/login probe is added.
 Malformed framing, transport loss and runtime death retain distinct evidence;
@@ -854,17 +867,32 @@ selectors with absence distinct from empty. Synthetic native history requires
 the actually received config root to match its scripted root; `NativeConfigRoot`
 alone is not proof. Existing launch/resume factories and public caller adapters
 carry explicit selection. The single `cursor-groups` collector uses these shared
-helpers for seven cases and is registered once among the 20 integration groups.
+helpers for ten cases and is registered once among the 20 integration groups.
+Its selected new/load rejection and template fresh-recovery cases extend that
+same collector; static validation alone is not executed integration acceptance.
 Received environment observations are synthetic runtime evidence; new/existing
 server isolation checks use actual tmux. Neither proves native accounts,
 renewal, configuration repair, worker isolation or macOS acceptance.
 
 Capability and failure tests MUST reuse `Scenario.InitializeReply`,
-`NewReplies` and `PromptReply` on this peer and the existing session/load/mode
-starters. `capabilities_test.go` and `session_capabilities_linux_test.go` own
+`FirstNewReply`/`NewReplies`, `LoadReply`, `ModeReply` and `PromptReply` on this
+peer and the existing session/load/mode starters. `beginConfiguredCursorSession`
+adds one pre-run callback to the existing session factory; selection setup MUST
+reuse it rather than add another controller. `capabilities_test.go` and
+`session_capabilities_linux_test.go` own
 known-shape/exact-key/opaque-extension and correlated-operation regressions;
 the existing load-failure matrix owns absent/false load capability and no fresh
-fallback. OS-start repair stays in `lifecycle_linux_test.go`; assembled
+fallback. Selected rejection tests assert `Runtime.Selection` and the exact
+operation sequence. Latest-load tests retain the native-history root requirement
+and no older/fresh fallback. API resume create-failure tests reuse the existing
+factory and full restoration snapshot for determinate failures, keeping uncertain
+create pending. Real-tmux resume/reuse tests reuse the public caller adapters to
+distinguish accepted asynchronous rejection from synchronous restoration: accepted
+new-request reuse keeps its new selection and archives latest once. B15 and the
+existing real-tmux mode-repair owner cover literal fresh recovery, selected
+directories/template intent, retained originals and unresolved-survivor STOP.
+Future changes MUST extend these owners. OS-start repair stays in
+`lifecycle_linux_test.go`; assembled
 asynchronous failure, sanitized trail and independent public missing reads stay
 in `cursor_startup_liveness_linux_test.go`. Extend those owners rather than
 copying controllers or liveness matrices.
@@ -13593,7 +13621,22 @@ fresh tmux session, same transcript. `resume` takes no agent input: it
 relaunches the row's own agent (`ComposeRelaunch` reads `Row.Agent`), and
 the advice it gives names that agent. Claude/Codex reuse advice uses
 `spawn.ReuseSpawn(row.Agent)` and `spawn.ReservedHomeAlternative`; Cursor uses
-the explicit unique-id `cursorFreshRecovery`. A Codex relaunch is composed by
+the shared `cursorFreshRecovery`. All Cursor no-session, protected-transcript
+and saved-environment recovery advice MUST reuse this owner. It preserves the
+original row/session/history/transcript/artifacts, names public `get` and
+live-row `kill` with its existing live-row sequence, and treats neither missing
+state nor a finished-row kill no-op as process-death proof. Unresolved survivors
+require STOP and a human following
+`docs/operator-actions.md#inspect-and-end-a-session-by-hand` before fresh launch.
+The deliberate fresh command omits `instance_id` for a generated unique id,
+keeps HOME and carries caller-known supported `extra_env` or template intent.
+No selection is valid only for intended personal login without custom
+configuration/data. Unavailable credential intent or reconstruction requiring
+protected data requires STOP/human, never saved-environment reading/export/edit,
+same-row repair or personal-default fallback. Machine error names, fields and
+states remain the contract; advice is supplementary. This adds no recovery API
+or screen-text classifier; `read-pane` remains explicit inspection.
+A Codex relaunch is composed by
 `composeCodexResumeCommand` (see [Per-agent launch
 composition](#per-agent-launch-composition)); the steps below are the same
 for all three agents except where a step says otherwise. Cursor's
@@ -13631,8 +13674,8 @@ written, harmlessly:
    marks it `missing`, if `get` still shows no session id, spawn the id
     again with the reuse opt-in and the row's agent, in their one
    spelling (`spawn.ReuseSpawn`), for Claude/Codex. Cursor instead uses
-   `cursorFreshRecovery`: preserve artifacts and spawn from the intended cwd
-   without an instance id, yielding a unique fresh row. The step is conditional
+   `cursorFreshRecovery` with the survivor and intent conditions above, yielding
+   a unique fresh row. The step is conditional
    because an agent that reports in late records a session id, and once
    that row is `missing` it can be resumed; a reuse would discard its
    conversation. A row with a session id (typically a resume's launch,
@@ -13684,8 +13727,8 @@ written, harmlessly:
    named by its own key (`spawn.InvalidEnvKeyAlternative`); the fresh conversation
    starts with no memory of the old conversation. See [Malformed
    `extra_env` keys](#malformed-extra_env-keys-bvpb). Cursor's two environment
-   refusals instead preserve artifacts and give `cursorFreshRecovery`, omitting
-   HOME or the malformed key from an intent-preserving new launch. Cursor keeps
+   refusals instead preserve artifacts and give conditional `cursorFreshRecovery`;
+   this is no authority to reconstruct protected saved values. Cursor keeps
    HOME; its directory alternative selects configuration/data with existing
    personal login, without credential isolation. No same-id reuse is suggested.
    Next, `spawn.ValidateCursorEnv` checks saved Cursor selection before transcript

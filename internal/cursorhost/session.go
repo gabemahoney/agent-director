@@ -1117,7 +1117,7 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 			raw, e := protocol.response(f)
 			if e != nil {
-				if modeResponse != nil {
+				if modeResponse != nil && errors.Is(e, errACPOperationUnsupported) {
 					return fmt.Errorf("Cursor requested mode configuration failed; remove --plan, or --mode and its value, then retry: %w", e)
 				}
 				return e

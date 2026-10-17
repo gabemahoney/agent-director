@@ -330,7 +330,7 @@ func resumeImpl(s ResumeStore, t ResumeTmux, pc ProcChecker, cfg config.Config, 
 	}
 	if row.Agent == store.AgentCursor {
 		if err := spawn.ValidateCursorEnv(row.ExtraEnv); err != nil {
-			return ResumeResult{}, fmt.Errorf("%w; nothing was written and nothing was launched; resume cannot change the saved environment; start a new instance with a supported explicit selection only if it matches the intended account and configuration", err)
+			return ResumeResult{}, fmt.Errorf("%w; nothing was written and nothing was launched; resume cannot change the saved environment; start a new instance with a supported explicit selection only if it matches the intended account and configuration; %s", err, cursorFreshRecovery)
 		}
 		if err := cursortranscript.VerifyAppend(row.JSONLPath); err != nil {
 			return ResumeResult{}, fmt.Errorf("%w: latest protected Cursor transcript unavailable; %s", ErrJsonlMissing, cursorFreshRecovery)
@@ -716,7 +716,7 @@ func resumeLostRace(s ResumeStore, row Spawn) error {
 // SR-4.4). The step is conditional on get still showing no
 // session id: an agent that reports in late records one, and once that row is
 // missing it is resumable, so a reuse would discard its conversation.
-const cursorFreshRecovery = `preserve the original row, session, transcript and saved artifacts; from the intended project directory run agent-director spawn --agent cursor --cwd "$PWD" for a fresh conversation with an automatically generated unique instance_id`
+const cursorFreshRecovery = `preserve the original row, session, transcript and saved artifacts; reconcile any surviving launch before starting another: use agent-director get --instance-id <id> and, while the row is live, follow agent-director kill --instance-id <id> and its live-row advice; missing state or a finished-row kill no-op is not proof of exit; if public operations cannot resolve survivors, STOP and ask a human to follow docs/operator-actions.md#inspect-and-end-a-session-by-hand before any fresh launch; only if the intended account and configuration can be preserved, from the intended project directory run agent-director spawn --agent cursor --cwd "$PWD" for a fresh conversation with an automatically generated unique instance_id; before running, add caller-known supported extra_env (CLI: repeat --extra-env KEY=VALUE) or --template NAME carrying that intent, keeping HOME unchanged; no selection is valid only for intended personal login without custom configuration/data; directories do not isolate account credentials; if intent is unavailable or reconstructing it requires protected data, STOP and ask a human; do not read or edit the protected saved environment or drop credential intent to retry personally`
 
 func launchInProgressNoSessionStep(agent string) string {
 	if agent == config.AgentCursor {
@@ -854,7 +854,8 @@ func launchInProgressError(row Spawn) error {
 //     opting in to reuse (SpawnParams.ReuseFinished) and passing the row's
 //     agent (SpawnParams.Agent, the row's recorded one), if get still shows
 //     no session id, as its description says. Cursor instead preserves the original
-//     row and artifacts and starts a fresh unique instance with --agent cursor;
+//     row and artifacts; fresh recovery follows cursorFreshRecovery, preserving
+//     caller-known supported account/configuration intent or stopping for a human.
 //     Nothing was written. Also a lost race: the row changed after resume examined it
 //     (found by the move, or by the one re-read after the pre-launch check
 //     found a left-over session), and nothing was written.
@@ -864,8 +865,8 @@ func launchInProgressError(row Spawn) error {
 //     (SpawnParams.ReuseFinished) and passing the row's agent (SpawnParams.Agent,
 //     which get shows): a fresh conversation starts in the retained life.
 //     Cursor instead preserves the original row/session/transcript/artifacts
-//     and starts a fresh unique instance: from the intended project directory,
-//     agent-director spawn --agent cursor --cwd "$PWD" (omit instance_id).
+//     and follows cursorFreshRecovery for a fresh unique instance with the
+//     caller-known intended account/configuration, or stops for a human.
 //     Older sessions remain listed
 //     for inspection only; resume never chooses them. An agent switch or switch back starts a new life with no memory
 //     of the earlier one.
@@ -881,6 +882,8 @@ func launchInProgressError(row Spawn) error {
 //     existing personal login; they do not isolate account credentials. Cursor
 //     also refuses saved credential-profile selectors and invalid directory
 //     selections before mutation; resume cannot change that saved environment.
+//     Fresh recovery follows cursorFreshRecovery; credential intent must never
+//     be discarded to retry personally, and unavailable intent requires a human.
 //   - [ErrJsonlMissing]: the latest protected Cursor transcript is unavailable,
 //     or no other-agent current-session transcript path stats successfully.
 //     Claude tries the recorded path and its config-dir-aware recomputation;

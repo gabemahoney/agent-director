@@ -179,24 +179,33 @@ Cursor supports same-agent finished-id reuse and switches through the
 never loads a saved session. Its failure outcomes follow
 [Transcript recovery](#transcript-recovery). If the latest session cannot be
 resumed and you want to preserve the original row, session, transcript and
-saved artifacts, resolve surviving work first, then run this from the intended
-project directory, omitting `instance_id` so AD generates a unique id:
+saved artifacts, reconcile any surviving launch first: use
+`agent-director get --instance-id <id>` and, while the row is live, follow
+`agent-director kill --instance-id <id>` and the live-row sequence above.
+Missing state or a finished-row kill no-op is not proof of exit. If public
+operations cannot resolve survivors, STOP and ask a human to follow
+[Inspect and end a session by hand](operator-actions.md#inspect-and-end-a-session-by-hand)
+before any fresh launch. Only when the intended account and configuration can
+be preserved, run this from the intended project directory, omitting
+`instance_id` so AD generates a unique id:
 
 ```sh
 agent-director spawn --agent cursor --cwd "$PWD"
 ```
 
-This is an explicit fresh conversation using the existing personal login when
-no selection is supplied. Use supported explicit `extra_env` only if it
-preserves the intended account and configuration. Cursor retains the caller's
+Before running, add caller-known supported `extra_env` (repeat
+`--extra-env KEY=VALUE` on the CLI) or `--template NAME` carrying the intended
+account and configuration. No selection is valid only for deliberately intended
+personal login without custom configuration/data. Cursor retains the caller's
 `HOME`; [Cursor directories](multi-account.md#cursor-configuration-and-data-directories)
 select configuration/data without relocating or isolating login credentials.
 For saved `ErrReservedEnvKey`, resume cannot change the saved environment.
 Preserve the original row, session, transcript and saved artifacts. A new
 instance is an option only with a supported selection matching the intended
 account/configuration; never remove account intent and retry under the personal
-login. If no supported selection meets that intent, retain the refusal for an
-[operator decision](operator-actions.md#inspect-and-end-a-session-by-hand).
+login. If intent is unavailable or reconstructing it requires protected data,
+STOP and ask a human. Do not read, export or edit the protected saved environment
+to reconstruct a launch, or repair the original row in place.
 
 Cursor `agent_args` accept the model, mode and single-prompt forms in
 [Fresh Cursor use](usage.md#fresh-cursor-use). Unsupported or malformed
@@ -220,9 +229,14 @@ its selection before publication, readiness or prompt submission. Missing mode
 state, an unavailable requested mode, a rejected or invalid acknowledgement,
 timeout or lost authority fails asynchronously, with no automatic fallback.
 Inspect the pane, row and `ad.cursor.failed` reason as for other gateway failures.
-If choosing to launch without an unavailable mode, remove `--plan`, or `--mode`
-and its value, and use the fresh generated-id procedure above to preserve the
-failed row. This deliberately chooses the runtime's default mode; it does not
+Only an advertised unavailable mode or a structured unsupported-operation error
+(`-32601`) while mode selection is pending can offer mode-removal advice.
+Authentication-required, unknown, internal, malformed, format, cancellation and
+missing-resource failures do not establish that dropping mode remedies them.
+If deliberately choosing to launch without that unavailable or unsupported mode,
+remove the complete mode group (`--plan`, or `--mode` and its value), then use
+the fresh generated-id procedure above, retaining intended configuration, to preserve
+the failed row. This deliberately chooses the runtime's default mode; it does not
 establish that the requested mode worked. A successful `spawn` or `resume`
 result confirms launch only. Model availability is likewise not established
 by launch success.

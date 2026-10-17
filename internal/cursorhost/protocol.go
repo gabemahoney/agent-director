@@ -19,6 +19,7 @@ const cancelWait = 3 * time.Second
 const transportWriteWait = 3 * time.Second
 
 var errMalformedACPFrame = errors.New("malformed ACP frame")
+var errACPOperationUnsupported = errors.New("operation unsupported by the selected runtime")
 
 type frame struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -335,7 +336,7 @@ func acpResponseFailure(method string, raw json.RawMessage) error {
 	cause := "runtime rejected the request; cause unknown"
 	switch *code {
 	case -32601:
-		cause = "operation unsupported by the selected runtime"
+		return fmt.Errorf("Cursor ACP %s failed: %w", method, errACPOperationUnsupported)
 	case -32700, -32600, -32602:
 		cause = "runtime rejected the request format or parameters"
 	case -32603:
