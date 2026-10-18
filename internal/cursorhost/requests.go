@@ -393,9 +393,9 @@ func (c *requestController) tick() error {
 	return nil
 }
 
-// Proof is deliberately narrow: the captured shell rawOutput establishes an
-// actual process exit, even nonzero. Status alone, MCP rejection, child task
-// completion and accepted plans establish no tool execution.
+// Proof requires the exact admitted tool's captured execution output. Shell
+// exits (even nonzero) and successful MCP results establish execution; status
+// alone, MCP rejection, child task completion and accepted plans do not.
 func (c *requestController) execution(params json.RawMessage) error {
 	var p struct {
 		Session string `json:"sessionId"`
@@ -410,16 +410,10 @@ func (c *requestController) execution(params json.RawMessage) error {
 		return nil
 	}
 	for _, r := range c.requests {
-		if r.session != p.Session || r.auth.plan || r.auth.kind != "execute" || r.auth.toolID != p.Update.Tool {
+		if r.session != p.Session || r.auth.plan || r.auth.toolID != p.Update.Tool {
 			continue
 		}
-		var output map[string]json.RawMessage
-		if json.Unmarshal(p.Update.Output, &output) != nil {
-			return nil
-		}
-		var exit int
-		var stdout, stderr string
-		if json.Unmarshal(output["exitCode"], &exit) != nil || string(output["exitCode"]) == "null" || json.Unmarshal(output["stdout"], &stdout) != nil || bytes.Equal(bytes.TrimSpace(output["stdout"]), []byte("null")) || json.Unmarshal(output["stderr"], &stderr) != nil || bytes.Equal(bytes.TrimSpace(output["stderr"]), []byte("null")) {
+		if !r.auth.executionOutput(p.Update.Status, p.Update.Output) {
 			return nil
 		}
 		if e := c.rep.store.ProveCursorToolRan(c.rep.binding, r.token, r.auth.toolID, c.checkFor(c.rep.binding)); e != nil {
@@ -431,6 +425,27 @@ func (c *requestController) execution(params json.RawMessage) error {
 		return nil
 	}
 	return nil
+}
+
+func (a *authorization) executionOutput(status string, raw json.RawMessage) bool {
+	var output map[string]json.RawMessage
+	if json.Unmarshal(raw, &output) != nil {
+		return false
+	}
+	switch a.kind {
+	case "execute":
+		var exit int
+		var stdout, stderr string
+		return json.Unmarshal(output["exitCode"], &exit) == nil && string(output["exitCode"]) != "null" && json.Unmarshal(output["stdout"], &stdout) == nil && !bytes.Equal(bytes.TrimSpace(output["stdout"]), []byte("null")) && json.Unmarshal(output["stderr"], &stderr) == nil && !bytes.Equal(bytes.TrimSpace(output["stderr"]), []byte("null"))
+	case "other":
+		// Admission already requires the captured MCP title and canonical
+		// permission options. Native MCP completion supplies only success:true;
+		// failed/ambiguous output does not prove that the approved call ran.
+		var success bool
+		return status == "completed" && len(output) == 1 && json.Unmarshal(output["success"], &success) == nil && success
+	default:
+		return false
+	}
 }
 
 // ACP ids are type-distinct. Numerically equal spellings cannot replace one

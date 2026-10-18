@@ -649,7 +649,8 @@ still awaits an answer, so follow each request you track with
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
 showed the request's dialog gone: `tool_ran` (Claude tool execution or
-validated matching Cursor shell execution), `turn_end` (an eligible main request
+validated matching Cursor execution; see [Cursor permissions](permissions.md#cursor-spawns)),
+`turn_end` (an eligible main request
 was written before the main turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
 `agent_gone` (the agent ended). A Codex agent's request carries
 no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
@@ -712,7 +713,8 @@ agent-director record-pane-answer --request-token "$token" \
 Pass `--as unknown` unless you saw how it was answered. On a Claude agent, a
 request whose tool then runs is closed on its own (`decision_reason`
 `tool_ran`); a Codex request is closed only by one of the two calls above.
-A Cursor request can close on validated matching shell execution as well;
+A Cursor request can close on validated matching shell execution or a successful
+MCP result under [Cursor permissions](permissions.md#cursor-spawns);
 other tool/plan completion supplies no execution proof. `record-pane-answer`
 types nothing and neither authorizes Cursor approval nor proves a dialog gone.
 A Codex pane's keys and an example are in

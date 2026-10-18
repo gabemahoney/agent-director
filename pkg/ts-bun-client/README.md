@@ -350,7 +350,8 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `pane_answer`; never read a reason as a verdict.
 
 `proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, its
-tool ran (Claude, or validated exact matching Cursor shell execution);
+tool ran (Claude, or validated exact matching Cursor execution under
+[Cursor permissions](../../docs/permissions.md#cursor-spawns));
 `"turn_end"`, an eligible main request's turn ended under the age and identity
 guards; or `"agent_gone"`, the agent ended) say when and how the request's
 dialog was proven gone; `"delivered"` and a pane answer are
