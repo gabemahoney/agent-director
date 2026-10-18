@@ -632,7 +632,8 @@ The response is a single permission row:
 `pane` (`send-keys` or a native Cursor choice), `pane_outside` (outside claim),
 or `tool_ran` (tool execution). API allow initially has no reason; later
 validated Cursor execution can fill that missing reason with `tool_ran`,
-while preserving an existing verdict and reason. Read `decision` for the
+while preserving an existing verdict and reason. Failed MCP invocation proof
+leaves these fields unchanged. Read `decision` for the
 verdict and the [delivery and proof fields](permissions.md#delivery) for its
 outcome; a reason is not an immutable writer identity.
 
@@ -649,7 +650,8 @@ still awaits an answer, so follow each request you track with
 
 `proven_gone_at` and `proven_gone_how` say when and how the agent itself
 showed the request's dialog gone: `tool_ran` (Claude tool execution or
-validated matching Cursor execution; see [Cursor permissions](permissions.md#cursor-spawns)),
+validated matching Cursor invocation proof, including an exact failed MCP
+invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
 was written before the main turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
 `agent_gone` (the agent ended). A Codex agent's request carries

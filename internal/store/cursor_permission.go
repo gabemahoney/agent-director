@@ -213,20 +213,37 @@ func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, unt
 // Emit only after a committed mutation; an already complete proof is a no-op.
 // The event preserves any earlier decision and reason retained by COALESCE.
 func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, check CursorCheck) error {
+	return s.proveCursorTool(b, token, tool, true, check)
+}
+
+// ProveCursorToolFailed proves only the exact completed invocation's dialog
+// gone, under current runtime authority. The gateway must validate the captured
+// MCP error completion first. Like Claude's PostToolUseFailure, tool_ran here
+// records the invocation's end, not successful execution of the server action.
+// No decision, delivery or pane-answer inference follows from this evidence.
+func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, check CursorCheck) error {
+	return s.proveCursorTool(b, token, tool, false, check)
+}
+
+func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran bool, check CursorCheck) error {
 	var written bool
 	var requestID int64
 	var toolName, decision, reason string
+	set, incomplete := "", ""
+	if ran {
+		set = `,
+ pane_answer=CASE WHEN delivered_at IS NULL AND pane_answer IN ('none','intent') THEN 'tool_ran' ELSE pane_answer END,
+ decision=COALESCE(decision,'allow'),decision_reason=COALESCE(decision_reason,'tool_ran'),decided_at=COALESCE(decided_at,CURRENT_TIMESTAMP)`
+		incomplete = ` OR (delivered_at IS NULL AND pane_answer IN ('none','intent'))
+ OR decision IS NULL OR decision_reason IS NULL OR decided_at IS NULL`
+	}
 	err := s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, e := s.cursorAuthority(ctx, conn, b, time.Time{}, check); e != nil {
 			return e
 		}
-		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET proven_gone_at=COALESCE(proven_gone_at,?),proven_gone_how=COALESCE(proven_gone_how,?),
- pane_answer=CASE WHEN delivered_at IS NULL AND pane_answer IN ('none','intent') THEN 'tool_ran' ELSE pane_answer END,
- decision=COALESCE(decision,'allow'),decision_reason=COALESCE(decision_reason,'tool_ran'),decided_at=COALESCE(decided_at,CURRENT_TIMESTAMP)
+		e := conn.QueryRowContext(ctx, `UPDATE permission_requests SET proven_gone_at=COALESCE(proven_gone_at,?),proven_gone_how=COALESCE(proven_gone_how,?)`+set+`
  WHERE instance_id=? AND request_token=? AND tool_use_id=? AND closed_at IS NULL
- AND (proven_gone_at IS NULL OR proven_gone_how IS NULL
- OR (delivered_at IS NULL AND pane_answer IN ('none','intent'))
- OR decision IS NULL OR decision_reason IS NULL OR decided_at IS NULL)
+ AND (proven_gone_at IS NULL OR proven_gone_how IS NULL`+incomplete+`)
  RETURNING request_id,tool_name,COALESCE(decision,''),COALESCE(decision_reason,'')`, millisArg(time.Now()), ProvenGoneToolRan, b.InstanceID, token, tool).Scan(&requestID, &toolName, &decision, &reason)
 		if errors.Is(e, sql.ErrNoRows) {
 			return nil

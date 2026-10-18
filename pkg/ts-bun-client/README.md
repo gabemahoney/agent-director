@@ -349,9 +349,11 @@ do not know, read the recorded verdict from `decision` (`null` for a
 `"pane_outside"` `"unknown"` claim) and the outcome from `delivery` and
 `pane_answer`; never read a reason as a verdict.
 
-`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, its
-tool ran (Claude, or validated exact matching Cursor execution under
-[Cursor permissions](../../docs/permissions.md#cursor-spawns));
+`proven_gone_at` and `proven_gone_how` (`ProvenGoneHow`: `"tool_ran"`, Claude's
+tool ran or Cursor supplied validated exact matching invocation proof under
+[Cursor permissions](../../docs/permissions.md#cursor-spawns), including a failed
+MCP invocation that proves dialog closure without inferring execution or changing
+decision, delivery or pane-answer fields;
 `"turn_end"`, an eligible main request's turn ended under the age and identity
 guards; or `"agent_gone"`, the agent ended) say when and how the request's
 dialog was proven gone; `"delivered"` and a pane answer are

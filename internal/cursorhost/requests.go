@@ -394,8 +394,9 @@ func (c *requestController) tick() error {
 }
 
 // Proof requires the exact admitted tool's captured execution output. Shell
-// exits (even nonzero) and successful MCP results establish execution; status
-// alone, MCP rejection, child task completion and accepted plans do not.
+// exits (even nonzero) and successful MCP results establish execution. A captured
+// failed MCP completion proves only that invocation's dialog gone, not that the
+// server action ran. Status alone, child completion and accepted plans do not.
 func (c *requestController) execution(params json.RawMessage) error {
 	var p struct {
 		Session string `json:"sessionId"`
@@ -413,10 +414,15 @@ func (c *requestController) execution(params json.RawMessage) error {
 		if r.session != p.Session || r.auth.plan || r.auth.toolID != p.Update.Tool {
 			continue
 		}
-		if !r.auth.executionOutput(p.Update.Status, p.Update.Output) {
+		ran := r.auth.executionOutput(p.Update.Status, p.Update.Output)
+		if !ran && !r.auth.completedMCPError(p.Update.Status, p.Update.Output) {
 			return nil
 		}
-		if e := c.rep.store.ProveCursorToolRan(c.rep.binding, r.token, r.auth.toolID, c.checkFor(c.rep.binding)); e != nil {
+		prove := c.rep.store.ProveCursorToolRan
+		if !ran {
+			prove = c.rep.store.ProveCursorToolFailed
+		}
+		if e := prove(c.rep.binding, r.token, r.auth.toolID, c.checkFor(c.rep.binding)); e != nil {
 			return e
 		}
 		r.terminal.Store(true)
@@ -439,13 +445,27 @@ func (a *authorization) executionOutput(status string, raw json.RawMessage) bool
 		return json.Unmarshal(output["exitCode"], &exit) == nil && string(output["exitCode"]) != "null" && json.Unmarshal(output["stdout"], &stdout) == nil && !bytes.Equal(bytes.TrimSpace(output["stdout"]), []byte("null")) && json.Unmarshal(output["stderr"], &stderr) == nil && !bytes.Equal(bytes.TrimSpace(output["stderr"]), []byte("null"))
 	case "other":
 		// Admission already requires the captured MCP title and canonical
-		// permission options. Native MCP completion supplies only success:true;
-		// failed/ambiguous output does not prove that the approved call ran.
+		// permission options. Only the captured success result establishes
+		// execution; a completed error takes the separate proof-only path.
 		var success bool
 		return status == "completed" && len(output) == 1 && json.Unmarshal(output["success"], &success) == nil && success
 	default:
 		return false
 	}
+}
+
+func (a *authorization) completedMCPError(status string, raw json.RawMessage) bool {
+	if a.kind != "other" || status != "completed" {
+		return false
+	}
+	output, err := object(raw)
+	if err != nil || len(output) != 1 {
+		return false
+	}
+	// This exact native completion was captured after MCP disconnection. It
+	// ends the invocation without establishing server execution or an allow.
+	var message string
+	return json.Unmarshal(output["error"], &message) == nil && message == "Tool execution error"
 }
 
 // ACP ids are type-distinct. Numerically equal spellings cannot replace one
