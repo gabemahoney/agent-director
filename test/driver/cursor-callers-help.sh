@@ -12,6 +12,7 @@ if [[ ${CH_CASE_GUARDED:-} != 1 ]]; then
 fi
 for ch_key in ${!AGENT_DIRECTOR_@}; do [[ $ch_key == AGENT_DIRECTOR_TEST_HARNESS ]] || unset "$ch_key"; done
 unset TMUX TMUX_PANE GIT_CONFIG_GLOBAL
+umask 077
 source /work/source/test/driver/cursor-pane-controls.sh
 export GIT_CONFIG_GLOBAL="$case_dir/gitconfig" GIT_CONFIG_NOSYSTEM=1
 : > "$GIT_CONFIG_GLOBAL"
@@ -23,11 +24,45 @@ jq -cn --rawfile plain "$case_dir/canonical-help" --arg id "$id" '{mcpExpectedIn
 ch_peer_socket=''
 ch_peer_gateway=''
 ch_peer_runtime=''
+ch_peer_server=''
+ch_peer_retired=0
+ch_peer_evidence() {
+ local out=$1
+ [[ -d $case_dir/peer-diagnostics ]] || return 0
+ mkdir -m 700 -p "$out/peer-diagnostics" || return
+ chmod 00700 "$out/peer-diagnostics" || return
+ cp -R "$case_dir/peer-diagnostics/." "$out/peer-diagnostics/" || return
+ chmod -R go-rwx "$out/peer-diagnostics" || return
+}
+ch_peer_binding() {
+ [[ -f $case_dir/peer.db ]] || return 0
+ # Startup bindings survive an exit before session/transcript publication.
+ /opt/driver/sql.sh "$case_dir/peer.db" -readonly -json "SELECT instance_id,state,session_id,jsonl_path,launch_token,life_number,pane_pid,pane_starttime,tmux_socket,tmux_server_pid,tmux_server_starttime FROM spawns WHERE instance_id='peer-$id'; SELECT bound_instance_id,bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_session_id,bound_terminated FROM cursor_runtimes WHERE bound_instance_id='peer-$id';" > "$case_dir/peer-binding.jsonl"
+}
+ch_peer_failure() {
+ local name
+ printf 'PEER_FAILURE instance=peer-%s socket=%s evidence=/tmp/cursor-callers-help-artifacts/%s/peer-diagnostics\n' "$id" "$ch_peer_socket" "$id" >&2
+ for name in "$case_dir/peer-startup.log" "$case_dir/peer-spawn.stderr" "$case_dir/peer-binding.jsonl" "$case_dir"/peer-diagnostics/tmux-server-*.log "$case_dir"/peer-diagnostics/tmux-out-*.log; do
+  [[ -f $name ]] || continue
+  printf 'PEER_DIAGNOSTIC file=%s tail_bytes=4096\n' "${name##*/}" >&2
+  tail -c 4096 "$name" >&2
+  printf '\n' >&2
+  if [[ ${name##*/} == tmux-server-*.log ]]; then
+   # Detached tmux-out can be empty. Verbose server input records retain
+   # the gateway's own pane diagnostics before the pane disappears.
+   printf 'PEER_PANE_DIAGNOSTIC file=%s tail_bytes=4096\n' "${name##*/}" >&2
+   { grep -a 'input_parse_buffer:' "$name" || true; } | tail -c 4096 >&2
+   printf '\n' >&2
+  fi
+ done
+}
 ch_export() {
  local out="/tmp/cursor-callers-help-artifacts/$id" name peer_path
  pc_export_evidence || return
  mkdir -m 700 -p "$out" || return
- for name in canonical-help mcp.jsonl mcp.jsonl.inventory.json scenario trace.jsonl raw peer-mcp.jsonl peer-mcp.jsonl.inventory.json peer-scenario peer-trace.jsonl peer-raw public.json peer-public.json; do
+ ch_peer_binding || return
+ ch_peer_evidence "$out" || return
+ for name in canonical-help mcp.jsonl mcp.jsonl.inventory.json scenario trace.jsonl raw peer-mcp.jsonl peer-mcp.jsonl.inventory.json peer-scenario peer-trace.jsonl peer-raw public.json peer-public.json peer-startup.log peer-cleanup.stderr peer-spawn.stderr peer-binding.jsonl peer-tmux-command; do
   if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$out/$name" || return; chmod 600 "$out/$name" || return; fi
  done
  pc_export_launch_records "$out" "$STORE" "$id" "${path:-}" || return
@@ -37,13 +72,35 @@ ch_export() {
   pc_export_launch_records "$out/peer" "$case_dir/peer.db" "peer-$id" "$peer_path" || return
  fi
 }
+ch_cleanup_peer() {
+ local rc
+ tmux -S "$ch_peer_socket" kill-server > /dev/null 2> "$case_dir/peer-cleanup.stderr" && return 0
+ rc=$?
+ # A sole-pane server normally exits with its retired gateway. Accept only
+ # that known absence after independently observing every owned process die.
+ if [[ $ch_peer_retired == 1 && $ch_peer_server =~ ^[1-9][0-9]*$ ]] && proc_gone "$ch_peer_server" &&
+    { [[ $(cat "$case_dir/peer-cleanup.stderr") == "no server running on "* ]] || [[ $(cat "$case_dir/peer-cleanup.stderr") == "error connecting to "*" (No such file or directory)" ]]; }; then
+  printf 'PEER_CLEANUP already-exited server=%s owned-death=proven\n' "$ch_peer_server" >&2
+  return 0
+ fi
+ printf 'CLEANUP_FAILED stage=peer-tmux exit=%s server=%s retired=%s\n' "$rc" "$ch_peer_server" "$ch_peer_retired" >&2
+ cat "$case_dir/peer-cleanup.stderr" >&2
+ return "$rc"
+}
 ch_exit() {
  local rc=$? evidence_rc=0 cleanup_rc=0 helper_cleanup_rc=0
  trap - EXIT
  set +e
- ch_export || evidence_rc=$?
+ ch_export || { evidence_rc=$?; printf 'HELP_EVIDENCE_FAILED stage=export exit=%s\n' "$evidence_rc" >&2; }
  # Gateway death is observed before tmux teardown on successful cases.
- if [[ -n $ch_peer_socket ]]; then tmux -S "$ch_peer_socket" kill-server >/dev/null 2>&1 || cleanup_rc=$?; fi
+ if [[ -n $ch_peer_socket ]]; then ch_cleanup_peer || cleanup_rc=$?; fi
+ # Retain the final server tail as well as the pre-teardown first failure.
+ ch_peer_evidence "/tmp/cursor-callers-help-artifacts/$id" || { evidence_rc=$?; printf 'HELP_EVIDENCE_FAILED stage=peer-diagnostics exit=%s\n' "$evidence_rc" >&2; }
+ if ((rc!=0 || evidence_rc!=0 || cleanup_rc!=0)) && [[ -n $ch_peer_socket ]]; then ch_peer_failure; fi
+ if [[ -f $case_dir/peer-cleanup.stderr ]]; then
+  if ! cp "$case_dir/peer-cleanup.stderr" "/tmp/cursor-callers-help-artifacts/$id/peer-cleanup.stderr"; then evidence_rc=1; fi
+  if ! chmod 600 "/tmp/cursor-callers-help-artifacts/$id/peer-cleanup.stderr"; then evidence_rc=1; fi
+ fi
  (exit "$rc"); cleanup_cursor_case || helper_cleanup_rc=$?
  if ((cleanup_rc==0)); then cleanup_rc=$helper_cleanup_rc; fi
  printf 'HELP_CASE_EXIT original=%s evidence=%s cleanup=%s\n' "$rc" "$evidence_rc" "$cleanup_rc" >&2
@@ -89,8 +146,24 @@ ch_isolation() {
  jq -cn --rawfile plain "$case_dir/canonical-help" --arg id "$peer_id" '{mcpExpectedInstructions:$plain,mcpCalls:[{name:"get",arguments:{instance_id:$id}},{name:"read-pane",arguments:{instance_id:$id}}]}' > "$case_dir/peer-scenario"
  local peer_settings
  peer_settings=$(jq --arg dir "$case_dir" '.+{trace:($dir+"/peer-trace.jsonl"),pid:($dir+"/peer-pid"),scenario:($dir+"/peer-scenario"),raw:($dir+"/peer-raw"),mcpTrace:($dir+"/peer-mcp.jsonl")}' <<<"$primary_settings")
- TMUX_TMPDIR="$case_dir/peer-tmux" AD_CURSOR_FIX_SETTINGS="$peer_settings" agent-director spawn --home "$HOME" --store-path "$peer_store" --agent cursor --instance-id "$peer_id" --tmux-session-name "$peer_id" --cwd "$case_dir/cwd" --no-pre-trust --extra-env "CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" --extra-env "CURSOR_DATA_DIR=$CURSOR_DATA_DIR" > "$case_dir/peer-public.json"
+ local peer_tmux
+ peer_tmux=$(command -v tmux)
+ mkdir -m 700 "$case_dir/peer-diagnostics"
+ chmod 00700 "$case_dir/peer-diagnostics"
+ # new-session already passes the explicit -c cwd. Only tmux's log cwd
+ # changes; exec preserves its argv and the actual AD pane command/lifetime.
+ {
+  printf '#!/bin/bash\nset -euo pipefail\numask 077\ncd %q\nexec %q -vv "$@"\n' "$case_dir/peer-diagnostics" "$peer_tmux"
+ } > "$case_dir/peer-tmux-command"
+ chmod 700 "$case_dir/peer-tmux-command"
+ printf 'peer-spawn-start utc=%s socket=%s store=%s\n' "$(date -u +%s.%N)" "$ch_peer_socket" "$peer_store" >> "$case_dir/peer-startup.log"
+ TMUX_TMPDIR="$case_dir/peer-tmux" AD_CURSOR_FIX_SETTINGS="$peer_settings" agent-director spawn --home "$HOME" --store-path "$peer_store" --tmux-command "$case_dir/peer-tmux-command" --agent cursor --instance-id "$peer_id" --tmux-session-name "$peer_id" --cwd "$case_dir/cwd" --no-pre-trust --extra-env "CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" --extra-env "CURSOR_DATA_DIR=$CURSOR_DATA_DIR" > "$case_dir/peer-public.json" 2> "$case_dir/peer-spawn.stderr"
+ printf 'peer-spawn-return utc=%s\n' "$(date -u +%s.%N)" >> "$case_dir/peer-startup.log"
+ ch_peer_server=$(tmux -S "$ch_peer_socket" display-message -p '#{pid}' 2>> "$case_dir/peer-startup.log") || true
+ if [[ $ch_peer_server =~ ^[1-9][0-9]*$ ]]; then cat "/proc/$ch_peer_server/stat" >> "$case_dir/peer-startup.log" || true; fi
+ ch_peer_binding
  check guidance.peer wait_until ch_exchange "$case_dir/peer-mcp.jsonl" "$peer_id"
+ [[ $ch_peer_server =~ ^[1-9][0-9]*$ ]]
  ch_peer_gateway=$(/opt/driver/sql.sh "$peer_store" "SELECT pane_pid FROM spawns WHERE instance_id='$peer_id';")
  ch_peer_runtime=$(/opt/driver/sql.sh "$peer_store" "SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='$peer_id';")
  check stores.primary-only test "$(sql 'SELECT count(*) FROM spawns;')" = 1
@@ -101,6 +174,8 @@ ch_isolation() {
  check peer.runtime-death wait_gone "$ch_peer_runtime"
  check peer.gateway-death wait_gone "$ch_peer_gateway"
  for ch_pid in "${peer_mcp[@]}"; do check peer.mcp-reaped wait_until ch_reaped "$ch_pid"; done
+ check peer.server-death wait_gone "$ch_peer_server"
+ ch_peer_retired=1
  for ch_pid in $(ch_mcp_pids "$case_dir/mcp.jsonl"); do check primary.mcp-survives kill -0 "$ch_pid"; done
  ad send-keys --instance-id "$id" --text 'foreign store stop leaves me useful' >/dev/null
  check primary.continuation wait_until pc_ready 1
