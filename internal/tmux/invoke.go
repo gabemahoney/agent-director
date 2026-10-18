@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -81,14 +82,24 @@ type Runner func(Invocation) RunResult
 // A WaitDelay of zero or less closes the pipes as soon as the process ends
 // (exec.Cmd treats zero as "wait forever", which SR-2.4 forbids).
 func execRunner(inv Invocation) RunResult {
+	return execRunnerWithOutputWrapper(inv, nil)
+}
+
+// execRunnerWithOutputWrapper lets focused runner tests delay copy completion
+// while retaining the production process, pipes and timeout handling.
+func execRunnerWithOutputWrapper(inv Invocation, wrap func(io.Writer) io.Writer) RunResult {
 	ctx, cancel := context.WithTimeout(context.Background(), inv.Timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, inv.Binary, inv.Args...)
 	cmd.Env = inv.Env
 	cmd.WaitDelay = max(inv.WaitDelay, time.Nanosecond)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr outputBuffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	if wrap != nil {
+		cmd.Stdout = wrap(cmd.Stdout)
+		cmd.Stderr = wrap(cmd.Stderr)
+	}
 	err := cmd.Run()
 	res := RunResult{ExitStatus: -1, Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	state := cmd.ProcessState
@@ -106,11 +117,33 @@ func execRunner(inv Invocation) RunResult {
 	case err == nil:
 		res.Status, res.ExitStatus = RunExited, 0
 	case errors.Is(err, exec.ErrWaitDelay) && state.ExitCode() == 0:
-		res.Status, res.ExitStatus = RunPipesCut, 0
+		// WaitDelay bounds copier completion, which can lag behind clean
+		// EOF. Run has joined both copiers, so their evidence is safe to
+		// read. A forced pipe close returns a read error, never clean EOF.
+		if stdout.cleanEOF && stderr.cleanEOF {
+			res.Status, res.ExitStatus = RunExited, 0
+		} else {
+			res.Status, res.ExitStatus = RunPipesCut, 0
+		}
 	default:
 		res.Status, res.ExitStatus = RunExited, state.ExitCode()
 	}
 	return res
+}
+
+// outputBuffer records complete output independently of os/exec's copier
+// bookkeeping. Its fields are read only after Cmd.Run joins the copy goroutine.
+type outputBuffer struct {
+	data     bytes.Buffer
+	cleanEOF bool
+}
+
+func (b *outputBuffer) Write(p []byte) (int, error) { return b.data.Write(p) }
+func (b *outputBuffer) Bytes() []byte               { return b.data.Bytes() }
+func (b *outputBuffer) ReadFrom(r io.Reader) (int64, error) {
+	n, err := b.data.ReadFrom(r)
+	b.cleanEOF = err == nil
+	return n, err
 }
 
 // isExecError reports whether err is a failure to run the binary itself.

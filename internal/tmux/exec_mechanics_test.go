@@ -2,6 +2,8 @@ package tmux_test
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -231,6 +233,186 @@ func TestExecStreamsSeparate(t *testing.T) {
 			if ce.Failure != tc.wantFail || ce.Socket != tc.wantSocket || ce.FirstLine != tc.wantLine || ce.ExitStatus != tc.exit {
 				t.Errorf("CallError = %+v, want %v, Socket %q, FirstLine %q, ExitStatus %d",
 					*ce, tc.wantFail, tc.wantSocket, tc.wantLine, tc.exit)
+			}
+		})
+	}
+}
+
+// execCompletionGate delays only the copy result after the actual collector
+// has consumed its reader. WaitDelay must close this same reader before the
+// gate releases; no sleep is used to guess when Process.Wait has completed.
+type execCompletionGate struct {
+	dst       io.Writer
+	readError bool
+	called    bool
+	copied    int64
+	copyErr   error
+	closed    bool
+	gateErr   error
+	closedErr error
+}
+
+func execCompletionTimeouts() tmux.Timeouts {
+	return tmux.Timeouts{Query: 1500 * time.Millisecond, Action: 1500 * time.Millisecond,
+		Create: 1500 * time.Millisecond, WaitDelay: 100 * time.Millisecond}
+}
+
+// Older Go versions report an internal closed-file sentinel from pipe Stat
+// that errors.Is does not equate with os.ErrClosed. Obtain that same sentinel
+// from our own closed pipe instead of matching version-specific error text.
+func execClosedPipeStatError(t *testing.T) error {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Stat()
+	if err == nil || errors.Unwrap(err) == nil {
+		t.Fatalf("closed pipe Stat returned %v, want wrapped closed-file error", err)
+	}
+	return errors.Unwrap(err)
+}
+
+func (g *execCompletionGate) Write(p []byte) (int, error) { return g.dst.Write(p) }
+
+func (g *execCompletionGate) ReadFrom(r io.Reader) (int64, error) {
+	g.called = true
+	input := r
+	if g.readError {
+		input = &execCopyErrorReader{reader: r}
+	}
+	g.copied, g.copyErr = io.Copy(g.dst, input)
+	// os.File's WriterTo fallback can hide WriteTo while retaining Stat.
+	// Stat does not consume bytes or change descriptor blocking mode.
+	file, ok := r.(interface{ Stat() (os.FileInfo, error) })
+	if !ok {
+		g.gateErr = fmt.Errorf("copy reader %T has no Stat method", r)
+		return g.copied, g.gateErr
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := file.Stat()
+		if errors.Is(err, os.ErrClosed) || errors.Is(err, g.closedErr) {
+			g.closed = true
+			return g.copied, g.copyErr
+		}
+		if err != nil {
+			g.gateErr = fmt.Errorf("observe own copy reader: %w", err)
+			return g.copied, g.gateErr
+		}
+		time.Sleep(time.Millisecond)
+	}
+	g.gateErr = errors.New("copy reader was not closed within gate safety bound")
+	return g.copied, g.gateErr
+}
+
+// execCopyErrorReader preserves a real byte from the helper, then injects a
+// read failure before EOF. The production collector must not call this clean.
+type execCopyErrorReader struct {
+	reader io.Reader
+	read   bool
+}
+
+func (r *execCopyErrorReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.ErrUnexpectedEOF
+	}
+	r.read = true
+	return r.reader.Read(p[:min(len(p), 1)])
+}
+
+// Parallel: all subprocesses, output gates, files and cleanup PIDs are owned
+// by this test. b.ftd: a late copier result must not turn clean EOF into a cut.
+func TestExecCleanEOFBeforeCopierCompletion(t *testing.T) {
+	t.Parallel()
+	closedErr := execClosedPipeStatError(t)
+	const output, diagnostic = "complete capture\n", "separate diagnostic\n"
+	for _, streams := range []struct {
+		name           string
+		stdout, stderr bool
+	}{
+		{name: "stdout", stdout: true},
+		{name: "stderr", stderr: true},
+		{name: "both", stdout: true, stderr: true},
+	} {
+		t.Run(streams.name, func(t *testing.T) {
+			bin, _ := execFake(t, output, diagnostic, "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+			var gates []*execCompletionGate
+			index := 0
+			client := tmux.NewWithOutputWrapper(bin, execCompletionTimeouts(), func(dst io.Writer) io.Writer {
+				delay := []bool{streams.stdout, streams.stderr}[index]
+				index++
+				if !delay {
+					return dst
+				}
+				gate := &execCompletionGate{dst: dst, closedErr: closedErr}
+				gates = append(gates, gate)
+				return gate
+			})
+			got, err := client.CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
+			for _, gate := range gates {
+				if !gate.called || !gate.closed || gate.copyErr != nil || gate.copied == 0 {
+					t.Fatalf("gate did not observe complete actual copy then descriptor close: called=%v closed=%v bytes=%d copy error=%v gate error=%v", gate.called, gate.closed, gate.copied, gate.copyErr, gate.gateErr)
+				}
+			}
+			if err != nil || got != output {
+				t.Fatalf("capture after real EOF = %q, %v; want full output %q and success", got, err, output)
+			}
+		})
+	}
+}
+
+// Parallel: helpers and their held writer PIDs belong only to this test.
+// b.ftd: one clean stream cannot excuse the other stream's open writer.
+func TestExecOneStreamHeldStillCutsOutput(t *testing.T) {
+	t.Parallel()
+	for _, stream := range []struct{ name, hold string }{
+		{name: "stdout", hold: `sleep 5 2>/dev/null & echo $! >> "$D/gc"`},
+		{name: "stderr", hold: `sleep 5 >/dev/null & echo $! >> "$D/gc"`},
+	} {
+		t.Run(stream.name, func(t *testing.T) {
+			bin, _ := execFake(t, "complete-looking capture\n", "", stream.hold+"\ncat \"$D/out\"\nexit 0")
+			got, err := tmux.New(bin, execCompletionTimeouts()).CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
+			ce := callError(t, err)
+			if got != "" || ce.Failure != tmux.FailUnrecognized || ce.FirstLine != execCutShort || ce.ExitStatus != 0 {
+				t.Fatalf("held %s capture = %q, %+v; want cut-short refusal without partial output", stream.name, got, *ce)
+			}
+		})
+	}
+}
+
+// Parallel: both the failed reader and the helper belong only to this test.
+// b.ftd: delayed completion after a partial/error read is not clean EOF.
+func TestExecCopyErrorBeforeCompletionStillCutsOutput(t *testing.T) {
+	t.Parallel()
+	closedErr := execClosedPipeStatError(t)
+	for _, stream := range []string{"stdout", "stderr"} {
+		t.Run(stream, func(t *testing.T) {
+			bin, _ := execFake(t, "complete capture\n", "diagnostic\n", "cat \"$D/out\"\ncat \"$D/err\" >&2\nexit 0")
+			var gate *execCompletionGate
+			index := 0
+			client := tmux.NewWithOutputWrapper(bin, execCompletionTimeouts(), func(dst io.Writer) io.Writer {
+				selected := []string{"stdout", "stderr"}[index] == stream
+				index++
+				if !selected {
+					return dst
+				}
+				gate = &execCompletionGate{dst: dst, readError: true, closedErr: closedErr}
+				return gate
+			})
+			got, err := client.CapturePaneID("/tmp/owned-synthetic-socket", "%1", 10, false)
+			if gate == nil || !gate.called || !gate.closed || gate.copied != 1 || !errors.Is(gate.copyErr, io.ErrUnexpectedEOF) {
+				t.Fatalf("partial/error gate did not execute: %+v", gate)
+			}
+			ce := callError(t, err)
+			if got != "" || ce.Failure != tmux.FailUnrecognized || ce.FirstLine != execCutShort || ce.ExitStatus != 0 {
+				t.Fatalf("failed %s copy = %q, %+v; want cut-short refusal", stream, got, *ce)
 			}
 		})
 	}

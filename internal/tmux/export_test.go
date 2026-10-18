@@ -1,5 +1,15 @@
 package tmux
 
+import "io"
+
+// NewWithOutputWrapper keeps actual subprocess execution and decorates only
+// its output writers, so tests can hold copier completion after real EOF.
+func NewWithOutputWrapper(binary string, t Timeouts, wrap func(io.Writer) io.Writer) *Client {
+	c := New(binary, t)
+	c.runCall = func(inv Invocation) RunResult { return execRunnerWithOutputWrapper(inv, wrap) }
+	return c
+}
+
 // NewWithRunner builds a client whose socket-taking calls run through r
 // instead of the production exec runner. Test-only: tmux_test tests use it.
 func NewWithRunner(binary string, t Timeouts, r Runner) *Client {
