@@ -20,12 +20,18 @@ func VerifyPane(s *store.Store, row store.Spawn, cfg config.Config) error {
 	}
 	t := tmux.New("", tmux.Timeouts{Query: cfg.Tmux.EffectiveQueryTimeout(), Action: cfg.Tmux.EffectiveActionTimeout(), Create: cfg.Tmux.EffectiveCreateTimeout(), WaitDelay: cfg.Tmux.EffectivePipeCloseWait()})
 	result := tmux.Lookup(t, probe.NewProcChecker(), tmux.Launch{InstanceID: row.InstanceID, Token: id.Token, StoreID: s.StoreID(), Socket: id.Socket, ServerPID: id.ServerPID, ServerStart: id.ServerStart, ServerStarttime: id.ServerStarttime}, row.TmuxSessionName)
+	if result.Verdict == tmux.CantTell {
+		if result.CantTell == tmux.CantTellUnreadable {
+			return interruptedPane(result.Cause)
+		}
+		return &paneUncertain{cause: result.Cause}
+	}
 	if result.Verdict != tmux.Ours {
 		return fmt.Errorf("Cursor pane ownership changed")
 	}
 	panes, err := t.ListPanes(id.Socket)
 	if err != nil {
-		return fmt.Errorf("Cursor pane evidence unavailable")
+		return interruptedPane(err)
 	}
 	matches := 0
 	for _, p := range panes {

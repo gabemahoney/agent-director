@@ -275,7 +275,7 @@ func (c *Client) runFailure(call Call, res RunResult) *CallError {
 // incomplete, so it is an unrecognised reply (SR-2.4).
 func cutShort(call Call, res RunResult) *CallError {
 	return &CallError{Call: call, Failure: FailUnrecognized, FirstLine: firstLineOutputCut,
-		ExitStatus: res.ExitStatus, HadStdout: len(res.Stdout) > 0}
+		ExitStatus: res.ExitStatus, HadStdout: len(res.Stdout) > 0, pipesCut: true}
 }
 
 // runAction runs a call whose output is not used (kills, sends, label by

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
@@ -80,7 +83,9 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 		fmt.Fprintln(os.Stderr, "    claude mcp add agent-director -- <binary-path> serve --stdio")
 		return nil
 	}
-	serverOptions, closeScope, err := cursorMCPOptions(cfg, o)
+	ctx, stop := newSignalCtx()
+	defer stop()
+	serverOptions, closeScope, err := cursorMCPOptionsContext(ctx, cfg, o)
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrInternal", err.Error())
 	}
@@ -106,9 +111,6 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	// Signal-aware ctx so SIGINT / SIGTERM (e.g. Kubernetes graceful
 	// shutdown) flow as cancellation instead of killing the process
 	// outright — defers (store close, WAL checkpoint) must run.
-	ctx, stop := newSignalCtx()
-	defer stop()
-
 	// bufio.Scanner inside Serve blocks on stdin, so ctx alone won't
 	// unblock it. Close stdin on cancellation so Serve can return.
 	stdin := os.Stdin
@@ -124,6 +126,10 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 // ordinary serve path performs no guidance work and omits instructions. Scope
 // does not grant tools any new permissions; dispatch still uses pkg/api.
 func cursorMCPOptions(cfg config.Config, o clisetup.Overrides) (mcp.Options, func(), error) {
+	return cursorMCPOptionsContext(context.Background(), cfg, o)
+}
+
+func cursorMCPOptionsContext(ctx context.Context, cfg config.Config, o clisetup.Overrides) (mcp.Options, func(), error) {
 	noClose := func() {}
 	scope, err := cursorMCPScope(o)
 	if err != nil {
@@ -139,7 +145,17 @@ func cursorMCPOptions(cfg config.Config, o clisetup.Overrides) (mcp.Options, fun
 	if err != nil {
 		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP store unavailable")
 	}
-	verify := func() error {
+	var verifierAbandoned atomic.Bool
+	closeStore := func() {
+		if verifierAbandoned.Load() {
+			// Close may wait for an in-flight SQL read. Reap this private
+			// handle after the bounded caller has returned.
+			go s.Close()
+			return
+		}
+		s.Close()
+	}
+	verifyOnce := func() error {
 		row, b, err := scope.Binding(s)
 		if err != nil {
 			return err
@@ -147,23 +163,43 @@ func cursorMCPOptions(cfg config.Config, o clisetup.Overrides) (mcp.Options, fun
 		if err = cursorhost.VerifyRuntime(b, false); err != nil {
 			return err
 		}
-		return cursorhost.VerifyPane(s, row, cfg)
+		if err = cursorhost.VerifyPane(s, row, cfg); err != nil {
+			return err
+		}
+		_, b, err = scope.Binding(s)
+		if err != nil {
+			return err
+		}
+		return cursorhost.VerifyRuntime(b, false)
+	}
+	// A replacement after publication retains one positive check, without
+	// renewing the admission attempt or its observation deadline.
+	verify := func() error {
+		until := scope.Until
+		if !time.Now().Before(until) {
+			until = time.Time{}
+		}
+		err := cursorhost.VerifyGuidanceOwnership(ctx, until, verifyOnce)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			verifierAbandoned.Store(true)
+		}
+		return err
 	}
 	if err = verify(); err != nil {
-		s.Close()
+		closeStore()
 		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP ownership unavailable")
 	}
 	instructions, err := helptext.Plain()
 	if err != nil {
-		s.Close()
+		closeStore()
 		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP guidance unavailable")
 	}
 	return mcp.Options{Instructions: instructions, Initialized: func() error {
 		if err := verify(); err != nil {
 			return fmt.Errorf("Cursor MCP ownership retired")
 		}
-		return scope.Acknowledge()
-	}}, func() { s.Close() }, nil
+		return scope.AcknowledgeContext(ctx)
+	}}, closeStore, nil
 }
 
 // cursorMCPScope checks private routing before run opens any client, so a

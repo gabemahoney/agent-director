@@ -119,6 +119,13 @@ type CallError struct {
 	ExitStatus int
 	// HadStdout reports that the call wrote something to standard output.
 	HadStdout bool
+	pipesCut  bool
+}
+
+// QueryInterrupted reports a timeout or an actual pipe-close cut of a data
+// query. Unrecognized or malformed replies alone are not interruption proof.
+func (e *CallError) QueryInterrupted() bool {
+	return e != nil && (e.Call == CallLookup || e.Call == CallListPanes) && (e.Failure == FailTimeout || e.pipesCut)
 }
 
 // Error names the call by its wording and the failure. A timeout states the

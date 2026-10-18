@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -122,7 +123,29 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	if err != nil {
 		return fmt.Errorf("Cursor gateway store unavailable")
 	}
-	defer s.Close()
+	var guidanceVerificationAbandoned bool
+	var guidanceVerificationStoreUse sync.Mutex
+	var abandonedCleanupBinding *store.CursorRuntime
+	defer func() {
+		if guidanceVerificationAbandoned {
+			// Runtime cleanup has already proved this binding dead. A canceled
+			// read-only verifier may still hold the store's only connection;
+			// serialize failed-launch cleanup and close after its final read
+			// without extending admission's deadline.
+			go func() {
+				guidanceVerificationStoreUse.Lock()
+				defer guidanceVerificationStoreUse.Unlock()
+				defer s.Close()
+				if abandonedCleanupBinding != nil {
+					// The original failure has already been returned. This is
+					// best-effort retirement under fresh conditional row guards.
+					_ = closeFailedLaunch(s, *abandonedCleanupBinding)
+				}
+			}()
+			return
+		}
+		s.Close()
+	}()
 	s.SetSettleMs(int64(cfg.State.EffectiveSettleMs()))
 	row, err := waitForOwnedPane(s, cfg)
 	if err != nil {
@@ -159,6 +182,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if err != nil && cleanupBinding != nil {
 			if proofErr := VerifyRuntime(*cleanupBinding, true); proofErr != nil {
 				err = errors.Join(err, proofErr)
+			} else if guidanceVerificationAbandoned {
+				binding := *cleanupBinding
+				abandonedCleanupBinding = &binding
 			} else if closeErr := closeFailedLaunch(s, *cleanupBinding); closeErr != nil {
 				err = errors.Join(err, closeErr)
 			}
@@ -526,13 +552,48 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if intentional || !inputs.current(epoch) || !time.Now().Before(until) {
 			return fmt.Errorf("Cursor guidance initialization authority retired; no prompt admitted")
 		}
-		if err := await(func() error {
-			if err := VerifyRuntime(rep.binding, false); err != nil {
+		binding := rep.binding
+		verifyCtx, cancelVerify := context.WithCancel(context.Background())
+		var verificationCompleted atomic.Bool
+		var verifierAbandoned atomic.Bool
+		verifyErr := await(func() error {
+			err := VerifyGuidanceOwnership(verifyCtx, until, func() error {
+				guidanceVerificationStoreUse.Lock()
+				defer guidanceVerificationStoreUse.Unlock()
+				// A worker scheduled after cleanup acquired the store lock must
+				// observe retirement before touching the closed private handle.
+				if err := verifyCtx.Err(); err != nil {
+					return err
+				}
+				check := func() (store.Spawn, error) {
+					current, err := s.GetSpawn(row.InstanceID)
+					bound, bindErr := s.ReadCursorRuntime(row.InstanceID)
+					if err != nil || bindErr != nil || bound != binding || current.Agent != store.AgentCursor || current.State == store.StateEnded || current.State == store.StateMissing || current.LifeNumber != binding.Life || current.Identity.Token != binding.Token || current.Identity.PanePID != binding.GatewayPID || current.Identity.PaneStarttime != binding.GatewayStart || current.Identity.Socket != row.Identity.Socket {
+						return store.Spawn{}, fmt.Errorf("Cursor guidance binding retired")
+					}
+					return current, VerifyRuntime(bound, false)
+				}
+				current, err := check()
+				if err != nil {
+					return err
+				}
+				if err = VerifyPane(s, current, cfg); err != nil {
+					return err
+				}
+				_, err = check()
 				return err
-			}
-			return VerifyPane(s, row, cfg)
-		}); err != nil {
+			})
+			verifierAbandoned.Store(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+			verificationCompleted.Store(true)
 			return err
+		})
+		cancelVerify()
+		if verifyErr != nil {
+			// await may select another failure after the verifier abandons an
+			// inner read. Publish that outcome before completion so completed
+			// hard ownership failures alone keep synchronous cleanup.
+			guidanceVerificationAbandoned = !verificationCompleted.Load() || verifierAbandoned.Load() || errors.Is(verifyErr, context.Canceled) || errors.Is(verifyErr, context.DeadlineExceeded)
+			return verifyErr
 		}
 		if intentional || !inputs.current(epoch) || !time.Now().Before(until) {
 			return fmt.Errorf("Cursor guidance initialization authority retired; no prompt admitted")

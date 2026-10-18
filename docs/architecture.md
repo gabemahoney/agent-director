@@ -320,6 +320,9 @@ opens a store for a privately scoped `serve`. It requires exact explicit routing
 and no creation, so malformed scope cannot open or create an ambient fallback
 store. `cursorMCPOptions` reuses that parser, then `Scope.Binding`,
 `VerifyRuntime` and `VerifyPane` at server construction and acknowledgement.
+Each verification rereads the protected binding and verifies the runtime before
+pane evidence and again afterward; the gateway confirmation checks its captured
+binding against fresh protected records on both sides of the pane check too.
 Protected store, parent, token/life, connection, gateway/runtime PID/start and
 unterminated current records must agree. `Parse` requires an explicitly present
 nonnegative int64 life: zero is the valid first life, while missing/null,
@@ -327,6 +330,19 @@ negative, fractional, string and overflow values cannot select it. Future
 consumers MUST reuse these owners rather than add scope parsing or ownership
 shortcuts. Scope deliberately does not freeze the conversation id; current
 protected binding still decides authority.
+
+Private guidance admission, acknowledgement and gateway confirmation MUST reuse
+`cursorhost.VerifyGuidanceOwnership` in `guidance_ownership.go`, rather than add
+another retry or supervision framework. `VerifyPane` distinguishes unavailable
+evidence (`paneUncertain`) from proven ownership or pane mismatch. Only an actual
+typed lookup or pane-listing timeout or pipe cut permits re-verification, within
+the original absolute setup deadline. `tmux.CallError.QueryInterrupted` uses the
+call kind, timeout failure and private runner-recorded cut provenance; error text,
+`FirstLine`, empty output, malformed output or generic uncertainty cannot grant
+retry eligibility. Partial replies never grant ownership or authority. Proven
+mismatch and other noneligible failures refuse immediately. Configured query and
+pipe-close bounds are unchanged. This policy is private to guidance; public pane
+operations, tool dispatch, permission relay and ACP writes gain no retries.
 
 Each setup attempt owns a fresh random nonce and Unix observation socket in a
 new private 0700 directory, with a 0600 socket. `Observation.Wait` accepts only
@@ -347,7 +363,10 @@ transcript and parent history; subsequent prompt records may append normally.
 It neither certifies a new setup attempt nor relaxes protected ownership or
 prompt/decision guards. `Scope.Acknowledge` is a no-op after its original
 `Until`; a retired token/life/connection or terminated runtime still refuses
-the registration. Independently AD-spawned children own their rows and runtime
+the registration. After expiry each configured-replacement ownership verification
+remains a single positive check, without retries or a new setup budget. Re-verification
+does not replay `initialize`, session new/load, tools or permission actions, nor
+replace the observer nonce. Independently AD-spawned children own their rows and runtime
 cleanup; parent association never adopts them as runtime descendants.
 
 `session.go` MUST retain `configureGuidance`/`confirmGuidance` through the existing
@@ -362,6 +381,20 @@ prompt admission remain separate facts. Existing mode confirmation,
 `SetCursorRuntimeSession`, `BindLoadedCursorSession`, atomic rotation publication,
 protected recording and prompt/hold/FIFO guards remain mandatory. Initialization
 alone neither commits identity nor releases provisionally held input.
+
+The shared verifier checks cancellation and the original deadline after evidence
+returns, rejecting late positive results. Gateway controls, runtime loss, current
+input epoch and publication checks remain authoritative; acknowledgement receipt
+writes are context-gated. Workers abandoned by their caller only read evidence
+and cannot acknowledge or publish. Only an unfinished or canceled/deadline
+verification permits asynchronous private-store cleanup; a completed hard refusal
+keeps normal synchronous cleanup and error joining. After independent proof that
+the exact runtime binding is dead, abandoned gateway verification serializes its
+remaining store reads, fresh token/life/connection-guarded failed-launch retirement
+and store close under the same private mutex. A worker acquiring that mutex after
+cancellation cannot touch the closed store. Deferred retirement is best effort
+and cannot change the returned failure or delay it on SQL; scoped `serve` also
+closes its private store asynchronously when verification was abandoned.
 
 This route has no supported ACP compaction callback or forced reinsertion inside
 an already compacted conversation. That is the compaction-only limitation;

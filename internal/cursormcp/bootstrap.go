@@ -4,6 +4,7 @@ package cursormcp
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -203,16 +204,30 @@ func (scope Scope) Binding(s *store.Store) (store.Spawn, store.CursorRuntime, er
 // A restarted server may outlive the admission observer; it still provides the
 // same instructions, but cannot retroactively authorize a later operation.
 func (scope Scope) Acknowledge() error {
+	return scope.AcknowledgeContext(context.Background())
+}
+
+func (scope Scope) AcknowledgeContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !time.Now().Before(scope.Until) {
 		return nil
 	}
 	until := minTime(scope.Until, time.Now().Add(time.Second))
-	conn, err := net.DialTimeout("unix", scope.Receipt, time.Until(until))
+	ctx, cancel := context.WithDeadline(ctx, until)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", scope.Receipt)
 	if err != nil {
 		return fmt.Errorf("Cursor MCP initialization observation unavailable")
 	}
 	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	_ = conn.SetWriteDeadline(until)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if _, err = fmt.Fprintln(conn, scope.Nonce); err != nil {
 		return fmt.Errorf("Cursor MCP initialization observation unavailable")
 	}

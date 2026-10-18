@@ -159,8 +159,10 @@ before publication or prompt admission. A registration, candidate identity or
 previous conversation's acknowledgement cannot satisfy that requirement.
 Guidance setup shares the existing 45-second startup/load operation bounds;
 rotation shares the first control's fixed three-second bound. Waiting for guidance
-never renews a deadline. Failure, interruption, authority loss or expiry stops
-admission; `allow_pending` bypasses none of these checks. Transport initialization
+never renews a deadline. Transient pane-query timeouts or interrupted replies may
+be checked again within that same bound; they grant no admission authority.
+Unresolved failure, cancellation, authority loss or expiry stops admission;
+`allow_pending` bypasses none of these checks. Transport initialization
 does not establish native model consumption. See
 [guidance delivery](hooks.md#what-agent-director-help-actually-outputs).
 
