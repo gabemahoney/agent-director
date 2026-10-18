@@ -1,0 +1,2 @@
+# b.w21 expected=FAIL(Invariant_RelayHoldOnlyCurrentLaunch_is_violated); observed=NOT_RUN
+B146R5Cx w21_relaunch_red @700

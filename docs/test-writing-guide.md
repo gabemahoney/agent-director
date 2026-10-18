@@ -382,6 +382,41 @@ build each case's old-layout install with the fixture in
 `test/install-sh/testdata/claude-mcp/`; `INDEX.tsv` marks each `synthetic` or
 `captured`, and a real capture replaces a synthetic one with no test change.
 
+## Ordinary input delivery tests
+
+Run these tests only through `make sandbox CMD="…"`, as required by
+`CLAUDE.md`. A supported delivery test needs native evidence, not a hook-state
+transition or a tmux send returning nil. In `pkg/api`, reuse
+`newNativeSubmissionEnv` and `deliveryBackend` from
+`sendkeys_submission_fixture_test.go`: they keep real store and tmux ownership
+guards while replacing native readiness, terminal samples and proof I/O through
+`SendKeysEnv.Input`. Advance the fixture clock through its injected `Sleep`;
+do not add wall-clock sleeps or weaken readiness for a recorder. Test native
+behavior in dedicated feature tests using these explicit helpers. Keep the
+shared pane, relay, pending-submission and runnable-example fixtures on their
+established input contract; do not make their default helpers enable native
+delivery or change their assertions to accommodate it. Test native
+capability separately from readiness: an unsupported launch retains literal text
+and one Enter with no exact-proof result, while a supported launch lacking
+readiness attempts no input. Compatibility regressions in
+`sendkeys_compatibility_regression_test.go` cover the existing state, relay and
+dialog refusals before native selection, bounded pending-Codex hook observation,
+and unresolved native ownership blocking fallback resends. Tests of manual
+transport should explicitly choose a manual operation.
+
+Native adapter tests in `internal/inputdelivery` use private temporary launch
+manifests and native JSONL records. Reuse `evidenceSession`, `claudeRecord`,
+`writeEvidence` and the Codex record fixtures. Check exact new content and
+session/process provenance, prefix watermarks, late evidence and durable
+reconciliation. Include an older identical record in a newly discovered Codex
+path so a descriptor discovered after input cannot masquerade as fresh proof.
+For unresolved delivery, assert conservative outcome fields and absence of
+replayed text or Enter. An empty queue never suffices for a submitted result.
+`launch_identity_regression_test.go` records the version probe's and real
+launch's environments: the probe must receive no
+`AGENT_DIRECTOR_*`, `TMUX` or `TMUX_PANE`, while the real launch retains its
+environment.
+
 ## Synthetic-regression test convention
 
 Synthetic-regression tests re-anchor known failure-classes so they can

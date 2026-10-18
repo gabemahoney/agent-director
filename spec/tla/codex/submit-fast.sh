@@ -3,7 +3,7 @@
 # Writes "job-dir<TAB>job-id<TAB>expected" lines to job-ids.txt.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-JS=/home/horde/projects/horde_admin/job-scheduler/bin/jobsched
+JS=/home/horde/projects/sysadmin-project/box_admin_dev/box_admin_horde/job-scheduler/bin/jobsched
 OUT="$HERE/job-ids.txt"
 : > "$OUT"
 sed -n '/^# Fast set/,/^# Optional/p' "$HERE/submit-order.txt" | grep -v '^#' | while IFS=$'\t' read -r dir timeout mem expect; do

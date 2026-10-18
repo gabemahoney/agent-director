@@ -25,7 +25,7 @@ file, and tmux.
   Cursor needs its standalone `agent` program, not the editor's `cursor`
   command; its gateway currently supports Linux only, with no established
   minimum Cursor version. For Claude Code, `claude` (Claude
-  Code) 2.1.296 or later: the native binary, or a wrapper that `exec`s it. For
+  Code) 2.1.280 or later: the native binary, or a wrapper that `exec`s it. For
   Codex, `codex` (Codex) 0.159.2 or later: its native program, or a wrapper that
   `exec`s it. An npm-installed `codex` does not qualify: set `[launch]
   codex_path` in `~/.config/agent-director/config.toml` to the native program.

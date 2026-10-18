@@ -19,7 +19,7 @@
   and prompt operations must receive valid authoritative responses. Presence
   discovery does not check those operations; see
   [Cursor operation boundaries](caller-contract.md#cursor-operation-boundaries).
-- For Claude Code: `claude` (Claude Code) 2.1.296 or later
+- For Claude Code: `claude` (Claude Code) 2.1.280 or later
   (<https://claude.com/claude-code>): its native binary, or a wrapper that
   `exec`s it, not a shim that runs it as a child.
 - For Codex: `codex` (Codex) 0.159.2 or later, the native Codex program, not a
@@ -53,6 +53,12 @@
   directory. (A `~/` path in `config.toml` is refused at load while `HOME` is
   unset or empty: see [configuration](configuration.md).)
 - `jq`, `sqlite3` and `file` on PATH (the installer checks for them).
+
+Native confirmed ordinary text delivery has narrower requirements: Linux, the exact
+agent versions above and a fresh supported launch. See
+[Ordinary text submission](caller-contract.md#ordinary-text-submission).
+Other launches retain literal text delivery without exact transcript confirmation,
+as described in that contract.
 
 ## Install from a release
 

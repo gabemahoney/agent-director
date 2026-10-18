@@ -459,11 +459,7 @@ func TestPermissionRequestCapEvictionKeepsNewestWhileOpen(t *testing.T) {
 }
 
 // TestMarkMissingClosesOpenRequests pins SR-5.4, SR-A-2.5 and b.146 rule 12:
-// find-missing's mark denies every open request of its row with reason
-// find_missing in the mark's own transaction and leaves a decided request as
-// it was; after the commit it emits, per closed request in request-id order,
-// one ad.row_mutation.committed (writer find_missing) and one
-// permission_orphan_closeout tick. A row with no open request emits nothing.
+// open requests are denied; decided legacy rows close with a tick and keep their verdict (b.w21).
 func TestMarkMissingClosesOpenRequests(t *testing.T) {
 	const decided = "dddddddd-dddd-4ddd-addd-dddddddddddd"
 	for _, tokens := range [][]string{nil, {tokenA}, {tokenA, tokenB, tokenC}} {
@@ -499,10 +495,14 @@ func TestMarkMissingClosesOpenRequests(t *testing.T) {
 			if _, _, _, decision, reason := readPermRow(t, s, id, decided); decision.String != "allow" || reason.Valid {
 				t.Errorf("decided request = %+v, %+v; want allow, NULL kept", decision, reason)
 			}
+			if pr, err := s.GetPermissionRequest(id, decided); err != nil || !pr.Closed() {
+				t.Errorf("decided legacy request closed = %v, %v; want closed", pr.Closed(), err)
+			}
 			if got := openTokens(t, s, id); len(got) != 0 {
 				t.Errorf("open requests = %v; want none", got)
 			}
 			var got, want []string // event/token, in trail order
+			want = append(want, "ad.find_missing.tick/"+decided)
 			for _, tok := range tokens {
 				want = append(want, "ad.row_mutation.committed/"+tok, "ad.find_missing.tick/"+tok)
 			}

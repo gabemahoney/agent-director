@@ -581,7 +581,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Send text into the agent's own pane: `\\r` stripped, `\\n` kept as a newline in the input box, and one Enter appended to submit (empty text: Enter only). With request_token: a pane answer, one key, no Enter. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE; after a timeout the keys may have been delivered), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Strip `\\r`, keep `\\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -604,9 +604,14 @@ var Verbs = []VerbDef{
 				AllowedValues: nil,
 			},
 			{
+				Name: "delivery_request_id", Type: "string",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
+				Required:    false, Nullable: false, AllowEmpty: true,
+			},
+			{
 				Name:          "allow_pending",
 				Type:          "bool",
-				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected.",
+				Description:   "When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
@@ -659,11 +664,18 @@ var Verbs = []VerbDef{
 				AllowedValues: []string{"allow", "deny", ""},
 			},
 		},
-		ResultFields: []FieldDef{},
+		ResultFields: []FieldDef{
+			{Name: "request_id", Type: "string", Description: "Native ordinary delivery attempt identity; absent on fallback pane input and manual operations.", AllowEmpty: true},
+			{Name: "outcome", Type: "string", Description: "submitted only with exact native transcript proof; absent on fallback pane input and manual operations.", AllowEmpty: true},
+			{Name: "session_id", Type: "string", Description: "Native session that recorded the ordinary prompt.", AllowEmpty: true},
+			{Name: "record_id", Type: "string", Description: "Native user record id when provided by the pinned schema.", AllowEmpty: true},
+			{Name: "record_sha256", Type: "string", Description: "SHA-256 of the exact structured user record.", AllowEmpty: true},
+		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",
 			"ErrSpawnNotFound",
 			"ErrSpawnNotInteractive",
+			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",
 			"ErrRelayFallenBack",
 			"ErrDialogMaybeOpen",
@@ -1235,7 +1247,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Shut down a waiting row: type `/exit`, wait up to pause.timeout_seconds for `ended`. Ended/missing: no-op success. " + missingNotProofShort + " Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Shut down a waiting row: type `/exit`, wait pause.timeout_seconds for `ended`. Ended/missing: no-op success. " + missingNotProofShort + " Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Held as plain send-keys; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. tmux errors: ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{

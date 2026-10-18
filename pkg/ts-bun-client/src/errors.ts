@@ -460,6 +460,12 @@ export class ErrTmuxKillFailed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotInteractive (package: api) */
 export class ErrSpawnNotInteractive extends AgentDirectorError {}
 /**
+ * tmux accepted the pending Codex row's keys and Enter, but submission could not be confirmed.
+ * The keys were sent; do not repeat text or Enter automatically. Check hook-derived get
+ * or status; if submission remains unknown, escalate to the caller or a human.
+ */
+export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
+/**
  * Mirrors ErrSendKeysWhileRelayed (package: api): from `sendKeys` and `pause` while a relay hook
  * of the Spawn may still answer its request; nothing was sent.
  */
@@ -625,6 +631,7 @@ const ERROR_TABLE = {
   ErrTmuxKillFailed,
   // api package
   ErrSpawnNotInteractive,
+  ErrSubmissionUnconfirmed,
   ErrSendKeysWhileRelayed,
   ErrSpawnNotPausable,
   ErrPauseTimeout,

@@ -38,7 +38,8 @@ The synthesized payload contains:
 
 agent-director never writes hooks or permissions to disk on behalf of a
 Spawn. The synthesized JSON exists only for the lifetime of the tmux
-session, and no cleanup is needed.
+session, and no cleanup is needed. Separate native diagnostics and delivery
+evidence are described in [Ordinary delivery launch settings](#ordinary-delivery-launch-settings).
 
 ## Cursor launch settings
 
@@ -81,8 +82,9 @@ project `.codex/`, and it needs no cleanup. It holds:
   [Hooks](hooks.md#the-codex-entry-set)), each trusted by its own hash, so
   Codex shows no hook-review dialog for them in any launch, `no_pre_trust` and
   a failed pre-trust included.
-- **The typing setting.** Enter submits at once, so a multi-line text arrives
-  as one prompt.
+- **The typing setting.** Codex's paste-burst delay is disabled. Ordinary
+  delivery support and submission confirmation are covered by the
+  [caller contract](caller-contract.md#ordinary-text-submission).
 - **The question tool, off.** While `disable_ask_user` is on, Codex's question
   tool is turned off for the launch (see
   [Permissions](permissions.md#disable_ask_user-config)).
@@ -98,6 +100,44 @@ project `.codex/`, and it needs no cleanup. It holds:
 - **Folder trust and the hook-review bypass,** only when pre-trust is `ok`
   (see [Pre-trust for Codex](#pre-trust-for-codex)). The folder-trust setting
   replaces any `projects` table the caller passes for that launch.
+
+### Ordinary delivery launch settings
+
+A fresh launch with the arguments supported by
+[Ordinary text submission](caller-contract.md#ordinary-text-submission) and
+exactly Codex 0.159.2 or Claude Code 2.1.280 gets additional launch settings.
+Resumed conversations, unsupported versions and other agent arguments do not
+get these additions. Native confirmed ordinary delivery requires Linux;
+when native capability is unavailable, literal input remains available as
+described in the caller contract.
+
+- **Claude Code:** a generated `--session-id`,
+  `--debug-file <evidence-dir>/claude-debug.log` and `-d hooks`. The launch
+  receives agent-director's `HOME` and the inspected `CLAUDE_CONFIG_DIR`:
+  the spawn's `extra_env` value when present, otherwise agent-director's
+  environment, falling back to `$HOME/.claude` when empty. A relative config
+  directory or an existing or unreadable `keybindings.json` disables native
+  confirmed delivery; these additions still apply to that launch.
+- **Codex:** `-c log_dir="<evidence-dir>"`,
+  `RUST_LOG=off,codex_tui=info`, a complete `-c tui.keymap=…` set to Codex
+  0.159.2's built-in bindings, and `-c tui.vim_mode_default=false`. These
+  replace configured user, project and cloud keybindings and start with Vim
+  disabled for this launch. They apply even when `extra_env` supplies
+  `RUST_LOG`. `CODEX_HOME` comes from `extra_env` when supplied; otherwise
+  Codex uses the tmux server's environment and its normal home default.
+  agent-director does not copy its own `CODEX_HOME` into the launch. A
+  higher-priority `/etc/codex/managed_config.toml` containing keymap or Vim
+  settings, or one that cannot be read or parsed, disables native confirmed delivery.
+
+The evidence directory is
+`~/.config/agent-director/input/<store_id>/<launch_token>/`, under
+agent-director's `HOME`, even with a custom database path or agent config
+directory. It is private (0700; evidence files and the adjacent lock are 0600)
+and persists after the session exits. It retains native diagnostics and
+delivery evidence, including full normalized prompts and matching transcript
+records. There is no automatic cleanup. Follow
+[Operator actions](operator-actions.md#unresolved-ordinary-input) for unresolved
+input.
 
 ### Codex's layers
 

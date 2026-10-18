@@ -135,6 +135,11 @@
     "description": ""
   },
   {
+    "name": "ErrSubmissionUnconfirmed",
+    "package": "api",
+    "description": ""
+  },
+  {
     "name": "ErrListInvalidLabel",
     "package": "api",
     "description": ""

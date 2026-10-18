@@ -118,6 +118,19 @@ func planSendKeys(p SendKeysParams) (sendKeysPlan, error) {
 		return sendKeysPlan{}, fmt.Errorf("%w: send-keys: "+format+"; nothing was sent", append([]any{ErrInvalidFlags}, args...)...)
 	}
 	plan := sendKeysPlan{answer: p.RequestToken != "", text: strings.ReplaceAll(p.Text, "\r", ""), nLines: p.NLines}
+	if p.DeliveryRequestID != "" {
+		if len(p.DeliveryRequestID) > 128 {
+			return bad("delivery_request_id exceeds 128 bytes")
+		}
+		for _, c := range p.DeliveryRequestID {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+				return bad("delivery_request_id must contain only letters, digits, '_' or '-'")
+			}
+		}
+		if p.RequestToken != "" || p.Key != "" || p.NoEnter || p.ExpectPaneSHA256 != "" || plan.text == "" {
+			return bad("delivery_request_id requires ordinary text with Enter")
+		}
+	}
 	if p.NLines < 0 {
 		return bad("n_lines %d must not be negative", p.NLines)
 	}

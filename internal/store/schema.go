@@ -718,8 +718,9 @@ func migrateV5toV6(db *sql.DB) error {
 //     (b.146 rule 12): find-missing's mark of the Spawn missing, the terminal
 //     SessionEnd's move to ended, or resume's move of a finished Spawn to
 //     pending as a backstop; a request that still awaited an answer then,
-//     decided or not, one recorded before v7 included (milliseconds since the
-//     epoch). A closed request no longer awaits an answer. NULL on every
+//     plus a decided unacked request without a completed pane answer, even
+//     when recorded before v7 (milliseconds since the epoch). A closed
+//     request no longer awaits an answer. NULL on every
 //     request no close closed;
 //   - proven_gone_at, proven_gone_how (b.146 step 2c): when a hook of Claude
 //     Code, or its Spawn's end, proved the request's permission dialog gone

@@ -27,7 +27,9 @@ import {
   ErrAgentMissing,
   ErrOldLayout,
   ErrPermissionsUnsupported,
+  ErrSubmissionUnconfirmed,
   ErrTemplateAgentMissing,
+  type SubmissionUnconfirmedDetails,
 } from "../src/index.js";
 import { errorMap, throwFromEnvelope } from "../src/internal/errorMap.js";
 import { thrownBy } from "./internal/helper.js";
@@ -63,12 +65,32 @@ test.each([
   ["ErrPermissionsUnsupported", ErrPermissionsUnsupported, "spawn"],
   ["ErrTemplateAgentMissing", ErrTemplateAgentMissing, "make-template"],
   ["ErrOldLayout", ErrOldLayout, "list"],
+  ["ErrSubmissionUnconfirmed", ErrSubmissionUnconfirmed, "send-keys"],
 ] as const)("%s: the exported class is what both factories build from its err_name", (name, Class, verb) => {
   const thrown = thrownBy(() => throwFromEnvelope(verb, { err_name: name, err_description: "d" }));
   for (const err of [errorFromEnvelope(verb, name, "d"), thrown]) {
     expect(err).toBeInstanceOf(Class);
     expect((err as AgentDirectorError).verb).toBe(verb);
     expect(err).not.toBeInstanceOf(ErrUnknownErrorName);
+  }
+});
+
+test("ErrSubmissionUnconfirmed preserves accepted-keys and unknown-submission details through both factories", () => {
+  const details = {
+    keys_sent: true,
+    submission_confirmed: false,
+    row_state: "pending",
+  } satisfies SubmissionUnconfirmedDetails;
+  const envelope = {
+    err_name: "ErrSubmissionUnconfirmed",
+    err_description: "inspect before sending again",
+    err_details: details,
+  };
+  const thrown = thrownBy(() => throwFromEnvelope("send-keys", envelope));
+  const built = errorFromEnvelope("send-keys", envelope.err_name, envelope.err_description, details);
+  for (const err of [thrown, built]) {
+    expect(err).toBeInstanceOf(ErrSubmissionUnconfirmed);
+    expect((err as AgentDirectorError).errDetails).toEqual(details);
   }
 });
 

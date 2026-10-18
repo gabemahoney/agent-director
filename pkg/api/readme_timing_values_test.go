@@ -274,9 +274,15 @@ func TestReadmeTimingValuesTable(t *testing.T) {
 // agent's minimum is stated once in the README's Prerequisites and once in
 // install.md's Requirements, and nowhere else; pointer is the operator-actions
 // item for that agent's launch failure, which links Requirements instead.
-var agentMinimums = []struct{ agent, program, pointer string }{
-	{"Claude Code", "claude", noExecFormItemTitle},
-	{"Codex", "codex", codexOtherCauseItemTitle},
+// minimum, when set, returns the version the project verified the agent
+// against, which the stated minimum must equal; nil leaves the agent's
+// minimum unpinned (Codex: no verified-minimum source exists).
+var agentMinimums = []struct {
+	agent, program, pointer string
+	minimum                 func(t *testing.T) string
+}{
+	{"Claude Code", "claude", noExecFormItemTitle, claudeCodeVerifiedMinimum},
+	{"Codex", "codex", codexOtherCauseItemTitle, nil},
 }
 
 // TestReadmeTimingValuesAgentMinimum: for each agent, the README's
@@ -305,6 +311,11 @@ func TestReadmeTimingValuesAgentMinimum(t *testing.T) {
 			}
 			if versions[0] != versions[1] {
 				t.Fatalf("the user docs' %s minimum statements disagree: %s", a.agent, strings.Join(stated, "; "))
+			}
+			if a.minimum != nil {
+				if want := a.minimum(t); versions[0] != want {
+					t.Errorf("the user docs state the %s minimum %s; the verified minimum is %s", a.agent, versions[0], want)
+				}
 			}
 			for _, path := range mdUserDocs {
 				if path == mdTopREADME || path == mdInstall {

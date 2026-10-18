@@ -95,6 +95,39 @@ appropriate only for deliberate personal login without custom directories.
 Automated input correction belongs
 in the [caller contract](caller-contract.md#spawn-and-template-input-refusals).
 
+## Unresolved ordinary input
+
+For `send-keys` with `partial_input_unconfirmed` or `submission_unconfirmed`,
+or `ErrSubmissionUnconfirmed` with `keys_sent: true` and no native `outcome`,
+the original input may still submit later. Keep other writers away. For a native
+attempt, re-issue the original text with its `delivery_request_id`
+to observe any late transcript proof while the row's state, permission-relay
+and dialog guards allow it; this does not replay input. Finished rows are refused.
+For an unconfirmed manual or fallback send, check hook-derived `get` or `status`
+without resending. The outcome fields and supported
+launches are in [Ordinary text submission](caller-contract.md#ordinary-text-submission).
+
+If still unresolved, inspect the exact labelled session read-only using steps
+1 to 3 above. A visible draft helps a human choose a recovery action; it is
+not proof that a turn was or was not submitted. Do not blindly send another
+Enter or paste the text again. Continue through direct operator control only
+after judging the agent's state, or end the owned session and verify its
+process has stopped before starting a fresh conversation. Ending a session
+does not undo a turn or its effects.
+
+Manual input does not reset native delivery eligibility. To return to
+native ordinary input, use a fresh supported launch with an empty composer;
+`resume` does not provide that contract. Do not delete or edit input journals
+to bypass an unresolved attempt.
+
+A manual `send-keys` can also return `ErrSubmissionUnconfirmed`
+with `outcome: "not_started"` when it cannot own the input writer or read or
+save its journal. `pause` returns `ErrInternal` for these failures. That call
+sent nothing. Let any active writer finish, then
+re-issue the call. For a persistent refusal, check access to the private
+[delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
+as the agents' user. Preserve its evidence; never clear it to force input.
+
 ## A finished row's own old session
 
 `resume` or `spawn --reuse-finished` refuses with `ErrTmuxSessionConflict`

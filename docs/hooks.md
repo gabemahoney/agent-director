@@ -27,7 +27,8 @@ is in exec form — `{"type": "command", "command": "<abs-path>/agent-director",
 "args": ["hook"]}` — so Claude Code starts `agent-director hook`
 directly, with no shell in between, and feeds it the payload JSON on
 stdin. The hook's parent process is therefore the Claude process that
-fired it. install.md states the minimum supported Claude Code version.
+fired it. [Requirements](install.md#requirements) states the minimum
+supported Claude Code version.
 The `PermissionRequest` entry's arguments are `["hook", "--timeout",
 "<N>"]`, N being the same per-hook `timeout` the entry gives Claude Code
 (`[relay] timeout_seconds`), so the relay hook knows when Claude Code will
@@ -84,8 +85,10 @@ a fork from the agent.
 
 Claude Code sends a `Notification` with `notification_type`
 `idle_prompt` only while the main agent is idle at the prompt, about
-60 s after its turn ended (Claude Code's default). For that Notification,
-when the payload carries no `agent_id`:
+60 s after its turn ended (Claude Code's default). Before Claude Code
+2.1.288 it can fire while a background subagent is still running (see
+"Limits" below). For that Notification, when the payload carries no
+`agent_id`:
 
 - a row that is `working` when the write lands returns to `waiting`.
   The update applies only for the row's own agent (see
@@ -128,8 +131,12 @@ Limits:
 - If a new turn starts as the idle-prompt Notification fires, the
   Notification's write can land after the new turn's first hook. The
   row then reads `waiting` until the turn's next hook.
-
-The idle-prompt Notification waits until background subagents finish.
+- On Claude Code 2.1.280 through 2.1.287, the idle-prompt Notification
+  can fire while a background subagent is still running; 2.1.288 and later
+  wait until background subagents finish. If that subagent's hook had
+  moved the row to `working`, the row reads `waiting`, possibly while
+  the subagent's tool still runs, until the subagent's next tool hook
+  (`PreToolUse`, `PostToolUse` or `PermissionRequest`).
 
 Setting `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false` in the agent's
 environment (`spawn`'s `extra_env`) turns off Claude Code's prompt
@@ -1036,7 +1043,9 @@ A request still awaiting an answer when its agent ends can never be
 answered by that agent. The terminal `SessionEnd` (cause `logout`,
 `prompt_input_exit` or `exit`) moves the row to `ended` and, in the same
 update, closes every request of the row that still awaits an
-answer: both are written or neither is. Each gets `closed_at`; an
+answer, plus decided requests without a relay confirmation or completed
+pane answer, including those recorded by an older binary: both the row
+and request changes are written or neither is. Each gets `closed_at`; an
 undecided one is also denied with `decision_reason` `ended` (so a relay
 hook still polling for it reads a deny), and a decided one whose relay
 hook had not confirmed the verdict keeps it. Each deny is written to the
@@ -1109,9 +1118,11 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
   requests" above). A retained request of a finished row is proven by the same rule.
 - **What a proof releases.** A request proven gone holds no move of the
   row, even while it still awaits an answer (see "A relay row left in
-  `check_permission`" above). Nothing else changes for it:
-  `get-permission` reads it, `decide` uses its recorded state, and a plain
-  `send-keys` is still refused on its account until it is closed.
+  `check_permission`" above). Proof also releases its dialog hold, but
+  relay and fallback checks can still refuse plain `send-keys` or `pause`.
+  `get-permission` keeps its delivery facts; decided requests recorded
+  before v7 with `agent_gone` proof are treated as closed by those guards
+  (see the [caller contract](caller-contract.md#permission-relay)).
 - **Subagents.** A request with an `agent_id` is proven only by its
   tool's `PostToolUse` or the agent's end. A denied subagent request runs
   no tool, so it holds a plain `send-keys` without a pane hash, and

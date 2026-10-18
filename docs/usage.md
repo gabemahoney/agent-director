@@ -63,7 +63,9 @@ refused, as for any `pending` row (once the agent has exited with an end
 report, `pause` ends the row instead; see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits)). Pass the first prompt in the `spawn`
 arguments, or read the pane with `read-pane` and then type with
-`allow_pending`. After the first prompt the row moves
+`allow_pending` (see
+[Ordinary text submission](caller-contract.md#ordinary-text-submission)).
+After the first prompt the row moves
 with Codex's own events: a turn's prompt and tools read `working`, its end
 (`Stop`, or Esc) reads `waiting`, and a permission request reads
 `check_permission`. No Codex tool reads `ask_user`. A session change in the
@@ -641,9 +643,14 @@ outcome; a reason is not an immutable writer identity.
 `permission_requests`; they list only requests that still await an answer,
 never a closed one. `hook_alive` is `null` when agent-director cannot check
 the relay hook's process (for example from another pid namespace, for a
-Cursor gateway request, or for a request recorded by an older agent-director);
-such a request falls back by time, at `confirm_by`. A closed request's `delivery` reads the same way as
-any other's: `delivered` only after durable relay acknowledgement. A row
+Cursor gateway request, or for a
+request recorded by an older agent-director); such a request falls back by
+time, at `confirm_by`. A closed request's `delivery` follows the same
+[delivery rules](permissions.md#delivery) as an open one's: a request with
+a settle instant requires its relay hook's confirmation for `delivered`,
+while requests recorded by an older binary retain their
+[time-derived delivery](permissions.md#requests-recorded-by-an-older-binary).
+A row
 can read `waiting`, `working` or `ask_user` while a request it recorded
 still awaits an answer, so follow each request you track with
 `get-permission`, not only rows in `check_permission`.
@@ -772,6 +779,12 @@ The saved initial prompt in `agent_args` is submitted once per launch after
 successful load and hold checks. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in
 the [Cursor caller contract](caller-contract.md#cursor-operation-boundaries).
+
+For Claude and Codex, continue a resumed conversation with `send-keys` using its literal input
+fallback. Native confirmed
+[ordinary text submission](caller-contract.md#ordinary-text-submission)
+requires a fresh supported launch with an empty composer; `allow_pending`
+does not extend native confirmation to resumed conversations.
 
 `resume` replays stored `agent_args` except recognized session selectors and
 their values, and Claude's `-p` / `--print`, so those options cannot replace

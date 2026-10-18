@@ -671,7 +671,7 @@ func TestMakeTemplateHasErrorNames(t *testing.T) {
 // request is not proven gone.
 func TestSendKeysHasInteractErrorNames(t *testing.T) {
 	assertErrorNames(t, "send-keys", "SendKeys", true, "ErrSendKeysWhileRelayed", "ErrSpawnNotFound",
-		"ErrSpawnNotInteractive", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
+		"ErrSpawnNotInteractive", "ErrSubmissionUnconfirmed", "ErrTmuxNotAvailable", "ErrTmuxSendKeys", "ErrTmuxSessionConflict", "ErrTmuxUnresponsive",
 		"ErrInvalidFlags", "ErrRelayFallenBack", "ErrDialogMaybeOpen", "ErrNoOpenPermissionRequest", "ErrAlreadyDecided",
 		"ErrPaneAnswerInProgress", "ErrPaneChanged", "ErrStoreBusy")
 }

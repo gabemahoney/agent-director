@@ -1,0 +1,2 @@
+# b.w21 r2 expected=FAIL(Invariant_B21MixedAckedLiveUnreachable_is_violated); observed=NOT_RUN
+B146R5Cx w21_r2_mixed_acked_live_probe @700

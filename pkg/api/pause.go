@@ -74,6 +74,7 @@ type PauseStore interface {
 // (SendKeysEnv), so pause's relay guard is evaluated exactly as send-keys'
 // is. The Client builds it from its own readers, clock and configuration.
 type PauseEnv struct {
+	Input InputDeliveryBackend
 	// Relay judges the Spawn's relay hooks: its start-time reader (which also
 	// judges the lookup's server and an adopted pane, SR-3.3, SR-3.6), its own
 	// pid namespace, its clock and the relay window.
@@ -422,6 +423,16 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	if err != nil {
 		return false, fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
+	var session InputDeliverySession
+	if row.Identity.Token != "" {
+		session, err = openInputDelivery(env.Input, deliveryIdentity(row, r.s.StoreID()))
+		if err != nil {
+			return false, fmt.Errorf("pause: exclusive input writer or delivery journal unavailable; no input attempted")
+		}
+		if session != nil {
+			defer session.Close()
+		}
+	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
 	r.clear = t
 	if row.Agent == store.AgentCursor {
@@ -431,7 +442,18 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 		r.clearPresses = codexLineClearPresses
 		r.codex, r.launch = true, launchOf(row)
 	}
-	if err := r.deliver("/exit"); err != nil {
+	paneID, launch, err := r.targetPane()
+	if err != nil {
+		return false, err
+	}
+	if session != nil {
+		owned := row
+		owned.Identity = r.adoption.Identity
+		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID())); err != nil {
+			return false, err
+		}
+	}
+	if err := r.typeText(paneID, launch, "/exit", true); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -520,6 +542,9 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 // "Operator actions" in agent-director's docs/operator-actions.md).
 //
 // CLI: agent-director pause
+//
+// Input writer or delivery journal failures return ErrInternal before any
+// input is attempted by this pause call.
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.

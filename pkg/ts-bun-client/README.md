@@ -1,7 +1,9 @@
 # agent-director
 
-TypeScript/Bun client for the agent-director CLI. Shares the Go API
-surface 1:1. The `Client` discovers the system-installed
+TypeScript/Bun client for the agent-director CLI. Shares the Go API's verbs
+and CLI semantics; native request and proof fields have the declaration and
+runtime limitations described under [sendKeys](#sendkeys).
+The `Client` discovers the system-installed
 `agent-director` CLI binary at construction time and drives it as a
 subprocess per verb call — no FFI, no network hop, no bundled binary.
 
@@ -197,16 +199,53 @@ the pane" below). Pass it only for a pane a person or an LLM judged, never
 from an automatic flow.
 
 ```ts
-await client.sendKeys({ instance_id: "<id>", text: "what is 2+2?" });
+await client.sendKeys({
+  instance_id: "<id>",
+  text: "what is 2+2?",
+});
 ```
+
+On a supported native launch, ordinary nonempty text with Enter and no pane
+hash returns runtime proof fields
+`outcome: "submitted"`, `request_id`, `session_id`, `record_sha256` and
+`record_id` when the native record supplies it. They confirm the exact
+normalized text in the launch's native transcript. The published
+`SendKeysParams` and `SendKeysResult` declarations do not expose native request
+IDs or proof fields; use the Go API or CLI for explicit delivery request IDs.
+Launches without
+native capability retain literal text and one Enter, return an empty object on
+success and make no exact transcript-confirmation claim. Manual
+operations (`no_enter`, `key`, empty text, pane hashes and permission answers)
+return an empty object on success; their input-ownership refusals are in
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
+Supported launches, omitted-ID behavior, structured
+outcomes and recovery are in
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
+Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
+cancel submission.
 
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
 reuse or resume) whose agent has not reported in yet, for example to dismiss a
 prompt the agent shows before it reports in. Keys are delivered only to a
 session started by the row's current launch. `ended` and `missing` rows are
-still rejected. A `pending` row whose launch start or launch token is not recorded, or where
+rejected, including retries of an existing delivery request. State, relay and
+dialog guards precede native capability selection and request reconciliation.
+A `pending` row whose launch start or launch token is not recorded, or where
 only a session an earlier launch left behind is found, gets
 `ErrSpawnNotInteractive` and nothing is sent.
+
+`allow_pending` preserves native readiness and transcript requirements on
+supported launches; it does not make a startup dialog an ordinary composer.
+For fallback input to a pending Codex row, the bounded hook-state observation
+and its unconfirmed result are described in the caller contract.
+`SubmissionUnconfirmedDetails` describes that fallback payload only:
+`keys_sent: true`, `submission_confirmed: false` and `row_state`. Native
+uncertainty adds `outcome`, `request_id`, `phase`, `bytes_attempted`,
+`enter_may_have_been_sent`, optional `last_queue` and `reason` at runtime.
+Read these through `AgentDirectorError.errDetails`, whose type is
+`Readonly<Record<string, unknown>> | null`, and check their values; see
+[Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission)
+for the fields and recovery.
 
 `liveness_note: "unreported"` means an alive agent has not reported since
 launch. Action on a pending row belongs to the
@@ -265,6 +304,9 @@ but `waiting` throws `ErrSpawnNotPausable`. On a Codex Spawn
 ```ts
 await client.pause({ instance_id: "<id>" });
 ```
+
+For input ownership or journal failures (`ErrInternal` before any input), see
+[Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
 `pause` is held like a `sendKeys` without `request_token` and without
 `expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
@@ -497,12 +539,15 @@ try {
 ```
 
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, or `null`. Five errors
+the error envelope's optional `err_details` object, or `null`. Six errors
 carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
-`ErrPaneChanged` (`PaneChangedDetails`) and `ErrDialogMaybeOpen`
-(`DialogMaybeOpenDetails`). So does the `ErrInternal` of a
+`ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
+(`DialogMaybeOpenDetails`) and `ErrSubmissionUnconfirmed`
+(`SubmissionUnconfirmedDetails`, for fallback pending-Codex uncertainty).
+Native submission facts remain available through the generic `errDetails`
+record. So does the `ErrInternal` of a
 pane answer whose key was sent but not recorded (`PaneKeySentDetails`:
 `key_sent` `true` and `request_token`). Read facts from `errDetails`, never
 from `errDescription`.
@@ -586,7 +631,8 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | Error | When it fires |
 |---|---|
 | `ErrSpawnNotFound` | No spawn row matches the supplied `instance_id`. |
-| `ErrSpawnNotInteractive` | The target spawn is not in a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. |
+| `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
+| `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes fallback pending-Codex uncertainty; native outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
 | `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
@@ -622,7 +668,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 | `ErrRelayModeOff` | `decide` was called on a spawn whose `relay_mode` is not `on`. |
 | `ErrInvalidDecision` | `decision` was neither `allow` nor `deny`. |
 | `ErrMissingRequestToken` | `decide` was called with an empty `request_token`. |
-| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or `find-missing` or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request relay acknowledged its recorded verdict, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (`"delivered"` only after relay acknowledgement). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
+| `ErrNoOpenPermissionRequest` | No open permission-request row matches the `(instance_id, request_token)` pair. `decide` also throws it, recording nothing, for an open request of a spawn that is `ended` or `missing`: such a request is closed; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. It throws it too for a request closed with its spawn (when its agent ended it, or `find-missing` or `pause` moved a Codex row to `ended`, `decision_reason` `"ended"` for an undecided one, or when `find-missing` marked it `missing`) before the request relay acknowledged its recorded verdict, `find-missing`'s own deny excepted, whether or not the spawn was resumed since: the request stays closed, `get` and `list` no longer show it, and `getPermission` reads its `delivery` as for any request (for a request with a settle instant, `"delivered"` requires durable relay acknowledgement; requests recorded by an older binary retain the [legacy delivery rules](../../docs/permissions.md#requests-recorded-by-an-older-binary), including derived delivery after expiry even when closed). Pane handling is owned by [Permission relay](../../docs/caller-contract.md#permission-relay). A pane answer (`sendKeys` with `request_token`) and `recordPaneAnswer` throw it for such a closed request too, nothing sent or recorded. For a request recorded by an older binary, `decide` also throws it when the request's record is still open 2 s after its relay window ended but the spawn has left `check_permission`, has recorded a later request, or has another request open: the request's dialog may have closed, and a pane answer to a closed dialog is typed into the agent's prompt; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling. `send-keys` does not apply this check. |
 | `ErrAlreadyDecided` | A permission-request row exists but has already been decided; first decide wins. This includes a request the relay denied when its time ran out (`getPermission` returns `decision_reason` `"timeout"`); the recorded decision and acknowledgement prevent a second API answer. Acknowledgement does not establish agent receipt or dialog closure; see [Permission relay](../../docs/caller-contract.md#permission-relay). It also includes a request `find-missing` denied when it marked the spawn `missing` (`decision_reason` `"find_missing"`), and one closed at the pane (`pane_answer` `"sent"`, `"outside"` or `"tool_ran"`, with a `decision` or, for an `"unknown"` claim, none): `decide` on it records nothing, not even `attempted_decision`. A pane answer or `recordPaneAnswer` on a request its relay acknowledged, or one already closed at the pane, throws it too. |
 | `ErrStoreBusy` | `decide` was called with `max_wait_ms`, and its precommit budget ran out, including acquisition or SQL work. It does not establish another process held the store. Once the verdict is confirmed committed, `decide` never throws it: a bound reached while it waits for confirmation resolves with `delivery` `"not_confirmed"`. An unconfirmed commit is an internal error instead. Without `max_wait_ms`, `decide` never throws `ErrStoreBusy`. A pane answer (`sendKeys` with `request_token`) or `recordPaneAnswer` throws it when the store's write lock was not taken within its busy timeout. Recovery and zero-wait semantics are in the [caller contract](../../docs/caller-contract.md#permission-relay). |
 | `ErrPermissionRequestNotFound` | No permission-request row exists for the supplied `request_token`. |

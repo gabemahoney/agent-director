@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -146,6 +147,42 @@ type PaneKeySentDetails struct {
 	KeySent bool `json:"key_sent"`
 	// RequestToken is the request the pane answer named.
 	RequestToken string `json:"request_token"`
+}
+
+// SubmissionUnconfirmedDetails describes an unconfirmed native delivery attempt
+// or pending Codex fallback input without a bounded hook-derived observation.
+// RowState is the last raw state read, not a synthetic state or proof that the
+// prompt remains unsubmitted.
+type SubmissionUnconfirmedDetails struct {
+	RequestID            string `json:"request_id,omitempty"`
+	Outcome              string `json:"outcome"`
+	Phase                string `json:"phase"`
+	BytesAttempted       int    `json:"bytes_attempted"`
+	EnterMayHaveBeenSent bool   `json:"enter_may_have_been_sent"`
+	LastQueue            *int   `json:"last_queue,omitempty"`
+	Reason               string `json:"reason"`
+	// KeysSent means input was attempted and may have reached the pane.
+	KeysSent bool `json:"keys_sent"`
+
+	// SubmissionConfirmed is false: the applicable submission evidence is unavailable.
+	SubmissionConfirmed bool `json:"submission_confirmed"`
+
+	// RowState is the last raw state read, not proof of submission or its absence.
+	RowState string `json:"row_state"`
+}
+
+// MarshalJSON preserves the legacy pending-Codex three-field payload. Native
+// outcomes retain every required field, including zero bytes and false Enter.
+func (d SubmissionUnconfirmedDetails) MarshalJSON() ([]byte, error) {
+	if d.Outcome == "" {
+		return json.Marshal(struct {
+			KeysSent            bool   `json:"keys_sent"`
+			SubmissionConfirmed bool   `json:"submission_confirmed"`
+			RowState            string `json:"row_state"`
+		}{d.KeysSent, d.SubmissionConfirmed, d.RowState})
+	}
+	type nativeDetails SubmissionUnconfirmedDetails
+	return json.Marshal(nativeDetails(d))
 }
 
 // PaneChangedDetails is ErrPaneChanged's err_details (b.146 rule 7): the

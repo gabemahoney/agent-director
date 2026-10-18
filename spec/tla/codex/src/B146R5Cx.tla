@@ -257,13 +257,25 @@ KnobOff == FALSE
 CxR5    == FALSE
 CxRv    == FALSE
 
+\* b.w21: opt-in upgraded-store scenarios. All old cfgs keep their steps.
+PreV7Old       == FALSE  \* one decided, unacked pre-v7 request already in the store
+PreV7Current   == FALSE  \* the seed belongs to this launch until Relaunch
+PreV7Relaunch  == FALSE  \* allow one kill/find-missing/resume sequence
+PreV7Expired   == FALSE  \* seed past created_at + relay window + 2 seconds
+PreV7CloseDeny == FALSE  \* decision_reason find_missing or ended (CloseDenied)
+PreV7TurnEnd   == FALSE  \* seed has turn_end proof, not agent_gone
+PreV7ReadRepair  == FALSE  \* runtime's logical close of decided agent_gone legacy rows
+PreV7CloseRepair == FALSE  \* lifecycle close stamps decided, unacked legacy rows
+
 Unproven == "Unproven" \in R5
 IdleGate == "IdleGate" \in R5 \/ "IdleSnap" \in R5
 IdleSnap == "IdleSnap" \in R5
 SameScreen == "SameScreen" \in R5
 Bypass == "Bypass" \in R5
 
-R == 1 .. N
+L == 0
+R == IF PreV7Old THEN L .. N ELSE 1 .. N
+Legacy == IF PreV7Old THEN {L} ELSE {}
 I == 1 .. NI
 Live == {"pending", "waiting", "working", "check_permission"}
 LivePcs == {"t", "i", "x", "p", "a", "d", "e"}
@@ -339,7 +351,9 @@ VARIABLES
     sOK,      \* SameScreen: the pane is unchanged since the stray sender's capture
     nz,       \* Noise has happened
     rvd,      \* b.ssz (CxRv): the /review thread's output drawn, flipped by each of its writes
-    rvw       \* b.ssz ghost (CxRv): working was written by a review hook after the turn ended
+    rvw,      \* b.ssz ghost (CxRv): working was written by a review hook after the turn ended
+    nl,       \* b.w21 ghost: the legacy request belongs to an earlier launch
+    legacyProof \* durable proven_gone_how of the single legacy seed; never a launch timestamp
 
 ccV == <<proc, aph, dl, got, scr, inq, ptu, idl>>
 hookV == <<h, ph>>
@@ -350,7 +364,7 @@ gpV == <<gpc, gr, gsk>>
 paneV == <<oc, snap, sk, skt, skq, skd, st>>
 ghostV == <<typed, silent, wrong, misfire, race, late, busylie, falsefb, hit>>
 r5V == <<unp, quiet, snapOK, sOK, nz, rvd, rvw>>
-vars == <<ccV, hookV, storeV, decV, callV, gpV, paneV, ghostV, r5V>>
+vars == <<ccV, hookV, storeV, decV, callV, gpV, paneV, ghostV, r5V, nl, legacyProof>>
 
 Hit(tag) == hit' = (hit \/ Probe = tag)
 
@@ -367,37 +381,84 @@ KnownHookAlive == \E r \in R : rec[r] /\ HookAlive(r)
 
 (* What a reader's process check says (rule 14). *)
 JudgedAlive(r) ==
-    CASE LiveCheck = "exact" -> HookAlive(r)
-      [] LiveCheck = "time"  -> h[r] # "idle" /\ ph[r] < 2
-      [] OTHER               -> FALSE
+    IF r \in Legacy THEN ph[r] < 2
+    ELSE CASE LiveCheck = "exact" -> HookAlive(r)
+           [] LiveCheck = "time"  -> h[r] # "idle" /\ ph[r] < 2
+           [] OTHER               -> FALSE
 AnyJudgedAlive == \E r \in R : rec[r] /\ JudgedAlive(r)
 
 Answered(r) == pane[r] \in {"sent", "outside", "ran"}
+\* sendkeys_relay.go: a read-time close, not a fabricated delivery ack.
+\* Neither nl (launch ghost) nor ~unp (which Stop also clears) is proof
+\* that the asking agent's launch ended. Modern requests never match.
+LegacyReleased(r) ==
+    PreV7ReadRepair /\ r \in Legacy /\ dec[r] # "none"
+    /\ legacyProof = "agent_gone"
 (* The record is closed: delivered, answered at the pane, or closed with  *)
 (* its agent (rule 12: written by find-missing's mark, and read as closed *)
 (* on a missing row, which also covers a record an orphan hook wrote      *)
 (* after the mark).                                                        *)
 Closed(r) ==
-    \/ IF AckFirst THEN ack[r] ELSE dec[r] # "none"
-    \/ Answered(r) \/ cls[r]
+    \/ IF r \in Legacy THEN ack[r] ELSE IF AckFirst THEN ack[r] ELSE dec[r] # "none"
+    \/ Answered(r) \/ cls[r] \/ LegacyReleased(r)
     \/ CloseOnMissing /\ rs = "missing"
 
 (* AD reports r fallen back: ErrRelayFallenBack from decide and send-keys,  *)
 (* delivery "fallen_back" on get and get-permission (rule 5, round 3 wording: *)
 (* "hook gone, no pane answer recorded through AD").                         *)
-Reported(r) == rec[r] /\ ~Closed(r) /\ pane[r] \in {"none", "intent"} /\ ~JudgedAlive(r)
+\* The pre-v7 delivery branch is independent of closed_at and proven_gone.
+\* An ordinary verdict becomes delivered after expiry; a close's deny does not.
+LegacyDelivery(r) ==
+    CASE ack[r] -> "delivered"
+      [] Answered(r) -> "fallen_back"
+      [] ph[r] < 2 -> "not_confirmed"
+      [] dec[r] # "none" /\ ~PreV7CloseDeny -> "delivered"
+      [] OTHER -> "fallen_back"
+
+\* hookMayAnswer reads closed_at, completed pane answers and row state, not
+\* delivered_at: an acked v7 hook can still be writing its answer. Keep the
+\* original v7 liveness abstraction even in a mixed legacy/current store:
+\* its time fallback conservatively holds through settlement, including ack.
+GuardClosed(r) == Answered(r) \/ cls[r] \/ LegacyReleased(r)
+                  \/ (CloseOnMissing /\ rs = "missing")
+RelayHolds(r) ==
+    rec[r] /\ ~GuardClosed(r)
+    /\ IF r \in Legacy THEN LegacyDelivery(r) = "not_confirmed"
+        ELSE JudgedAlive(r)
+AnyRelayHolds == IF PreV7Old THEN \E r \in R : RelayHolds(r) ELSE AnyJudgedAlive
+
+Reported(r) ==
+    rec[r] /\ ~Closed(r) /\ pane[r] \in {"none", "intent"}
+    /\ IF r \in Legacy THEN LegacyDelivery(r) = "fallen_back" ELSE ~JudgedAlive(r)
+
+\* The statement's awaitingAnswerSQL predicate. Row state alone is not a
+\* permanent close; a decided pre-v7 record does not match any pane write
+\* or the old close statements. The repaired lifecycle close deliberately
+\* uses a different predicate; pane writes retain awaitingAnswerSQL.
+StoreAwaits(r) ==
+    rec[r] /\ ~cls[r] /\ pane[r] \in {"none", "intent"}
+    /\ IF r \in Legacy THEN dec[r] = "none" ELSE ~ack[r]
+\* request_close.go: union of undecided awaiting and decided unacked close.
+\* A prior turn_end proof must not prevent this persistent close.
+StoreCloseable(r) ==
+    StoreAwaits(r)
+    \/ (PreV7CloseRepair /\ rec[r] /\ ~cls[r]
+        /\ dec[r] # "none" /\ ~ack[r] /\ pane[r] \in {"none", "intent"})
 Open == {r \in R : Reported(r)}
 Oldest == CHOOSE r \in Open : \A q \in Open : r <= q
 
 (* A request that still holds the row in check_permission. *)
 Awaiting(r) ==
     rec[r] /\ ~Closed(r) /\ (pane[r] = "none" \/ (IntentAwaits /\ pane[r] = "intent"))
+    /\ (r \in Legacy => dec[r] = "none")
 AnyAwaiting == \E r \in R : Awaiting(r)
 
 SenderAlive(r) == \E i \in I : sk[i] \in {"intent", "typing"} /\ skt[i] = r
 
 (* What a record read finds. *)
-RecK(r) == IF ack[r] THEN "ack" ELSE IF Closed(r) THEN "closed" ELSE "open"
+RecK(r) ==
+    IF ack[r] \/ (r \in Legacy /\ LegacyDelivery(r) = "delivered") THEN "ack"
+    ELSE IF Closed(r) THEN "closed" ELSE "open"
 
 Quiet == Lag \/ inq = <<>>
 (* Without Lag, nothing changes the screen between a send-keys's check   *)
@@ -461,11 +522,18 @@ LookAsked == StrayHeld \/ UnprovenClosed
 
 -----------------------------------------------------------------------------
 Init ==
-    /\ proc = "alive" /\ aph = "ss" /\ dl = [r \in R |-> "none"] /\ got = [r \in R |-> "none"]
+    /\ proc = "alive"
+    /\ aph = IF PreV7Old /\ PreV7Current THEN "idle" ELSE "ss"
+    /\ dl = [r \in R |-> IF r \in Legacy THEN "ans" ELSE "none"]
+    /\ got = [r \in R |-> IF r \in Legacy /\ ~PreV7CloseDeny THEN "allow" ELSE "none"]
     /\ scr = 0 /\ inq = <<>> /\ ptu = [r \in R |-> "none"] /\ idl = FALSE
-    /\ h = [r \in R |-> "idle"] /\ ph = [r \in R |-> 0]
-    /\ lk = "free" /\ envN = 0 /\ rs = "pending"
-    /\ rec = [r \in R |-> FALSE] /\ dec = [r \in R |-> "none"] /\ ack = [r \in R |-> FALSE]
+    /\ h = [r \in R |-> IF r \in Legacy THEN "done" ELSE "idle"]
+    /\ ph = [r \in R |-> IF r \in Legacy /\ PreV7Expired THEN 2 ELSE 0]
+    /\ lk = "free" /\ envN = 0
+    /\ rs = IF PreV7Old /\ PreV7Current THEN "waiting" ELSE "pending"
+    /\ rec = [r \in R |-> r \in Legacy]
+    /\ dec = [r \in R |-> IF r \in Legacy THEN (IF PreV7CloseDeny THEN "deny" ELSE "allow") ELSE "none"]
+    /\ ack = [r \in R |-> FALSE]
     /\ pane = [r \in R |-> "none"] /\ pas = [r \in R |-> "none"] /\ cls = [r \in R |-> FALSE]
     /\ gone = [r \in R |-> FALSE] /\ old = [r \in R |-> FALSE] /\ att = [r \in R |-> FALSE]
     /\ dpc = "idle" /\ dr = 1 /\ dv = "allow" /\ de = 0 /\ dmark = 0
@@ -480,7 +548,12 @@ Init ==
     /\ typed = [r \in R |-> FALSE]
     /\ silent = FALSE /\ wrong = FALSE /\ misfire = FALSE /\ race = FALSE
     /\ late = FALSE /\ busylie = FALSE /\ falsefb = FALSE /\ hit = FALSE
-    /\ unp = [r \in R |-> FALSE] /\ quiet = FALSE /\ snapOK = FALSE /\ sOK = FALSE /\ nz = FALSE
+    /\ unp = [r \in R |-> r \in Legacy /\ PreV7Current /\ ~PreV7TurnEnd]
+    /\ quiet = FALSE /\ snapOK = FALSE /\ sOK = FALSE /\ nz = FALSE
+    /\ nl = (PreV7Old /\ ~PreV7Current)
+    /\ legacyProof = IF ~PreV7Old THEN "none"
+                      ELSE IF PreV7TurnEnd THEN "turn_end"
+                      ELSE IF PreV7Current THEN "none" ELSE "agent_gone"
     /\ rvd = FALSE /\ rvw = FALSE
 
 -----------------------------------------------------------------------------
@@ -518,6 +591,7 @@ TurnStart ==
                    cls, gone, old, att, decV, callV, gpV, paneV, ghostV>>
 
 Ask(r) ==
+    /\ r \notin Legacy
     /\ aph = "turn" /\ proc = "alive" /\ dl[r] = "none" /\ IF r = 1 THEN TRUE ELSE Asked(r - 1)
     /\ dl' = [dl EXCEPT ![r] = "hook"] /\ h' = [h EXCEPT ![r] = FirstPc]
     /\ UNCHANGED <<proc, aph, got, scr, inq, ptu, idl, ph, storeV, decV, callV, gpV, paneV,
@@ -707,7 +781,7 @@ HDie(r) ==
 (* hook exits before its kill. InsertCut: a hook still waiting for its    *)
 (* first write gives up before its kill (HFirstFail).                     *)
 Tick(r) ==
-    /\ h[r] # "idle" /\ ph[r] < 2 /\ (HookAlive(r) \/ LiveCheck = "time") /\ Calm
+    /\ h[r] # "idle" /\ ph[r] < 2 /\ (HookAlive(r) \/ LiveCheck = "time" \/ r \in Legacy) /\ Calm
     /\ ph[r] = 1 => ~(Deadline /\ h[r] = "e")
     \* a hook still before its first write at its kill is in its lock wait (a stall
     \* that long is a death before the first write: BlindDeath); InsertCut ends that
@@ -988,6 +1062,7 @@ SendSet == <<pane, pas, gone, sk, skt, skq>>
 (* committed under the check; the keys ks are typed by a later tmux call  *)
 (* (SKType); then "sent" (SKDone). send-keys may die at either point.     *)
 SendOn(i, a, ks, v) ==
+    /\ (a \in Legacy => StoreAwaits(a))
     /\ IF PaneIntent
        THEN pane' = [pane EXCEPT ![a] = "intent"] /\ pas' = [pas EXCEPT ![a] = v]
        ELSE UNCHANGED <<pane, pas>>
@@ -1035,10 +1110,13 @@ OrcAct(i) ==
                THEN \E r \in Open :
                       IF hashOK /\ (LiveSender => ~SenderAlive(r))
                       THEN IF ~ClaimAge \/ old[r]
-                           THEN /\ pane' = [pane EXCEPT ![r] = "outside"]
-                                /\ pas' = [pas EXCEPT ![r] = "unknown"]
-                                /\ MarkGone(r) /\ Hit("claimed")
-                                /\ UNCHANGED <<sk, skt, skq>>
+                           THEN IF r \in Legacy /\ ~StoreAwaits(r)
+                                THEN /\ MarkGone(r) /\ Hit("legacyclaimblocked")
+                                     /\ UNCHANGED <<pane, pas, sk, skt, skq>>
+                                ELSE /\ pane' = [pane EXCEPT ![r] = "outside"]
+                                     /\ pas' = [pas EXCEPT ![r] = "unknown"]
+                                     /\ MarkGone(r) /\ Hit("claimed")
+                                     /\ UNCHANGED <<sk, skt, skq>>
                            ELSE /\ MarkGone(r) /\ Hit("toosoon")   \* ErrClaimTooSoon
                                 /\ UNCHANGED <<pane, pas, sk, skt, skq>>
                       ELSE UNCHANGED <<SendSet, hit>>
@@ -1046,9 +1124,10 @@ OrcAct(i) ==
           ELSE IF T = {} THEN UNCHANGED <<SendSet, hit>>
           ELSE \E t \in T, k \in {"yes", "esc"} :
                  LET v == IF k = "esc" THEN "deny" ELSE "allow"
-                     ok == /\ ~AnyJudgedAlive /\ hashOK /\ Len(inq) <= 2
+                     ok == /\ ~AnyRelayHolds /\ hashOK /\ Len(inq) <= 2
                  IN IF Pick = "token"
                     THEN IF /\ ok /\ Reported(t)
+                            /\ (t \in Legacy => StoreAwaits(t))
                             /\ pane[t] = "intent" => (HashCheck /\ (LiveSender => ~SenderAlive(t)))
                          THEN SendOn(i, t, Keys(t, k), v)
                          ELSE /\ UNCHANGED SendSet
@@ -1094,7 +1173,7 @@ SKDie(i) ==
 StraySend ==
     /\ IF SameScreen THEN st = "read" /\ sOK ELSE st = "want"
     /\ proc = "alive" /\ Calm /\ lk = "free" /\ Len(inq) <= 2
-    /\ ~AnyJudgedAlive
+    /\ ~AnyRelayHolds
     /\ (Pick = "token" /\ PlainGuard) => Open = {}
     /\ R5OK /\ UNCHANGED <<unp, quiet, nz, rvd, rvw>>
     /\ st' = "done"
@@ -1139,7 +1218,7 @@ OrcBlindAct(i) ==
     /\ BlindCase(i) /\ sk[i] = "idle" /\ Quiet /\ proc = "alive"
     /\ oc' = [oc EXCEPT ![i] = "idle"] /\ snap' = [snap EXCEPT ![i] = 0]
     /\ LET s == snap[i]
-           ok == /\ Hash(scr) = Hash(s) /\ ~AnyJudgedAlive
+           ok == /\ Hash(scr) = Hash(s) /\ ~AnyRelayHolds
                  /\ (Pick = "token" /\ PlainGuard) => Open = {}
        IN IF ~ok \/ (s = 0 /\ ~StrayHeld) THEN UNCHANGED <<inq, st, race, hit>>
           ELSE IF s > 0
@@ -1196,14 +1275,34 @@ FMMissing ==
     /\ Sweep /\ proc = "gone" /\ rs \in Live /\ lk = "free"
     /\ rs' = "missing"
     /\ IF CloseOnMissing
-       THEN /\ cls' = [q \in R |-> cls[q] \/ (rec[q] /\ ~Closed(q))]
+       THEN /\ cls' = [q \in R |-> cls[q] \/
+                         (IF q \in Legacy THEN StoreCloseable(q)
+                          ELSE rec[q] /\ ~Closed(q))]
             /\ dec' = [q \in R |-> IF rec[q] /\ ~Closed(q) /\ dec[q] = "none" THEN "deny" ELSE dec[q]]
        ELSE UNCHANGED <<cls, dec>>
+    /\ unp' = IF PreV7Old /\ CloseOnMissing THEN [q \in R |-> FALSE] ELSE unp
+    /\ UNCHANGED <<quiet, nz, rvd, rvw>>
     /\ Hit("missing")
     /\ UNCHANGED <<ccV, hookV, lk, envN, rec, ack, pane, pas, gone, old, att, decV, callV, gpV,
                    paneV, typed, silent, wrong, misfire, race, late, busylie, falsefb>>
 
 -----------------------------------------------------------------------------
+\* b.w21's one resume: find-missing's row-state-only close is undone by
+\* MoveToPending. Its backstop runs the SAME close statements and proves
+\* requests gone; the close repair now includes decided pre-v7 rows.
+\* Fresh slots are untouched: this slice ends before the next turn's Ask.
+Relaunch ==
+    /\ PreV7Old /\ PreV7Relaunch /\ ~nl
+    /\ rs = "missing" /\ proc = "gone" /\ lk = "free"
+    /\ \A q \in R \ Legacy : ~rec[q] /\ dl[q] = "none"
+    /\ proc' = "alive" /\ aph' = "ss" /\ rs' = "pending" /\ idl' = FALSE
+    /\ cls' = [q \in R |-> cls[q] \/ StoreCloseable(q)]
+    /\ dec' = [q \in R |-> IF StoreAwaits(q) /\ dec[q] = "none" THEN "deny" ELSE dec[q]]
+    /\ unp' = [q \in R |-> FALSE] /\ nl' = TRUE
+    /\ QuietTo(FALSE) /\ UNCHANGED <<nz, rvd, rvw>>
+    /\ UNCHANGED <<dl, got, scr, inq, ptu, hookV, lk, envN, rec, ack, pane, pas,
+                   gone, old, att, decV, callV, gpV, paneV, ghostV>>
+
 HookStep(r) == HX(r) \/ HT(r) \/ HI(r) \/ HP(r) \/ HA(r) \/ HD(r) \/ HE(r)
 DStep == DStart \/ DChk \/ DRef \/ DW \/ DPollRec \/ DPoll \/ DRep
 Life == SessionStart \/ TurnStart \/ TurnEnd \/ StopHook \/ IdleNotif
@@ -1220,7 +1319,7 @@ Plain ==
     \/ G2 \/ GW
     \/ Consume \/ HumanKey
     \/ \E i \in I : OrcRead(i) \/ OrcAct(i) \/ SKType(i) \/ SKDone(i) \/ SKDie(i)
-    \/ FMRecon \/ FMPromote \/ FMMissing
+    \/ FMRecon \/ FMPromote
 
 (* The pane's bytes after a step: AD's idle capture (IdleSnap) is taken  *)
 (* at an idle hook (cap) and spoilt by any change; the stray's capture    *)
@@ -1228,22 +1327,34 @@ Plain ==
 Track(cap, sread) ==
     /\ snapOK' = IF IdleSnap THEN cap \/ (snapOK /\ ~Changed) ELSE snapOK
     /\ sOK' = IF SameScreen THEN sread \/ (sOK /\ ~Changed) ELSE sOK
+    \* Track the single legacy record's durable proof at the actual writes.
+    \* proveAgentGoneSQL only fills NULL: an existing turn_end stays turn_end.
+    \* Stop/idle also fill NULL; SessionStart and AgentCrash alone prove nothing.
+    \* Keeping this out of unp is essential: Stop clears unp without ending a launch.
+    /\ legacyProof' = IF ~PreV7Old \/ legacyProof # "none" THEN legacyProof
+                       ELSE IF (CloseOnMissing /\ proc = "gone"
+                                /\ rs \in Live /\ rs' = "missing")
+                               \/ (rs = "missing" /\ rs' = "pending")
+                            THEN "agent_gone"
+                       ELSE IF cap /\ aph \in {"stop", "notif", "notifL"}
+                            THEN "turn_end" ELSE legacyProof
 
 (* Whole steps (TLC needs every primed variable, also for fairness):     *)
 (* P, a round-4 action that keeps round 5's state; E, a round-5-aware     *)
 (* action; C, an idle hook (AD's capture).                                *)
-P(A) == A /\ UNCHANGED <<unp, quiet, nz, rvd, rvw>> /\ Track(FALSE, FALSE)
-E(A) == A /\ Track(FALSE, FALSE)
-C(A) == A /\ Track(TRUE, FALSE)
+P(A) == A /\ UNCHANGED <<unp, quiet, nz, rvd, rvw, nl>> /\ Track(FALSE, FALSE)
+E(A) == A /\ UNCHANGED nl /\ Track(FALSE, FALSE)
+C(A) == A /\ UNCHANGED nl /\ Track(TRUE, FALSE)
 
 Next ==
     \/ P(Plain)
     \/ C(SessionStart \/ StopHook \/ IdleNotif)
     \/ E(\/ TurnStart
          \/ \E r \in R : PostToolUse(r) \/ HX(r) \/ HT(r) \/ HI(r)
-         \/ StraySend \/ StrayStale \/ NoiseStep \/ RevWrite
+         \/ StraySend \/ StrayStale \/ NoiseStep \/ RevWrite \/ FMMissing
          \/ \E i \in I : OrcBlindAct(i))
-    \/ StrayRead /\ Track(FALSE, TRUE)
+    \/ StrayRead /\ UNCHANGED nl /\ Track(FALSE, TRUE)
+    \/ Relaunch /\ Track(FALSE, FALSE)
 
 (* Fair: Claude Code's own steps (the agent goes on; a live hook takes its *)
 (* next step, or dies: death is never forced, never excluded); time; the  *)
@@ -1269,9 +1380,9 @@ Fairness ==
     /\ \A i \in I : WF_vars(P(OrcRead(i))) /\ WF_vars(P(OrcAct(i))) /\ WF_vars(P(SKType(i)))
                     /\ WF_vars(P(SKDone(i)))
     /\ WF_vars(E(StraySend))
-    /\ WF_vars(P(FMRecon)) /\ WF_vars(P(FMPromote)) /\ WF_vars(P(FMMissing))
+    /\ WF_vars(P(FMRecon)) /\ WF_vars(P(FMPromote)) /\ WF_vars(E(FMMissing))
     \* round 5: the stray sender captures and retries; the intelligence acts on a held send
-    /\ WF_vars(StrayRead /\ Track(FALSE, TRUE)) /\ WF_vars(E(StrayStale))
+    /\ WF_vars(StrayRead /\ UNCHANGED nl /\ Track(FALSE, TRUE)) /\ WF_vars(E(StrayStale))
     /\ \A i \in I : WF_vars(E(OrcBlindAct(i)))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
@@ -1288,7 +1399,8 @@ TypeOK ==
     /\ dpc \in {"idle", "start", "chk", "ref", "w", "aw", "awr", "fin"}
     /\ gpc \in {"idle", "g1", "g2", "gw"}
     /\ \A r \in R : pane[r] \in {"none", "intent", "sent", "outside", "ran"}
-    /\ rvd \in BOOLEAN /\ rvw \in BOOLEAN
+    /\ rvd \in BOOLEAN /\ rvw \in BOOLEAN /\ nl \in BOOLEAN
+    /\ legacyProof \in {"none", "turn_end", "agent_gone"}
 
 (* No dialog is allowed by a key that nobody sent as its answer. *)
 NoSilentAllow == ~silent
@@ -1393,4 +1505,76 @@ NeverHeldNoRequest == ~(StrayHeld /\ proc = "alive" /\ \A r \in R : ~rec[r])
 (* ... during the turn (a probe for IdleGate's cost). *)
 NeverHeldInTurnNoRequest ==
     ~(StrayHeld /\ proc = "alive" /\ aph = "turn" /\ \A r \in R : ~rec[r])
+-----------------------------------------------------------------------------
+\* b.w21 checks the selected rules (repairs default off). nl is
+\* TRUE in the seeded cutover (already stuck store rows) and after resume.
+RelayHoldOnlyCurrentLaunch == nl => \A r \in Legacy : ~RelayHolds(r)
+OldRequestsDoNotHoldPlainKeys ==
+    nl => \A r \in Legacy : ~RelayHolds(r) /\ ~Reported(r)
+
+\* Legacy settlement permits read-time release without a stored close.
+\* The original RecordsClose property and all nonlegacy obligations stay.
+B21RecordsSettle ==
+    <>[](/\ \A r \in R \ Legacy : rec[r] => Closed(r)
+         /\ \A r \in Legacy : rec[r] => (~RelayHolds(r) /\ ~Reported(r)))
+
+\* Independent reachability probe: in the current-launch cfg, nl starts
+\* FALSE and only Relaunch sets it TRUE, after AgentCrash and FMMissing.
+\* Keep this probe after repair: it must still fail at resumed pending.
+B21RelaunchPendingUnreachable ==
+    ~(PreV7Old /\ PreV7Current /\ PreV7Relaunch /\ nl
+      /\ proc = "alive" /\ rs = "pending" /\ aph = "ss")
+
+\* Focus the short counterexamples on pending-before-SessionStart. Phase
+\* 0/1 compress the entire legacy hold; there is no minutes-to-hours bound.
+\* Only this opt-in spec suspends lifecycle/Ask; the original Spec is kept.
+B21Next ==
+    \/ P(AgentCrash \/ (\E r \in Legacy : Tick(r) \/ Age(r))
+         \/ (\E i \in I : OrcRead(i) \/ OrcAct(i)))
+    \/ E(FMMissing \/ StraySend)
+    \/ Relaunch /\ Track(FALSE, FALSE)
+
+B21Fairness ==
+    /\ \A r \in Legacy : WF_vars(P(Tick(r))) /\ WF_vars(P(Age(r)))
+    /\ \A i \in I : WF_vars(P(OrcRead(i))) /\ WF_vars(P(OrcAct(i)))
+    /\ WF_vars(E(FMMissing)) /\ WF_vars(E(StraySend))
+B21Spec == Init /\ [][B21Next]_vars /\ B21Fairness
+B21KeysEventuallyAccepted == <>(st = "done")
+
+\* Controls and fidelity checks are separate from the desired invariants.
+B21SeedFidelity ==
+    /\ \A r \in Legacy : rec[r] /\ ~ack[r] /\ pane[r] = "none"
+                         /\ h[r] = "done" /\ dl[r] = "ans" /\ ~StoreAwaits(r)
+    /\ (nl => \A r \in Legacy : ~unp[r])
+B21CurrentHoldExists ==
+    \A r \in Legacy : (PreV7Current /\ ~nl /\ rs \in Live /\ ph[r] < 2) => RelayHolds(r)
+B21TurnEndHoldExists ==
+    \A r \in Legacy : (legacyProof = "turn_end" /\ ~cls[r]
+                        /\ rs \in Live /\ ph[r] < 2) => RelayHolds(r)
+B21ClosePersists ==
+    (PreV7Current /\ PreV7Relaunch /\ nl) => \A r \in Legacy : cls[r]
+B21ProofFidelity ==
+    /\ (legacyProof = "agent_gone" => \A r \in Legacy : ~unp[r])
+    /\ (PreV7TurnEnd => legacyProof = "turn_end")
+    /\ \A r \in Legacy : LegacyReleased(r) => dec[r] # "none" /\ ~ack[r]
+B21ExpiredOrdinaryDelivered ==
+    \A r \in Legacy : (ph[r] = 2 /\ ~PreV7CloseDeny) =>
+                        LegacyDelivery(r) = "delivered" /\ ~Reported(r)
+
+\* A fresh request reaches its timeout ack through the original actions;
+\* neither the legacy release nor the ack proves that this hook exited.
+B21MixedAckedLive ==
+    /\ PreV7Old /\ nl /\ LegacyReleased(L) /\ ~RelayHolds(L)
+    /\ proc = "alive" /\ rs = "check_permission"
+    /\ rec[1] /\ dec[1] = "deny" /\ ack[1] /\ h[1] = "e" /\ ph[1] = 1
+B21MixedAckedLiveUnreachable == ~B21MixedAckedLive
+B21MixedAckedLiveHeld == B21MixedAckedLive => RelayHolds(1) /\ AnyRelayHolds
+
+\* Reproduce the submitted counterexample with real lifecycle/relay and
+\* pane-reader actions. The full Spec remains the integration obligation.
+B21MixedNext ==
+    \/ C(SessionStart)
+    \/ E(TurnStart \/ HX(1) \/ StraySend \/ OrcBlindAct(1))
+    \/ P(Ask(1) \/ Tick(1) \/ HP(1) \/ HD(1) \/ HE(1) \/ OrcRead(1))
+B21MixedSpec == Init /\ [][B21MixedNext]_vars
 =============================================================================

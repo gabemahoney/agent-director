@@ -3,7 +3,7 @@
 # job-ids.txt) when it reaches a terminal state, with its JOB-VERDICT. Exits when all are terminal.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-JS=/home/horde/projects/horde_admin/job-scheduler/bin/jobsched
+JS=/home/horde/projects/sysadmin-project/box_admin_dev/box_admin_horde/job-scheduler/bin/jobsched
 gate=$(sed -n '/^# Gate set/,$p' "$HERE/submit-order.txt" | grep -v '^#' | cut -f1)
 declare -A seen
 total=$(echo "$gate" | grep -c .)

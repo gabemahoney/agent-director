@@ -3,7 +3,7 @@
 # Exits when every job is terminal.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-JS=/home/horde/projects/horde_admin/job-scheduler/bin/jobsched
+JS=/home/horde/projects/sysadmin-project/box_admin_dev/box_admin_horde/job-scheduler/bin/jobsched
 declare -A seen
 total=$(grep -c . "$HERE/job-ids.txt")
 while true; do
