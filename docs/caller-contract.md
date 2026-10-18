@@ -164,6 +164,25 @@ admission; `allow_pending` bypasses none of these checks. Transport initializati
 does not establish native model consumption. See
 [guidance delivery](hooks.md#what-agent-director-help-actually-outputs).
 
+Cursor shell CLI access requires the sandbox to permit the AD executable,
+selected store and tmux socket. Codex's sandbox settings in
+[caller setup](usage.md#drive-a-spawn-from-another-agent) do not establish Cursor
+shell reachability. Native Cursor shell reachability and Cursor-originated tool
+use remain unverified; the supported managed MCP setup uses explicit ACP stdio
+routing, without relying on ambient environment inheritance or a policy bypass.
+
+Recreating an ordinary external CLI/MCP caller leaves the managed gateway,
+runtime and current conversation running. Replacing the actual MCP process
+configured for a Cursor conversation is a separate operation: while its launch
+binding remains current, it can initialize again from the same registration and
+make useful tool calls without restarting the gateway or runtime, changing the
+conversation or resetting its history. A replacement after the original setup
+deadline cannot acknowledge a later setup attempt. Retired launch registrations
+do not authorize a new launch. This is distinct from `pause` and `resume`, which
+end and relaunch the managed runtime. Independently launched AD children retain
+their own rows and lifetimes. Native Cursor process replacement and continuation
+remain unverified.
+
 `resume` accepts only `instance_id` (`--instance-id` on the CLI) for an
 `ended` or `missing` Cursor row. It loads only the latest durably reported
 session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).

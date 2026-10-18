@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
@@ -478,28 +479,54 @@ type cursorFailureDiagnostics struct {
 	peer       cursorfix.Runtime
 	id, home   string
 	operations []string
+	root       string
+	captured   bool
 }
 
 func (d *cursorFailureDiagnostics) record(operation string, started time.Time, result any, err error) {
 	if raw, ok := result.([]byte); ok {
 		result = string(raw)
 	}
-	d.operations = append(d.operations, fmt.Sprintf("start=%s end=%s elapsed=%s operation=%s result=%v error=%v", started.Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), time.Since(started), operation, result, err))
+	d.operations = append(d.operations, fmt.Sprintf("start=%s end=%s elapsed=%s operation=%s result=%#v error=%v error_detail=%#v", started.Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), time.Since(started), operation, result, err, err))
 }
 
 func (d *cursorFailureDiagnostics) capture() {
 	if !d.t.Failed() {
 		return
 	}
+	d.captureNow()
+}
+
+func (d *cursorFailureDiagnostics) captureNow() {
+	if d.captured {
+		return
+	}
+	d.captured = true
 	// This repository-mounted ignored directory survives sandbox and TempDir cleanup.
 	root := filepath.Join("..", "..", "tmpbin")
+	if d.root != "" {
+		root = d.root
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		d.t.Logf("FAILURE CAPTURE ERROR creating artifact root: %v", err)
+		return
+	}
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		d.t.Logf("FAILURE CAPTURE ERROR unsafe artifact root %s: %v", root, err)
+		return
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		d.t.Logf("FAILURE CAPTURE ERROR protecting artifact root: %v", err)
 		return
 	}
 	dir, err := os.MkdirTemp(root, "realtmux-failure-")
 	if err != nil {
 		d.t.Logf("FAILURE CAPTURE ERROR creating artifact directory: %v", err)
+		return
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		d.t.Logf("FAILURE CAPTURE ERROR protecting artifact directory: %v", err)
 		return
 	}
 	d.t.Logf("failure evidence before cleanup: %s", dir)
@@ -512,17 +539,28 @@ func (d *cursorFailureDiagnostics) capture() {
 	}
 	write := func(name string, raw []byte) { note("write "+name, os.WriteFile(filepath.Join(dir, name), raw, 0600)) }
 	write("operations.txt", []byte(fmt.Sprintf("test=%s instance=%s capture=%s\n%s\n", d.t.Name(), d.id, time.Now().Format(time.RFC3339Nano), strings.Join(d.operations, "\n"))))
-	read := func(name, source string) {
+	read := func(name, source string) []byte {
 		// Explicit files only; never traverse HOME, native history or private config trees.
 		if slices.Contains(strings.Split(filepath.Clean(source), string(os.PathSeparator)), ".claude") {
 			note("read "+name, fmt.Errorf("excluded path component"))
-			return
+			return nil
+		}
+		info, err := os.Lstat(source)
+		if err != nil {
+			note("read "+name, err)
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			note("read "+name, fmt.Errorf("not a regular owned fixture file: %s", source))
+			return nil
 		}
 		raw, err := os.ReadFile(source)
 		note("read "+name, err)
 		if err == nil {
 			write(name, raw)
+			return raw
 		}
+		return nil
 	}
 	pane, paneErr := d.f.API.ReadPane(api.ReadPaneParams{InstanceID: d.id, NLines: 1000})
 	write("pane.txt", []byte(fmt.Sprintf("pane=%+v\nread_error=%v\n", pane, paneErr)))
@@ -530,10 +568,30 @@ func (d *cursorFailureDiagnostics) capture() {
 	for _, file := range []struct{ name, source string }{
 		{"peer-received.jsonl", d.peer.Trace}, {"peer-sent.jsonl", d.peer.Sent},
 		{"peer-raw", d.peer.Raw}, {"peer-observer", d.peer.Observer},
-		{"peer-scenario", d.peer.Scenario}, {"peer-pid", d.peer.PID},
+		{"peer-scenario", d.peer.Scenario}, {"peer-mcp-control.json", d.peer.MCPControl},
 		{"trail.jsonl", filepath.Join(d.home, ".config", "agent-director", "ad-trail.jsonl")},
+		{"hook-errors.log", filepath.Join(d.home, ".config", "agent-director", "errors.log")},
 	} {
 		read(file.name, file.source)
+	}
+	peerPID := read("peer-pid", d.peer.PID)
+	peerMCPTrace := read("peer-mcp.jsonl", d.peer.MCPTrace)
+	// Only identities in this synthetic fixture's own files or rows are probed.
+	pids := map[int]bool{}
+	addPID := func(value any) {
+		pid := 0
+		if _, err := fmt.Sscan(fmt.Sprint(value), &pid); err == nil && pid > 0 {
+			pids[pid] = true
+		}
+	}
+	addPID(string(peerPID))
+	for _, line := range bytes.Split(peerMCPTrace, []byte("\n")) {
+		var event struct {
+			PID int `json:"pid"`
+		}
+		if json.Unmarshal(line, &event) == nil {
+			addPID(event.PID)
+		}
 	}
 	var stacks bytes.Buffer
 	note("goroutine stacks", pprof.Lookup("goroutine").WriteTo(&stacks, 2))
@@ -545,7 +603,11 @@ func (d *cursorFailureDiagnostics) capture() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		for _, table := range []string{"spawns", "cursor_runtimes", "permission_requests", "session_history"} {
-			rows, err := db.QueryContext(ctx, "SELECT * FROM "+table)
+			key := "instance_id"
+			if table == "cursor_runtimes" {
+				key = "bound_instance_id"
+			}
+			rows, err := db.QueryContext(ctx, "SELECT * FROM "+table+" WHERE "+key+" = ?", d.id)
 			note("query "+table, err)
 			if err != nil {
 				continue
@@ -568,6 +630,9 @@ func (d *cursorFailureDiagnostics) capture() {
 						record[key] = values[i]
 					}
 					records = append(records, record)
+					for _, key := range []string{"pid", "pane_pid", "tmux_server_pid", "bound_gateway_pid", "bound_runtime_pid"} {
+						addPID(record[key])
+					}
 				}
 			}
 			note("iterate "+table, rows.Err())
@@ -576,12 +641,14 @@ func (d *cursorFailureDiagnostics) capture() {
 			note("encode "+table, err)
 			if err == nil {
 				write("sql-"+table+".json", raw)
+				d.t.Logf("failure snapshot instance=%s table=%s rows=%d artifact=%s", d.id, table, len(records), filepath.Join(dir, "sql-"+table+".json"))
 			}
 			if table == "spawns" {
 				for _, row := range records {
 					if row["instance_id"] == d.id {
 						if path, ok := row["jsonl_path"].(string); ok && path != "" {
-							relative, err := filepath.Rel(d.home, path)
+							transcriptRoot := filepath.Join(d.home, ".config", "agent-director", "cursor-transcripts")
+							relative, err := filepath.Rel(transcriptRoot, path)
 							if err != nil {
 								note("transcript path", err)
 							} else if relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
@@ -598,5 +665,11 @@ func (d *cursorFailureDiagnostics) capture() {
 		}
 		note("close synthetic SQL", db.Close())
 	}
+	var identities []string
+	for pid := range pids {
+		start, alive, known := probe.NewProcChecker().StartTime(pid)
+		identities = append(identities, fmt.Sprintf("pid=%d observed_start=%s alive=%t known=%t state=%s", pid, start, alive, known, procState(pid)))
+	}
+	write("process-identities.txt", []byte(strings.Join(identities, "\n")+"\n"))
 	write("capture-errors.txt", []byte(strings.Join(captureErrors, "\n")+"\n"))
 }

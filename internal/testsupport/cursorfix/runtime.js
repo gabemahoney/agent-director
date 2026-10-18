@@ -51,29 +51,44 @@ const input = readline.createInterface({input:process.stdin});
 let pendingScenario = null;
 let newCount = 0;
 let mcpAttempt = 0;
+let configuredMCP = null;
+let controlBusy = false;
+let lastControl = '';
 function mcpEvent(event) {
  if(SETTINGS.mcpTrace) fs.appendFileSync(SETTINGS.mcpTrace,JSON.stringify(event)+'\n');
 }
-async function initializeMCP(frame, scripted) {
- const attempt=++mcpAttempt;
- const servers=frame.params?.mcpServers || [];
- mcpEvent({event:'registration',attempt,method:frame.method,servers});
- for(const server of servers) {
-  const env={...process.env,...scripted?.mcpAmbientEnv,...Object.fromEntries(server.env.map(entry=>[entry.name,entry.value]))};
+async function startMCP(server, env, scripted, attempt) {
   const child=require('child_process').spawn(server.command,server.args,{env,stdio:['pipe','pipe','pipe']});
   const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
-  mcpEvent({event:'started',attempt,pid:child.pid,start:stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]});
+  const start=stat.slice(stat.lastIndexOf(')')+2).split(' ')[19];
+  mcpEvent({event:'started',attempt,pid:child.pid,start});
   child.stderr.on('data',raw=>mcpEvent({event:'stderr',attempt,text:String(raw)}));
   child.on('exit',(code,signal)=>mcpEvent({event:'exit',attempt,pid:child.pid,code,signal}));
   child.on('error',err=>mcpEvent({event:'error',attempt,message:err.message}));
   const lines=readline.createInterface({input:child.stdout});
-  const id='cursor-mcp-'+attempt;
-  const response=await new Promise((resolve,reject)=>{
-   lines.once('line',line=>{try{resolve(JSON.parse(line));}catch(err){reject(err);}});
-   child.once('exit',()=>reject(Error('MCP exited before initialize response')));
-   child.stdin.on('error',reject);
-   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'cursorfix',version:'1'}}})+'\n',err=>mcpEvent({event:'initialize_written',attempt,error:err?.message}));
+  let serial=0;
+  const pending=new Map();
+  lines.on('line',line=>{
+   try {
+    const reply=JSON.parse(line), waiter=pending.get(reply.id);
+    if(!waiter) throw Error('uncorrelated MCP response');
+    pending.delete(reply.id); waiter.resolve(reply);
+   } catch(err) {for(const waiter of pending.values()) waiter.reject(err);pending.clear();}
   });
+  child.on('exit',()=>{for(const waiter of pending.values()) waiter.reject(Error('MCP exited before response'));pending.clear();});
+  child.stdin.on('error',err=>{for(const waiter of pending.values()) waiter.reject(err);pending.clear();});
+  function request(id,method,params) {
+   return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{pending.delete(id);reject(Error('MCP response deadline'));},10000);
+    pending.set(id,{resolve:r=>{clearTimeout(timer);resolve(r);},reject:e=>{clearTimeout(timer);reject(e);}});
+    child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n',err=>{
+     if(method==='initialize') mcpEvent({event:'initialize_written',attempt,error:err?.message});
+     if(err) {const waiter=pending.get(id);pending.delete(id);waiter?.reject(err);}
+    });
+   });
+  }
+  const id='cursor-mcp-'+attempt;
+  const response=await request(id,'initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'cursorfix',version:'1'}});
   mcpEvent({event:'response',attempt,response});
   if(response.id!==id || response.error || response.result?.protocolVersion!=='2024-11-05' || typeof response.result?.instructions!=='string' || (scripted?.mcpExpectedInstructions && response.result.instructions!==scripted.mcpExpectedInstructions)) throw Error('invalid MCP correlated guidance response');
   if(scripted?.mcpWaitAttempt===attempt) while(!fs.existsSync(SETTINGS.mcpRelease)) await new Promise(r=>setTimeout(r,10));
@@ -81,18 +96,53 @@ async function initializeMCP(frame, scripted) {
    child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
    mcpEvent({event:'notification',attempt});
   }
-  for(const [index,call] of (scripted?.mcpCalls || []).entries()) {
-   const callID=id+'-tool-'+index;
-   const result=await new Promise((resolve,reject)=>{
-    lines.once('line',line=>{try{resolve(JSON.parse(line));}catch(err){reject(err);}});
-    child.once('exit',()=>reject(Error('MCP exited before tool response')));
-    child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:callID,method:'tools/call',params:call})+'\n');
-   });
-   if(result.id!==callID || result.error) throw Error('invalid MCP tool response');
-   mcpEvent({event:'tool_response',attempt,call,response:result});
-  }
+  return {child,start,attempt,server,env,scripted,async calls(calls,control) {
+   for(const call of calls) {
+    const callID=id+'-tool-'+serial++;
+    const result=await request(callID,'tools/call',call);
+    if(result.id!==callID || result.error) throw Error('invalid MCP tool response');
+    mcpEvent({event:'tool_response',attempt,control,call,response:result});
+   }
+  }};
+}
+async function initializeMCP(frame, scripted) {
+ const attempt=++mcpAttempt;
+ const servers=frame.params?.mcpServers || [];
+ mcpEvent({event:'registration',attempt,method:frame.method,servers});
+ for(const server of servers) {
+  const env={...process.env,...scripted?.mcpAmbientEnv,...Object.fromEntries(server.env.map(entry=>[entry.name,entry.value]))};
+  const handle=await startMCP(server,env,scripted,attempt);
+  await handle.calls(scripted?.mcpCalls || []);
+  configuredMCP=handle;
  }
 }
+setInterval(async()=>{
+ if(controlBusy || !SETTINGS.mcpControl || !fs.existsSync(SETTINGS.mcpControl)) return;
+ const command=JSON.parse(fs.readFileSync(SETTINGS.mcpControl,'utf8'));
+ if(command.id===lastControl) return;
+ lastControl=command.id; controlBusy=true;
+ try {
+  let handle=configuredMCP;
+  if(!handle) throw Error('no configured MCP handle');
+  if(command.operation==='stop') {
+   await new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>reject(Error('configured MCP stop deadline')),2000);
+    handle.child.once('exit',()=>{clearTimeout(timer);resolve();});
+    if(!handle.child.kill('SIGKILL')) {clearTimeout(timer);reject(Error('configured MCP not running'));}
+   });
+   mcpEvent({event:'stopped',attempt:handle.attempt,pid:handle.child.pid,start:handle.start,control:command.id});
+  } else if(command.operation==='restart') {
+   if(handle.child.exitCode===null && handle.child.signalCode===null) throw Error('configured MCP must exit before restart');
+   handle=await startMCP(handle.server,handle.env,handle.scripted,++mcpAttempt);
+   configuredMCP=handle;
+   await handle.calls(command.calls || [],command.id);
+  } else if(command.operation==='calls') {
+   await handle.calls(command.calls || [],command.id);
+  } else throw Error('unknown MCP operation');
+  mcpEvent({event:'control_result',control:command.id,attempt:handle.attempt,pid:handle.child.pid,start:handle.start});
+ } catch(err) {mcpEvent({event:'control_result',control:command.id,error:err.stack});}
+ finally {controlBusy=false;}
+},10);
 function scenario() {
  if(!fs.existsSync(SETTINGS.scenario)) return null;
  const raw=fs.readFileSync(SETTINGS.scenario,'utf8');

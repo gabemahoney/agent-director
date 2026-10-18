@@ -51,6 +51,13 @@ current AD guidance through a session-scoped stdio MCP registration. With it
 off, no guidance server is registered. Delivery and compaction limits are in
 [Hooks](hooks.md#what-agent-director-help-actually-outputs).
 
+This is the supported managed Cursor MCP path: AD supplies the registration
+through ACP session setup with explicit routing. It requires no dashboard MCP
+registration or native-home configuration edit. Caller workflows are in
+[Usage](usage.md#drive-a-spawn-from-another-agent); shell reachability and process
+replacement limits are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
+
 Cursor pre-trust never reports `ok`: `no_pre_trust` yields `skipped`, otherwise
 the unsupported attempt yields `failed` with a warning and launch continues.
 No validated Cursor trust grant is made. Each spawn or reuse saves its own

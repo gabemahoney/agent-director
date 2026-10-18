@@ -302,6 +302,19 @@ configuration do not. A comma-bearing socket is refused rather than ambiguously
 encoded in `TMUX`. This routing prerequisite grants no additional tool permission
 or lifecycle authority; real caller/child/restart acceptance is separate.
 
+Public CLI and ordinary stdio MCP clients MUST reuse `clisetup.APIOptions`
+for explicit global overrides. `--home` applies before config/default-path
+resolution; arbitrary override stores require `--store-path`.
+`AGENT_DIRECTOR_CURSOR_STORE_PATH` carries the actual opened store to the
+gateway and direct reporting hooks, not generic public CLI configuration.
+Fresh/reuse composition and resume's pending transition MUST reuse
+`spawn.ParentIDFromEnv` for association. That text and public `get`/`list --parent`
+are not caller authentication or protected launch authority. Fresh launches
+select the intended caller socket; resume MUST reuse `ResolveRowLaunchSocket`
+and finished-id reuse its existing recorded-socket selection before ambient
+fallback. Wrappers around opened stores must forward `Path()` so resume keeps
+the actual override store.
+
 `cursorMCPScope` in the CLI MUST remain the pure preflight before `setupClient`
 opens a store for a privately scoped `serve`. It requires exact explicit routing
 and no creation, so malformed scope cannot open or create an ambient fallback
@@ -324,6 +337,18 @@ This socket carries no guidance payload. Closing/replacing an observation also
 closes a stalled accepted receipt connection. An older server's receipt cannot
 qualify another attempt; a restart after the receipt deadline cannot retroactively
 admit input.
+
+Ordinary external caller recreation and replacement of the actual configured
+runtime-descendant MCP process are separate boundaries. Under the still-current
+binding, the latter reuses the exact registration and standard initialization,
+including after the original observer deadline. It preserves gateway/runtime
+PID and start, token/life, connection/pipes, current conversation, protected
+transcript and parent history; subsequent prompt records may append normally.
+It neither certifies a new setup attempt nor relaxes protected ownership or
+prompt/decision guards. `Scope.Acknowledge` is a no-op after its original
+`Until`; a retired token/life/connection or terminated runtime still refuses
+the registration. Independently AD-spawned children own their rows and runtime
+cleanup; parent association never adopts them as runtime descendants.
 
 `session.go` MUST retain `configureGuidance`/`confirmGuidance` through the existing
 `await` loop, with control, signal, runtime-loss, epoch and deadline supervision.
@@ -909,7 +934,17 @@ initialize response, standard initialized notification and tool responses.
 ordering and deadline cases. The fixture starts the registered command with its
 actual argv and explicit environment and validates canonical instructions; it
 never fabricates the private nonce receipt. Null session parameters remain valid
-for existing protocol-only fixtures. Future guidance cases MUST extend this
+for existing protocol-only fixtures. The peer retains the exact configured
+process handle and captured registration. `Runtime.MCPControl` and `MCPCommand`
+serialize post-readiness useful calls, abrupt stop with bounded actual exit,
+and restart of that same command/argv/environment through the existing standard
+exchange. New attempts retain correlated replies and PID/start observations;
+they do not amend scope or manufacture receipts. `Runtime.Settings()` exposes
+isolated per-child files through explicit `AD_CURSOR_FIX_SETTINGS` selection
+while sharing one stable fixture executable. Child scenarios, traces, runtime
+PIDs and release/control files remain independent; tests MUST reuse this
+selection rather than rewrite the running parent's config or executable.
+Future guidance and configured-process restart cases MUST extend this
 shared peer and its existing session/load/rotation helpers. In-process gateway
 tests use private `Options.mcpExecutable` only because their own executable is a
 Go test binary; production uses the actual gateway executable.

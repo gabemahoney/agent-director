@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/cursormcp"
 	"github.com/gabemahoney/agent-director/internal/helptext"
+	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/clibuild"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
@@ -117,11 +120,85 @@ func TestCursorGuidanceActualScopedToolsIgnoreAmbientStoreAndSocket(t *testing.T
 		t.Fatalf("decoy changed: %+v %v", retained, err)
 	}
 	child, err := e.s.GetSpawn("scoped-child")
-	if err != nil || child.ParentID != row.InstanceID {
+	if err != nil || child.ParentID != row.InstanceID || child.Identity.Socket != row.Identity.Socket {
 		t.Fatalf("actual dispatcher parent=%+v %v", child, err)
 	}
 	if _, err := apitest.ReadSpawnColumns(decoy, "scoped-child"); err == nil {
 		t.Fatal("scoped child reached ambient store")
+	}
+	// Follow the public two-command example literally, substituting only its store path.
+	const example = `agent-director --home "$HOME" --store-path /srv/ad/state.db spawn --cwd "$PWD" --agent cursor
+agent-director --home "$HOME" --store-path /srv/ad/state.db list --parent "$AGENT_DIRECTOR_INSTANCE_ID"`
+	usage, err := os.ReadFile(filepath.Join("..", "..", "docs", "usage.md"))
+	if err != nil || !strings.Contains(string(usage), "```sh\n"+example+"\n```") {
+		t.Fatalf("public CLI example changed; recheck its literal follow: %v", err)
+	}
+	cliDir := t.TempDir()
+	if err := os.Symlink(executable, filepath.Join(cliDir, "agent-director")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-e", "-c", strings.ReplaceAll(example, "/srv/ad/state.db", "'"+strings.ReplaceAll(e.s.Path(), "'", "'\"'\"'")+"'"))
+	cmd.Dir = row.CWD
+	cmd.Env = append(os.Environ(), "PATH="+cliDir+":"+os.Getenv("PATH"), "HOME="+home, "PWD="+row.CWD, "AGENT_DIRECTOR_INSTANCE_ID="+row.InstanceID, "AGENT_DIRECTOR_CURSOR_STORE_PATH="+decoy, "TMUX="+fmt.Sprintf("%s,%d,0", row.Identity.Socket, row.Identity.ServerPID), "TMUX_TMPDIR="+t.TempDir())
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("literal CLI override route: %v stdout=%s stderr=%s", err, &stdout, &stderr)
+	}
+	decoder := json.NewDecoder(&stdout)
+	var spawned struct {
+		InstanceID string `json:"instance_id"`
+	}
+	if err := decoder.Decode(&spawned); err != nil || spawned.InstanceID == "" {
+		t.Fatalf("literal spawn response: %+v %v", spawned, err)
+	}
+	var listed struct {
+		Spawns []struct {
+			InstanceID string `json:"instance_id"`
+			ParentID   string `json:"parent_id"`
+		} `json:"spawns"`
+	}
+	if err := decoder.Decode(&listed); err != nil {
+		t.Fatalf("literal list response: %v", err)
+	}
+	found := false
+	for _, child := range listed.Spawns {
+		if child.ParentID != row.InstanceID {
+			t.Fatalf("list --parent returned unrelated row: %+v", child)
+		}
+		found = found || child.InstanceID == spawned.InstanceID
+	}
+	if !found {
+		t.Fatalf("literal list did not find spawned child %q: %+v", spawned.InstanceID, listed)
+	}
+	cliID := spawned.InstanceID
+	cliChild, err := e.s.GetSpawn(cliID)
+	if err != nil || cliChild.ParentID != row.InstanceID || cliChild.Identity.Socket != row.Identity.Socket || cliChild.CWD != row.CWD || cliChild.Agent != store.AgentCursor {
+		t.Fatalf("CLI persisted child route: %+v %v", cliChild, err)
+	}
+	if !strings.Contains(string(usage), "with `get --instance-id <child-id>` and find associated children with\n`list --parent <parent-id>`.") {
+		t.Fatal("public child inspection instructions changed; recheck their literal follow")
+	}
+	cmd = exec.Command(executable, "--home", home, "--store-path", e.s.Path(), "get", "--instance-id", cliID)
+	cmd.Env = append(os.Environ(), "AGENT_DIRECTOR_CURSOR_STORE_PATH="+decoy)
+	output, err := cmd.Output()
+	var inspected struct {
+		InstanceID string `json:"instance_id"`
+		ParentID   string `json:"parent_id"`
+		Socket     string `json:"tmux_socket"`
+	}
+	if err != nil {
+		t.Fatalf("literal get child: %v", err)
+	}
+	if err := json.Unmarshal(output, &inspected); err != nil || inspected.InstanceID != cliID || inspected.ParentID != row.InstanceID || inspected.Socket != row.Identity.Socket {
+		t.Fatalf("literal get child route: %+v %v", inspected, err)
+	}
+	if _, err := apitest.ReadSpawnColumns(decoy, cliID); err == nil {
+		t.Fatal("explicit CLI child reached decoy private store")
+	}
+	retained, err = apitest.ReadSpawnColumns(decoy, row.InstanceID)
+	if err != nil || retained.SessionID != "decoy-session" {
+		t.Fatalf("CLI changed default-store decoy: %+v %v", retained, err)
 	}
 }
 
@@ -143,6 +220,133 @@ func guidanceCLI(t *testing.T) string {
 		t.Fatal(guidanceBuild.err)
 	}
 	return guidanceBuild.path
+}
+
+func TestCursorGuidanceConfiguredRestartAfterObserverDeadline(t *testing.T) {
+	// Serial: Run owns HOME, signal handlers and the protected runtime fixture.
+	if testing.Short() {
+		t.Skip("actual configured process restart")
+	}
+	c := beginConfiguredCursorSession(t, Options{mcpExecutable: guidanceCLI(t)}, guidanceScenario(t), openTranscript, terminalLoop, func(e *requestEnv) {
+		enableGuidance(t, e)
+		t.Setenv("AD_CURSOR_FIX_SETTINGS", e.runtime.Settings())
+	})
+	c.wait(t, "published ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
+	id := c.e.binding.InstanceID
+	before, err := c.e.s.ReadCursorRuntime(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := c.e.s.GetSpawn(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := c.e.s.ListSessionHistory(id, row.LifeNumber)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := func(id, operation string, calls ...map[string]any) map[string]json.RawMessage {
+		c.e.runtime.MCPCommand(t, id, operation, calls...)
+		var result map[string]json.RawMessage
+		c.wait(t, operation, func() bool {
+			for _, event := range mcpEvents(t, c) {
+				if string(event["event"]) == `"control_result"` && string(event["control"]) == fmt.Sprintf("%q", id) {
+					result = event
+					if len(event["error"]) != 0 {
+						t.Fatalf("configured control failed: %s", event["error"])
+					}
+					return true
+				}
+			}
+			return false
+		})
+		return result
+	}
+	get := map[string]any{"name": "get", "arguments": map[string]any{"instance_id": id}}
+	command("before", "calls", get)
+	var until time.Time
+	for _, event := range mcpEvents(t, c) {
+		if string(event["event"]) != `"registration"` {
+			continue
+		}
+		var servers []cursormcp.Stdio
+		if err := json.Unmarshal(event["servers"], &servers); err != nil {
+			t.Fatal(err)
+		}
+		for _, server := range servers {
+			for _, env := range server.Env {
+				if env.Name == cursormcp.ScopeEnv {
+					var scope cursormcp.Scope
+					if err := json.Unmarshal([]byte(env.Value), &scope); err != nil {
+						t.Fatal(err)
+					}
+					until = scope.Until
+				}
+			}
+		}
+	}
+	if until.IsZero() || time.Until(until) > protocolWait {
+		t.Fatalf("missing original observer bound: %v", until)
+	}
+	if remaining := time.Until(until); remaining > 0 {
+		time.Sleep(remaining)
+	}
+	stopped := command("stop", "stop")
+	var oldPID int
+	json.Unmarshal(stopped["pid"], &oldPID)
+	c.wait(t, "configured child independently gone", func() bool { _, err := os.Stat(fmt.Sprintf("/proc/%d", oldPID)); return os.IsNotExist(err) })
+	replacement := command("replacement", "restart", get)
+	if bytes.Equal(stopped["pid"], replacement["pid"]) {
+		t.Fatal("configured process was not replaced")
+	}
+	if !guidanceEvent(t, c, "response", 2) || !guidanceEvent(t, c, "notification", 2) {
+		t.Fatal("replacement missing standard initialization")
+	}
+	c.keys(t, "useful parent after configured restart\r")
+	c.wait(t, "parent result after restart", func() bool {
+		return bytes.Contains(c.pane.bytes(), []byte("Synthetic reply: useful parent after configured restart"))
+	})
+	c.wait(t, "parent outcome", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
+	after, err := c.e.s.ReadCursorRuntime(id)
+	if err != nil || before != after {
+		t.Fatalf("runtime binding changed: before=%+v after=%+v err=%v", before, after, err)
+	}
+	afterRow, err := c.e.s.GetSpawn(id)
+	if err != nil || row.Identity != afterRow.Identity || row.LifeNumber != afterRow.LifeNumber || row.SessionID != afterRow.SessionID || row.JSONLPath != afterRow.JSONLPath {
+		t.Fatalf("parent identity changed: %+v %v", afterRow, err)
+	}
+	afterHistory, err := c.e.s.ListSessionHistory(id, row.LifeNumber)
+	if err != nil || !reflect.DeepEqual(history, afterHistory) {
+		t.Fatalf("history changed: %+v %v", afterHistory, err)
+	}
+	for _, identity := range []struct {
+		pid   int
+		start string
+	}{{before.GatewayPID, before.GatewayStart}, {before.RuntimePID, before.RuntimeStart}} {
+		start, alive, known := probe.NewProcChecker().StartTime(identity.pid)
+		if !known || !alive || start != identity.start {
+			t.Fatal("parent process identity changed")
+		}
+	}
+	for _, event := range mcpEvents(t, c) {
+		if string(event["event"]) == `"tool_response"` {
+			var response struct {
+				Result struct {
+					IsError bool `json:"isError"`
+					Content []struct {
+						Text string `json:"text"`
+					} `json:"content"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(event["response"], &response); err != nil || response.Result.IsError || len(response.Result.Content) != 1 || !bytes.Contains([]byte(response.Result.Content[0].Text), []byte(id)) {
+				t.Fatalf("useful configured get failed: %s", event["response"])
+			}
+		}
+	}
+	if rotationRecordCount(c, t, "guidance_initialized") != 1 {
+		t.Fatal("restart retroactively certified a setup attempt")
+	}
+	c.stop(t)
 }
 func enableGuidance(t *testing.T, e *requestEnv) {
 	t.Helper()

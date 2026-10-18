@@ -109,8 +109,9 @@ publication and input admission, including latest-session load and every confirm
 `/clear` or `/new`. It adds no user prompt and does not replay the initial prompt.
 See [Settings](settings.md#defaultsinject_help_hook-config) and the
 [delivery and compaction limits](hooks.md#what-agent-director-help-actually-outputs).
-This managed bootstrap does not establish actual Cursor-originated CLI/MCP child
-launches or caller/server restart behavior; those workflows remain unverified.
+Caller setup is in [Drive a Spawn from another agent](#drive-a-spawn-from-another-agent);
+shell access and restart limits are in the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
 
 To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
 then attach on that socket:
@@ -230,8 +231,7 @@ several rows.
 
 ## Drive a Spawn from another agent
 
-An agent that supervises other agents calls agent-director over MCP, whether
-it is a Claude Code or a Codex agent:
+An agent that supervises other agents calls agent-director over MCP:
 
 - **A Claude Code caller:** install with `--register-mcp`. The verbs then appear
   as `mcp__agent-director__spawn`, `mcp__agent-director__send_keys`, etc.; `hook`,
@@ -243,11 +243,36 @@ it is a Claude Code or a Codex agent:
   folder the caller runs in. Codex names the tools `mcp__<server>__<tool>`, with
   `<server>` the name its `config.toml` gives the server, and by default asks
   before each call (see [What is relayed](permissions.md#what-is-relayed)).
+- **A managed Cursor caller:** enable `defaults.inject_help_hook` for the
+  session-scoped ACP stdio MCP setup described in
+  [Cursor launch settings](settings.md#cursor-launch-settings). It supplies the
+  AD tools with explicit home, store, parent id and tmux routing.
 
-A Spawn the caller makes has the caller as its `parent_id` and runs on the
-caller's tmux server.
+A fresh child records `AGENT_DIRECTOR_INSTANCE_ID` from its caller as
+`parent_id` and selects the caller's intended tmux server from `TMUX`, then
+`TMUX_TMPDIR` or the normal per-user default when no `TMUX` socket is present.
+Resume and finished-id reuse prefer the row's recorded socket. Inspect a child
+with `get --instance-id <child-id>` and find associated children with
+`list --parent <parent-id>`. Parent association does not authenticate a caller
+or grant authority over its parent.
 
-MCP always works and is the recommended path for a Codex caller. A Codex
+For shell CLI calls, preserve the caller id and intended tmux selection.
+When using an override store, pass `--store-path` explicitly on every call;
+`--home` selects HOME for configuration and default paths, and does not identify
+an arbitrary override store. For example, from a caller shell with those
+variables available:
+
+```sh
+agent-director --home "$HOME" --store-path /srv/ad/state.db spawn --cwd "$PWD" --agent cursor
+agent-director --home "$HOME" --store-path /srv/ad/state.db list --parent "$AGENT_DIRECTOR_INSTANCE_ID"
+```
+
+Use the actual store path in place of `/srv/ad/state.db`. The private
+`AGENT_DIRECTOR_CURSOR_STORE_PATH` bootstrap variable is not a public CLI store
+override. Cursor shell access depends on its sandbox; see the
+[caller contract](caller-contract.md#cursor-operation-boundaries).
+
+MCP is the recommended path for a Codex caller. A Codex
 agent's own shell reaches agent-director's CLI, and the Go and TypeScript
 clients, only where Codex's sandbox lets it: in Codex's `workspace-write`
 sandbox, with both of these in the folder's `config.toml`, or with full access:
