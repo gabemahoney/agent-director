@@ -178,9 +178,17 @@ runtime and current conversation running. Replacing the actual MCP process
 configured for a Cursor conversation is a separate operation: while its launch
 binding remains current, it can initialize again from the same registration and
 make useful tool calls without restarting the gateway or runtime, changing the
-conversation or resetting its history. A replacement after the original setup
-deadline cannot acknowledge a later setup attempt. Retired launch registrations
-do not authorize a new launch. This is distinct from `pause` and `resume`, which
+conversation or resetting its history. After the original setup deadline, a
+replacement requires a nonempty current protected runtime session matching the
+current row session; `pending` alone does not disqualify a confirmed session.
+Each ownership check has its own fixed allowance of
+`2 × (query timeout + pipe-close wait)` (3.2 seconds at defaults). Transient query timeouts
+or interrupted replies may be checked again within that allowance; retries never
+reset it. Initial ownership and completed initialization are checked independently,
+so waiting between them does not consume the later check's allowance. A setup
+that starts before its deadline keeps that original deadline throughout.
+Replacement verification cannot acknowledge a later setup attempt. Retired launch
+registrations do not authorize a new launch. This is distinct from `pause` and `resume`, which
 end and relaunch the managed runtime. Independently launched AD children retain
 their own rows and lifetimes. Native Cursor process replacement and continuation
 remain unverified.

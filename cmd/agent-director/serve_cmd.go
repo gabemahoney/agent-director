@@ -141,6 +141,9 @@ func cursorMCPOptionsContext(ctx context.Context, cfg config.Config, o clisetup.
 	if !cfg.Defaults.InjectHelpHook {
 		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP scope invalid")
 	}
+	// Capture the mode once: an unfinished setup cannot gain replacement
+	// authority merely by running past its original observation deadline.
+	replacement := !time.Now().Before(scope.Until)
 	s, err := store.OpenWithBusyTimeout(scope.StorePath, cfg.Store.EffectiveBusyTimeoutMs())
 	if err != nil {
 		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP store unavailable")
@@ -155,8 +158,15 @@ func cursorMCPOptionsContext(ctx context.Context, cfg config.Config, o clisetup.
 		}
 		s.Close()
 	}
-	verifyOnce := func() error {
+	binding := func() (store.Spawn, store.CursorRuntime, error) {
 		row, b, err := scope.Binding(s)
+		if err == nil && replacement && (b.SessionID == "" || row.SessionID != b.SessionID) {
+			return store.Spawn{}, store.CursorRuntime{}, fmt.Errorf("Cursor MCP session unpublished")
+		}
+		return row, b, err
+	}
+	verifyOnce := func() error {
+		row, b, err := binding()
 		if err != nil {
 			return err
 		}
@@ -166,18 +176,19 @@ func cursorMCPOptionsContext(ctx context.Context, cfg config.Config, o clisetup.
 		if err = cursorhost.VerifyPane(s, row, cfg); err != nil {
 			return err
 		}
-		_, b, err = scope.Binding(s)
+		_, b, err = binding()
 		if err != nil {
 			return err
 		}
 		return cursorhost.VerifyRuntime(b, false)
 	}
-	// A replacement after publication retains one positive check, without
-	// renewing the admission attempt or its observation deadline.
+	// Published replacement checks have only the existing two-query work
+	// allowance. Each protocol check is independently bounded; the original
+	// observation and its acknowledgement deadline are never renewed.
 	verify := func() error {
 		until := scope.Until
-		if !time.Now().Before(until) {
-			until = time.Time{}
+		if replacement {
+			until = time.Now().Add(2 * (cfg.Tmux.EffectiveQueryTimeout() + cfg.Tmux.EffectivePipeCloseWait()))
 		}
 		err := cursorhost.VerifyGuidanceOwnership(ctx, until, verifyOnce)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

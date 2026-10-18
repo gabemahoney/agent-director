@@ -336,7 +336,8 @@ Private guidance admission, acknowledgement and gateway confirmation MUST reuse
 another retry or supervision framework. `VerifyPane` distinguishes unavailable
 evidence (`paneUncertain`) from proven ownership or pane mismatch. Only an actual
 typed lookup or pane-listing timeout or pipe cut permits re-verification, within
-the original absolute setup deadline. `tmux.CallError.QueryInterrupted` uses the
+the original absolute setup deadline or the expired-replacement allowance below.
+`tmux.CallError.QueryInterrupted` uses the
 call kind, timeout failure and private runner-recorded cut provenance; error text,
 `FirstLine`, empty output, malformed output or generic uncertainty cannot grant
 retry eligibility. Partial replies never grant ownership or authority. Proven
@@ -363,9 +364,19 @@ transcript and parent history; subsequent prompt records may append normally.
 It neither certifies a new setup attempt nor relaxes protected ownership or
 prompt/decision guards. `Scope.Acknowledge` is a no-op after its original
 `Until`; a retired token/life/connection or terminated runtime still refuses
-the registration. After expiry each configured-replacement ownership verification
-remains a single positive check, without retries or a new setup budget. Re-verification
-does not replay `initialize`, session new/load, tools or permission actions, nor
+the registration. `cursorMCPOptions` captures setup versus expired-replacement mode
+once at adapter entry. A setup beginning before `Scope.Until` retains that original
+absolute deadline and cannot switch modes after expiry. An already-expired
+replacement additionally requires a nonempty current protected runtime session
+matching the current row session, before and after positive pane evidence. Pending
+state alone does not refuse a confirmed load; session identity remains dynamic.
+Each existing ownership-verification call receives one absolute read-only allowance
+of `2 * (EffectiveQueryTimeout() + EffectivePipeCloseWait())`, 3.2 seconds at
+defaults, bounded by the caller context. Typed timeout/cut retries consume that
+call's allowance without resetting it. Constructor and `Initialized` checks remain
+independent, preserving arbitrary notification delay between them. This allowance
+does not renew `Scope.Until`, the observation or setup/publication authority.
+Re-verification does not replay `initialize`, session new/load, tools or permission actions, nor
 replace the observer nonce. Independently AD-spawned children own their rows and runtime
 cleanup; parent association never adopts them as runtime descendants.
 
@@ -382,7 +393,7 @@ prompt admission remain separate facts. Existing mode confirmation,
 protected recording and prompt/hold/FIFO guards remain mandatory. Initialization
 alone neither commits identity nor releases provisionally held input.
 
-The shared verifier checks cancellation and the original deadline after evidence
+The shared verifier checks cancellation and the applicable absolute deadline after evidence
 returns, rejecting late positive results. Gateway controls, runtime loss, current
 input epoch and publication checks remain authoritative; acknowledgement receipt
 writes are context-gated. Workers abandoned by their caller only read evidence
