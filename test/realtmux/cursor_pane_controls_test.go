@@ -247,6 +247,7 @@ type paneRecord struct {
 		Text        string `json:"text"`
 		Request     string `json:"request_id"`
 		RuntimeGone bool   `json:"runtime_gone"`
+		Intentional bool   `json:"intentional"`
 	} `json:"data"`
 }
 

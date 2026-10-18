@@ -63,7 +63,7 @@ ch_export() {
  mkdir -m 700 -p "$out" || return
  ch_peer_binding || return
  ch_peer_evidence "$out" || return
- for name in canonical-help mcp.jsonl mcp.jsonl.inventory.json scenario trace.jsonl raw peer-mcp.jsonl peer-mcp.jsonl.inventory.json peer-scenario peer-trace.jsonl peer-raw public.json peer-public.json peer-startup.log peer-cleanup.stderr peer-spawn.stderr peer-binding.jsonl peer-tmux-command route-before.json route-after.json mcp-control.json; do
+ for name in canonical-help mcp.jsonl mcp.jsonl.inventory.json scenario trace.jsonl raw commits.jsonl peer-mcp.jsonl peer-mcp.jsonl.inventory.json peer-scenario peer-trace.jsonl peer-raw public.json peer-public.json peer-startup.log peer-cleanup.stderr peer-spawn.stderr peer-binding.jsonl peer-tmux-command route-before.json route-after.json mcp-control.json; do
   if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$out/$name" || return; chmod 600 "$out/$name" || return; fi
  done
  for name in "$case_dir"/child-*; do
@@ -106,10 +106,12 @@ ch_child() {
  local surface=$1 label=$2 settings params child
  child="child-$label-$id"
  ch_known_children+=("$label")
- jq -cn --arg session "$child-session" --rawfile plain "$case_dir/canonical-help" '{sessionId:$session,loadSupport:true,mcpExpectedInstructions:$plain}' > "$case_dir/child-$label-scenario"
- settings=$(jq --arg dir "$case_dir" --arg child_label "$label" '.+{trace:($dir+"/child-"+$child_label+"-trace.jsonl"),pid:($dir+"/child-"+$child_label+"-pid"),scenario:($dir+"/child-"+$child_label+"-scenario"),raw:($dir+"/child-"+$child_label+"-raw"),mcpTrace:($dir+"/child-"+$child_label+"-mcp.jsonl"),mcpControl:($dir+"/child-"+$child_label+"-control.json")}' <<<"$AD_CURSOR_FIX_SETTINGS")
+ if [[ -n ${3:-} ]]; then cp "$3" "$case_dir/child-$label-scenario"; else
+  jq -cn --arg session "$child-session" --rawfile plain "$case_dir/canonical-help" '{sessionId:$session,loadSupport:true,mcpExpectedInstructions:$plain}' > "$case_dir/child-$label-scenario"
+ fi
+ settings=$(jq --arg dir "$case_dir" --arg child_label "$label" '.+{trace:($dir+"/child-"+$child_label+"-trace.jsonl"),pid:($dir+"/child-"+$child_label+"-pid"),scenario:($dir+"/child-"+$child_label+"-scenario"),raw:($dir+"/child-"+$child_label+"-raw"),sent:($dir+"/child-"+$child_label+"-sent.jsonl"),release:($dir+"/child-"+$child_label+"-release"),observer:($dir+"/child-"+$child_label+"-observer"),mcpTrace:($dir+"/child-"+$child_label+"-mcp.jsonl"),mcpControl:($dir+"/child-"+$child_label+"-control.json")}' <<<"$AD_CURSOR_FIX_SETTINGS")
  printf '%s\n' "$settings" > "$case_dir/child-$label-settings.json"
- params=$(jq -cn --arg child "$child" --arg cwd "$case_dir/cwd" --arg settings "$settings" --arg config "$CURSOR_CONFIG_DIR" --arg data "$CURSOR_DATA_DIR" '{instance_id:$child,tmux_session_name:$child,agent:"cursor",cwd:$cwd,no_pre_trust:true,extra_env:{AD_CURSOR_FIX_SETTINGS:$settings,CURSOR_CONFIG_DIR:$config,CURSOR_DATA_DIR:$data}}')
+ params=$(jq -cn --arg child "$child" --arg cwd "$case_dir/cwd" --arg settings "$settings" --arg config "$CURSOR_CONFIG_DIR" --arg data "$CURSOR_DATA_DIR" '{instance_id:$child,tmux_session_name:$child,agent:"cursor",cwd:$cwd,no_pre_trust:true,relay_mode:"on",extra_env:{AD_CURSOR_FIX_SETTINGS:$settings,CURSOR_CONFIG_DIR:$config,CURSOR_DATA_DIR:$data}}')
  if [[ $surface == configured ]]; then
   ch_control "child-$label" calls "$(jq -cn --argjson params "$params" '[{name:"spawn",arguments:$params}]')"
  else
@@ -124,6 +126,137 @@ ch_child() {
  jq -e --arg child "$child" --arg parent "$id" '.instance_id==$child and .parent_id==$parent' "$case_dir/child-$label-get.json" >/dev/null
  jq -e --arg child "$child" 'any(.spawns[]; .instance_id==$child)' "$case_dir/child-$label-list.json" >/dev/null
  pc_assert_stores_untouched
+}
+ch_child_guard() {
+ local child=$1 text=$2
+ if ad send-keys --instance-id "$child" --text "$text" > "$case_dir/child-guard.json" 2> "$case_dir/child-guard.stderr"; then
+  check child.gateway-refusal wait_until ch_child_refused "$child"
+ else
+  jq -e '.err_name=="ErrSendKeysWhileRelayed" or .err_name=="ErrRelayFallenBack" or .err_name=="ErrDialogMaybeOpen"' "$case_dir/child-guard.stderr" >/dev/null
+ fi
+ jq -se --arg text "$text" 'all(.[]|select(.method=="session/prompt"); .params.prompt[0].text!=$text)' "$case_dir/child-composed-trace.jsonl" >/dev/null
+}
+ch_child_refused() { ad read-pane --instance-id "$1" --n-lines 100 | jq -e '.pane|gsub("\n";"")|contains("Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent")' >/dev/null; }
+ch_composed_admitted() { [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id='child-composed-$id';") == 1 ]]; }
+ch_composed_completed() { [[ $(sql "SELECT state FROM spawns WHERE instance_id='child-composed-$id';") == waiting && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == "$1" ]]; }
+ch_composed_held() { [[ $(sql "SELECT count(*) FROM spawns s JOIN permission_requests p ON p.instance_id=s.instance_id WHERE s.instance_id='child-composed-$id' AND s.state='check_permission' AND p.request_token='$1' AND p.proven_gone_at IS NULL AND COALESCE(p.decision,'')='$2' AND (p.delivered_at IS NOT NULL)=$3;") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 2 ]]; }
+ch_composed_identity() {
+ sql -readonly -json "SELECT parent_id,agent,session_id,life_number,launch_token,pane_pid,pane_starttime,jsonl_path,tmux_socket,tmux_server_pid,tmux_server_starttime FROM spawns WHERE instance_id='child-composed-$id'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='child-composed-$id'; SELECT * FROM session_history WHERE instance_id='child-composed-$id';"
+}
+ch_composed_independent() {
+ ch_composed_identity > "$case_dir/child-current.json" || return
+ cmp "$case_dir/child-switch-before.json" "$case_dir/child-current.json" || return
+ [[ $(sql "SELECT count(*) FROM spawns s JOIN cursor_runtimes r ON r.bound_instance_id=s.instance_id WHERE s.instance_id='child-composed-$id' AND s.parent_id='$id' AND s.agent='cursor' AND s.session_id='$child_session' AND s.state NOT IN ('pending','ended','missing') AND r.bound_session_id=s.session_id AND r.bound_launch_token=s.launch_token AND r.bound_life_number=s.life_number AND r.bound_gateway_pid=s.pane_pid AND r.bound_gateway_start=s.pane_starttime AND r.bound_terminated=0;") == 1 ]]
+}
+# Idle proof retires the request; a subsequent hook supplies the lifecycle write.
+ch_composed_proven() {
+ [[ $(sql "SELECT count(*) FROM permission_requests p JOIN spawns s ON s.instance_id=p.instance_id WHERE p.instance_id='child-composed-$id' AND p.request_token='$token' AND p.tool_use_id='$child_tool' AND s.session_id='$child_session' AND p.proven_gone_how='tool_ran' AND p.proven_gone_at>0 AND p.delivered_at>0 AND p.decision='allow';") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 2 ]] || return
+ ch_composed_independent
+}
+ch_composed_reply() { jq -se '[.[]|select(has("method")|not)]|length==1 and .[0].id=="child-permission" and .[0].result.outcome.optionId=="allow-once"' "$case_dir/child-composed-trace.jsonl" >/dev/null; }
+ch_composed() {
+ pc_start
+ check guidance.actual-exchange wait_until ch_exchange "$case_dir/mcp.jsonl" "$id"
+ local child="child-composed-$id" capture="$SOURCE_DIR/internal/testsupport/cursorfix/testdata/authorizations.json" child_session child_tool parent_life token confirm
+ child_session=$(jq -r '.[]|select(.name=="execute")|.params.sessionId' "$capture")
+ child_tool=$(jq -r '.[]|select(.name=="execute")|.params.toolCall.toolCallId' "$capture")
+ jq -cn --arg session "$child_session" --rawfile plain "$case_dir/canonical-help" '{sessionId:$session,mcpExpectedInstructions:$plain}' > "$case_dir/child-initial-scenario"
+ ch_route_snapshot > "$case_dir/route-before.json"
+ cp "$case_dir/route-before.json" "$case_dir/child-parent-initial.json"
+ cp "$path" "$case_dir/child-parent-prefix"
+ ch_child configured composed "$case_dir/child-initial-scenario"
+ check child.ready wait_until ch_child_ready composed
+ ch_route_snapshot > "$case_dir/route-after.json"
+ check child.start-parent-unchanged cmp "$case_dir/route-before.json" "$case_dir/route-after.json"
+ cp "$case_dir/route-after.json" "$case_dir/child-parent-start.json"
+ local connection
+ connection=$(sql "SELECT bound_connection_id FROM cursor_runtimes WHERE bound_instance_id='$id';")
+ jq -cn --arg program "$(command -v agent-director)" --arg parent "$id" --arg store "$STORE" --arg session "$session" --arg connection "$connection" --arg path "$path" '{promptHook:{program:$program,args:["hook","--agent","cursor"],env:{AGENT_DIRECTOR_INSTANCE_ID:$parent,AGENT_DIRECTOR_AGENT:"cursor",AGENT_DIRECTOR_CURSOR_STORE_PATH:$store},payload:{hook_event_name:"UserPromptSubmit",session_id:$session,cursor_connection:$connection,origin:"main",transcript_path:$path}}}' > "$case_dir/child-composed-scenario"
+ ad send-keys --instance-id "$child" --text 'child legitimate work and wrong destination hook' >/dev/null
+ ch_child_path=$(sql "SELECT jsonl_path FROM spawns WHERE instance_id='$child';")
+ check child.first-outcome wait_until ch_composed_completed 1
+ jq -se --argjson runtime "$(sql "SELECT bound_runtime_pid FROM cursor_runtimes WHERE bound_instance_id='$child';")" 'any(.[]; .event=="prompt_hook" and .runtime==$runtime and .status==0)' "$case_dir/child-composed-mcp.jsonl" >/dev/null || { cat "$case_dir/child-composed-mcp.jsonl" >&2; return 1; }
+ check child.different-authority test "$(sql "SELECT count(DISTINCT bound_gateway_pid)||'|'||count(DISTINCT bound_connection_id) FROM cursor_runtimes WHERE bound_instance_id IN ('$id','$child');")" = '2|2'
+ ch_route_snapshot > "$case_dir/route-after.json"
+ check child.report-parent-unchanged cmp "$case_dir/route-before.json" "$case_dir/route-after.json"
+ cp "$case_dir/route-after.json" "$case_dir/child-parent-report.json"
+ cmp "$path" "$case_dir/child-parent-prefix"
+ jq -cn --slurpfile captures "$capture" '($captures[0][]|select(.name=="execute")) as $p | {sessionId:$p.params.sessionId,completeBeforeAnswers:true,waitForAfterAnswersRelease:true,requests:[{jsonrpc:"2.0",id:"child-permission",method:$p.method,params:$p.params}],afterAnswers:[{jsonrpc:"2.0",method:"session/update",params:{sessionId:$p.params.sessionId,update:{sessionUpdate:"tool_call_update",toolCallId:$p.params.toolCall.toolCallId,status:"completed",rawOutput:{exitCode:0,stdout:"synthetic child execution",stderr:""}}}}]}' > "$case_dir/child-composed-scenario"
+ relay_observe
+ cp "$case_dir/observer" "$case_dir/child-composed-observer"
+ ad send-keys --instance-id "$child" --text 'held child across parent transition' >/dev/null
+ check child.permission-admitted wait_until ch_composed_admitted
+ token=$(sql "SELECT request_token FROM permission_requests WHERE instance_id='$child';")
+ check child.completed-turn-held wait_until ch_composed_held "$token" '' 0
+ ad get-permission --request-token "$token" > "$case_dir/child-permission-before.json"
+ confirm=$(jq -r '.confirm_by' "$case_dir/child-permission-before.json")
+ check child.unknown-origin test "$(sql "SELECT main_turn_end_eligible||'|'||COALESCE(agent_id,'') FROM permission_requests WHERE instance_id='$child';")" = '0|'
+ jq -e --arg token "$token" --slurpfile captures "$capture" '.request_token==$token and .decision==null and .delivery=="not_confirmed" and .confirm_by!=null and (.tool_input|fromjson)==($captures[0][]|select(.name=="execute")|.params)' "$case_dir/child-permission-before.json" >/dev/null
+ ad get --instance-id "$child" | jq -e --arg token "$token" 'any(.permission_requests[];.request_token==$token)' >/dev/null
+ if ad decide --instance-id "$id" --request-token "$token" --decision allow > "$case_dir/child-parent-decide.json" 2> "$case_dir/child-parent-decide.stderr"; then return 1; fi
+ jq -e '.err_name=="ErrNoOpenPermissionRequest"' "$case_dir/child-parent-decide.stderr" >/dev/null
+ ad send-keys --instance-id "$id" --text 'useful parent while child held' >/dev/null
+ check parent.useful wait_until pc_ready 1
+ check child.parent-work-hold ch_composed_held "$token" '' 0
+ ch_child_guard "$child" 'parent work cannot release child'
+ ad list-subagents --instance-id "$id" | jq -e '.tracked==false and .subagents==[]' >/dev/null
+ ch_composed_identity > "$case_dir/child-switch-before.json"
+ parent_life=$(sql "SELECT life_number FROM spawns WHERE instance_id='$id';")
+ ad pause --instance-id "$id" >/dev/null
+ check parent.runtime-death wait_gone "$runtime"
+ check parent.gateway-death wait_gone "$gateway"
+ printf '#!/bin/sh\nexec sleep 300\n' > "$case_dir/codex-standin"
+ chmod 700 "$case_dir/codex-standin"
+ sed -i "/^cursor_path = /a codex_path = \"$case_dir/codex-standin\"" "$HOME/.config/agent-director/config.toml"
+ ad spawn --instance-id "$id" --agent codex --cwd "$case_dir/cwd" --no-pre-trust --reuse-finished >/dev/null
+ check parent.legitimate-switch test "$(sql "SELECT agent||'|'||life_number||'|'||COALESCE(session_id,'') FROM spawns WHERE instance_id='$id';")" = "codex|$((parent_life+1))|"
+ ad list-subagents --instance-id "$id" | jq -e '.tracked==false and .subagents==[]' >/dev/null
+ ad get --instance-id "$child" | jq -e --arg parent "$id" '.parent_id==$parent' >/dev/null
+ ad list --parent "$id" | jq -e --arg child "$child" 'any(.spawns[];.instance_id==$child)' >/dev/null
+ ch_composed_identity > "$case_dir/child-switch-after.json"
+ cmp "$case_dir/child-switch-before.json" "$case_dir/child-switch-after.json"
+ ad get-permission --request-token "$token" > "$case_dir/child-permission-after.json"
+ jq -e --arg confirm "$confirm" '.confirm_by==$confirm and .decision==null and .delivery=="not_confirmed"' "$case_dir/child-permission-after.json" >/dev/null
+ check child.no-parent-proof test "$(sql "SELECT COALESCE(proven_gone_at,'')||'|'||COALESCE(delivered_at,'') FROM permission_requests WHERE request_token='$token';")" = '|'
+ check child.parent-switch-hold ch_composed_held "$token" '' 0
+ ch_child_guard "$child" 'parent switch cannot release child'
+ ad decide --instance-id "$child" --request-token "$token" --decision allow >/dev/null
+ check child.actual-answer wait_until ch_composed_reply
+ jq -se --arg token "$token" 'any(.[][];.request_token==$token and .decision=="allow" and .delivered_at!=null)' "$case_dir/commits.jsonl" >/dev/null
+ ad get-permission --request-token "$token" | jq -e --arg confirm "$confirm" '.confirm_by==$confirm and .delivery=="delivered" and .decision=="allow"' >/dev/null
+ check child.delivered-completed-turn-held ch_composed_held "$token" allow 1
+ ch_child_guard "$child" 'delivered alone cannot release child'
+ ch_route_snapshot > "$case_dir/child-parent-proof-before.json"
+ touch "$case_dir/child-composed-release"
+ check child.correlated-proof wait_until ch_composed_proven
+ ad get-permission --request-token "$token" | jq -e --arg token "$token" --arg confirm "$confirm" '.request_token==$token and .confirm_by==$confirm and .delivery=="delivered" and .decision=="allow"' >/dev/null
+ ch_route_snapshot > "$case_dir/child-parent-followup-before.json"
+ cmp "$case_dir/child-parent-proof-before.json" "$case_dir/child-parent-followup-before.json"
+ printf '{}\n' > "$case_dir/child-composed-scenario"
+ ad send-keys --instance-id "$child" --text 'useful child after parent life switch' >/dev/null
+ check child.post-switch-useful wait_until ch_composed_completed 3
+ ad read-pane --instance-id "$child" --n-lines 100 | jq -e '.pane|contains("Synthetic reply: useful child after parent life switch")' >/dev/null
+ check child.post-followup-independent ch_composed_independent
+ ad get --instance-id "$child" | jq -e --arg parent "$id" '.parent_id==$parent' >/dev/null
+ ad list --parent "$id" | jq -e --arg child "$child" 'any(.spawns[];.instance_id==$child)' >/dev/null
+ ch_route_snapshot > "$case_dir/child-parent-followup-after.json"
+ cmp "$case_dir/child-parent-followup-before.json" "$case_dir/child-parent-followup-after.json"
+ ch_route_snapshot > "$case_dir/route-before.json"
+ sql -readonly -json "SELECT * FROM cursor_runtimes WHERE bound_instance_id='$child';" > "$case_dir/child-end-binding-before.json"
+ ch_child_retire composed
+ check child.end-state test "$(sql "SELECT state FROM spawns WHERE instance_id='$child';")" = ended
+ check child.end-timestamp test "$(sql "SELECT ended_at IS NOT NULL FROM spawns WHERE instance_id='$child';")" = 1
+ sql -readonly -json "SELECT * FROM cursor_runtimes WHERE bound_instance_id='$child';" > "$case_dir/child-end-binding-after.json"
+ check child.end-runtime jq -e --slurpfile before "$case_dir/child-end-binding-before.json" 'length==1 and ($before[0]|length)==1 and $before[0][0].bound_terminated==0 and .==($before[0]|map(.bound_terminated=1))' "$case_dir/child-end-binding-after.json"
+ check child.end-record jq -se --arg child "$child" --slurpfile binding "$case_dir/child-end-binding-before.json" '[.[]|select(.kind=="session_end")]|length==1 and .[0].instance_id==$child and .[0].session_id==$binding[0][0].bound_session_id and .[0].launch_token==$binding[0][0].bound_launch_token and .[0].life_number==$binding[0][0].bound_life_number and .[0].connection_id==$binding[0][0].bound_connection_id and .[0].data.intentional==true and .[0].data.runtime_gone==true' "$ch_child_path"
+ check child.end-row-identity test "$(sql "SELECT count(*) FROM spawns s JOIN cursor_runtimes r ON r.bound_instance_id=s.instance_id WHERE s.instance_id='$child' AND s.session_id=r.bound_session_id AND s.launch_token=r.bound_launch_token AND s.life_number=r.bound_life_number AND s.pane_pid=r.bound_gateway_pid AND s.pane_starttime=r.bound_gateway_start;")" = 1
+ ch_route_snapshot > "$case_dir/route-after.json"
+ check child.end-parent-preserved cmp "$case_dir/route-before.json" "$case_dir/route-after.json"
+ local codex_gateway
+ codex_gateway=$(sql "SELECT pane_pid FROM spawns WHERE instance_id='$id';")
+ ad kill --instance-id "$id" | jq -e '.kill_sent==true' >/dev/null
+ check parent.codex-death wait_gone "$codex_gateway"
+ ch_finish CLI "$1" retired
 }
 ch_child_ready() { ad read-pane --instance-id "child-$1-$id" --n-lines 100 | jq -e '.pane|contains("Cursor ready")' >/dev/null; }
 ch_child_resume_ready() {
@@ -321,7 +454,9 @@ ch_finish() {
  local surface=$1
  mapfile -t ch_pids < <(ch_mcp_pids "$case_dir/mcp.jsonl")
  check owned.nonempty-inventory test "${#ch_pids[@]}" -gt 0
- if [[ $surface == CLI ]]; then ad pause --instance-id "$id" >/dev/null; else pc_public "$surface" pause "$(jq -cn --arg id "$id" '{instance_id:$id}')" >/dev/null; fi
+ if [[ ${3:-} != retired ]]; then
+  if [[ $surface == CLI ]]; then ad pause --instance-id "$id" >/dev/null; else pc_public "$surface" pause "$(jq -cn --arg id "$id" '{instance_id:$id}')" >/dev/null; fi
+ fi
  check owned.runtime-death wait_gone "$runtime"
  check owned.gateway-death wait_gone "$gateway"
  for ch_pid in "${ch_pids[@]}"; do check owned.mcp-reaped wait_until ch_reaped "$ch_pid"; done

@@ -33,7 +33,7 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 		t.Fatal(err)
 	}
 	scenario := cursorfix.Scenario{SessionID: "guidance-owned", MCPExpectedInstructions: plain, MCPCalls: []map[string]any{{"name": "list", "arguments": map[string]any{}}}}
-	first, firstRuntime, firstLaunch := newCursorPaneScenario(t, false, "", cursorPaneOptions{InjectHelp: true, Script: &scenario})
+	first, firstRuntime, firstLaunch := newCursorPaneScenario(t, false, "", cursorPaneOptions{InjectHelp: true, Script: &scenario, Relay: "on", Timeout: 20})
 	firstHome := os.Getenv("HOME")
 	second, secondRuntime, secondLaunch := newCursorPaneScenario(t, false, "", cursorPaneOptions{InjectHelp: true, Script: &scenario})
 	secondHome := os.Getenv("HOME")
@@ -167,6 +167,10 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 	defer public.close()
 	public.must("get", map[string]any{"instance_id": firstLaunch.ID})
 	cli := newPaneCaller(t, first, "CLI", bin)
+	var parentPublic api.SpawnRow
+	if err := json.Unmarshal(public.must("get", map[string]any{"instance_id": firstLaunch.ID}), &parentPublic); err != nil {
+		t.Fatal(err)
+	}
 	childRuntimes := map[string]cursorfix.Runtime{}
 	readyChild := func(id, resumeSession string) {
 		var lastPane api.ReadPaneResult
@@ -269,13 +273,16 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 	child := func(surface, control string) spawned {
 		r := cursorfix.New(t)
 		session := newInstanceID("child-session")
+		if control == "child-before" {
+			session = relayCapturedScenario(t).SessionID
+		}
 		r.Configure(t, cursorfix.Scenario{SessionID: session, LoadSupport: true, MCPExpectedInstructions: plain})
 		id := newInstanceID("configured-child")
 		childRuntimes[id] = r
 		childDiagnostics[id] = &cursorFailureDiagnostics{t: t, f: first, peer: r, id: id, home: firstHome, root: captureRoot}
 		// Also retain spawn/route failures before a launch object exists.
 		t.Cleanup(captureFailure)
-		params := map[string]any{"instance_id": id, "agent": "cursor", "cwd": first.CWD, "no_pre_trust": true, "tmux_session_name": id, "extra_env": map[string]string{"AD_CURSOR_FIX_SETTINGS": r.Settings()}}
+		params := map[string]any{"instance_id": id, "agent": "cursor", "cwd": first.CWD, "no_pre_trust": true, "tmux_session_name": id, "relay_mode": "on", "extra_env": map[string]string{"AD_CURSOR_FIX_SETTINGS": r.Settings()}}
 		if surface == "configured" {
 			configured(control, "calls", map[string]any{"name": "spawn", "arguments": params})
 		} else {
@@ -327,7 +334,27 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 		}
 		return launch
 	}
+	assertParentIndependent := func() {
+		t.Helper()
+		got := readRow(t, first.DBPath, firstLaunch.ID)
+		gotBinding, bindingErr := st.ReadCursorRuntime(firstLaunch.ID)
+		gotHistory, historyErr := apitest.ReadSessionHistoryAllLives(first.DBPath, firstLaunch.ID)
+		gotTranscript, transcriptErr := os.ReadFile(parent.JSONLPath.(string))
+		current := public.must("get", map[string]any{"instance_id": firstLaunch.ID})
+		var currentPublic api.SpawnRow
+		if err := json.Unmarshal(current, &currentPublic); err != nil {
+			t.Fatal(err)
+		}
+		if bindingErr != nil || historyErr != nil || transcriptErr != nil || gotBinding != binding || !reflect.DeepEqual(history, gotHistory) || !reflect.DeepEqual(parentPublic.PriorSessions, currentPublic.PriorSessions) || string(gotTranscript) != string(transcript) || got.SessionID != parent.SessionID || got.LaunchToken != parent.LaunchToken || got.LifeNumber != parent.LifeNumber || got.JSONLPath != parent.JSONLPath {
+			t.Fatalf("child changed parent identity/history: row=%+v binding=%+v history=%+v public=%s errors=%v/%v/%v", got, gotBinding, gotHistory, current, bindingErr, historyErr, transcriptErr)
+		}
+	}
 	beforeChild := child("configured", "child-before")
+	assertParentIndependent()
+	childPeer := childRuntimes[beforeChild.ID]
+	assertCursorChildWrongDestination(t, first, st, public, firstLaunch.ID, beforeChild, childPeer, parent, binding, bin)
+	assertParentIndependent()
+	childPeer.Configure(t, cursorfix.Scenario{})
 	cliChild := child("CLI", "cli-child")
 	// Fresh calls selected the parent's server; later resume/reuse must retain it
 	// even with the caller now pointing at the independent foreign server.
@@ -335,6 +362,7 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 	for _, verb := range []string{"resume", "spawn"} {
 		previous := readRow(t, first.DBPath, cliChild.ID)
 		pauseChild(cliChild.ID)
+		assertParentIndependent()
 		params := map[string]any{"instance_id": cliChild.ID}
 		if verb == "spawn" {
 			childRuntimes[cliChild.ID].Configure(t, cursorfix.Scenario{SessionID: newInstanceID("reused-session"), LoadSupport: true, MCPExpectedInstructions: plain})
@@ -436,15 +464,68 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 	if !reflect.DeepEqual(foreignBefore, readRow(t, second.DBPath, firstLaunch.ID)) {
 		t.Fatal("foreign same-id row changed")
 	}
-	// Parent retirement must leave independently AD-launched children useful.
-	public.must("pause", map[string]any{"instance_id": firstLaunch.ID})
+	assertComposedChildIndependent := cursorChildPermissionAcrossParentSwitch(t, first, st, public, cli, firstLaunch, beforeChild, childPeer, parent)
 	for _, launch := range []spawned{beforeChild, afterChild} {
+		wantOutcomes := 1
+		if launch.ID == beforeChild.ID {
+			wantOutcomes = 3
+		}
 		public.send(launch.ID, "independent child after parent retirement")
 		waitFor(t, "child independent continuation", func() bool {
 			pane, err := first.API.ReadPane(api.ReadPaneParams{InstanceID: launch.ID, NLines: 100})
-			return err == nil && strings.Contains(pane.Pane, "Synthetic reply: independent child after parent retirement") && strings.Contains(pane.Pane, "Cursor turn complete") && readRow(t, first.DBPath, launch.ID).State == store.StateWaiting
+			return err == nil && strings.Contains(pane.Pane, "Synthetic reply: independent child after parent retirement") && strings.Contains(pane.Pane, "Cursor turn complete") && paneRecordCount(t, readRow(t, first.DBPath, launch.ID).JSONLPath.(string), "turn_outcome") == wantOutcomes && readRow(t, first.DBPath, launch.ID).State == store.StateWaiting
 		}, func() string { return fmt.Sprint(readRow(t, first.DBPath, launch.ID)) })
+		if launch.ID == beforeChild.ID {
+			assertComposedChildIndependent()
+		}
+		parentBeforeEnd := readRow(t, first.DBPath, firstLaunch.ID)
+		parentHistoryBeforeEnd, err := apitest.ReadSessionHistoryAllLives(first.DBPath, firstLaunch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		childBeforeEnd := readRow(t, first.DBPath, launch.ID)
+		endBinding, err := st.ReadCursorRuntime(launch.ID)
+		if err != nil || endBinding.Terminated {
+			t.Fatalf("child pre-end runtime: child=%s terminated=%t err=%v", launch.ID, endBinding.Terminated, err)
+		}
 		pauseChild(launch.ID)
+		ended := readRow(t, first.DBPath, launch.ID)
+		if ended.State != store.StateEnded {
+			t.Fatalf("child end state: child=%s state=%v", launch.ID, ended.State)
+		}
+		if ended.EndedAt == nil {
+			t.Fatalf("child end timestamp missing: child=%s", launch.ID)
+		}
+		for _, pair := range [][2]any{{ended.SessionID, childBeforeEnd.SessionID}, {ended.LaunchToken, childBeforeEnd.LaunchToken}, {ended.LifeNumber, childBeforeEnd.LifeNumber}, {ended.JSONLPath, childBeforeEnd.JSONLPath}, {ended.PanePID, childBeforeEnd.PanePID}, {ended.PaneStarttime, childBeforeEnd.PaneStarttime}} {
+			if !reflect.DeepEqual(pair[0], pair[1]) {
+				t.Fatalf("child end identity changed: child=%s", launch.ID)
+			}
+		}
+		endRecords := 0
+		for _, record := range paneRecords(t, ended.JSONLPath.(string)) {
+			if record.Kind != "session_end" {
+				continue
+			}
+			endRecords++
+			if !record.Data.Intentional || !record.Data.RuntimeGone || record.Instance != launch.ID || record.Session != endBinding.SessionID || record.Launch != endBinding.Token || record.Life != endBinding.Life || record.Connection != endBinding.Connection {
+				t.Fatalf("child end record authority: child=%s sequence=%d intentional=%t runtime_gone=%t", launch.ID, record.Sequence, record.Data.Intentional, record.Data.RuntimeGone)
+			}
+		}
+		if endRecords != 1 {
+			t.Fatalf("child end record count: child=%s count=%d", launch.ID, endRecords)
+		}
+		endBinding.Terminated = true
+		currentEndBinding, err := st.ReadCursorRuntime(launch.ID)
+		if err != nil || currentEndBinding != endBinding {
+			t.Fatalf("child end runtime identity/termination: child=%s terminated=%t err=%v", launch.ID, currentEndBinding.Terminated, err)
+		}
+		if readRow(t, first.DBPath, firstLaunch.ID) != parentBeforeEnd {
+			t.Fatalf("child end mutated switched parent row: child=%s", launch.ID)
+		}
+		parentHistoryAfterEnd, err := apitest.ReadSessionHistoryAllLives(first.DBPath, firstLaunch.ID)
+		if err != nil || !reflect.DeepEqual(parentHistoryBeforeEnd, parentHistoryAfterEnd) {
+			t.Fatalf("child end mutated switched parent history: child=%s err=%v", launch.ID, err)
+		}
 	}
 	if _, err := second.API.Pause(context.Background(), api.PauseParams{InstanceID: secondLaunch.ID}); err != nil {
 		t.Fatal(err)
@@ -458,4 +539,9 @@ func TestCursorGuidanceTwoStoresTwoSocketsAndOwnedMCPRetirement(t *testing.T) {
 		return err == nil && strings.Contains(pane.Pane, "Synthetic reply: ordinary peer continuation") && strings.Contains(pane.Pane, "Cursor turn complete") && readRow(t, first.DBPath, cliChild.ID).State == store.StateWaiting
 	}, func() string { return fmt.Sprint(readRow(t, first.DBPath, firstLaunch.ID)) })
 	pauseChild(cliChild.ID)
+	codexParent := readRow(t, first.DBPath, firstLaunch.ID)
+	if result, err := first.API.Kill(api.KillParams{InstanceID: firstLaunch.ID}); err != nil || !result.KillSent {
+		t.Fatalf("retire synthetic switched parent: %+v %v", result, err)
+	}
+	waitFor(t, "switched parent process dead before teardown", func() bool { return pidGone(int(codexParent.PanePID.(int64))) }, nil)
 }

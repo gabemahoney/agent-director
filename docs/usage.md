@@ -254,7 +254,10 @@ A fresh child records `AGENT_DIRECTOR_INSTANCE_ID` from its caller as
 Resume and finished-id reuse prefer the row's recorded socket. Inspect a child
 with `get --instance-id <child-id>` and find associated children with
 `list --parent <parent-id>`. Parent association does not authenticate a caller
-or grant authority over its parent.
+or grant report or approval authority over its parent. Each independent AD
+child reports its own session, history and lifecycle; its reports do not replace
+the parent's. These children are separate from
+[native subagent records](#read-an-agents-subagent-records).
 
 For shell CLI calls, preserve the caller id and intended tmux selection.
 When using an override store, pass `--store-path` explicitly on every call;

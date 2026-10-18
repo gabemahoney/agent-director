@@ -1135,8 +1135,46 @@ envelopes. `Authorizations` remains the captured permission/plan factory;
 and publishes `Paused` before blocking the event loop until `Release`.
 `AfterAnswers` and `WaitForRelease` control subsequent correlated updates;
 `CompleteBeforeAnswers` allows a normal turn outcome with requests still
-outstanding. Scripted request scenarios use `SessionID`. These seams provide
-controlled ordering, not policy or ordinary-input queue support.
+outstanding. `WaitForRelease` keeps its unconditional prompt-completion gate.
+The explicit private `WaitForAfterAnswersRelease` selector instead gates
+`AfterAnswers` on both actual answers and `Runtime.Release`; with
+`CompleteBeforeAnswers`, the turn can complete while its request remains held
+and the correlated execution update waits separately. Without that selector,
+existing release and update ordering is unchanged. Request-hold compositions
+MUST reuse these controls rather than add another peer or alter cancellation
+and rotation fixtures. Scripted request scenarios use `SessionID`. These seams
+provide controlled ordering, not policy or ordinary-input queue support.
+
+`Scenario.PromptHook` runs a configured executable synchronously from the
+synthetic runtime on prompt receipt, with explicit arguments, environment
+overrides and JSON payload. The `prompt_hook` MCP trace event retains the
+runtime PID, payload, exit status, output and spawn error. Report-misdirection
+cases MUST reuse this action and the existing shipped hook: status zero is the
+hook's expected fail-open result, not proof that a report was accepted or
+rejected. The child runtime's distinct authority and the target parent's
+unchanged binding, session, life, history and transcript establish the mutation
+boundary separately.
+
+The configured-child owner in `cursor_guidance_linux_test.go` and its shared
+`cursor_child_composition_linux_test.go` helpers reuse per-child `Settings()`,
+`newCursorPaneScenario`, `newPaneCaller`, protected records and existing relay
+observations. `test/driver/cursor-callers-help.sh` owns the scheduler counterpart
+through its existing child/control, public caller, SQL and cleanup helpers.
+Future caller-child compositions MUST extend these owners. They cover legitimate
+child reports, guarded report misdirection, useful child work across a parent
+Cursor-to-Codex life switch, separate native-subagent listings and independent
+child discovery, and child-attributed permission holds across parent work and
+switching. Association is distinct from protected report and request authority.
+Delivered acknowledgement, actual ACP answer and exact execution proof remain
+separate observations. Late idle proof changes the matching request, not the
+row's lifecycle state; actual useful follow-up and its final waiting report
+establish continuation. Cursor end checks use `ended_at`, its exact protected
+intentional/runtime-gone record, retired binding and independent process death,
+without requiring Codex's `end_reported_at` marker. Existing relay/fallback/
+deadline, switch-back/history and worker/stale-event matrices retain their
+owners. This is synthetic ACP with actual AD/MCP/CLI/tmux transport, not native
+Cursor or Codex conversation evidence.
+
 Successive fresh identities and correlated scripted `Scenario.NewReplies`,
 `WaitForNew`/`Runtime.NewRelease` and `AfterNew` extend this same peer for
 rotation; prompt updates use the actual prompt's session. Rotation tests MUST

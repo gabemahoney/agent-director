@@ -239,10 +239,16 @@ input.on('line', async line => {
   mcpEvent({event:'prompt',session:frame.params.sessionId,text:frame.params.prompt[0].text});
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
+  if(scripted?.promptHook) {
+   const hook=scripted.promptHook;
+   const child=require('child_process').spawnSync(hook.program,hook.args,{input:JSON.stringify(hook.payload),encoding:'utf8',env:{...process.env,...hook.env}});
+   mcpEvent({event:'prompt_hook',runtime:process.pid,payload:hook.payload,status:child.status,stdout:child.stdout,stderr:child.stderr,spawnError:child.error ? {code:child.error.code,message:child.error.message} : null});
+  }
   if(scripted?.promptReply) { send({id:frame.id,...scripted.promptReply}); return; }
   if(scripted?.beforeRequests) for(const update of scripted.beforeRequests) send(update);
+  let answers=Promise.resolve();
   if(scripted?.requests?.length) {
-   const answers = new Promise(resolve=>{
+   answers = new Promise(resolve=>{
     if(scripted.pauseAfterRequests) { input.pause(); process.stdin.pause(); }
     pendingScenario={resolve,ids:new Set(scripted.requests.map(r=>JSON.stringify(r.id)))};
     for(const request of scripted.requests) send(request);
@@ -255,7 +261,18 @@ input.on('line', async line => {
    if(!scripted.completeBeforeAnswers) await answers;
   }
   if(scripted?.waitForRelease) while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
-  if(scripted?.afterAnswers) for(const update of scripted.afterAnswers) send(update);
+  function sendAfterAnswers() {
+   if(scripted?.afterAnswers) for(const update of scripted.afterAnswers) send(update);
+  }
+  if(scripted?.waitForAfterAnswersRelease) {
+   async function afterAnswersRelease() {
+    await answers;
+    while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
+    sendAfterAnswers();
+   }
+   if(scripted.completeBeforeAnswers) void afterAnswersRelease();
+   else await afterAnswersRelease();
+  } else sendAfterAnswers();
   if(text==='HOLD') while(!fs.existsSync(SETTINGS.release)) await new Promise(r=>setTimeout(r,10));
   if(text==='DIE') process.exit(0);
   if(text==='DENY_FOREVER') {

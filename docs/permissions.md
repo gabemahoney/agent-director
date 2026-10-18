@@ -43,7 +43,10 @@ an answer through agent-director.
 Validated Cursor permission and blocking plan requests use `check_permission`,
 `get-permission`, the permission fields of `get`/`list`, and `decide`. Each has
 its own `request_token`; answering one never answers another. Requests retain
-their admitted conversation. [Conversation rotation](usage.md#fresh-cursor-use)
+their admitted conversation. An independent AD child's requests belong to that
+child's row. Parent association grants no approval authority, and work or a
+life change on the parent cannot answer the child's request or release its hold.
+[Conversation rotation](usage.md#fresh-cursor-use)
 does not transfer old choices or request identities to the fresh conversation.
 Resume does not restore old choices or make replayed permission, plan or question
 requests answerable. Load replay supplies no execution proof or readiness and

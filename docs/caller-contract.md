@@ -752,6 +752,9 @@ person or an LLM read the pane and, having looked, send with that read's
 applies), and a changed pane is `ErrPaneChanged`. Never pass
 `--expect-pane-sha256` from an automatic flow.
 
+Late matching Cursor execution proof resolves only that request's hold; it does
+not immediately write `waiting` or replay a prior turn-end report.
+
 `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)
 and types nothing; it takes no pane hash. To stop a held agent, see
