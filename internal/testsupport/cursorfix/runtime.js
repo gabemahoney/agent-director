@@ -67,7 +67,13 @@ async function startMCP(server, env, scripted, attempt) {
   child.on('error',err=>mcpEvent({event:'error',attempt,message:err.message}));
   const lines=readline.createInterface({input:child.stdout});
   let serial=0;
+  const stopped=new AbortController();
   const pending=new Map();
+  function stop(err) {
+   if(!stopped.signal.aborted) stopped.abort(err);
+   for(const waiter of pending.values()) waiter.reject(err);
+   pending.clear();
+  }
   lines.on('line',line=>{
    try {
     const reply=JSON.parse(line), waiter=pending.get(reply.id);
@@ -77,15 +83,20 @@ async function startMCP(server, env, scripted, attempt) {
     pending.delete(reply.id); waiter.resolve(reply);
    } catch(err) {
     mcpEvent({event:'response_rejected',attempt,bytes:Buffer.byteLength(line),sha256:require('crypto').createHash('sha256').update(line).digest('hex')});
-    for(const waiter of pending.values()) waiter.reject(err);pending.clear();
+    stop(err);
    }
   });
-  child.on('exit',()=>{for(const waiter of pending.values()) waiter.reject(Error('MCP exited before response'));pending.clear();});
-  child.stdin.on('error',err=>{for(const waiter of pending.values()) waiter.reject(err);pending.clear();});
-  function request(id,method,params) {
+  child.on('exit',()=>stop(Error('MCP exited before response')));
+  child.on('error',stop);
+  child.stdout.on('end',()=>stop(Error('MCP output ended before response')));
+  child.stdin.on('error',stop);
+  function request(id,method,params,deadline=performance.now()+10000) {
    return new Promise((resolve,reject)=>{
-    const timer=setTimeout(()=>{pending.delete(id);reject(Error('MCP response deadline'));},10000);
-    pending.set(id,{resolve:r=>{clearTimeout(timer);resolve(r);},reject:e=>{clearTimeout(timer);reject(e);}});
+    if(stopped.signal.aborted) {reject(stopped.signal.reason);return;}
+    const remaining=deadline-performance.now();
+    if(remaining<=0) {reject(Error('MCP response deadline'));return;}
+    const timer=setTimeout(()=>{pending.delete(id);reject(Error('MCP response deadline'));},remaining);
+    pending.set(id,{resolve:r=>{clearTimeout(timer);if(performance.now()>=deadline) reject(Error('MCP response deadline'));else resolve(r);},reject:e=>{clearTimeout(timer);reject(e);}});
     const wire=JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n';
     child.stdin.write(wire,err=>{
      // Actual write completion, not a request inferred from a later response.
@@ -93,6 +104,16 @@ async function startMCP(server, env, scripted, attempt) {
      if(method==='initialize') mcpEvent({event:'initialize_written',attempt,error:err?.message});
      if(err) {const waiter=pending.get(id);pending.delete(id);waiter?.reject(err);}
     });
+   });
+  }
+  function backoff(delay,deadline) {
+   return new Promise((resolve,reject)=>{
+    if(stopped.signal.aborted) {reject(stopped.signal.reason);return;}
+    const remaining=deadline-performance.now();
+    if(remaining<=0) {reject(Error('MCP response deadline'));return;}
+    const cancel=()=>{clearTimeout(timer);reject(stopped.signal.reason);};
+    const timer=setTimeout(()=>{stopped.signal.removeEventListener('abort',cancel);resolve();},Math.min(delay,remaining));
+    stopped.signal.addEventListener('abort',cancel,{once:true});
    });
   }
   const id='cursor-mcp-'+attempt;
@@ -106,10 +127,23 @@ async function startMCP(server, env, scripted, attempt) {
   }
   return {child,start,attempt,server,env,scripted,async calls(calls,control) {
    for(const call of calls) {
-    const callID=id+'-tool-'+serial++;
-    const result=await request(callID,'tools/call',call);
-    if(result.id!==callID || result.error) throw Error('invalid MCP tool response');
-    mcpEvent({event:'tool_response',attempt,control,call,response:result});
+    const deadline=performance.now()+10000;
+    let delay=100;
+    for(;;) {
+     const callID=id+'-tool-'+serial++;
+     const result=await request(callID,'tools/call',call,deadline);
+     if(stopped.signal.aborted) throw stopped.signal.reason;
+     if(performance.now()>=deadline) throw Error('MCP response deadline');
+     const transient=call.name==='read-pane' && result.jsonrpc==='2.0' && result.id===callID && !('result' in result) && result.error?.code===-32000 && typeof result.error.message==='string' && result.error.data?.err_name==='ErrTmuxUnresponsive';
+     if(transient) {
+      await backoff(delay,deadline);
+      delay=Math.min(delay*2,500);
+      continue;
+     }
+     if(result.jsonrpc!=='2.0' || result.id!==callID || ('error' in result) || !result.result || !Array.isArray(result.result.content) || result.result.isError) throw Error('invalid MCP tool response');
+     mcpEvent({event:'tool_response',attempt,control,call,response:result});
+     break;
+    }
    }
   }};
 }

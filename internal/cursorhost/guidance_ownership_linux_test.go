@@ -22,7 +22,7 @@ import (
 
 // heldGuidanceQuery uses the production exec collector and the existing fake's
 // complete replies; only an owned descendant's open pipe makes them uncertain.
-func heldGuidanceQuery(t *testing.T, query string, partial bool) string {
+func heldGuidanceQuery(t *testing.T, query string, partial bool, consumeOnce ...bool) string {
 	t.Helper()
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "hold")
@@ -33,17 +33,22 @@ func heldGuidanceQuery(t *testing.T, query string, partial bool) string {
 	if partial {
 		output = fmt.Sprintf("%q \"$@\" | head -c 16\n", faketmuxfix.Binary(t))
 	}
+	condition := fmt.Sprintf("[ -f '%s' ]", marker)
+	if len(consumeOnce) > 0 && consumeOnce[0] {
+		// Rename claims the injection before pipe holding, without a Go-side release.
+		condition = fmt.Sprintf("mv '%s' '%s.consumed' 2>/dev/null", marker, marker)
+	}
 	script := fmt.Sprintf(`#!/bin/sh
 case " $* " in
  *" %s "*)
-  if [ -f '%s' ]; then
+  if %s; then
    %ssleep 5 &
    echo $! >> '%s/pids'
    exit 0
   fi;;
 esac
 exec %q "$@"
-`, query, marker, output, dir, faketmuxfix.Binary(t))
+`, query, condition, output, dir, faketmuxfix.Binary(t))
 	if err := os.WriteFile(filepath.Join(dir, "tmux"), []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}

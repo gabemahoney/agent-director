@@ -988,6 +988,18 @@ isolated per-child files through explicit `AD_CURSOR_FIX_SETTINGS` selection
 while sharing one stable fixture executable. Child scenarios, traces, runtime
 PIDs and release/control files remain independent; tests MUST reuse this
 selection rather than rewrite the running parent's config or executable.
+The synthetic MCP peer retries only `read-pane` after a valid correlated
+JSON-RPC 2.0 error with code `-32000` and structured
+`error.data.err_name: ErrTmuxUnresponsive`. Each logical tool call retains one
+original monotonic 10-second allowance across physical attempts and backoff;
+attempts use fresh IDs and the original arguments. Failed physical
+request/response metadata remains in the trace; only the final complete success
+emits a logical `tool_response`. Partial capture data never counts as success.
+Other tools, malformed replies, other errors and request timeouts do not retry.
+Exit or transport failure cancels pending requests and backoff; a retired handle
+cannot continue against its replacement. This fixture recovery adds no public
+automatic retry or product deadline and establishes no authenticated or native
+Cursor evidence.
 Future guidance and configured-process restart cases MUST extend this
 shared peer and its existing session/load/rotation helpers. In-process gateway
 tests use private `Options.mcpExecutable` only because their own executable is a
