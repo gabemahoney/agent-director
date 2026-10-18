@@ -71,6 +71,7 @@ type cursorSession struct {
 	controllerReturnMu     sync.Mutex
 	controllerReturned     bool
 	controllerErr          error
+	recordCache            submissionRecordCache
 }
 
 // observeControllerReturn retains nil as an observed result without blocking cleanup.
@@ -226,14 +227,9 @@ func (c *cursorSession) records(t *testing.T) []submissionRecord {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var records []submissionRecord
-	lines := bytes.Split(raw, []byte("\n"))
-	for _, line := range lines[:len(lines)-1] {
-		var r submissionRecord
-		if err := json.Unmarshal(line, &r); err != nil {
-			t.Fatal(err)
-		}
-		records = append(records, r)
+	records, err := c.recordCache.decode(path, raw)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return records
 }
