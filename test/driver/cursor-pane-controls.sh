@@ -12,14 +12,18 @@ pc_export_evidence() {
  # The scheduler can bind-mount this fixed test-only path for raw receipt
  # retention; the standard driver's short details field is not a raw archive.
  artifact_dir="/tmp/cursor-pane-controls-artifacts/$id"
- mkdir -m 700 -p "$artifact_dir"
+ mkdir -m 700 -p "$artifact_dir" || return
  for name in trace.jsonl sent.jsonl raw raw-before-guard scenario want.json initial.json artifact-sha256 source-sha256 inspection.json public.json task3-timing.jsonl held-ids refused-ids; do
-  if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$artifact_dir/$name"; chmod 600 "$artifact_dir/$name"; fi
+  if [[ -f $case_dir/$name ]]; then cp "$case_dir/$name" "$artifact_dir/$name" || return; chmod 600 "$artifact_dir/$name" || return; fi
  done
- if [[ -n ${path:-} && -f $path ]]; then cp "$path" "$artifact_dir/protected.jsonl"; chmod 600 "$artifact_dir/protected.jsonl"; fi
- if [[ -f $STORE ]]; then
-  sql -readonly -json "SELECT * FROM spawns WHERE instance_id='$id'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$id'; SELECT * FROM permission_requests WHERE instance_id='$id'; SELECT * FROM session_history WHERE instance_id='$id';" > "$artifact_dir/authority.jsonl"
-  chmod 600 "$artifact_dir/authority.jsonl"
+ pc_export_launch_records "$artifact_dir" "$STORE" "$id" "${path:-}"
+}
+pc_export_launch_records() {
+ local out=$1 store=$2 instance=$3 transcript=$4
+ if [[ -n $transcript && -f $transcript ]]; then cp "$transcript" "$out/protected.jsonl" || return; chmod 600 "$out/protected.jsonl" || return; fi
+ if [[ -f $store ]]; then
+  /opt/driver/sql.sh "$store" -readonly -json "SELECT * FROM spawns WHERE instance_id='$instance'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='$instance'; SELECT * FROM permission_requests WHERE instance_id='$instance'; SELECT * FROM session_history WHERE instance_id='$instance';" > "$out/authority.jsonl" || return
+  chmod 600 "$out/authority.jsonl" || return
  fi
 }
 pc_start() {
@@ -39,11 +43,14 @@ pc_start() {
   /opt/driver/sql.sh "$decoy" 'CREATE TABLE collector_decoy(value TEXT); INSERT INTO collector_decoy VALUES ("untouched");'
  done
 }
-pc_finish() {
+pc_assert_stores_untouched() {
  for decoy in "$case_dir/configured.db" "$HOME/.config/agent-director/state.db"; do
   check store.decoy test "$(/opt/driver/sql.sh "$decoy" 'SELECT count(*) FROM spawns; SELECT value FROM collector_decoy;')" = $'0\nuntouched'
  done
  check owned.sentinel kill -0 "$control_sentinel"
+}
+pc_finish() {
+ pc_assert_stores_untouched
  pc_export_evidence
  jq -cn --arg case "$1" --argjson checks "$2" --arg id "$id" --arg session "$session" --arg path "$path" --argjson runtime "$runtime" --argjson gateway "$gateway" \
   '{case:$case,status:"pass",checks:$checks,provenance:{runtime:"synthetic-ACP",terminal:"actual-tmux-scripted",clients:"shipped-CLI/MCP-or-explicit-installed-Bun",authenticated_cursor:false,human_terminal:false},facts:{instance_id:$id,initial_session_id:$session,transcript:$path,runtime_pid:$runtime,gateway_pid:$gateway,raw_artifacts:("/tmp/cursor-pane-controls-artifacts/"+$id)}}'

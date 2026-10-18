@@ -153,6 +153,17 @@ remain opaque. A minimal capability object permits fresh text sessions.
 prove that creating or loading a session, selecting a requested mode or submitting
 a prompt succeeded; each operation needs its own authoritative response.
 
+When `inject_help_hook` is enabled, each fresh, latest-loaded or replacement
+conversation additionally requires its own completed guidance MCP initialization
+before publication or prompt admission. A registration, candidate identity or
+previous conversation's acknowledgement cannot satisfy that requirement.
+Guidance setup shares the existing 45-second startup/load operation bounds;
+rotation shares the first control's fixed three-second bound. Waiting for guidance
+never renews a deadline. Failure, interruption, authority loss or expiry stops
+admission; `allow_pending` bypasses none of these checks. Transport initialization
+does not establish native model consumption. See
+[guidance delivery](hooks.md#what-agent-director-help-actually-outputs).
+
 `resume` accepts only `instance_id` (`--instance-id` on the CLI) for an
 `ended` or `missing` Cursor row. It loads only the latest durably reported
 session with its saved configuration; see [Pause and resume](usage.md#pause-and-resume).
@@ -272,8 +283,9 @@ to resolve before expecting held input to be admitted. A rotation notice or
 fresh-identity confirmation is not evidence of admission or prompt completion.
 
 The first control has a fixed three-second cancellation deadline, including
-fresh-session creation, publication and protected recording. Repeated controls
-cannot extend it. Cancellation timeout, missing, invalid or reused identity,
+fresh-session creation, publication and protected recording. With help enabled,
+this bound also includes the new conversation's guidance initialization.
+Repeated controls cannot extend it. Cancellation timeout, missing, invalid or reused identity,
 refused publication, lost authority or persistence failure stops admission and
 visibly refuses held input to both conversations. Interrupting a pending
 rotation also stops the owned runtime. Do not send refused input to the old

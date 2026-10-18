@@ -7,11 +7,16 @@ import (
 )
 
 var cursorReportHelper func() int
+var cursorTestCleanup func()
 
 func TestMain(m *testing.M) {
 	sandboxguard.Require()
 	if os.Getenv("AD_TEST_CURSOR_REPORT_HELPER") == "1" && cursorReportHelper != nil {
 		os.Exit(cursorReportHelper())
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if cursorTestCleanup != nil {
+		cursorTestCleanup()
+	}
+	os.Exit(code)
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/helptext"
 	"github.com/gabemahoney/agent-director/internal/hook"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/spawn"
@@ -480,12 +481,6 @@ func hookLog(logger *log.Logger, format string, args ...any) {
 	logger.Printf(format, args...)
 }
 
-// helpResult is the top-level JSON envelope for the help verb. The single
-// "verbs" field mirrors the manifest's ResultFields for the help verb.
-type helpResult struct {
-	Verbs []pkgapi.VerbSummary `json:"verbs"`
-}
-
 // helpHandler implements the help verb. `help` is Callable:false in the
 // manifest — it does NOT route through the Client facade. It calls
 // pkg/api.Help() directly.
@@ -504,7 +499,7 @@ func helpHandler(_ *pkgapi.Client, _ []string) error {
 		name, desc := errnames.Classify(err)
 		return writeApiErrorAndDispatch(name, errnames.TrimNamePrefix(name, desc))
 	}
-	payload, err := json.Marshal(helpResult{Verbs: verbs})
+	payload, err := helptext.Marshal(verbs)
 	if err != nil {
 		if werr := writeError(os.Stderr, errJSONMarshal, err.Error()); werr != nil {
 			return werr
@@ -792,6 +787,12 @@ func run() int {
 		return 0
 	}
 
+	if len(strippedArgv) > 0 && strippedArgv[0] == "serve" {
+		if _, err := cursorMCPScope(overrides); err != nil {
+			_ = writeError(os.Stderr, "ErrInternal", err.Error())
+			return 1
+		}
+	}
 	client, cfg, err := setupClient(overrides)
 	if err != nil {
 		if errors.Is(err, errDispatch) {

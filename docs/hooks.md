@@ -151,9 +151,9 @@ Cursor startup confirms a conversation before the row becomes `waiting`;
 accepted input yields `working`, a confirmed completion yields `waiting`,
 and intentional termination yields `ended` only after the runtime is gone.
 Launch return and pre-trust `failed` or `skipped` do not confirm startup.
-Reporting is required independently of the saved pre-trust choice and native
-permission policy. Initialization, load, mode or prompt failures cannot supply
-a successful startup or turn report.
+Reporting is required independently of the help setting, saved pre-trust choice
+and native permission policy. Initialization, load, mode or prompt failures
+cannot supply a successful startup or turn report.
 Rotation reporting authenticates the outgoing conversation and publishes the
 fresh current identity with required outgoing history in one operation; an
 old or child report cannot replace the main conversation. The interaction and
@@ -845,10 +845,29 @@ no-verb run, and prints the plain list when the read fails. The whole list
 reaches the agent at every session start: its first prompt, and the next
 prompt after `/clear`, `/new`, `/resume` or `/fork`.
 
+With `inject_help_hook` enabled, Cursor receives the same complete plain JSON
+guidance as MCP initialization instructions through its session-scoped ACP stdio
+registration. This applies at fresh startup, latest-session load and each
+confirmed `/clear` or `/new`, without an extra user turn or replayed prompt.
+The registration explicitly selects the managed parent's home, opened AD store
+and intended tmux server; it does not depend on dashboard MCP configuration or
+ambient environment inheritance. The gateway requires the current attempt's
+completed MCP initialization before conversation publication or input admission.
+That acknowledgement establishes the transport exchange, not native model
+consumption. Native full-guidance consumption remains unverified for fresh,
+loaded and replacement conversations.
+
+Cursor provides no supported ACP compaction callback on this route, so AD cannot
+force guidance back into an already compacted conversation. Native retention
+after compaction has not been checked live. This limitation applies only to
+compaction; startup, latest load and confirmed conversation changes still require
+guidance initialization. The [caller contract](caller-contract.md#cursor-operation-boundaries)
+owns deadlines and failure behavior.
+
 ### Caveat — install fail-closed gap
 
-A help command that cannot run injects no verb list; the conversation
-proceeds. For installation checks and repairs see [Installation](install.md).
+A Claude or Codex help command that cannot run injects no verb list; the
+conversation proceeds. For installation checks and repairs see [Installation](install.md).
 
 ## PermissionRequest relay path
 

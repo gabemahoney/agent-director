@@ -97,18 +97,35 @@ type Dispatcher interface {
 // Server is the long-lived MCP server (SRD §3.3). One instance per
 // process; config is loaded once at startup and not hot-reloaded.
 type Server struct {
-	dispatcher Dispatcher
-	logger     *log.Logger
+	dispatcher             Dispatcher
+	logger                 *log.Logger
+	options                Options
+	initializeWritten      bool
+	initializationObserved bool
+	handshakeErr           error
+}
+
+// Options is internal server wiring. Ordinary MCP servers omit instructions
+// and retain their existing notification behavior. Initialized observes the
+// client's standard acknowledgement after a successful initialize response;
+// it establishes transport completion, never model consumption.
+type Options struct {
+	Instructions string
+	Initialized  func() error
 }
 
 // New constructs a Server. The dispatcher carries the live wiring to
 // internal/api; the logger receives operational diagnostics (NOT
 // tool errors — those go in the JSON-RPC response).
 func New(d Dispatcher, logger *log.Logger) *Server {
+	return NewWithOptions(d, logger, Options{})
+}
+
+func NewWithOptions(d Dispatcher, logger *log.Logger, options Options) *Server {
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
-	return &Server{dispatcher: d, logger: logger}
+	return &Server{dispatcher: d, logger: logger, options: options}
 }
 
 // Serve runs the stdio loop. Each line from stdin is one JSON-RPC
@@ -151,6 +168,9 @@ func (s *Server) Serve(ctx context.Context, stdin io.Reader, stdout io.Writer) e
 			continue
 		}
 		s.handle(ctx, &req, enc)
+		if s.handshakeErr != nil {
+			return s.handshakeErr
+		}
 	}
 	return scanner.Err()
 }
@@ -174,17 +194,28 @@ func (s *Server) handle(ctx context.Context, req *Request, enc *json.Encoder) {
 
 	switch req.Method {
 	case "initialize":
-		respond(InitializeResult{
+		result := InitializeResult{
 			ProtocolVersion: ProtocolVersion,
 			Capabilities: ServerCapabilities{
 				Tools: &ToolsCapability{ListChanged: false},
 			},
-			ServerInfo: ServerInfo{Name: ServerName, Version: ServerVersion},
-		}, nil)
+			ServerInfo:   ServerInfo{Name: ServerName, Version: ServerVersion},
+			Instructions: s.options.Instructions,
+		}
+		if s.options.Initialized == nil {
+			respond(result, nil)
+		} else if !isNotification {
+			s.handshakeErr = enc.Encode(Response{JSONRPC: "2.0", ID: req.ID, Result: result})
+			s.initializeWritten = s.handshakeErr == nil
+		}
 
 	case "notifications/initialized":
 		// Standard MCP handshake — client tells us it's ready to
 		// receive tool calls. No response.
+		if isNotification && s.initializeWritten && !s.initializationObserved && s.options.Initialized != nil {
+			s.handshakeErr = s.options.Initialized()
+			s.initializationObserved = s.handshakeErr == nil
+		}
 
 	case "tools/list":
 		respond(map[string]any{"tools": buildToolList()}, nil)
@@ -276,6 +307,7 @@ type InitializeResult struct {
 	ProtocolVersion string             `json:"protocolVersion"`
 	Capabilities    ServerCapabilities `json:"capabilities"`
 	ServerInfo      ServerInfo         `json:"serverInfo"`
+	Instructions    string             `json:"instructions,omitempty"`
 }
 
 // ServerCapabilities advertises which MCP capability groups the

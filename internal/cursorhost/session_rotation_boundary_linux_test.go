@@ -110,7 +110,7 @@ func TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority(t *testing.T)
 	// Serial: actual protocol/controller, kernel evidence and protected records.
 	for _, traffic := range []string{"known old", "unattributed", "foreign", "owned death with old traffic"} {
 		t.Run(traffic, func(t *testing.T) {
-			c := postBootstrapCursorSession(t, "")
+			c := postBootstrapCursorSession(t, "", true)
 			old := json.RawMessage(`{"method":"session/update","params":{"sessionId":"synthetic-session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old-output-not-current"}}}}`)
 			frames := []json.RawMessage{old, json.RawMessage(`{"id":2,"result":{"sessionId":"synthetic-session-1"}}`), json.RawMessage(`{"id":"old-child-auth","method":"session/request_permission","params":{"sessionId":"synthetic-session-1","agentId":"child","toolCall":{"toolCallId":"old","title":"Bash"},"options":[{"optionId":"yes","kind":"allow_once"}]}}`)}
 			if traffic == "unattributed" {
@@ -214,7 +214,7 @@ func TestCursorRotationExitInterruptAndEligiblePausePreemptPhases(t *testing.T) 
 				if phase == "cancellation" {
 					initial = "HOLD"
 				}
-				c := postBootstrapCursorSessionWithInput(t, initial, opener, starter)
+				c := postBootstrapCursorSessionWithInput(t, initial, opener, starter, phase == "confirmation sync")
 				defer barrier.unblock()
 				diagnosed := false
 				defer func() {
@@ -404,7 +404,7 @@ func TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld(t *testing.T)
 				}
 				return tr, err
 			}
-			c := postBootstrapCursorSessionWithInput(t, "", opener, terminalLoop)
+			c := postBootstrapCursorSessionWithInput(t, "", opener, terminalLoop, true)
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 			c.keys(t, "/new\r")

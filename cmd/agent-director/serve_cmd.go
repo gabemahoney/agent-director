@@ -8,11 +8,16 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/gabemahoney/agent-director/internal/clisetup"
 	"github.com/gabemahoney/agent-director/internal/config"
+	"github.com/gabemahoney/agent-director/internal/cursorhost"
+	"github.com/gabemahoney/agent-director/internal/cursormcp"
+	"github.com/gabemahoney/agent-director/internal/helptext"
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/internal/store"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 )
 
@@ -75,6 +80,11 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 		fmt.Fprintln(os.Stderr, "    claude mcp add agent-director -- <binary-path> serve --stdio")
 		return nil
 	}
+	serverOptions, closeScope, err := cursorMCPOptions(cfg, o)
+	if err != nil {
+		return writeApiErrorAndDispatch("ErrInternal", err.Error())
+	}
+	defer closeScope()
 
 	// Construct a SEPARATE Client for the MCP dispatcher (Pin H4), on the
 	// store and tmux command o selects (b.wb7), and name a failed open as
@@ -91,7 +101,7 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	// fallback) — NOT stdout, which is reserved for the JSON-RPC
 	// transport. cfg is passed directly (Pin H6).
 	logger := newMCPLogger(cfg)
-	server := mcp.New(dispatcher, logger)
+	server := mcp.NewWithOptions(dispatcher, logger, serverOptions)
 
 	// Signal-aware ctx so SIGINT / SIGTERM (e.g. Kubernetes graceful
 	// shutdown) flow as cancellation instead of killing the process
@@ -108,6 +118,71 @@ func serveHandlerWith(cfg config.Config, o clisetup.Overrides,
 	}()
 
 	return server.Serve(ctx, stdin, os.Stdout)
+}
+
+// cursorMCPOptions accepts only the explicitly scoped owned invocation. The
+// ordinary serve path performs no guidance work and omits instructions. Scope
+// does not grant tools any new permissions; dispatch still uses pkg/api.
+func cursorMCPOptions(cfg config.Config, o clisetup.Overrides) (mcp.Options, func(), error) {
+	noClose := func() {}
+	scope, err := cursorMCPScope(o)
+	if err != nil {
+		return mcp.Options{}, noClose, err
+	}
+	if scope == nil {
+		return mcp.Options{}, noClose, nil
+	}
+	if !cfg.Defaults.InjectHelpHook {
+		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP scope invalid")
+	}
+	s, err := store.OpenWithBusyTimeout(scope.StorePath, cfg.Store.EffectiveBusyTimeoutMs())
+	if err != nil {
+		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP store unavailable")
+	}
+	verify := func() error {
+		row, b, err := scope.Binding(s)
+		if err != nil {
+			return err
+		}
+		if err = cursorhost.VerifyRuntime(b, false); err != nil {
+			return err
+		}
+		return cursorhost.VerifyPane(s, row, cfg)
+	}
+	if err = verify(); err != nil {
+		s.Close()
+		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP ownership unavailable")
+	}
+	instructions, err := helptext.Plain()
+	if err != nil {
+		s.Close()
+		return mcp.Options{}, noClose, fmt.Errorf("Cursor MCP guidance unavailable")
+	}
+	return mcp.Options{Instructions: instructions, Initialized: func() error {
+		if err := verify(); err != nil {
+			return fmt.Errorf("Cursor MCP ownership retired")
+		}
+		return scope.Acknowledge()
+	}}, func() { s.Close() }, nil
+}
+
+// cursorMCPScope checks private routing before run opens any client, so a
+// malformed scoped invocation cannot create or fall back to an ambient store.
+// The handler reuses it before checking protected launch and kernel evidence.
+func cursorMCPScope(o clisetup.Overrides) (*cursormcp.Scope, error) {
+	raw, present := os.LookupEnv(cursormcp.ScopeEnv)
+	if !present {
+		return nil, nil
+	}
+	scope, err := cursormcp.Parse(raw)
+	if err != nil || o.StorePath != scope.StorePath || !o.CreateIfMissingSet || o.CreateIfMissing || os.Getenv("HOME") != scope.Home || os.Getenv("AGENT_DIRECTOR_INSTANCE_ID") != scope.Parent || os.Getenv("AGENT_DIRECTOR_AGENT") != "cursor" {
+		return nil, fmt.Errorf("Cursor MCP scope invalid")
+	}
+	selected, _, _ := strings.Cut(os.Getenv("TMUX"), ",")
+	if selected != scope.Socket {
+		return nil, fmt.Errorf("Cursor MCP route invalid")
+	}
+	return &scope, nil
 }
 
 // mcpClientOptions returns the pkg/api.Options of the MCP dispatcher's Client:

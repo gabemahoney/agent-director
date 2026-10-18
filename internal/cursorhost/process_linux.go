@@ -111,7 +111,7 @@ func traceProcess(program string, args []string, cwd string, environ []string, r
 		ready <- processReady{err: fmt.Errorf("Cursor lifetime protection could not be established")}
 		return
 	}
-	options := unix.PTRACE_O_EXITKILL | unix.PTRACE_O_TRACEFORK | unix.PTRACE_O_TRACEVFORK | unix.PTRACE_O_TRACECLONE | unix.PTRACE_O_TRACEEXEC
+	options := unix.PTRACE_O_EXITKILL | unix.PTRACE_O_TRACEFORK | unix.PTRACE_O_TRACEVFORK | unix.PTRACE_O_TRACECLONE | unix.PTRACE_O_TRACEEXEC | unix.PTRACE_O_TRACEEXIT
 	if err = unix.PtraceSetOptions(pid, options); err != nil {
 		unix.Kill(pid, unix.SIGKILL)
 		unix.PtraceCont(pid, 0)
@@ -200,6 +200,14 @@ func traceProcess(program string, args []string, cwd string, environ []string, r
 				sig = 0
 			}
 			event := status.TrapCause()
+			if event == unix.PTRACE_EVENT_EXIT {
+				// Group exit can overtake a clone announcement just as
+				// SIGKILL can. Discover inherited tasks before the leader
+				// becomes a zombie: its final wait status is withheld until
+				// those tasks have been drained, including their initial stop.
+				collectTracees(tracked, initial)
+				sig = 0
+			}
 			if event == unix.PTRACE_EVENT_FORK || event == unix.PTRACE_EVENT_VFORK || event == unix.PTRACE_EVENT_CLONE {
 				child, e := unix.PtraceGetEventMsg(tid)
 				if e != nil {
@@ -253,7 +261,7 @@ func traceProcess(program string, args []string, cwd string, environ []string, r
 	}
 }
 
-// SIGKILL can overtake a fork/clone event before its child ID is reported.
+// Group exit or SIGKILL can overtake a fork/clone event before its child ID is reported.
 // That automatically attached child still needs its initial ptrace stop
 // consumed, or a thread can prevent the leader from completing group exit.
 // Discover only processes/tasks that this exact tracer thread owns; waiting

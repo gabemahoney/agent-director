@@ -60,7 +60,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[defaults] relay_mode` | `on`, `off` | `off` | Whether a spawn relays the agent's permission prompts to `decide`; `--relay-mode` overrides it per call. |
 | `[defaults] expire_retention_days` | 1 to 106751 | 31 | Days a finished row must have ended before `expire` (without `--older-than`) may delete it. |
 | `[defaults] disable_ask_user` | `true`, `false` | `false` | Whether every spawn denies the agent its question-asking tool: Claude Code's `AskUserQuestion`, and for Codex its question tool, turned off for the launch. Cursor denies questions with either value. See [permissions](permissions.md#disable_ask_user-config). |
-| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether every Claude or Codex spawn adds a help SessionStart hook; `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
+| `[defaults] inject_help_hook` | `true`, `false` | `false` | Whether managed launches receive AD guidance: a SessionStart help entry for Claude and Codex, or session-scoped MCP instructions for Cursor. `install.sh` sets `true` unless `--no-hooks`. See [settings](settings.md#defaultsinject_help_hook-config). |
 | `[relay] poll_base_ms` | ms | 100 | Wait between a relay hook's polls for a decision (never under 50 ms; 0 or negative gives that floor plus jitter). |
 | `[relay] poll_jitter_ms` | ms | 100 | Random time added to each poll wait; 0 or negative adds none. |
 | `[relay] timeout_seconds` | 1 to 2147483 | 86400 | The relay hook's time limit: the agent ends the hook that long after it starts. A request has this less 3 s to be decided (see [The relay hook's time limit](#the-relay-hooks-time-limit)). |

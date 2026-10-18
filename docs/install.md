@@ -93,7 +93,7 @@ Claude Code installed; see [Claude Code and Codex](#claude-code-and-codex)).
   [Upgrade](#upgrade) for the old entries it prints) and do not set
   `inject_help_hook` in `config.toml` (see
   [settings](settings.md#defaultsinject_help_hook-config)), which is also what
-  gives a Codex launch its help entry. It does not skip the [rename
+  enables Codex help entries and Cursor session guidance. It does not skip the [rename
   migration](#upgrade).
 - `--schedule`: schedule the `find-missing` and `expire` sweeps for the user
   running the script, who must be the agents' user. Off by default. See

@@ -17,6 +17,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/cursorenv"
+	"github.com/gabemahoney/agent-director/internal/cursormcp"
 	"github.com/gabemahoney/agent-director/internal/layout"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -32,6 +33,11 @@ type Options struct {
 	InitialPrompt string
 	LoadSession   string
 	RequestedMode string
+
+	// mcpExecutable selects an actual AD CLI binary for in-process session
+	// fixtures, whose own executable is a Go test binary. Production leaves it
+	// empty and registers the exact executable already owning the gateway.
+	mcpExecutable string
 
 	// verifyModeRuntime replaces only the mode writer's runtime verification.
 	// Tests can delay a real VerifyRuntime result to order a control during its
@@ -251,6 +257,27 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	phase := "initialize"
 	var loadUntil time.Time
 	var sessionUntil time.Time
+	var guidance *cursormcp.Observation
+	defer func() { guidance.Close() }()
+	configureGuidance := func(until time.Time) ([]cursormcp.Stdio, error) {
+		servers := []cursormcp.Stdio{}
+		if !cfg.Defaults.InjectHelpHook {
+			return servers, nil
+		}
+		guidance.Close()
+		guidance = nil
+		var registration cursormcp.Stdio
+		var e error
+		mcpExe := exe
+		if options.mcpExecutable != "" {
+			mcpExe = options.mcpExecutable
+		}
+		guidance, registration, e = cursormcp.New(mcpExe, os.Getenv("HOME"), s, row, b, until)
+		if e != nil {
+			return nil, e
+		}
+		return append(servers, registration), nil
+	}
 	var modeResponse json.RawMessage
 	var modePhase, modeSession string
 	var modeEpoch uint64
@@ -485,6 +512,40 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	}
 	reportWaiting := func(event string, check func(func() bool)) error {
 		return await(func() error { return rep.reportWaiting(event, check) })
+	}
+	confirmGuidance := func(target string, epoch uint64, until time.Time) error {
+		if guidance == nil {
+			return nil
+		}
+		if err := record("guidance_configured", map[string]any{"configured_session_id": target, "operation": phase}); err != nil {
+			return err
+		}
+		if err := await(guidance.Wait); err != nil {
+			return err
+		}
+		if intentional || !inputs.current(epoch) || !time.Now().Before(until) {
+			return fmt.Errorf("Cursor guidance initialization authority retired; no prompt admitted")
+		}
+		if err := await(func() error {
+			if err := VerifyRuntime(rep.binding, false); err != nil {
+				return err
+			}
+			return VerifyPane(s, row, cfg)
+		}); err != nil {
+			return err
+		}
+		if intentional || !inputs.current(epoch) || !time.Now().Before(until) {
+			return fmt.Errorf("Cursor guidance initialization authority retired; no prompt admitted")
+		}
+		// The standard MCP client acknowledgement proves the transport exchange.
+		// Session publication, admission and native model receipt are distinct.
+		if err := record("guidance_initialized", map[string]any{"configured_session_id": target, "operation": phase, "evidence": "mcp_client_initialized", "model_consumption": "unverified"}); err != nil {
+			return err
+		}
+		if intentional || !inputs.current(epoch) || !time.Now().Before(until) {
+			return fmt.Errorf("Cursor guidance initialization authority retired; no prompt admitted")
+		}
+		return nil
 	}
 	cancelSubmission := func(v terminalInput, reason string) error {
 		inputs.release(v)
@@ -785,7 +846,11 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				return fmt.Errorf("Cursor rotation cancellation deadline passed")
 			}
 			requestEpoch := rotationEpoch
-			if _, err = protocol.requestGuarded("session/new", map[string]any{"cwd": row.CWD, "mcpServers": []any{}}, func() error {
+			servers, e := configureGuidance(rotationUntil)
+			if e != nil {
+				return e
+			}
+			if _, err = protocol.requestGuarded("session/new", map[string]any{"cwd": row.CWD, "mcpServers": servers}, func() error {
 				if !inputs.current(requestEpoch) || !time.Now().Before(rotationUntil) {
 					return errPromptRetired
 				}
@@ -1149,8 +1214,10 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					return e
 				}
 				method := "session/new"
-				params := map[string]any{"cwd": row.CWD, "mcpServers": []any{}}
+				params := map[string]any{"cwd": row.CWD}
 				phase = "new"
+				sessionUntil = time.Now().Add(protocolWait)
+				until := sessionUntil
 				if options.LoadSession != "" {
 					if !loadSupported {
 						return fmt.Errorf("Cursor runtime does not support session/load")
@@ -1158,15 +1225,20 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 					method, phase = "session/load", "load"
 					params["sessionId"] = options.LoadSession
 					loadUntil = time.Now().Add(protocolWait)
+					until = loadUntil
 				}
+				servers, e := configureGuidance(until)
+				if e != nil {
+					return e
+				}
+				params["mcpServers"] = servers
 				if _, err = protocol.request(method, params); err != nil {
 					return err
 				}
 				if phase == "load" {
 					resetDeadline(time.Until(loadUntil))
 				} else {
-					sessionUntil = time.Now().Add(protocolWait)
-					resetDeadline(protocolWait)
+					resetDeadline(time.Until(sessionUntil))
 				}
 			case "rotate_new":
 				var created struct {
@@ -1180,6 +1252,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						return err
 					}
 					continue
+				}
+				if err = confirmGuidance(created.ID, rotationEpoch, cancelAt.Add(cancelWait)); err != nil {
+					return err
 				}
 				if err = record("rotation_confirmed", map[string]any{"previous_session_id": rotationOld, "confirmed_session_id": created.ID}); err != nil {
 					return err
@@ -1284,6 +1359,13 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 						return err
 					}
 					continue
+				}
+				guidanceUntil := sessionUntil
+				if loaded {
+					guidanceUntil = loadUntil
+				}
+				if err = confirmGuidance(created.ID, loadEpoch, guidanceUntil); err != nil {
+					return err
 				}
 				waitingEpoch := inputs.epochValue()
 				expected := b

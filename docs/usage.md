@@ -103,6 +103,15 @@ reported remains `pending`, and can be noted `unreported`. A submitted prompt
 reads `working`; a correlated turn completion returns it to `waiting`
 subject to [request holds](permissions.md#the-dialog-hold).
 
+The existing `inject_help_hook` setting also enables Cursor guidance; its default
+is off. When enabled, session setup supplies the current AD guidance before
+publication and input admission, including latest-session load and every confirmed
+`/clear` or `/new`. It adds no user prompt and does not replay the initial prompt.
+See [Settings](settings.md#defaultsinject_help_hook-config) and the
+[delivery and compaction limits](hooks.md#what-agent-director-help-actually-outputs).
+This managed bootstrap does not establish actual Cursor-originated CLI/MCP child
+launches or caller/server restart behavior; those workflows remain unverified.
+
 To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
 then attach on that socket:
 

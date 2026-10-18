@@ -74,7 +74,8 @@ func beginCursorLoadWithOptions(t *testing.T, scenario cursorfix.Scenario, optio
 
 func TestCursorLoadSavedInitialWaitsForIndependentHoldOnce(t *testing.T) {
 	var token string
-	c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: true, Modes: advertisedCursorModes()}, Options{InitialPrompt: "saved initial", RequestedMode: "plan"}, terminalLoop, nil, func(e *requestEnv) {
+	c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: true, Modes: advertisedCursorModes()}, Options{InitialPrompt: "saved initial", RequestedMode: "plan", mcpExecutable: guidanceCLI(t)}, terminalLoop, nil, func(e *requestEnv) {
+		enableGuidance(t, e)
 		p, err := apitest.SeedPermissionRequest(e.path, e.binding.InstanceID, "Bash")
 		if err != nil {
 			t.Fatal(err)
@@ -217,7 +218,8 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 			var native cursorfix.NativeHistory
 			var protected cursorfix.GatewayHistory
 			var currentPrefix []byte
-			c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: tc.supported, LoadReply: json.RawMessage(tc.reply)}, "must not dispatch", terminalLoop, func(e *requestEnv) {
+			c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: tc.supported, LoadReply: json.RawMessage(tc.reply)}, Options{InitialPrompt: "must not dispatch", mcpExecutable: guidanceCLI(t)}, terminalLoop, nil, func(e *requestEnv) {
+				enableGuidance(t, e)
 				if tc.name == "explicitly disabled" {
 					e.runtime.Configure(t, cursorfix.Scenario{InitializeReply: json.RawMessage(`{"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}`)})
 				}
@@ -253,7 +255,7 @@ func TestCursorLoadFailureNeverCreatesFresh(t *testing.T) {
 				}
 			}
 			for _, r := range c.records(t) {
-				if r.Kind == "session_loaded" || r.Kind == "session_start" || r.Kind == "submission_dispatched" {
+				if r.Kind == "session_loaded" || r.Kind == "session_start" || r.Kind == "submission_started" {
 					t.Fatalf("failed load published: %+v", r)
 				}
 			}
@@ -314,16 +316,19 @@ func TestCursorLoadWithheldReplyExpiresOriginalProtocolBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("retains actual 45-second protocol bound")
 	}
-	for _, phase := range []string{"load", "mode"} {
+	for _, phase := range []string{"load", "mode", "guidance"} {
 		t.Run(phase, func(t *testing.T) {
 			scenario := cursorfix.Scenario{LoadSupport: true, WaitForLoad: true}
-			options := Options{InitialPrompt: "never dispatch"}
+			options := Options{InitialPrompt: "never dispatch", mcpExecutable: guidanceCLI(t)}
+			if phase == "guidance" {
+				scenario.MCPOmitNotification = true
+			}
 			if phase == "mode" {
 				scenario.Modes = advertisedCursorModes()
 				scenario.WaitForMode = true
 				options.RequestedMode = "plan"
 			}
-			c := beginCursorLoadWithOptions(t, scenario, options, terminalLoop, nil)
+			c := beginCursorLoadWithOptions(t, scenario, options, terminalLoop, nil, func(e *requestEnv) { enableGuidance(t, e) })
 			c.wait(t, "load dispatched", func() bool {
 				for _, f := range c.e.runtime.Frames(t) {
 					if string(f["method"]) == `"session/load"` {
@@ -333,12 +338,15 @@ func TestCursorLoadWithheldReplyExpiresOriginalProtocolBound(t *testing.T) {
 				return false
 			})
 			started := time.Now()
-			if phase == "mode" {
+			if phase != "load" {
 				// Consume part of loadUntil before moving to configuration; a fresh
 				// mode-relative 45s timer would exceed the unchanged outer bound below.
 				<-time.After(2 * time.Second)
 				rotationRelease(t, c.e.runtime.NewRelease)
-				c.wait(t, "load mode dispatched", func() bool {
+				c.wait(t, "load configuration dispatched", func() bool {
+					if phase == "guidance" {
+						return guidanceEvent(t, c, "response", 1)
+					}
 					for _, f := range c.e.runtime.Frames(t) {
 						if string(f["method"]) == `"session/set_mode"` {
 							return true
@@ -631,7 +639,7 @@ func TestCursorLoadPublicationRejectsReplacementWhileWriterHeld(t *testing.T) {
 		t.Run(change, func(t *testing.T) {
 			input := &completeInput{ready: make(chan struct{})}
 			ready := make(chan *loadPublicationWriter, 1)
-			c := beginObservedCursorLoad(t, cursorfix.Scenario{LoadSupport: true}, "never dispatch", input.start, holdLoadPublication(ready, change))
+			c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: true}, Options{InitialPrompt: "never dispatch", mcpExecutable: guidanceCLI(t)}, input.start, holdLoadPublication(ready, change), func(e *requestEnv) { enableGuidance(t, e) })
 			w := awaitLoadPublicationWriter(t, ready)
 			if _, err := w.conn.ExecContext(context.Background(), "COMMIT"); err != nil {
 				t.Fatal(err)
@@ -710,7 +718,11 @@ func TestCursorLoadReplayCannotAdmitOrPersistHistory(t *testing.T) {
 				}
 				events = append(events, raw)
 			}
-			c := beginCursorLoad(t, cursorfix.Scenario{LoadSupport: true, BeforeLoadReply: events, WaitForLoad: true}, "", input.start, func(e *requestEnv) {
+			c := beginCursorLoadWithOptions(t, cursorfix.Scenario{LoadSupport: true, BeforeLoadReply: events, WaitForLoad: true}, Options{mcpExecutable: guidanceCLI(t)}, input.start, nil, func(e *requestEnv) {
+				configPath := filepath.Join(os.Getenv("HOME"), ".config", "agent-director", "config.toml")
+				if err := os.WriteFile(configPath, []byte("[defaults]\ninject_help_hook = true\ndisable_ask_user = "+disabled+"\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
 				p, err := apitest.SeedPermissionRequest(e.path, e.binding.InstanceID, "Bash")
 				if err != nil {
 					t.Fatal(err)

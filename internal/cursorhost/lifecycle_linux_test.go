@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -17,6 +19,70 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
+
+// TestOwnedDescendantHelper runs only in the owned subprocess tree.
+func TestOwnedDescendantHelper(t *testing.T) {
+	role := os.Getenv("AD_TEST_OWNED_DESCENDANT")
+	if role == "" {
+		t.Skip("subprocess helper")
+	}
+	if role == "child" {
+		var ready sync.WaitGroup
+		ready.Add(8)
+		for i := 0; i < 8; i++ {
+			go func() { runtime.LockOSThread(); ready.Done(); select {} }()
+		}
+		ready.Wait()
+		os.Exit(0)
+	}
+	input := bufio.NewScanner(os.Stdin)
+	for input.Scan() {
+		if input.Text() == "children" {
+			for i := 0; i < 16; i++ {
+				child := exec.Command(os.Args[0], "-test.run=^TestOwnedDescendantHelper$")
+				child.Env = append(os.Environ(), "AD_TEST_OWNED_DESCENDANT=child")
+				if err := child.Run(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fmt.Println("all children waited")
+		} else {
+			fmt.Println("responsive:" + input.Text())
+		}
+	}
+}
+
+func TestOwnedRuntimeReapsNormalDescendantsBeforeTermination(t *testing.T) {
+	p, err := startProcess(os.Args[0], []string{"-test.run=^TestOwnedDescendantHelper$"}, t.TempDir(), append(os.Environ(), "AD_TEST_OWNED_DESCENDANT=root"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.terminate()
+	defer p.input.Close()
+	defer p.output.Close()
+	lines := make(chan string, 2)
+	go func() {
+		scanner := bufio.NewScanner(p.output)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	for _, exchange := range []struct{ request, response string }{{"children", "all children waited"}, {"ping", "responsive:ping"}} {
+		if _, err := fmt.Fprintln(p.input, exchange.request); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-lines:
+			if got != exchange.response {
+				t.Fatalf("response=%q want %q", got, exchange.response)
+			}
+		case err := <-p.done:
+			t.Fatalf("accepting root exited before normal descendant waits: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("owned root did not complete %q before termination", exchange.request)
+		}
+	}
+}
 
 func awaitProcessGone(t *testing.T, pid int) {
 	t.Helper()

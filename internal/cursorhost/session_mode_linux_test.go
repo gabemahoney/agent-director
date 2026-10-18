@@ -40,7 +40,7 @@ func TestCursorModeAcknowledgementBeforePrompt(t *testing.T) {
 				}
 				return tr, err
 			}
-			c := beginCursorSessionWithOptions(t, Options{RequestedMode: mode, InitialPrompt: initial}, cursorfix.Scenario{Modes: advertisedCursorModes(), WaitForMode: true, BeforeModeReply: before}, opener, terminalLoop)
+			c := beginConfiguredCursorSession(t, Options{RequestedMode: mode, InitialPrompt: initial, mcpExecutable: guidanceCLI(t)}, cursorfix.Scenario{Modes: advertisedCursorModes(), WaitForMode: true, BeforeModeReply: before}, opener, terminalLoop, func(e *requestEnv) { enableGuidance(t, e) })
 			var protectedPath string
 			select {
 			case protectedPath = <-opened:
@@ -117,7 +117,13 @@ func TestCursorModeRefusalNeverAdmitsInitial(t *testing.T) {
 		{"uncorrelated response ID", advertisedCursorModes(), json.RawMessage(`{"id":999,"result":{}}`), nil, "uncorrelated ACP response"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c := beginCursorSessionWithOptions(t, Options{RequestedMode: "plan", InitialPrompt: "never admit"}, cursorfix.Scenario{Modes: tc.modes, ModeReply: tc.reply, BeforeModeReply: tc.before}, openTranscript, terminalLoop)
+			options := Options{RequestedMode: "plan", InitialPrompt: "never admit"}
+			var before func(*requestEnv)
+			if tc.name == "RPC rejected" {
+				options.mcpExecutable = guidanceCLI(t)
+				before = func(e *requestEnv) { enableGuidance(t, e) }
+			}
+			c := beginConfiguredCursorSession(t, options, cursorfix.Scenario{Modes: tc.modes, ModeReply: tc.reply, BeforeModeReply: tc.before}, openTranscript, terminalLoop, before)
 			err := c.awaitFailure(t, 3*time.Second)
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("mode refusal=%v; want %q", err, tc.want)

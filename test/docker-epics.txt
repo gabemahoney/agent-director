@@ -38,3 +38,4 @@ cursor-pane-controls
 cursor-resume-life
 cursor-install-runtime
 cursor-groups
+cursor-callers-help

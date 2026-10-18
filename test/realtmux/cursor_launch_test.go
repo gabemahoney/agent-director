@@ -39,6 +39,7 @@ type cursorPaneOptions struct {
 	AgentArgs    []string
 	ExtraEnv     map[string]string
 	Unconfigured bool
+	InjectHelp   bool
 	BeforeLaunch func(*spawnFix)
 }
 
@@ -103,6 +104,9 @@ func newCursorPaneScenario(t *testing.T, disableQuestions bool, scenario string,
 		cfg = cfg[:strings.Index(string(cfg), "\n[defaults]")]
 	}
 	cfg = append(cfg, []byte("\n[defaults]\ndisable_ask_user = "+fmt.Sprint(disableQuestions)+"\n")...)
+	if opts.InjectHelp {
+		cfg = append(cfg, []byte("inject_help_hook = true\n")...)
+	}
 	if opts.Timeout > 0 {
 		cfg = append(cfg, []byte(fmt.Sprintf("\n[relay]\ntimeout_seconds = %d\n", opts.Timeout))...)
 	}

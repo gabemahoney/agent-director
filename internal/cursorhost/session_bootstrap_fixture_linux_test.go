@@ -16,17 +16,22 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
 
-func postBootstrapCursorSession(t *testing.T, initial string) *cursorSession {
+func postBootstrapCursorSession(t *testing.T, initial string, guidance ...bool) *cursorSession {
 	t.Helper()
-	c := postBootstrapCursorSessionWithInput(t, initial, openTranscript, terminalLoop)
+	c := postBootstrapCursorSessionWithInput(t, initial, openTranscript, terminalLoop, guidance...)
 	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	return c
 }
 
 // Rotation semantics start after real bootstrap; original caller assertions keep their bounds.
-func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter) *cursorSession {
+func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, guidance ...bool) *cursorSession {
 	t.Helper()
 	e := newRequestEnv(t, "off", "synthetic-session-1")
+	mcpExecutable := ""
+	if len(guidance) > 0 && guidance[0] {
+		enableGuidance(t, e)
+		mcpExecutable = guidanceCLI(t)
+	}
 	e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{}})
 	master, slave := e.prepareRunPTY(t)
 	row, err := e.s.GetSpawn(e.binding.InstanceID)
@@ -104,7 +109,7 @@ func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener fu
 	ctx, cancel := context.WithTimeout(context.Background(), protocolWait)
 	defer cancel()
 	go func() {
-		c.done <- runWithInput(Options{Runtime: e.runtime.Program, InitialPrompt: initial, beforeControllerCleanup: c.observeControllerReturn, afterStartupQueueEnabled: func() {
+		c.done <- runWithInput(Options{Runtime: e.runtime.Program, mcpExecutable: mcpExecutable, InitialPrompt: initial, beforeControllerCleanup: c.observeControllerReturn, afterStartupQueueEnabled: func() {
 			select {
 			case queueEnabled <- struct{}{}:
 			default:

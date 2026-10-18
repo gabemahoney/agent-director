@@ -25,6 +25,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/probe"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/clibuild"
 	"github.com/gabemahoney/agent-director/internal/testsupport/faketmuxfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/sandboxguard"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
@@ -45,9 +46,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	binaryPath = filepath.Join(tmp, "agent-director")
-	build := exec.Command("go", "build", "-o", binaryPath, ".")
-	build.Stdout, build.Stderr = os.Stdout, os.Stderr
-	if err := build.Run(); err != nil {
+	if err := clibuild.Build(binaryPath); err != nil {
 		panic(err)
 	}
 	home := filepath.Join(tmp, "home")

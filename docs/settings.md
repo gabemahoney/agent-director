@@ -12,8 +12,7 @@ For Claude Code's own description of settings, see the upstream docs:
 <https://docs.claude.com/en/docs/claude-code/settings>.
 
 The Claude Code merge sections below describe `claude` Spawns; the
-template sections cover all three agents; `inject_help_hook` covers Claude
-and Codex, and
+template sections and `inject_help_hook` cover all three agents, and
 [Set up agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)
 covers the entries a Codex folder needs by hand.
 
@@ -46,8 +45,11 @@ session, and no cleanup is needed.
 `disable_ask_user` accepts either value for Cursor; neither enables questions,
 with relay mode on or off.
 The enforced behavior and permission-list handling are owned by
-[Permissions](permissions.md#cursor-spawns). `inject_help_hook` currently adds
-no Cursor session guidance.
+[Permissions](permissions.md#cursor-spawns). With `inject_help_hook` enabled,
+each fresh, latest-loaded or confirmed replacement conversation receives the
+current AD guidance through a session-scoped stdio MCP registration. With it
+off, no guidance server is registered. Delivery and compaction limits are in
+[Hooks](hooks.md#what-agent-director-help-actually-outputs).
 
 Cursor pre-trust never reports `ok`: `no_pre_trust` yields `skipped`, otherwise
 the unsupported attempt yields `failed` with a warning and launch continues.
@@ -149,7 +151,8 @@ absolute install path `~/.config/agent-director/bin/agent-director help`
 and fires alongside it. Every Codex launch carries a help entry of its own in
 its per-launch block while the setting is on (see
 [Hooks](hooks.md#what-agent-director-help-actually-outputs)), and none when it
-is off; the persistent pair described there is Claude-only. A Codex folder gets
+is off; the persistent pair described there is Claude-only. Cursor uses the
+session-scoped delivery described above. A Codex folder gets
 a help entry for the agents you start there by hand (see [Set up
 agent-director in a Codex folder](#set-up-agent-director-in-a-codex-folder)),
 which also covers a hand-made entry that names the old directory.

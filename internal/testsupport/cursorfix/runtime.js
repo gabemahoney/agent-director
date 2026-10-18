@@ -50,6 +50,49 @@ process.stdin.on('data', chunk => {
 const input = readline.createInterface({input:process.stdin});
 let pendingScenario = null;
 let newCount = 0;
+let mcpAttempt = 0;
+function mcpEvent(event) {
+ if(SETTINGS.mcpTrace) fs.appendFileSync(SETTINGS.mcpTrace,JSON.stringify(event)+'\n');
+}
+async function initializeMCP(frame, scripted) {
+ const attempt=++mcpAttempt;
+ const servers=frame.params?.mcpServers || [];
+ mcpEvent({event:'registration',attempt,method:frame.method,servers});
+ for(const server of servers) {
+  const env={...process.env,...scripted?.mcpAmbientEnv,...Object.fromEntries(server.env.map(entry=>[entry.name,entry.value]))};
+  const child=require('child_process').spawn(server.command,server.args,{env,stdio:['pipe','pipe','pipe']});
+  const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
+  mcpEvent({event:'started',attempt,pid:child.pid,start:stat.slice(stat.lastIndexOf(')')+2).split(' ')[19]});
+  child.stderr.on('data',raw=>mcpEvent({event:'stderr',attempt,text:String(raw)}));
+  child.on('exit',(code,signal)=>mcpEvent({event:'exit',attempt,pid:child.pid,code,signal}));
+  child.on('error',err=>mcpEvent({event:'error',attempt,message:err.message}));
+  const lines=readline.createInterface({input:child.stdout});
+  const id='cursor-mcp-'+attempt;
+  const response=await new Promise((resolve,reject)=>{
+   lines.once('line',line=>{try{resolve(JSON.parse(line));}catch(err){reject(err);}});
+   child.once('exit',()=>reject(Error('MCP exited before initialize response')));
+   child.stdin.on('error',reject);
+   child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'cursorfix',version:'1'}}})+'\n',err=>mcpEvent({event:'initialize_written',attempt,error:err?.message}));
+  });
+  mcpEvent({event:'response',attempt,response});
+  if(response.id!==id || response.error || response.result?.protocolVersion!=='2024-11-05' || typeof response.result?.instructions!=='string' || (scripted?.mcpExpectedInstructions && response.result.instructions!==scripted.mcpExpectedInstructions)) throw Error('invalid MCP correlated guidance response');
+  if(scripted?.mcpWaitAttempt===attempt) while(!fs.existsSync(SETTINGS.mcpRelease)) await new Promise(r=>setTimeout(r,10));
+  if(!scripted?.mcpOmitNotification) {
+   child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
+   mcpEvent({event:'notification',attempt});
+  }
+  for(const [index,call] of (scripted?.mcpCalls || []).entries()) {
+   const callID=id+'-tool-'+index;
+   const result=await new Promise((resolve,reject)=>{
+    lines.once('line',line=>{try{resolve(JSON.parse(line));}catch(err){reject(err);}});
+    child.once('exit',()=>reject(Error('MCP exited before tool response')));
+    child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:callID,method:'tools/call',params:call})+'\n');
+   });
+   if(result.id!==callID || result.error) throw Error('invalid MCP tool response');
+   mcpEvent({event:'tool_response',attempt,call,response:result});
+  }
+ }
+}
 function scenario() {
  if(!fs.existsSync(SETTINGS.scenario)) return null;
  const raw=fs.readFileSync(SETTINGS.scenario,'utf8');
@@ -72,6 +115,8 @@ input.on('line', async line => {
   // Source-derived synthetic agent-store.ts existence check; success remains scripted ACP, never authenticated recall.
   const nativeMissing=scripted?.nativeConfigRoot && (process.env.CURSOR_CONFIG_DIR!==scripted.nativeConfigRoot || !fs.existsSync(require('path').join(process.env.CURSOR_CONFIG_DIR,'acp-sessions',frame.params.sessionId,'store.db')));
   send({id:frame.id,...(nativeMissing ? {error:{code:-32603,message:'Session "'+frame.params.sessionId+'" not found'}} : (scripted?.loadReply || {result:{...(scripted?.modes ? {modes:scripted.modes} : {})}}))});
+  mcpEvent({event:'session_response',method:frame.method});
+  if(!nativeMissing && !scripted?.loadReply?.error) await initializeMCP(frame,scripted);
   if(scripted?.afterLoadReply) for(const event of scripted.afterLoadReply) send(event);
  }
  else if(frame.method==='session/new') {
@@ -86,6 +131,8 @@ input.on('line', async line => {
    while(!fs.existsSync(SETTINGS.newRelease)) await new Promise(r=>setTimeout(r,10));
   const reply = count > 1 ? scripted?.newReplies?.[count-2] : scripted?.firstNewReply;
   send({id:frame.id,...(reply || {result:{sessionId:count===1 ? (scripted?.sessionId || 'synthetic-session-1') : 'synthetic-session-'+count,...(scripted?.modes ? {modes:scripted.modes} : {})}})});
+  mcpEvent({event:'session_response',method:frame.method});
+  if(!reply?.error) try {await initializeMCP(frame,scripted);} catch(err) {mcpEvent({event:'failure',message:err.stack});throw err;}
   if(count > 1 && scripted?.afterNew) for(const event of scripted.afterNew) send(event);
  }
  else if(frame.method==='session/set_mode') {
@@ -97,6 +144,7 @@ input.on('line', async line => {
   if(scripted?.afterModeReply) for(const event of scripted.afterModeReply) send(event);
  }
  else if(frame.method==='session/prompt') {
+  mcpEvent({event:'prompt',session:frame.params.sessionId,text:frame.params.prompt[0].text});
   const text=frame.params.prompt[0].text;
   const scripted=scenario();
   if(scripted?.promptReply) { send({id:frame.id,...scripted.promptReply}); return; }

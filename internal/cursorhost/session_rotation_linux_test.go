@@ -243,7 +243,7 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 
 func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
-	c := postBootstrapCursorSession(t, "")
+	c := postBootstrapCursorSession(t, "", true)
 	before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 	b, _ := c.e.s.ReadCursorRuntime(before.InstanceID)
 	gate := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
@@ -289,7 +289,7 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 	// Serial: real runtime/report subprocess and fault injection own environment.
 	for _, failure := range []string{"rejection", "missing ID", "malformed ID", "reused ID", "archive", "report after commit", "authority loss", "runtime death"} {
 		t.Run(failure, func(t *testing.T) {
-			c := postBootstrapCursorSession(t, "")
+			c := postBootstrapCursorSession(t, "", true)
 			before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 			scenario := cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true}
 			switch failure {

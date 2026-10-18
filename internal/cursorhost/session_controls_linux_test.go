@@ -23,6 +23,19 @@ import (
 func TestCursorFIFOExactTextAndLifecycle(t *testing.T) {
 	// Serial: verified runtime fixture sets HOME/PATH and Run owns signal handlers.
 	c := startCursorSession(t, "HOLD")
+	for _, frame := range c.e.runtime.Frames(t) {
+		if string(frame["method"]) == `"session/new"` {
+			var params struct {
+				MCP []any `json:"mcpServers"`
+			}
+			if err := json.Unmarshal(frame["params"], &params); err != nil || params.MCP == nil || len(params.MCP) != 0 {
+				t.Fatalf("help-off registration=%s %v", frame["params"], err)
+			}
+		}
+	}
+	if rotationRecordCount(c, t, "guidance_configured") != 0 || rotationRecordCount(c, t, "guidance_initialized") != 0 {
+		t.Fatal("help-off session recorded guidance")
+	}
 	c.wait(t, "initial receipt", func() bool { return len(c.prompts(t)) == 1 })
 	texts := []string{"HOLD", "第一\t🦋\nsecond café", "paste\tone\nline two", "final 🐝"}
 	c.keys(t, texts[1]+"\r\x1b[200~paste\tone\rline two\x1b[201~\r"+texts[3]+"\r")
