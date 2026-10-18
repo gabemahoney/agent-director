@@ -188,6 +188,15 @@ appending the step makes both a v11→v12 upgrade and a v1→v12 chain work.
 
 ### Current worked example: v10 → v11
 
+**CSCB upgrade caveat (2026-10-18):** The relay rewrite (b.q2i, b.3oc,
+b.8t7 and b.zdz) shipped in AD 0.12.0. CSCB pins AD 0.12.0, but its
+0.16.1 release has only completed b.u7d items 1, 3, 4, 5, 12 and 14;
+10 and 13 are partial; and 2, 6, 7, 8, 9 and 11 are missing. An AD
+upgrade does not fill those consumer delivery/dialog-hold/pause recovery
+gaps. Follow AD's documented recovery semantics and track CSCB catch-up
+in b.u7d. These disclosed gaps do not block AD releases; Gabe approved
+shipping 0.13.0 with this caveat. See docs/release-blockers.md.
+
 Released 0.12.0 uses schema v9. The settled E1 v9→v10 hop creates the
 seventh table, `cursor_runtimes`, validating any pre-existing table before
 stamping v10 in its own transaction. The released v8→v9 rename hop and its

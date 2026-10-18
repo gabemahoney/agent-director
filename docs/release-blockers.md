@@ -37,11 +37,24 @@ binary and has no `optionalDependencies` and no per-platform sub-packages
 
 ---
 
-## B146 — the relay rewrite ships whole, after CSCB (OPEN)
+## B146 — shipped relay rewrite; CSCB catch-up (NON-BLOCKING 2026-10-18)
 
-**Status:** Open.
+**Status:** Non-blocking for AD releases, 2026-10-18. The relay rewrite
+(b.q2i, b.3oc, b.8t7 and b.zdz) shipped in AD 0.12.0. Gabe approved
+shipping AD 0.13.0 (option A) with the CSCB gaps below disclosed.
 
-### What it gates
+### Historical release coordination
+
+The original coordination requirement below describes the already-shipped
+0.12.0 rewrite. It no longer gates AD releases. b.u7d tracks CSCB catching
+up; CSCB currently pins agent-director 0.12.0. Per CSCB 0.16.1, items
+1, 3, 4, 5, 12 and 14 are done; 10 and 13 are partial; and
+2, 6, 7, 8, 9 and 11 are missing. Do not treat that pin or the AD release
+as proof that CSCB handles every delivery, dialog-hold or pause recovery
+case. AD release authorization and scheduler operation belong to the
+orchestrator; b.u7d remains CSCB's catch-up record.
+
+The following was the original release condition, retained as history:
 
 Any release whose binary carries b.146 step 2 (b.q2i: schema v7, `decide`'s
 `delivery`, `max_wait_ms` and `ErrStoreBusy`, the relay hook's ack). Step 2
@@ -68,6 +81,14 @@ v7 is one migration shared with steps 2b (b.3oc) and 2c (b.8t7), so:
   automatic flow), and bumps its pinned client, first.
 
 ### Upgrade notes the release must carry
+
+**CSCB compatibility caveat (2026-10-18):** AD's relay rewrite already
+shipped in 0.12.0, but CSCB 0.16.1 has not completed b.u7d. Items
+1, 3, 4, 5, 12 and 14 are done; 10 and 13 are partial; and
+2, 6, 7, 8, 9 and 11 are missing. CSCB pins AD 0.12.0. Upgrading AD
+does not complete those consumer changes; use AD's documented delivery
+and recovery semantics rather than assuming CSCB implements them all.
+This is a disclosed consumer gap, not an AD release blocker.
 
 Release notes are built from commit messages, so the release states these
 in commit bodies.
@@ -110,7 +131,7 @@ check the prompt is empty, send `/exit` with
 `send-keys --expect-pane-sha256` and poll `get` or `status` until the row
 is `ended`. See docs/permissions.md, "Send-keys interaction".
 
-### Resolution steps
+### Original resolution checklist (historical)
 
 1. Steps 2, 2b and 2c are merged on the release branch, and so is b.zdz
    (`pause` held like a plain `send-keys`).
