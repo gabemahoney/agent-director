@@ -26,6 +26,7 @@ ch_peer_gateway=''
 ch_peer_runtime=''
 ch_peer_server=''
 ch_peer_retired=0
+ch_known_children=()
 ch_peer_evidence() {
  local out=$1
  [[ -d $case_dir/peer-diagnostics ]] || return 0
@@ -104,6 +105,7 @@ ch_route_snapshot() {
 ch_child() {
  local surface=$1 label=$2 settings params child
  child="child-$label-$id"
+ ch_known_children+=("$label")
  jq -cn --arg session "$child-session" --rawfile plain "$case_dir/canonical-help" '{sessionId:$session,loadSupport:true,mcpExpectedInstructions:$plain}' > "$case_dir/child-$label-scenario"
  settings=$(jq --arg dir "$case_dir" --arg child_label "$label" '.+{trace:($dir+"/child-"+$child_label+"-trace.jsonl"),pid:($dir+"/child-"+$child_label+"-pid"),scenario:($dir+"/child-"+$child_label+"-scenario"),raw:($dir+"/child-"+$child_label+"-raw"),mcpTrace:($dir+"/child-"+$child_label+"-mcp.jsonl"),mcpControl:($dir+"/child-"+$child_label+"-control.json")}' <<<"$AD_CURSOR_FIX_SETTINGS")
  printf '%s\n' "$settings" > "$case_dir/child-$label-settings.json"
@@ -272,10 +274,16 @@ ch_cleanup_peer() {
  return "$rc"
 }
 ch_exit() {
- local rc=$? evidence_rc=0 cleanup_rc=0 helper_cleanup_rc=0
+ local rc=$? evidence_rc=0 cleanup_rc=0 helper_cleanup_rc=0 diagnostic_rc=0 diagnostic_emitted=0
  trap - EXIT
  set +e
+ # No probe/startup capture: snapshot only at terminal exit, while children and
+ # their tmux server still exist. Keep passing stdout quiet, but retain this
+ # pre-cleanup observation for failures discovered during export or cleanup.
+ if timeout --kill-after=1s 9s node "$SOURCE_DIR/test/driver/cursor-callers-help-diagnostics.cjs" "$case_dir" "$STORE" "$id" "$socket" "${check_id:-terminal-exit}" "$ch_peer_socket" "${ch_known_children[*]}" > "$case_dir/help-failure-metadata.jsonl" 2> "$case_dir/help-failure-metadata.stderr"; then :; else diagnostic_rc=$?; fi
+ if ((rc!=0)); then ch_print_failure_metadata before-cleanup "$diagnostic_rc"; diagnostic_emitted=1; fi
  ch_export || { evidence_rc=$?; printf 'HELP_EVIDENCE_FAILED stage=export exit=%s\n' "$evidence_rc" >&2; }
+ if ((evidence_rc!=0 && diagnostic_emitted==0)); then ch_print_failure_metadata before-cleanup "$diagnostic_rc"; diagnostic_emitted=1; fi
  # Gateway death is observed before tmux teardown on successful cases.
  if [[ -n $ch_peer_socket ]]; then ch_cleanup_peer || cleanup_rc=$?; fi
  # Retain the final server tail as well as the pre-teardown first failure.
@@ -285,12 +293,22 @@ ch_exit() {
   if ! cp "$case_dir/peer-cleanup.stderr" "/tmp/cursor-callers-help-artifacts/$id/peer-cleanup.stderr"; then evidence_rc=1; fi
   if ! chmod 600 "/tmp/cursor-callers-help-artifacts/$id/peer-cleanup.stderr"; then evidence_rc=1; fi
  fi
+ if (( (evidence_rc!=0 || cleanup_rc!=0) && diagnostic_emitted==0 )); then ch_print_failure_metadata deferred-after-peer-cleanup "$diagnostic_rc"; diagnostic_emitted=1; fi
  (exit "$rc"); cleanup_cursor_case || helper_cleanup_rc=$?
  if ((cleanup_rc==0)); then cleanup_rc=$helper_cleanup_rc; fi
+ if (( (evidence_rc!=0 || cleanup_rc!=0) && diagnostic_emitted==0 )); then ch_print_failure_metadata deferred-after-cleanup "$diagnostic_rc"; fi
  printf 'HELP_CASE_EXIT original=%s evidence=%s cleanup=%s\n' "$rc" "$evidence_rc" "$cleanup_rc" >&2
  if ((rc==0 && evidence_rc!=0)); then rc=$evidence_rc; fi
  if ((rc==0 && cleanup_rc!=0)); then rc=$cleanup_rc; fi
  exit "$rc"
+}
+ch_print_failure_metadata() {
+ # Expected diagnostic failures never invoke the driver's ERR trap or change
+ # the original case result. Raw helper stderr is deliberately not published.
+ printf 'HELP_FAILURE_METADATA_BEGIN case=%s stage=%s snapshot=before-cleanup emission=%s collector_exit=%s\n' "$id" "${check_id:-terminal-exit}" "$1" "$2"
+ if [[ -s $case_dir/help-failure-metadata.jsonl ]]; then cat "$case_dir/help-failure-metadata.jsonl" || true; fi
+ printf 'HELP_FAILURE_METADATA_END case=%s incomplete_collector=%s\n' "$id" "$2"
+ return 0
 }
 trap ch_exit EXIT
 ch_exchange() {

@@ -71,9 +71,14 @@ async function startMCP(server, env, scripted, attempt) {
   lines.on('line',line=>{
    try {
     const reply=JSON.parse(line), waiter=pending.get(reply.id);
+    // Retain receipt metadata even when correlation/validation rejects a reply.
+    mcpEvent({event:'response_received',attempt,id:reply.id,code:reply.error?.code ?? null,bytes:Buffer.byteLength(line),sha256:require('crypto').createHash('sha256').update(line).digest('hex')});
     if(!waiter) throw Error('uncorrelated MCP response');
     pending.delete(reply.id); waiter.resolve(reply);
-   } catch(err) {for(const waiter of pending.values()) waiter.reject(err);pending.clear();}
+   } catch(err) {
+    mcpEvent({event:'response_rejected',attempt,bytes:Buffer.byteLength(line),sha256:require('crypto').createHash('sha256').update(line).digest('hex')});
+    for(const waiter of pending.values()) waiter.reject(err);pending.clear();
+   }
   });
   child.on('exit',()=>{for(const waiter of pending.values()) waiter.reject(Error('MCP exited before response'));pending.clear();});
   child.stdin.on('error',err=>{for(const waiter of pending.values()) waiter.reject(err);pending.clear();});
@@ -81,7 +86,10 @@ async function startMCP(server, env, scripted, attempt) {
    return new Promise((resolve,reject)=>{
     const timer=setTimeout(()=>{pending.delete(id);reject(Error('MCP response deadline'));},10000);
     pending.set(id,{resolve:r=>{clearTimeout(timer);resolve(r);},reject:e=>{clearTimeout(timer);reject(e);}});
-    child.stdin.write(JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n',err=>{
+    const wire=JSON.stringify({jsonrpc:'2.0',id,method,params})+'\n';
+    child.stdin.write(wire,err=>{
+     // Actual write completion, not a request inferred from a later response.
+     mcpEvent({event:'request_written',attempt,id,method,code:err?.code || null,bytes:Buffer.byteLength(wire),sha256:require('crypto').createHash('sha256').update(wire).digest('hex')});
      if(method==='initialize') mcpEvent({event:'initialize_written',attempt,error:err?.message});
      if(err) {const waiter=pending.get(id);pending.delete(id);waiter?.reject(err);}
     });
