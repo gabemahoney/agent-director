@@ -8,6 +8,7 @@ package hook_test
 // guards are internal/store's.
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -59,6 +60,13 @@ func TestCodexSessionIdAndTranscript(t *testing.T) {
 			cxFire(t, st, id, cxOwn(t, st, id), payload)
 
 			row := mustGetSpawn(t, st, id)
+			wantStartup := tc.fixture == "session-start-startup.json"
+			if (row.CodexStartup != nil) != wantStartup {
+				t.Fatalf("startup provenance = %+v; want present %v", row.CodexStartup, wantStartup)
+			}
+			if wantStartup && (row.CodexStartup.SessionID != sid || row.CodexStartup.JSONLPath != path || row.ContextEvidence().FreshCodexWriter() != tc.present) {
+				t.Errorf("startup provenance does not match hook/session/path: %+v", row.CodexStartup)
+			}
 			wantSession, wantPath := "", ""
 			if tc.session {
 				wantSession = sid
@@ -71,6 +79,57 @@ func TestCodexSessionIdAndTranscript(t *testing.T) {
 			}
 			if stem := strings.TrimSuffix(filepath.Base(path), ".jsonl"); row.SessionID == stem && row.SessionID != "" {
 				t.Errorf("session id %q is the rollout's file stem; want the payload's session_id", row.SessionID)
+			}
+		})
+	}
+}
+
+func TestCodexStartupDeferredRollout(t *testing.T) {
+	for _, matchingPath := range []bool{true, false} {
+		t.Run(strconv.FormatBool(matchingPath), func(t *testing.T) {
+			const id = "cx-deferred-rollout"
+			st, _ := cxSeed(t, id, store.StatePending)
+			payload, sid, startupPath := codexPayload(t, "session-start-startup.json", false, nil)
+			cxFire(t, st, id, cxOwn(t, st, id), payload)
+			row := mustGetSpawn(t, st, id)
+			if row.CodexStartup == nil || row.JSONLPath != "" || row.ContextEvidence().FreshCodexWriter() {
+				t.Fatalf("deferred startup: %+v", row.CodexStartup)
+			}
+			path := startupPath
+			if !matchingPath {
+				path = codexfix.TempRolloutPath(t, sid, true)
+			}
+			if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			payload, _, _ = codexPayload(t, "user-prompt-submit.json", false, map[string]any{"session_id": sid, "transcript_path": path})
+			cxFire(t, st, id, cxOwn(t, st, id), payload)
+			row = mustGetSpawn(t, st, id)
+			if row.JSONLPath != path || row.ContextEvidence().FreshCodexWriter() != matchingPath {
+				t.Fatalf("healed writer path=%q, qualifies=%v; want %q, %v", row.JSONLPath, row.ContextEvidence().FreshCodexWriter(), path, matchingPath)
+			}
+		})
+	}
+}
+
+func TestCodexStartupInvalidatedByLaterSessionStart(t *testing.T) {
+	for _, source := range []string{"startup", "resume", "fork", "clear"} {
+		t.Run(source, func(t *testing.T) {
+			const id = "cx-startup-invalidated"
+			st, _ := cxSeed(t, id, store.StatePending)
+			startup, sid, path := codexPayload(t, "session-start-startup.json", true, nil)
+			cxFire(t, st, id, cxOwn(t, st, id), startup)
+			if mustGetSpawn(t, st, id).CodexStartup == nil {
+				t.Fatal("initial startup was not admitted")
+			}
+			later, _, _ := codexPayload(t, "session-start-"+source+".json", false, map[string]any{"session_id": sid, "transcript_path": path})
+			cxFire(t, st, id, cxOwn(t, st, id), later)
+			if row := mustGetSpawn(t, st, id); row.State != store.StateWaiting || row.SessionID != sid || row.CodexStartup != nil {
+				t.Fatalf("later %s did not invalidate origin while preserving lifecycle: %+v", source, row)
+			}
+			cxFire(t, st, id, cxOwn(t, st, id), startup)
+			if mustGetSpawn(t, st, id).CodexStartup != nil {
+				t.Fatal("delayed startup restored invalidated origin")
 			}
 		})
 	}

@@ -154,7 +154,8 @@ func TestFreshStoreSchema(t *testing.T) {
 		{"spawns", "family_settled_state", "TEXT", true, "''"},
 		{"spawns", "family_changed_ms", "INTEGER", true, "0"},
 	})
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms"})
+	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"})
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}

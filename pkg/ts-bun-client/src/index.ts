@@ -131,7 +131,7 @@ export type {
 // Verb Params / Result interfaces.
 export type {
   SpawnParams, SpawnResult,
-  StatusParams, StatusResult,
+  StatusParams, StatusResult, ContextReading,
   GetParams, GetResult,
   SendKeysParams, SendKeysResult,
   ReadPaneParams, ReadPaneResult,

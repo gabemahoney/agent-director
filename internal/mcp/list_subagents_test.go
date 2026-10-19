@@ -7,12 +7,13 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/mcp"
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // subagentKeys are the keys of every list_subagents record, sorted; all always present.
 var subagentKeys = []string{
-	"close_reason", "description", "first_started_at", "instance_id", "lost_at", "model",
+	"close_reason", "context", "description", "first_started_at", "instance_id", "lost_at", "model",
 	"parent_id", "parent_type", "run_mode", "session_id", "started_at", "state",
 	"stopped_at", "subagent_id", "subagent_type", "tool_use_id",
 }
@@ -81,6 +82,7 @@ func TestListSubagentsMCPResultShape(t *testing.T) {
 		t.Fatalf("subagents = %d records; want %d", len(recs), len(want))
 	}
 	for i, rec := range recs {
+		want[i]["context"] = string(contextfix.Must(t, "claude-missing-capacity").Expected)
 		keys := make([]string, 0, len(rec))
 		got := map[string]string{}
 		for k, v := range rec {

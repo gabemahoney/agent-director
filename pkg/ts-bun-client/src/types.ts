@@ -470,6 +470,8 @@ export interface StatusParams {
 
 /** The row's reported lifecycle state. */
 export interface StatusResult {
+  /** Experimental context estimate for the current session. */
+  context: ContextReading;
   /**
    * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
@@ -500,6 +502,26 @@ export interface StatusResult {
   launch_started_at?: string | null;
 }
 
+/**
+ * Experimental: agent internals and this output shape have no stable-format guarantee.
+ * Unavailable readings retain all five null fields. The Codex 0.159.2 OpenAI rollout
+ * source estimates last-response occupancy from its own usage and reported usable window;
+ * it does not represent cumulative billing. Claude 2.1.280 first-party pairs native capacity
+ * callbacks with transcript usage for the same resolved model and response, without provider,
+ * endpoint or window overrides. Cursor remains unknown: managed ACP lacks the ordinary
+ * usage-bearing afterAgentResponse/stop path and manual /summarize; its prompt result has only
+ * stopReason. Both captured Cursor versions have a shared-resource native preCompact executor
+ * path, but automatic managed delivery remains unqualified and managed support incomplete.
+ */
+export interface ContextReading {
+  used_tokens: number | null;
+  window_tokens: number | null;
+  fraction: number | null;
+  source: string | null;
+  /** Measurement time in RFC3339 UTC, never the time of the read. */
+  as_of: string | null;
+}
+
 /** The id whose row is requested. */
 export interface GetParams {
   /** Id of the Spawn to fetch. */
@@ -508,6 +530,8 @@ export interface GetParams {
 
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+  /** Experimental context estimate for the current session. */
+  context: ContextReading;
   instance_id: string;
   parent_id: string;
   /**
@@ -1136,6 +1160,8 @@ export interface ListSubagentsParams {
  * (trailing zeros dropped, no fraction on a whole second), exactly as the CLI prints it.
  */
 export interface SubagentRecord {
+  /** Experimental reading; unknown without evidence belonging to this child. */
+  context: ContextReading;
   /** The subagent's id, unique among the records shown for its row. */
   subagent_id: string;
   /** The id of the row (agent) the subagent belongs to. */

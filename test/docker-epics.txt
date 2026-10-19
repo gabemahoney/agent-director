@@ -40,3 +40,4 @@ cursor-install-runtime
 cursor-groups
 cursor-callers-help
 family-state
+context-fullness

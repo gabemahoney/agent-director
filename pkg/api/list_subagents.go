@@ -14,6 +14,9 @@ import (
 // RFC3339 with the millisecond fraction, trailing zeros dropped, no fraction on
 // a whole second, ending Z.
 type SubagentRecord struct {
+	// Context remains unknown without qualified evidence attributable to this
+	// child. A parent transcript or capacity never supplies the child's reading.
+	Context ContextReading `json:"context"`
 	// SubagentID is the subagent's id, unique among the records shown for its agent.
 	SubagentID string `json:"subagent_id"`
 	// InstanceID is the instance_id of the agent the subagent belongs to.
@@ -106,6 +109,7 @@ func optMillisToUTC(millis *int64) *time.Time {
 // subagentRecordOf projects one stored record onto its JSON shape.
 func subagentRecordOf(r SubagentRow) SubagentRecord {
 	return SubagentRecord{
+		Context:        contextForSubject(r.ContextEvidence, r.SubagentID),
 		SubagentID:     r.SubagentID,
 		InstanceID:     r.InstanceID,
 		SessionID:      r.SessionID,

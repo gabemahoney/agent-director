@@ -18,8 +18,9 @@ const rolloutStamp = "2026-09-01T00-00-00"
 // the Codex folder codexHome: <codexHome>/sessions/2026/09/01/
 // rollout-2026-09-01T00-00-00-<sessionID>.jsonl, a file name that carries the
 // session id. When present is true the file is created with one placeholder
-// line; otherwise only the path is returned, as a transcript not on disk yet.
-func RolloutPath(t *testing.T, codexHome, sessionID string, present bool) string {
+// line, or the supplied captured content; otherwise only the path is returned,
+// as a transcript not on disk yet.
+func RolloutPath(t *testing.T, codexHome, sessionID string, present bool, content ...[]byte) string {
 	t.Helper()
 	p := filepath.Join(codexHome, "sessions", "2026", "09", "01", "rollout-"+rolloutStamp+"-"+sessionID+".jsonl")
 	if !present {
@@ -28,14 +29,18 @@ func RolloutPath(t *testing.T, codexHome, sessionID string, present bool) string
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		t.Fatalf("codexfix.RolloutPath: mkdir rollout folder: %v", err)
 	}
-	if err := os.WriteFile(p, []byte("{}\n"), 0o600); err != nil {
+	data := []byte("{}\n")
+	if len(content) > 0 {
+		data = content[0]
+	}
+	if err := os.WriteFile(p, data, 0o600); err != nil {
 		t.Fatalf("codexfix.RolloutPath: write rollout: %v", err)
 	}
 	return p
 }
 
 // TempRolloutPath is RolloutPath under a fresh temporary Codex folder.
-func TempRolloutPath(t *testing.T, sessionID string, present bool) string {
+func TempRolloutPath(t *testing.T, sessionID string, present bool, content ...[]byte) string {
 	t.Helper()
-	return RolloutPath(t, t.TempDir(), sessionID, present)
+	return RolloutPath(t, t.TempDir(), sessionID, present, content...)
 }

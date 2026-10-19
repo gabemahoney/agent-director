@@ -1,0 +1,8 @@
+{
+  "kind": "sanitized_capture",
+  "version": "2.1.280",
+  "source_report": "t1.b1n.y4",
+  "source_artifact": "local-evidence.json",
+  "original_line": 579,
+  "qualification": "No captured applicable context capacity; expected unknown. Only version/model/usage/session/timestamp retained."
+}

@@ -326,3 +326,17 @@ test("public-surface: dist/index.d.ts does not leak _cliPath (SR-4.9)", () => {
 test("public-surface: SpawnResult carries optional nonnullable dropped_args", () => {
   expect(interfaceBody(typesGolden(), "SpawnResult")).toMatch(/\bdropped_args\?\s*:\s*string\[\]\s*;/);
 });
+
+
+test.each(["StatusResult", "GetResult", "SubagentRecord"])(
+ "public-surface: %s requires ContextReading", (name) => {
+  expect(interfaceBody(typesGolden(),name)).toMatch(/\bcontext\s*:\s*ContextReading\s*;/);
+ });
+
+test("public-surface: ContextReading requires every nullable field and is exported", () => {
+ const body = interfaceBody(typesGolden(), "ContextReading");
+ for (const [name,type] of [["used_tokens","number"],["window_tokens","number"],["fraction","number"],["source","string"],["as_of","string"]]) {
+  expect(body).toMatch(new RegExp(`\\b${name}\\s*:\\s*${type}\\s*\\|\\s*null\\s*;`));
+ }
+ expect(fs.readFileSync(path.join(fixtureDir,"index.d.ts.golden"),"utf8")).toMatch(/\bContextReading\b/);
+});

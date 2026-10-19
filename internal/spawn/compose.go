@@ -58,8 +58,9 @@ type ComposedLaunch struct {
 
 // ComposeLaunch composes the launch of r, a resolved, validated and
 // defaulted request, for plain spawn's insert and for reuse's reset
-// (SR-10.3, SR-22.2). It makes no store write, tmux call, file or network
-// I/O; it reads only the process environment for the parent id. So every
+// (SR-10.3, SR-22.2). It makes no store/file write, tmux call or network I/O.
+// It reads Claude's selected settings to preserve native status-line commands
+// and the process environment for the parent id. So every
 // composition failure (a settings synthesis error) comes before the write
 // that begins the launch and writes nothing, and between that write and the
 // create there is only in-process work (SR-13.4).

@@ -49,6 +49,8 @@ type PermissionRequestInfo struct {
 // match the SRD §4.2 column names so callers reading the verb output can
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
+	// Context is an experimental on-demand reading for the current session.
+	Context ContextReading `json:"context"`
 	// InstanceID is the stable id of the Spawn (UUID4 or caller-supplied).
 	InstanceID string `json:"instance_id"`
 	// ParentID is the instance_id of the Spawn that launched this one
@@ -399,6 +401,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
+		Context:                 contextOf(row.ContextEvidence()),
 		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,
 		State:                   reported,

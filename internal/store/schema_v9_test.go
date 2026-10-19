@@ -199,10 +199,8 @@ func TestV9MigratedRowResumes(t *testing.T) {
 	}
 }
 
-// TestV9LeavesNoClaudeColumn: no table of a new store, nor of a migrated v8
-// one (every table sqlite_master lists, so a later table is held to it too),
-// has a column named claude_*, and the six renamed columns hold their new
-// names (SR-3.1).
+// TestV9LeavesNoClaudeColumn rejects legacy claude_* columns in fresh and
+// migrated stores, allowing the capacity metadata introduced in v13.
 func TestV9LeavesNoClaudeColumn(t *testing.T) {
 	cases := []struct {
 		name string
@@ -227,8 +225,8 @@ func TestV9LeavesNoClaudeColumn(t *testing.T) {
 				}
 				for _, table := range tables {
 					for _, c := range tableColumnNames(t, db, table) {
-						if strings.HasPrefix(c, "claude_") {
-							t.Errorf("%s has the column %s; want no claude_ column", table, c)
+						if strings.HasPrefix(c, "claude_") && !(table == "spawns" && c == "claude_capacity") {
+							t.Errorf("%s has the legacy column %s", table, c)
 						}
 					}
 				}

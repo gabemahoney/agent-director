@@ -87,9 +87,11 @@ type HandleConfig struct {
 	// (fail-open; closed for a relayed PermissionRequest), found after
 	// ad.hook.fired is armed.
 	Agent string
-	Env   func(string) string
-	Cfg   config.Relay
-	Clock PollClock
+	// ContextSource selects a native capacity callback, never a lifecycle event.
+	ContextSource string
+	Env           func(string) string
+	Cfg           config.Relay
+	Clock         PollClock
 	// ParentPID returns the hook's parent pid; with exec-form hooks it is
 	// the agent process (SR-22.9). cmd/agent-director wires os.Getppid; tests
 	// inject a fixed pid. A nil ParentPID reads as pid 0, which matches no
@@ -359,6 +361,13 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		return nil
 	}
 
+	if hc.ContextSource != "" {
+		if err := handleClaudeCapacity(raw, st, hc, parent, start); err != nil {
+			logf(logger, "hook: Claude capacity: %v", err)
+		}
+		return nil
+	}
+
 	// Peek the event name from the raw payload so failClosed can gate
 	// its envelope write on event type from the first post-read failure
 	// point. An empty event name (parse failure or missing field) is
@@ -432,10 +441,11 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		sessionID, transcriptPath = "", ""
 	}
 	gate := store.HookGate{
-		Event:       res.EventName,
-		ParentPID:   parent.pid,
-		ParentStart: parent.start,
-		SessionID:   sessionID,
+		Event:        res.EventName,
+		ParentPID:    parent.pid,
+		ParentStart:  parent.start,
+		SessionID:    sessionID,
+		CodexStartup: res.CodexStartup,
 	}
 	if res.Agent == store.AgentCursor {
 		reader, ok := st.(interface {

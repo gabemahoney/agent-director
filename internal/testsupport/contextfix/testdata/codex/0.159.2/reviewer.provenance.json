@@ -1,0 +1,11 @@
+{
+  "kind": "sanitized_capture",
+  "version": "0.159.2",
+  "source_report": "t1.b1n.y4",
+  "source_artifact": "local-evidence.json",
+  "source_filename": "rollout-2026-10-17T04-12-29-01a14990-31ea-7be2-a3f4-9165aa8ff1b0.jsonl",
+  "original_sha256": "99d5cc726da22c1d9e09471e32f5a79f178ed1309a37379b19b3eacb609604fa",
+  "session_id": "01a14990-31ea-7be2-a3f4-9165aa8ff1b0",
+  "record_selection": "All original record envelopes through original line 592, the task_complete following the research snapshot latest_usage. Retained timestamps, record/event types, session/turn/model/provider/history metadata and numeric token accounting; removed all content and other fields. Source file later continued; later records excluded.",
+  "latest_usage_original_line": 591
+}

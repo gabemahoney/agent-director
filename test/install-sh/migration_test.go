@@ -238,8 +238,8 @@ func TestMigrationGate(t *testing.T) {
 			if got := h.migBackupsUnder(h.New); len(got) != 0 {
 				t.Errorf("backups = %v, want none", got)
 			}
-			if v, cur := h.migStoreVersion(filepath.Join(h.New, "state.db")), moveCurrentVersion(t, h); v != cur {
-				t.Errorf("installed store version %s; want current %s", v, cur)
+			if v, current := h.migStoreVersion(filepath.Join(h.New, "state.db")), moveCurrentVersion(t, h); v != current {
+				t.Errorf("installed store version %s; want current %s", v, current)
 			}
 			if strings.Contains(res.Stdout, "migrate :") {
 				t.Errorf("stdout reports a migration:\n%s", res.Stdout)

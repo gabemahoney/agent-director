@@ -1,0 +1,104 @@
+{
+  "installation": "/home/horde/.local/share/cursor-agent/versions/2026.10.12-d47ca18",
+  "source_only": true,
+  "files": [
+    {
+      "file": "7000.index.js",
+      "sha256": "be2636cb7a009122546a16c3968ce478d7a2cb36889785b91574de27279ec42b",
+      "terms": [
+        {
+          "term": "tokenUsage:",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 837641,
+              "text": "cutor,e.hooksConfig,{conversationId:U.getId(),generationId:c,model:e.modelManager.getHookModelString(f?.modelId),text:C,tokenUsage:p});const i=async()=>{if(e.hookExecutor&&e.hooksConfig&&(e.hooksConfig.userHooks?.hooks.stop?.length||e.hooksConfig.projectHooks?.hooks.stop?.length))try{const t=await e.hookExecutor.executeHookForStep(k._E.stop,{conversation_id:U.getId(),generation_id:c,model:e.modelManager.getHookModelString(f?.modelId),status:\"completed\",loop_count:Zr.current,input_tokens:p?.inputTokens,output_tokens:p?.outputTokens,cache_read_tokens:p?.cacheReadTokens,cache_write_toke"
+            }
+          ]
+        },
+        {
+          "term": "afterAgentResponse",
+          "count": 3,
+          "excerpts": [
+            {
+              "offset": 598,
+              "text": "on_ms:n.durationMs}).catch((e=>{(0,s.cY)(\"[hooks] afterAgentThought hook error:\",e)}))}function a(e,t,n){e&&t&&o(t,r._E.afterAgentResponse)&&e.executeHookForStep(r._E.afterAgentResponse,{conversation_id:n.conversationId,generation_id:n.generationId,model:n.model,text:n.text,input_tokens:n.tokenUsage?.inputTokens,output_tokens:n.tokenUsage?.outputTokens,cache_read_tokens:n.tokenUsage?.cacheReadTokens,cache_write_tokens:n.tokenUsage?.cacheWriteTokens}).catch((e=>{(0,s.cY)(\"[hooks] afterAgentResponse hook error:\",e)}))}},\"./src/autorun-aware-decision-provider.ts\"(e,t,n){n.d(t,{w:()=>s})"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": "6136.index.js",
+      "sha256": "0352239a9250ac8e5631ad6cab8eed0d35f6b45c4c219f330f802c28c5b36e88",
+      "terms": [
+        {
+          "term": "hookExecutor",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 72811,
+              "text": ":return}}});return ve=(0,o.hv_)(ye),Ce=(0,w.g)(ye),ee.register(o.ZnQ,ve),ee.register(o.I2x,Ce),{resources:fe,mcpLease:K,hookExecutor:pe,backgroundWorkRegistry:H,subagentPublisher:Ie}}},\"./src/acp/session-update-presenter.ts\"(e,t,s){s.d(t,{A:()=>i});var a=s(\"../proto/dist/generated/agent/v1/todo_tool_pb.js\"),n=s(\"./src/debug.ts\");class o{constructor(e,t,s){this.sentToolCalls=e,this.sendToolCall=t,this.sendToolCallUpdate=s,this.states=new Map}clear(){this.states.clear()}async ensureToolCard(e,t,s){const a=this.getState(e);if(a.hasCard)return;const n=this.sentToolCalls.has(e);a.hasCard="
+            }
+          ]
+        },
+        {
+          "term": "async handleSlashCommand",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 16898,
+              "text": "async()=>{const t=e;e=void 0,void 0!==t&&await this.presenter.sendToolCallUpdate({toolCallId:t,status:\"completed\"})}))}}async handleSlashCommand(e){if(\"/copy-request-id\"===e.toLowerCase().trim())return await this.handleCopyRequestId(),{handled:!0};const t={handled:!1,cursorCommands:[],selectedSkills:[]};if(!e.startsWith(\"/\")&&!(0,b._)(e))return t;let s;try{({loader:s}=await this.loadCommandsAndSkills())}catch(e){return(0,I.cY)(\"Failed to load commands and skills for prompt\",{sessionId:this.sessionId,error:e instanceof Error?e.message:String(e)}),t}return{handled:!1,cursorCommands:thi"
+            }
+          ]
+        },
+        {
+          "term": "afterAgentResponse",
+          "count": 0,
+          "excerpts": []
+        },
+        {
+          "term": "sessionStart",
+          "count": 0,
+          "excerpts": []
+        }
+      ]
+    },
+    {
+      "file": "index.js",
+      "sha256": "1d18be20841eacedf7a71eadacd5a97ca3d4de323478c9f73afcba92416e1337",
+      "terms": [
+        {
+          "term": "command(\"acp\"",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 1725051,
+              "text": ".endpoint),o=(0,B.m)({credentialManager:we,endpoint:i,configProvider:ue});return n(we,ue,o,{format:t,product:ze})})),Ce.command(\"acp\",{hidden:!0}).description(\"Start the Cursor Agent as an ACP (Agent Client Protocol) server\").action((async()=>{const{runAcp:e}=await Promise.all([r.e(2240),r.e(8096),r.e(7923),r.e(190),r.e(1429),r.e(2496),r.e(1623),r.e(6136)]).then(r.bind(r,\"./src/commands/acp.ts\")),t=ve(),{workspacePath:n,workspaceDirectories:s,worktreeSetupPath:i}=await xe(t),o=await Se(n);if(i){if(!0===t.trust)try{for(const e of s)await(0,ie.I)(e)}catch{(0,I.uQ)(1,`Error: Failed to t"
+            }
+          ]
+        },
+        {
+          "term": "ConversationTokenDetails|",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 5071709,
+              "text": "JsonString(e,t){return(new Qo).fromJsonString(e,t)}static equals(e,t){return n.C.util.equals(Qo,e,t)}static $(){return[\"ConversationTokenDetails|1 used_tokens 13|2 max_tokens 13|3 breakdown #0?|4 prompt_context_usage_tree #1?\",To,qo]}}class No extends Is{constructor(e){super(),n.C.util.initPartial(e,this)}static fromBinary(e,t){return(new No).fromBinary(e,t)}static fromJson(e,t){return(new No).fromJson(e,t)}static fromJsonString(e,t){return(new No).fromJsonString(e,t)}static equals(e,t){return n.C.util.equals(No,e,t)}static $(){return[\"FileState|1 content 9?|2 initial_content 9?\"]}}c"
+            }
+          ]
+        },
+        {
+          "term": "case\"preCompact\"",
+          "count": 1,
+          "excerpts": [
+            {
+              "offset": 3606124,
+              "text": "ForStep?.(e,t)??!1}async execute(e,t){const r=t.request;if(!r)return new g.S1({response:void 0});switch(r.request.case){case\"preCompact\":{const e=r.request.value,t={conversation_id:e.conversationId??\"\",generation_id:e.generationId??\"\",model:e.model??\"\",...(0,We.U4)(e),trigger:\"manual\"===e.trigger?\"manual\":\"auto\",context_usage_percent:e.contextUsagePercent,context_tokens:Number(e.contextTokens),context_window_size:Number(e.contextWindowSize),message_count:e.messageCount,messages_to_compact:e.messagesToCompact,is_first_compaction:e.isFirstCompaction},n=await this.hookExecutor.executeHo"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -62,12 +63,12 @@ func TestListSubagentsCLIPrintsRecords(t *testing.T) {
 	stdout, stderr, code := runCLIWithHome(t, home, "list-subagents", "--instance-id", id)
 
 	want := `{"tracked":true,"subagents":[` +
-		`{"subagent_id":"sub-full","instance_id":"` + id + `","session_id":"sess-1","subagent_type":"Explore",` +
+		`{"context":` + string(contextfix.Must(t, "claude-missing-capacity").Expected) + `,"subagent_id":"sub-full","instance_id":"` + id + `","session_id":"sess-1","subagent_type":"Explore",` +
 		`"description":"map the repo","model":"opus","parent_type":"agent","parent_id":"` + id + `",` +
 		`"tool_use_id":"toolu_1","run_mode":"foreground","first_started_at":"2026-09-21T14:13:20Z",` +
 		`"started_at":"2026-09-21T14:13:20.12Z","stopped_at":"2026-09-21T14:13:20.456Z","lost_at":null,` +
 		`"state":"stopped","close_reason":"stop_event"},` +
-		`{"subagent_id":"sub-bare","instance_id":"` + id + `","session_id":null,"subagent_type":null,` +
+		`{"context":` + string(contextfix.Must(t, "claude-missing-capacity").Expected) + `,"subagent_id":"sub-bare","instance_id":"` + id + `","session_id":null,"subagent_type":null,` +
 		`"description":null,"model":null,"parent_type":null,"parent_id":null,"tool_use_id":null,"run_mode":null,` +
 		`"first_started_at":null,"started_at":null,"stopped_at":null,"lost_at":null,` +
 		`"state":"running","close_reason":null}]}` + "\n"

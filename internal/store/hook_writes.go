@@ -603,9 +603,11 @@ const clearIdleSinceSQL = `UPDATE spawns
 // snapshot the caller examined: the prior state (for the trail) and the
 // outgoing transcript path and life (for the rotation archive).
 type sessionStartPrior struct {
-	state     string
-	jsonlPath string
-	life      int64
+	agent       string
+	launchToken string
+	state       string
+	jsonlPath   string
+	life        int64
 }
 
 // RecordSessionStartIdentity is the gated SessionStart write (SR-22.9,
@@ -681,6 +683,8 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             last_seen_at              = CURRENT_TIMESTAMP,
 	             ended_at                  = NULL,
 	             session_id                = COALESCE(?, session_id),
+	             codex_startup             = ?,
+	             claude_capacity           = NULL,
 	             ` + jsonlSet + `,
 	             pid                       = ?,
 	             proc_starttime            = ?,
@@ -692,7 +696,7 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	             ` + launchStartClear + `,
 	             ` + rowVersionAdvance + `
 	       WHERE instance_id = ? AND ` + hookGateSQL + ` AND ` + snapshotMatchSQL
-	args := append(append(stateArgs, nullableStringArg(gate.SessionID)), jsonlArgs...)
+	args := append(append(stateArgs, nullableStringArg(gate.SessionID), codexStartupArg(prior, gate, jsonlPath)), jsonlArgs...)
 	args = append(args, positiveIntArg(gate.ParentPID), nullableStringArg(gate.ParentStart),
 		gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
@@ -767,10 +771,10 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 // pinned is false when no row has the id or the row has changed since.
 func (s *Store) readSessionStartPrior(instanceID string, examined RowSnapshot, errPrefix string) (prior sessionStartPrior, pinned bool, err error) {
 	args := append([]any{instanceID}, snapshotMatchArgs(examined)...)
-	err = s.db.QueryRow(`SELECT state, COALESCE(jsonl_path, ''), COALESCE(life_number, 0)
+	err = s.db.QueryRow(`SELECT state, COALESCE(jsonl_path, ''), COALESCE(life_number, 0), COALESCE(agent, ''), COALESCE(launch_token, '')
 	                       FROM spawns
 	                      WHERE instance_id = ? AND `+snapshotMatchSQL, args...,
-	).Scan(&prior.state, &prior.jsonlPath, &prior.life)
+	).Scan(&prior.state, &prior.jsonlPath, &prior.life, &prior.agent, &prior.launchToken)
 	if errors.Is(err, sql.ErrNoRows) {
 		return sessionStartPrior{}, false, nil
 	}

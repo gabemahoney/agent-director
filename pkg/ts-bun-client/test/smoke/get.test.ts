@@ -10,6 +10,7 @@
  */
 
 import { test, expect } from "bun:test";
+import { expectedContext } from "../internal/contextFixture.js";
 import * as path from "path";
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper, homeStore, openClient } from "../internal/helper.js";
@@ -35,6 +36,7 @@ test("get: happy path — returns full spawn row fields", async () => {
     }
     expect(result.launch_started_at).toBeUndefined();
     expect(result.agent).toBe("claude");
+    expect(result.context).toEqual(expectedContext("unknown"));
   });
 }, 10_000);
 
@@ -88,4 +90,14 @@ test("get: error — unknown id → ErrSpawnNotFound", async () => {
     using client = await openClient(homeStore(homeDir));
     await expect(client.get({ instance_id: "smoke-bogus-id" })).rejects.toBeInstanceOf(ErrSpawnNotFound);
   });
+}, 10_000);
+
+
+test.each(["reviewer", "claude-parent"] as const)("get: captured %s context survives the client transport", async (name) => {
+ await withTempHome(async (homeDir) => {
+  const store = homeStore(homeDir);
+  runHelper("seed-spawn", {store, id:"context-get", state:"ended", "create-store":true, "context-fixture":name, "context-writer-pid":String(process.pid)});
+  using client = await openClient(store);
+  expect((await client.get({instance_id:"context-get"})).context).toEqual(expectedContext(name));
+ });
 }, 10_000);

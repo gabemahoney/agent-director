@@ -23,11 +23,12 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			path := makeVersionedDB(t, dir, 10)
 			seedV10EligibilityFixture(t, path, tc.agent, tc.child)
 			before := dbDump(t, path)
-			var priorCols []string
-			var priorSpawnCols []string
-			withRaw(t, path, func(db *sql.DB) { priorCols = tableColumnNames(t, db, "permission_requests") })
-			withRaw(t, path, func(db *sql.DB) { priorSpawnCols = tableColumnNames(t, db, "spawns") })
-			priorSpawn := readRawSpawn(t, path, "pre", priorSpawnCols)
+			var priorCols, spawnCols []string
+			withRaw(t, path, func(db *sql.DB) {
+				priorCols = tableColumnNames(t, db, "permission_requests")
+				spawnCols = tableColumnNames(t, db, "spawns")
+			})
+			priorSpawns := readQuotedRows(t, path, "spawns", "pre", "instance_id", spawnCols)
 			priorRequests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols)
 			id := assertOneStoreID(t, path)
 			writeSentinel(t, dir, 10, schemaVersion)
@@ -60,6 +61,9 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if err := migrateV11toV12(s.db); err != nil {
 				t.Fatal(err)
 			}
+			if err := migrateV12toV13(s.db); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -67,8 +71,8 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if got := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols); !reflect.DeepEqual(got, priorRequests) {
 				t.Fatal("migration changed preexisting request columns")
 			}
-			if got := readRawSpawn(t, path, "pre", priorSpawnCols); !reflect.DeepEqual(got, priorSpawn) {
-				t.Error("preexisting spawn columns changed")
+			if got := readQuotedRows(t, path, "spawns", "pre", "instance_id", spawnCols); !reflect.DeepEqual(got, priorSpawns) {
+				t.Fatal("migration changed preexisting spawn columns")
 			}
 			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
@@ -146,6 +150,9 @@ func TestV11MigrationExistingColumn(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err = migrateV11toV12(s.db); err != nil {
+				t.Fatal(err)
+			}
+			if err = migrateV12toV13(s.db); err != nil {
 				t.Fatal(err)
 			}
 			s.Close()

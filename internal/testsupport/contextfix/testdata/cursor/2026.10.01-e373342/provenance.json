@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "evidence_class": "real-managed-acp-negative-qualification",
+  "cursor_version": "2026.10.01-e373342",
+  "host": "this-host",
+  "verdict": "not-qualified",
+  "recommended_context": "unknown",
+  "source_revision": "98a2283275b43535bb8487e0de05006f8b3a4c68",
+  "source_worktree_clean_at_build": true,
+  "ad_binary_sha256": "ed5ab993b0cb4744334f92aa978016c680552e0560a3b828bbac1ca366067646",
+  "ad_version_metadata": {
+    "version": "dev",
+    "commit": "unknown"
+  },
+  "build_command": "make sandbox CMD='go build -o /work/bin/context-capture-agent-director ./cmd/agent-director'",
+  "build_execution": "repository sandbox; no tests executed",
+  "binary_use": "temporary isolated authorized live capture only; no installed binary replaced",
+  "ssh_route": null,
+  "research_method": "/home/horde/research/tickets/b.fzk/t1.fzk.bh/t1.fzk.bh.md: Method and provenance; reuse existing login provider through XDG_CONFIG_HOME with fresh HOME and isolated Cursor config/data",
+  "instrument_paths": [
+    "/run/openclaw/horde/cursor-managed-qualification-rrp0_9f6/capture_managed.py",
+    "/run/openclaw/horde/cursor-managed-qualification-rrp0_9f6/enrich_result.py"
+  ],
+  "instrument_sha256": {
+    "capture_managed.py": "cd2274e5d2b67e201923fb2e35e5cf0ee3e64b97b84d456fb11d70bac2963039",
+    "enrich_result.py": "ca5a32b1501caea535b3cb54050fd24f6b5e43a23348de6254f249e72e88aebd"
+  },
+  "configured_native_hooks": [
+    "sessionStart",
+    "sessionEnd",
+    "beforeSubmitPrompt",
+    "preCompact",
+    "afterAgentResponse",
+    "stop"
+  ],
+  "hook_configuration_sha256": "d39b3409fea0f440e7835631f378ecc24657150fd8fcea3c87b9e32bfb1bf70e",
+  "model_requested": "composer-2.5",
+  "mode_requested": "ask",
+  "ordinary_model_turns": 1,
+  "additional_compaction_or_post_compaction_turns": 0,
+  "provider_and_window_settings_qualified": false,
+  "native_generation_captured": false,
+  "usage_hook_captured": false,
+  "compaction_hook_captured": false,
+  "positive_usage_capacity_pair": false,
+  "hook_receipt_time": null,
+  "native_hook_observation_limitation": "The capture instrument read native_hooks after the ordinary turn and before sending /exit; that observation alone does not establish whether sessionEnd emitted a hook during shutdown.",
+  "native_measurement_time": null,
+  "lifecycle_authority": "Existing direct gateway child reports and registered connection were used unchanged; native collector never invoked AD hook/decide and no context admission was implemented.",
+  "permission_request_count": 0,
+  "installed_ad_prerequisite_attempt": {
+    "version": {
+      "version": "0.12.0",
+      "commit": "e1b6f2e769cd8dbf29161590046ca0e963c44b65"
+    },
+    "spawn_exit_code": 1,
+    "err_name": "ErrAgentInvalid",
+    "cursor_process_started": false,
+    "model_turns": 0
+  },
+  "allowlist": "Numeric counts, timestamps, field names, IDs, launch-token hashes, process identities, version/binary/build/isolation metadata, command names and fixed qualification annotations only; no auth files/tokens, prompt/reply/summary text, terminal text, whole databases or encryption metadata.",
+  "cleanup": "Managed /exit reached ended with bound_terminated=1; all observed test-owned processes gone or zombie; post-exit root-cwd scan empty. Private tmux kill-server exit 1 means server had already exited.",
+  "scheduler_jobs": [],
+  "tests": "No repository code tooling introduced; no unit or integration suites run in engineer lane."
+}

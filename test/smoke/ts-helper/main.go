@@ -46,11 +46,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -129,6 +132,8 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		id                 = fs.String("id", "", "instance_id (UUID); auto-generated if empty")
 		relayMode          = fs.String("relay-mode", "off", "relay_mode value (on|off); defaults to off")
 		sessionID          = fs.String("session-id", "", "session_id; non-empty enables resume pre-flight")
+		contextFixture     = fs.String("context-fixture", "", "named sanitized context fixture; seeds its agent, session and transcript")
+		contextWriterPID   = fs.Int("context-writer-pid", 0, "live test-owned process retained by the caller for fresh Codex context")
 		createStore        = fs.Bool("create-store", false, "create the store if it does not exist")
 		socket             = fs.String("socket", "", "recorded tmux socket; defaults to apitest.TestSocket (a resume needs its directory to exist)")
 		noPreTrust         = fs.Bool("no-pre-trust", false, "record the pre-trust opt-out on the row (apitest.WithNoPreTrust); default records pre-trust allowed")
@@ -170,10 +175,66 @@ func cmdSeedSpawn(args []string, stdout, stderr io.Writer) int {
 		opts = append(opts, apitest.WithNoSubagentTracking())
 	}
 
+	var startupSession, startupPath string
+	var claudeSample *contextfix.Sample
+	if *contextFixture != "" {
+		sample, err := contextfix.Load(*contextFixture)
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		*sessionID = sample.SessionID
+		opts = append(opts, apitest.WithAgent(sample.Agent))
+		transcript := filepath.Join(filepath.Dir(*storePath), "context-"+*id+".jsonl")
+		if sample.Agent == store.AgentClaude {
+			transcript = filepath.Join(filepath.Dir(*storePath), "context-"+*id, sample.SessionID+".jsonl")
+		}
+		if err := os.MkdirAll(filepath.Dir(transcript), 0700); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		if err := os.WriteFile(transcript, sample.Transcript, 0600); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		opts = append(opts, apitest.WithJsonlPath(transcript))
+		if sample.Agent == store.AgentClaude && len(sample.Callback) > 0 && *contextWriterPID > 0 {
+			identity, err := apitest.ContextWriter(*contextWriterPID)
+			if err != nil {
+				printError(stderr, err)
+				return 1
+			}
+			*state = store.StateWaiting
+			opts = append(opts, apitest.WithLaunchIdentity(identity), apitest.WithPID(identity.PanePID), apitest.WithProcStarttime(identity.PaneStarttime))
+			claudeSample = &sample
+		}
+		if sample.Agent == store.AgentCodex && *contextWriterPID > 0 {
+			identity, err := apitest.ContextWriter(*contextWriterPID)
+			if err != nil {
+				printError(stderr, err)
+				return 1
+			}
+			startupSession, startupPath = sample.SessionID, transcript
+			*sessionID, *state = "", store.StatePending
+			opts = append(opts, apitest.WithLaunchIdentity(identity))
+		}
+	}
 	instanceID, err := apitest.SeedSpawn(*storePath, *id, *state, *cwd, *relayMode, *sessionID, *createStore, opts...)
 	if err != nil {
 		printError(stderr, err)
 		return 1
+	}
+	if startupSession != "" {
+		if err := apitest.AdmitContextStartup(*storePath, instanceID, startupSession, startupPath, *contextWriterPID); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+	}
+	if claudeSample != nil {
+		if err := apitest.AdmitClaudeCapacity(*storePath, instanceID, *claudeSample); err != nil {
+			printError(stderr, err)
+			return 1
+		}
 	}
 
 	if err := printResult(stdout, map[string]string{
@@ -292,24 +353,25 @@ func cmdSeedSubagent(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		storePath    = fs.String("store", "", "path to SQLite store file (required)")
-		instanceID   = fs.String("instance-id", "", "instance_id of an existing spawn (required)")
-		subagentID   = fs.String("subagent-id", "", "subagent_id; auto-generated if empty")
-		state        = fs.String("state", "", "state (running|stopped|lost); empty keeps SeedSubagent's running")
-		closeReason  = fs.String("close-reason", "", "close_reason (stop_event|absent_from_snapshot|agent_gone); empty leaves it NULL")
-		sessionID    = fs.String("session-id", "", "session_id; empty leaves it NULL")
-		subagentType = fs.String("type", "", "subagent_type; empty leaves it NULL")
-		description  = fs.String("description", "", "description; empty leaves it NULL")
-		model        = fs.String("model", "", "model; empty leaves it NULL")
-		parentType   = fs.String("parent-type", "", "parent_type (agent|subagent); needs --parent-id")
-		parentID     = fs.String("parent-id", "", "parent_id; needs --parent-type")
-		toolUseID    = fs.String("tool-use-id", "", "tool_use_id; empty leaves it NULL")
-		runMode      = fs.String("run-mode", "", "run_mode (background|foreground); empty leaves it NULL")
-		firstStarted = fs.Int64("first-started-at-ms", 0, "first_started_at, Unix milliseconds; unset leaves it NULL")
-		startedAt    = fs.Int64("started-at-ms", 0, "started_at, Unix milliseconds; unset leaves it NULL")
-		stoppedAt    = fs.Int64("stopped-at-ms", 0, "stopped_at, Unix milliseconds; unset leaves it NULL")
-		lostAt       = fs.Int64("lost-at-ms", 0, "lost_at, Unix milliseconds; unset leaves it NULL")
-		confirmed    = fs.Bool("confirmed", true, "true stores a record, false an unconfirmed observation (list-subagents never returns one)")
+		contextFixture = fs.String("context-fixture", "", "named captured child context")
+		storePath      = fs.String("store", "", "path to SQLite store file (required)")
+		instanceID     = fs.String("instance-id", "", "instance_id of an existing spawn (required)")
+		subagentID     = fs.String("subagent-id", "", "subagent_id; auto-generated if empty")
+		state          = fs.String("state", "", "state (running|stopped|lost); empty keeps SeedSubagent's running")
+		closeReason    = fs.String("close-reason", "", "close_reason (stop_event|absent_from_snapshot|agent_gone); empty leaves it NULL")
+		sessionID      = fs.String("session-id", "", "session_id; empty leaves it NULL")
+		subagentType   = fs.String("type", "", "subagent_type; empty leaves it NULL")
+		description    = fs.String("description", "", "description; empty leaves it NULL")
+		model          = fs.String("model", "", "model; empty leaves it NULL")
+		parentType     = fs.String("parent-type", "", "parent_type (agent|subagent); needs --parent-id")
+		parentID       = fs.String("parent-id", "", "parent_id; needs --parent-type")
+		toolUseID      = fs.String("tool-use-id", "", "tool_use_id; empty leaves it NULL")
+		runMode        = fs.String("run-mode", "", "run_mode (background|foreground); empty leaves it NULL")
+		firstStarted   = fs.Int64("first-started-at-ms", 0, "first_started_at, Unix milliseconds; unset leaves it NULL")
+		startedAt      = fs.Int64("started-at-ms", 0, "started_at, Unix milliseconds; unset leaves it NULL")
+		stoppedAt      = fs.Int64("stopped-at-ms", 0, "stopped_at, Unix milliseconds; unset leaves it NULL")
+		lostAt         = fs.Int64("lost-at-ms", 0, "lost_at, Unix milliseconds; unset leaves it NULL")
+		confirmed      = fs.Bool("confirmed", true, "true stores a record, false an unconfirmed observation (list-subagents never returns one)")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -375,7 +437,18 @@ func cmdSeedSubagent(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	if err := apitest.SeedSubagent(*storePath, *instanceID, *subagentID, opts...); err != nil {
+	if *contextFixture != "" {
+		sample, err := contextfix.Load(*contextFixture)
+		if err != nil {
+			printError(stderr, err)
+			return 1
+		}
+		*subagentID = sample.ChildID
+		if _, err = apitest.AdmitClaudeChild(*storePath, *instanceID, sample, opts...); err != nil {
+			printError(stderr, err)
+			return 1
+		}
+	} else if err := apitest.SeedSubagent(*storePath, *instanceID, *subagentID, opts...); err != nil {
 		printError(stderr, err)
 		return 1
 	}
