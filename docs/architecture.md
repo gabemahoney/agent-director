@@ -2134,7 +2134,10 @@ authority. Existing gateway admission and subagent visibility stay with their
 current owners. Visible children receive no parent reading or new tracking.
 
 **Reusable fixtures:** `internal/testsupport/contextfix` owns named captures,
-synthetic variants, expectations and provenance. `apitest.SeedContextSpawn`
+synthetic variants, expectations and provenance. Transcript size-boundary tests
+MUST reuse `contextfix.Padded`, which adds synthetic JSON whitespace while
+preserving captured record order and metadata; it adds no native evidence.
+`apitest.SeedContextSpawn`
 places evidence through `SeedContextTranscript`, binds a live test-owned
 writer with `ContextWriter` and admits the fresh startup with
 `AdmitContextStartup` for Codex. Claude samples use `SeedClaudeCapacity` /

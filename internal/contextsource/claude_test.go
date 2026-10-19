@@ -1,8 +1,8 @@
 package contextsource_test
 
 import (
-	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -39,7 +39,7 @@ func TestClaudeCapturedUsage(t *testing.T) {
 }
 
 func TestClaudeUnavailableTranscript(t *testing.T) {
-	for _, name := range []string{"relative", "missing", "directory", "fifo", "symlink", "overlong record", "oversized file"} {
+	for _, name := range []string{"relative", "missing", "directory", "fifo", "symlink"} {
 		t.Run(name, func(t *testing.T) {
 			s := contextfix.Must(t, "claude-parent")
 			path := apitest.SeedContextTranscript(t, s)
@@ -65,26 +65,38 @@ func TestClaudeUnavailableTranscript(t *testing.T) {
 				if err := os.Symlink(target, path); err != nil {
 					t.Fatal(err)
 				}
-			case "overlong record":
-				if err := os.WriteFile(path, append(bytes.Repeat([]byte(" "), (4<<20)+1), '\n'), 0600); err != nil {
-					t.Fatal(err)
-				}
-			case "oversized file":
-				f, err := os.OpenFile(path, os.O_WRONLY, 0600)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = f.Truncate((64 << 20) + 1); err != nil {
-					t.Fatal(err)
-				}
-				if err = f.Close(); err != nil {
-					t.Fatal(err)
-				}
 			}
 			if got, ok := contextsource.Claude(s.SessionID, "", path); ok {
 				t.Fatalf("unsafe/unavailable transcript accepted: %+v", got)
 			}
 		})
+	}
+}
+
+func TestClaudeTranscriptSizeBoundaries(t *testing.T) {
+	for _, boundary := range []string{"line", "file"} {
+		for _, offset := range []int{-1, 1} {
+			t.Run(fmt.Sprintf("%s%+d", boundary, offset), func(t *testing.T) {
+				sample := contextfix.Padded(t, "claude-parent", boundary, offset)
+				got, ok := contextsource.Claude(sample.SessionID, "", apitest.SeedContextTranscript(t, sample))
+				if offset > 0 {
+					if ok {
+						t.Fatalf("oversized %s accepted: %+v", boundary, got)
+					}
+					return
+				}
+				var expected struct {
+					Used int64  `json:"used_tokens"`
+					At   string `json:"as_of"`
+				}
+				if err := json.Unmarshal(sample.Expected, &expected); err != nil {
+					t.Fatal(err)
+				}
+				if !ok || got.Tokens != expected.Used || got.UUID != sample.ResponseUUID || got.At.Format("2006-01-02T15:04:05.999999999Z07:00") != expected.At {
+					t.Fatalf("padded capture usage=%+v valid=%v; want %s uuid=%s", got, ok, sample.Expected, sample.ResponseUUID)
+				}
+			})
+		}
 	}
 }
 

@@ -17,8 +17,8 @@ func composeContextStatuslines(r Resolved, exe string, top map[string]any) {
 	if err != nil {
 		return
 	}
-	configDir := r.ExtraEnv["CLAUDE_CONFIG_DIR"]
-	if configDir == "" {
+	configDir, explicit := r.ExtraEnv["CLAUDE_CONFIG_DIR"]
+	if !explicit {
 		configDir = os.Getenv("CLAUDE_CONFIG_DIR")
 	}
 	if configDir == "" {

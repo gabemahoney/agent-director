@@ -305,6 +305,13 @@ mismatched callback/transcript models and provider, endpoint, window and
 supported-capability overrides, including Fable, Opus, Sonnet, Haiku and
 custom-model options. The retained real capture remains the Haiku pair above.
 
+Use `Padded(t, name, "line" | "file", offset)` for transcript size boundaries.
+It adds synthetic JSON whitespace to a captured record around the 4 MiB line
+limit, or across bounded records around the 64 MiB file limit; offsets `-1`
+and `1` exercise either side. Record order and metadata remain intact, and
+the capture files remain unchanged. These derived samples test size handling;
+they do not qualify an agent version or add native evidence.
+
 For capacity races, interleave callbacks at the real store write after snapshot
 computation. Assert stale writes fail before a full re-read/recompute, and
 compare real `Status`, `Get` and `ListSubagents` results throughout. Cover stale
@@ -376,7 +383,7 @@ refuses the migrated current schema, then restore a stopped-writer
 pre-upgrade DB/WAL/SHM set at default and configured paths. Verify stale
 companions are removed, prior rows/settings are restored and post-backup
 writes are lost. A copy made after migration cannot qualify as the backup;
-there is no v12 reverse recipe to test or imply.
+there is no v13 reverse recipe to test or imply.
 
 ## pkg/api tests: parallel or serial
 

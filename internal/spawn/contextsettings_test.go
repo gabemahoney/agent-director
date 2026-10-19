@@ -12,7 +12,7 @@ import (
 )
 
 func TestClaudeContextStatuslineComposition(t *testing.T) {
-	for _, name := range []string{"none", "user", "project overrides user", "local overrides project", "selected sources", "jsonc", "unresolved", "ancestor local"} {
+	for _, name := range []string{"none", "user", "project overrides user", "local overrides project", "selected sources", "jsonc", "unresolved", "ancestor local", "inherited config", "explicit empty config", "explicit config override"} {
 		t.Run(name, func(t *testing.T) {
 			home, root := t.TempDir(), t.TempDir()
 			t.Setenv("HOME", home)
@@ -38,6 +38,40 @@ func TestClaudeContextStatuslineComposition(t *testing.T) {
 			}
 			if name != "none" {
 				write(filepath.Join(home, ".claude", "settings.json"), string(b))
+			}
+			var configCommands map[string]string
+			if name == "inherited config" || name == "explicit empty config" || name == "explicit config override" {
+				inherited, override := t.TempDir(), t.TempDir()
+				t.Setenv("CLAUDE_CONFIG_DIR", inherited)
+				selected := inherited
+				if name == "explicit empty config" {
+					r.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": ""}
+					selected = filepath.Join(home, ".claude")
+				} else if name == "explicit config override" {
+					r.ExtraEnv = map[string]string{"CLAUDE_CONFIG_DIR": override}
+					selected = override
+				}
+				for label, dir := range map[string]string{"home": filepath.Join(home, ".claude"), "inherited": inherited, "override": override} {
+					settings := map[string]any{}
+					commands := map[string]string{}
+					for _, key := range []string{"statusLine", "subagentStatusLine"} {
+						callback := map[string]any{}
+						for k, v := range fields {
+							callback[k] = v
+						}
+						commands[key] = label + " " + key + " " + command
+						callback["command"] = commands[key]
+						settings[key] = callback
+					}
+					data, err := json.Marshal(settings)
+					if err != nil {
+						t.Fatal(err)
+					}
+					write(filepath.Join(dir, "settings.json"), string(data))
+					if dir == selected {
+						configCommands = commands
+					}
+				}
 			}
 			if name == "project overrides user" || name == "local overrides project" {
 				write(filepath.Join(root, ".claude", "settings.json"), `{"statusLine":{"command":"project command","padding":7}}`)
@@ -89,6 +123,9 @@ func TestClaudeContextStatuslineComposition(t *testing.T) {
 				expected := command
 				if key == "subagentStatusLine" && name != "none" && name != "selected sources" {
 					expected = fields["command"].(string)
+				}
+				if configCommands != nil {
+					expected = configCommands[key]
 				}
 				parts := strings.Split(wrapper, " --context-forward ")
 				if name == "none" || name == "selected sources" {

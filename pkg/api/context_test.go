@@ -162,7 +162,7 @@ func TestContextReaders(t *testing.T) {
 
 func TestContextUnreadableEvidenceKeepsReadSuccessful(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"relative-path", "denied", "missing", "directory", "fifo", "partial-json", "unterminated-record", "malformed-tail", "overlong-line", "oversized-file"} {
+	for _, name := range []string{"relative-path", "denied", "missing", "directory", "fifo", "partial-json", "unterminated-record", "malformed-tail"} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			sample := contextfix.Must(t, "writer")
@@ -201,21 +201,8 @@ func TestContextUnreadableEvidenceKeepsReadSuccessful(t *testing.T) {
 				sample.Transcript = bytes.TrimSuffix(sample.Transcript, []byte("\n"))
 			case "malformed-tail":
 				sample.Transcript = append(sample.Transcript, []byte("invalid\n")...)
-			case "overlong-line":
-				sample.Transcript = append(sample.Transcript, bytes.Repeat([]byte(" "), 4<<20)...)
-			case "oversized-file":
-				f, err := os.OpenFile(path, os.O_WRONLY, 0600)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err = f.Truncate((64 << 20) + 1); err != nil {
-					t.Fatal(err)
-				}
-				if err = f.Close(); err != nil {
-					t.Fatal(err)
-				}
 			}
-			if name != "denied" && name != "relative-path" && name != "missing" && name != "directory" && name != "fifo" && name != "oversized-file" {
+			if name != "denied" && name != "relative-path" && name != "missing" && name != "directory" && name != "fifo" {
 				if err := os.WriteFile(path, sample.Transcript, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -226,6 +213,27 @@ func TestContextUnreadableEvidenceKeepsReadSuccessful(t *testing.T) {
 			}
 			assertContext(t, got.Context, contextfix.Must(t, "claude-missing-capacity").Expected)
 		})
+	}
+}
+
+func TestContextTranscriptSizeBoundaries(t *testing.T) {
+	t.Parallel()
+	for _, boundary := range []string{"line", "file"} {
+		for _, offset := range []int{-1, 1} {
+			t.Run(fmt.Sprintf("%s%+d", boundary, offset), func(t *testing.T) {
+				sample := contextfix.Padded(t, "writer", boundary, offset)
+				s, id, _ := seedContext(t, sample)
+				got, err := api.Status(s, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := sample.Expected
+				if offset > 0 {
+					want = json.RawMessage(contextfix.UnknownJSON)
+				}
+				assertContext(t, got.Context, want)
+			})
+		}
 	}
 }
 

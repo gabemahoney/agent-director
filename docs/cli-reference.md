@@ -568,7 +568,7 @@ _None._
 
 ## hook
 
-Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Exits 0 (fail-open).
+Internal: run by each agent's hooks; only the row's own agent's hooks write (others: ad.hook.ignored). Lifecycle hooks exit 0 (fail-open); context capacity callbacks preserve the forwarded command's exit status.
 
 ### Parameters
 
