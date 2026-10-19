@@ -561,10 +561,10 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // answered at the pane): its dialog is gone (b.146 step 2c).
 // In the same statement it NULLs launch_started_at, advances row_version by
 // one (SR-5.2) and writes the settle columns of an immediate write (b.3ie:
-// the new state reports at once). It writes no other column: idle_since is
-// kept until the
-// agent's next hook clears it, and last_seen_at is not bumped, since no hook
-// reported.
+// the new state reports at once). It writes no other own-state column:
+// idle_since is kept until the agent's next hook clears it, and last_seen_at
+// is not bumped, since no hook reported. The guarded repair and family-history
+// refresh commit together.
 //
 // Whether a request's relay hook may still be alive is the caller's to check
 // before calling: a process check is no statement. A request recorded after
@@ -582,7 +582,9 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 	const errPrefix = "store: repair check_permission if same life"
 	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
 		snapshotMatchArgs(examined)...)
-	err = s.db.QueryRow(repairCheckPermissionSQL, args...).Scan(&newState)
+	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&newState)
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		res, err = s.condNotApplied(instanceID, errPrefix)

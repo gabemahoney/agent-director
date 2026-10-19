@@ -1162,27 +1162,28 @@ installing.
   new version's `schema_v<N>_test.go` (§3): `TestV5MigrationKeepsV4Rows`,
   the store-id tests (`TestStoreIDKept`,
   `TestStoreID_MissingOrMalformedFailsOpen`) and the downgrade tests:
-  `TestDowngradeRecipe_MatchesGuide` parses the four recipe SQL blocks of
-  §5, "v8 → v7", "v7 → v6", "v6 → v5" and "v5 → v4", and fails when any
-  differs from its test copy (`v8ToV7RecipeStatements`,
+  `TestDowngradeRecipe_MatchesGuide` parses the five recipe SQL blocks of
+  §5, "v12 → v11", "v8 → v7", "v7 → v6", "v6 → v5" and "v5 → v4", and fails
+  when any differs from its test copy (`v12ToV11RecipeStatements`,
+  `v8ToV7RecipeStatements`,
   `v7ToV6RecipeStatements`, `v6ToV5RecipeStatements`,
   `v5ToV4RecipeStatements`) or lacks the `.bail on` / `BEGIN;` / `COMMIT;`
   frame, so no recipe here can drift from the statements the tests run; it
-  is also the test that pins the v8 → v7, v7 → v6 and v6 → v5 recipes to the
-  guide.
-  `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults` takes a current
-  store back to v5 first (`v8ToV7RecipeStatements`, then
-  `v7ToV6RecipeStatements`, then `v6ToV5RecipeStatements`), applies the
-  recipe to `seedV5DowngradeRows`,
+  is also the test that pins the v12 → v11, v8 → v7, v7 → v6 and v6 → v5
+  recipes to the guide.
+  `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults` takes a v8 store
+  from `makeV8Fixture` back to v5 first (`v8ToV7RecipeStatements`, then
+  `v7ToV6RecipeStatements`, then `v6ToV5RecipeStatements`), applies
+  `v5ToV4RecipeStatements` to its reused and opted-out rows,
   checks every v4 column and history entry survives, then re-migrates and
   checks the v5 and v6 columns take their defaults (pre-trust opt-out and
   life numbers are lost; no launch owner).
 - `internal/store/schema_v6_test.go` — v6's own cases (§3):
   `TestV6MigrationKeepsV5Rows` (`makeV5Fixture` migrated: every v5 value
   kept, no launch owner, the store id kept) and
-  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which takes a current store
-  back to v6 (`v8ToV7RecipeStatements`, then `v7ToV6RecipeStatements`),
-  applies `v6ToV5RecipeStatements` to
+  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which takes a v8 store from
+  `makeV8Fixture` back to v6 (`v8ToV7RecipeStatements`, then
+  `v7ToV6RecipeStatements`), applies `v6ToV5RecipeStatements` to
   it holding a `pending` row with a recorded owner, checks the v5 store keeps
   every other value and the store id and is refused with
   `ErrSchemaMigrationRequired`, then re-migrates and checks the row has no
@@ -1194,8 +1195,8 @@ installing.
   before v7), `TestV7MigrationProvesFinishedRowsRequests` (phase 3: the
   `ended` and `missing` rows' requests proven `agent_gone` at one instant,
   the live row's unproven, a second run changing nothing) and
-  `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which takes a current store
-  back to v7 (`v8ToV7RecipeStatements`), then applies
+  `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which takes a v8 store from
+  `makeV8Fixture` back to v7 (`v8ToV7RecipeStatements`), then applies
   `v7ToV6RecipeStatements` to it, holding a request the relay hook
   recorded with its identity, checks the v6 store has a v6 store's shape,
   keeps every other value of the row and the request and the store id, and
