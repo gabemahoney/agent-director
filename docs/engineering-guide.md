@@ -19,6 +19,14 @@ A practical checklist for writing and reviewing code. Prioritize substance over 
 
 See also "Core Principle: Never Hardcode Claude Code's Terminal Text" below, which applies this to outcomes only Claude Code's screen can show.
 
+## Core Principle: Ship Features to Every Supported Agent at Once
+
+**A new feature lands for every supported agent (Claude Code, Codex and Cursor) in the same release, or as close to it as the agents allow.** Callers should not have to learn which agent got a capability first.
+
+- **Plan for all supported agents from the PRD onward.** Requirements, design and tests cover each one; a feature is not complete while one is missing without a stated reason.
+- **When an agent genuinely can't support it yet, say so explicitly.** Record the evidence (what was measured and why it falls short), make the gap a documented, machine-readable outcome for that agent (for example an `unknown` value), and keep a follow-up ticket to close it. Never leave it silently unsupported.
+- **Measure before deciding an agent can't.** Lack of a ready signal is a reason to investigate, not a reason to skip.
+
 ## Core Principle: Never Hardcode Claude Code's Terminal Text
 
 **Agent Director's product code never hardcodes Claude Code's strings, patterns or layout** — no string, regex, layout rule, line position or glyph that encodes what Claude Code's prompts, menus, dialogs or key layouts mean. That text and layout change between Claude Code releases without notice. Reading the pane is not the problem; giving it a meaning written into the code is.
