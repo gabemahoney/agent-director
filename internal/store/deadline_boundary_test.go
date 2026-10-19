@@ -136,7 +136,7 @@ func (b *deadlineBoundary) stopObservingAfterCleanup(t *testing.T, s *Store) {
 	_ = conn.Close()
 }
 
-func assertDeadlineDatabaseReusable(t *testing.T, s *Store, path, decision string) {
+func assertDeadlineConnectionReusable(t *testing.T, s *Store) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -150,6 +150,11 @@ func assertDeadlineDatabaseReusable(t *testing.T, s *Store, path, decision strin
 	if _, err := s.db.ExecContext(ctx, "ROLLBACK"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func assertDeadlineDatabaseReusable(t *testing.T, s *Store, path, decision string) {
+	t.Helper()
+	assertDeadlineConnectionReusable(t, s)
 	withRaw(t, path, func(db *sql.DB) {
 		var got sql.NullString
 		if err := db.QueryRow("SELECT decision FROM permission_requests WHERE instance_id=? AND request_token=?", relayID, tokenA).Scan(&got); err != nil {

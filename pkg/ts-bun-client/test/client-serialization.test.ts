@@ -66,7 +66,8 @@ test.each([
     expect(listed).toMatchObject({ instance_id: spawned.instance_id, agent: "cursor", state: "pending" });
     const status = await client.status({ instance_id: spawned.instance_id });
     expect(status.state).toBe("pending");
-    expect(Object.keys(status).sort()).toEqual(["launch_started_at", "state"]);
+    expect(status.family_state).toBe("working");
+    expect(Object.keys(status).sort()).toEqual(["family_state", "launch_started_at", "state"]);
     expect(await client.listSubagents({ instance_id: spawned.instance_id })).toEqual({ tracked: false, subagents: [] });
     expect(runHelper("fake-pane-owner", { pid: String(owner.pid), store: storePath, id: spawned.instance_id })).toEqual(identity);
     } finally {

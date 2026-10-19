@@ -149,7 +149,12 @@ func TestFreshStoreSchema(t *testing.T) {
 	// spawns ends with the v6 columns, v7's idle_since, the v8 columns, then
 	// agent, end_reported_at and subagent_tracking; permission_requests with the v7 columns after
 	// created_at, then v11's durable eligibility (the two-places rule's order).
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames())
+	assertColumnSpecs(t, db, []columnSpec{
+		{"spawns", "family_state", "TEXT", true, "''"},
+		{"spawns", "family_settled_state", "TEXT", true, "''"},
+		{"spawns", "family_changed_ms", "INTEGER", true, "0"},
+	})
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms"})
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}

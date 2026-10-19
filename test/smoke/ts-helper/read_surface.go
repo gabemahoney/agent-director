@@ -6,8 +6,45 @@ import (
 	"io"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// cmdWriteFamilyTransition is a real hook writer process for restart continuity.
+func cmdWriteFamilyTransition(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("write-family-transition", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("store", "", "store path")
+	id := fs.String("id", "", "existing instance")
+	state := fs.String("state", "working", "new raw state")
+	ms := fs.Int64("settle-ms", 0, "writer's existing settle interval")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	s, err := store.Open(*path)
+	if err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	defer s.Close()
+	s.SetSettleMs(*ms)
+	err = storefix.WithSeedPane(*path, *id, func(gate store.HookGate) error {
+		_, applied, err := s.ApplyHookTransitionResult(*id, gate, *state, false, "family_restart_test", "", false)
+		if err == nil && !applied.Applied {
+			return errors.New("family transition was not applied")
+		}
+		return err
+	})
+	if err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if err := printResult(stdout, map[string]string{"instance_id": *id}); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	return 0
+}
 
 // ---- seed-read-surface-store -------------------------------------------------
 

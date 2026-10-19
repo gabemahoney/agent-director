@@ -237,7 +237,7 @@ func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any
 // failure.
 func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, trailNew string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	res, err := s.db.Exec(q, args...)
+	res, err := s.execFamily(q, args...)
 	if err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -722,6 +722,10 @@ func (s *Store) RecordSessionStartIdentity(instanceID string, gate HookGate, jso
 	var archiveErr error
 	if archive {
 		archiveErr = upsertSessionHistoryEntry(tx, instanceID, outgoing, prior.jsonlPath, prior.life)
+	}
+	if err := s.refreshFamilies(tx); err != nil {
+		_ = tx.Rollback()
+		return HookApplied{}, false, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return HookApplied{}, false, fmt.Errorf("%s: commit: %w", errPrefix, err)

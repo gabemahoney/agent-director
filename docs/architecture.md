@@ -1345,8 +1345,8 @@ in `init`. The verb registry
 | `cmd/agent-director-admin` | The operator tool (b.vqr), a thin shim like `cmd/agent-director` with no business logic: verbs `kill-finished` (kill's finished-row opt-in), `delete`, `help` (also `--help`, `-h` and the no-verb run) and `version` (also `--version` and `-v`, b.fv2), taken from `internal/adminapi.Verbs`, never from `pkg/api/manifest`. It parses and applies the main CLI's global flags (`--store-path`, `--home`, `--tmux-command`, `--create-if-missing`, before or after the verb) with `internal/clisetup`, opens the Client with `clisetup.Open` (the same store, config, logger and schema checks as `agent-director`), calls `adminapi.KillFinished` / `adminapi.Delete`, and prints JSON on stdout, or one `{err_name, err_description}` envelope on stderr with exit 1 (`errnames.Classify`). `help`, every verb's `--help` / `-h`, `version` and the aliases open no store and load no config, and every help opens with `adminapi.ApprovalStatement`. See [Operator tool `agent-director-admin`](#operator-tool-agent-director-admin). | stdlib; `internal/adminapi`; `internal/clisetup`; `pkg/api` (`Client`, `Version`); `pkg/api/errnames`. | `pkg/api/manifest` (its verbs are not manifest verbs); direct `database/sql`; `store.Open` / `config.Load` / `tmux.New`; business logic. |
 | `internal/adminapi` | The admin binary's door into `pkg/api` (b.vqr). Declares the hooks `KillFinished(c any, id) (KillResult, error)` and `Delete(c any, ids) (DeleteResult, error)` as function variables, which `pkg/api`'s `init` (`pkg/api/admin.go`) sets to the unexported `Client.killFinished` (`kill_optin.go`) and `Client.deleteRows` (`delete.go`); a `c` that is not a non-nil `*api.Client` is an error and nothing runs. Also holds the admin binary's own verb list (`Verbs`, `Lookup`), global-flag list (`GlobalFlags`, `GlobalFlagsText`) and `ApprovalStatement`, from which its help and the generated `docs/admin-reference.md` are built. Being under `internal/`, no other module can import it, so neither action has a public Go entry point. | stdlib only (it imports nothing). | `pkg/api` (`pkg/api` imports it: a cycle); `pkg/api/manifest`. |
 | `internal/clisetup` | Client setup shared by both command binaries (b.vqr). `APIOptions(Overrides)` builds the `pkg/api.Options` of every Client a command binary opens: the config path, `CreateIfMissing` (true unless the overrides set it false, b.78b) and the overrides' store path and tmux command, with `Logger` nil. `Open(Overrides)` builds the `pkg/api.Client` every store-backed CLI verb and admin verb uses from `APIOptions` plus the recovery logger (the design pins: `CreateIfMissing`, the store-path precedence, the recovery logger `NewRecoveryLogger`, the returned `config.Config`). `Open` returns an `*OpenError` naming `ErrConfigMalformed`, `ErrSchemaMismatch`, `ErrSchemaMigrationRequired`, `ErrOldLayout` or `ErrStoreOpen`; it refuses with `ErrOldLayout` first (Pin 4, before the recovery logger and `errors.log`), under the rule in [Old layout (step 2b)](#pkgapi-client-lifecycle), and `ErrOldLayout` is the store's own sentinel, `store.ErrOldLayout`, re-exported by `clisetup` and `pkg/api`. `NewOpenError(err)` holds the one naming of a `pkg/api.New` failure: the `*OpenError` named `ErrSchemaMismatch` or `ErrSchemaMigrationRequired` when the store's schema refused the open, `ErrStoreOpen` otherwise; `Open` names its `pkg/api.New` failure with it, and `serve` the failure of its MCP Client's, so every Client a command binary opens names a failed open alike (b.uii). It also declares the sentinels `pkg/api/errnames.Catalog` pairs with the names the command binaries give outside any verb handler (b.vma, b.cm7): `ErrConfigMalformed`, `ErrStoreOpen`, `ErrSchemaMismatch` and `ErrSchemaMigrationRequired` (`(*OpenError).Is` matches the sentinel its `Name` names, so `errors.Is` and `errnames.Classify` recognise an `OpenError` of any of the five names); and `ErrUnknownVerb`, `ErrJSONMarshal` and `ErrTrailWrite`, which no error wraps, because the binaries write those names themselves. The two schema sentinels and `ErrOldLayout` are the store's own, `store.ErrSchemaMismatch`, `store.ErrSchemaMigrationRequired` and `store.ErrOldLayout` (`pkg/api` re-exports them under the same names), so `Classify` gives a schema or old-layout refusal the same name whether it comes as an `OpenError` or straight from `pkg/api.New` (b.x8s); the store returns them only when it opens (`ErrOldLayout`, when the open is about to begin), so no verb error wraps them. `globalflags.go` holds the only global-flag parser, the pre-scan `ParseGlobalFlags`, with `GlobalFlags.Apply` (`--home` sets HOME before any config load; `--store-path`, `--tmux-command` and `--create-if-missing` become `Overrides`) and `ExpandTilde`; `globalflags_test.go` tests them. `--create-if-missing` takes exactly `true` or `false`; any other value, or none, is `ErrInvalidFlags` with exit 1 before any verb runs, `help` and `version` included (b.78b). `ExpandTilde` expands a bare `~` or a leading `~/` against `HOME` (`os.UserHomeDir`) and nothing else, never the passwd home, the store's rule (b.4uz, b.38a); it reports when there is no HOME to expand against. `Apply` expands `--home` with it, then `--tmux-command` against the new HOME (`--store-path` goes on as given; `pkg/api.New` expands it). A `--home` of `~` or `~/…` while HOME is unset or empty is refused and HOME is left as it was: both binaries print `ErrInvalidFlags` (`--home "~": HOME is unset or empty, so there is no home directory to expand "~" against`) and exit 1 before any verb runs, `help` and `version` included. A `--tmux-command` `ExpandTilde` cannot expand goes on unexpanded. **Must use:** a command binary opens its Client through `Open` (a Client that must not log, such as `serve`'s MCP Client, takes its options from `APIOptions` and names a failed `pkg/api.New` with `NewOpenError`) and parses its global flags through `ParseGlobalFlags` / `Apply`; never a second setup, options builder, open-failure naming or flag parser. A new override goes into `APIOptions`, so every Client a binary opens gets it. A global flag's `~` is expanded only here, never by a caller such as the TS client (see [Client lifecycle](#client-lifecycle)). | stdlib; `pkg/api`; `internal/config`; `internal/store` (error sentinels only). | `internal/mcp`; `cmd/*`; `pkg/api/errnames` (`errnames` imports `clisetup` for its sentinels: a cycle); direct `database/sql`. |
-| `pkg/api` | **Canonical verb-handler home and public surface.** Native ordinary input uses `internal/inputdelivery` through the existing backend/session seam; see [Ordinary input delivery](#ordinary-input-delivery). Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/cursortranscript`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
-| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v11; see "Schema versioning convention" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
+| `pkg/api` | **Canonical verb-handler home and public surface.** Native ordinary input uses `internal/inputdelivery` through the existing backend/session seam; see [Ordinary input delivery](#ordinary-input-delivery). Opaque `Client` facade — no exported fields, construction via `New` only. Owns all verb implementations, seam interfaces (`ListStore`, `PauseStore`, etc.), params/result types, and error sentinels (the seven tmux sentinels of SR-1.1 are all re-exported in `aliases.go`). Owns store, tmux, and config internally; exposes one method per CLI verb; idempotent `Close`. Consumed by `cmd/agent-director`, `internal/mcp`, `internal/clisetup` and `cmd/agent-director-admin`. **Operator-only actions (b.vqr):** the finished-row kill and delete are unexported (`Client.killFinished` in `kill_optin.go`, `Client.deleteRows` in `delete.go`) and reached only through the `internal/adminapi` hooks that `admin.go`'s `init` sets, so no exported method, type or field offers them. **`kill` seams** (`kill.go`): `KillStore` (`GetSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `StoreID`; `*store.Store` satisfies it), `KillTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `KillPane`, `KillSessionID`; `TmuxClient` satisfies it) and the start-time reader `ProcChecker`; `Kill` also takes the three `[tmux]` durations, the clock and the sleep, and has no logger. **`find-missing` seams** (`find_missing.go`): `FindMissingStore` (the live-row read, the five same-life guarded writes, the `unreported` note of a live `pending` row `NoteUnreportedIfSameLife` among them (b.kdf), the mark closing the row's open permission requests and running subagent entries in its own transaction, and the one-method `EndedMover` (`MarkEndedIfSameLife`, the same close for a Codex row that holds an end report), embedded in `PauseStore` too, `ListProvisionalTranscripts`, `HealJsonlPath`, `StoreID`; `*store.Store` satisfies it), `FindMissingTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`) and `ProcChecker`; the exported `FindMissing` also takes the pending grace period, the sweep budget, the clock and a `FindMissingLogger` (see [`find-missing`](#find-missing)). **Pane-verb seams** (`readpane.go`, `sendkeys.go`, `pause.go`; see [Interact](#interact-send-keys--read-pane) and [`pause`](#pause)): `ReadPaneStore` (`GetSpawn`, `StoreID`; no write) and `ReadPaneTmux` (`TmuxLookup`'s `Lookup` plus `ListPanes`, `CapturePaneID`); `SendKeysStore` (`GetSpawn`, `PermissionRequestsForSpawn`, the adoption write `AdoptIdentityIfUnchanged`, `RecordHookGone`, a pane answer's three writes `RecordPaneIntent`, `RecordPaneSent` and `ReleasePaneIntent`, `StoreID`) and `SendKeysTmux` (`Lookup`, `ListPanes`, `SendKeysPane`, `SendKeyPane` for a named key, `CapturePaneID` for `expect_pane_sha256`), with `SendKeysEnv` (the `RelayView`, the pane answer's sender reader `Self` and `IntentHold`) in place of a bare start-time reader; `RecordPaneAnswerStore` (`GetPermissionRequestByToken`, `GetSpawn`, `PermissionRequestsForSpawn`, `RecordHookGone`, `RecordPaneOutside`, `StoreID`), with `ReadPaneTmux` and `RecordPaneAnswerEnv` (`record_pane_answer.go`); `PauseStore` (`GetSpawn`, `GetSpawnState`, `PermissionRequestsForSpawn` and `RecordHookGone` for its relay guard (b.zdz), `AdoptIdentityIfUnchanged`, `EndedMover`, `StoreID`) and `PauseTmux` (`Lookup`, `ListPanes`, `SendKeyPane` for `pause`'s line clear, `C-u`, `SendKeyPaneRepeat` for a Codex row's repeated clear, `SendKeysPane`), with `PauseEnv` (the `RelayView` and `IntentHold`, as `send-keys` judges the relay) in place of a bare start-time reader. `*store.Store` and `TmuxClient` satisfy them. `SendKeys`, `RecordPaneAnswer` and `Pause` take the start-time reader in their env's `RelayView`; the exported `ReadPane` uses `probe.NewProcChecker()` and `Client.ReadPane` the Client's reader. **tmux:** `TmuxClient` (the `Options.TmuxClient` injection point, SRD Appendix F.3) carries the ten socket-taking methods (`Lookup`, `ListPanes`, `KillPane`, `KillSessionID`, `SendKeysPane`, `SendKeyPane`, `SendKeyPaneRepeat`, `CapturePaneID`, `NewSession`, `SetLabel`) beside the one name-based method left, `HasSession`, which is kept but no verb uses, and none may; the name-based send and capture are gone. `*tmux.Client` and `tmuxfix.Recorder` implement it. `tmux_aliases.go` re-exports the typed tmux API as `Tmux*` aliases (`TmuxLookupAnswer`, `TmuxSession`, `TmuxPane`, `TmuxLabel`, `TmuxCreateReply`, `TmuxCall`, `TmuxFailure`, `TmuxCallError`) and constants (`TmuxCall*`, `TmuxCallSendKey`, "key send", included; `TmuxFail*`, `TmuxLabelNone` / `TmuxLabelValid`), identical to the originals, so an external implementer never imports `internal/tmux`; it also re-exports the start-time reader interface as `ProcChecker` (`= tmux.ProcChecker`). The Client holds its clock (`time.Now`), its sleep (`time.Sleep`, the pause of `kill`'s process wait and of `decide`'s waits: for its verdict's ack, and for a request recorded before schema v7 to settle), its start-time reader (`probe.NewProcChecker()`), its own pid-namespace reader (`probe.SelfPIDNamespace`) and the reader of its own process identity a pane answer records as its sender (`paneSelf`, `selfIdentity` through those two), all set in `New`; `relayView()` hands the clock, the start-time reader, the pid-namespace reader and the effective relay window to the relay's readers and `decide` as a `RelayView`, and `sendKeysEnv()` adds the sender reader and the intent hold for `send-keys` and `record-pane-answer`; `Client.Pause` builds its `PauseEnv` from `relayView()` and the same intent hold (`paneIntentHold`). **Relay seams** (`relay_delivery.go`, `decide.go`, `get.go`, `list.go`, `get_permission.go`, `find_missing_repair.go`, with rule 7, step 2c's dialog hold and the pane answer in `sendkeys_relay.go`, `pane_answer.go` and `record_pane_answer.go`, and `err_details` in `error_details.go`; see [Permission relay](#permission-relay)): `RelayView`, `DecideStore`, `GetStore`, `ListStore`, `GetPermissionStore`, `CheckPermissionRepairStore` and `RecordPaneAnswerStore`, which `*store.Store` satisfies; a store that also has `RecordHookGone` gets the readers' `hook_gone_at` write; plain spawn uses the clock and reader for the launch start and the identity write, and `kill` uses all three for its lookup, adoption and process wait; `Client.SendKeys` and `Client.Decide` take their relay verdicts on the clock (see [Permission relay](#permission-relay)); `find-missing` measures the pending grace period on the same clock, with the value from `EffectivePendingGrace`. The label scan of a plain spawn lives in `spawn_scan.go`, its held-name path after "duplicate session" (the end write, one re-lookup, the classified error) in `spawn_held.go`, the shared held-name error builder in `held_name.go` and the one `ad.launch.name_held` emitter in `name_held_trail.go` (see [Launch identity](#launch-identity)). **`resume` seams** (`resume.go`): `ResumeStore` and `ResumeTmux` (`TmuxLookup`'s `Lookup` plus `NewSession`, `SetLabel` and `KillSessionID`; no pane listing, since `resume` adopts nothing, and no name-based method; `TmuxClient` satisfies it), with the start-time reader `ProcChecker`, the configuration, the store id, the clock and the logger. Its pre-launch lookup's decision lives in `resume_lookup.go` (`decidePreLaunch`), the launch outcome, restore and path after "duplicate session" it shares with reuse in `finished_launch.go` (`finishedLaunch`) and the shared starting-session refusal in `starting_session.go` (see [Resume](#resume) and [Starting-session rule](#starting-session-rule-starting_sessiongo)). **Reuse** (`spawn` with `ReuseFinished` and an explicit id whose row is finished; `spawn_reuse.go`): the unexported `reuseStore` (`ReadForReuse`, `ResetForReuse`, `RestoreAfterFailedReuse`, `RecordLaunchIdentity`; `*store.Store` satisfies it), injected through `runSpawnWithReuseStore` (`runSpawn` passes its store), and its own descriptions in `spawn_reuse_errors.go` (see [Reuse of a finished id](#reuse-of-a-finished-id)). **`expire`'s window parser** (`older_than.go`, b.hxn): `ParseOlderThan(s) (time.Duration, bool)` takes an unsigned Go duration or decimal digits followed by `d` for days, and rejects a value in neither form, a value with a leading `+` or `-` in either form (b.c4n) and a day count above `config.MaxExpireRetentionDays` (106751); `OlderThanForm` words the accepted form for the refusals and for MCP's `tools/list` (see [`expire`](#expire)). `api.New` builds the production client as `tmux.New(opts.TmuxCommand, tmuxTimeouts(cfg.Tmux))`, taking the timeouts and pipe-close wait from `EffectiveQueryTimeout`, `EffectiveActionTimeout`, `EffectiveCreateTimeout` and `EffectivePipeCloseWait`; an injected `Options.TmuxClient` is used as given and gets no timeouts. **`list-subagents` seam** (`list_subagents.go`): `ListSubagentsStore` (`ListSubagentRecords`, no write; `*store.Store` satisfies it), taken by the exported `ListSubagents` and by `Client.ListSubagents`, with no clock, relay view or tmux (see [The `list-subagents` verb](#the-list-subagents-verb)). **Settle time (b.3ie):** `Client.Status`, `Client.Get` and `Client.List` take one `store.SettleRead` per call from `settleRead()` (the loaded config's `[state] settle_ms` and the Client's clock, read before the store read) and report the settled state through `statusSettled`, `getSettled` and `listSettled`; the package-level `Status`, `Get` and `List` read with no settle time. Every other verb, and every field but `state` and the independently settled `family_state`, reads the raw state (see [Settle time (b.3ie)](#settle-time-b3ie)). | stdlib; `internal/store`; `internal/config`; `internal/tmux`; `internal/probe`; `internal/spawn`; `internal/cursortranscript`; `internal/adminapi` (to set its hooks); `pkg/api/manifest` (the verb list for `help`, and `TmuxSessionNameSpelling` for the list hint). | Direct `database/sql`; raw SQL strings; MCP framing. |
+| `internal/store` | Sole owner of the SQLite database file. Opens the DB, enforces file/dir permissions, manages schema (v12; see "Schema versioning convention" below), exposes typed CRUD primitives. Opens every connection with the busy timeout its opener passes (`OpenWithBusyTimeout`, `OpenOrInitWithBusyTimeout`; `Open` and `OpenOrInit` pass `DefaultBusyTimeoutMs`, 10000), or with `DefaultBusyTimeoutMs` in place of a value outside 1 to `math.MaxInt32`, which SQLite would take as no wait; see "Busy timeout" under [`internal/store`](#internalstore). Holds the settle time its opener passes (`SetSettleMs`, 0 by default), with which hook writes judge the state they replace, and derives the state `status`, `get` and `list` report at read time from a reader's `SettleRead` (b.3ie; see "v8 columns" under [`internal/store`](#internalstore)); the store reads no config. | stdlib (`database/sql`, `os`, `path/filepath`, `errors`, etc.); `modernc.org/sqlite` for the driver side-effect import. | `pkg/api`; `internal/config`; `cmd/*`; any package outside this one. The dependency arrow points *into* `store`, never out. |
 | `internal/config` | Loads, validates, and serves the TOML config at `~/.config/agent-director/config.toml`. Read-only after load. Before validating any value, `Load` refuses a file that sets an old `[defaults]` key (`oldKeyRefusal`; see [Refusal of old names](#refusal-of-old-names)), then a file that sets one key under names differing only in letter case (`db_path` under both `[Store]` and `[store]`), whose value the decoder would otherwise pick at random on each load (`caseVariantRefusal`, b.p8n; see "One spelling per key" under [`[tmux]` timing settings](#tmux-timing-settings)). `LoadTemplate` refuses a spawn template of that shape (`RELAY_MODE` and `relay_mode`) the same way, as `ErrTemplateMalformed`, except that the names of keys in its tables that decode into a Go map (`[extra_env]` and `[labels]`, listed in `templateMapTables`) keep their letter case (b.2u1). **Must use:** a loader that decodes a TOML file into a struct refuses this shape through `caseVariantRefusal`, passing the file's top-level tables that decode into a Go map, never a second copy; keep `templateMapTables` in step with `TemplateFile`'s map fields (`TestTemplateMapTablesMatchTemplateFile` checks it). **Must use:** every "is this key set" check in `internal/config` asks `isDefined`, which matches the table's and key's names regardless of letter case, as the decoder does (by comparing `foldKey` forms), never `toml.MetaData.IsDefined`, which compares names exactly and so misses a key the decoder still read into its field (b.g7h; see "Refuse, never clamp" under [`[tmux]` timing settings](#tmux-timing-settings)). Owns the `[tmux]` timing settings (`config.Tmux`, nine keys: `starting_session_seconds`, `stopping_window_seconds`, `pending_grace_seconds`, `query_timeout_ms`, `action_timeout_ms`, `create_timeout_ms`, `pipe_close_wait_ms`, `sweep_budget_seconds`, `kill_exit_wait_ms`), one named constant per default and per safe minimum, and the pending grace period's minimum rule (`PendingGraceMinimumSeconds`). The pending grace period bounds both `find-missing`'s hands-off window for a `pending` row and a SessionStart hook's wait for its launch's identity write, each measured from the launch start (SR-13.4, SR-22.9); it has no maximum. The hook's wait is also capped at 540 s after it began (`sessionStartWaitCap` in `internal/hook`; WD 2026-09-30c), so a grace above 540 s lengthens only `find-missing`'s window, which is unchanged. Safe minimums: bound 60 s, stopping window 30 s, grace period 30 s or ⌈(create timeout + pipe-close wait) / 1000⌉ + 20 s when larger; the other six keys have none (a value too low fails closed). A missing key or 0 gives the default, except that `pending_grace_seconds` takes its default or its derived minimum, whichever is larger (b.9e1); a negative value, a positive value below a minimum and a non-integer are refused at load (`*config.ConfigError`, surfaced by the CLI as `ErrConfigMalformed`), never clamped. See [`[tmux]` timing settings](#tmux-timing-settings). Also owns `[defaults] expire_retention_days`, `expire`'s default window in whole days: `DefaultExpireRetentionDays` (31), `MaxExpireRetentionDays` (106751, the largest whole number of days a `time.Duration` holds, which is also `older_than`'s day limit in `pkg/api`'s `ParseOlderThan`) and `Defaults.EffectiveExpireRetentionDays()` (the configured value when positive, else 31). A missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` as the `[tmux]` refusals, never replaced by the default or capped. **Must use:** read the setting only through `EffectiveExpireRetentionDays` and the day limit only from `MaxExpireRetentionDays` (see [`expire`](#expire)). Also owns `[relay] timeout_seconds`, the relay window in whole seconds: `DefaultRelayTimeoutSeconds` (86400), `MaxRelayTimeoutSeconds` (2147483, `math.MaxInt32 / 1000`: the largest per-hook `timeout` Claude Code honours) and `Relay.EffectiveTimeoutSeconds()`; `[pause] timeout_seconds`, `pause`'s wait in whole seconds: `DefaultPauseTimeoutSeconds` (30), `MaxPauseTimeoutSeconds` (9223372036, the largest whole number of seconds a `time.Duration` holds) and `Pause.EffectiveTimeoutSeconds()`; `[pre_trust] lock_wait_seconds`, a Claude launch's pre-trust's wait for Claude Code's lock on `.claude.json` while another process holds it (a Codex launch takes no lock and ignores the key), in whole seconds: `DefaultPreTrustLockWaitSeconds` (12, just above the lock's 10 s stale limit), `MaxPreTrustLockWaitSeconds` (9223372036, as for `[pause]`) and `PreTrust.EffectiveLockWaitSeconds()`; and `[store] busy_timeout_ms`, how long each store connection waits for a lock another connection holds before its statement fails (SQLite's busy timeout), in whole milliseconds: `DefaultStoreBusyTimeoutMs` (10000), `MaxStoreBusyTimeoutMs` (2147483647, `math.MaxInt32`: SQLite takes a larger busy timeout as 0, and the `sqlite3` shell's `.timeout` truncates one to 32 bits, either of which turns the wait off) and `Store.EffectiveBusyTimeoutMs()`. Each accessor returns the configured value when positive, else the default. The same rule applies: a missing key or 0 gives the default; a negative value and one above the maximum are refused at load in the same `*config.ConfigError` (b.8q2, b.kr4, b.c7f). **Must use:** read each only through its accessor and its limit only from its `Max*` constant (see "Emitted per-hook relay timeout" in the spawn pipeline section, [`pause`](#pause), [Workspace-trust pre-write](#workspace-trust-pre-write) and "Busy timeout" under [`internal/store`](#internalstore)). Also owns `[state] settle_ms` (b.3ie), the settle time of the state `status`, `get` and `list` report, in whole milliseconds: `DefaultStateSettleMs` (0, off), `MaxStateSettleMs` (60000, one minute, far above the recommended 1 to 2 s; a longer one would hide whole turns from every polling caller on the host) and `State.EffectiveSettleMs()` (the configured value when positive, else 0). Unlike the keys above, 0 is the default itself, not its stand-in: a missing key or 0 turns the settle time off. A negative value and one above the maximum are refused at load in the same `*config.ConfigError` ("[state] settle_ms = <value>, outside its range 0 to 60000 milliseconds"), never clamped. **Must use:** read it only through `EffectiveSettleMs` and its limit only from `MaxStateSettleMs`; every opener that loads the config (`pkg/api.New` and `runHook`) passes it to the store through `Store.SetSettleMs`, and the Client's `status`, `get` and `list` take it from the loaded config (`settleRead`), so each process uses the value it loaded (see [Settle time (b.3ie)](#settle-time-b3ie)). Also owns `[store] db_path`'s default, `DefaultDbPath` (`~/.config/agent-director/state.db`, which `Default()` seeds), and `Store.EffectiveDbPath()`, the store path every opener uses: `db_path` as `Load` resolved it when non-empty, else `DefaultDbPath` with `~/` joined onto `$HOME`, refused with `expand tilde: …` when `HOME` is unset or empty. It never returns `""` (b.8up). **Must use:** code that opens the configured store (`pkg/api`'s `resolveStorePath` for tiers 2 and 3, and Claude/Codex `runHook`) takes its path from `EffectiveDbPath`, never from `Store.DbPath` directly (see "StorePath three-tier precedence" under [`pkg/api` Client lifecycle](#pkgapi-client-lifecycle)), and every opener that loads the config (`pkg/api.New`, whichever tier gave the path, and `runHook`) passes `EffectiveBusyTimeoutMs` to the store, never `Store.BusyTimeoutMs` (b.c7f). Also owns `[launch]` (`config.Launch`: `claude_path`, `codex_path` and `cursor_path`), the program each agent's launch runs. A value is an absolute path or starts with `~/`, which `Load` joins onto `$HOME`; empty is unset. `Load` refuses a blank value, a relative one, `~` alone, `~user/...`, and a `~/` value when `HOME` is unset or empty, as `*config.ConfigError` (surfaced as `ErrConfigMalformed`) naming the key, never a silent default (`launchRefusals`, `launchRefusal`). **Must use:** launch composition takes the Claude program from `spawn`'s `claudeProgram(cfg)` (`claude_path` when set, else `claude` on `PATH`), read at each launch, never from `Launch.ClaudePath` directly or a literal `claude`; and takes the Codex program from `codexProgram(cfg)` (`codexlaunch.go`: `codex_path` when set, as one unchanged argument, else `codex` on the `PATH` of the agents' tmux server), read at each launch for spawn, reuse and resume, never from `Launch.CodexPath` directly or a literal `codex`. Fresh, reused and resumed Cursor composition selects `Launch.CursorPath` (else `agent` on `PATH`) in `composeCursorCommand` (`cursorlaunch.go`); all future Cursor argv construction must reuse that function. Also owns the template file's `agent` key (`TemplateFile.Agent`): `LoadTemplate` refuses a value outside `claude`, `codex` and `cursor` as `ErrTemplateMalformed`, and non-empty `agent_args` with no `agent` as `ErrTemplateAgentMissing`, and `config.ValidAgent`, `config.AgentClaude`, `config.AgentCodex` and `config.AgentCursor` are the one statement of the valid values (see [The agent: resolution, ownership and checks](#the-agent-resolution-ownership-and-checks)). | stdlib; `github.com/BurntSushi/toml`. | `database/sql`; `internal/store`; `pkg/api`; `cmd/*`. |
 | `internal/layout` | The one definition of where agent-director keeps its files: `DirRel` (`.config/agent-director`), `Display` (`~/.config/agent-director`), the file and directory names in it (`ConfigFile`, `StoreFile`, `ErrorLogFile`, `TrailFile`, `TemplatesDir`, `BinDir`, `BinaryName`), the `~/` forms of the defaults (`DisplayConfigPath`, `DisplayStorePath`, `DisplayErrorLogPath`, `DisplayTemplatesDir`), `Dir(home)` and `Join(home, ...)`; and, in `old.go`, the presence rules `OldPresent`, `NewPresent`, `OnlyOldPresent` and `StoreExists`, the only code that names the old directory. See [`internal/layout`](#internallayout). **Must use:** every default path in the Go code derives from this package, never a literal `.config/agent-director`; a presence question about the two directories is asked only through `old.go`. | stdlib only. | Every other `internal/` and `pkg/` package (it is a leaf, so each can import it without a cycle). |
 | `pkg/api/apitest` | Test helpers shared across packages (non-test `.go` files, so harnesses outside `pkg/api` import them). Families: the `Seed*` fixtures (`SeedSpawn`, `SeedListFixture`, `SeedDeleteFixture`, `SeedDecideFixture` (with `SeedDecideFixtureAgent`), `SeedPermissionRow`, `SeedExpireFixture`, `SeedJsonl`, `SeedStore`, `OpenStoreWithRow`), `SeedSpawn`'s `With*` options, the store-read, store-id and write-lock (`HoldWriteLock`) helpers (see [apitest Seed* factory contract](#apitest-seed-factory-contract-reusable-test-fixtures)); the config writers `WriteTmuxConfig`, `WriteRetentionConfig` and `WriteKeysConfig` (see [apitest `[tmux]` config writer](#apitest-tmux-config-writer-reusable-test-fixture)); the template body builder `TemplateBody` (see [apitest template factory](#apitest-template-factory-reusable-test-fixture)); and the description helper, `AssertDescription` with the `Desc*` cases in `descriptions*.go` (see [apitest description helper](#apitest-description-helper-reusable-test-fixture)). Each section states the must-use rule. | stdlib; `internal/store`; `internal/spawn`; `internal/config` (the `[tmux]` key definitions); `internal/tmux` (the `tmux.Call` names the description cases use); `github.com/BurntSushi/toml` (to encode the config file); `internal/testsupport/storefix`; `internal/testsupport/procstarttimefix` and `internal/testsupport/launchfix` (leaf fixture-value packages); `github.com/google/uuid`; `modernc.org/sqlite` (driver side-effect import). | `pkg/api` (cycle constraint); `cmd/*`; `internal/mcp`; `test/*`. |
@@ -2146,7 +2146,7 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v11** lives in `internal/store/schema.go`. Seven tables, none with a
+**Schema v12** lives in `internal/store/schema.go`. Seven tables, none with a
 column whose name starts with `claude_` (the v9 hop renamed those; see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
 
@@ -2507,7 +2507,7 @@ out-of-range values and true with a known child are refused transactionally
 with `ErrSchemaMismatch`, preserving v10/data/authorization for corrected retry.
 Fresh schema11 DDL converges with migrated stores. Earlier runtime/rename hops
 remain unchanged; rename threshold9 is immutable. Full engineering recovery
-policy is in [migration-guide.md](migration-guide.md#current-worked-example-v10--v11).
+policy is in [migration-guide.md](migration-guide.md#historical-worked-example-v10--v11).
 
 - **Readers.** Every read returning a `PermissionRow` selects
   `permissionColumns` and scans with `scanPermissionRow`
@@ -2807,8 +2807,8 @@ the socket is shown").
 compare-and-set write can guard on it: the write checks that the version is
 still the one it read, so it knows the row has not changed since. As built:
 
-- Every statement that updates a `spawns` row advances `row_version` by
-  exactly one in that same statement, with no transaction added. The shared
+- Every lifecycle or metadata statement that updates a `spawns` row advances
+  `row_version` by exactly one in that same statement. The shared
   SET fragment is `rowVersionAdvance` in `internal/store/spawns.go`. This
   covers every branch of `ApplyHookTransition` / `ApplyHookTransitionResult`
   (state transitions, the `ended` transition, soft refreshes),
@@ -2832,6 +2832,11 @@ still the one it read, so it knows the row has not changed since. As built:
   `spawns` row and advance nothing; nor does the close of a Spawn's
   requests, whose `spawns` change (the mark, the ended transition, resume's
   move) advances the version once.
+- Derived family-history updates through `refreshFamilies` are an exception:
+  they change only `family_state`, `family_settled_state` and
+  `family_changed_ms`, without advancing the row's or any ancestor's
+  `row_version`. Lifecycle mutations and their family refresh share a
+  transaction and commit or roll back together; see [Family reporting](#family-reporting).
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the non-Cursor `working`-transition hold path
   (a permission request holding the row, `holdsRowSQL`, at the hold's read
@@ -3342,8 +3347,11 @@ still the one it read, so it knows the row has not changed since. As built:
     that sets `state` to `waiting` when
     `idle_since` is set and to `working` otherwise, NULLs
     `launch_started_at` (`launchStartClear`) and advances `row_version`,
-    returning the state it wrote. It writes no other column: `idle_since`
-    stays until the agent's next hook, and `last_seen_at` is not bumped.
+    returning the state it wrote. It also writes the own-state settle columns
+    for an immediate report. `inImmediateTx` refreshes family history before
+    commit; the family report settles independently. No other own-state column
+    changes: `idle_since` stays until the agent's next hook, and
+    `last_seen_at` is not bumped.
     Whether a request's relay hook may still run is the caller's to check
     first (`RepairCheckPermission`, which skips a request a close
     closed, and judges a proven one as any other); a request recorded after that check
@@ -3404,7 +3412,8 @@ still the one it read, so it knows the row has not changed since. As built:
   read any other way never matches.
 - **Must use:** any new or changed store statement that updates a `spawns`
   row must advance `row_version` in that same statement (concatenate
-  `rowVersionAdvance`), and must follow the launch-start rule (concatenate
+  `rowVersionAdvance`), except for the derived family-history updates above.
+  Lifecycle and metadata writes must follow the launch-start rule (concatenate
   `launchStartClear` when it sets a non-`pending` state) and, when it
   writes `state`, the settle rule (its settle columns in the same
   statement; see "v8 columns" above). It must also get a
@@ -3415,20 +3424,20 @@ still the one it read, so it knows the row has not changed since. As built:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v11 tables and indexes and insert
+- `user_version == 0` → fresh DB: create the v12 tables and indexes and insert
   the store id inside a single transaction, then stamp `PRAGMA user_version =
-  11`.
-- `0 < user_version < 11` (older-than-binary, i.e. v1, v2, v3, v4, v5, v6, v7, v8, v9 or v10) → **gated**: the
+  12`.
+- `0 < user_version < 12` (older-than-binary, v1 through v11) → **gated**: the
   store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
   use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
   valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
   sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (e.g. `{"from": 10, "to": 11}`) and authorizes the migration only
+  transition (e.g. `{"from": 11, "to": 12}`) and authorizes the migration only
   when its `from` exact-matches the DB's actual `user_version` and its `to`
   exact-matches this binary's `schemaVersion`. When authorized, the upgrade
   runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds ten
+  `schema.go`), each step individually transactional; today the chain holds eleven
   steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
   V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
   `spawns`), `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`),
@@ -3444,15 +3453,17 @@ source of truth for which schema this binary expects. On `Open`:
   backfill), then `{from: 9, apply: migrateV9toV10}` (CREATE
   `cursor_runtimes`, validating a pre-existing table before stamping), then
   `{from: 10, apply: migrateV10toV11}` (durable main-turn eligibility,
-  conditional backfill and validation; see v11 columns above) —
+  conditional backfill and validation; see v11 columns above), then
+  `{from: 11, apply: migrateV11toV12}` (three family-history columns,
+  validation and initialization; see [Family reporting](#family-reporting)) —
   see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", "Schema v3 →
   v4 Migration", "Schema v4 → v5 Migration", "Schema v5 → v6 Migration",
   "Schema v6 → v7 Migration", "Schema v7 → v8 Migration" and [Store upgrade
   to agent-generic names](#store-upgrade-to-agent-generic-names) below.
-  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11 in one
+  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12 in one
   pass. The sentinel is consumed after the chain commits.
-- `user_version == 11` → nothing to do; the schema already matches.
-- `user_version > 11` (newer-than-binary) → return the sentinel
+- `user_version == 12` → nothing to do; the schema already matches.
+- `user_version > 12` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
 - After any of the successful arms, `openDB` reads the store id; a store
@@ -3531,7 +3542,7 @@ the `store_meta` table (`migrateV4toV5`, b.fmk):
    of the new columns, and no `store_id`.
 4. **Install-only**: like every hop, it runs only when the install flow's
    `migrate-authorized` sentinel authorizes the transition from the store's
-   version to this binary's (`{"from": 4, "to": 11}` for a v4 store, which
+   version to this binary's (`{"from": 4, "to": 12}` for a v4 store, which
    chains through this hop); a v4 store opened without it is refused with
    `ErrSchemaMigrationRequired`. `install.sh` learns the target version from
    that refusal, so it needed no change.
@@ -3566,7 +3577,7 @@ columns (`migrateV5toV6`, b.kdf; see "v6 columns" above):
    a column) leaves `user_version = 5` and none of the three columns.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 5, "to": 11}` for a v5 store); a v5 store opened without it is
+   (`{"from": 5, "to": 12}` for a v5 store); a v5 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v5, use the v6 → v5
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the three
@@ -3625,7 +3636,7 @@ see "v7 columns" above):
    columns and no request proven.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 6, "to": 11}` for a v6 store); a v6 store opened without it is
+   (`{"from": 6, "to": 12}` for a v6 store); a v6 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v6, use the v7 → v6
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the
@@ -3666,7 +3677,7 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    column or the backfill) leaves `user_version = 7` and neither column.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 7, "to": 11}` for a v7 store); a v7 store opened without it is
+   (`{"from": 7, "to": 12}` for a v7 store); a v7 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v7, use the v8 → v7
    emergency downgrade recipe in docs/migration-guide.md §5 (drop
@@ -3679,7 +3690,7 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    Every agent is stopped before the rollback and started again after it.
 6. **Distinct migration hops**: the v6 → v7 permission-relay hop and the
    v7 → v8 settle-state hop remain separate steps in the authorized chain
-   to v11; their columns are not folded together.
+   to v12; their columns are not folded together.
 
 **Concurrency.** `Open` calls `db.SetMaxOpenConns(1)`. WAL is set once at
 fresh-database initialization and otherwise verified from the persistent
@@ -3852,9 +3863,11 @@ entry `{from: 8, apply: migrateV8toV9}`) takes the store from schema v8 to
 v9. It drops the Claude names from the store's columns, gives every row a
 record of its agent and of whether its launch registers the subagent events,
 and adds the tables that hold a row's subagent records (these are folded into
-this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh store is created at v11 by `schemaDDL`, retaining the
-same v9 column text and adding `cursor_runtimes`, so a fresh and a migrated store have the same
-shape (names, positions, index columns and foreign keys).
+this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh
+store is created at v12 by `schemaDDL`, retaining the same v9 column text
+and adding `cursor_runtimes`, proof eligibility and family history, so a
+fresh and a migrated store have the same shape (names, positions, index
+columns and foreign keys).
 
 1. **Six renames**, each an `ALTER TABLE … RENAME COLUMN`, in `v9Renames`'
    order:
@@ -3916,13 +3929,14 @@ shape (names, positions, index columns and foreign keys).
    exists is left as it is (`IF NOT EXISTS`).
 6. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it, `{"from": 8,
-   "to": 11}` for a v8 store (the sentinel's `to` is this binary's
-   `schemaVersion`, 11; the separate v9→v10 and v10→v11 hops follow); a v8 store opened without it is refused with
-   `ErrSchemaMigrationRequired`, and `user_version > 11` surfaces
+   "to": 12}` for a v8 store (the sentinel's `to` is this binary's
+   `schemaVersion`, 12; the separate v9→v10, v10→v11 and v11→v12 hops follow); a v8 store opened without it is refused with
+   `ErrSchemaMigrationRequired`, and `user_version > 12` surfaces
    `ErrSchemaMismatch`.
 7. **No reverse recipe.** docs/migration-guide.md §5 has no v9 → v8 recipe,
    and none is to be written (the hop renames columns and adds a column and
-   two tables): the downgrade recipes cover v8 and older only.
+   two tables). The recipes cover v12 → v11 and v8 and older; none crosses
+   v11 → v10, v10 → v9 or v9 → v8.
    The way back from a v9 store is to restore the copy of `state.db` (with its
    `-wal` and `-shm` files) taken before the install, then run the
    previous release's install; every write made since the install is lost.
@@ -4197,7 +4211,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v11 / SRD §4.2)|
+                |    schema v12 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -6160,7 +6174,7 @@ to the `state` that `status`, `get` and `list` report on every surface
 
 - With T > 0, `state` moves to a new value only once that raw value has
   held for T; until then it reports the last settled value. There is no
-  `settling` value, no new field and no in-flight marker, and the reported
+  `settling` value or in-flight marker for own-state settling, and the reported
   value is always one the row's raw history held.
 - Every raw change of value restarts the clock, a change no poll would
   have seen included; a write of the same value (`working → working`, a
@@ -6187,9 +6201,9 @@ to the `state` that `status`, `get` and `list` report on every surface
   has a row marked `missing` before its agent reported in). Such a move is
   a hook write and settles: the row reads `missing` or `ended` for T, then
   the live value. Never state that hooks do not leave a terminal state.
-- **Off is unchanged.** With T = 0 or unset, every read statement is the one
-  from before b.3ie (`stateExpr` gives the bare `state` column) and the
-  output is byte-identical, pinned by the settle-off goldens
+- **Off preserves existing fields.** With T = 0 or unset, `stateExpr` gives
+  the bare `state` column. Existing result fields keep their values; the
+  additive `family_state` reports the raw aggregate. The settle-off goldens pin this contract
   (`cmd/agent-director/testdata/settle_off/`, with the MCP and TypeScript
   tests over the same store).
 
@@ -6201,9 +6215,9 @@ statement with SQLite's clock; readers take the Client's clock before their
 one SELECT. No read waits for a state to settle, so no accepted T can push
 a caller past its deadline (the TypeScript client's 30 s
 `DEFAULT_CALL_TIMEOUT_MS`, `decide`'s `max_wait_ms`) or change a relay
-outcome, and a hook's settle columns are part of its one existing UPDATE,
-with no extra read, statement or wait (b.146's "no setting can break a
-deadline").
+outcome. A hook's own-state settle columns remain part of its state UPDATE;
+the lifecycle transaction also refreshes family history before commit (see
+[Family reporting](#family-reporting)).
 
 **Who reads T.** Each process reads the config once: a hook process when it
 fires (its T judges whether the state its write replaces had settled) and
@@ -6282,6 +6296,79 @@ state is the raw one; a reported value held raw for at least T or is the
 last settled one; terminal and command-written values report at once; no
 guard reads the reported state; every reported value is one the raw
 history held.
+
+### Family reporting
+
+`family_state` is a separate binary report (`working` or `waiting`) on CLI
+and MCP `status`, `get` and every returned `list` row. Go exposes
+`StatusResult.FamilyState`, `SpawnRow.FamilyState` and `ListRow.FamilyState`;
+TypeScript exposes `family_state` on `StatusResult`, `GetResult` and
+`ListRow`. The manifest and generated references describe the same field.
+
+**Membership and raw authority.** `familyAggregateSQL`
+(`internal/store/family.go`) carries working membership upward through stored
+`parent_id` links at every depth, including retained `ended` and `missing`
+intermediates, excluding only their own contribution. Any live member with
+raw state other than `waiting` makes the family `working`; otherwise,
+including no live members, it is `waiting`. Refresh and migration join the
+materialized aggregate with `UPDATE ... FROM`. Native subagent records do
+not participate. Filters and limits select returned rows, never their
+family members. Resume, reuse, restore,
+reparenting and deletion use the relationships currently stored; deleted
+ancestry is not reconstructed.
+
+**v12 durable history.** Each `spawns` row appends `family_state TEXT NOT
+NULL DEFAULT ''` (raw aggregate), `family_settled_state TEXT NOT NULL
+DEFAULT ''` (retained settled aggregate), and `family_changed_ms INTEGER
+NOT NULL DEFAULT 0` (raw aggregate change in epoch milliseconds). They
+are independent of the v8 own-state history. New rows initialize to their
+raw aggregate. The authorized `migrateV11toV12` hop
+(`internal/store/family_schema.go`) validates pre-existing column names,
+types, nullability, defaults and primary-key shape before adding missing
+columns. It validates binary-or-empty history values and an integer clock,
+initializes empty history from the full tree and preserves compatible
+established history. DDL, initialization and stamp share one transaction;
+failure rolls back the hop. Fresh DDL converges with it; store identity and
+own-state history are preserved. Recovery is in
+[migration-guide.md §5](migration-guide.md#v12--v11-reverses-migratev11tov12).
+
+**Writers must reuse** `refreshFamilies` in `family.go` for every mutation
+that changes a member's binary contribution or parent membership.
+`execFamily` wraps a single lifecycle statement in `inImmediateTx`, which
+refreshes families before commit. The generic bounded `inWriteTx` and
+`inWriteTxContext` do not refresh automatically: relevant lifecycle callbacks
+use `refreshFamiliesAfterStateChange` to refresh only when the member's
+binary contribution changes. Permission-only and authority-only writes,
+and contribution-preserving state changes in those callbacks, skip refresh.
+Cursor runtime registration, session binding and retirement use guarded
+authority-only writes without family refresh. Aggregate changes and
+lifecycle changes commit or roll back together, retaining each write's
+guarded result. Refresh preserves the history and clock when the aggregate
+is unchanged. When it changes, the writer's `settle_ms` judges whether the
+preceding aggregate had settled, retaining the earlier settled value
+otherwise; SQLite stamps the actual aggregate change under the lock.
+An uninitialized aggregate starts settled at its raw value.
+
+**Readers must reuse** `SettleRead.familyExpr`, alongside `stateExpr`, in
+the existing status/get/list store reads. With settling off it reads the
+raw aggregate. Otherwise it uses the reader's clock and T once, returning
+the prior settled family value until the current raw aggregate has held
+for T. Both directions settle, including changes from command writes or
+terminal exclusions. Depth and member own-state settling add no delay;
+short reversals remain invisible. History survives client and process
+restarts, so the next read after T needs no intervening polling or timer.
+Clock and configuration-change semantics match own-state settling.
+Family projection adds no writer lock, write, settle wait or liveness probe.
+
+Existing Cursor read checks, guarded terminal persistence and errors remain
+in place. A projected `missing` own state does not remove a member from its
+stored family until the terminal write commits. Ancestor own-state and
+permission fields remain local to the ancestor; descendant `ask_user` or
+`check_permission` affects only the binary family aggregate. Read failures
+remain errors. A stored live working row continues to contribute until
+existing detection or state changes say otherwise. Family waiting is no
+task-success or action-safety guarantee, including while settling briefly
+retains waiting after work begins.
 
 ## Spawn Parameter Resolution
 
@@ -9327,7 +9414,7 @@ for every cause, so a caller that checks only for 5 is unaffected.
 | `ErrVersionUnreadable` | `ad_fail_unreadable_version`: the migration gate's read (pre-flight, before anything on disk changes; "reading state.db's schema version FAILED"), step 2's read, step 3's read after the probe, step 5's read when a migration was expected | re-run; a read that printed a non-version prints it again until sqlite3 or `state.db` changes, so a caller caps its re-runs |
 | `ErrConfigMalformed` | pre-flight `ad_store_db_path` (including its `[launch]` reader), `ad_store_busy_timeout_ms`, the migration's checks of `config.toml` (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) and (hooks on) `ad_config_merge_check` and `ad_link_write_check` on a symlinked `config.toml`, all but the apply's before anything on disk changes; `ad_fail_config_refused` at step 3's probe and step 4's open | fix `config.toml` (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
 | `ErrTemplateMalformed` | the migration's checks of a stored template (a form it refuses, a file it cannot read, a symlink it cannot write through; with or without `--no-hooks`; and, at the apply, a file that changed since pre-flight) | fix the template the message names (or its symlink), then re-run; see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template) |
-| `ErrSchemaMismatch` | step 4's open, relayed: newer store, invalid store id, or authorized migration refusing incompatible eligibility metadata | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
+| `ErrSchemaMismatch` | step 4's open, relayed: newer store, invalid store id, or authorized migration refusing incompatible eligibility or family-history definitions/values | read the actual envelope; a matching binary addresses a newer store, while invalid metadata requires stopped-writer backup/restore or human recovery; never edit eligibility or family history to bypass validation (see [ErrSchemaMismatch recovery](#errschemamismatch-recovery)) |
 | `ErrMoveConflict` | `ad_move_conflict`, before every other pre-flight reader (and, for a store that is a link and a path key that cannot be placed, right after the reader) | the layout cannot be moved as it is: apply the remedy in operator-actions.md, re-run |
 | `ErrAgentsLive` | `ad_agents_live_check`, in pre-flight and again as the move's first step | stop every agent, `serve` and caller, then re-run from a shell agent-director did not start; a re-run reads unreadable rows again |
 | `ErrMoveFailed` | `ad_move_fail`, any failure or interrupt before the rename | free space or fix the cause named, re-run; the old directory was not changed |
@@ -10448,10 +10535,9 @@ the migration with a one-shot `migrate-authorized` sentinel — the flow
 is described under **Pattern B** above ("Schema migration at
 install-time") and, in full, in
 `skills/install-agent-director/SKILL.md`. The upgrade-safety caveat: because
-migrations are forward-only, rolling the *binary* back after the DB has
-migrated forward makes the older binary newer-than-DB in reverse and
-surfaces `ErrSchemaMismatch`. Roll back only before letting the new
-binary migrate the DB. After it has migrated, first return the store to
+migrations only run forward, rolling the *binary* back after the DB has
+migrated forward leaves a store newer than the older binary expects and
+surfaces `ErrSchemaMismatch`. After migration, first return the store to
 the older version with the emergency downgrade recipes in
 docs/migration-guide.md §5, newest first. A store at v9, v10 or v11 has no recipe: the
 v8 → v9 hop renamed columns, added the three `spawns` columns `agent`,
@@ -10467,6 +10553,9 @@ An upgrade within the current layout, including v9→v10 and v10→v11, retains 
 layout directory: restore the operator's pre-upgrade store copy, with its
 companion files and all writers stopped, as described in
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release). For a store
+at v12, the tested v12 → v11 recipe drops only the three family-history
+columns and preserves own-state history and store identity; it cannot cross
+the unsupported v11 → v10 or v10 → v9 boundaries. For a store
 at v8 or older the recipes are (for v8 → v7: drop the two
 settle columns, then stamp `user_version = 7`; then, for an older
 release, v7 → v6: drop the twenty v7 columns, then stamp
@@ -11008,7 +11097,7 @@ line from stdin. Each reply, and what a caller sees:
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 11`). An unauthorized older store (v1 through v10)
+(`user_version > 12`). An unauthorized older store (v1 through v11)
 surfaces `ErrSchemaMigrationRequired`. An authorized migration can instead
 return `ErrSchemaMismatch` when it refuses incompatible metadata. The store does not silently upgrade an
 older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
@@ -11026,12 +11115,14 @@ settled, preserving every row and the store id; v8→v9, six column renames,
 three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
 every row backfilled as a Claude row, preserving every row and the store id;
 v9→v10, CREATE `cursor_runtimes`, preserving existing rows and the store id;
-v10→v11, add and validate durable main-turn proof eligibility).
-Rolling the binary back after such a migration to v11 needs the copy of
+v10→v11, add and validate durable main-turn proof eligibility;
+v11→v12, add, validate and initialize independent family history).
+The tested v12 → v11 reverse recipe is in docs/migration-guide.md §5.
+Rolling the binary back across a migration to v9, v10 or v11 needs the copy of
 `state.db` taken before the install, restored with matched WAL/SHM companions
 and all writers stopped as in
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release):
-no downgrade recipe reaches a v9, v10 or v11 store.
+no supported reverse path crosses v11 → v10, v10 → v9 or v9 → v8.
 Rolling it back over a migration that ended at v8 or older can also use the
 emergency downgrade recipes in docs/migration-guide.md §5.
 
@@ -11050,6 +11141,14 @@ when a chain starting at an earlier version reaches that hop too. The
 failed hop rolls back; earlier committed hops remain. Installing a newer
 binary or rewriting eligibility values is not a supported bypass.
 
+The authorized v11→v12 hop (`internal/store/family_schema.go`) also returns
+`ErrSchemaMismatch` for an incompatible existing family column definition
+(name, type, nullability, default or primary-key shape), a family state or
+settled value outside `''`, `working` and `waiting`, or a non-integer family
+clock. This applies to earlier-version chains reaching that hop. The failed
+hop rolls back while earlier committed hops remain. The canonical recovery
+policy is in the [migration guide](migration-guide.md#emergency-downgrade-recipe).
+
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
 the recovery depends on the cause, and it is never to delete `state.db`:
 
@@ -11062,12 +11161,15 @@ the recovery depends on the cause, and it is never to delete `state.db`:
   the install afterwards; this release's install migrates it again. Writes
   made since the install are lost.
 
-- **Eligibility shape/value refusal.** Stop all writers and use the
+- **Eligibility or family-history shape/value refusal.** Stop all writers and use the
   supported backup/restore procedure or human recovery in
   [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
   using the actual DB path and matched WAL/SHM companions. Retry through
   the installer only after the incompatible state is resolved; it reads
   the resulting version and refreshes authorization as needed.
+  Follow the [migration guide's recovery policy](migration-guide.md#emergency-downgrade-recipe)
+  for supported reversals and schema boundaries; never rewrite family history
+  to bypass validation.
 
 An install that meets any of these causes stops at step 4's open with exit 5 and
 the same cause line, `install.sh: err_name=ErrSchemaMismatch` (see "Exit
@@ -12301,7 +12403,10 @@ When the hook that would move the row is lost:
   says nothing of its turn), only while the row
   is still in `check_permission` with `relay_mode` on, holds the snapshot
   the read gave, and has no request holding it (`holdsRowSQL`). It NULLs
-  `launch_started_at`, advances `row_version` and writes no other column
+  `launch_started_at`, advances `row_version` and writes the own-state settle
+  columns for an immediate report. The guarded statement runs in
+  `inImmediateTx`, which refreshes family history before commit; family
+  reporting settles independently. No other own-state column changes
   (`idle_since` stays until the agent's next hook; `last_seen_at` is not
   bumped, since no hook reported). A request recorded after the read
   advances the snapshot (its first write moves the row), so the guard
@@ -12376,8 +12481,8 @@ passage is only the close.
 
 **The five writes.** Each calls the one shared step
 `closeSubagentsAgentGone(q, instanceID, at)` (`internal/store/subagents.go`),
-as the last step of its own `BEGIN IMMEDIATE` transaction and only once its
-row write applied:
+inside its own `BEGIN IMMEDIATE` transaction and only once its row write
+applied. Family history is refreshed after the close and before commit:
 
 - the terminal SessionEnd's move to `ended` (`applyEndedTransition`);
 - `find-missing`'s mark (`MarkMissingIfSameLife`);
@@ -17665,7 +17770,7 @@ detects this case via the presence of `pkg/api/go.mod`.
 ### ErrSchemaMismatch on upgrade
 
 Schema upgrades are **gated**, not automatic: an older-than-binary database
-(v1, v2, v3, v4, v5, v6, v7, v8, v9 or v10) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
+(v1 through v11) is refused on `Open` with `ErrSchemaMigrationRequired` unless an
 administrator has placed a valid `migrate-authorized` sentinel next to the DB
 file. Only then does the migration chain run: the v1→v2 hop (DROP+CREATE
 `permission_requests`, no row preservation), the v2→v3 hop (five
@@ -17680,25 +17785,27 @@ COLUMN, the settle columns, then every row backfilled as settled) and/or the
 v8→v9 hop (six column renames, three `spawns` ADD COLUMN, CREATE `subagents`
 and `subagent_launches`, then every row backfilled as a Claude row; see [Store upgrade to agent-generic
 names](#store-upgrade-to-agent-generic-names)), then the separate v9→v10
-Cursor binding-table hop and v10→v11 eligibility hop, walking
+Cursor binding-table hop, v10→v11 eligibility hop and v11→v12 family-history hop, walking
 from the DB's `user_version` up to `schemaVersion` in one pass.
-`ErrSchemaMismatch` fires when `user_version > 11` — meaning the store was
+`ErrSchemaMismatch` fires when `user_version > 12` — meaning the store was
 written by a binary newer than the current one — or when a current store
 has no valid store id, which only a hand edit causes, or an authorized
 migration refuses incompatible eligibility column shape/values, including
-eligible known-child requests (see "ErrSchemaMismatch recovery"). The failed
+eligible known-child requests, or incompatible family-history columns or
+values (see "ErrSchemaMismatch recovery" and [Family reporting](#family-reporting)). The failed
 hop rolls back while earlier committed hops remain; retry authorization
 must match the resulting version. Rolling a release back after its install
 migrated the store to v11 has one way back: restoring the copy of `state.db`
-taken before the install. No downgrade recipe reaches a v9, v10 or v11 store, and none is
-written for it. The emergency downgrade recipes in docs/migration-guide.md §5
-cover older stores only, newest first (v8 → v7: the two settle columns,
+taken before the install. No supported reverse path crosses v11 → v10,
+v10 → v9 or v9 → v8. The emergency downgrade recipes in docs/migration-guide.md §5
+also provide v12 → v11 (drop the three family-history columns); further
+reversal stops at v11. The older recipes cover v8 → v7: the two settle columns,
 keeping the store id; v7 → v6: the twenty v7 columns, keeping the store
 id; v6 → v5: the three launch-owner columns, keeping the store id; v5 →
-v4: the thirteen columns and `store_meta`), for a store at v8 or older; a
+v4: the thirteen columns and `store_meta`, for a store at v8 or older; a
 re-migration after a rollback to v4 creates a new store id.
 
-Bumping `schemaVersion` beyond 11 requires:
+Bumping `schemaVersion` beyond 12 requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
@@ -19312,7 +19419,7 @@ mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
 `storefix.InjectWriteFailure` for committed-row observation and failure cuts;
 do not create a second trail observer or runtime-proof fixture.
 
-**Agent of a seeded row (current schema v11).** The store refuses to insert a
+**Agent of a seeded row (current schema v12).** The store refuses to insert a
 row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
 "v9 columns" under [`internal/store`](#internalstore)), so every storefix
 insert sets `Agent: store.AgentClaude` (`defaultSpawn`); a test that needs a
@@ -20919,7 +21026,7 @@ unchanged. When two options set the same column, the later one wins.
   reports `settled` until `stampMs` plus that time. Without it the row is
   settled (below). **Must use** it to seed a row whose change has not
   settled; never write the columns with raw SQL.
-- Agent (current schema v11): `WithAgent(agent string)` stores `agent` as the
+- Agent (current schema v12): `WithAgent(agent string)` stores `agent` as the
   row's `agent` column, exactly as given and in place of `SeedSpawn`'s
   default `claude` (any text, so a row whose agent is outside `claude`,
   `codex` and `cursor` can be seeded; the store's own writes refuse one, see "v9
@@ -20992,6 +21099,10 @@ unchanged. When two options set the same column, the later one wins.
   settle time and would otherwise leave the previous raw value, the seed's
   `pending`, as the settled state.)
 - The tmux server identity columns are NULL.
+- Family history starts separately settled at the seeded row's raw binary
+  aggregate (`family_changed_ms` 0), independently of `WithSettle`.
+  `SeedParentChild` recomputes and initializes the synthetic tree's family
+  history after linking rows; set explicit family history after the links.
 - A live row (a state for which `store.IsLiveState` holds: `pending`,
   `waiting`, `working`, `ask_user`, `check_permission`) gets the default
   pane `apitest.TestPaneID` (`%42`) with pid `apitest.TestPanePID`
@@ -21052,7 +21163,7 @@ values, except for a row the test inserted itself.
 **Read helpers:**
 
 - `ReadSpawnColumns(dbPath, instanceID) (SpawnColumns, error)`
-  - Returns the `spawns` columns of one row raw through current schema v11 (under
+  - Returns the existing `spawns` columns of one row raw (under
     the names introduced by v9), the
     three v6 launch-owner columns (`LaunchOwnerPID`,
     `LaunchOwnerStarttime`, `LaunchOwnerPIDNS`), v7's `idle_since`
@@ -21060,7 +21171,8 @@ values, except for a row the test inserted itself.
     `end_reported_at` and `subagent_tracking` (`SpawnColumns.Agent`,
     `SpawnColumns.EndReportedAt`, `SpawnColumns.SubagentTracking`; 1 on a
     default seed) included; v8's settle
-    columns are read with `ReadSettle` (below). Each comes
+    columns are read with `ReadSettle`; v12 family history uses
+    `ReadFamilyHistory` (below). Each comes
     back as `any`: nil for NULL,
     otherwise the stored storage class (`int64`, `float64`, `string` or
     `[]byte`). TIMESTAMP columns come back as stored text.
@@ -21149,26 +21261,46 @@ time, and check them with one:
 
 - `SeedReadSurfaceStore(dbPath)` seeds the fixed store the goldens are
   taken on: a row in every state, rows whose raw state flapped through
-  hooks and came back, permission requests, every shown time pinned. Its
+  hooks and came back, permission requests, and a waiting parent and child
+  with a working grandchild; every shown time is pinned. Its
   last step scrambles every row's settle columns (`settled_state`
   `ReadSurfaceSettled(state)`, the next of the seven states, stamped
   `ReadSurfaceStampMs`, in 2099), which a read with no settle time must
-  ignore and a read with one must report. The ts-helper's
+  ignore and a read with one must report. Family history is scrambled
+  independently through `ReadSurfaceSettledFamily` (the opposite binary
+  value at the same fixed stamp). The ts-helper's
   `seed-read-surface-store` calls it.
 - `LoadReadSurfaceCases(t, dir)` reads the case table
-  (`cmd/agent-director/testdata/settle_off/cases.json`: config variants,
-  `settle_ms` missing and 0, times `status`, `get` and `list` calls);
+  (`cmd/agent-director/testdata/settle_off/cases.json`: 32 serialized cases
+  shared across config variants, `settle_ms` missing and 0);
   `ReadSurfaceCase.CLIArgs`, `SettleVariant.WriteConfig` and
   `ReadSurfaceCases.Golden` give a case's argv, config and golden bytes.
-  The goldens were captured on the code before b.3ie and are never
-  regenerated: unset and 0 must stay byte-identical.
+  The goldens preserve existing fields and include the additive binary
+  `family_state`; unset and 0 must match the same current golden.
 - `ReadSurfaceCases.CheckSettleOn(t, c, got)` checks a case's output under
-  `SettleOnConfig` against its golden: the same document with only each
-  `state` read as settled, `list`'s state filter and limit applied to the
+  `SettleOnConfig` against its golden: the same document with each
+  `state` and `family_state` read from their independent settled histories,
+  `list`'s state filter and limit applied to the
   settled state.
 - `SeedSettleFilterRows(dbPath, nowMs)` and `SettleFilterIDs(rows,
   settled, limit, states...)` seed and select the rows that pin `list
   --state` on the settled state ahead of the limit.
+
+**Family-history helpers** (`pkg/api/apitest/family.go`):
+
+- `InitializeFamilyHistory(dbPath)` initializes a synthetic stored tree to
+  its raw aggregates with both family values equal and change clocks 0.
+- `SetFamilyHistory(dbPath, id, rawState, settled, stampMs)` writes only the
+  three family columns, independently of own-state history; a missing row
+  returns an error wrapping `store.ErrSpawnNotFound`.
+- `ReadFamilyHistory(dbPath, id)` returns the raw aggregate, retained settled
+  aggregate and change clock.
+- **Must use:** tests outside `internal/store` seed, move and inspect family
+  history through these helpers, never SQL of their own. Use reader clocks
+  for deterministic transition checks. The ts-helper's
+  `write-family-transition` performs a real gated hook write with the chosen
+  writer settle interval; the family restart collector uses it to establish
+  actual lifecycle history across process restarts.
 
 **Permission-request age helper** (`pkg/api/apitest/seeds.go`, b.3oc):
 
@@ -23228,6 +23360,7 @@ emptiness on success means a non-empty stderr is an unambiguous failure signal.
 | `seed-row-session` | `--store`, `--id`, `--capture` (the row's pane's capture text; empty uses the fake's default), `--tables-dir` (default `$FAKE_TMUX_TABLES`, else the table beside the socket) | `{"socket": "...", "session_id": "...", "pane_id": "...", "table": "..."}` |
 | `seed-read-surface-store` | `--store` (b.3ie: the read-surface goldens' store, through `apitest.SeedReadSurfaceStore`) | `{"ids": [...], "settled": {"<raw state>": "<settled state>", ...}}`: the row ids in seeding order and, per raw state, the settled state its rows were scrambled to, which a read with a settle time reports |
 | `set-settle` | `--store`, `--id`, `--settled`, `--stamp-ms` (b.3ie: an existing row's settle columns, through `apitest.SetSettle`) | `{"instance_id": "..."}` |
+| `write-family-transition` | `--store`, `--id`, `--state` (default `working`), `--settle-ms` (default 0); real gated lifecycle write for the family restart collector | `{"instance_id": "..."}` |
 | `seed-subagent` | `--store`, `--instance-id` (an existing row; both required, else exit 1 with `<flags>: required` on stderr and nothing written), `--subagent-id` (a UUID when empty), `--state`, `--close-reason`, `--session-id`, `--type`, `--description`, `--model`, `--tool-use-id`, `--run-mode` (each applied when non-empty), `--parent-type` and `--parent-id` (both or neither), `--first-started-at-ms`, `--started-at-ms`, `--stopped-at-ms`, `--lost-at-ms` (each applied when given), `--confirmed` (default true: a record; false: an unconfirmed observation that `list-subagents` never returns), all through `apitest.SeedSubagent` | `{"instance_id": "...", "subagent_id": "..."}` |
 | `json-schema` | — | machine-readable result-shape map for all subcommands |
 

@@ -82,7 +82,7 @@ func (s *Store) RotateCursorSession(examined Spawn, gate HookGate, next, path st
 		}
 		prior = row.State
 		applied = true
-		return nil
+		return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, state)
 	})
 	if err != nil {
 		return false, err

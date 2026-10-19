@@ -147,13 +147,16 @@ const result = await client.status({ instance_id: "<id>" });
 console.log(result.state);
 ```
 
-With `[state] settle_ms` set in the CLI's `~/.config/agent-director/config.toml`,
-`status`, `get` and `list` report the settled state: a state a hook wrote
-shows only once it has held that long, the last settled state until then;
-`ended`, `missing` and a state a verb wrote show at once, and `list`'s
-`state` filter matches the settled state. Every verb that acts on a Spawn
-judges its live state, which can be newer. The client adds no field and
-no state value for it.
+`StatusResult`, `GetResult` and each `ListRow` expose
+`family_state: "working" | "waiting"`, separately from `state`.
+[Usage](../../docs/usage.md#family-state) defines membership and raw
+aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
+defines reporting limits.
+
+`status`, `get` and `list` use `[state] settle_ms` in the CLI's
+`~/.config/agent-director/config.toml` for [independent state and family
+settling](../../docs/configuration.md#settle-time-state). Verbs that act on a
+Spawn judge its live state, which can be newer than its reported state.
 
 ### list
 

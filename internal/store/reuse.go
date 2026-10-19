@@ -451,6 +451,9 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 
+	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}

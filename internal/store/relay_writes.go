@@ -148,7 +148,10 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 			return fmt.Errorf("store: relay request insert: %w", err)
 		}
 		requestID, _ = ins.LastInsertId()
-		return evictClosedRequests(ctx, conn, cap)
+		if err := evictClosedRequests(ctx, conn, cap); err != nil {
+			return err
+		}
+		return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateCheckPermission)
 	})
 	if errors.Is(err, errRelayNotApplied) {
 		applied, err := s.hookNotApplied(instanceID, gate, "store: relay request")

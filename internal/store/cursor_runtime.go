@@ -126,7 +126,7 @@ func (s *Store) RegisterCursorRuntime(row Spawn, b CursorRuntime) (bool, error) 
  WHERE cursor_runtimes.bound_launch_token<>excluded.bound_launch_token OR cursor_runtimes.bound_life_number<>excluded.bound_life_number`
 	args := []any{b.GatewayPID, b.GatewayStart, b.RuntimePID, b.RuntimeStart, b.Connection, b.InputPipe, b.OutputPipe, b.InputFD, b.OutputFD, b.InstanceID, b.Token, b.Life, b.GatewayPID, b.GatewayStart}
 	args = append(args, snapshotMatchArgs(row.Snapshot)...)
-	return s.execGuarded(q, args, "store: register Cursor runtime")
+	return s.execCursorRuntime(q, args, "store: register Cursor runtime")
 }
 
 func (s *Store) ReadCursorRuntime(id string) (b CursorRuntime, err error) {
@@ -138,7 +138,7 @@ func (s *Store) ReadCursorRuntime(id string) (b CursorRuntime, err error) {
 // SetCursorRuntimeSession and MarkCursorRuntimeGone preserve the complete
 // connection identity. Their caller first checks the independent kernel facts.
 func (s *Store) SetCursorRuntimeSession(b CursorRuntime, sid string) (bool, error) {
-	return s.execGuarded(`UPDATE cursor_runtimes SET bound_session_id=? WHERE bound_session_id='' AND bound_terminated=0 AND `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start AND state='pending')`, append([]any{sid}, cursorBindingArgs(b)...), "store: Cursor session")
+	return s.execCursorRuntime(`UPDATE cursor_runtimes SET bound_session_id=? WHERE bound_session_id='' AND bound_terminated=0 AND `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start AND state='pending')`, append([]any{sid}, cursorBindingArgs(b)...), "store: Cursor session")
 }
 
 // BindLoadedCursorSession publishes only a confirmed load of the examined
@@ -177,10 +177,24 @@ func (s *Store) BindLoadedCursorSession(ctx context.Context, row Spawn, b Cursor
 	return err == nil && applied, err
 }
 func (s *Store) MarkCursorRuntimeGone(b CursorRuntime) (bool, error) {
-	return s.execGuarded(`UPDATE cursor_runtimes SET bound_terminated=1 WHERE `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start)`, cursorBindingArgs(b), "store: retire Cursor runtime")
+	return s.execCursorRuntime(`UPDATE cursor_runtimes SET bound_terminated=1 WHERE `+cursorBindingMatchSQL+` AND EXISTS(SELECT 1 FROM spawns WHERE spawns.instance_id=cursor_runtimes.bound_instance_id AND agent='cursor' AND launch_token=cursor_runtimes.bound_launch_token AND life_number=cursor_runtimes.bound_life_number AND pane_pid=cursor_runtimes.bound_gateway_pid AND pane_starttime=cursor_runtimes.bound_gateway_start)`, cursorBindingArgs(b), "store: retire Cursor runtime")
 }
 
 const cursorBindingMatchSQL = `bound_instance_id=? AND bound_launch_token=? AND bound_life_number=? AND bound_gateway_pid=? AND bound_gateway_start=? AND bound_runtime_pid=? AND bound_runtime_start=? AND bound_connection_id=? AND bound_input_pipe=? AND bound_output_pipe=? AND bound_input_fd=? AND bound_output_fd=?`
+
+// execCursorRuntime changes only connection authority, never stored spawn
+// state or parent links. Its guarded statement needs no family transaction.
+func (s *Store) execCursorRuntime(query string, args []any, errPrefix string) (bool, error) {
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("%s rows affected: %w", errPrefix, err)
+	}
+	return n > 0, nil
+}
 
 func cursorBindingArgs(b CursorRuntime) []any {
 	return []any{b.InstanceID, b.Token, b.Life, b.GatewayPID, b.GatewayStart, b.RuntimePID, b.RuntimeStart, b.Connection, b.InputPipe, b.OutputPipe, b.InputFD, b.OutputFD}

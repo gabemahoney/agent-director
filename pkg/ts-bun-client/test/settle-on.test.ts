@@ -51,7 +51,8 @@ function call(client: Client, c: ReadSurfaceCase): Promise<unknown> {
 function expected(c: ReadSurfaceCase, settled: Record<string, string>): unknown {
   const asSettled = (row: Row): Row => {
     expect(Object.keys(settled)).toContain(row.state);
-    return { ...row, state: settled[row.state]! };
+    expect(["working", "waiting"]).toContain(String(row.family_state));
+    return { ...row, state: settled[row.state]!, family_state: row.family_state === "working" ? "waiting" : "working" };
   };
   if (c.verb !== "list") return asSettled(golden(c.name) as Row);
   const all = (golden("list") as { spawns: Row[] }).spawns.map(asSettled);

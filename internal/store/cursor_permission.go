@@ -76,7 +76,10 @@ func (s *Store) InsertCursorRequest(b CursorRuntime, req RelayRequest, cap int, 
 			return e
 		}
 		id, _ = result.LastInsertId()
-		return evictClosedRequests(ctx, conn, cap)
+		if e := evictClosedRequests(ctx, conn, cap); e != nil {
+			return e
+		}
+		return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateCheckPermission)
 	})
 	if e == nil {
 		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{"instance_id": b.InstanceID, "prior_state": prior, "new_state": StateCheckPermission, "triggering_event_name": "PermissionRequest", "soft_refresh": false, "source": "ad_spawn_store"})

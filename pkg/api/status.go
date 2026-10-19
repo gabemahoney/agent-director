@@ -24,6 +24,9 @@ type StatusResult struct {
 	// session id and history; a caller tells it from a fresh one by its
 	// non-empty session_id, shown by [Client.Get].
 	State string `json:"state"`
+	// FamilyState reports working or waiting for the complete stored family.
+	// Both directions settle independently using [state] settle_ms.
+	FamilyState string `json:"family_state"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
@@ -44,6 +47,11 @@ type settledStatusReader interface {
 	SpawnStatusSettled(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, err error)
 }
 
+// familyStatusReader keeps family and own-state reports in the same read.
+type familyStatusReader interface {
+	SpawnStatusWithFamily(instanceID string, r store.SettleRead) (reported, raw, family string, launchStartedAtMillis int64, err error)
+}
+
 // Status returns the current state column for the given instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
@@ -59,6 +67,14 @@ func Status(s StatusStore, instanceID string) (StatusResult, error) {
 // read's own statement); launch_started_at still keys on the raw state. With
 // no settle time it is Status exactly as before b.3ie. It never waits.
 func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	if sr, ok := s.(familyStatusReader); ok {
+		reported, raw, family, launchMillis, err := sr.SpawnStatusWithFamily(instanceID, settle)
+		if err != nil {
+			return StatusResult{}, err
+		}
+		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis)}, nil
+	}
+
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
 		reported, raw, launchMillis, err := sr.SpawnStatusSettled(instanceID, settle)
 		if err != nil {
@@ -121,6 +137,7 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 // Status uses, so the production wiring keeps showing the launch start, and
 // the settled read the Client's status uses with a settle time.
 var (
+	_ familyStatusReader  = (*store.Store)(nil)
 	_ statusReader        = (*store.Store)(nil)
 	_ settledStatusReader = (*store.Store)(nil)
 )
