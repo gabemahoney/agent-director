@@ -109,6 +109,11 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 			continue
 		}
 
+		// A required object may contain only null fields, as unknown context does.
+		if fd.Type == "object" && fv.Kind() == reflect.Struct {
+			continue
+		}
+
 		// Default: must be non-zero.
 		if isZero(fv) {
 			t.Errorf("AssertResultMatchesManifest(%s): field %q is zero value; expected non-zero",

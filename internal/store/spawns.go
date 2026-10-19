@@ -109,6 +109,10 @@ func IsLiveState(state string) bool {
 // package. AgentArgs and Labels are presented as their materialized Go
 // shapes; the JSON encoding stays inside the package.
 type Spawn struct {
+	// CodexStartup is admitted fresh-history provenance; it contains no usage.
+	// It is never taken from a caller's Spawn by insert/reuse writes.
+	CodexStartup    *CodexStartup
+	ClaudeCapacity  *ClaudeCapacity
 	InstanceID      string
 	ParentID        string
 	State           string
@@ -449,7 +453,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, codex_startup, claude_capacity`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -493,6 +497,8 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		noPreTrust      any
 		endReportedAt   any
 		subagentTrack   any
+		codexStartup    any
+		claudeCapacity  any
 		life            lifeScan
 	)
 	dest := append([]any{
@@ -506,7 +512,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &codexStartup, &claudeCapacity)
 	if reported {
 		dest = append(dest, &sp.ReportedState)
 	}
@@ -531,6 +537,8 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		return Spawn{}, fmt.Errorf("%s extra_env: %w", errs.decode, err)
 	}
 	sp.LaunchStartedAtMillis = decodeLaunchStartedAt(launchStartedAt)
+	sp.CodexStartup = decodeCodexStartup(codexStartup)
+	sp.ClaudeCapacity = decodeClaudeCapacity(claudeCapacity)
 	sp.NoPreTrust = decodeNoPreTrust(noPreTrust)
 	sp.EndReportedAtMillis = decodeEndReportedAt(endReportedAt)
 	sp.SubagentTracking = decodeSubagentTracking(subagentTrack)
@@ -577,34 +585,82 @@ func (s *Store) SpawnStatusSettled(instanceID string, r SettleRead) (reported, r
 }
 
 func (s *Store) spawnStatusSettled(instanceID string, r SettleRead, proofs []CursorMissingProof) (reported, raw string, launchStartedAtMillis int64, err error) {
+	reported, raw, launchStartedAtMillis, _, err = s.spawnStatusContext(instanceID, r, proofs)
+	return
+}
+
+// SpawnContext identifies only the current row's session evidence. It never
+// falls back to another life or an archived session and contains no reading.
+type SpawnContext struct {
+	Agent               string
+	State               string
+	SessionID           string
+	JSONLPath           string
+	LaunchToken         string
+	PID                 int
+	ProcStarttime       string
+	PanePID             int
+	PaneStarttime       string
+	EndReportedAtMillis int64
+	CodexStartup        *CodexStartup
+	ClaudeCapacity      *ClaudeCapacity
+}
+
+// SpawnStatusContext reads status and its evidence identity in one statement.
+// Evidence columns are decoded tolerantly so they cannot fail a status read.
+func (s *Store) SpawnStatusContext(instanceID string, r SettleRead) (reported, raw string, launchStartedAtMillis int64, evidence SpawnContext, err error) {
+	return s.spawnStatusContext(instanceID, r, nil)
+}
+
+func (s *Store) spawnStatusContext(instanceID string, r SettleRead, proofs []CursorMissingProof) (reported, raw string, launchStartedAtMillis int64, evidence SpawnContext, err error) {
 	if len(proofs) > 0 {
 		row, err := s.getSpawnSettled(instanceID, r, proofs)
-		return row.ReportedState, row.State, row.LaunchStartedAtMillis, err
+		return row.ReportedState, row.State, row.LaunchStartedAtMillis, row.ContextEvidence(), err
 	}
 	var (
-		launchStartedAt any
-		q               = `SELECT state, launch_started_at FROM spawns WHERE instance_id = ?`
-		args            = []any{instanceID}
-		dest            = []any{&raw, &launchStartedAt}
+		launchStartedAt                                                     any
+		agent, sessionID, path                                              any
+		token, pid, start, panePID, paneStart, endReport, startup, capacity any
+		q                                                                   = `SELECT state, launch_started_at, ` + spawnContextColumns + ` FROM spawns WHERE instance_id = ?`
+		args                                                                = []any{instanceID}
+		dest                                                                = []any{&raw, &launchStartedAt, &agent, &sessionID, &path, &token, &pid, &start, &panePID, &paneStart, &endReport, &startup, &capacity}
 	)
 	if r.on() {
 		expr, exprArgs := r.stateExpr()
-		q = `SELECT state, launch_started_at, ` + expr + ` FROM spawns WHERE instance_id = ?`
+		q = `SELECT state, launch_started_at, ` + spawnContextColumns + `, ` + expr + ` FROM spawns WHERE instance_id = ?`
 		args = append(exprArgs, instanceID)
 		dest = append(dest, &reported)
 	}
 	err = s.db.QueryRow(q, args...).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", 0, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+		return "", "", 0, SpawnContext{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
 	if err != nil {
-		return "", "", 0, fmt.Errorf("store: spawn status: %w", err)
+		return "", "", 0, SpawnContext{}, fmt.Errorf("store: spawn status: %w", err)
 	}
 	if !r.on() {
 		reported = raw
 	}
-	return reported, raw, decodeLaunchStartedAt(launchStartedAt), nil
+	evidence.Agent, _ = agent.(string)
+	evidence.SessionID, _ = sessionID.(string)
+	evidence.JSONLPath, _ = path.(string)
+	evidence.State = raw
+	evidence.LaunchToken = decodeLaunchToken(token)
+	if n, ok := pid.(int64); ok && n > 0 && int64(int(n)) == n {
+		evidence.PID = int(n)
+	}
+	if n, ok := panePID.(int64); ok && n > 0 && int64(int(n)) == n {
+		evidence.PanePID = int(n)
+	}
+	evidence.ProcStarttime, _ = start.(string)
+	evidence.PaneStarttime, _ = paneStart.(string)
+	evidence.EndReportedAtMillis = decodeEndReportedAt(endReport)
+	evidence.CodexStartup = decodeCodexStartup(startup)
+	evidence.ClaudeCapacity = decodeClaudeCapacity(capacity)
+	return reported, raw, decodeLaunchStartedAt(launchStartedAt), evidence, nil
 }
+
+const spawnContextColumns = `agent, session_id, jsonl_path, launch_token, pid, proc_starttime, pane_pid, pane_starttime, end_reported_at, codex_startup, claude_capacity`
 
 // SpawnState returns the state of the row with the given instance_id
 // in one read, with exists false and no error when there is no such row. It

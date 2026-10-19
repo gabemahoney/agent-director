@@ -1,0 +1,771 @@
+{
+  "version": "2026.10.12-d47ca18",
+  "route": "native-interactive-research",
+  "managed_delivery_proved": false,
+  "model": "composer-2.5",
+  "started_at_unix_ms": 1792393315504,
+  "snapshots": [
+    {
+      "observed_at_unix_ms": 1792393320433,
+      "reading": {
+        "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+        "root_sha256": "8e04c6ebaa5ba1d9c04005d83a093016650a6ef61aa456829485d06834753efc",
+        "root_fields": [
+          1,
+          5,
+          8,
+          9,
+          10,
+          22,
+          26,
+          27,
+          38,
+          39,
+          46
+        ],
+        "root_prompt_count": 4,
+        "turn_count": 1,
+        "summary_present": false,
+        "summary_archives": 0,
+        "self_summary_count": null,
+        "message_count_at_last_compaction": null,
+        "conversation_started_timestamp_ms": 1792393318903,
+        "token_details": {
+          "used_tokens": 9894,
+          "max_tokens": 200000,
+          "fields": [
+            1,
+            2,
+            3
+          ]
+        },
+        "turn_timings": []
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393329915,
+      "reading": {
+        "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+        "root_sha256": "8850ad1b9c8c694a8ec42c5acf4a94a697e2a459beacdbc9c38edd19570cf5f5",
+        "root_fields": [
+          1,
+          5,
+          6,
+          8,
+          9,
+          10,
+          13,
+          22,
+          26,
+          27,
+          37,
+          38,
+          39,
+          46
+        ],
+        "root_prompt_count": 3,
+        "turn_count": 1,
+        "summary_present": true,
+        "summary_archives": 1,
+        "self_summary_count": null,
+        "message_count_at_last_compaction": 3,
+        "conversation_started_timestamp_ms": 1792393318903,
+        "token_details": {
+          "used_tokens": 9894,
+          "max_tokens": 200000,
+          "fields": [
+            1,
+            2,
+            3
+          ]
+        },
+        "turn_timings": []
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393351528,
+      "reading": {
+        "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+        "root_sha256": "92a0b254b83d4331afcb3a2aaed7331cb6d5714c7cc8d72755d36819d7c109c3",
+        "root_fields": [
+          1,
+          5,
+          6,
+          8,
+          9,
+          10,
+          13,
+          22,
+          26,
+          27,
+          37,
+          38,
+          39,
+          46
+        ],
+        "root_prompt_count": 5,
+        "turn_count": 2,
+        "summary_present": true,
+        "summary_archives": 1,
+        "self_summary_count": null,
+        "message_count_at_last_compaction": 3,
+        "conversation_started_timestamp_ms": 1792393318903,
+        "token_details": {
+          "used_tokens": 10772,
+          "max_tokens": 200000,
+          "fields": [
+            1,
+            2,
+            3
+          ]
+        },
+        "turn_timings": []
+      }
+    }
+  ],
+  "actions": [
+    {
+      "action": "/summarize",
+      "sent_at_unix_ms": 1792393329047,
+      "enter_separate": true
+    },
+    {
+      "action": "post-compaction prompt",
+      "sent_at_unix_ms": 1792393349694,
+      "enter_separate": true
+    }
+  ],
+  "method": "b.fzk probe_initial.py/run_turn.py + capture_compaction_separated.py; numeric allowlist correction from remote_repeat_probe.py; read-only checkpoint snapshot additionally retained at receipt",
+  "terminal_output_policy": "PTY output drained and discarded; headless output reduced to allowlisted metadata only",
+  "isolated_runtime_root": "/run/openclaw/horde/cursor-native-evidence-p_c7mgq6",
+  "binary": "/home/horde/.local/share/cursor-agent/versions/2026.10.12-d47ca18/cursor-agent",
+  "collector_sha256": "54678d80bf29de5cc6d975c3b9823b56bf8a17ff69a9bf4ba66fdce95e0e5502",
+  "metrics_sha256": "fa2cf08e49845492229a0b0ddddad067e4fdfdbd03654bfdd67e5ede7a7481c9",
+  "initial_turn": {
+    "exit_code": 0,
+    "stdout_bytes": 309,
+    "stderr_bytes": 0,
+    "diagnostic_flags": {
+      "Authentication required": false,
+      "not logged in": false,
+      "Unauthorized": false,
+      "certificate": false,
+      "network": false,
+      "ENOTFOUND": false,
+      "permission denied": false,
+      "ConnectError": false,
+      "failed": false,
+      "model unavailable": false,
+      "rate limit": false,
+      "billing": false,
+      "expired": false,
+      "ECONN": false,
+      "403": false,
+      "429": false,
+      "500": false
+    },
+    "structured_output_keys": [
+      "duration_api_ms",
+      "duration_ms",
+      "is_error",
+      "request_id",
+      "result",
+      "session_id",
+      "subtype",
+      "type",
+      "usage"
+    ],
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 1722,
+    "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+    "terminal_result_usage": {
+      "inputTokens": 5979,
+      "outputTokens": 45,
+      "cacheReadTokens": 3870,
+      "cacheWriteTokens": 0
+    }
+  },
+  "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+  "interactive_exit_code": 0,
+  "hooks": [
+    {
+      "observed_at_unix_ms": 1792393318356,
+      "hook": "sessionStart",
+      "payload_keys": [
+        "composer_mode",
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "is_background_agent",
+        "model",
+        "session_id",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393318356,
+        "sessions": []
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393320362,
+      "hook": "sessionEnd",
+      "payload_keys": [
+        "conversation_id",
+        "cursor_version",
+        "duration_ms",
+        "final_status",
+        "generation_id",
+        "hook_event_name",
+        "is_background_agent",
+        "model",
+        "reason",
+        "session_id",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393320362,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "8e04c6ebaa5ba1d9c04005d83a093016650a6ef61aa456829485d06834753efc",
+            "root_fields": [
+              1,
+              5,
+              8,
+              9,
+              10,
+              22,
+              26,
+              27,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 4,
+            "turn_count": 1,
+            "summary_present": false,
+            "summary_archives": 0,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": null,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 9894,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393329413,
+      "hook": "preCompact",
+      "payload_keys": [
+        "context_tokens",
+        "context_usage_percent",
+        "context_window_size",
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "is_first_compaction",
+        "message_count",
+        "messages_to_compact",
+        "model",
+        "session_id",
+        "transcript_path",
+        "trigger",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "fc7c23ee-5ea8-4106-91ad-dccb473760d6",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "gemini-3.7-flash-low",
+      "cursor_version": "2026.10.12-d47ca18",
+      "trigger": "manual",
+      "context_tokens": 9894,
+      "context_window_size": 200000,
+      "context_usage_percent": 4.947,
+      "message_count": 4,
+      "messages_to_compact": 2,
+      "is_first_compaction": true,
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393329413,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "8e04c6ebaa5ba1d9c04005d83a093016650a6ef61aa456829485d06834753efc",
+            "root_fields": [
+              1,
+              5,
+              8,
+              9,
+              10,
+              22,
+              26,
+              27,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 4,
+            "turn_count": 1,
+            "summary_present": false,
+            "summary_archives": 0,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": null,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 9894,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393329897,
+      "hook": "afterAgentResponse",
+      "payload_keys": [
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "model",
+        "session_id",
+        "text",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "fc7c23ee-5ea8-4106-91ad-dccb473760d6",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393329897,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "8850ad1b9c8c694a8ec42c5acf4a94a697e2a459beacdbc9c38edd19570cf5f5",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 3,
+            "turn_count": 1,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 9894,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393329899,
+      "hook": "stop",
+      "payload_keys": [
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "loop_count",
+        "model",
+        "session_id",
+        "status",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "fc7c23ee-5ea8-4106-91ad-dccb473760d6",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "status": "completed",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393329899,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "8850ad1b9c8c694a8ec42c5acf4a94a697e2a459beacdbc9c38edd19570cf5f5",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 3,
+            "turn_count": 1,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 9894,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393349740,
+      "hook": "beforeSubmitPrompt",
+      "payload_keys": [
+        "attachments",
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "model",
+        "prompt",
+        "session_id",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "b6e4ea2b-a4ca-4d78-89a4-56191d74fea9",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393349740,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "8850ad1b9c8c694a8ec42c5acf4a94a697e2a459beacdbc9c38edd19570cf5f5",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 3,
+            "turn_count": 1,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 9894,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393351576,
+      "hook": "afterAgentResponse",
+      "payload_keys": [
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "input_tokens",
+        "model",
+        "output_tokens",
+        "session_id",
+        "text",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "b6e4ea2b-a4ca-4d78-89a4-56191d74fea9",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "input_tokens": 10743,
+      "output_tokens": 29,
+      "cache_read_tokens": 9468,
+      "cache_write_tokens": 0,
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393351576,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "92a0b254b83d4331afcb3a2aaed7331cb6d5714c7cc8d72755d36819d7c109c3",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 5,
+            "turn_count": 2,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 10772,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393351577,
+      "hook": "stop",
+      "payload_keys": [
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "conversation_id",
+        "cursor_version",
+        "generation_id",
+        "hook_event_name",
+        "input_tokens",
+        "loop_count",
+        "model",
+        "output_tokens",
+        "session_id",
+        "status",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "b6e4ea2b-a4ca-4d78-89a4-56191d74fea9",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "status": "completed",
+      "input_tokens": 10743,
+      "output_tokens": 29,
+      "cache_read_tokens": 9468,
+      "cache_write_tokens": 0,
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393351577,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "92a0b254b83d4331afcb3a2aaed7331cb6d5714c7cc8d72755d36819d7c109c3",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 5,
+            "turn_count": 2,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 10772,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792393362291,
+      "hook": "sessionEnd",
+      "payload_keys": [
+        "conversation_id",
+        "cursor_version",
+        "duration_ms",
+        "final_status",
+        "generation_id",
+        "hook_event_name",
+        "is_background_agent",
+        "model",
+        "reason",
+        "session_id",
+        "transcript_path",
+        "user_email",
+        "workspace_roots"
+      ],
+      "conversation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "generation_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+      "model": "composer-2.5",
+      "cursor_version": "2026.10.12-d47ca18",
+      "checkpoint_at_receipt": {
+        "observed_at_unix_ms": 1792393362291,
+        "sessions": [
+          {
+            "session_id": "c7ae4404-5c44-448c-ab3d-d54075aaf7e0",
+            "root_sha256": "92a0b254b83d4331afcb3a2aaed7331cb6d5714c7cc8d72755d36819d7c109c3",
+            "root_fields": [
+              1,
+              5,
+              6,
+              8,
+              9,
+              10,
+              13,
+              22,
+              26,
+              27,
+              37,
+              38,
+              39,
+              46
+            ],
+            "root_prompt_count": 5,
+            "turn_count": 2,
+            "summary_present": true,
+            "summary_archives": 1,
+            "self_summary_count": null,
+            "message_count_at_last_compaction": 3,
+            "conversation_started_timestamp_ms": 1792393318903,
+            "token_details": {
+              "used_tokens": 10772,
+              "max_tokens": 200000,
+              "fields": [
+                1,
+                2,
+                3
+              ]
+            },
+            "turn_timings": []
+          }
+        ]
+      }
+    }
+  ],
+  "cleanup": {
+    "processes_started": [
+      2633589,
+      2634662
+    ],
+    "exit_codes": [
+      0,
+      0
+    ],
+    "remaining_isolated_runtime_processes_killed": [],
+    "runtime_root_removed": true
+  },
+  "finished_at_unix_ms": 1792393362336
+}

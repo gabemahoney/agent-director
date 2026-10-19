@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -44,7 +45,7 @@ var (
 const emptySubagentsJSON = `{"tracked":false,"subagents":[]}`
 
 // subagentKeys are the SR-6.1 keys of every record, and no others.
-var subagentKeys = []string{"subagent_id", "instance_id", "session_id", "subagent_type", "description",
+var subagentKeys = []string{"context", "subagent_id", "instance_id", "session_id", "subagent_type", "description",
 	"model", "parent_type", "parent_id", "tool_use_id", "run_mode", "first_started_at", "started_at",
 	"stopped_at", "lost_at", "state", "close_reason"}
 
@@ -115,6 +116,7 @@ func assertRecordJSON(t *testing.T, got, want map[string]string) {
 	if !slices.Equal(keys, wantKeys) {
 		t.Errorf("record keys = %v; want exactly %v", keys, wantKeys)
 	}
+	want["context"] = strings.TrimSpace(string(contextfix.Must(t, "claude-missing-capacity").Expected))
 	for _, k := range subagentKeys {
 		if got[k] != want[k] {
 			t.Errorf("%s = %s; want %s", k, got[k], want[k])

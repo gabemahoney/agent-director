@@ -9,6 +9,21 @@
  */
 
 import { test, expect } from "bun:test";
+import { expectedContext } from "../internal/contextFixture.js";
+
+test("list-subagents: captured Claude child retains its own occupancy", async () => {
+  await withTempHome(async (homeDir) => {
+    const store=homeStore(homeDir);
+    runHelper("seed-spawn", {store,id:"context-parent",state:"waiting","create-store":true,"context-fixture":"claude-parent","context-writer-pid":String(process.pid)});
+    const child=runHelper("seed-subagent",{store,"instance-id":"context-parent","context-fixture":"claude-child"});
+    using client=await openClient(store);
+    const result=await client.listSubagents({instance_id:"context-parent"});
+    expect(result.tracked).toBe(true);
+    expect(result.subagents).toHaveLength(1);
+    expect(result.subagents[0].subagent_id).toBe(child.subagent_id as string);
+    expect(result.subagents[0].context).toEqual(expectedContext("claude-child"));
+  });
+}, 10_000);
 import { withTempHome } from "../internal/tempHome.js";
 import { runHelper, homeStore, openClient } from "../internal/helper.js";
 import { ErrSpawnNotFound } from "../../src/index.js";
@@ -39,7 +54,7 @@ test("list-subagents: happy path — every record key, nulls and the three time 
     const result = await client.listSubagents({ instance_id: id });
 
     const full: SubagentRecord = {
-      subagent_id: "sa-full", instance_id: id, state: "lost", session_id: "sess-1",
+      context: expectedContext("unknown"), subagent_id: "sa-full", instance_id: id, state: "lost", session_id: "sess-1",
       subagent_type: "general-purpose", description: "find the bug", model: "model-1",
       parent_type: "agent", parent_id: id, tool_use_id: "toolu-1", run_mode: "background",
       close_reason: "agent_gone", first_started_at: "2026-09-21T14:13:20Z",
@@ -47,7 +62,7 @@ test("list-subagents: happy path — every record key, nulls and the three time 
       lost_at: "2026-09-21T14:13:21.007Z",
     };
     const nulls: SubagentRecord = {
-      subagent_id: "sa-nulls", instance_id: id, state: "running", session_id: null, subagent_type: null,
+      context: expectedContext("unknown"), subagent_id: "sa-nulls", instance_id: id, state: "running", session_id: null, subagent_type: null,
       description: null, model: null, parent_type: null, parent_id: null, tool_use_id: null, run_mode: null,
       close_reason: null, first_started_at: null, started_at: null, stopped_at: null, lost_at: null,
     };

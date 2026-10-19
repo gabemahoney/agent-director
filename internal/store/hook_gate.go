@@ -12,7 +12,9 @@ import (
 // records ParentStart. The store makes the gate part of each write's own
 // statement, so no write can land between a check and the write.
 type HookGate struct {
-	Cursor *CursorRuntime // independently revalidated current connection; nil never authorizes Cursor
+	CodexStartup           bool           // classified main Codex SessionStart with source=startup
+	Cursor                 *CursorRuntime // independently revalidated current connection; nil never authorizes Cursor
+	ClaudeCapacitySnapshot *string        // capacity writes only: JSON examined before computation; "null" expects SQL NULL
 
 	Event        string      // the Claude Code hook event name
 	ParentPID    int         // os.Getppid() of the exec-form hook: the agent process

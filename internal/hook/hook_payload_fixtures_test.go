@@ -216,6 +216,9 @@ func TestPayloadFixtureParses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ClassifyEvent: %v", err)
 			}
+			if want := tc.agent == "codex" && tc.event == "SessionStart" && tc.value == "startup" && tc.agentID == ""; res.CodexStartup != want {
+				t.Errorf("CodexStartup=%v; want %v", res.CodexStartup, want)
+			}
 			if res.AgentID != tc.agentID || res.SessionID != wantSession || res.TranscriptPath != path {
 				t.Errorf("ClassifyEvent AgentID/SessionID/TranscriptPath = %q/%q/%q; want %q/%q/%q",
 					res.AgentID, res.SessionID, res.TranscriptPath, tc.agentID, wantSession, path)

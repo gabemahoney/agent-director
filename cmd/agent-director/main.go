@@ -153,7 +153,7 @@ const hookExitCode = 0
 // --timeout argument (parseHookArgs).
 //
 // The function never returns an error; it logs and returns.
-func runHook() int {
+func runHook() (exit int) {
 	start := time.Now()
 	stdout := os.Stdout
 	relayActive := os.Getenv(hook.EnvRelayMode) == hook.RelayModeOn
@@ -170,6 +170,16 @@ func runHook() int {
 	// log, exiting silently.
 	stdinRaw, _ := io.ReadAll(io.LimitReader(os.Stdin, hook.MaxPayloadBytes+1))
 	eventName := hook.PeekEventName(stdinRaw)
+	contextArgs := parseHookArgs(os.Args[2:])
+	if contextArgs.contextSource != "" {
+		eventName = ""
+		defer func() {
+			exit = forwardContextStatusline(contextArgs.contextForward, io.MultiReader(bytes.NewReader(stdinRaw), os.Stdin))
+		}()
+		if int64(len(stdinRaw)) > hook.MaxPayloadBytes {
+			return hookExitCode
+		}
+	}
 
 	// The old-layout refusal comes before the logger, which creates
 	// errors.log, and before the trail and the store: a refused hook creates
@@ -177,14 +187,21 @@ func runHook() int {
 	// relayed PermissionRequest still gets its deny, as for any failure
 	// before Handle.
 	if err := hookOldLayout(); err != nil {
-		hookLog(log.New(os.Stderr, "agent-director-hook ", log.LstdFlags), "hook: %v", err)
+		if contextArgs.contextSource == "" {
+			hookLog(log.New(os.Stderr, "agent-director-hook ", log.LstdFlags), "hook: %v", err)
+		}
 		if relayActive && eventName == hook.EventNamePermissionRequest {
 			fmt.Fprintln(stdout, hook.EncodeDecision(eventName, "deny", ""))
 		}
 		return hookExitCode
 	}
 
-	logger := newHookLogger()
+	// Capacity observation must not add diagnostics to the original command's
+	// stderr, including when the ordinary hook logger would fall back there.
+	logger := log.New(io.Discard, "", 0)
+	if contextArgs.contextSource == "" {
+		logger = newHookLogger()
+	}
 	// Wire the hook logger into the trail writer so emit failures and
 	// ts-substitution warnings reach cfg.Log.ErrorLogPath rather than
 	// being silently discarded. SetLogger is safe to call before the
@@ -264,6 +281,7 @@ func runHook() int {
 	args := parseHookArgs(os.Args[2:])
 	hc := hook.HandleConfig{
 		Agent:                args.agent,
+		ContextSource:        args.contextSource,
 		Env:                  hook.OSGetenv,
 		Cfg:                  cfg.Relay,
 		Clock:                hook.DefaultPollClock(),
@@ -330,7 +348,9 @@ type hookArgs struct {
 	agent string
 	// timeout is --timeout's per-hook timeout; 0 when absent, unparseable or
 	// not positive (Handle then reads the loaded config's relay window).
-	timeout time.Duration
+	timeout        time.Duration
+	contextSource  string
+	contextForward string
 }
 
 // parseHookArgs parses the hook verb's arguments in one pass, --agent and
@@ -345,6 +365,7 @@ type hookArgs struct {
 func parseHookArgs(args []string) hookArgs {
 	var seconds int
 	var agent agentFlag
+	var contextSource, contextForward string
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	// An unparseable --timeout value is no parse error: it leaves seconds 0, so
@@ -352,6 +373,8 @@ func parseHookArgs(args []string) hookArgs {
 	// take and a malformed flag.
 	fs.Var(lenientValue{newDecimalInt(&seconds, 0)}, "timeout", "the per-hook timeout in seconds spawn wrote for this hook (the relay hook's kill instant is its start plus it)")
 	fs.Var(&agent, "agent", "the agent whose hook this is, claude, codex or cursor (absent: claude)")
+	fs.StringVar(&contextSource, "context-source", "", "internal native capacity callback")
+	fs.StringVar(&contextForward, "context-forward", "", "internal original status-line command")
 	rest := args
 	for len(rest) > 0 {
 		err := fs.Parse(rest)
@@ -374,7 +397,7 @@ func parseHookArgs(args []string) hookArgs {
 		// (an unknown flag, or a flag and its value); carry on from there.
 		rest = after
 	}
-	out := hookArgs{agent: agent.val}
+	out := hookArgs{agent: agent.val, contextSource: contextSource, contextForward: contextForward}
 	if agent.set && agent.val == "" {
 		out.agent = hookAgentNoValue
 	}

@@ -1721,3 +1721,30 @@ func seedV10EligibilityFixture(t *testing.T, path string, agent any, child any) 
 		mustExec(t, db, `INSERT INTO cursor_runtimes(bound_instance_id,bound_launch_token,bound_life_number,bound_gateway_pid,bound_gateway_start,bound_runtime_pid,bound_runtime_start,bound_connection_id,bound_input_pipe,bound_output_pipe,bound_input_fd,bound_output_fd,bound_session_id,bound_terminated) VALUES('pre','1111111111111111',3,4101,'start',12345,'synthetic','kept','pipe:[1]','pipe:[2]',11,12,'kept-session',0)`)
 	})
 }
+
+// startupJSON builds persisted origin variants for migration validation.
+func startupJSON(t *testing.T, change func(map[string]any)) string {
+	t.Helper()
+	p := map[string]any{"launch_token": testLaunchToken, "session_id": "fresh-session", "jsonl_path": "/tmp/fresh-session.jsonl", "pid": testPane().PanePID, "starttime": testPaneStart}
+	if change != nil {
+		change(p)
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// seedV11StartupFixture retains populated lifecycle, request, history and runtime rows.
+func seedV11StartupFixture(t *testing.T, path, definition string, marker any) {
+	t.Helper()
+	seedV10EligibilityFixture(t, path, AgentCodex, nil)
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `UPDATE permission_requests SET main_turn_end_eligible=1`)
+		if definition != "" {
+			mustExec(t, db, "ALTER TABLE spawns ADD COLUMN "+definition)
+			mustExec(t, db, `UPDATE spawns SET codex_startup=?`, marker)
+		}
+	})
+}

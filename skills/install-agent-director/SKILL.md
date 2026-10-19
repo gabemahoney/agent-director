@@ -2289,6 +2289,18 @@ and matched WAL/SHM companions. After the incompatible state is resolved,
 rerun the supported installer: it reads the resulting version and refreshes
 authorization when an earlier hop has committed.
 
+**Authorized migration refuses context provenance** (the error names
+"v11→v12 incompatible Codex startup column", "invalid Codex startup
+value", "v11→v12 incompatible Claude capacity column" or "invalid Claude
+capacity value"): the existing column or stored provenance fails validation. The
+failed hop rolls back; earlier committed hops remain. Stop all writers and
+follow "Going back to the previous release" with the actual DB path and
+matching pre-upgrade WAL/SHM set, or obtain human help. A backup cannot be
+created retroactively from the migrated store. Do not edit the column or
+values or reset the version to bypass validation. After the incompatible
+state is resolved, rerun the supported installer to refresh authorization
+for the resulting version.
+
 The JSONL transcripts under `~/.claude/projects/` persist
 independently of state.db in every case.
 
@@ -2337,8 +2349,8 @@ checked. Delete the kept directory once the upgrade is confirmed.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10 and v10→v11, the old-layout steps below do not
-apply. Before upgrading, stop agents, servers and callers and keep a copy
+including schema v9→v10, v10→v11 and v11→v12, the old-layout steps below do
+not apply. Before upgrading, stop agents, servers and callers and keep a copy
 of the actual store (`[store] db_path` when set), including its `-wal` and
 `-shm` files.
 To roll back, stop them again, restore that pre-upgrade copy and install the
@@ -2346,8 +2358,9 @@ previous release with its own `install.sh` and the original install flags.
 Restore the store with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. This loses all writes made since
 the backup. The installer does not make this backup; a binary swap cannot
-make a v11 store readable by a v9 or v10 binary. There is no supported
-in-place v11→v10 or v10→v9 downgrade. Without a pre-upgrade copy, stop
+make a v12 store readable by a v9, v10 or v11 binary. There is no supported
+in-place v12→v11, v11→v10 or v10→v9 downgrade. A copy made after migration
+cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
 and obtain human help.
 
 The numbered procedure below applies only to an upgrade that moved

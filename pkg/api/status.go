@@ -16,6 +16,8 @@ type StatusStore interface {
 // plus launch_started_at on a pending row, surfaced as a JSON object on the
 // CLI.
 type StatusResult struct {
+	// Context is an experimental on-demand reading; unavailable values are null.
+	Context ContextReading `json:"context"`
 	// State is the current lifecycle state of the Spawn. One of:
 	// pending, waiting, working, ask_user, check_permission, ended, missing.
 	// pending means a launch (spawn, reuse or resume) is in progress and the
@@ -44,6 +46,10 @@ type settledStatusReader interface {
 	SpawnStatusSettled(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, err error)
 }
 
+type contextStatusReader interface {
+	SpawnStatusContext(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, evidence store.SpawnContext, err error)
+}
+
 // Status returns the current state column for the given instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
@@ -59,6 +65,14 @@ func Status(s StatusStore, instanceID string) (StatusResult, error) {
 // read's own statement); launch_started_at still keys on the raw state. With
 // no settle time it is Status exactly as before b.3ie. It never waits.
 func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	if sr, ok := s.(contextStatusReader); ok {
+		reported, raw, launchMillis, evidence, err := sr.SpawnStatusContext(instanceID, settle)
+		if err != nil {
+			return StatusResult{}, err
+		}
+		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			Context: contextOf(evidence)}, nil
+	}
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
 		reported, raw, launchMillis, err := sr.SpawnStatusSettled(instanceID, settle)
 		if err != nil {
@@ -123,4 +137,6 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 var (
 	_ statusReader        = (*store.Store)(nil)
 	_ settledStatusReader = (*store.Store)(nil)
+	_ contextStatusReader = (*store.Store)(nil)
+	_ contextStatusReader = (*store.CursorMissingReads)(nil)
 )

@@ -45,6 +45,10 @@ func (s *CursorMissingReads) SpawnStatusSettled(id string, settle SettleRead) (s
 	return s.Store.spawnStatusSettled(id, settle, s.proofs)
 }
 
+func (s *CursorMissingReads) SpawnStatusContext(id string, settle SettleRead) (string, string, int64, SpawnContext, error) {
+	return s.Store.spawnStatusContext(id, settle, s.proofs)
+}
+
 func (s *CursorMissingReads) ListSpawns(filters ListFilters) ([]Spawn, error) {
 	return s.Store.listSpawns(filters, s.proofs)
 }

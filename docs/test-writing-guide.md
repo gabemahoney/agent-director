@@ -216,6 +216,168 @@ from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by every consumer, so any schema break is
 caught early.
 
+## Context fullness captures and fixtures
+
+Reuse `internal/testsupport/contextfix` across reader, API, CLI and MCP tests.
+`Must(t, name)` or `Load(name)` supplies the agent, session, transcript bytes
+and independent expected JSON; `UnknownJSON` retains all five null fields.
+Do not embed session JSON or copy expected token counts into test bodies.
+
+| Sample | Evidence and expected result |
+| --- | --- |
+| `writer`, `reviewer` | Sanitized native Codex 0.159.2 OpenAI envelopes through the selected complete turn; numeric readings from the adjacent `.expected.json` files when startup origin and current live writer are qualified. |
+| `claude-parent`, `claude-child` | Fresh Claude 2.1.280 first-party Haiku transcript/status-line pairs; 10659/200000 and 691/200000, respectively. Expected values and original measurement times come from `live-provenance.json`. |
+| `claude-missing-capacity` | Claude Code 2.1.280 usage capture without applicable capacity; unknown. |
+| `cursor-2026.10.01-e373342`, `cursor-2026.10.12-d47ca18` | Public unknown selectors, the authorized managed result for this build; native interactive positives do not qualify ACP delivery. |
+
+Captures and provenance live under `contextfix/testdata/<agent>/<version>`.
+Codex provenance records the source report/artifact, original hash and exact
+record-selection boundary. Selection is a historical observation through a
+completed turn, not a claim about the source file's later state. Retained
+record envelopes preserve ordering and accounting while content is removed.
+Wall-clock age does not expire a reading: vary observation time without
+altering the captured measurement time. Claude `Sample` also carries its
+callback, observation time, response UUID and optional child ID. Its
+`live-parent-transcript.jsonl`, `live-child-transcript.jsonl`,
+`live-statuslines.jsonl` and `live-provenance.json` preserve same-session
+numeric/metadata evidence. Child progress 766 is distinct from occupancy 691;
+do not substitute it. The real capture has no compaction or iteration sample.
+
+The Cursor `managed-attempt.json` and `provenance.json` files record bounded
+ordinary managed turns on both versions. No configured native hook was
+observed before exit; that observation does not establish shutdown hook
+behavior. Compaction was not attempted because no control was exposed or
+advertised. Checkpoint numbers were observed after exit, without a qualified
+generation/model/provider/window pairing or accepted receipt time. These are
+negative managed qualification artifacts, not numeric or compaction-recovery
+samples. Separately, each version's `native-capture.json` and
+`native-provenance.json` retain successful interactive usage, real manual
+compaction, usage-free completion and post-compaction recovery
+(11668/200000 and 11669/200000). `native-mismatch-capture.json` retains real
+usage/checkpoint mismatch pairs for rejection; `native-first-repeat.json`,
+`native-source.json` and `native-cleanup.json` retain method/source/cleanup
+evidence. Usage adds top-level input plus output, without adding cached input
+again. Capacity is the same-session checkpoint's `max_tokens`, observed in
+the collector invocation, not a fixed 200000 fallback or preCompact window.
+Collector times are research observations, never accepted AD receipt times;
+checkpoint observations do not establish an atomic generation contract or
+an independent provider identity. Native captures cannot qualify managed ACP
+delivery. Both pinned ACP implementations lack ordinary usage-bearing
+`afterAgentResponse`/`stop` completion production, return `stopReason` only,
+and expose no manual `/summarize` control. Both shared ACP resource wrappers
+can invoke the native `preCompact` executor; automatic compaction delivery is
+still unqualified. Do not describe ACP as unable to invoke any compaction hook.
+Hook configuration cannot supply the missing ordinary usage producer. Managed
+Cursor ships explicit unknown in this build; numeric support requires upstream
+ACP to supply qualified usage evidence.
+
+The brief checkpoint alternative check reused these captures. On both versions,
+`token_details.used_tokens` remains 10772 while `summary_archives` advances from
+1 to 2; later usage becomes 11668/11669. `message_count_at_last_compaction`
+stays 3. Captured `ConversationTokenDetails` contains only fields 1–3
+(used/max/breakdown), without a usage timestamp, generation ID or compaction
+sequence. Root `turn_timings`/`turn_telemetry` are absent and conversation start
+is unchanged; a newer assistant timestamp can coexist with stale counts.
+External hook `generation_id` and collector `observed_at_unix_ms` establish
+research chronology, not checkpoint-local, restart-safe usage/compaction ordering
+or measurement time. Initial absence of summary markers is no freshness proof.
+Thus the latest checkpoint cannot prove no compaction since its last usage
+update. Preserve the mismatch cases and unknown public results; no checkpoint
+reader, invented receipt semantics or further capture campaign is required.
+`cursorfix.New`, `NewGatewayHistory` and `NewNativeHistory` remain synthetic;
+no context-event or checkpoint selection extension is implemented.
+
+`Variant(t, name)` derives explicitly synthetic reliability cases from the
+writer capture: for example `untested-version`, `wrong-session`,
+`wrong-capacity`, `compaction-gap`, `response-gap`, `regressing-time`,
+`post-compaction` and `zero-usage`. Reuse named variants for missing,
+stale-history or unsupported cases. Synthetic variants and
+placeholder transcripts never qualify a new version or configuration.
+Use `ClaudeVariant(t, name)` for synthetic Claude cases, including branches,
+partial/malformed tails, regressing measurements, compaction gaps/recovery,
+last ordinary iteration and invalid selected iteration. Callback admission
+tests separately cover model/window/UUID pairing, invalidation replay,
+new-response recovery and the 128-child bound. Use
+`ClaudeModelVariant(t, name, model, window)` for alternate resolved-model and
+capacity cases. It changes the real Haiku pair synthetically; it does not
+qualify another native model capture. Cover matching parent/child models,
+mismatched callback/transcript models and provider, endpoint, window and
+supported-capability overrides, including Fable, Opus, Sonnet, Haiku and
+custom-model options. The retained real capture remains the Haiku pair above.
+
+For capacity races, interleave callbacks at the real store write after snapshot
+computation. Assert stale writes fail before a full re-read/recompute, and
+compare real `Status`, `Get` and `ListSubagents` results throughout. Cover stale
+child writes racing parent model/window invalidation, parent replay racing
+child invalidation, global clear conflicts, initial SQL NULL and launch changes.
+Preserve sticky same-response invalidation and genuinely new-response recovery;
+a retry must not cross the original launch. Settings/forwarding tests
+cover source resolution and original command stdin/stdout/stderr/exit,
+including oversized observation input. These tests do not convert synthetic
+compaction/iteration records into captured-version evidence.
+
+For positive Go/API/CLI/MCP surface tests, use `apitest.SeedContextSpawn`.
+For Codex it seeds an unbound pending row, uses `ContextWriter` to bind the
+live test process and calls `AdmitContextStartup` through the store's gated
+SessionStart write. Keep that process alive throughout reads. For deliberate
+producer-attribution cases, reuse `ContextWriter`/`AdmitContextStartup`
+with `SeedSpawn`, `WithAgent`, `WithJsonlPath` and `WithLaunchIdentity`.
+Creation metadata, a transcript path or an ended seeded row alone never
+qualifies a positive reading. Cover resumed runtimes retaining tested
+creation metadata, dead/ended writers, mismatched bindings, duplicate/stale
+starts and resume/reuse invalidation without replacing the native captures.
+
+For Claude, `SeedContextSpawn` binds the live test process and calls
+`SeedClaudeCapacity` / `AdmitClaudeCapacity` with captured metadata; usage
+still comes from the transcript on every read. For already-visible children,
+use `SeedContextChild` / `AdmitClaudeChild`: they place the child's capture at
+its native path, seed visibility with `SeedSubagent` and admit its own window.
+Fixture metadata admission does not prove native callback transport; hook
+tests own direct-parent and current-launch admission separately.
+
+`SeedContextTranscript` uses `SeedJsonlUnder` for Claude and
+`codexfix.TempRolloutPath` for other sample paths. Both Codex path helpers
+accept optional captured bytes; omitting them preserves the placeholder
+default. Use `SeedSubagent`/`WithSubagentSessionID` for visible children and
+existing life/session options for attribution cases. Reuse `TestSocket`,
+`TestPaneID`, `TestPanePID` and `SeededSubagentMs` when needed; keep every
+store and transcript under test-owned temporary directories.
+
+TypeScript smoke tests retain `withTempHome`, `runHelper`, `homeStore` and
+`openClient`. Select `seed-spawn --context-fixture <name>` to seed the sample's
+agent/session/transcript. Positive Codex and Claude cases also pass
+`--context-writer-pid` with the calling Bun process's PID; the short-lived
+seed helper cannot stand in for the live writer. Reuse
+`ContextWriter` and the agent's admission helper through that helper; use
+`seed-subagent --context-fixture claude-child` for an already-visible Claude
+child. Use `expectedContext("writer" | "reviewer" | "claude-parent" |
+"claude-child" | "unknown")` from `test/internal/contextFixture.ts` for shared expected JSON.
+Omitting the flag preserves existing helper behavior. The registered
+`context-fullness` shell plan exercises public results through
+`test/driver/context-fullness.cjs`. Execute tests only through the repository
+sandbox and the required scheduler workflow for heavy suites.
+
+The unreleased v12 provenance migration belongs in `internal/store/schema_v12_test.go`
+and the shared migration matrices: test physical-v11 preservation, NULL/no
+backfill, compatible marker reentry, incompatible shape/value refusal,
+commit rollback and corrected retry, fresh/migrated convergence and reopen.
+Both nullable TEXT fields, `codex_startup` and `claude_capacity`, must converge
+between fresh and migrated stores. Include Claude capacity shape/bounded JSON
+validation and retention of valid explicit markers. It stores provenance and
+capacity only, never usage; Cursor remains unknown without context persistence.
+Recovery coverage must follow the restore-only procedure in
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
+`TestAdviceFollow_CurrentLayoutRollback` in
+`test/install-sh/current_layout_rollback_test.go` compares that complete
+section with its install-skill and historical testplan copies. Keep all three
+identical and synchronize its literal policy checks. Behavioral coverage
+must retain the actual released prior binary, prove a binary-only swap
+refuses the migrated current schema, then restore a stopped-writer
+pre-upgrade DB/WAL/SHM set at default and configured paths. Verify stale
+companions are removed, prior rows/settings are restored and post-backup
+writes are lost. A copy made after migration cannot qualify as the backup;
+there is no v12 reverse recipe to test or imply.
+
 ## pkg/api tests: parallel or serial
 
 Every top-level test in `pkg/api` starts with `t.Parallel()` or, as the first

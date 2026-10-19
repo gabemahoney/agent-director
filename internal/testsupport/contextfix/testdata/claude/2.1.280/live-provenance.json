@@ -1,0 +1,167 @@
+{
+  "kind": "fresh_sanitized_native_capture",
+  "version": "2.1.280",
+  "captured_at": "2026-10-19T07:03:00.692934+00:00",
+  "ended_at": "2026-10-19T07:03:09.780427+00:00",
+  "binary": {
+    "path": "/home/horde/.local/share/claude/versions/2.1.280",
+    "sha256": "1e08503dbdf3c2cb0d706d32f3408277388d1c76ef108673e8fe42c1b322925b"
+  },
+  "invocation": {
+    "argv_without_user_prompt_sha256": "0b10a990e4ea037287326b3e2f33a2af37b4d61a9396817e05927efe6954f756",
+    "model": "haiku",
+    "max_turns": 4,
+    "max_budget_usd": 0.15,
+    "user_turns_submitted": 1,
+    "minimal_child_requested": 1,
+    "setting_sources": [],
+    "strict_empty_mcp_config": true,
+    "terminal_output": "discarded, never persisted"
+  },
+  "provider": {
+    "identity": "Anthropic first-party default",
+    "basis": "Inferred from isolated invocation: no inherited provider, endpoint or authentication environment; existing native securestorage login only; no user/project settings sources. Native callback itself has no provider field.",
+    "endpoint_override": false,
+    "window_override": false,
+    "scope": "Only this captured session/configuration, never a universal model default."
+  },
+  "isolation": {
+    "home_config_workspace": "fresh temporary directories",
+    "git_global": "empty temporary file",
+    "git_system_disabled": true,
+    "environment": "constructed allowlist; no inherited AD, hook, instance, token or auth environment",
+    "credential_access": "Native runtime alone directed to existing securestorage provider; agent never opened/copied/printed authentication files.",
+    "write_protection": "Linux Landlock ABI4: all filesystem writes/create/remove/rename/truncate restricted to temporary root, plus writes to /dev/null. Real HOME/settings/credentials/AD stores were not writable.",
+    "bwrap_attempt": "Read-only namespace setup unavailable: UID map permission denied. No agent launch in that attempt.",
+    "first_native_attempt": "Stopped before any transcript or callback: temporary onboarding state was at wrong config location. Second native launch completed one user turn.",
+    "managed_capture": false,
+    "ad_store_access": false
+  },
+  "fixtures": [
+    {
+      "fixture": "live-parent-transcript.jsonl",
+      "fixture_sha256": "fda10bcd197378e86e441320a6c060e7571361dd820dd8586ef3199941ec0689",
+      "original_relative_path": "home/.claude/projects/-run-openclaw-horde-claude-capacity-17w--js24g9w-workspace/3c7527ef-3298-49aa-9884-770be0f3effc.jsonl",
+      "original_sha256": "b833ba744a7545fd704c2bdb8bf990e5417340056472d36272be80a7e2439c13",
+      "latest_original_line": 37,
+      "latest_fixture_line": 37,
+      "latest_message_id": "msg_011CgBAhpqP8uVzDnnfC9QSL",
+      "assistant_usage_records": 6,
+      "distinct_response_ids": 3
+    },
+    {
+      "fixture": "live-child-transcript.jsonl",
+      "fixture_sha256": "d01b6cf674c8b8a170a6e5ca86c7a80747bcf5be16d13df288caf64968be847a",
+      "original_relative_path": "home/.claude/projects/-run-openclaw-horde-claude-capacity-17w--js24g9w-workspace/3c7527ef-3298-49aa-9884-770be0f3effc/subagents/agent-af5a1319aaa1dbbac.jsonl",
+      "original_sha256": "c90ce5aa7b2094c295d062e461bea90071350454aa4aa41ac10a429dc6b2dba6",
+      "latest_original_line": 8,
+      "latest_fixture_line": 8,
+      "latest_message_id": "msg_011CgBAhmBsZ2andrusEJ2ww",
+      "assistant_usage_records": 2,
+      "distinct_response_ids": 1
+    }
+  ],
+  "callback_fixture": {
+    "file": "live-statuslines.jsonl",
+    "sha256": "e32c32fb40f77acc27a2134c4da27c9f46865abc5baca34c1df478e716571c6e"
+  },
+  "pairs": [
+    {
+      "agent": "parent",
+      "session_id": "3c7527ef-3298-49aa-9884-770be0f3effc",
+      "agent_id": null,
+      "model": "claude-haiku-4-5-20251001",
+      "usage": {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 342,
+        "cache_read_input_tokens": 10251,
+        "output_tokens": 56
+      },
+      "used_tokens": 10659,
+      "window_tokens": 200000,
+      "fraction": 0.053295,
+      "usage_as_of": "2026-10-19T07:03:05.499Z",
+      "capacity_observed_at": "2026-10-19T07:03:05.835721+00:00",
+      "usage_source": "live-parent-transcript.jsonl",
+      "capacity_source": "live-statuslines.jsonl",
+      "capacity_field": "context_window.context_window_size",
+      "statusline_usage": {
+        "input_tokens": 10,
+        "cache_creation_input_tokens": 342,
+        "cache_read_input_tokens": 10251,
+        "output_tokens": 56
+      }
+    },
+    {
+      "agent": "child",
+      "session_id": "3c7527ef-3298-49aa-9884-770be0f3effc",
+      "agent_id": "af5a1319aaa1dbbac",
+      "model": "claude-haiku-4-5-20251001",
+      "usage": {
+        "input_tokens": 652,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 39
+      },
+      "used_tokens": 691,
+      "window_tokens": 200000,
+      "fraction": 0.003455,
+      "usage_as_of": "2026-10-19T07:03:04.436Z",
+      "capacity_observed_at": "2026-10-19T07:03:08.755198+00:00",
+      "usage_source": "live-child-transcript.jsonl",
+      "capacity_source": "live-statuslines.jsonl",
+      "capacity_field": "tasks[].contextWindowSize",
+      "statusline_usage": {
+        "tokenCount": 766
+      }
+    }
+  ],
+  "semantics": {
+    "usage": "Latest assistant message usage: input_tokens + cache_creation_input_tokens + cache_read_input_tokens + output_tokens, each once. Repeated records share message IDs; do not sum them.",
+    "as_of": "Native assistant transcript timestamp. Callback observed_at is capacity receipt time and is distinct.",
+    "iterations": "No iterations observed in this short capture. Existing 2.1.280 ordinary-message normalization evidence remains in t1.b1n.y4.",
+    "child_progress": "Completed statusline tokenCount=766; latest transcript input+output=691. These are distinct estimates. Child capacity comes from its own row, never the parent.",
+    "compaction": "No compact_boundary observed; synthetic compaction tests must remain identified as synthetic."
+  },
+  "native_persistence": {
+    "capacity_fields_found": false,
+    "checked": "Fresh native parent/child JSONL, child .meta.json and generated non-auth JSON metadata; recursively searched capacity/context-window/provider field names, excluding content/prompt/tool bodies.",
+    "cost_state": "modelUsage contains cumulative usage/cost only; no window. Do not use it for occupancy.",
+    "production_consequence": "Temporary statusline callback collection is research-only. Product needs a native capacity callback admitted into existing hook processing and stored as configuration/life-bound capacity metadata; transcript usage stays on demand. No native on-demand capacity file was established."
+  },
+  "source_evidence": [
+    {
+      "offset": 193047142,
+      "length": 1900,
+      "purpose": "Runtime capacity resolution uses override, model metadata/provider/configuration and fallback; not a universal lookup supplied by AD.",
+      "sha256": "a52099c6f696c56e2c6f6fea39323ee1b7304ad747ca7451e5f4a88eca1258aa",
+      "excerpt": "function Af(e,n){let r=Dg();if(r!==void 0)return r;if(Ayr(e,n))return B2;return Ig(e,n)}function kyr(e,n=Ge(e)){let r=Ui(e,n);if(r===void 0)return;if(r>CHe&&!rw(e))return{declared:r,believed:CHe};return{declared:r,believed:r}}function rw(e){if(Bh(e))return!0;let n=Vlo(e);return n!==void 0&&n>CHe}function Dg(){if(Me(process.env.DISABLE_COMPACT)){let e=a.CLAUDE_CODE_MAX_CONTEXT_TOKENS;if(e!==void 0&&e>0)return e}return}function Ayr(e,n){return Sst()&&Dg()===void 0&&Ig(e,n)>B2}function Ig(e,n){if(su(e))return 1e6;if(trt(n)?.includes(AL.header)&&D1(e))return 1e6;let r=kyr(e);if(r!==void 0)return I7t(e)??r.believed;if(Bh(e))return 1e6;let s=I7t(e);if(s!==null)return s;let g=a.CLAUDE_CODE_MAX_CONTEXT_TOKENS;if(g!==void 0&&g>0&&Mg(e))return g;return CHe}function ulo(){return Pbr()}function dlo(){if(Oe()!==\"firstParty\")return null;return ie().autoCompactWindowsCache??null}var ow=1e6;function I7t(e){if(GO())return null;if(su(e))return null;if(Ge(e)!==\"claude-sonnet-4-6\")return null;let n=Pbr()?.kelp_forest_sonnet;if(typeof n!==\"string\")return null;let r=parseInt(n,10);if(!Number.isFinite(r)||r<=CHe||r>ow)return null;return r}function P7t(e,n){if(!e)return{used:null,remaining:null};let r=e.input_tokens+e.cache_creation_input_tokens+e.cache_read_input_tokens,s=Math.round(r/n*100),g=Math.min(100,Math.max(0,s));return{used:g,remaining:100-g}}function sw(e){let n=Tc()?.heather_vale;if(typeof n!==\"object\"||n===null||Array.isArray(n))return null;let r=n[e];if(typeof r!==\"number\"||!Number.isInteger(r)||r<=0)return null;return r}function W6(e){let n,r,s=Ge(e),g=Ag(e,s),h=pc(s)?.max_output_tokens;if(g!==void 0)r=g,n=Math.min(h?.default??Og,g);else if(h)n=h.default,r=h.upper;else if(s===\"claude-3-opus\"||s===\"claude-3-haiku\")n=4096,r=4096;else if(s===\"claude-3-sonnet\")n=8192,r=8192;else n=Og,r=tw;let y=wg(e,s)??sw(s);if(y!==null)n=Math.min(y,r);let E=ag(e);if(E?.max_tokens&&E.max_tokens>="
+    },
+    {
+      "offset": 198857250,
+      "length": 440,
+      "purpose": "Main statusline input usage and capacity payload.",
+      "sha256": "8fe8a06c14c824e3930bf54a30ed1cc80467bcf1332870c32ac1049bfd6b9bb1",
+      "excerpt": "=he}return{char_length:M.length,visual_width:B,line_count:L.length,command_length:w}},y)}catch{}}function bbe(e,n){let r=P7t(e,n);return{total_input_tokens:e?e.input_tokens+e.cache_creation_input_tokens+e.cache_read_input_tokens:0,total_output_tokens:e?.output_tokens??0,context_window_size:n,current_usage:e,used_percentage:r.used,remaining_percentage:r.remaining}}function fwn(e){return oh(e)?.uuid??null}async function der(e){let[n,r]=aw"
+    },
+    {
+      "offset": 217652752,
+      "length": 510,
+      "purpose": "Child statusline uses each child resolved model for its capacity.",
+      "sha256": "259b5dc7678959310d08a27dfa1792d8c06229cdffa06b1eb8dc6b3029374d9f",
+      "excerpt": "tasks:h.map((ut)=>({id:ut.id,name:E.get(ut.id),type:ut.type,status:ut.status,description:ut.description,label:K_t(ut)||ut.description,startTime:ut.startTime,model:ut.model,effort:ut.effort,contextWindowSize:ut.model?Af(ut.model,mf()):void 0,tokenCount:ut.progress?.tokenCount??0,tokenSamples:Q.get(ut.id)??[],cwd:ut.cwd??Se}))},Pe=O()===\"windows\",Ie=Pe?fz():null,De=Pe&&!Ie?await WA():null,$e=Pe&&Ie?(ut)=>ut.replaceAll(\"\\\\\",\"/\"):(ut)=>ut,Be={...Zs(),...mxe(yne(Re)),CLAUDE_PROJECT_DIR:$e(_o()??we.project.proj"
+    }
+  ],
+  "cleanup": {
+    "native_process_group_stopped": true,
+    "remaining_capture_processes": false,
+    "temporary_runtime_files_deleted": true,
+    "temporary_collector_installed_in_product": false,
+    "temporary_research_script_deleted": true,
+    "verified_process_group_ids": [
+      75478,
+      81681
+    ]
+  },
+  "preserved_fixture": "missing-capacity.jsonl remains independent and unchanged"
+}

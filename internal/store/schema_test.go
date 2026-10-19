@@ -146,10 +146,12 @@ func TestFreshStoreSchema(t *testing.T) {
 	assertV9SubagentSchema(t, db)
 	assertColumnSpecs(t, db, slices.Concat(v3ColumnSpecs, v5ColumnSpecs, v6ColumnSpecs, v7ColumnSpecs, v8ColumnSpecs, v9ColumnSpecs))
 	assertColumnSpecs(t, db, []columnSpec{{"permission_requests", "main_turn_end_eligible", "INTEGER", true, "0"}})
+	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
 	// spawns ends with the v6 columns, v7's idle_since, the v8 columns, then
 	// agent, end_reported_at and subagent_tracking; permission_requests with the v7 columns after
 	// created_at, then v11's durable eligibility (the two-places rule's order).
 	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames())
+	wantSpawnsTail = append(wantSpawnsTail, "codex_startup", "claude_capacity")
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
@@ -222,7 +224,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
-				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking {
+				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking || sp.CodexStartup != nil || sp.ClaudeCapacity != nil {
 				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report and untracked", sp, err)
 			}
 			id := s.StoreID()
@@ -441,6 +443,7 @@ func TestMigrationStepReentry(t *testing.T) {
 		keepID string // the store id the hop must keep; "" when it creates one
 	}{
 		{"v2→v3 run twice", 2, nil, 2, ""},
+		{"v11→v12 run twice", 11, nil, 2, ""},
 		{"v2→v3 after pid was added", 2, func(t *testing.T, path string) {
 			withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "ALTER TABLE spawns ADD COLUMN pid INTEGER") })
 		}, 1, ""},

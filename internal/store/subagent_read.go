@@ -3,14 +3,17 @@ package store
 import "fmt"
 
 // SubagentRow is one subagent record as the store holds it (SR-6.1): a
-// confirmed entry of the subagents table. It carries the SR-6.1 fields and
-// nothing internal (no launch_token, confirmed, opened_at, activity_at,
-// created_seq, life_number or *_source column). A nil pointer is a NULL in the
+// confirmed entry of the subagents table. Its public projection carries the
+// SR-6.1 fields; ContextEvidence is internal provenance for the shared reader.
+// A nil pointer is a NULL in the
 // table (unknown or not applicable), distinct from an empty string or a zero;
 // times are the stored integer milliseconds since the epoch. The value sets of State,
 // CloseReason, ParentType and RunMode are the Subagent* constants of this
 // package.
 type SubagentRow struct {
+	// ContextEvidence belongs to the current launch only and is not a public
+	// subagent field. A historical launch never inherits a current capacity.
+	ContextEvidence SpawnContext `json:"-"`
 	// SubagentID is the subagent's id, unique within its agent row's current life.
 	SubagentID string
 	// InstanceID is the agent row the subagent belongs to.
@@ -57,7 +60,10 @@ const listSubagentRecordsSQL = `SELECT CASE WHEN sp.agent='cursor' THEN 0 ELSE s
         sa.subagent_id, sa.session_id, sa.subagent_type, sa.description,
         sa.model, sa.parent_type, sa.parent_id, sa.tool_use_id, sa.run_mode,
         sa.first_started_at, sa.started_at, sa.stopped_at, sa.lost_at,
-        sa.state, sa.close_reason
+        sa.state, sa.close_reason,
+        sp.agent, sp.state, sp.session_id, sp.jsonl_path, sp.launch_token,
+        sp.pid, sp.proc_starttime, sp.pane_pid, sp.pane_starttime,
+        sp.end_reported_at, sp.claude_capacity, sa.launch_token
    FROM spawns sp
    LEFT JOIN subagents sa
           ON sp.agent IS NOT 'cursor' AND sa.instance_id = sp.instance_id AND sa.life_number = sp.life_number AND sa.confirmed = 1
@@ -93,15 +99,18 @@ func (s *Store) ListSubagentRecords(instanceID string) (bool, []SubagentRow, err
 	)
 	for rows.Next() {
 		var (
-			flag  any
-			id    *string
-			state *string
-			r     SubagentRow
+			flag                                  any
+			id, state                             *string
+			r                                     SubagentRow
+			agent, parentState, session, path     any
+			token, pid, start, panePID, paneStart any
+			end, capacity, childToken             any
 		)
 		if err := rows.Scan(&flag, &id, &r.SessionID, &r.SubagentType, &r.Description,
 			&r.Model, &r.ParentType, &r.ParentID, &r.ToolUseID, &r.RunMode,
 			&r.FirstStartedAt, &r.StartedAt, &r.StoppedAt, &r.LostAt,
-			&state, &r.CloseReason); err != nil {
+			&state, &r.CloseReason,
+			&agent, &parentState, &session, &path, &token, &pid, &start, &panePID, &paneStart, &end, &capacity, &childToken); err != nil {
 			return false, nil, fmt.Errorf("store: list subagents scan: %w", err)
 		}
 		found = true
@@ -115,6 +124,25 @@ func (s *Store) ListSubagentRecords(instanceID string) (bool, []SubagentRow, err
 			r.State = *state
 		}
 		r.InstanceID = instanceID
+		e := SpawnContext{}
+		e.Agent, _ = agent.(string)
+		e.State, _ = parentState.(string)
+		e.SessionID, _ = session.(string)
+		e.JSONLPath, _ = path.(string)
+		e.LaunchToken = decodeLaunchToken(token)
+		e.ProcStarttime, _ = start.(string)
+		e.PaneStarttime, _ = paneStart.(string)
+		if n, ok := pid.(int64); ok && n > 0 && int64(int(n)) == n {
+			e.PID = int(n)
+		}
+		if n, ok := panePID.(int64); ok && n > 0 && int64(int(n)) == n {
+			e.PanePID = int(n)
+		}
+		e.EndReportedAtMillis = decodeEndReportedAt(end)
+		e.ClaudeCapacity = decodeClaudeCapacity(capacity)
+		if e.LaunchToken != "" && e.LaunchToken == decodeLaunchToken(childToken) && r.SessionID != nil && *r.SessionID == e.SessionID {
+			r.ContextEvidence = e
+		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {

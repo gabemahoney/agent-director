@@ -12,6 +12,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/codexfix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -39,7 +40,7 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 // emptyGetJSON is the row every Get failure encodes: agent_args, labels,
 // permission_requests, unproven_requests and prior_sessions empty, never null,
 // every other field zero (b.4nt).
-const emptyGetJSON = `{"instance_id":"","parent_id":"","state":"","cwd":"","agent":"","tmux_session_name":"",` +
+const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
 	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`

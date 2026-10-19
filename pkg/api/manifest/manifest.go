@@ -246,6 +246,8 @@ const launchStartLiveSentence = "It follows the row's live state: with [state] s
 // of get's result and of each list row (b.146 rule 15).
 const permissionRequestsDescription = "Open permission requests: those that still await an answer (not acked by their relay hook and not answered at the pane, decided or not; a request with no recorded settle instant while undecided). Always a non-null array ([] when empty). Populated only when the row's live state is check_permission; empty array for all other states (a row can read waiting, working or ask_user while a request is still open: follow a tracked request with get-permission). Requests are never delayed by [state] settle_ms, so with it set a row can also read any state (even ended or missing) with open requests listed, or check_permission with [], for up to settle_ms. Each element: request_id (int) — autoincrement row id; request_token (string) — UUIDv4 request token, pass to decide verb to target this row; tool_name (string) — the supplied tool name or Cursor action title/plan name; tool_input (string) — raw JSON string of the tool's input, NOT a nested object (consumers parse it themselves). Cursor preserves the received permission/plan params envelope byte for byte, including options and absent/null fields, without adding internal context; requested_at (RFC3339 timestamp) — when the request was recorded; decision and decision_reason (string?) — the recorded verdict, not the outcome; and the delivery facts as get-permission returns them: delivery (delivered, not_confirmed or fallen_back), confirm_by (timestamp), hook_alive (bool?), hook_gone_at (timestamp?), attempted_decision (string?), attempted_at (timestamp?), tool_use_id (string?), pane_answer (none or intent on an open request), pane_as (string?), proven_gone_at (timestamp?), proven_gone_how (string?) and unproven_since (timestamp?). get and list never wait for the store's write lock."
 
+const contextDescription = "Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage."
+
 // subagentsDescription is the text of list-subagents' subagents field: the
 // record's fields, the value sets of its enumerated fields, and the order.
 // Like the other result texts it reaches surface.json and MCP tools/list, never
@@ -258,7 +260,8 @@ const subagentsDescription = "Every subagent record of the row's current life, a
 	"first_started_at (timestamp?) — when it first started; started_at (timestamp?) — when its latest run started; stopped_at (timestamp?) — when it last stopped, null if it never has (kept when it runs again); lost_at (timestamp?) — when it was judged lost, null unless it was; " +
 	"state (string) — running (started, neither stopped nor judged lost), stopped (its agent reported it finished) or lost (judged gone without a stop report); " +
 	"close_reason (string?) — why it is no longer running, null exactly while state is running: stop_event (its agent reported it finished), absent_from_snapshot (a snapshot of the agent's running background tasks did not list it) or agent_gone (its agent ended, went missing or began a new launch). " +
-	"Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second)."
+	"Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second). " +
+	"context (object) — " + contextDescription + " A visible Claude child can qualify with its own capacity metadata and transcript path for the same response; otherwise child context is unknown. Parent usage or capacity is never substituted."
 
 // deliveryFactFields are a permission request's delivery facts besides
 // delivery itself (b.146 rule 15), as decide and get-permission return them
@@ -522,6 +525,7 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: stateEnum,
 			},
+			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{
 				Name:          "launch_started_at",
 				Type:          "timestamp?",
@@ -553,6 +557,7 @@ var Verbs = []VerbDef{
 		},
 		ResultFields: []FieldDef{
 			{Name: "instance_id", Type: "string", Description: "Stable id of the Spawn.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -952,12 +957,12 @@ var Verbs = []VerbDef{
 		},
 	},
 	{
-		Name:        "resume",
+		Name: "resume",
 		Description: "Resume latest ended/missing: saved args/env/cwd/transcript; new tmux. Cursor: current cursor_path, latest conversation/protected transcript; native-history loss fails async, no fallback. Replay: saved initial prompt once/launch; no transient input/readiness/decisions/proof. " + missingNotProofShort + " Cwd best-effort pre-trust unless the row's latest spawn set no_pre_trust; pre-trust failure never fails the resume. Returns the instance_id and pre_trust (ok, skipped or failed). Moves the row to pending, keeping its session id and history; parent_id=caller's AGENT_DIRECTOR_INSTANCE_ID; stays pending until the agent reports in, then waiting (Cursor: first verified prompt). Non-timeout failure restores the row's prior ended or missing state; restore failure reported. ErrTmuxNotAvailable ENVIRONMENT; ErrTmuxSessionCreate LAUNCH FAILURE. Create timeout: ErrTmuxUnresponsive (UNAVAILABLE, transient); the session may have been created and the row stays pending; do not retry until get shows the row ended or missing. Pre-move: untouched/retryable. ErrTmuxSessionConflict (CONFLICT, human) or ErrTmuxUnresponsive (starting/stopping): untouched. Held create: restore/refuse. A pending row (a launch in progress): ErrSpawnNotResumable. Cursor: keep row/session/transcript/artifacts. " +
 			"Fresh: kill's live-row advice; unresolved survivors: STOP, human: docs/operator-actions.md#inspect-and-end-a-session-by-hand; spawn agent=cursor, project cwd, omit instance_id, same HOME, known supported extra_env/template intent. None: intended personal login/no custom dirs; dirs don't isolate accounts. Unavailable intent/needs protected data: STOP, human; no saved-env edit/drop credential intent. Saved credential/bad-dir: ErrReservedEnvKey pre-mutation. " +
 			"ErrInternal: control-character id/unusable recorded name (see kill); record failure, no tmux/launch.",
-		Callable:    true,
-		HandleFree:  false,
+		Callable:   true,
+		HandleFree: false,
 		Params: []ParamDef{
 			{
 				Name:          "instance_id",
@@ -1445,6 +1450,24 @@ var Verbs = []VerbDef{
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
+			{
+				Name:          "context_source",
+				Type:          "string",
+				Description:   "Internal native Claude capacity callback: statusLine or subagentStatusLine, set automatically by spawn. Absent or empty: ordinary lifecycle hook handling.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    true,
+				AllowedValues: []string{"statusLine", "subagentStatusLine"},
+			},
+			{
+				Name:          "context_forward",
+				Type:          "string",
+				Description:   "Internal original Claude status-line command, encoded as unpadded standard base64 by spawn. Native capacity callbacks preserve its stdin, stdout, stderr and exit status. Absent or empty: no command to forward.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    true,
 				AllowedValues: nil,
 			},
 		},

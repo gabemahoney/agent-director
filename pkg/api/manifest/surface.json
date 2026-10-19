@@ -252,6 +252,14 @@
           ]
         },
         {
+          "name": "context",
+          "type": "object",
+          "description": "Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
           "name": "launch_started_at",
           "type": "timestamp?",
           "description": "Start of the launch in progress: RFC3339 UTC with millisecond precision. Present only while the row is pending; omitted otherwise. It follows the row's live state: with [state] settle_ms set, a row whose agent has reported in can read pending without it for up to settle_ms.",
@@ -285,6 +293,14 @@
           "name": "instance_id",
           "type": "string",
           "description": "Stable id of the Spawn.",
+          "nullable": false,
+          "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "context",
+          "type": "object",
+          "description": "Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage.",
           "nullable": false,
           "allow_empty": false,
           "allowed_values": null
@@ -1646,7 +1662,7 @@
         {
           "name": "subagents",
           "type": "[]object",
-          "description": "Every subagent record of the row's current life, across every launch of it. Empty array when it has none (never null). Ordered by first_started_at ascending (records with a null first_started_at last), then subagent_id. Each element has all of these keys, a field with no known value null: subagent_id (string) — the subagent's id, unique among the records shown for its row; instance_id (string) — the row's id; session_id (string?) — the session of the event that created the record, never changed after; subagent_type (string?) — its type; description (string?) — the short description the launching call gave it, never the prompt text; model (string?) — the model it runs; parent_type (string?) — what launched it: agent (the row's own agent, so parent_id is the row's instance_id) or subagent (another subagent, so parent_id is that subagent's subagent_id); parent_id (string?) — as parent_type says; tool_use_id (string?) — the id of the tool call that launched it; run_mode (string?) — background or foreground; first_started_at (timestamp?) — when it first started; started_at (timestamp?) — when its latest run started; stopped_at (timestamp?) — when it last stopped, null if it never has (kept when it runs again); lost_at (timestamp?) — when it was judged lost, null unless it was; state (string) — running (started, neither stopped nor judged lost), stopped (its agent reported it finished) or lost (judged gone without a stop report); close_reason (string?) — why it is no longer running, null exactly while state is running: stop_event (its agent reported it finished), absent_from_snapshot (a snapshot of the agent's running background tasks did not list it) or agent_gone (its agent ended, went missing or began a new launch). Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second).",
+          "description": "Every subagent record of the row's current life, across every launch of it. Empty array when it has none (never null). Ordered by first_started_at ascending (records with a null first_started_at last), then subagent_id. Each element has all of these keys, a field with no known value null: subagent_id (string) — the subagent's id, unique among the records shown for its row; instance_id (string) — the row's id; session_id (string?) — the session of the event that created the record, never changed after; subagent_type (string?) — its type; description (string?) — the short description the launching call gave it, never the prompt text; model (string?) — the model it runs; parent_type (string?) — what launched it: agent (the row's own agent, so parent_id is the row's instance_id) or subagent (another subagent, so parent_id is that subagent's subagent_id); parent_id (string?) — as parent_type says; tool_use_id (string?) — the id of the tool call that launched it; run_mode (string?) — background or foreground; first_started_at (timestamp?) — when it first started; started_at (timestamp?) — when its latest run started; stopped_at (timestamp?) — when it last stopped, null if it never has (kept when it runs again); lost_at (timestamp?) — when it was judged lost, null unless it was; state (string) — running (started, neither stopped nor judged lost), stopped (its agent reported it finished) or lost (judged gone without a stop report); close_reason (string?) — why it is no longer running, null exactly while state is running: stop_event (its agent reported it finished), absent_from_snapshot (a snapshot of the agent's running background tasks did not list it) or agent_gone (its agent ended, went missing or began a new launch). Each timestamp is RFC3339 UTC with millisecond precision (trailing zeros dropped, no fraction on a whole second). context (object) — Experimental context estimate: agent internals and this output shape have no stable-format guarantee. Always an object with used_tokens (integer?), window_tokens (integer?), fraction (number?; used_tokens divided by window_tokens), source (string?) and as_of (RFC3339 UTC timestamp with millisecond precision?). Unknown retains all five keys with null values. Readings estimate last-response occupancy, never cumulative billing. Claude 2.1.280 first-party pairs automatically composed capacity callbacks with on-demand transcript usage for the same resolved model, response and current live writer, without provider, endpoint or window overrides. Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer; existing, resumed or unproven sessions return unknown. Its sequential rollouts pair last_token_usage.total_tokens with the same session's reported usable model_context_window; source codex_jsonl_last_token_usage. as_of is the source measurement time, never read time. Claude and Codex usage is read on demand without a usage cache or wall-clock age cutoff; stored capacity metadata is not cached usage. Missing, malformed, incomplete, unsupported or unresolvable evidence yields unknown; compaction requires later valid usage. Both Cursor versions have successful native interactive captures. Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path, exposes only stopReason in prompt results and exposes no manual /summarize command. Both versions have a native shared-resource preCompact executor path; automatic managed delivery remains unqualified. Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage. A visible Claude child can qualify with its own capacity metadata and transcript path for the same response; otherwise child context is unknown. Parent usage or capacity is never substituted.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -1909,6 +1925,27 @@
           "required": false,
           "nullable": false,
           "allow_empty": false,
+          "allowed_values": null
+        },
+        {
+          "name": "context_source",
+          "type": "string",
+          "description": "Internal native Claude capacity callback: statusLine or subagentStatusLine, set automatically by spawn. Absent or empty: ordinary lifecycle hook handling.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
+          "allowed_values": [
+            "statusLine",
+            "subagentStatusLine"
+          ]
+        },
+        {
+          "name": "context_forward",
+          "type": "string",
+          "description": "Internal original Claude status-line command, encoded as unpadded standard base64 by spawn. Native capacity callbacks preserve its stdin, stdout, stderr and exit status. Absent or empty: no command to forward.",
+          "required": false,
+          "nullable": false,
+          "allow_empty": true,
           "allowed_values": null
         }
       ],

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v11 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v12 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -155,7 +155,9 @@ CREATE TABLE IF NOT EXISTS spawns (
     state_changed_ms           INTEGER NOT NULL DEFAULT 0,
     agent                      TEXT NOT NULL DEFAULT '',
     end_reported_at            INTEGER,
-    subagent_tracking          INTEGER NOT NULL DEFAULT 0
+    subagent_tracking          INTEGER NOT NULL DEFAULT 0,
+    codex_startup              TEXT,
+    claude_capacity            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -283,6 +285,7 @@ var migrationSteps = []migrationStep{
 	{from: 8, apply: migrateV8toV9},
 	{from: 9, apply: migrateV9toV10},
 	{from: 10, apply: migrateV10toV11},
+	{from: 11, apply: migrateV11toV12},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

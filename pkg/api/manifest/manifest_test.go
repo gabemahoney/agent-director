@@ -726,20 +726,31 @@ func TestNoVerbListsErrOldLayout(t *testing.T) {
 	}
 }
 
-// TestHookVerbListsAgentParam pins SR-6.1's flag in the manifest: the hook verb
-// has an optional string param agent, not nullable or empty, whose values are
-// claude, codex and cursor (TestSurfaceJSONMirrorsManifest carries it to surface.json).
+// TestHookVerbListsAgentParam pins the agent and native capacity callback
+// parameters; TestSurfaceJSONMirrorsManifest carries them to surface.json.
 func TestHookVerbListsAgentParam(t *testing.T) {
-	for _, p := range verbOf(t, "hook").Params {
-		if p.Name != "agent" {
-			continue
-		}
-		if p.Type != "string" || p.Required || p.Nullable || p.AllowEmpty || !reflect.DeepEqual(p.AllowedValues, []string{"claude", "codex", "cursor"}) {
-			t.Errorf("hook agent param = %+v; want an optional string, not nullable or empty, with values claude, codex and cursor", p)
-		}
-		return
+	for _, tc := range []struct {
+		name       string
+		allowEmpty bool
+		values     []string
+	}{
+		{"agent", false, []string{"claude", "codex", "cursor"}},
+		{"context_source", true, []string{"statusLine", "subagentStatusLine"}},
+		{"context_forward", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, p := range verbOf(t, "hook").Params {
+				if p.Name != tc.name {
+					continue
+				}
+				if p.Type != "string" || p.Required || p.Nullable || p.AllowEmpty != tc.allowEmpty || !reflect.DeepEqual(p.AllowedValues, tc.values) {
+					t.Errorf("hook %s param = %+v; want optional non-null string, allow_empty=%t, values=%v", tc.name, p, tc.allowEmpty, tc.values)
+				}
+				return
+			}
+			t.Errorf("hook has no %s param", tc.name)
+		})
 	}
-	t.Error("hook has no agent param")
 }
 
 func TestSpawnDroppedArgsContract(t *testing.T) {
@@ -758,4 +769,49 @@ func TestSpawnDroppedArgsContract(t *testing.T) {
 		return
 	}
 	t.Fatal("spawn missing dropped_args")
+}
+
+func TestExperimentalContextContract(t *testing.T) {
+	for _, verb := range []string{"status", "get"} {
+		var found bool
+		for _, f := range verbOf(t, verb).ResultFields {
+			if f.Name != "context" {
+				continue
+			}
+			found = true
+			if f.Type != "object" || f.Nullable || f.AllowEmpty {
+				t.Errorf("%s context shape = %+v", verb, f)
+			}
+			for _, phrase := range []string{
+				"Experimental", "used_tokens", "window_tokens", "fraction", "source", "as_of", "null",
+				"measurement time", "never read time", "wall-clock",
+				"Claude 2.1.280 first-party", "automatically composed capacity callbacks",
+				"on-demand transcript usage for the same resolved model, response and current live writer",
+				"without provider, endpoint or window overrides",
+				"Codex 0.159.2 OpenAI requires admitted fresh-startup provenance and a current live writer",
+				"existing, resumed or unproven sessions return unknown",
+				"Cursor versions have successful native interactive captures",
+				"Managed ACP lacks the ordinary usage-bearing afterAgentResponse/stop path",
+				"exposes only stopReason", "exposes no manual /summarize command",
+				"native shared-resource preCompact executor path", "automatic managed delivery remains unqualified",
+				"Cursor context is unknown in this build; numeric support is deferred until upstream ACP supplies usage.",
+			} {
+				if !strings.Contains(f.Description, phrase) {
+					t.Errorf("%s context description lacks %q", verb, phrase)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s lacks context", verb)
+		}
+	}
+	text := siteText(t, "list-subagents", "", "subagents")
+	for _, phrase := range []string{
+		"context (object)", "A visible Claude child can qualify with its own capacity metadata and transcript path for the same response",
+		"otherwise child context is unknown", "Parent usage or capacity is never substituted",
+	} {
+		if !strings.Contains(text, phrase) {
+			t.Errorf("subagent context description lacks %q", phrase)
+		}
+	}
 }

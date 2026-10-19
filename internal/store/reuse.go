@@ -84,6 +84,8 @@ type RawLife struct {
 	agent                   rawValue
 	endReportedAt           rawValue
 	subagentTracking        rawValue
+	codexStartup            rawValue
+	claudeCapacity          rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -155,6 +157,8 @@ var rawLifeColumns = []rawLifeColumn{
 	{"agent", func(l *RawLife) *rawValue { return &l.agent }},
 	{"end_reported_at", func(l *RawLife) *rawValue { return &l.endReportedAt }},
 	{"subagent_tracking", func(l *RawLife) *rawValue { return &l.subagentTracking }},
+	{"codex_startup", func(l *RawLife) *rawValue { return &l.codexStartup }},
+	{"claude_capacity", func(l *RawLife) *rawValue { return &l.claudeCapacity }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -255,6 +259,8 @@ const resetForReuseSQL = `UPDATE spawns
         extra_env                 = ?,
         parent_id                 = ?,
         no_pre_trust              = ?,
+        codex_startup             = NULL,
+        claude_capacity           = NULL,
         launch_token              = ?,
         tmux_socket               = ?,
         tmux_server_pid           = NULL,

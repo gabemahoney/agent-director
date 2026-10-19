@@ -5,10 +5,12 @@
 package envelope_diff
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/contextfix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -73,6 +75,14 @@ func listSubagentsArgv(ctx map[string]any) []string {
 	return []string{"list-subagents", "--instance-id", ctx["id"].(string)}
 }
 
+func listSubagentsUnknownContext() map[string]any {
+	var reading map[string]any
+	if err := json.Unmarshal([]byte(contextfix.UnknownJSON), &reading); err != nil {
+		panic(err)
+	}
+	return reading
+}
+
 // listSubagentsSuccessCases are appended to successCases. Order on the list is
 // first_started_at ascending with nulls last, so sa-full precedes sa-nulls.
 var listSubagentsSuccessCases = []successCase{
@@ -88,6 +98,7 @@ var listSubagentsSuccessCases = []successCase{
 			"subagents": []any{
 				map[string]any{
 					"subagent_id":      "sa-full",
+					"context":          listSubagentsUnknownContext(),
 					"instance_id":      listSubagentsID,
 					"state":            "lost",
 					"session_id":       "sess-1",
@@ -106,6 +117,7 @@ var listSubagentsSuccessCases = []successCase{
 				},
 				map[string]any{
 					"subagent_id":      "sa-nulls",
+					"context":          listSubagentsUnknownContext(),
 					"instance_id":      listSubagentsID,
 					"state":            "running",
 					"session_id":       nil,

@@ -56,6 +56,7 @@ var terminalSessionEndReasons = map[string]bool{
 // Claude Code versions (`reason`, `matcher`, `endReason`). We accept all
 // three so the classifier remains stable across upstream payload renames.
 type payload struct {
+	Source string `json:"source"`
 	Origin string `json:"origin"` // Cursor gateway protocol attribution only
 	// Claude Code's standard field name. The SRD's test examples use
 	// `event_name`; we accept both so the surface is forgiving.
@@ -149,6 +150,8 @@ type ClassifyResult struct {
 	// without an agent_id. Claude's hooks never heal; find-missing heals
 	// Claude's rows.
 	HealsTranscript bool
+	// CodexStartup is fresh-history origin, never inferred from rollout metadata.
+	CodexStartup bool
 
 	// EventName is the canonical event name as parsed from the payload.
 	// Empty when the payload had no event-name field at all.
@@ -420,6 +423,7 @@ func classifyCodex(p payload) ClassifyResult {
 		AgentID:         p.AgentID,
 		ToolUseID:       p.ToolUseID,
 		HealsTranscript: p.AgentID == "",
+		CodexStartup:    p.AgentID == "" && p.eventName() == "SessionStart" && p.Source == "startup",
 	}
 	if p.AgentID != "" {
 		res.SessionID = ""

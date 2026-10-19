@@ -17,10 +17,11 @@ import (
 
 // textCase is one manifest text, a verb's description or one param's or
 // result field's (own: find-missing's description before the live-row
-// pointer), and the case it must pass under the agent-text rules.
+// pointer; beforeContext: subagent fields before context), and its text rules.
 type textCase struct {
 	verb, param, field string
 	own                bool
+	beforeContext      bool
 	c                  apitest.DescCase
 }
 
@@ -201,8 +202,8 @@ const subagentsTimestampFormat = "Each timestamp is RFC3339 UTC with millisecond
 // and the subagents text's every key with its type and nullability, the value
 // sets of state, close_reason, parent_type and run_mode with their meanings,
 // the order, the empty array, the description never being prompt text, and the
-// timestamp format (SR-11.1, SR-11.4, SR-11.5). All three texts are agent
-// neutral: no agent name and no agent-specific hook field or event name.
+// timestamp format (SR-11.1, SR-11.4, SR-11.5). Record fields before context
+// are agent neutral; context documents agent-specific qualification.
 func listSubagentsTextCases() []textCase {
 	neutral := apitest.DescCase{Name: "agent neutral", MustNot: []string{
 		"Claude", "Claude Code", "Codex", "SubagentStart", "SubagentStop", "agent_id", "agent_type", "transcript_path", "hook_event_name",
@@ -211,7 +212,7 @@ func listSubagentsTextCases() []textCase {
 		{verb: "list-subagents", c: neutral},
 		{verb: "list-subagents", param: "instance_id", c: neutral},
 		{verb: "list-subagents", field: "tracked", c: neutral},
-		{verb: "list-subagents", field: "subagents", c: neutral},
+		{verb: "list-subagents", field: "subagents", beforeContext: true, c: neutral},
 		{verb: "list-subagents", field: "tracked", c: tokens("tracked values",
 			"false for a row launched before subagent tracking existed, which has no records",
 			"false for a row whose launch registers no subagent events", "true for any other row")},
@@ -257,7 +258,7 @@ func TestListSubagentsVerbDescription(t *testing.T) {
 // TestListSubagentsTimestampFormatOnce pins that the subagents text states the
 // timestamp format once, for every timestamp field, not once per field.
 func TestListSubagentsTimestampFormatOnce(t *testing.T) {
-	text := siteText(t, "list-subagents", "", "subagents")
+	text := strings.Split(siteText(t, "list-subagents", "", "subagents"), " context (object)")[0]
 	if n := strings.Count(text, "RFC3339"); n != 1 {
 		t.Errorf("subagents text names RFC3339 %d times, want once: %q", n, text)
 	}
@@ -274,6 +275,9 @@ func TestManifestTextCases(t *testing.T) {
 			text := siteText(t, tc.verb, tc.param, tc.field)
 			if tc.own {
 				text = apitest.FindMissingOwnText(text)
+			}
+			if tc.beforeContext {
+				text = strings.Split(text, " context (object)")[0]
 			}
 			apitest.AssertAgentTextCase(t, site, text, tc.c)
 		})

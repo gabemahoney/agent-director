@@ -174,8 +174,8 @@ func TestCurrentSchemaContradictoryChildRemainsHeld(t *testing.T) {
 		mustExec(t, db, `UPDATE permission_requests SET main_turn_end_eligible=1 WHERE instance_id=? AND request_token=?`, relayID, tokenA)
 	})
 	s.Close()
-	if got := readUserVersion(t, path); got != 11 {
-		t.Fatalf("corrupted fixture version %d; want already-current schema 11", got)
+	if got := readUserVersion(t, path); got != schemaVersion {
+		t.Fatalf("corrupted fixture version %d; want already-current schema %d", got, schemaVersion)
 	}
 	var err error
 	s, err = Open(path)

@@ -1,0 +1,719 @@
+{
+  "schema_version": 1,
+  "expected_cursor_version": "2026.10.12-d47ca18",
+  "evidence_class": "real-managed-acp-attempt",
+  "model_requested": "composer-2.5",
+  "root": "/run/openclaw/horde/cursor-managed-live-53ndbbk5",
+  "started_at_unix_ms": 1792389339101,
+  "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+  "commands": [
+    {
+      "verb": "version",
+      "at_unix_ms": 1792389339464,
+      "exit_code": 0,
+      "stdout_bytes": 77,
+      "stderr_bytes": 0,
+      "diagnostic_flags": {
+        "authentication required": false,
+        "not logged in": false,
+        "unauthorized": false,
+        "expired": false,
+        "model unavailable": false,
+        "unsupported": false,
+        "mcp": false,
+        "guidance": false,
+        "failed": false,
+        "timeout": false,
+        "permission denied": false
+      }
+    },
+    {
+      "verb": "spawn",
+      "at_unix_ms": 1792389339479,
+      "exit_code": 0,
+      "stdout_bytes": 89,
+      "stderr_bytes": 0,
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "pre_trust": "skipped",
+      "diagnostic_flags": {
+        "authentication required": false,
+        "not logged in": false,
+        "unauthorized": false,
+        "expired": false,
+        "model unavailable": false,
+        "unsupported": false,
+        "mcp": false,
+        "guidance": false,
+        "failed": false,
+        "timeout": false,
+        "permission denied": false
+      }
+    },
+    {
+      "verb": "send-keys",
+      "at_unix_ms": 1792389347381,
+      "exit_code": 0,
+      "stdout_bytes": 3,
+      "stderr_bytes": 0,
+      "diagnostic_flags": {
+        "authentication required": false,
+        "not logged in": false,
+        "unauthorized": false,
+        "expired": false,
+        "model unavailable": false,
+        "unsupported": false,
+        "mcp": false,
+        "guidance": false,
+        "failed": false,
+        "timeout": false,
+        "permission denied": false
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "observed_at_unix_ms": 1792389339488,
+      "reading": {
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "state": "pending",
+        "session_id": null,
+        "life_number": 0,
+        "pane_pid": 355654,
+        "pane_starttime": "468012125",
+        "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+        "runtime_binding": {
+          "bound_life_number": 0,
+          "bound_gateway_pid": 355654,
+          "bound_gateway_start": "468012125",
+          "bound_runtime_pid": 355665,
+          "bound_runtime_start": "468012126",
+          "bound_connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+          "bound_session_id": "",
+          "bound_terminated": 0
+        }
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792389343076,
+      "reading": {
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "state": "waiting",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "life_number": 0,
+        "pane_pid": 355654,
+        "pane_starttime": "468012125",
+        "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+        "runtime_binding": {
+          "bound_life_number": 0,
+          "bound_gateway_pid": 355654,
+          "bound_gateway_start": "468012125",
+          "bound_runtime_pid": 355665,
+          "bound_runtime_start": "468012126",
+          "bound_connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+          "bound_session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+          "bound_terminated": 0
+        }
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792389343232,
+      "reading": {
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "state": "working",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "life_number": 0,
+        "pane_pid": 355654,
+        "pane_starttime": "468012125",
+        "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+        "runtime_binding": {
+          "bound_life_number": 0,
+          "bound_gateway_pid": 355654,
+          "bound_gateway_start": "468012125",
+          "bound_runtime_pid": 355665,
+          "bound_runtime_start": "468012126",
+          "bound_connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+          "bound_session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+          "bound_terminated": 0
+        }
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792389347368,
+      "reading": {
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "state": "waiting",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "life_number": 0,
+        "pane_pid": 355654,
+        "pane_starttime": "468012125",
+        "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+        "runtime_binding": {
+          "bound_life_number": 0,
+          "bound_gateway_pid": 355654,
+          "bound_gateway_start": "468012125",
+          "bound_runtime_pid": 355665,
+          "bound_runtime_start": "468012126",
+          "bound_connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+          "bound_session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+          "bound_terminated": 0
+        }
+      }
+    },
+    {
+      "observed_at_unix_ms": 1792389347485,
+      "reading": {
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "state": "ended",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "life_number": 0,
+        "pane_pid": 355654,
+        "pane_starttime": "468012125",
+        "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+        "runtime_binding": {
+          "bound_life_number": 0,
+          "bound_gateway_pid": 355654,
+          "bound_gateway_start": "468012125",
+          "bound_runtime_pid": 355665,
+          "bound_runtime_start": "468012126",
+          "bound_connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+          "bound_session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+          "bound_terminated": 1
+        }
+      }
+    }
+  ],
+  "checkpoints": [],
+  "isolation": {
+    "fresh_home": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/home",
+    "ad_store": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/ad-state.db",
+    "git_config_global": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/gitconfig",
+    "git_config_global_bytes": 0,
+    "cursor_config": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/home/.cursor",
+    "cursor_data": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/home/.cursor",
+    "tmux_tmpdir": "/run/openclaw/horde/cursor-managed-live-53ndbbk5/tmux",
+    "existing_login_provider_only": true,
+    "credential_files_opened_by_researcher": false,
+    "login_logout_called": false,
+    "inherited_credential_environment": false,
+    "terminal_output_retained": false
+  },
+  "timing_semantics": "Collector receipt and transcript timestamps are observations; no native usage measurement time or accepted AD context receipt is inferred.",
+  "cursor_version": "2026.10.12-d47ca18",
+  "cursor_binary": "/home/horde/.local/share/cursor-agent/versions/2026.10.12-d47ca18/cursor-agent",
+  "ad_binary": "/run/openclaw/horde/cursor-managed-binary-uq_b72i8/agent-director",
+  "ad_binary_sha256": "ed5ab993b0cb4744334f92aa978016c680552e0560a3b828bbac1ca366067646",
+  "ad_version": {
+    "version": "dev",
+    "commit": "unknown"
+  },
+  "ordinary_turn_completed": true,
+  "compaction_attempt": {
+    "performed": false,
+    "reason": "No compaction control in the managed gateway or advertised ACP commands. No command was sent and no compaction sequence is claimed."
+  },
+  "transcript_metadata": [
+    {
+      "sequence": 1,
+      "timestamp": "2026-10-19T05:55:39.485397215Z",
+      "kind": "launch",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "agent"
+      ]
+    },
+    {
+      "sequence": 2,
+      "timestamp": "2026-10-19T05:55:43.060800711Z",
+      "kind": "session_configuration_update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "params"
+      ]
+    },
+    {
+      "sequence": 3,
+      "timestamp": "2026-10-19T05:55:43.0613583Z",
+      "kind": "session_mode_configured",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "configured_session_id",
+        "mode_id",
+        "request_id"
+      ],
+      "request_id": 3
+    },
+    {
+      "sequence": 4,
+      "timestamp": "2026-10-19T05:55:43.06200653Z",
+      "kind": "session_start",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin"
+      ]
+    },
+    {
+      "sequence": 5,
+      "timestamp": "2026-10-19T05:55:43.076354491Z",
+      "kind": "submission_accepted",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "submission_id",
+        "text"
+      ],
+      "submission_id": "initial"
+    },
+    {
+      "sequence": 6,
+      "timestamp": "2026-10-19T05:55:43.076677321Z",
+      "kind": "user_input",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "submission_id",
+        "text"
+      ],
+      "submission_id": "initial"
+    },
+    {
+      "sequence": 7,
+      "timestamp": "2026-10-19T05:55:43.089847592Z",
+      "kind": "submission_started",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "delivery",
+        "request_id",
+        "submission_id"
+      ],
+      "submission_id": "initial",
+      "request_id": "4"
+    },
+    {
+      "sequence": 8,
+      "timestamp": "2026-10-19T05:55:43.36258131Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "availableCommands",
+        "sessionUpdate"
+      ],
+      "session_update_type": "available_commands_update"
+    },
+    {
+      "sequence": 9,
+      "timestamp": "2026-10-19T05:55:43.668009186Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "sessionUpdate",
+        "title"
+      ],
+      "session_update_type": "session_info_update"
+    },
+    {
+      "sequence": 10,
+      "timestamp": "2026-10-19T05:55:46.841780246Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_thought_chunk"
+    },
+    {
+      "sequence": 11,
+      "timestamp": "2026-10-19T05:55:46.858089266Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_thought_chunk"
+    },
+    {
+      "sequence": 12,
+      "timestamp": "2026-10-19T05:55:46.878667403Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_thought_chunk"
+    },
+    {
+      "sequence": 13,
+      "timestamp": "2026-10-19T05:55:46.895339323Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_thought_chunk"
+    },
+    {
+      "sequence": 14,
+      "timestamp": "2026-10-19T05:55:46.919113497Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_thought_chunk"
+    },
+    {
+      "sequence": 15,
+      "timestamp": "2026-10-19T05:55:47.174495086Z",
+      "kind": "update",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "origin",
+        "request_id",
+        "submission_id",
+        "update"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "update_keys": [
+        "sessionId",
+        "update"
+      ],
+      "update_payload_keys": [
+        "content",
+        "sessionUpdate"
+      ],
+      "session_update_type": "agent_message_chunk"
+    },
+    {
+      "sequence": 16,
+      "timestamp": "2026-10-19T05:55:47.243914032Z",
+      "kind": "turn_outcome",
+      "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+      "life_number": 0,
+      "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "launch_token_sha256": "ac3034dc91685ca3f52488c901ad8e811bcef0bd06a419a6885eb0758f7641de",
+      "data_keys": [
+        "cancellation_requested",
+        "origin",
+        "request_id",
+        "stop_reason",
+        "submission_id"
+      ],
+      "submission_id": "initial",
+      "request_id": "4",
+      "stop_reason": "end_turn",
+      "cancellation_requested": false
+    }
+  ],
+  "native_hooks": [],
+  "native_hooks_observation_phase": "before-managed-exit",
+  "cleanup": {
+    "isolated_tmux_kill_exit_code": 1,
+    "signals": [],
+    "owned_processes": [
+      {
+        "pid": 355653,
+        "starttime": "468012125",
+        "gone_or_zombie": true
+      },
+      {
+        "pid": 355654,
+        "starttime": "468012125",
+        "gone_or_zombie": true
+      },
+      {
+        "pid": 355665,
+        "starttime": "468012126",
+        "gone_or_zombie": true
+      },
+      {
+        "pid": 355735,
+        "starttime": "468012195",
+        "gone_or_zombie": true
+      },
+      {
+        "pid": 355892,
+        "starttime": "468012428",
+        "gone_or_zombie": true
+      }
+    ]
+  },
+  "finished_at_unix_ms": 1792389348488,
+  "verdict": "not-qualified",
+  "numeric_cursor_support": false,
+  "ad_context_receipt_time": null,
+  "native_measurement_time": null,
+  "qualification_gaps": [
+    "No demonstrated native usage/compaction hook delivery to AD on the managed ACP route.",
+    "No qualified generation/model/provider/window-matched usage-hook and checkpoint-capacity pair.",
+    "No correlated managed compaction clearing, usage-free completion and post-compaction recovery sequence."
+  ],
+  "post_exit_observation": {
+    "observed_at_unix_ms": 1792389396736,
+    "checkpoint_observation_phase": "after-managed-exit",
+    "native_checkpoints": [
+      {
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "root_sha256": "2039001443e54a4ad8dbd051a37240cc7b2ace8c8541be4bbe0fd4be5334e5e0",
+        "root_fields": [
+          1,
+          5,
+          8,
+          9,
+          10,
+          22,
+          26,
+          27,
+          38,
+          39,
+          46
+        ],
+        "turn_count": 1,
+        "used_tokens": 11547,
+        "max_tokens": 200000,
+        "summary_present": false,
+        "summary_archives": 0,
+        "message_count_at_last_compaction": null
+      }
+    ],
+    "advertised_commands": [
+      "autopilot",
+      "copy-request-id",
+      "create-hook",
+      "create-rule",
+      "create-skill",
+      "create-subagent",
+      "goal",
+      "loop",
+      "migrate-to-skills",
+      "multi-model-review",
+      "new-repo",
+      "origin",
+      "rename-chat",
+      "sdk",
+      "share",
+      "shell",
+      "simplify",
+      "split-to-prs",
+      "statusline",
+      "update-cli-config"
+    ],
+    "remaining_test_processes": [],
+    "final_row": {
+      "state": "ended",
+      "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+      "life_number": 0
+    },
+    "permission_request_count": 0,
+    "qualification_limitation": "Native checkpoint numbers were read after process exit; they are not a usage-hook/current-checkpoint pair and have no accepted AD receipt time. No configured native hook fired in the bounded turn. No model/provider/window or native generation attribution was established.",
+    "final_lifecycle_metadata": [
+      {
+        "sequence": 17,
+        "timestamp": "2026-10-19T05:55:47.380694425Z",
+        "kind": "input_control",
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "life_number": 0,
+        "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "data_keys": [
+          "consumed_at",
+          "control",
+          "count",
+          "input_epoch",
+          "input_id"
+        ]
+      },
+      {
+        "sequence": 18,
+        "timestamp": "2026-10-19T05:55:47.439905738Z",
+        "kind": "session_end",
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "life_number": 0,
+        "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+        "session_id": "0f88ee67-0577-44e7-a311-6e1eef4c73b5",
+        "data_keys": [
+          "intentional",
+          "runtime_gone"
+        ],
+        "runtime_gone": true,
+        "intentional": true
+      }
+    ],
+    "configuration_update_metadata": [
+      {
+        "sequence": 2,
+        "timestamp": "2026-10-19T05:55:43.060800711Z",
+        "kind": "session_configuration_update",
+        "instance_id": "contextqual-63807b6a-ac29-471e-bb58-63c782692373",
+        "life_number": 0,
+        "connection_id": "db3d8e91e789a56342a3937cc0ae3ffb",
+        "session_id": "",
+        "data_keys": [
+          "origin",
+          "params"
+        ],
+        "params_keys": [
+          "sessionId",
+          "update"
+        ],
+        "update_keys": [
+          "currentModeId",
+          "sessionUpdate"
+        ],
+        "currentModeId": "ask",
+        "sessionUpdate": "current_mode_update"
+      }
+    ]
+  },
+  "checkpoints_sampling_limitation": "The live sampler used the prior interactive chats path; ACP stores use acp-sessions. Retained checkpoint values are explicitly post-exit observations from the selected ACP session."
+}

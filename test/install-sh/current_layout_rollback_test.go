@@ -45,7 +45,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10 and v10→v11, the old-layout steps below do not apply",
+		"including schema v9→v10, v10→v11 and v11→v12, the old-layout steps below do not apply",
 		"stop agents, servers and callers and keep a copy of the actual",
 		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
 		"restore that pre-upgrade copy and install the previous release with its own",
@@ -54,8 +54,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"and the original install flags",
 		"This loses all writes made since the backup",
 		"The installer does not make this backup",
-		"make a v11 store readable by a v9 or v10 binary",
-		"There is no supported in-place v11→v10 or v10→v9 downgrade",
+		"A copy made after migration cannot replace the pre-upgrade backup",
+		"make a v12 store readable by a v9, v10 or v11 binary",
+		"There is no supported in-place v12→v11, v11→v10 or v10→v9 downgrade",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -97,37 +98,29 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			} else {
 				h.Sqlite(db, seed)
 			}
-			backup := map[string][]byte{}
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				b, err := os.ReadFile(db + suffix)
-				if os.IsNotExist(err) && suffix != "" {
-					continue
-				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				backup[suffix] = b
-			}
+			backup := rollbackStoreCopy(t, db)
 			if tc.companions && (len(backup["-wal"]) == 0 || len(backup["-shm"]) == 0) {
 				t.Fatal("the stopped writer must leave committed WAL and SHM to restore")
 			}
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
 			moveMustInstall(t, h)
-			if v := h.migStoreVersion(db); v != "11" {
-				t.Fatalf("upgrade schema = %s; want 11", v)
+			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
+				t.Fatalf("upgrade schema = %s; want %s", v, current)
+			}
+			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
+				t.Fatalf("v12 upgrade lacks both provenance columns: %q", got)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
-				t.Fatalf("binary swap alone accepted v11: %+v", got)
+				t.Fatalf("binary swap alone accepted the current schema: %+v", got)
 			}
+			postUpgradeCopy := rollbackStoreCopy(t, db)
 			// Stop the post-upgrade writer too; its WAL must not survive restore.
 			h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0; UPDATE spawns SET cwd='/after', labels='{}' WHERE instance_id='before'; INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('after','ended','/after','ad-after','off','claude');").Kill()
-			for _, suffix := range []string{"", "-wal", "-shm"} {
-				if b, exists := backup[suffix]; exists {
-					h.Write(db+suffix, string(b), 0o600)
-				} else if err := os.Remove(db + suffix); err != nil && !os.IsNotExist(err) {
-					t.Fatal(err)
-				}
+			rollbackRestoreStore(t, h, db, postUpgradeCopy)
+			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
+				t.Fatalf("copy made after migration replaced the required pre-upgrade backup: %+v", got)
 			}
+			rollbackRestoreStore(t, h, db, backup)
 			h.S, h.Pair = &old, previous
 			moveMustInstall(t, h) // previous release's own installer, same flags
 			if got := h.Run(filepath.Join(h.New, "bin", "agent-director"), "get", "--instance-id", "before"); got.Code != 0 || !strings.Contains(got.Stdout, "original-session") || !strings.Contains(got.Stdout, "/before") {
@@ -147,6 +140,33 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 				t.Fatalf("current-layout recovery needs no old-layout directory: %v", kept)
 			}
 		})
+	}
+}
+
+func rollbackStoreCopy(t *testing.T, db string) map[string][]byte {
+	t.Helper()
+	backup := map[string][]byte{}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		b, err := os.ReadFile(db + suffix)
+		if os.IsNotExist(err) && suffix != "" {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		backup[suffix] = b
+	}
+	return backup
+}
+
+func rollbackRestoreStore(t *testing.T, h *moveHome, db string, backup map[string][]byte) {
+	t.Helper()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if b, exists := backup[suffix]; exists {
+			h.Write(db+suffix, string(b), 0o600)
+		} else if err := os.Remove(db + suffix); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
 	}
 }
 

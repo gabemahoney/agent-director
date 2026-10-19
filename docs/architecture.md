@@ -6,6 +6,7 @@ A Go binary (plus an off-PATH operator tool, `agent-director-admin`) that:
 
 - Spawns agent instances (Claude Code, Codex or Cursor, chosen per Spawn) inside tmux sessions.
 - Tracks agent state and transcripts through hooks; Cursor uses an owned ACP gateway with correlated reports and protected transcripts. All three agents share request inspection and decisions; Cursor validates ACP permissions/plans and denies questions before admission.
+- Reports experimental context fullness through the shared read surfaces using qualified structured evidence; unsupported or unreliable sources return explicit nulls.
 - Exposes a CLI for humans and a stdio MCP server for LLM callers — both implemented by the same binary in different modes.
 
 ## Surfaces
@@ -410,8 +411,11 @@ cancellation cannot touch the closed store. Deferred retirement is best effort
 and cannot change the returned failure or delay it on SQL; scoped `serve` also
 closes its private store asynchronously when verification was abandoned.
 
-This route has no supported ACP compaction callback or forced reinsertion inside
-an already compacted conversation. That is the compaction-only limitation;
+This route has no qualified automatic ACP compaction delivery or forced
+reinsertion inside an already compacted conversation. Both pinned versions'
+shared ACP resource wrappers can invoke the native `preCompact` executor;
+that reachability alone does not qualify automatic delivery. That is the
+compaction-only limitation;
 fresh/load/every confirmed replacement still require current initialization.
 Source and synthetic transport evidence do not establish native full-guidance
 model consumption, which remains pending separately for each lifecycle path.
@@ -1972,6 +1976,176 @@ grep -rn "store\.Open\|config\.Load\|tmux\.New" cmd/agent-director/ cmd/agent-di
 Expected output: only lines inside `runHook` and `newHookLogger` (and
 comments that name them).
 
+### Experimental context readers
+
+`pkg/api/context.go` owns `ContextReading` and the `contextOf` source
+boundary. `StatusResult`, `SpawnRow` and visible `SubagentRecord` results
+retain this object even when all five fields are null. **Must use:** future
+context sources and read surfaces reuse this type and dispatcher; CLI, MCP
+and TypeScript transports must not implement their own source interpretation.
+The [caller contract](caller-contract.md#experimental-context-fullness) owns
+the public fields, version limits and freshness semantics.
+
+`store.SpawnContext` carries the current row's agent, session, transcript,
+launch token, process/pane identity, lifecycle, `CodexStartup` provenance and
+`ClaudeCapacity` metadata.
+`Spawn.ContextEvidence` projects the same facts for `get`.
+`Store.SpawnStatusContext` reads these with lifecycle and
+settling facts in one statement; `CursorMissingReads.SpawnStatusContext`
+preserves the existing Cursor missing-proof behavior. `statusSettled` uses
+this optional capability, with unknown context for store doubles lacking it.
+`get` takes the evidence from its own row snapshot. **Must use:** status
+consumers needing context identity use `SpawnStatusContext`, never an
+independent row lookup or archived-session fallback. Malformed context
+identity does not turn a successful status read into an error.
+
+`internal/store/codex_startup.go` owns `CodexStartup`, its strict bounded JSON
+validation and `FreshCodexWriter`. Schema v12 adds nullable
+`spawns.codex_startup TEXT` for the launch token, session, rollout path, PID
+and process start time; existing rows receive no inferred provenance.
+Only the first admitted main Codex `SessionStart` with `source=startup`
+into an unbound session establishes it, through the existing hook authority
+and direct pane PID/start-time checks. In Codex 0.159.2 this source means
+`InitialHistory::New`; resume and fork use different origins. The rollout
+may be absent at admission, but context stays unknown until the matching
+file exists and its path heals/validates. Other admitted or duplicate
+SessionStarts clear provenance. Resume and reuse clear it immediately for
+the new launch. Failed resume leaves it cleared; failed reuse can restore
+the prior finished row's raw marker, which still cannot qualify a reading.
+A stale or delayed startup cannot reestablish it on a bound session.
+
+For Codex, `contextOf` requires `FreshCodexWriter`: a live, nonpending row with no end
+report and exact current launch/session/path/process/pane bindings. It
+checks the writer's PID/start-time liveness before and after the file read.
+Existing, resumed, forked, ended and unproven sessions yield unknown even
+when creation metadata retains a tested `cli_version`. Provenance survives
+store reopen only while every current binding and writer check still holds.
+**Must use:** future callers reuse `ContextEvidence`, `FreshCodexWriter`
+and the existing gated SessionStart write; neither rollout metadata alone
+nor an independently populated marker establishes producer authority.
+
+`pkg/api/context_codex.go` owns `readCodexContext` and its sequential record
+state. After producer admission it accepts only captured Codex 0.159.2 OpenAI metadata with matching
+session, paginated history and no inherited/forked base. It pairs the current
+turn's model and runtime capacity with `last_token_usage.total_tokens` and
+the same `model_context_window`; the token event supplies measurement time.
+New turns, context additions and compaction clear the estimate until later
+qualified usage. Invalid/unknown records, incomplete tails, regressing
+timestamps, unresolved history and mismatches yield unknown without falling
+back. Reads require an absolute path to a regular file, with a 64 MiB file
+bound and 4 MiB line bound. No file time, fixed model capacity, cumulative
+billing count, screen text or read time supplies missing evidence.
+**Must use:** extensions to this source reuse the bounded reader and state
+validation rather than scanning independently in a verb.
+
+`internal/contextsource/claude.go` owns the bounded sequential Claude 2.1.280
+transcript reader and shared usage counts. It requires the selected session,
+child identity, sidechain flag and UUID parent chain. It selects the latest
+ordinary `message`/`fallback_message` iteration, excluding advisor and
+compaction subrequests, and adds the four nonnegative input/cache/output
+categories once. A malformed selected iteration cannot fall back to aggregate
+usage. Compaction clears the prior response; partial, malformed, branching,
+unsupported or regressing evidence yields unknown. It uses the same 64 MiB
+file and 4 MiB line bounds and stable regular-file checks as Codex, with no
+wall-clock cutoff. **Must use:** Claude evidence consumers reuse this reader
+and `Counts` validation rather than interpreting transcripts separately.
+
+`internal/spawn/contextsettings.go` composes `statusLine` and
+`subagentStatusLine` observation into the in-memory launch settings. It
+resolves enabled user/project/local sources and their callback fields,
+respecting config-root/source options. Unreadable, oversized, invalid JSON,
+JSONC or ambiguous ancestor Git local settings leave callbacks untouched.
+`cmd/agent-director/context_statusline.go` forwards the original shell command;
+observation failures and oversized input preserve its complete stdin,
+stdout, stderr and exit status. No native settings file is written.
+**Must use:** callback composition and forwarding stay in these shared paths.
+
+`internal/hook/claude_capacity.go` admits capacity-only observations through
+the native direct-parent PID/start-time and current launch/session/path gate.
+It never enters lifecycle classification, session binding, permission relay
+or child discovery. Claude 2.1.280 first-party observations qualify by matching
+the native callback's resolved model to the current transcript response;
+there is no literal model allowlist or guessed model-to-window table. The native
+producer computes capacity from the resolved model. Provider, endpoint, window
+and custom capability overrides remain unqualified, including Fable, Opus,
+Sonnet, Haiku and custom-model supported-capability overrides. Main status-line
+usage categories must match the current transcript response. Child capacity comes from that
+already-visible child's `local_agent` task and own transcript path, never
+the parent's window or a progress counter.
+
+`internal/store/claude_capacity.go` owns strictly bounded `ClaudeCapacity`
+JSON, `CurrentClaudeCapacity`, `BoundClaudeCapacity`, `ClaudeChildPath` and
+the gated `RecordClaudeCapacity` write. The unreleased v12 transaction adds
+nullable `spawns.claude_capacity TEXT` alongside `codex_startup`, without
+backfill. Metadata binds launch, session, path, process, version/provider and
+each response UUID/model/window/observation time; it retains at most 128
+children in 128 KiB. Invalidated UUIDs remain bound so replay cannot restore
+the same response after a mismatch; a genuinely new qualifying response can
+recover. Existing child entries can refresh at the bound. **Must use:** reuse
+these validators and gate, including child-path derivation; callback payloads
+cannot choose paths or discover children.
+
+Every parent, child and clear callback passes the serialized prior capacity
+snapshot through `HookGate`. `RecordClaudeCapacity` compares it atomically in
+the guarded UPDATE, including an initial SQL NULL snapshot. On contention,
+`handleClaudeCapacity` re-reads the full row and recomputes transcript,
+visibility and pairing, for at most eight attempts pinned to the original
+launch. This preserves concurrent parent/child invalidation and prevents
+same-response replay from restoring it. **Must use:** callback writers use
+this snapshot/recompute path; never retry previously computed capacity JSON.
+
+`contextForSubject` and `readClaudeContext` pair on-demand transcript usage
+with current capacity metadata for the exact response/model and live writer,
+checking liveness before and after the read. The transcript timestamp is
+`as_of`; capacity observation time is not a usage measurement. Missing,
+invalidated or old-launch provenance yields unknown. **Must use:** visible
+child reads use this dispatcher with their own child ID and visibility facts.
+
+Usage is read on demand; no usage reading or numeric cache is persisted,
+and there is no background collector or polling. The v12 migration stores
+Codex startup and Claude capacity/provenance only; see the
+[migration guide](migration-guide.md#current-worked-example-v11--v12)
+for validation, reentry and restore-only recovery. Both Cursor versions have
+positive native interactive usage/capacity, compaction and recovery captures,
+plus retained real mismatch samples. Their bounded managed ACP attempts
+observed no native usage or compaction hooks. Both pinned ACP implementations
+lack ordinary usage-bearing `afterAgentResponse`/`stop` completion production;
+prompt results expose only `stopReason`, with no exposed manual `/summarize`
+control. Both shared ACP resource wrappers can invoke the native `preCompact`
+executor, but automatic compaction delivery remains unqualified. Hook
+configuration cannot supply the absent ordinary usage producer. The authorized
+deliverable for this build is unknown on managed Cursor, without context hook
+admission, usage persistence or a checkpoint reader. No runtime patch, build
+change or transport replacement is part of this build. Numeric support requires
+upstream ACP to supply qualified usage evidence.
+
+The brief check of existing captures did not qualify checkpoint-only usage:
+token details survive compaction, while summary counts and message counts do
+not bind those details to a compaction generation. Captured token details lack
+a usage measurement time or generation/compaction sequence. Conversation start
+and assistant timestamps, external hook generation IDs and collector chronology
+cannot establish checkpoint-local, restart-safe ordering. Missing initial
+summary markers likewise do not prove freshness. See the
+[fixture evidence](test-writing-guide.md#context-fullness-captures-and-fixtures).
+Future Cursor numeric support requires qualified managed
+usage/capacity and compaction evidence before adding a source at `contextOf`;
+native payload identity alone must never grant lifecycle or permission
+authority. Existing gateway admission and subagent visibility stay with their
+current owners. Visible children receive no parent reading or new tracking.
+
+**Reusable fixtures:** `internal/testsupport/contextfix` owns named captures,
+synthetic variants, expectations and provenance. `apitest.SeedContextSpawn`
+places evidence through `SeedContextTranscript`, binds a live test-owned
+writer with `ContextWriter` and admits the fresh startup with
+`AdmitContextStartup` for Codex. Claude samples use `SeedClaudeCapacity` /
+`AdmitClaudeCapacity`; `SeedContextChild` / `AdmitClaudeChild` install the
+already-visible child's own native path and metadata. Future Go/API/CLI/MCP context tests MUST reuse these
+helpers; TypeScript tests MUST use `seed-spawn --context-fixture` with
+`--context-writer-pid` for positive Codex cases and `expectedContext`. See
+[fixture selection](test-writing-guide.md#context-fullness-captures-and-fixtures)
+for supported names, isolation and evidence limits. Synthetic `cursorfix`
+history is not numeric qualification.
+
 ### `pkg/api` Client lifecycle
 
 `pkg/api.Client` is the opaque handle through which all callers interact with
@@ -2146,8 +2320,9 @@ verbatim so future code review can grep for it:
 
 > No SQL outside `internal/store`; callers use typed query primitives only.
 
-**Schema v11** lives in `internal/store/schema.go`. Seven tables, none with a
-column whose name starts with `claude_` (the v9 hop renamed those; see
+**Schema v12** lives in `internal/store/schema.go`. Seven tables. The v9 hop
+renamed agent-generic fields; v12's `claude_capacity` is deliberately
+Claude-specific capacity provenance (see
 [Store upgrade to agent-generic names](#store-upgrade-to-agent-generic-names)):
 
 - `spawns` — one row per agent instance under direction (Claude Code,
@@ -2156,7 +2331,9 @@ column whose name starts with `claude_` (the v9 hop renamed those; see
   `ended_at`), the settle columns `settled_state` and `state_changed_ms`
   (see "v8 columns" below), the agent columns `agent` and
   `end_reported_at` and the subagent tracking flag `subagent_tracking`
-  (see "v9 columns" below), the agent's arguments
+  (see "v9 columns" below), nullable `codex_startup` origin metadata and
+  `claude_capacity` capacity provenance
+  (see [Experimental context readers](#experimental-context-readers)), the agent's arguments
   (`agent_args`) and session id (`session_id`), tmux + relay metadata, and a
   JSON-encoded `labels` blob. Indexed on `state`, `last_seen_at`, and
   `parent_id`.
@@ -2474,7 +2651,7 @@ appended after `proven_gone_how`. `PermissionRow.MainTurnEndEligible` carries
 the persisted bool; nullable `agent_id` separately carries known child identity.
 Main-turn proof requires BOTH `main_turn_end_eligible = 1` AND `agent_id IS NULL`;
 NULL child identity alone supplies no origin evidence. Even an already-current
-schema11 row corrupted to child=true remains excluded from main-turn proof.
+current row corrupted to child=true remains excluded from main-turn proof.
 Only matching owning tool-use proof or owning-spawn end can release such a hold.
 
 `RelayRequest.MainTurnEndEligible` is an internal optional `*bool`: nil resolves
@@ -2505,9 +2682,9 @@ children and orphans stay false. Compatible existing columns retain explicit
 values; incompatible case/type/null/default/primary-key shape, non-integer or
 out-of-range values and true with a known child are refused transactionally
 with `ErrSchemaMismatch`, preserving v10/data/authorization for corrected retry.
-Fresh schema11 DDL converges with migrated stores. Earlier runtime/rename hops
+Fresh DDL retains the same eligibility shape alongside v12 startup provenance. Earlier runtime/rename hops
 remain unchanged; rename threshold9 is immutable. Full engineering recovery
-policy is in [migration-guide.md](migration-guide.md#current-worked-example-v10--v11).
+policy is in [migration-guide.md](migration-guide.md#earlier-worked-example-v10--v11).
 
 - **Readers.** Every read returning a `PermissionRow` selects
   `permissionColumns` and scans with `scanPermissionRow`
@@ -3415,20 +3592,20 @@ still the one it read, so it knows the row has not changed since. As built:
 **Schema versioning convention.** SQLite's `PRAGMA user_version` is the
 source of truth for which schema this binary expects. On `Open`:
 
-- `user_version == 0` → fresh DB: create the v11 tables and indexes and insert
+- `user_version == 0` → fresh DB: create the v12 tables and indexes and insert
   the store id inside a single transaction, then stamp `PRAGMA user_version =
-  11`.
-- `0 < user_version < 11` (older-than-binary, i.e. v1, v2, v3, v4, v5, v6, v7, v8, v9 or v10) → **gated**: the
+  12`.
+- `0 < user_version < 12` (older-than-binary, i.e. v1 through v11) → **gated**: the
   store does **not** auto-migrate on `Open`. The open is refused with
   `store.ErrSchemaMigrationRequired` (an exported `errors.New` value; callers
   use `errors.Is`) and zero DDL runs, *unless* an administrator has placed a
   valid authorization sentinel next to the DB file. The sentinel (`migrate-authorized`,
   sibling to the resolved DB path) is a strict JSON object naming exactly one
-  transition (e.g. `{"from": 10, "to": 11}`) and authorizes the migration only
+  transition (e.g. `{"from": 11, "to": 12}`) and authorizes the migration only
   when its `from` exact-matches the DB's actual `user_version` and its `to`
   exact-matches this binary's `schemaVersion`. When authorized, the upgrade
   runs as a chain of `migrationSteps` (the ordered step registry in
-  `schema.go`), each step individually transactional; today the chain holds ten
+  `schema.go`), each step individually transactional; today the chain holds eleven
   steps, `{from: 1, apply: migrateV1toV2}` (DROP+CREATE `permission_requests`,
   V1 rows discarded), `{from: 2, apply: migrateV2toV3}` (five ADD COLUMN on
   `spawns`), `{from: 3, apply: migrateV3toV4}` (CREATE `session_history`),
@@ -3444,15 +3621,17 @@ source of truth for which schema this binary expects. On `Open`:
   backfill), then `{from: 9, apply: migrateV9toV10}` (CREATE
   `cursor_runtimes`, validating a pre-existing table before stamping), then
   `{from: 10, apply: migrateV10toV11}` (durable main-turn eligibility,
-  conditional backfill and validation; see v11 columns above) —
+  conditional backfill and validation; see v11 columns above), then
+  `{from: 11, apply: migrateV11toV12}` (nullable Codex startup and Claude capacity provenance,
+  validation and no backfill; see [Experimental context readers](#experimental-context-readers)) —
   see "Schema v1 → v2 Migration", "Schema v2 → v3 Migration", "Schema v3 →
   v4 Migration", "Schema v4 → v5 Migration", "Schema v5 → v6 Migration",
   "Schema v6 → v7 Migration", "Schema v7 → v8 Migration" and [Store upgrade
   to agent-generic names](#store-upgrade-to-agent-generic-names) below.
-  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11 in one
+  A v1 DB opened against this binary chains v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12 in one
   pass. The sentinel is consumed after the chain commits.
-- `user_version == 11` → nothing to do; the schema already matches.
-- `user_version > 11` (newer-than-binary) → return the sentinel
+- `user_version == 12` → nothing to do; the schema already matches.
+- `user_version > 12` (newer-than-binary) → return the sentinel
   `store.ErrSchemaMismatch` (an exported `errors.New` value, so callers use
   `errors.Is`). No DDL runs in this case.
 - After any of the successful arms, `openDB` reads the store id; a store
@@ -3852,8 +4031,9 @@ entry `{from: 8, apply: migrateV8toV9}`) takes the store from schema v8 to
 v9. It drops the Claude names from the store's columns, gives every row a
 record of its agent and of whether its launch registers the subagent events,
 and adds the tables that hold a row's subagent records (these are folded into
-this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh store is created at v11 by `schemaDDL`, retaining the
-same v9 column text and adding `cursor_runtimes`, so a fresh and a migrated store have the same
+this hop: they are not moved into the separate v9→v10 Cursor hop). A fresh store is created at v12 by `schemaDDL`, retaining the
+same v9 column text and adding `cursor_runtimes`, proof eligibility and
+Codex startup and Claude capacity provenance, so a fresh and a migrated store have the same
 shape (names, positions, index columns and foreign keys).
 
 1. **Six renames**, each an `ALTER TABLE … RENAME COLUMN`, in `v9Renames`'
@@ -3916,9 +4096,9 @@ shape (names, positions, index columns and foreign keys).
    exists is left as it is (`IF NOT EXISTS`).
 6. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it, `{"from": 8,
-   "to": 11}` for a v8 store (the sentinel's `to` is this binary's
-   `schemaVersion`, 11; the separate v9→v10 and v10→v11 hops follow); a v8 store opened without it is refused with
-   `ErrSchemaMigrationRequired`, and `user_version > 11` surfaces
+   "to": 12}` for a v8 store (the sentinel's `to` is this binary's
+   `schemaVersion`, 12; the separate v9→v10, v10→v11 and v11→v12 hops follow); a v8 store opened without it is refused with
+   `ErrSchemaMigrationRequired`, and `user_version > 12` surfaces
    `ErrSchemaMismatch`.
 7. **No reverse recipe.** docs/migration-guide.md §5 has no v9 → v8 recipe,
    and none is to be written (the hop renames columns and adds a column and
@@ -4197,7 +4377,7 @@ See `docs/cli-reference.md` and `docs/mcp-reference.md` — auto-generated; do n
                 +-------------------------+
                 |   internal/store        |
                 |   (sole SQL owner;      |
-                |    schema v11 / SRD §4.2)|
+                |    schema v12 / SRD §4.2)|
                 +-------------------------+
 
    internal/config -----> consumed by pkg/api and cmd/
@@ -10463,7 +10643,7 @@ install (see [Moving agent-director's
 directory](#moving-agent-directors-directory) and [Store upgrade to
 agent-generic names](#store-upgrade-to-agent-generic-names)); a store kept
 outside that directory is put back from the operator's pre-upgrade copy.
-An upgrade within the current layout, including v9→v10 and v10→v11, retains no old
+An upgrade within the current layout, including v9→v10, v10→v11 and v11→v12, retains no old
 layout directory: restore the operator's pre-upgrade store copy, with its
 companion files and all writers stopped, as described in
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release). For a store
@@ -11008,7 +11188,7 @@ line from stdin. Each reply, and what a caller sees:
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 11`). An unauthorized older store (v1 through v10)
+(`user_version > 12`). An unauthorized older store (v1 through v11)
 surfaces `ErrSchemaMigrationRequired`. An authorized migration can instead
 return `ErrSchemaMismatch` when it refuses incompatible metadata. The store does not silently upgrade an
 older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
@@ -11026,12 +11206,13 @@ settled, preserving every row and the store id; v8→v9, six column renames,
 three `spawns` ADD COLUMN and CREATE `subagents` and `subagent_launches`, with
 every row backfilled as a Claude row, preserving every row and the store id;
 v9→v10, CREATE `cursor_runtimes`, preserving existing rows and the store id;
-v10→v11, add and validate durable main-turn proof eligibility).
-Rolling the binary back after such a migration to v11 needs the copy of
+v10→v11, add and validate durable main-turn proof eligibility; v11→v12,
+add nullable Codex startup and Claude capacity provenance without backfill).
+Rolling the binary back after such a migration to v12 needs the copy of
 `state.db` taken before the install, restored with matched WAL/SHM companions
 and all writers stopped as in
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release):
-no downgrade recipe reaches a v9, v10 or v11 store.
+no downgrade recipe reaches a v9, v10, v11 or v12 store.
 Rolling it back over a migration that ended at v8 or older can also use the
 emergency downgrade recipes in docs/migration-guide.md §5.
 
@@ -11050,6 +11231,11 @@ when a chain starting at an earlier version reaches that hop too. The
 failed hop rolls back; earlier committed hops remain. Installing a newer
 binary or rewriting eligibility values is not a supported bypass.
 
+The authorized v11→v12 hop likewise returns `ErrSchemaMismatch` for an
+incompatible `codex_startup` / `claude_capacity` column or invalid stored provenance, without
+backfill or a partial stamp. Its strict validation and restore-only policy
+are described in [the migration guide](migration-guide.md#current-worked-example-v11--v12).
+
 If a store-opening verb (e.g. `agent-director list`) reports `ErrSchemaMismatch`,
 the recovery depends on the cause, and it is never to delete `state.db`:
 
@@ -11062,7 +11248,7 @@ the recovery depends on the cause, and it is never to delete `state.db`:
   the install afterwards; this release's install migrates it again. Writes
   made since the install are lost.
 
-- **Eligibility shape/value refusal.** Stop all writers and use the
+- **Eligibility or Codex startup shape/value refusal.** Stop all writers and use the
   supported backup/restore procedure or human recovery in
   [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release),
   using the actual DB path and matched WAL/SHM companions. Retry through
@@ -17680,17 +17866,18 @@ COLUMN, the settle columns, then every row backfilled as settled) and/or the
 v8→v9 hop (six column renames, three `spawns` ADD COLUMN, CREATE `subagents`
 and `subagent_launches`, then every row backfilled as a Claude row; see [Store upgrade to agent-generic
 names](#store-upgrade-to-agent-generic-names)), then the separate v9→v10
-Cursor binding-table hop and v10→v11 eligibility hop, walking
+Cursor binding-table hop, v10→v11 eligibility hop and v11→v12 Codex
+startup / Claude capacity provenance hop, walking
 from the DB's `user_version` up to `schemaVersion` in one pass.
-`ErrSchemaMismatch` fires when `user_version > 11` — meaning the store was
+`ErrSchemaMismatch` fires when `user_version > 12` — meaning the store was
 written by a binary newer than the current one — or when a current store
 has no valid store id, which only a hand edit causes, or an authorized
 migration refuses incompatible eligibility column shape/values, including
-eligible known-child requests (see "ErrSchemaMismatch recovery"). The failed
+eligible known-child requests, or invalid Codex startup / Claude capacity provenance (see "ErrSchemaMismatch recovery"). The failed
 hop rolls back while earlier committed hops remain; retry authorization
 must match the resulting version. Rolling a release back after its install
-migrated the store to v11 has one way back: restoring the copy of `state.db`
-taken before the install. No downgrade recipe reaches a v9, v10 or v11 store, and none is
+migrated the store to v12 has one way back: restoring the copy of `state.db`
+taken before the install. No downgrade recipe reaches a v9, v10, v11 or v12 store, and none is
 written for it. The emergency downgrade recipes in docs/migration-guide.md §5
 cover older stores only, newest first (v8 → v7: the two settle columns,
 keeping the store id; v7 → v6: the twenty v7 columns, keeping the store
@@ -17698,7 +17885,7 @@ id; v6 → v5: the three launch-owner columns, keeping the store id; v5 →
 v4: the thirteen columns and `store_meta`), for a store at v8 or older; a
 re-migration after a rollback to v4 creates a new store id.
 
-Bumping `schemaVersion` beyond 11 requires:
+Bumping `schemaVersion` beyond 12 requires:
 
 1. Add a `migrateVNtoVN1` hop in `internal/store/schema.go` and append a
    `migrationStep{from: N, apply: migrateVNtoVN1}` entry to the `migrationSteps`
@@ -19312,7 +19499,7 @@ mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
 `storefix.InjectWriteFailure` for committed-row observation and failure cuts;
 do not create a second trail observer or runtime-proof fixture.
 
-**Agent of a seeded row (current schema v11).** The store refuses to insert a
+**Agent of a seeded row (current schema v12).** The store refuses to insert a
 row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
 "v9 columns" under [`internal/store`](#internalstore)), so every storefix
 insert sets `Agent: store.AgentClaude` (`defaultSpawn`); a test that needs a
@@ -19528,14 +19715,15 @@ tests, so no test hand-writes the shape of a Codex transcript path, and reads
 a recorded Codex launch command back into parts, so no test compares a whole
 argv string or parses a `-c` value by hand.
 
-- `RolloutPath(t, codexHome, sessionID, present) string` returns the rollout
+- `RolloutPath(t, codexHome, sessionID, present, content ...[]byte) string` returns the rollout
   (transcript) path Codex gives `sessionID` under `codexHome`:
   `<codexHome>/sessions/2026/09/01/rollout-2026-09-01T00-00-00-<sessionID>.jsonl`,
   a file name that carries the session id, on a fixed day so a path is the
   same on every run. When `present` is true it creates the file with one
-  placeholder line; otherwise it returns the path alone, as a transcript
-  not on disk yet.
-- `TempRolloutPath(t, sessionID, present)` is `RolloutPath` under a fresh
+  placeholder line, or the first supplied content argument; otherwise it
+  returns the path alone, as a transcript not on disk yet. Context captures
+  come from `contextfix`, not inline JSON.
+- `TempRolloutPath(t, sessionID, present, content ...[]byte)` is `RolloutPath` under a fresh
   `t.TempDir()`. A Codex folder is always under a temp directory in a test,
   never `~/.codex`.
 
@@ -20919,7 +21107,7 @@ unchanged. When two options set the same column, the later one wins.
   reports `settled` until `stampMs` plus that time. Without it the row is
   settled (below). **Must use** it to seed a row whose change has not
   settled; never write the columns with raw SQL.
-- Agent (current schema v11): `WithAgent(agent string)` stores `agent` as the
+- Agent (current schema v12): `WithAgent(agent string)` stores `agent` as the
   row's `agent` column, exactly as given and in place of `SeedSpawn`'s
   default `claude` (any text, so a row whose agent is outside `claude`,
   `codex` and `cursor` can be seeded; the store's own writes refuse one, see "v9
@@ -21052,14 +21240,15 @@ values, except for a row the test inserted itself.
 **Read helpers:**
 
 - `ReadSpawnColumns(dbPath, instanceID) (SpawnColumns, error)`
-  - Returns the `spawns` columns of one row raw through current schema v11 (under
+  - Returns the listed `spawns` columns of one row raw through schema v11 (under
     the names introduced by v9), the
     three v6 launch-owner columns (`LaunchOwnerPID`,
     `LaunchOwnerStarttime`, `LaunchOwnerPIDNS`), v7's `idle_since`
     (`SpawnColumns.IdleSince`, as stored text) and v9's `agent`,
     `end_reported_at` and `subagent_tracking` (`SpawnColumns.Agent`,
     `SpawnColumns.EndReportedAt`, `SpawnColumns.SubagentTracking`; 1 on a
-    default seed) included; v8's settle
+    default seed) included; v12's startup marker is read through the store
+    context projection, not this helper. v8's settle
     columns are read with `ReadSettle` (below). Each comes
     back as `any`: nil for NULL,
     otherwise the stored storage class (`int64`, `float64`, `string` or
@@ -23251,6 +23440,21 @@ combined with `--socket`: that call exits 1 with "--socket and
 **Must use:** a TypeScript test that needs a row of one agent seeds it with
 `seed-spawn --agent <claude|codex|cursor>`; without the flag the row is a Claude
 row.
+
+`seed-spawn --context-fixture <name>` instead selects the named `contextfix`
+sample's agent, session and transcript, writing the evidence beside the
+isolated store. Positive Codex and Claude cases also pass `--context-writer-pid` with
+the calling test process kept alive during reads; the helper reuses
+`ContextWriter` with `AdmitContextStartup` for Codex fresh origin or
+`AdmitClaudeCapacity` for Claude captured metadata. Use
+`seed-subagent --context-fixture claude-child` to install an already-visible
+child's own native transcript path and capacity through `AdmitClaudeChild`. Without
+that flag the evidence alone cannot qualify a numeric reading.
+**Must use:** context smoke tests select these flags and reuse
+`expectedContext` as described in the
+[test guide](test-writing-guide.md#context-fullness-captures-and-fixtures),
+rather than duplicate captures or expected numbers. Existing seeder defaults
+apply when the flag is omitted.
 
 **Must use:** a TypeScript test that needs subagent records seeds the row with
 `seed-spawn` and each record with `seed-subagent --instance-id <id>`, never by

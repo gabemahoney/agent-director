@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "evidence_class": "real-native-interactive-positive",
+  "version": "2026.10.01-e373342",
+  "host": "this-host",
+  "ssh_route": null,
+  "native_fixture_qualification": "positive usage/current-checkpoint pairing before and after the second real manual compaction; usage-free compaction completion",
+  "managed_acp_delivery_proved": false,
+  "prior_managed_attempts_preserved": {
+    "managed-attempt.json": "96285728a9df006988347d154cdcc870cfcabc757631965cebd6d6a2a45a2a58",
+    "provenance.json": "a963cec3ed1bf47fec4e0e963458a45076f781237fa8e94e7cef1fdd5dc05012"
+  },
+  "native_session_id": "4607ec67-ef76-4fd3-b2fc-d942c59372c5",
+  "model": "composer-2.5",
+  "ordinary_model_turns_final_capture": 3,
+  "precompact_model": "gemini-3.7-flash-low",
+  "usage_formula": "Captured top-level input_tokens + output_tokens; do not add cache_read_tokens again. Terminal-result usage is a distinct representation and is not hook evidence.",
+  "capacity_source": "Same-session current native store.db ConversationTokenDetails.max_tokens sampled read-only inside each hook collector invocation; never a constant fallback or preCompact substitute.",
+  "correlation_method": "Controlled sequential session with fixed composer-2.5 selection; receipt checkpoint session matches hook session and used pair. Native checkpoint has no independent captured generation field: correlation uses the native hook generation and current checkpoint observed in that invocation, not an invented checkpoint generation.",
+  "receipt_time_semantics": "observed_at_unix_ms is temporary research collector receipt/observation time, not AD receipt, provider measurement time or latest checkpoint measurement time. checkpoint_at_receipt.observed_at_unix_ms is the read observation. Production must record its own accepted AD receipt time.",
+  "native_measurement_time": null,
+  "usage_pairs": [
+    {
+      "hook": "afterAgentResponse",
+      "generation_id": "f1e8a6a4-7170-47e3-a799-df406969a9ae",
+      "receipt_observed_at_unix_ms": 1792393540153,
+      "input_tokens": 10740,
+      "output_tokens": 32,
+      "used_tokens": 10772,
+      "window_tokens": 200000,
+      "checkpoint_root_sha256": "8be3bbaa9f7c0740ebfa0aed3521c8ed4b4641bccb705de4b000e90c6ab146ac"
+    },
+    {
+      "hook": "stop",
+      "generation_id": "f1e8a6a4-7170-47e3-a799-df406969a9ae",
+      "receipt_observed_at_unix_ms": 1792393540155,
+      "input_tokens": 10740,
+      "output_tokens": 32,
+      "used_tokens": 10772,
+      "window_tokens": 200000,
+      "checkpoint_root_sha256": "8be3bbaa9f7c0740ebfa0aed3521c8ed4b4641bccb705de4b000e90c6ab146ac"
+    },
+    {
+      "hook": "afterAgentResponse",
+      "generation_id": "8a3c20c8-4f8c-46f9-93c7-edb9b7ce6aac",
+      "receipt_observed_at_unix_ms": 1792393573315,
+      "input_tokens": 11636,
+      "output_tokens": 32,
+      "used_tokens": 11668,
+      "window_tokens": 200000,
+      "checkpoint_root_sha256": "87c1e1dc28993b5ceb53de6ef0ed10df81fd0df19e2354d696e2d18ec7010c52"
+    },
+    {
+      "hook": "stop",
+      "generation_id": "8a3c20c8-4f8c-46f9-93c7-edb9b7ce6aac",
+      "receipt_observed_at_unix_ms": 1792393573316,
+      "input_tokens": 11636,
+      "output_tokens": 32,
+      "used_tokens": 11668,
+      "window_tokens": 200000,
+      "checkpoint_root_sha256": "87c1e1dc28993b5ceb53de6ef0ed10df81fd0df19e2354d696e2d18ec7010c52"
+    }
+  ],
+  "compaction_generation_id": "9433aeb1-c836-4d9d-9dd8-6fc80a13b096",
+  "usage_free_completion_hooks": [
+    "afterAgentResponse",
+    "stop"
+  ],
+  "cleanup": {
+    "processes_started": [
+      122841,
+      124821
+    ],
+    "exit_codes": [
+      0,
+      0
+    ],
+    "remaining_isolated_runtime_processes_killed": [],
+    "runtime_root_removed": true
+  },
+  "isolation": "Fresh HOME/workspace/CURSOR_CONFIG_DIR/CURSOR_DATA_DIR/cache/data, empty GIT_CONFIG_GLOBAL and GIT_CONFIG_NOSYSTEM=1. Explicit minimal environment; existing login provider available solely to native runtime via XDG_CONFIG_HOME. No auth files or tokens read/copied/printed and no inherited credential environment passed. PTY bytes drained and discarded. No AD binary executed and no AD store touched.",
+  "source_sha256": {
+    "native-capture.json": "f9ce84696c2232ad2854f4167ba4f65914da68faef2c37d4c64f2b686e1a25e5",
+    "native-first-repeat.json": "195e5e4a68fc791f1d4e504ef7eaa678cce17ea6761ab8a3604b64fbea3318e3",
+    "native-source.json": "36007502eeb2eea31fac1fd3bdf2463371d3d2c3a88dd036bd022ed48b7eca82",
+    "native-mismatch-capture.json": "ced01779ed9788227f64990cef8e544f063a1323f9a6ddb6d47d95171785049b",
+    "temporary_capture_script": "a88e8362568f8ee3e427196025484638366070850352e0b1321b48e887d0ba00",
+    "temporary_source_inspector": "15fea915c3320883fab1661cd28103fb5e78990f3b2968eb2b2a3340dc3abc95",
+    "native-cleanup.json": "654fb88c735e589e20e3fcb787b2a8a432f49c92aa65197f9d3e0b4b2551432b"
+  },
+  "research_method_sources": {
+    "probe_initial.py": "9e72bf0d740fc77526ed4f087b3375a206467eb9ffe3e3767d754215dd5716ce",
+    "run_turn.py": "49230557b6433c22b77efa442d6199a3723aa3147d9bc5e410e2f836c2142bef",
+    "capture_compaction_separated.py": "6a032ed1a1d37cbc7a4cfe3f9fc4e960600d73255f8987ab046aa098e5b091fc",
+    "remote_repeat_probe.py": "b4d7773940a9b02cd8590603311d22309883491c54b06518c695a9bbb8c37082",
+    "metrics.py": "fa2cf08e49845492229a0b0ddddad067e4fdfdbd03654bfdd67e5ede7a7481c9"
+  },
+  "method_changes": "Top-level numeric token allowlist correction follows remote_repeat_probe.py. Repeats a second /summarize after a positive post-compaction ordinary turn, following the b.fzk remote repeat pattern, and read-only checkpoint observation in collector. Uses the successful separated command-text/Enter keypress method.",
+  "delivery_integration_handoff": "Native interactive callbacks emit usage; the installed ACP path differs. Configure hooks only in launch-owned Cursor configuration. Native child context admission must verify actual registered runtime ancestry/current launch/life/connection/session and must never pass the direct-gateway-parent lifecycle gate by payload claims. Do not relabel fixtures as managed ACP delivery evidence. No flag-based ACP fix was established.",
+  "allowlist": "Numeric usage/capacity/timestamps, versions/models, session/generation IDs, field names, hashes, process/cleanup/isolation metadata, fixed method and source-code excerpts. No conversation, summary or terminal text, raw databases, encryption metadata or credential contents.",
+  "scheduler_jobs": [],
+  "repository_tests_run": [],
+  "total_ordinary_model_turns_all_bounded_repeats_per_version": 8,
+  "negative_pairing_case": "native-mismatch-capture.json preserves real ordinary usage hook sums different from current checkpoint used_tokens. Reject this pair; the cause is not independently proven.",
+  "cleanup_audit": {
+    "observed_at_unix_ms": 1792393607176,
+    "isolated_roots_removed": [
+      true,
+      true,
+      true
+    ],
+    "remaining_processes_with_isolated_cwd": [],
+    "started_pid_still_exists": [],
+    "test_runs_audited": 3
+  },
+  "provider_setting_scope": "Existing authenticated CLI with composer-2.5 and its unchanged default provider/window settings in the isolated session. Payloads expose no independent provider identifier; no other provider or model configuration is qualified.",
+  "event_representation": "hooks[] retains allowlisted native payload values and collector metadata. hook is the configured native-event command argument; payload_keys are original payload key names. checkpoint_at_receipt is the read-only collector observation, not a native hook field.",
+  "verdict": "interactive-source-positive; managed-ACP-delivery-unproved",
+  "checkpoint_observation_limit": "Receipt and read observation are sequential, not an atomic native checkpoint/generation contract. Controlled single-session fixed-model captures establish the observed pairing only."
+}

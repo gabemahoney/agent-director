@@ -199,6 +199,7 @@ func synthesizeSettings(r Resolved, cfg config.Config) (string, error) {
 	}
 
 	top := map[string]any{"hooks": hooks}
+	composeContextStatuslines(r, exe, top)
 
 	allow, deny, ask := mergePermissions(r.Permissions, cfg.Defaults.DisableAskUser)
 	if len(allow) > 0 || len(deny) > 0 || len(ask) > 0 {

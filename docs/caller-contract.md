@@ -93,6 +93,82 @@ To end a live row (`pending` included) and relaunch its id:
 
    A caller whose ids agent-director mints spawns fresh instead.
 
+## Experimental context fullness
+
+`status`, `get` and each visible `list-subagents` record include the same
+`context` object on the Go, CLI, MCP and TypeScript surfaces. This feature is
+experimental: its underlying agent internals have no published contract and
+can change without notice. Its output shape has no stable-format guarantee;
+changes to that shape do not count as breaking changes.
+
+| Field | Available reading |
+| --- | --- |
+| `used_tokens` | Integer estimate of the last response's context occupancy, not cumulative billing usage. |
+| `window_tokens` | Positive integer capacity applicable to that session's current model and runtime window settings. |
+| `fraction` | `used_tokens / window_tokens`; multiply by 100 for a percentage. |
+| `source` | `codex_jsonl_last_token_usage`, `claude_jsonl_usage_statusline_capacity` or `claude_jsonl_usage_subagent_statusline_capacity`, according to the qualified source. |
+| `as_of` | Source measurement time as an RFC3339 UTC timestamp with millisecond precision, not the time of the read. |
+
+Unknown readings retain every key:
+
+```json
+{"used_tokens":null,"window_tokens":null,"fraction":null,"source":null,"as_of":null}
+```
+
+Unknown never means zero. Missing or unreliable context evidence does not
+fail an otherwise successful instance read. Context reporting uses structured
+evidence only and never reads or interprets screen text.
+
+Claude numeric support is limited to Claude Code **2.1.280** and the first-party
+Anthropic configuration without provider, endpoint, window or custom capability
+overrides. The resolved model must match between the native callback and
+transcript; capacity comes from that model's native callback. The latest
+ordinary response's transcript usage must pair with its applicable native status-line
+capacity in the current live launch. Usage adds input, cache creation, cache
+read and output tokens once each; it does not sum requests or iterations.
+Automatic status-line observation preserves the selected user command's
+input, output and exit status. Unresolved settings, including JSONC or
+ambiguous ancestor Git local settings, leave native callbacks unchanged and
+context unknown. Unqualified configurations remain unknown.
+
+Codex numeric support is limited to Codex CLI **0.159.2**, the **OpenAI** provider,
+and resolved sequential rollout history from a fresh session whose startup
+agent-director admitted and whose original writer is still running. Existing,
+resumed or forked sessions, ended writers and sessions with unproven origin
+return unknown, even when their rollout names a tested version. Usage must
+belong to the inspected session's current turn/model and match its reported
+runtime capacity. This does not establish support for every provider or
+configuration.
+
+Managed Cursor returns all five fields as null in this build, including
+**2026.10.01-e373342** and **2026.10.12-d47ca18**. Both versions' ACP mode
+emits no ordinary usage-bearing completion events; hook configuration cannot
+supply the missing producer. Native interactive context evidence exists for
+both. A native `preCompact` executor is reachable through ACP shared resources,
+but automatic managed compaction delivery remains unqualified.
+
+Captured checkpoint token counts can survive compaction without a usage
+measurement time or generation binding. The latest checkpoint therefore
+cannot prove that no compaction occurred after its last usage update or
+supply a trustworthy `as_of`. Managed Cursor context remains unknown until
+upstream ACP supplies qualified usage evidence.
+Other untested or unrecognised versions return unknown.
+
+Each call reads current evidence on demand, without caching or a wall-clock
+age cutoff. An old measurement can remain valid while its context is current.
+Compaction and source-specific changes to the active response or context
+invalidate an older estimate until later qualified usage and capacity appear.
+Missing, malformed, incomplete or regressing records, mismatched
+session/model/capacity, and unresolved
+history, forks or rewinds produce unknown instead of an older reading.
+
+Already-visible Claude subagents can report a reading under the same version
+and configuration limits, using their own resolved model, transcript response
+and native subagent status-line capacity. Progress counters are not occupancy. Other
+visible children return unknown. A parent's usage or capacity never supplies
+a child's reading. Context reporting adds no subagent discovery or tracking.
+Callers own any policy for compaction, replacement or unknown readings.
+
 ## Ordinary text submission
 
 A nonempty `text` with Enter, without `key`, `request_token` or
