@@ -84,6 +84,29 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
+## Family state
+
+`status`, `get` and each row returned by `list`, on CLI and MCP, include
+`family_state`: `working` or `waiting`, separately from the agent's own
+`state`.
+
+A family includes the agent and every stored descendant linked through
+`parent_id`, at any depth. Only live members contribute: a member recorded
+as `ended` or `missing` is excluded, but its retained links still connect
+live descendants. Before [settling](configuration.md#settle-time-state),
+the family is `waiting` exactly when every live member's stored state is
+`waiting`; no live members also means `waiting`. Any other live state,
+including `pending`, `ask_user` or `check_permission`, makes it `working`.
+
+Each returned agent's family covers the full stored tree, including members
+hidden by list filters or limits. Resume, reuse and deletion follow the
+stored relationships; deleted connecting rows are not reconstructed. Native
+helpers and subagent records are separate from AD child spawns and do not
+participate. Permissions remain per agent: a descendant's request affects
+the family value without appearing as the ancestor's state or permission
+details. See [reporting limits](caller-contract.md#family-reporting-limits)
+before acting on a family value.
+
 ## Fresh Cursor use
 
 Cursor runs through an interactive gateway in its own tmux pane. Fresh

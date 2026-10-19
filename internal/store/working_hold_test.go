@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -74,8 +73,9 @@ func TestStateWriteRacingARequestRecordedAfterItsRead(t *testing.T) {
 			before := mustGetSpawn(t, s, relayID)
 			landed, mark := false, 0
 			beforeEachExec(t, s, path, func(query string) {
-				// The hook's state write: hookStateSet leads its SET (b.3ie).
-				if landed || !strings.Contains(query, "SET settled_state = CASE") {
+				// Preliminary hook reads are complete; land the request before
+				// the state write takes its SQLite writer lock.
+				if landed || query != "BEGIN IMMEDIATE" {
 					return
 				}
 				landed = true

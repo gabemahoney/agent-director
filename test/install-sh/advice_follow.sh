@@ -1015,20 +1015,22 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: fail the v10→v11 eligibility backfill after DDL.
-# Preserve the historical request so the literal retry can backfill it.
+# j6_break_hop <state.db>: fail the v11→v12 family backfill after DDL.
+# Preserve the historical request while the literal retry initializes history.
 j6_break_hop() {
-    [[ "$SCHEMA" == 11 ]] || { bad "j6_break_hop breaks the v10→v11 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE permission_requests DROP COLUMN main_turn_end_eligible;
+    [[ "$SCHEMA" == 12 ]] || { bad "j6_break_hop breaks the v11→v12 step; update it for v$SCHEMA"; return 1; }
+    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN family_state;
+        ALTER TABLE spawns DROP COLUMN family_settled_state;
+        ALTER TABLE spawns DROP COLUMN family_changed_ms;
         INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('j6','ended','/tmp','ad-j6','off','claude');
-        INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}');
-        CREATE TRIGGER j6_fail_backfill BEFORE UPDATE ON permission_requests BEGIN SELECT RAISE(ABORT,'injected eligibility backfill failure'); END;"
+        INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,main_turn_end_eligible) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}',1);
+        CREATE TRIGGER j6_fail_backfill BEFORE UPDATE ON spawns BEGIN SELECT RAISE(ABORT,'injected family backfill failure'); END;"
 }
 j6_repair_hop() { "$SQLITE" "$1" "DROP TRIGGER j6_fail_backfill;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with a failing eligibility backfill
+# make the store one version older with a failing family backfill
 # (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
 # failure; leaves HOME in J6H.
 j6_failing_migration() {
@@ -1064,7 +1066,9 @@ test_J6_MigrationFailedRerunRetries() {
     [[ "$(db_version "$J6H")" == "$SCHEMA" ]] || bad "store at v$(db_version "$J6H"); want v$SCHEMA"
     [[ ! -e "$(sentinel "$J6H")" ]] || bad "sentinel not consumed by the successful migration"
     [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT main_turn_end_eligible FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
-        || bad "corrected retry did not preserve and backfill the historical main request"
+        || bad "corrected retry did not preserve the historical main request's eligibility"
+    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT family_state || '|' || family_settled_state || '|' || family_changed_ms FROM spawns WHERE instance_id='j6';")" == 'waiting|waiting|0' ]] \
+        || bad "corrected retry did not initialize the historical row's family history"
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"

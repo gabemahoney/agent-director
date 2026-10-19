@@ -24,7 +24,10 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			seedV10EligibilityFixture(t, path, tc.agent, tc.child)
 			before := dbDump(t, path)
 			var priorCols []string
+			var priorSpawnCols []string
 			withRaw(t, path, func(db *sql.DB) { priorCols = tableColumnNames(t, db, "permission_requests") })
+			withRaw(t, path, func(db *sql.DB) { priorSpawnCols = tableColumnNames(t, db, "spawns") })
+			priorSpawn := readRawSpawn(t, path, "pre", priorSpawnCols)
 			priorRequests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols)
 			id := assertOneStoreID(t, path)
 			writeSentinel(t, dir, 10, schemaVersion)
@@ -54,6 +57,9 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if err := migrateV10toV11(s.db); err != nil {
 				t.Fatal(err)
 			}
+			if err := migrateV11toV12(s.db); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +67,10 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if got := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols); !reflect.DeepEqual(got, priorRequests) {
 				t.Fatal("migration changed preexisting request columns")
 			}
-			for _, table := range []string{"spawns", "session_history", "store_meta", "cursor_runtimes"} {
+			if got := readRawSpawn(t, path, "pre", priorSpawnCols); !reflect.DeepEqual(got, priorSpawn) {
+				t.Error("preexisting spawn columns changed")
+			}
+			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 					t.Errorf("%s changed", table)
 				}
@@ -134,6 +143,9 @@ func TestV11MigrationExistingColumn(t *testing.T) {
 				t.Fatalf("request %+v %v", pr, err)
 			}
 			if err = migrateV10toV11(s.db); err != nil {
+				t.Fatal(err)
+			}
+			if err = migrateV11toV12(s.db); err != nil {
 				t.Fatal(err)
 			}
 			s.Close()

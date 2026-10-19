@@ -113,11 +113,11 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			}
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
 			moveMustInstall(t, h)
-			if v := h.migStoreVersion(db); v != "11" {
-				t.Fatalf("upgrade schema = %s; want 11", v)
+			if v := h.migStoreVersion(db); v != "12" {
+				t.Fatalf("upgrade schema = %s; want 12", v)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
-				t.Fatalf("binary swap alone accepted v11: %+v", got)
+				t.Fatalf("binary swap alone accepted v12: %+v", got)
 			}
 			// Stop the post-upgrade writer too; its WAL must not survive restore.
 			h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0; UPDATE spawns SET cwd='/after', labels='{}' WHERE instance_id='before'; INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('after','ended','/after','ad-after','off','claude');").Kill()

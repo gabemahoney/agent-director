@@ -105,6 +105,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
+	case "write-family-transition":
+		return cmdWriteFamilyTransition(args[1:], stdout, stderr)
 	case "json-schema":
 		return cmdJSONSchema(args[1:], stdout, stderr)
 	default:

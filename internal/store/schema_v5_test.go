@@ -255,16 +255,14 @@ func guideRecipe(t *testing.T, heading string) (stmts, frame []string) {
 	return stmts, frame
 }
 
-// TestDowngradeRecipe_MatchesGuide: each downgrade recipe's test copy
-// (v8ToV7RecipeStatements, v7ToV6RecipeStatements, v6ToV5RecipeStatements,
-// v5ToV4RecipeStatements) is
-// the guide's recipe statement for statement, run in bail mode in one
-// transaction.
+// TestDowngradeRecipe_MatchesGuide compares each exercised reverse recipe
+// with the guide's statements and single-transaction bail-mode frame.
 func TestDowngradeRecipe_MatchesGuide(t *testing.T) {
 	for _, r := range []struct {
 		heading string
 		want    []string
 	}{
+		{"#### v12 → v11", v12ToV11RecipeStatements},
 		{"#### v8 → v7", v8ToV7RecipeStatements},
 		{"#### v7 → v6", v7ToV6RecipeStatements},
 		{"#### v6 → v5", v6ToV5RecipeStatements},

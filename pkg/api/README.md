@@ -212,18 +212,22 @@ if err != nil {
 fmt.Println(res.State) // e.g. "waiting"
 ```
 
-Returns `StatusResult` (`.State`, and `.LaunchStartedAt`, the start of
+Returns `StatusResult` (`.State`, `.FamilyState`, and `.LaunchStartedAt`, the start of
 the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
-With `[state] settle_ms` set in the config the `Client` loaded when it was
-built, `Status`, `Get` and `List` report the settled state: a state a hook
-wrote shows only once it has held that long, the last settled state until
-then; `ended`, `missing` and a state a verb wrote show at once. The other
-fields, and every verb that acts on a row, follow its live state. The
-package-level `api.Status`, `api.Get` and `api.List` functions use no
-settle time.
+`StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
+`FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
+[Usage](../../docs/usage.md#family-state) defines membership and raw
+aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
+defines reporting limits.
+
+`Client.Status`, `Client.Get` and `Client.List` use the config loaded when
+the client was built for [independent state and family
+settling](../../docs/configuration.md#settle-time-state). Other result fields
+and verbs that act on a row follow its live state. The package-level
+`api.Status`, `api.Get` and `api.List` functions use no settle time.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is

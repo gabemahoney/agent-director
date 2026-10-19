@@ -183,6 +183,13 @@ function interfaceBody(src: string, name: string): string {
 const typesGolden = () =>
   fs.readFileSync(path.join(fixtureDir, "types.d.ts.golden"), "utf-8");
 
+test.each(["StatusResult", "GetResult", "ListRow"])(
+  "public-surface: %s carries required binary family_state",
+  (iface) => {
+    expect(interfaceBody(typesGolden(), iface)).toMatch(/\bfamily_state\s*:\s*"working"\s*\|\s*"waiting"\s*;/);
+  }
+);
+
 test("public-surface: ListRow & GetResult carry additive-optional liveness fields (SR-8.3)", () => {
   const golden = typesGolden();
   for (const iface of ["ListRow", "GetResult"]) {

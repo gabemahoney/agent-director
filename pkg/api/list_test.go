@@ -155,7 +155,7 @@ func TestListShowsRowAgent(t *testing.T) {
 // TestListRowKeySetUnchanged pins the list row's exact JSON key set with every
 // optional field present: jsonl_path and extra_env, seeded on the row, are
 // dropped; permission_requests (b.146 rule 15) is always there.
-func TestListRowKeySetUnchanged(t *testing.T) {
+func TestListRowKeySet(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	seedWaiting(t, dbPath, "row-parent")
@@ -183,10 +183,10 @@ func TestListRowKeySetUnchanged(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"agent", "cwd", "ended_at", "instance_id", "labels", "last_seen_at", "liveness_note",
+	want := []string{"agent", "cwd", "ended_at", "family_state", "instance_id", "labels", "last_seen_at", "liveness_note",
 		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "tmux_session_name"}
 	if !equalStrings(got, want) {
-		t.Errorf("ListRow keys = %v; want exactly %v (no jsonl_path, no extra_env, nothing new)", got, want)
+		t.Errorf("ListRow keys = %v; want exactly %v", got, want)
 	}
 	if reqs, ok := m["permission_requests"].([]any); !ok || len(reqs) != 0 {
 		t.Errorf("permission_requests = %v; want [] on a row not in check_permission", m["permission_requests"])

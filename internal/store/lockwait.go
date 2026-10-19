@@ -334,6 +334,9 @@ func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error
 	if err := fn(ctx, conn); err != nil {
 		return err
 	}
+	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}

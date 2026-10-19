@@ -93,6 +93,26 @@ To end a live row (`pending` included) and relaunch its id:
 
    A caller whose ids agent-director mints spawns fresh instead.
 
+## Family reporting limits
+
+Use [`family_state`](usage.md#family-state) as a report of currently stored
+family activity. `waiting` means neither task success nor permission or
+readiness to take an action. With [settling](configuration.md#settle-time-state),
+it can still show `waiting` briefly after work begins.
+
+Family reporting adds no liveness detection. A stopped agent still recorded
+as `working` keeps the raw family working until an existing detector or
+state change records otherwise. Cursor's existing per-agent read projection
+can show `missing` before its terminal write succeeds; family reporting
+continues to use stored states until that write commits.
+
+Inspect each agent's own state and requests for permission handling and
+follow each verb's existing preconditions. An ancestor's family value
+does not forward a descendant's permission details. Existing read failures
+remain errors; never treat a failed read as `waiting` or invent a third
+family value. Reading a family value adds no wait for settling or writer
+lock acquisition.
+
 ## Ordinary text submission
 
 A nonempty `text` with Enter, without `key`, `request_token` or

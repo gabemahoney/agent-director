@@ -55,6 +55,9 @@ func readSurfaceRows() []readSurfaceRow {
 		{id: "rs-flap-waiting", state: store.StateWaiting, hooks: []string{"PreToolUse", "Stop", "PreToolUse", "Stop"}},
 		{id: "rs-flap-working", state: store.StateWorking, hooks: []string{"Stop", "PreToolUse"}},
 		{id: "rs-flap-check-permission", state: store.StateCheckPermission, hooks: []string{"PostToolUse", "PermissionRequest"}},
+		{id: "rs-family-parent", state: store.StateWaiting},
+		{id: "rs-family-child", state: store.StateWaiting},
+		{id: "rs-family-grandchild", state: store.StateWorking},
 	}
 }
 
@@ -123,6 +126,11 @@ func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 	if err := SeedParentChild(dbPath, "rs-working", "rs-waiting"); err != nil {
 		return nil, fmt.Errorf("SeedReadSurfaceStore: %w", err)
 	}
+	for _, link := range [][2]string{{"rs-family-parent", "rs-family-child"}, {"rs-family-child", "rs-family-grandchild"}} {
+		if err := SeedParentChild(dbPath, link[0], link[1]); err != nil {
+			return nil, fmt.Errorf("SeedReadSurfaceStore: %w", err)
+		}
+	}
 	for _, req := range readSurfaceRequests {
 		if err := recordReadSurfaceRequest(s, dbPath, req); err != nil {
 			return nil, err
@@ -146,6 +154,13 @@ func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 		if err := SetSettle(dbPath, r.id, ReadSurfaceSettled(r.state), ReadSurfaceStampMs); err != nil {
 			return nil, fmt.Errorf("SeedReadSurfaceStore: scramble %s: %w", r.id, err)
 		}
+		family, _, _, err := ReadFamilyHistory(dbPath, r.id)
+		if err != nil {
+			return nil, fmt.Errorf("SeedReadSurfaceStore: %w", err)
+		}
+		if err := SetFamilyHistory(dbPath, r.id, family, ReadSurfaceSettledFamily(family), ReadSurfaceStampMs); err != nil {
+			return nil, err
+		}
 	}
 	return ids, nil
 }
@@ -153,6 +168,14 @@ func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 // ReadSurfaceStampMs is the state_changed_ms SeedReadSurfaceStore gives every
 // row: 2099-01-01, ahead of any clock a test runs on.
 var ReadSurfaceStampMs = readSurfaceSettledAt.UnixMilli()
+
+// ReadSurfaceSettledFamily is the independent binary family scramble.
+func ReadSurfaceSettledFamily(raw string) string {
+	if raw == store.StateWorking {
+		return store.StateWaiting
+	}
+	return store.StateWorking
+}
 
 // readSurfaceStates are the seven states, in the order ReadSurfaceSettled
 // rotates them.

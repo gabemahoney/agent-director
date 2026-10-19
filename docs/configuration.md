@@ -69,7 +69,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[pre_trust] lock_wait_seconds` | 1 to 9223372036 | 12 | How long `spawn` and `resume` of a Claude agent wait for Claude Code's lock on `.claude.json`. On timeout the launch goes ahead with `pre_trust` `failed`. Codex pre-trust takes no lock, so a Codex launch never waits and ignores this key. |
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
-| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new state must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
+| `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
@@ -119,8 +119,8 @@ and the other hooks can still be killed by a long store wait.
 
 While an agent uses tools, its state can flip between `working` and
 `waiting` several times a second. `[state] settle_ms` makes `status`,
-`get` and `list` (CLI, MCP and the TypeScript client) show a new state only
-once it has held:
+`get` and `list` show a new `state` or `family_state` only once it has held,
+on CLI, MCP and the Go and TypeScript clients:
 
 - **Range.** Whole milliseconds from 0 to 60000. A missing key, or 0, turns
   it off: every read shows the latest state. A negative value or one above
@@ -128,11 +128,25 @@ once it has held:
 - **What `state` shows.** With a settle time T, `state` moves to a new
   value only once that value has held for T; until then it shows the last
   settled value. Every change of value restarts the wait; a repeat of the
-  same state does not. No field or state value is added, and nothing marks
-  a state as late. `list --state` filters on the state `list` shows.
+  same state does not. Nothing marks a state as late. `list --state` filters
+  on the agent's own state that `list` shows.
+- **What `family_state` shows.** Apply T once to the
+  [raw family aggregate](usage.md#family-state), independently of each
+  member's displayed `state`. Both `working` and `waiting` must hold for T;
+  until then the previous settled family value remains. A shorter reversal
+  never appears. A member's change that leaves the raw aggregate unchanged
+  does not restart its clock, and descendant depth adds no delay. Changes
+  caused by commands or members becoming `ended` or `missing` follow this
+  same family rule.
+- **Family initialization and restarts.** New or upgraded families start
+  at their current raw aggregate. Later transitions are timed from the
+  actual raw aggregate change, with history kept across client and process
+  restarts. Once T has elapsed the next read shows the new value, even
+  without intervening polls. With settling off, the raw aggregate shows
+  immediately.
 - **Flaps never show.** A change that comes back within T is never seen: a
   working agent that reads `waiting` for a moment reads `working` throughout.
-- **At once.** `ended` and `missing`, and a state a command sets (`spawn`,
+- **Own state at once.** `ended` and `missing`, and a state a command sets (`spawn`,
   `resume`, `find-missing`), show at once. A row that its own agent moves
   out of `missing` or `ended` waits like any other change: it reads
   `missing` or `ended` for T, then the new state.
@@ -152,7 +166,11 @@ once it has held:
   even `ended` or `missing`, while `get` lists an open request, or
   `check_permission` with none, for up to T.
 - **Reads never wait** for a state to settle. A change of the key takes
-  effect as [any other](#when-a-change-takes-effect).
+  effect as [any other](#when-a-change-takes-effect). For both fields, an
+  earlier raw value is judged with the setting loaded by the writer that
+  replaced it; the current value uses the reader's setting. After a setting
+  change, a reported value can have held for less than the new interval.
+  A wall-clock step back delays settling; a jump forward can settle early.
 
 ## Timing settings (`[tmux]`)
 

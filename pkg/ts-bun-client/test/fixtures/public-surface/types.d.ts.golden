@@ -252,6 +252,13 @@ export interface ListRow {
      * its live state, which can be newer: a refusal can name a state this field does not show yet.
      */
     state: string;
+    /**
+     * Complete stored family: self and live descendants, including through retained terminal
+     * intermediates. Waiting means every live member is waiting, or no live members remain.
+     * Uses raw member states and settles once in either direction with `[state] settle_ms`,
+     * independently of `state`. This report does not establish readiness or task success.
+     */
+    family_state: "working" | "waiting";
     /** Canonicalized working directory. */
     cwd: string;
     /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
@@ -451,6 +458,13 @@ export interface StatusResult {
      */
     state: string;
     /**
+     * Complete stored family: self and live descendants, including through retained terminal
+     * intermediates. Waiting means every live member is waiting, or no live members remain.
+     * Uses raw member states and settles once in either direction with `[state] settle_ms`,
+     * independently of `state`. This report does not establish readiness or task success.
+     */
+    family_state: "working" | "waiting";
+    /**
      * Start of the launch in progress (RFC3339 UTC, millisecond precision); present only on a
      * pending row, omitted otherwise. It follows the row's live state: with `[state] settle_ms`
      * set, a row whose agent has reported in can read pending without it for up to settle_ms.
@@ -481,6 +495,13 @@ export interface GetResult {
      * its live state, which can be newer: a refusal can name a state this field does not show yet.
      */
     state: string;
+    /**
+     * Complete stored family: self and live descendants, including through retained terminal
+     * intermediates. Waiting means every live member is waiting, or no live members remain.
+     * Uses raw member states and settles once in either direction with `[state] settle_ms`,
+     * independently of `state`. This report does not establish readiness or task success.
+     */
+    family_state: "working" | "waiting";
     cwd: string;
     /** The agent the row runs: `"claude"` (Claude Code), `"codex"` (Codex) or `"cursor"` (Cursor). Set at spawn; resume follows it. */
     agent: string;

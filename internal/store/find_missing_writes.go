@@ -236,6 +236,9 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err != nil || res != CondApplied {
 		return "", res, err
 	}
+	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
@@ -257,6 +260,9 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+		if err == nil && res == CondApplied {
+			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing)
+		}
 		return err
 	})
 	if err != nil {
@@ -591,7 +597,7 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 // matched a row.
 // errPrefix names the write in a driver error.
 func (s *Store) execGuarded(q string, args []any, errPrefix string) (bool, error) {
-	r, err := s.db.Exec(q, args...)
+	r, err := s.execFamily(q, args...)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}
