@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -148,7 +149,7 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 			return fmt.Errorf("rows affected: %w", err)
 		}
 		if n == 0 {
-			return nil
+			return errFamilyWriteNotApplied
 		}
 		moved = true
 		closed, err = closeOrphanedRequests(ctx, conn, instanceID, DecisionReasonEnded, storeNowMillis())
@@ -157,6 +158,9 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 		}
 		return closeSubagentsAgentGone(connQuerier{ctx: ctx, conn: conn}, instanceID, launchStartedAtMillis)
 	})
+	if errors.Is(err, errFamilyWriteNotApplied) {
+		err = nil
+	}
 	if err != nil {
 		return 0, 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -253,7 +257,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		boolInt(prior.SubagentTracking),
 		instanceID, StatePending, movedVersion,
 	)
-	r, err := s.db.Exec(restoreAfterFailedResumeSQL, args...)
+	r, err := s.execFamily(restoreAfterFailedResumeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

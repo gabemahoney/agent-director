@@ -108,8 +108,9 @@ func (s *nativeSubmissionStore) GetSpawn(id string) (api.Spawn, error) {
 	return row, err
 }
 
-func (s *nativeSubmissionStore) GetSpawnWithin(id string, wait time.Duration) (api.Spawn, error) {
-	row, err := s.SendKeysStore.GetSpawnWithin(id, wait)
+func (s *nativeSubmissionStore) GetSpawnWithin(id string, _ time.Duration) (api.Spawn, error) {
+	// The injected clock owns poll deadlines; SQL reads still fetch fresh state.
+	row, err := s.SendKeysStore.GetSpawn(id)
 	if err == nil && s.sent && s.read != nil {
 		return s.read(row)
 	}

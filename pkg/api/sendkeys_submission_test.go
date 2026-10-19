@@ -20,15 +20,21 @@ import (
 // submissionStore injects hook/read races only after the keys have been sent.
 type submissionStore struct {
 	api.SendKeysStore
-	sent  bool
-	reads int
-	read  func(int, api.Spawn) (api.Spawn, error)
-	waits []time.Duration
+	sent         bool
+	reads        int
+	read         func(int, api.Spawn) (api.Spawn, error)
+	waits        []time.Duration
+	boundedReads bool
 }
 
 func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
 	s.waits = append(s.waits, maxWait)
-	row, err := s.SendKeysStore.GetSpawnWithin(id, maxWait)
+	// Virtual poll budgets must not become real SQL deadlines in semantic tests.
+	read := s.SendKeysStore.GetSpawn
+	if s.boundedReads {
+		read = func(id string) (api.Spawn, error) { return s.SendKeysStore.GetSpawnWithin(id, maxWait) }
+	}
+	row, err := read(id)
 	if err != nil || !s.sent {
 		return row, err
 	}
@@ -167,12 +173,15 @@ func TestSendKeysCodexSubmissionEvidenceLost(t *testing.T) {
 		{name: "read failed", state: store.StatePending, err: fmt.Errorf("read evidence: %w", api.ErrStoreBusy)},
 		{name: "row deleted", state: store.StatePending, err: api.ErrSpawnNotFound},
 		{name: "read failed after waiting", state: store.StateWaiting, err: api.ErrStoreBusy, failAt: 2},
+		{name: "read failed with 200ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 19},
+		{name: "read failed with 100ms remaining", state: store.StatePending, err: api.ErrStoreBusy, failAt: 20},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newSubmissionEnv(t)
 			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
+			before := e.columns(t, r.ID)
 			e.s.read = func(n int, row api.Spawn) (api.Spawn, error) {
 				row.State = tc.state
 				if tc.change != nil {
@@ -189,7 +198,12 @@ func TestSendKeysCodexSubmissionEvidenceLost(t *testing.T) {
 			if e.waits != wantWaits {
 				t.Errorf("waits = %d; want %d before evidence was lost", e.waits, wantWaits)
 			}
+			if want := time.Duration(wantWaits) * 100 * time.Millisecond; e.slept != want {
+				t.Errorf("wait = %v; want %v before evidence was lost", e.slept, want)
+			}
 			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+			e.assertNoCalls(t, tmux.CallCapture)
+			e.assertRowUnchanged(t, r.ID, before)
 		})
 	}
 }
@@ -291,6 +305,7 @@ func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
 func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 	t.Parallel()
 	e := newSubmissionEnv(t)
+	e.s.boundedReads = true // This case exercises the real store's remaining connection wait.
 	r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 	before := e.columns(t, r.ID)
 	free, held, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)

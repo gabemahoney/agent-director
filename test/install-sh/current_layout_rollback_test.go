@@ -45,7 +45,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, v10→v11 and v11→v12, the old-layout steps below do not apply",
+		"including schema v9→v10, v10→v11, v11→v12 and v12→v13, the old-layout steps below do not apply",
 		"stop agents, servers and callers and keep a copy of the actual",
 		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
 		"restore that pre-upgrade copy and install the previous release with its own",
@@ -55,8 +55,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"This loses all writes made since the backup",
 		"The installer does not make this backup",
 		"A copy made after migration cannot replace the pre-upgrade backup",
-		"make a v12 store readable by a v9, v10 or v11 binary",
-		"There is no supported in-place v12→v11, v11→v10 or v10→v9 downgrade",
+		"make a v13 store readable by a v9, v10, v11 or v12 binary",
+		"There is no supported in-place downgrade from v13",
+		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -108,7 +109,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 				t.Fatalf("upgrade schema = %s; want %s", v, current)
 			}
 			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
-				t.Fatalf("v12 upgrade lacks both provenance columns: %q", got)
+				t.Fatalf("v13 upgrade lacks both provenance columns: %q", got)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("binary swap alone accepted the current schema: %+v", got)

@@ -11,7 +11,7 @@ import time
 from collections import Counter
 
 
-BASELINE = '98a2283275b43535bb8487e0de05006f8b3a4c68'
+BASELINE = '67a0c703b14224268cf094410d12e7df9b63a652'
 STRICT_TEST = 'internal/cursorhost/session_guidance_tools_linux_test.go'
 FIXTURE = 'internal/testsupport/cursorfix/runtime.js'
 STRICT_HASH = '7759ba927ca52fa706c553564cc4872c1d7fbdfe59a6b87f9edea4bb4a346ad5'
@@ -20,6 +20,10 @@ FIXTURE_HASHES = {
     'branch': '51313bb0b1fa3ae7d8982645b8266f899d24e77d5a3038fadd5245663e4d9c95',
 }
 manifest = json.loads(Path('/opt/unit/snapshot.json').read_text())
+if manifest['comparison_baseline'] != BASELINE or not manifest['tracked_tree_clean']:
+    sys.exit('Paired gate requires the committed final tree and exact comparison baseline')
+if hashlib.sha256(Path('/opt/unit/source.tar.gz').read_bytes()).hexdigest() != manifest['source_archive_sha256']:
+    sys.exit('Source archive checksum mismatch')
 for entry in manifest['files']:
     path = Path('/work') / entry['path']
     content = os.readlink(path).encode() if path.is_symlink() else path.read_bytes()
@@ -111,11 +115,12 @@ def run(side, cwd):
                GIT_CONFIG_GLOBAL='/dev/null')
     for path in (home / '.cache', home / '.config', home / '.local/share', temporary):
         path.mkdir(parents=True, exist_ok=True)
-    for ref in (BASELINE, manifest['released_baseline'], 'refs/tags/v0.11.1', 'refs/heads/main'):
+    for ref in (BASELINE, manifest['released_baseline'], 'refs/tags/v0.11.1'):
         subprocess.run(['git', 'cat-file', '-e', ref + '^{commit}'], cwd=cwd, check=True)
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd, text=True).strip()
-    if side == 'main' and head != BASELINE:
-        sys.exit(f'Incorrect main revision: {head}')
+    expected_head = BASELINE if side == 'main' else manifest['head']
+    if head != expected_head:
+        sys.exit(f'Incorrect {side} revision: {head}; expected {expected_head}')
     expected = subprocess.check_output(['go', 'list', './...'], cwd=cwd, env=env, text=True).splitlines()
     started = time.time()
     go = run_suite(side, 'go', ['go', 'test', '-json', '-count=1', '-timeout', '30m', './...'], cwd, env)
@@ -135,6 +140,45 @@ def run(side, cwd):
     Path(f'/out/{side}-result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(f'END {side}: {json.dumps(result)}', flush=True)
     return result
+
+
+
+def prepared_artifacts(cwd):
+    root = Path(cwd)
+    paths = [root / 'bin' / name for name in ('agent-director', 'agent-director-admin')]
+    paths.extend(sorted((root / 'pkg/ts-bun-client/dist').rglob('*')))
+    files = [path for path in paths if path.is_file()]
+    for required in ('bin/agent-director', 'bin/agent-director-admin',
+                     'pkg/ts-bun-client/dist/index.js', 'pkg/ts-bun-client/dist/index.d.ts'):
+        if not (root / required).is_file():
+            sys.exit(f'Missing fresh build artifact: {cwd}/{required}')
+    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in files}
+
+
+# Validate BOTH sides before starting either full suite.
+preflight = {}
+for side, cwd in (('main', '/baseline'), ('branch', '/work')):
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd, text=True).strip()
+    expected = BASELINE if side == 'main' else manifest['head']
+    if head != expected:
+        sys.exit(f'Incorrect {side} revision: {head}; expected {expected}')
+    for revision in (BASELINE, manifest['head'], manifest['released_baseline'], 'refs/tags/v0.11.1'):
+        subprocess.run(['git', 'cat-file', '-e', revision + '^{commit}'], cwd=cwd, check=True)
+    hashes = {name: hashlib.sha256((Path(cwd) / name).read_bytes()).hexdigest()
+              for name in (STRICT_TEST, FIXTURE)}
+    if hashes != {STRICT_TEST: STRICT_HASH, FIXTURE: FIXTURE_HASHES[side]}:
+        sys.exit(f'Incorrect guarded {side} sources: {hashes}')
+    preflight[side] = dict(head=head, source_hashes=hashes, artifacts=prepared_artifacts(cwd))
+artifact_path = Path('/opt/unit/prepared-artifacts.json')
+if sys.argv[1:] == ['--prepare-artifacts']:
+    artifact_path.write_text(json.dumps(preflight, indent=2) + '\n')
+    print('Prepared and verified both exact checkouts and fresh build artifacts', flush=True)
+    sys.exit(0)
+if preflight != json.loads(artifact_path.read_text()):
+    sys.exit('Prepared artifacts or checkout provenance changed since image build')
+Path('/out/preflight.json').write_text(json.dumps(preflight, indent=2) + '\n')
+print(json.dumps({'verified_preflight': preflight}), flush=True)
 
 
 results = {'main': run('main', '/baseline'), 'branch': run('branch', '/work')}

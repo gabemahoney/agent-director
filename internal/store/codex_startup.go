@@ -60,7 +60,7 @@ func codexStartupArg(prior sessionStartPrior, gate HookGate, path string) any {
 
 // ContextEvidence selects only this row's current evidence and authority.
 func (sp Spawn) ContextEvidence() SpawnContext {
-	return SpawnContext{Agent: sp.Agent, State: sp.State, SessionID: sp.SessionID, JSONLPath: sp.JSONLPath,
+	return SpawnContext{FamilyState: sp.FamilyState, Agent: sp.Agent, State: sp.State, SessionID: sp.SessionID, JSONLPath: sp.JSONLPath,
 		LaunchToken: sp.Identity.Token, PID: sp.PID, ProcStarttime: sp.ProcStarttime,
 		PanePID: sp.Identity.PanePID, PaneStarttime: sp.Identity.PaneStarttime,
 		EndReportedAtMillis: sp.EndReportedAtMillis, CodexStartup: sp.CodexStartup, ClaudeCapacity: sp.ClaudeCapacity}
@@ -75,9 +75,9 @@ func (e SpawnContext) FreshCodexWriter() bool {
 		e.PID == p.PID && e.PanePID == p.PID && e.ProcStarttime == p.Starttime && e.PaneStarttime == p.Starttime
 }
 
-// migrateV11toV12 adds bounded startup provenance, without inferring origin
+// migrateV12toV13 adds bounded startup provenance, without inferring origin
 // for existing sessions. Compatible reentry preserves valid explicit markers.
-func migrateV11toV12(db *sql.DB) error {
+func migrateV12toV13(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -101,7 +101,7 @@ func migrateV11toV12(db *sql.DB) error {
 		}
 		if name != "codex_startup" || kind != "TEXT" || notnull != 0 || pk != 0 || def.Valid {
 			rows.Close()
-			return fmt.Errorf("%w: store: v11→v12 incompatible Codex startup column", ErrSchemaMismatch)
+			return fmt.Errorf("%w: store: v12→v13 incompatible Codex startup column", ErrSchemaMismatch)
 		}
 		found = true
 	}
@@ -123,7 +123,7 @@ func migrateV11toV12(db *sql.DB) error {
 			}
 			if decodeCodexStartup(raw) == nil {
 				rows.Close()
-				return fmt.Errorf("%w: store: v11→v12 invalid Codex startup value", ErrSchemaMismatch)
+				return fmt.Errorf("%w: store: v12→v13 invalid Codex startup value", ErrSchemaMismatch)
 			}
 		}
 		err = rows.Err()
@@ -137,7 +137,7 @@ func migrateV11toV12(db *sql.DB) error {
 	if err = migrateClaudeCapacity(tx); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`PRAGMA user_version = 12`); err != nil {
+	if _, err = tx.Exec(`PRAGMA user_version = 13`); err != nil {
 		return err
 	}
 	return tx.Commit()

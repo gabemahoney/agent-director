@@ -177,8 +177,11 @@ func applySpawnColumns(dbPath, id, state string, opts []SpawnOption) error {
 		// which leaves the previous raw value as settled_state and stamps
 		// the change now, so a read with a settle time would report the
 		// seed's pending; the seeded row reads its state at once instead.
-		"settled_state":    state,
-		"state_changed_ms": int64(0),
+		"settled_state":        state,
+		"state_changed_ms":     int64(0),
+		"family_state":         familySeedState(state),
+		"family_settled_state": familySeedState(state),
+		"family_changed_ms":    int64(0),
 	}
 	if store.IsLiveState(state) {
 		defaults["pane_id"], defaults["pane_pid"] = TestPaneID, int64(TestPanePID)
@@ -306,7 +309,7 @@ func SeedParentChild(dbPath, parentID, childID string) error {
 	if err := s.SetParentID(childID, parentID); err != nil {
 		return fmt.Errorf("SeedParentChild: SetParentID: %w", err)
 	}
-	return nil
+	return InitializeFamilyHistory(dbPath)
 }
 
 // PermissionRequestSeed is the result of SeedPermissionRequest.

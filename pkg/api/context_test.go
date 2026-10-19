@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -313,4 +314,51 @@ func TestContextDoesNotBorrowArchivedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContext(t, status.Context, json.RawMessage(contextfix.UnknownJSON))
+}
+
+func TestContextAndFamilyCoexistAcrossSettling(t *testing.T) {
+	t.Parallel()
+	for _, sampleName := range []string{"writer", "claude-parent"} {
+		for _, settle := range []int64{0, settleMax} {
+			t.Run(fmt.Sprintf("%s/settle-%d", sampleName, settle), func(t *testing.T) {
+				t.Parallel()
+				sample := contextfix.Must(t, sampleName)
+				s, id, _ := seedContext(t, sample)
+				clock := tmuxfix.NewClock(time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC))
+				if _, err := apitest.SeedSpawn(s.Path(), "context-family-child", store.StateWorking, "/family-child", "off", "", false); err != nil {
+					t.Fatal(err)
+				}
+				if err := apitest.SeedParentChild(s.Path(), id, "context-family-child"); err != nil {
+					t.Fatal(err)
+				}
+				if err := apitest.SetFamilyHistory(s.Path(), id, "working", "waiting", clock.Now().UnixMilli()); err != nil {
+					t.Fatal(err)
+				}
+				c := settleClientFor(t, s.Path(), settle, tmuxfix.NewRecorder(), clock.Now)
+				check := func(want string) {
+					t.Helper()
+					status, err := c.Status(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					row, err := c.Get(id)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if status.FamilyState != want || row.FamilyState != want || status.State != store.StateWaiting || row.State != store.StateWaiting {
+						t.Fatalf("combined read: status=%+v get=%+v; family want %s", status, row, want)
+					}
+					assertContext(t, status.Context, sample.Expected)
+					assertContext(t, row.Context, sample.Expected)
+				}
+				if settle == 0 {
+					check("working")
+				} else {
+					check("waiting")
+					clock.Advance(time.Duration(settle) * time.Millisecond)
+					check("working")
+				}
+			})
+		}
+	}
 }

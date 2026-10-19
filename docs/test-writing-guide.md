@@ -357,9 +357,9 @@ Omitting the flag preserves existing helper behavior. The registered
 `test/driver/context-fullness.cjs`. Execute tests only through the repository
 sandbox and the required scheduler workflow for heavy suites.
 
-The unreleased v12 provenance migration belongs in `internal/store/schema_v12_test.go`
-and the shared migration matrices: test physical-v11 preservation, NULL/no
-backfill, compatible marker reentry, incompatible shape/value refusal,
+The unreleased v13 provenance migration belongs in `internal/store/schema_v13_test.go`
+and the shared migration matrices: test physical-v12 preservation, including
+family history, NULL/no backfill, compatible marker reentry, incompatible shape/value refusal,
 commit rollback and corrected retry, fresh/migrated convergence and reopen.
 Both nullable TEXT fields, `codex_startup` and `claude_capacity`, must converge
 between fresh and migrated stores. Include Claude capacity shape/bounded JSON

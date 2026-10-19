@@ -9,7 +9,8 @@ package store
 //
 // The fragments below are the only code that writes the two settle columns,
 // and SettleRead.stateExpr is the only code that derives the reported state
-// from them. Every write of state sets all three in its own statement, never
+// from them. Family history and its independent derivation live in family.go.
+// Every write of state sets all three in its own statement, never
 // from a Go-side read of the row (a duplicate hook would otherwise restart the
 // clock: the model's red_stalebase), with the time taken inside the statement,
 // under the write lock (red_nowoutside).
@@ -84,8 +85,8 @@ func (s *Store) hookWriteStateSet(v string) (string, []any) {
 // ([state] settle_ms, config.State.EffectiveSettleMs; b.3ie). 0, the value a
 // store opens with, is no settle time; a negative value is taken as 0. Every
 // opener that loads the config (the hook handler, pkg/api.New) calls it once,
-// right after the open and before the store is shared. Only hook writes read
-// it; reads take their settle time from a SettleRead.
+// right after the open and before the store is shared. Hook writes and family
+// aggregate changes read it; reads take their settle time from a SettleRead.
 func (s *Store) SetSettleMs(ms int64) {
 	s.settleMs = max(ms, 0)
 }

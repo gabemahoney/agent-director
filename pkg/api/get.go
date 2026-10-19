@@ -64,6 +64,9 @@ type SpawnRow struct {
 	// startup prompt. A resumed pending row keeps its session id and history;
 	// a non-empty SessionID tells it from a fresh one.
 	State string `json:"state"`
+	// FamilyState reports working or waiting for the complete stored family.
+	// Both directions settle independently using [state] settle_ms.
+	FamilyState string `json:"family_state"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -402,6 +405,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		InstanceID:              row.InstanceID,
 		ParentID:                row.ParentID,
 		State:                   reported,
+		FamilyState:             row.FamilyState,
 		CWD:                     row.CWD,
 		Agent:                   row.Agent,
 		TmuxSessionName:         row.TmuxSessionName,

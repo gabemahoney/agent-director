@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
-import type { VersionResult, SpawnParams, MakeTemplateParams, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
+import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
 import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
@@ -110,3 +110,18 @@ function _assertAgentTypes(get: GetResult, row: ListRow): void {
   void _bad;
 }
 void _assertAgentTypes;
+
+function _assertFamilyTypes(status: StatusResult, get: GetResult, row: ListRow): void {
+  const values: ("working" | "waiting")[] = [status.family_state, get.family_state, row.family_state];
+  const waiting: StatusResult["family_state"] = "waiting";
+  const working: GetResult["family_state"] = "working";
+  const listed: ListRow["family_state"] = waiting;
+  // @ts-expect-error — a terminal own state is not a family value
+  const badStatus: StatusResult["family_state"] = "ended";
+  // @ts-expect-error — family values are binary on get too
+  const badGet: GetResult["family_state"] = "ask_user";
+  // @ts-expect-error — family values are binary on each list row too
+  const badList: ListRow["family_state"] = "pending";
+  void [values, waiting, working, listed, badStatus, badGet, badList];
+}
+void _assertFamilyTypes;

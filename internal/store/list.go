@@ -44,9 +44,9 @@ type ListFilters struct {
 // selected after spawnColumns into ReportedState, and the state filter is on
 // that same expression, in the statement, ahead of LIMIT, so a limited list
 // is the first rows whose reported state matches. With no settle time the
-// statement is exactly the one before b.3ie: the bare `state IN (...)` filter
-// and no extra column, so the query plan, row order and LIMIT subset are
-// unchanged, and ReportedState is State. It never waits for a state to settle.
+// state filter is the bare `state IN (...)`, and ReportedState is State.
+// FamilyState is selected from its own history, before these filters and
+// limits. It never waits for a state to settle.
 func (s *Store) ListSpawns(f ListFilters) ([]Spawn, error) {
 	return s.listSpawns(f, nil)
 }
@@ -69,6 +69,9 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 		// The select list comes first in the statement, so its arguments do.
 		selectCols += `, ` + stateExpr
 		args = append(args, stateArgs...)
+		familyExpr, familyArgs := f.Settle.familyExpr()
+		selectCols += `, ` + familyExpr
+		args = append(args, familyArgs...)
 	}
 
 	if len(f.State) > 0 {

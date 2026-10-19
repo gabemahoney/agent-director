@@ -66,6 +66,9 @@ type ListRow struct {
 	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history.
 	State string `json:"state"`
+	// FamilyState reports working or waiting for the complete stored family.
+	// Both directions settle independently using [state] settle_ms.
+	FamilyState string `json:"family_state"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -219,6 +222,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			InstanceID:              r.InstanceID,
 			ParentID:                r.ParentID,
 			State:                   reported,
+			FamilyState:             r.FamilyState,
 			CWD:                     r.CWD,
 			Agent:                   r.Agent,
 			TmuxSessionName:         r.TmuxSessionName,

@@ -1015,14 +1015,14 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: fail v11→v12's second ADD COLUMN after its first DDL.
+# j6_break_hop <state.db>: fail v12→v13's second ADD COLUMN after its first DDL.
 # The generated capacity column is hidden from table_info but conflicts on ADD.
 j6_break_hop() {
-    [[ "$SCHEMA" == 12 ]] || { bad "j6_break_hop breaks the v11→v12 step; update it for v$SCHEMA"; return 1; }
+    [[ "$SCHEMA" == 13 ]] || { bad "j6_break_hop breaks the v12→v13 step; update it for v$SCHEMA"; return 1; }
     "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_startup;
         ALTER TABLE spawns DROP COLUMN claude_capacity;
         ALTER TABLE spawns ADD COLUMN claude_capacity TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;
-        INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('j6','ended','/tmp','ad-j6','off','claude');
+        INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent,family_state,family_settled_state,family_changed_ms) VALUES ('j6','ended','/tmp','ad-j6','off','claude','waiting','waiting',0);
         INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,main_turn_end_eligible) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}',1);"
 }
 j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN claude_capacity;"; }
@@ -1073,6 +1073,8 @@ test_J6_MigrationFailedRerunRetries() {
         || bad "corrected retry did not add both nullable provenance columns"
     [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT codex_startup IS NULL AND claude_capacity IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
         || bad "corrected retry fabricated provenance for the historical spawn"
+    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT family_state || '|' || family_settled_state || '|' || family_changed_ms FROM spawns WHERE instance_id='j6';")" == 'waiting|waiting|0' ]] \
+        || bad "corrected retry changed the historical row's family history"
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"

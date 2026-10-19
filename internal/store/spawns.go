@@ -231,6 +231,8 @@ type Spawn struct {
 	// fills it, so it is never "" on a row a read returned. Guards never read
 	// it: they act on State, the raw state.
 	ReportedState string
+	// FamilyState is the independently settled aggregate of this stored family.
+	FamilyState string
 }
 
 // The tracking flag every launch write stores (b.xjn, SR-9): the launch's
@@ -336,7 +338,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
 	args = append(args, StatePending, sp.Agent, sp.Agent)
-	_, err = s.db.Exec(stmt, args...)
+	_, err = s.execFamily(stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
 		if errors.As(err, &serr) {
@@ -414,6 +416,9 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 		}
 		q += `, ` + expr
 		args = append(args, stateArgs...)
+		familyExpr, familyArgs := r.familyExpr()
+		q += `, ` + familyExpr
+		args = append(args, familyArgs...)
 	}
 	q += ` FROM spawns WHERE instance_id = ?`
 	sp, err := scanSpawnRow(s.db.QueryRowContext(s.readContext(), q, append(args, instanceID)...), getSpawnErrs, r.on())
@@ -453,7 +458,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, codex_startup, claude_capacity`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -512,9 +517,9 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &codexStartup, &claudeCapacity)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity)
 	if reported {
-		dest = append(dest, &sp.ReportedState)
+		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
 	err := sc.Scan(dest...)
 	if err != nil {
@@ -592,6 +597,7 @@ func (s *Store) spawnStatusSettled(instanceID string, r SettleRead, proofs []Cur
 // SpawnContext identifies only the current row's session evidence. It never
 // falls back to another life or an archived session and contains no reading.
 type SpawnContext struct {
+	FamilyState         string
 	Agent               string
 	State               string
 	SessionID           string
@@ -621,17 +627,19 @@ func (s *Store) spawnStatusContext(instanceID string, r SettleRead, proofs []Cur
 		launchStartedAt                                                     any
 		agent, sessionID, path                                              any
 		token, pid, start, panePID, paneStart, endReport, startup, capacity any
-		q                                                                   = `SELECT state, launch_started_at, ` + spawnContextColumns + ` FROM spawns WHERE instance_id = ?`
+		q                                                                   = `SELECT state, launch_started_at, family_state, ` + spawnContextColumns + ` FROM spawns WHERE instance_id = ?`
 		args                                                                = []any{instanceID}
-		dest                                                                = []any{&raw, &launchStartedAt, &agent, &sessionID, &path, &token, &pid, &start, &panePID, &paneStart, &endReport, &startup, &capacity}
+		dest                                                                = []any{&raw, &launchStartedAt, &evidence.FamilyState, &agent, &sessionID, &path, &token, &pid, &start, &panePID, &paneStart, &endReport, &startup, &capacity}
 	)
 	if r.on() {
 		expr, exprArgs := r.stateExpr()
-		q = `SELECT state, launch_started_at, ` + spawnContextColumns + `, ` + expr + ` FROM spawns WHERE instance_id = ?`
-		args = append(exprArgs, instanceID)
-		dest = append(dest, &reported)
+		familyExpr, familyArgs := r.familyExpr()
+		q = `SELECT state, launch_started_at, family_state, ` + spawnContextColumns + `, ` + expr + `, ` + familyExpr + ` FROM spawns WHERE instance_id = ?`
+		args = append(exprArgs, familyArgs...)
+		args = append(args, instanceID)
+		dest = append(dest, &reported, &evidence.FamilyState)
 	}
-	err = s.db.QueryRow(q, args...).Scan(dest...)
+	err = s.db.QueryRowContext(s.readContext(), q, args...).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", 0, SpawnContext{}, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
 	}
@@ -658,6 +666,33 @@ func (s *Store) spawnStatusContext(instanceID string, r SettleRead, proofs []Cur
 	evidence.CodexStartup = decodeCodexStartup(startup)
 	evidence.ClaudeCapacity = decodeClaudeCapacity(capacity)
 	return reported, raw, decodeLaunchStartedAt(launchStartedAt), evidence, nil
+}
+
+// SpawnStatusWithFamily reads both independent reports in one snapshot,
+// without decoding unrelated row fields or acquiring a writer lock.
+func (s *Store) SpawnStatusWithFamily(instanceID string, r SettleRead) (reported, raw, family string, launchStartedAtMillis int64, err error) {
+	return s.spawnStatusWithFamily(instanceID, r, nil)
+}
+
+func (s *Store) spawnStatusWithFamily(instanceID string, r SettleRead, proofs []CursorMissingProof) (reported, raw, family string, launchStartedAtMillis int64, err error) {
+	if len(proofs) > 0 {
+		row, err := s.getSpawnSettled(instanceID, r, proofs)
+		return row.ReportedState, row.State, row.FamilyState, row.LaunchStartedAtMillis, err
+	}
+	var launchStartedAt any
+	expr, args := r.stateExpr()
+	familyExpr, familyArgs := r.familyExpr()
+	args = append(args, familyArgs...)
+	args = append(args, instanceID)
+	q := `SELECT ` + expr + `, state, ` + familyExpr + `, launch_started_at FROM spawns WHERE instance_id = ?`
+	err = s.db.QueryRowContext(s.readContext(), q, args...).Scan(&reported, &raw, &family, &launchStartedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", "", 0, fmt.Errorf("%w: %s", ErrSpawnNotFound, instanceID)
+	}
+	if err != nil {
+		return "", "", "", 0, fmt.Errorf("store: spawn status: %w", err)
+	}
+	return reported, raw, family, decodeLaunchStartedAt(launchStartedAt), nil
 }
 
 const spawnContextColumns = `agent, session_id, jsonl_path, launch_token, pid, proc_starttime, pane_pid, pane_starttime, end_reported_at, codex_startup, claude_capacity`
@@ -897,7 +932,7 @@ const endHeldLaunchSQL = `UPDATE spawns
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
 	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
 		instanceID, StatePending, insertLaunchStartedAtMillis)
-	res, err := s.db.Exec(endHeldLaunchSQL, args...)
+	res, err := s.execFamily(endHeldLaunchSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("store: end held launch: %w", err)
 	}
@@ -1021,7 +1056,7 @@ func (s *Store) SetParentID(instanceID, parentID string) error {
 	} else {
 		parent = nil
 	}
-	res, err := s.db.Exec(q, parent, instanceID)
+	res, err := s.execFamily(q, parent, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: set parent id: %w", err)
 	}

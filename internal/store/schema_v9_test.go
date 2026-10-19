@@ -200,7 +200,7 @@ func TestV9MigratedRowResumes(t *testing.T) {
 }
 
 // TestV9LeavesNoClaudeColumn rejects legacy claude_* columns in fresh and
-// migrated stores, allowing the capacity metadata introduced in v12.
+// migrated stores, allowing the capacity metadata introduced in v13.
 func TestV9LeavesNoClaudeColumn(t *testing.T) {
 	cases := []struct {
 		name string

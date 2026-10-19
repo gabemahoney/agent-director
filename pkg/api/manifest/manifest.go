@@ -66,6 +66,11 @@ type FieldDef struct {
 	AllowedValues []string // nil if not an enum
 }
 
+// Family state is a separate binary report, independent of own-state settling.
+const familyStateText = "Complete stored family (self and live descendants at every depth, including through retained ended/missing intermediates). Uses stored raw member states: waiting exactly when every live member is waiting, or no live members remain; otherwise working. With [state] settle_ms, both directions settle once from the aggregate change, independently of state and depth. New/upgraded families start raw; later timing survives reopening. List filters and limits do not restrict family membership. Reporting never waits; waiting does not establish readiness, action safety or task success. Permissions remain per agent."
+
+var familyStateField = FieldDef{Name: "family_state", Type: "string", Description: familyStateText, AllowedValues: []string{"working", "waiting"}}
+
 // stateEnum is the exhaustive set of valid spawn state strings (SRD §6).
 // Inlined into AllowedValues where state fields appear.
 var stateEnum = []string{
@@ -231,10 +236,11 @@ const killDescription = "End the agent of a live row's current launch (pending i
 // setting's range, what state shows with a settle time, that nothing marks a
 // state as late, the
 // setting's host-wide reach and its short-turn limit, and that the row's other
-// fields and the verbs acting on it follow its live state. No verb Description carries it: those reach help, whose size has a
+// fields except family_state and the verbs acting on it follow its live state.
+// No verb Description carries it: those reach help, whose size has a
 // hard cap (cmd/agent-director/help_size_test.go); list's state param text
 // carries the filter's part, for MCP tools/list.
-const settledStateText = "With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. The row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet."
+const settledStateText = "With [state] settle_ms set in config.toml (whole milliseconds from 0 to 60000, 0 or unset is off; a value outside that range is refused, never capped), state is the settled state: a state a hook wrote shows only once it has held that long, and the last settled state shows meanwhile, so a change that reverts sooner never shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once. Nothing marks a state as late, and the setting covers every caller on the host. A turn shorter than settle_ms never shows (a waiting agent that replies sooner reads waiting throughout), so keep it at 1000 to 2000. Except for independently settled family_state, the row's other fields, and the verbs that act on it (send-keys, decide, pause, resume, kill, find-missing, expire, spawn), follow its live state, which can be newer: a refusal can name a state status does not show yet."
 
 // launchStartLiveSentence ends the launch_started_at texts of status and get
 // and list's spawns text (b.3ie): the field follows the row's live state, so
@@ -526,6 +532,7 @@ var Verbs = []VerbDef{
 				AllowedValues: stateEnum,
 			},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
+			familyStateField,
 			{
 				Name:          "launch_started_at",
 				Type:          "timestamp?",
@@ -560,6 +567,7 @@ var Verbs = []VerbDef{
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
+			familyStateField,
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code), codex (Codex) or cursor (Cursor). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex", "cursor"}},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -1219,7 +1227,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",

@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v12 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v13 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -96,6 +96,10 @@ import (
 // DEFAULT 0), appended after proven_gone_how, matching migrateV10toV11.
 // Main-turn proof authority is durable and independent of nullable child ID.
 //
+// v12 adds independent family history; v13 adds nullable codex_startup and
+// claude_capacity provenance without backfilling existing sessions or usage.
+// The column order matches the two corresponding migration steps.
+//
 // subagents holds one row per entry, a record (confirmed) or an observation
 // (unconfirmed): created_seq grows with each insert and is never reused, so it
 // orders creation; life_number is the row's life at insert and never changes;
@@ -156,6 +160,9 @@ CREATE TABLE IF NOT EXISTS spawns (
     agent                      TEXT NOT NULL DEFAULT '',
     end_reported_at            INTEGER,
     subagent_tracking          INTEGER NOT NULL DEFAULT 0,
+    family_state               TEXT NOT NULL DEFAULT '',
+    family_settled_state       TEXT NOT NULL DEFAULT '',
+    family_changed_ms          INTEGER NOT NULL DEFAULT 0,
     codex_startup              TEXT,
     claude_capacity            TEXT
 );
@@ -286,6 +293,7 @@ var migrationSteps = []migrationStep{
 	{from: 9, apply: migrateV9toV10},
 	{from: 10, apply: migrateV10toV11},
 	{from: 11, apply: migrateV11toV12},
+	{from: 12, apply: migrateV12toV13},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

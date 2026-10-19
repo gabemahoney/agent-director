@@ -82,6 +82,11 @@ func settledRow(t testing.TB, row map[string]any) map[string]any {
 		out[k] = v
 	}
 	out["state"] = ReadSurfaceSettled(state)
+	family, ok := row["family_state"].(string)
+	if !ok || !slices.Contains([]string{store.StateWorking, store.StateWaiting}, family) {
+		t.Fatalf("invalid golden family_state: %v", row)
+	}
+	out["family_state"] = ReadSurfaceSettledFamily(family)
 	return out
 }
 

@@ -139,7 +139,7 @@ func (s *Store) RecordClaudeCapacity(instanceID string, g HookGate, p ClaudeCapa
 	return n == 1, err
 }
 
-// v12 is unreleased. This is part of its one authorized v11→v12 transaction;
+// Capacity metadata is part of the authorized v12→v13 transaction;
 // older, released migrations are unchanged and existing rows get no capacity.
 func migrateClaudeCapacity(tx *sql.Tx) error {
 	rows, err := tx.Query(`PRAGMA table_info(spawns)`)
@@ -160,7 +160,7 @@ func migrateClaudeCapacity(tx *sql.Tx) error {
 		}
 		if name != "claude_capacity" || kind != "TEXT" || notnull != 0 || pk != 0 || def.Valid {
 			rows.Close()
-			return fmt.Errorf("%w: store: v11→v12 incompatible Claude capacity column", ErrSchemaMismatch)
+			return fmt.Errorf("%w: store: v12→v13 incompatible Claude capacity column", ErrSchemaMismatch)
 		}
 		found = true
 	}
@@ -184,7 +184,7 @@ func migrateClaudeCapacity(tx *sql.Tx) error {
 			return err
 		}
 		if decodeClaudeCapacity(raw) == nil {
-			return fmt.Errorf("%w: store: v11→v12 invalid Claude capacity value", ErrSchemaMismatch)
+			return fmt.Errorf("%w: store: v12→v13 invalid Claude capacity value", ErrSchemaMismatch)
 		}
 	}
 	return rows.Err()

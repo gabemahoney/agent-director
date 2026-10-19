@@ -49,9 +49,13 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 					process = procfix.Alive(row.Identity.PaneStarttime)
 				}
 				e.pc.Set(pid, process)
+				if err := apitest.SetFamilyHistory(e.dbPath, row.InstanceID, store.StateWorking, store.StateWorking, 0); err != nil {
+					t.Fatal(err)
+				}
 				before := cursorResumeRawSnapshot(t, e.dbPath, row.InstanceID)
 				getStarted := time.Now()
 				got, err := c.Get(row.InstanceID)
+				getFinished := time.Now()
 				t.Logf("public Get elapsed=%s state=%s error=%v", time.Since(getStarted), got.State, err)
 				if err != nil {
 					t.Fatal(err)
@@ -86,9 +90,13 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 						if after["spawns"]["row_version"] != before["spawns"]["row_version"].(int64)+1 || after["spawns"]["ended_at"] == nil || !reflect.DeepEqual(before["cursor_runtimes"], after["cursor_runtimes"]) {
 							t.Fatalf("terminal persistence changed binding or lacked terminal facts: %+v", after)
 						}
+						changed := after["spawns"]["family_changed_ms"].(int64)
+						if after["spawns"]["family_state"] != store.StateWaiting || after["spawns"]["family_settled_state"] != store.StateWorking || changed < getStarted.UnixMilli() || changed > getFinished.UnixMilli() {
+							t.Fatalf("terminal persistence did not record the family transition independently: %+v", after["spawns"])
+						}
 						for column, value := range before["spawns"] {
 							switch column {
-							case "state", "settled_state", "state_changed_ms", "ended_at", "last_seen_at", "liveness_unverified_since", "liveness_note", "launch_started_at", "row_version":
+							case "state", "settled_state", "state_changed_ms", "ended_at", "last_seen_at", "liveness_unverified_since", "liveness_note", "launch_started_at", "row_version", "family_state", "family_settled_state", "family_changed_ms":
 								continue
 							}
 							if !reflect.DeepEqual(value, after["spawns"][column]) {

@@ -15,14 +15,15 @@ Schema dispatch and fresh-store DDL live in `internal/store/schema.go`, with
 the version constant and typed errors in `internal/store/store.go`. The v9→v10 hop and shared
 runtime-table DDL live in
 `internal/store/cursor_runtime.go`; the v10→v11 proof-eligibility hop lives in
-`internal/store/request_eligibility.go`; the current v11→v12 Codex startup
-and Claude capacity provenance hop lives in `internal/store/codex_startup.go`
+`internal/store/request_eligibility.go`; the v11→v12 family-history hop lives
+in `internal/store/family_schema.go`; the current v12→v13 Codex startup and
+Claude capacity provenance hop lives in `internal/store/codex_startup.go`
 with `migrateClaudeCapacity` in `internal/store/claude_capacity.go`.
 The current schema has seven tables: `spawns`, `permission_requests`,
 `session_history`, `store_meta`, `subagents`, `subagent_launches` and
 `cursor_runtimes`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `12`) is the
+**The version contract.** `schemaVersion` (`store.go`, currently `13`) is the
 version this binary writes and reads. Every opened DB carries its own version
 in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
 dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
@@ -43,7 +44,7 @@ sentinel next to the DB file; otherwise the open is refused with the typed
 (zero DB writes). See §1a for the sentinel gate and §1b for the refusal.
 
 The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
-`user_version=12` opened by a v11 binary) returns `ErrSchemaMismatch` (`store.go`)
+`user_version=14` opened by a v13 binary) returns `ErrSchemaMismatch` (`store.go`)
 rather than touching the file. Callers detect it with
 `errors.Is(err, ErrSchemaMismatch)`.
 
@@ -56,25 +57,25 @@ insert is guarded (`insertStoreIDOnceSQL`, `INSERT … SELECT … WHERE NOT
 EXISTS`), so it never replaces an id that is already there. No other statement
 writes `store_meta`, no verb changes the id, and later hops (`migrateV5toV6`,
 `migrateV6toV7`, `migrateV7toV8`, `migrateV8toV9`, `migrateV9toV10`,
-`migrateV10toV11`, `migrateV11toV12`) keep it.
+`migrateV10toV11`, `migrateV11toV12`, `migrateV12toV13`) keep it.
 After `ensureSchema` succeeds,
 `openDB` reads the id once (`readStoreID`), and `(*Store).StoreID()` returns
 it. A current-version store with no `store_meta` table, no `store_id` row, or a
 value that is not 16 lowercase hex characters fails the open with an error that
 wraps `ErrSchemaMismatch`. The error never contains the value, the DB is
 closed, and nothing is written. Only a hand edit leaves a store in that state;
-the v5 → v4 recipe (§5) stamps v4, which a v5, v6, v7, v8, v9, v10, v11 or v12 binary refuses
+the v5 → v4 recipe (§5) stamps v4, which a v5, v6, v7, v8, v9, v10, v11, v12 or v13 binary refuses
 with `ErrSchemaMigrationRequired`.
 
 **A registry of steps, not a switch.** Version transitions are no longer
 `case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
 migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds eleven entries, one per hop from
-v1→v2 through v11→v12. The released `migrateV8toV9` remains unchanged,
-as do the separate v9→v10 runtime-binding and v10→v11 eligibility hops.
-`migrateV11toV12` is the current worked example. The next version is v13:
-append its own step rather than changing these settled earlier hops.
-See §1a's "Adding a step".
+(`schema.go`); today that registry holds twelve entries, one per hop from
+v1→v2 through v12→v13. The released `migrateV8toV9` remains unchanged,
+as do the separate v9→v10 runtime-binding, v10→v11 eligibility and
+v11→v12 family-history hops. `migrateV12toV13` is the current worked example.
+The next version is v14: append its own step rather than changing these
+settled earlier hops. See §1a's "Adding a step".
 
 **One transaction per step, stamp included.** Every `apply` func opens a single
 `db.Begin()` transaction and does *all* of its DDL/DML **and** the
@@ -99,8 +100,8 @@ the DDL is `IF NOT EXISTS` and the insert is guarded.
 `runMigrationChain(db, from)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v12 binary
-runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v13 binary
+runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -171,16 +172,16 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v13, generalizing to any vN→vN+1),
-use the v11→v12 worked example below and the validate-first pattern (§2):
+**Adding a step.** To add the next version (v14, generalizing to any vN→vN+1),
+use the v12→v13 worked example below and the validate-first pattern (§2):
 
-1. Bump `schemaVersion` to `13` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v13 (the two-places
+1. Bump `schemaVersion` to `14` (`store.go`).
+2. Evolve `schemaDDL` so a fresh DB is created directly at v14 (the two-places
    rule — §1, §4). Keep `store_meta` and `createSchema`'s guarded store-id
-   insert. A v12→v13 hop must preserve the existing id.
-3. Write `migrateV12toV13(db)` using one transaction, with validation before
+   insert. A v13→v14 hop must preserve the existing id.
+3. Write `migrateV13toV14(db)` using one transaction, with validation before
    mutation and the version stamp last (§2).
-4. Append `{from: 12, apply: migrateV12toV13}` to `migrationSteps` (`schema.go`).
+4. Append `{from: 13, apply: migrateV13toV14}` to `migrationSteps` (`schema.go`).
 5. Document the recovery policy in §5. Where an in-place reverse recipe is
    supported, add its matching test copy to `TestDowngradeRecipe_MatchesGuide`
    and chain the applicable older recipe to it. Otherwise record the technical
@@ -188,18 +189,17 @@ use the v11→v12 worked example below and the validate-first pattern (§2):
    never imply that an older recipe can operate on the new schema.
 
 The chain engine walks the registry up to `schemaVersion` automatically;
-appending the step makes both a v12→v13 upgrade and a v1→v13 chain work.
+appending the step makes both a v13→v14 upgrade and a v1→v14 chain work.
 
-### Current worked example: v11 → v12
+### Current worked example: v12 → v13
 
-`migrateV11toV12` (`codex_startup.go`) appends nullable
+`migrateV12toV13` (`codex_startup.go`) appends nullable
 `spawns.codex_startup TEXT` and `spawns.claude_capacity TEXT`, with no default
-or backfill, after `subagent_tracking`. Schema v12 is unreleased; these are
-one hop, and released migrations through v11 stay unchanged.
-Fresh `schemaDDL` creates the same shape directly at
-v12. The registered `{from: 11, apply: migrateV11toV12}` step runs after
-the separate runtime and eligibility hops; authorization must match the
-actual starting version and target 12.
+or backfill, after the three v12 family-history columns. Schema v13 is
+unreleased; these are one hop, and existing migrations through v12 stay
+unchanged. Fresh `schemaDDL` creates the same shape directly at v13. The registered `{from: 12, apply: migrateV12toV13}` step runs after
+the separate runtime, eligibility and family-history hops; authorization
+must match the actual starting version and target 13.
 
 `codex_startup` stores a strictly validated JSON `CodexStartup`: launch token,
 session id, absolute rollout path, writer PID and process start time. It
@@ -208,8 +208,8 @@ reading. `claude_capacity` stores strictly validated JSON `ClaudeCapacity`:
 the same launch/session/path/process identity, version/provider, and optional
 main/child model, positive window, response UUID, observation time and
 invalidation marker. It contains capacity/provenance only; Claude usage is
-read from the transcript on demand. Existing rows retain NULL, so migration never qualifies an old or
-resumed rollout by its creation-only `cli_version`. Cursor remains unknown;
+read from the transcript on demand. Existing rows retain NULL, so migration
+never qualifies an old or resumed rollout by its creation-only `cli_version`. Cursor remains unknown;
 this migration adds no Cursor context admission, checkpoint reader or
 usage persistence. See [Experimental context readers](architecture.md#experimental-context-readers)
 for runtime admission and invalidation.
@@ -231,23 +231,35 @@ at most 128 ASCII letters, digits, hyphens or underscores. Unknown fields,
 trailing JSON, invalid bindings or entries and incompatible column shapes
 are refused. Invalidated entries are valid provenance, not usable readings.
 
-Validation, any ADD COLUMN, the v12 stamp and commit share one transaction.
-A refusal or failed commit leaves the hop's v11 schema/data/version and
+Validation, any ADD COLUMN, the v13 stamp and commit share one transaction.
+A refusal or failed commit leaves the hop's v12 schema/data/version and
 authorization intact. Earlier committed hops remain; rerun the supported
 installer to refresh authorization to the resulting version before retry.
 The store id and all existing rows/columns in all seven tables are preserved.
-Successful migration consumes authorization; reopening v12 does not replay
+Successful migration consumes authorization; reopening v13 does not replay
 it. A retained marker on reopen still requires current runtime bindings and
 a live original writer before it can qualify any reading.
 
-`schema_v12_test.go` covers physical-v11 preservation, absent/NULL/valid
+`schema_v13_test.go` covers physical-v12 preservation, absent/NULL/valid
 partial columns, bounded marker reentry, incompatible shape/value refusal,
 commit rollback and corrected retry, fresh/migrated convergence and reopen.
 The shared migration matrices include the new step and every prior starting
-version. Recovery is restore-only (§5); no v12 reverse recipe is implemented.
+version. Recovery is restore-only (§5); no v13 reverse recipe is implemented.
 Targeted tests do not establish full-unit, installer, Docker or live acceptance.
 
-### Earlier worked example: v10 → v11
+### Earlier worked example: v11 → v12
+
+`migrateV11toV12` (`family_schema.go`) appends `family_state`,
+`family_settled_state` and `family_changed_ms` after `subagent_tracking`.
+It validates compatible existing definitions and values, then initializes
+family history from the stored tree without changing own-state history or
+store identity. This remains a distinct registered hop before v12→v13.
+Fresh DDL keeps the same column definitions and order before the two
+context provenance columns. See [Family reporting](architecture.md#family-reporting)
+for aggregation and initialization; `schema_v12_test.go` checks preservation,
+reentry/refusal and the tested family-only v12 → v11 recovery recipe (§5).
+
+### Historical worked example: v10 → v11
 
 **CSCB upgrade caveat (2026-10-18):** The relay rewrite (b.q2i, b.3oc,
 b.8t7 and b.zdz) shipped in AD 0.12.0. CSCB pins AD 0.12.0, but its
@@ -285,8 +297,9 @@ A chain may already have committed earlier hops; per-hop rollback does not
 reverse those earlier commits. After successful authorization consumption,
 reopen at v11 does not replay migration.
 
-Fresh DDL retains `cursorRuntimeDDL` and the identical eligibility column
-alongside v12's startup and capacity columns. `schema_v11_test.go` covers physical-v10 preservation,
+Fresh DDL retains `cursorRuntimeDDL`, the identical eligibility column,
+v12 family history and v13 startup/capacity provenance.
+`schema_v11_test.go` covers physical-v10 preservation,
 NULL/malformed historical agents, Cursor/child/orphan false, compatible
 reentry, incompatible shape/value refusal, injected post-DDL backfill failure
 and corrected retry, fresh/migrated convergence and restart. The dynamic
@@ -303,7 +316,7 @@ release appends its columns to `v7Columns` (`schema.go`) and the same text to
 test copy. For a restore-only version, retain the documented recovery exception
 instead. Once a version has shipped, its hop never changes. The settled Cursor
 runtime, proof and context provenance changes explicitly use distinct
-v9→v10, v10→v11 and v11→v12 hops; do not fold them into earlier hops.
+v9→v10, v10→v11, v11→v12 and v12→v13 hops; do not fold them into earlier hops.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -694,11 +707,11 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** The current v12 fresh DDL
-includes `cursorRuntimeDDL`, the eligibility column and nullable
-`spawns.codex_startup TEXT` and `spawns.claude_capacity TEXT`; the v9→v10,
-v10→v11 and v11→v12 hops use the
-same respective definitions. Future changes must update
+goes wrong: **fresh databases never replay hops.** The current v13 fresh DDL
+includes `cursorRuntimeDDL`, the eligibility column, the three v12
+family-history columns and nullable `spawns.codex_startup TEXT` and
+`spawns.claude_capacity TEXT`; the v9→v10, v10→v11, v11→v12 and v12→v13
+hops use the same respective definitions. Future changes must update
 both fresh DDL and the next hop. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
@@ -768,7 +781,7 @@ ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```
 
-This illustrates the historical pattern, not a recipe for v9, v10, v11 or v12. Never
+This illustrates the historical pattern, not a recipe for v9, v10, v11, v12 or v13. Never
 merely reset the version pragma. Confirm the starting version and use only the
 matching tested recipe before letting an older binary open the file. The store
 does not downgrade automatically.
@@ -780,10 +793,12 @@ the v8 → v7 recipe, then the v7 → v6 recipe, and to v5 by those two, then th
 v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
-**Current recovery policy (technical exception to an in-place reverse recipe).**
-There is no supported v12→v11, v11→v10 or v10→v9 reverse recipe. The v12
-technical exception retains restore-only recovery: no reverse implementation
-or tested SQL recipe accompanies the two provenance columns. Before upgrading,
+**Current recovery policy.** Schema v13 is restore-only: there is no
+supported v13→v12 reverse recipe for the context provenance columns. The
+v12 → v11 recipe below applies only to genuine family-only v12 stores;
+it must never be run against v13 or a v13 store whose version was merely
+reset. There is no supported v11→v10 or v10→v9 reverse recipe either
+(technical exceptions to an in-place reverse recipe). Before upgrading,
 stop writers and back up the actual configured database and its WAL/SHM
 companions. Restore that matching pre-upgrade set with the matching prior
 binary and that release's own installer/flags; writes since the backup are
@@ -794,7 +809,7 @@ either provenance column or reset `user_version` as a downgrade substitute.
 The complete current-layout and
 historical directory-move procedure is owned by
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-Older recipes below are inapplicable to v9, v10, v11 and v12.
+The v8-and-older recipes below are inapplicable to v9, v10, v11, v12 and v13.
 
 There is no v9 → v8 recipe. The v8 → v9 hop (`migrateV8toV9`, b.ssz) renames
 six columns, adds three columns to `spawns` (`agent`, `end_reported_at` and
@@ -802,6 +817,49 @@ six columns, adds three columns to `spawns` (`agent`, `end_reported_at` and
 `subagent_launches` tables, so no recipe reaches a v9 store; the way back is a copy of
 `state.db` (with its `-wal` and `-shm` files) that you took yourself before
 installing. The installer does not make that copy.
+
+#### v12 → v11 (reverses `migrateV11toV12`)
+
+Use this only on a genuine family-only v12 store whose `PRAGMA user_version;`
+prints `12`, to allow a schema-v11 binary to open it. A v13 store cannot use
+this recipe, even if someone resets its version: the two context provenance
+columns would remain and the result would not match schema v11. Stop every agent, server and other caller
+that can hold or write the store. Back up the actual configured `state.db`
+and its `-wal` and `-shm` companions before changing anything. Use SQLite
+3.35.5 or later, as required by the older `DROP COLUMN` recipes below.
+
+Save this as `recipe.sql`, then run
+`sqlite3 -bail /path/to/configured/state.db < recipe.sql`, replacing the
+path with the actual configured store:
+
+```sql
+.bail on
+BEGIN;
+ALTER TABLE spawns DROP COLUMN family_changed_ms;
+ALTER TABLE spawns DROP COLUMN family_settled_state;
+ALTER TABLE spawns DROP COLUMN family_state;
+PRAGMA user_version=11;
+COMMIT;
+```
+
+The three columns have no index or constraint preventing `DROP COLUMN` in
+the v12 schema. Their removal and the final stamp share one transaction.
+If any statement fails, bail mode exits without committing; restore the
+backup if the store has been changed outside that transaction. Never stamp
+the version alone or apply an older recipe directly to v12.
+
+Confirm `PRAGMA user_version;` prints `11` and `.schema spawns` has none of
+the three family columns before installing the schema-v11 binary. This
+deletes only family aggregate history: every row, stored relationship,
+own-state settle value and clock, permission record, session history entry
+and store id remains. A later authorized v11 → v12 migration initializes
+family history afresh from the current raw stored tree. The recovery test
+`TestV12RecoveryRecipePreservesOwnHistoryAndRemigrates` checks the reverse
+schema and preservation/remigration behavior.
+
+This recipe stops at v11. To return to schema v10 or v9, restore the
+matching stopped-writer pre-upgrade backup and use that release's binary
+and installer; the v11→v10 and v10→v9 exceptions still apply.
 
 #### v8 → v7 (reverses `migrateV7toV8`)
 
@@ -1145,12 +1203,15 @@ installing.
 
 ## References
 
-- `internal/store/codex_startup.go` — guarded v11→v12 startup provenance hop
+- `internal/store/codex_startup.go` — guarded v12→v13 startup provenance hop
   and bounded `CodexStartup` validation.
 - `internal/store/claude_capacity.go` — Claude capacity addition in the same
-  v12 transaction, bounded metadata validation and gated runtime writes.
-- `internal/store/schema_v12_test.go` — preservation/no-backfill, reentry,
+  v13 transaction, bounded metadata validation and gated runtime writes.
+- `internal/store/schema_v13_test.go` — preservation/no-backfill, reentry,
   refusal, commit rollback/retry, convergence and reopen checks.
+- `internal/store/family_schema.go` — guarded v11→v12 family-history hop.
+- `internal/store/schema_v12_test.go` — family initialization, preservation,
+  compatible reentry/refusal and genuine-v12 recovery/remigration checks.
 - `internal/store/request_eligibility.go` — guarded v10→v11 proof metadata hop.
 - `internal/store/schema_v11_test.go` — eligibility migration, reentry, refusal,
   rollback/retry and NULL-safe historical compatibility checks.
@@ -1159,7 +1220,7 @@ installing.
   `cursorRuntimeDDL`, shared by the hop and fresh-store DDL.
 - `internal/store/schema_v10_test.go` —
   `TestV10MigrationReentryAndPreservation` and
-  `TestV10MigrationRefusalRollback`.
+  `TestV10MigrationRefusalRollback` (§1a's historical worked example).
 
 - `internal/store/schema.go` — `ensureSchema`, `runMigrationChain`,
   `migrationSteps`/`migrationStep`, `migrationStepFrom`, `createSchema`,
@@ -1194,27 +1255,28 @@ installing.
   new version's `schema_v<N>_test.go` (§3): `TestV5MigrationKeepsV4Rows`,
   the store-id tests (`TestStoreIDKept`,
   `TestStoreID_MissingOrMalformedFailsOpen`) and the downgrade tests:
-  `TestDowngradeRecipe_MatchesGuide` parses the four recipe SQL blocks of
-  §5, "v8 → v7", "v7 → v6", "v6 → v5" and "v5 → v4", and fails when any
-  differs from its test copy (`v8ToV7RecipeStatements`,
+  `TestDowngradeRecipe_MatchesGuide` parses the five recipe SQL blocks of
+  §5, "v12 → v11", "v8 → v7", "v7 → v6", "v6 → v5" and "v5 → v4", and fails
+  when any differs from its test copy (`v12ToV11RecipeStatements`,
+  `v8ToV7RecipeStatements`,
   `v7ToV6RecipeStatements`, `v6ToV5RecipeStatements`,
   `v5ToV4RecipeStatements`) or lacks the `.bail on` / `BEGIN;` / `COMMIT;`
   frame, so no recipe here can drift from the statements the tests run; it
-  is also the test that pins the v8 → v7, v7 → v6 and v6 → v5 recipes to the
-  guide.
-  `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults` takes a current
-  store back to v5 first (`v8ToV7RecipeStatements`, then
-  `v7ToV6RecipeStatements`, then `v6ToV5RecipeStatements`), applies the
-  recipe to `seedV5DowngradeRows`,
+  is also the test that pins the v12 → v11, v8 → v7, v7 → v6 and v6 → v5
+  recipes to the guide.
+  `TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults` takes a v8 store
+  from `makeV8Fixture` back to v5 first (`v8ToV7RecipeStatements`, then
+  `v7ToV6RecipeStatements`, then `v6ToV5RecipeStatements`), applies
+  `v5ToV4RecipeStatements` to its reused and opted-out rows,
   checks every v4 column and history entry survives, then re-migrates and
   checks the v5 and v6 columns take their defaults (pre-trust opt-out and
   life numbers are lost; no launch owner).
 - `internal/store/schema_v6_test.go` — v6's own cases (§3):
   `TestV6MigrationKeepsV5Rows` (`makeV5Fixture` migrated: every v5 value
   kept, no launch owner, the store id kept) and
-  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which takes a current store
-  back to v6 (`v8ToV7RecipeStatements`, then `v7ToV6RecipeStatements`),
-  applies `v6ToV5RecipeStatements` to
+  `TestDowngradeV6ToV5_KeepsRowsThenRemigrates`, which takes a v8 store from
+  `makeV8Fixture` back to v6 (`v8ToV7RecipeStatements`, then
+  `v7ToV6RecipeStatements`), applies `v6ToV5RecipeStatements` to
   it holding a `pending` row with a recorded owner, checks the v5 store keeps
   every other value and the store id and is refused with
   `ErrSchemaMigrationRequired`, then re-migrates and checks the row has no
@@ -1226,8 +1288,8 @@ installing.
   before v7), `TestV7MigrationProvesFinishedRowsRequests` (phase 3: the
   `ended` and `missing` rows' requests proven `agent_gone` at one instant,
   the live row's unproven, a second run changing nothing) and
-  `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which takes a current store
-  back to v7 (`v8ToV7RecipeStatements`), then applies
+  `TestDowngradeV7ToV6_KeepsRowsThenRemigrates`, which takes a v8 store from
+  `makeV8Fixture` back to v7 (`v8ToV7RecipeStatements`), then applies
   `v7ToV6RecipeStatements` to it, holding a request the relay hook
   recorded with its identity, checks the v6 store has a v6 store's shape,
   keeps every other value of the row and the request and the store id, and

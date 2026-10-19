@@ -236,6 +236,9 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err != nil || res != CondApplied {
 		return "", res, err
 	}
+	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
@@ -257,6 +260,9 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
+		if err == nil && res == CondApplied {
+			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing)
+		}
 		return err
 	})
 	if err != nil {
@@ -555,10 +561,10 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // answered at the pane): its dialog is gone (b.146 step 2c).
 // In the same statement it NULLs launch_started_at, advances row_version by
 // one (SR-5.2) and writes the settle columns of an immediate write (b.3ie:
-// the new state reports at once). It writes no other column: idle_since is
-// kept until the
-// agent's next hook clears it, and last_seen_at is not bumped, since no hook
-// reported.
+// the new state reports at once). It writes no other own-state column:
+// idle_since is kept until the agent's next hook clears it, and last_seen_at
+// is not bumped, since no hook reported. The guarded repair and family-history
+// refresh commit together.
 //
 // Whether a request's relay hook may still be alive is the caller's to check
 // before calling: a process check is no statement. A request recorded after
@@ -576,7 +582,9 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 	const errPrefix = "store: repair check_permission if same life"
 	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
 		snapshotMatchArgs(examined)...)
-	err = s.db.QueryRow(repairCheckPermissionSQL, args...).Scan(&newState)
+	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&newState)
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		res, err = s.condNotApplied(instanceID, errPrefix)
@@ -591,7 +599,7 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 // matched a row.
 // errPrefix names the write in a driver error.
 func (s *Store) execGuarded(q string, args []any, errPrefix string) (bool, error) {
-	r, err := s.db.Exec(q, args...)
+	r, err := s.execFamily(q, args...)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}
