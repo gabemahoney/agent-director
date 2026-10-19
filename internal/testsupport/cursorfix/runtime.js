@@ -74,18 +74,6 @@ async function startMCP(server, env, scripted, attempt) {
    for(const waiter of pending.values()) waiter.reject(err);
    pending.clear();
   }
-  function available() {
-   if(!stopped.signal.aborted) {
-    try {
-     // Exit/EOF dispatch can lag a due retry timer after an event-loop stall.
-     const stat=fs.readFileSync('/proc/'+child.pid+'/stat','utf8');
-     const fields=stat.slice(stat.lastIndexOf(')')+2).split(' ');
-     if(fields[19]!==start || ['Z','X','x'].includes(fields[0]) || child.exitCode!==null || child.signalCode!==null || !child.stdin.writable || child.stdin.destroyed || child.stdout.readableEnded || child.stdout.destroyed)
-      throw Error('MCP endpoint retired before request');
-    } catch(err) {stop(err);}
-   }
-   return !stopped.signal.aborted;
-  }
   lines.on('line',line=>{
    try {
     const reply=JSON.parse(line), waiter=pending.get(reply.id);
@@ -104,7 +92,7 @@ async function startMCP(server, env, scripted, attempt) {
   child.stdin.on('error',stop);
   function request(id,method,params,deadline=performance.now()+10000) {
    return new Promise((resolve,reject)=>{
-    if(!available()) {reject(stopped.signal.reason);return;}
+    if(stopped.signal.aborted) {reject(stopped.signal.reason);return;}
     const remaining=deadline-performance.now();
     if(remaining<=0) {reject(Error('MCP response deadline'));return;}
     const timer=setTimeout(()=>{pending.delete(id);reject(Error('MCP response deadline'));},remaining);
@@ -120,11 +108,11 @@ async function startMCP(server, env, scripted, attempt) {
   }
   function backoff(delay,deadline) {
    return new Promise((resolve,reject)=>{
-    if(!available()) {reject(stopped.signal.reason);return;}
+    if(stopped.signal.aborted) {reject(stopped.signal.reason);return;}
     const remaining=deadline-performance.now();
     if(remaining<=0) {reject(Error('MCP response deadline'));return;}
     const cancel=()=>{clearTimeout(timer);reject(stopped.signal.reason);};
-    const timer=setTimeout(()=>{stopped.signal.removeEventListener('abort',cancel);if(available()) resolve();else reject(stopped.signal.reason);},Math.min(delay,remaining));
+    const timer=setTimeout(()=>{stopped.signal.removeEventListener('abort',cancel);resolve();},Math.min(delay,remaining));
     stopped.signal.addEventListener('abort',cancel,{once:true});
    });
   }
