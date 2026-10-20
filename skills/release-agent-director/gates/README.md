@@ -31,7 +31,9 @@ Every gate script **must** adhere to the following contract:
 
 - Gates **must not** mutate repository state. They are read-only checks.
   Any gate that needs to modify state should instead report a diagnostic
-  and let the orchestrator decide whether to proceed.
+  and let the orchestrator decide whether to proceed. Diagnostic log files
+  under ignored `dist/release-logs/` are allowed; see "Go root failure logs"
+  below.
 
 - Command output, and any JSON that holds it (diagnostics, sub-checks,
   excerpts, report phases), reaches `jq` on stdin or in a file `jq` reads,
@@ -249,6 +251,29 @@ siblings fail; nothing is masked by the first failure. Every gate's
 individual outcome and its diagnostics appear in the consolidated output
 regardless of sibling failures. The phase's overall outcome is `failed` if
 any gate failed, `passed` only if all passed.
+
+#### Go root failure logs
+
+When `coverage.go-root` fails, its diagnostic description names the first
+failing package and includes every `--- FAIL:` header from the complete Go
+output, including nested subtests, with up to 20 following indented message
+lines per header. An omission notice marks additional message lines. The
+last 50 output lines remain in the description for build errors and other
+failures without test headers.
+
+The diagnostic also names the absolute path of the complete combined stdout
+and stderr log: `<worktree>/dist/release-logs/coverage.go-root.XXXXXX`, with
+a unique suffix for each invocation. Inspect this file for omitted context;
+no diagnostic rerun is needed. Failed-run logs survive the parallel
+executor's capture cleanup and subsequent gate invocations. They are
+gitignored and do not fail `preflight.worktree-clean`. A successful run
+removes only its own log, leaving earlier failure logs available until they
+or the worktree are removed.
+
+Log-creation errors stop the gate before tests run. A log-write failure
+fails the gate and warns that the named log may be incomplete or missing;
+check disk space and permissions before retrying. Failure to remove a
+successful run's log also fails the gate with a cleanup diagnostic.
 
 #### Tree-write lock
 

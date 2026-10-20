@@ -307,4 +307,11 @@ func TestCoverageGoRootFires(t *testing.T) {
 	if !strings.Contains(stdout, okLine) {
 		t.Fatalf("passing: gate stdout missing %q — fixture module was not tested (cd-fallback?)\nstdout:\n%s", okLine, stdout)
 	}
+	if stderr != "" {
+		t.Fatalf("passing: expected quiet stderr, got %q", stderr)
+	}
+	logs, err := filepath.Glob(filepath.Join(fixtureRoot, "dist", "release-logs", "*"))
+	if err != nil || len(logs) != 1 {
+		t.Fatalf("passing: only the earlier build failure log should remain, got %v (%v)", logs, err)
+	}
 }

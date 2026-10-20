@@ -17938,6 +17938,14 @@ line costs a whole gate's diagnostics: the parallel executor
 starts with `{` in a single `jq -s`, and records an empty list if that
 fails.
 
+`coverage.go-root` retains failed-run output independently of the parallel
+executor's disposable captures, using unique files under the worktree's
+ignored `dist/release-logs/`. Its diagnostic names the absolute log path and
+summarizes every failing test header, including subtests, with bounded
+message-line context, followed by the last 50 output lines. Successful runs
+remove their own logs. See [Go root failure logs](../skills/release-agent-director/gates/README.md#go-root-failure-logs)
+for the retention and recovery contract.
+
 **Command output reaches `jq` on stdin.** Linux caps one argument at
 128 KiB (`MAX_ARG_STRLEN`). A larger `--arg` or `--argjson` makes the exec
 of `jq` fail with "Argument list too long", and the diagnostic, sub-check
