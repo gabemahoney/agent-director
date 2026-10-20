@@ -113,7 +113,7 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 				t.Fatal("decision/ack/reopen conferred eligibility")
 			}
 			gate.Event = "Stop"
-			n, err := s.ProveRequestsGone(relayID, gate, RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt})
+			n, err := s.ProveRequestsGone(relayID, gate, turnEndProof())
 			want := int64(0)
 			if tc.want {
 				want = 1
@@ -186,7 +186,7 @@ func TestCurrentSchemaContradictoryChildRemainsHeld(t *testing.T) {
 	if got := mustRequest(t, s, tokenA); !got.MainTurnEndEligible || got.AgentID != child.AgentID {
 		t.Fatalf("corruption did not survive reopen: %+v", got)
 	}
-	turnEnd := RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}
+	turnEnd := turnEndProof()
 	if n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), turnEnd); err != nil || n != 1 {
 		t.Fatalf("main proof %d %v; want only eligible main", n, err)
 	}
@@ -229,10 +229,10 @@ func TestExplicitFalseUnknownClosePreservesOtherHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if n, err := s.ProveRequestsGone(relayID, foreignGate("Stop", ""), RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}); err != nil || n != 0 {
+	if n, err := s.ProveRequestsGone(relayID, foreignGate("Stop", ""), turnEndProof()); err != nil || n != 0 {
 		t.Fatalf("foreign proof %d %v", n, err)
 	}
-	if n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}); err != nil || n != 0 {
+	if n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), turnEndProof()); err != nil || n != 0 {
 		t.Fatalf("main proof %d %v", n, err)
 	}
 	if n, err := s.ProveRequestsGone(relayID, agentGate("PostToolUse", ""), RequestProof{How: ProvenGoneToolRan, ToolUseID: a.ToolUseID, At: proofAt}); err != nil || n != 1 {

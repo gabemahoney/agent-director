@@ -19706,6 +19706,13 @@ are in `internal/hook/hook_parent_fakes_test.go`). Inside
 `internal/store/agent_pane_helpers_test.go` (`insertAgentRow`,
 `agentGate`, `foreignGate`, `agentHook`, `agentSessionStart`, …).
 
+Store tests needing a turn-end proof after their seeded requests MUST use
+`turnEndProof()` (`internal/store/request_proof_test.go`) after request
+setup, keeping the factory in table entries until then. It preserves the
+fixed `proofAt` and sets `RecordedBefore` one second after construction,
+beyond the requests' whole second; repeated runs cannot outlive a shared
+cutoff. Tests of the time boundary itself supply their own cutoff.
+
 **`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
 write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
 seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:

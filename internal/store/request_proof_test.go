@@ -26,9 +26,11 @@ import (
 // proofAt is the instant a test proof records as proven_gone_at.
 var proofAt = time.UnixMilli(1_790_000_000_123)
 
-// startAfterAll is a turn_end proof's hook start later than every request a
-// test records, so the created_at cut (b.omt) leaves none of them out.
-var startAfterAll = time.Now().Add(time.Hour)
+// turnEndProof starts after requests already recorded, beyond their whole second.
+// Construct it after setup so repeated runs cannot outlive a shared cutoff.
+func turnEndProof() RequestProof {
+	return RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: time.Now().Add(time.Second), At: proofAt}
+}
 
 // mainReq is relayReq(token) as the main agent's request (no agent_id).
 func mainReq(token string) RelayRequest {
@@ -70,30 +72,29 @@ func proven(t *testing.T, s *Store, tokens ...string) map[string]string {
 // Another row's main-agent request with A's tool_use_id is never touched.
 func TestProveRequestsGone(t *testing.T) {
 	toolRan := func(id string) RequestProof { return RequestProof{How: ProvenGoneToolRan, ToolUseID: id, At: proofAt} }
-	turnEnd := RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}
 	cases := []struct {
 		name    string
 		before  *RequestProof // an earlier proof, an hour before proofAt
-		proof   RequestProof
+		proof   func() RequestProof
 		foreign bool
 		wantErr bool
 		want    map[string]string // A, B, C
 	}{
-		{name: "tool_ran, the main agent's tool_use_id", proof: toolRan("toolu_" + tokenA[:8]),
+		{name: "tool_ran, the main agent's tool_use_id", proof: func() RequestProof { return toolRan("toolu_" + tokenA[:8]) },
 			want: map[string]string{tokenA: ProvenGoneToolRan, tokenB: "", tokenC: ""}},
-		{name: "tool_ran, a subagent's tool_use_id", proof: toolRan("toolu_" + tokenB[:8]),
+		{name: "tool_ran, a subagent's tool_use_id", proof: func() RequestProof { return toolRan("toolu_" + tokenB[:8]) },
 			want: map[string]string{tokenA: "", tokenB: ProvenGoneToolRan, tokenC: ""}},
-		{name: "tool_ran, another tool_use_id", proof: toolRan("toolu_other"),
+		{name: "tool_ran, another tool_use_id", proof: func() RequestProof { return toolRan("toolu_other") },
 			want: map[string]string{tokenA: "", tokenB: "", tokenC: ""}},
-		{name: "tool_ran, no tool_use_id", proof: toolRan(""),
+		{name: "tool_ran, no tool_use_id", proof: func() RequestProof { return toolRan("") },
 			want: map[string]string{tokenA: "", tokenB: "", tokenC: ""}},
-		{name: "turn_end", proof: turnEnd,
+		{name: "turn_end", proof: turnEndProof,
 			want: map[string]string{tokenA: ProvenGoneTurnEnd, tokenB: "", tokenC: ProvenGoneTurnEnd}},
-		{name: "turn_end after A's tool ran", before: ptrProof(toolRan("toolu_" + tokenA[:8])), proof: turnEnd,
+		{name: "turn_end after A's tool ran", before: ptrProof(toolRan("toolu_" + tokenA[:8])), proof: turnEndProof,
 			want: map[string]string{tokenA: ProvenGoneToolRan, tokenB: "", tokenC: ProvenGoneTurnEnd}},
-		{name: "turn_end from another process", proof: turnEnd, foreign: true,
+		{name: "turn_end from another process", proof: turnEndProof, foreign: true,
 			want: map[string]string{tokenA: "", tokenB: "", tokenC: ""}},
-		{name: "an unknown proof", proof: RequestProof{How: "agent_gone", At: proofAt}, wantErr: true,
+		{name: "an unknown proof", proof: func() RequestProof { return RequestProof{How: "agent_gone", At: proofAt} }, wantErr: true,
 			want: map[string]string{tokenA: "", tokenB: "", tokenC: ""}},
 	}
 	for _, tc := range cases {
@@ -115,14 +116,15 @@ func TestProveRequestsGone(t *testing.T) {
 				gate = foreignGate("Stop", "")
 			}
 
-			n, err := s.ProveRequestsGone(relayID, gate, tc.proof)
+			proof := tc.proof()
+			n, err := s.ProveRequestsGone(relayID, gate, proof)
 
 			if (err != nil) != tc.wantErr || tc.wantErr && !errors.Is(err, errUnknownProof) {
 				t.Fatalf("err = %v; want errUnknownProof %v", err, tc.wantErr)
 			}
 			var wantN int64
 			for _, how := range tc.want {
-				if how == tc.proof.How {
+				if how == proof.How {
 					wantN++
 				}
 			}
@@ -134,7 +136,7 @@ func TestProveRequestsGone(t *testing.T) {
 				if got[tok] != how {
 					t.Errorf("%s proven_gone_how = %q; want %q", tok, got[tok], how)
 				}
-				if pr := mustRequest(t, s, tok); how == tc.proof.How && !pr.ProvenGoneAt.Equal(proofAt) {
+				if pr := mustRequest(t, s, tok); how == proof.How && !pr.ProvenGoneAt.Equal(proofAt) {
 					t.Errorf("%s proven_gone_at = %v; want the proof's %v", tok, pr.ProvenGoneAt, proofAt)
 				}
 			}
@@ -161,6 +163,7 @@ func ptrProof(p RequestProof) *RequestProof { return &p }
 func TestTurnEndCoversOnlyRequestsWrittenBeforeIt(t *testing.T) {
 	s, path := newRelayRow(t, "on", StateWorking)
 	insertRelay(t, s, mainReq(tokenA))
+	createdAt := mustRequest(t, s, tokenA).CreatedAt.UTC().Format("2006-01-02 15:04:05")
 	landed := false
 	beforeEachExec(t, s, path, func(query string) {
 		if landed || !strings.Contains(query, "SET proven_gone_at") {
@@ -168,12 +171,13 @@ func TestTurnEndCoversOnlyRequestsWrittenBeforeIt(t *testing.T) {
 		}
 		landed = true
 		withRaw(t, path, func(db *sql.DB) {
-			mustExec(t, db, `INSERT INTO permission_requests (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible)
-				VALUES (?, ?, 'Bash', '{}', 1)`, relayID, tokenB)
+			// Both requests qualify by time, so only the read boundary excludes B.
+			mustExec(t, db, `INSERT INTO permission_requests (instance_id, request_token, tool_name, tool_input, main_turn_end_eligible, created_at)
+				VALUES (?, ?, 'Bash', '{}', 1, ?)`, relayID, tokenB, createdAt)
 		})
 	})
 
-	n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt})
+	n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), turnEndProof())
 
 	if !landed || err != nil || n != 1 {
 		t.Fatalf("ProveRequestsGone = %d, %v, B committed before its write %v; want 1 (A only), B committed", n, err, landed)
@@ -268,18 +272,17 @@ func TestProvenGoneRequestHoldsNothing(t *testing.T) {
 		}, StateWorking},
 	}
 	toolRanA := RequestProof{How: ProvenGoneToolRan, ToolUseID: "toolu_" + tokenA[:8], At: proofAt}
-	turnEnd := RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}
 	proofs := []struct {
 		name     string
-		subagent bool          // A is a subagent's request
-		proof    *RequestProof // nil: none
-		releases bool          // the proof proves A gone
+		subagent bool                // A is a subagent's request
+		proof    func() RequestProof // nil: none
+		releases bool                // the proof proves A gone
 	}{
 		{"unproven", false, nil, false},
-		{"its tool ran", false, &toolRanA, true},
-		{"the main agent's turn ended after it", false, &turnEnd, true},
-		{"a subagent's request, the main agent's turn ended after it", true, &turnEnd, false},
-		{"a subagent's request, its tool ran", true, &toolRanA, true},
+		{"its tool ran", false, func() RequestProof { return toolRanA }, true},
+		{"the main agent's turn ended after it", false, turnEndProof, true},
+		{"a subagent's request, the main agent's turn ended after it", true, turnEndProof, false},
+		{"a subagent's request, its tool ran", true, func() RequestProof { return toolRanA }, true},
 	}
 	for _, w := range writes {
 		for _, pf := range proofs {
@@ -295,7 +298,7 @@ func TestProvenGoneRequestHoldsNothing(t *testing.T) {
 					if pf.releases {
 						wantN = 1
 					}
-					if n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), *pf.proof); err != nil || n != wantN {
+					if n, err := s.ProveRequestsGone(relayID, agentGate("Stop", ""), pf.proof()); err != nil || n != wantN {
 						t.Fatalf("ProveRequestsGone = %d, %v; want %d", n, err, wantN)
 					}
 				}
