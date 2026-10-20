@@ -21,6 +21,11 @@ import (
 // each row's ReportedState is its settled state and State filters on it; the
 // zero value is no settle time, and ListSpawns runs exactly the query it ran
 // before b.3ie, State filtering on the raw state.
+//
+// StuckCandidates widens a State filter to every row whose displayed state
+// may differ from its reported state: one with a retained stuck observation,
+// and, when State names stuck, one whose raw state can become stuck. The
+// caller filters those rows on their displayed state and applies Limit.
 type ListFilters struct {
 	State           []string
 	Labels          map[string]string
@@ -29,7 +34,11 @@ type ListFilters struct {
 	TmuxSessionName string
 	Limit           int
 	Settle          SettleRead
+	StuckCandidates bool
 }
+
+// stuckRawStates are the raw states a read can display as stuck.
+var stuckRawStates = []string{StateCheckPermission}
 
 // ListSpawns runs the filtered query and returns rows in unspecified
 // order. SRD §4.2 explicitly accepts the linear scan + json_extract
@@ -81,7 +90,21 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			placeholders[i] = "?"
 			args = append(args, st)
 		}
-		where = append(where, stateExpr+" IN ("+strings.Join(placeholders, ",")+")")
+		clause := stateExpr + " IN (" + strings.Join(placeholders, ",") + ")"
+		if f.StuckCandidates {
+			clause = "(" + clause + " OR stuck_observation IS NOT NULL"
+			for _, st := range f.State {
+				if st == StateStuck {
+					clause += " OR state IN (" + strings.TrimSuffix(strings.Repeat("?,", len(stuckRawStates)), ",") + ")"
+					for _, raw := range stuckRawStates {
+						args = append(args, raw)
+					}
+					break
+				}
+			}
+			clause += ")"
+		}
+		where = append(where, clause)
 	}
 
 	// Label filters are sorted by key so the generated SQL is

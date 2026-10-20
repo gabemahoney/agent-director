@@ -32,17 +32,34 @@ type permissionStuckStore interface {
 // Sampling and persistence are best effort; an uncommitted observation returns
 // the coherent display from the original row snapshot, including its detail.
 func permissionDisplay(s any, v RelayView, settle store.SettleRead, row Spawn) store.StuckDisplay {
+	display, _ := permissionObservation(s, v, settle, row)
+	return display
+}
+
+// judgedRequestSet is one check-before-read read of every request of a row,
+// with its hook verdicts, which list reuses for the row's open requests.
+type judgedRequestSet struct {
+	rows     []PermissionRow
+	verdicts map[int64]hookVerdict
+}
+
+// permissionObservation is permissionDisplay, also returning the requests it
+// read; nil when it read none.
+func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn) (store.StuckDisplay, *judgedRequestSet) {
 	previous := row.CommittedStuckDisplay()
 	r, ok := s.(permissionStuckStore)
 	if !ok || finishedState(row.State) || row.State == store.StatePending ||
 		(row.State != store.StateCheckPermission && row.StuckObservation == "") {
-		return previous
+		return previous, nil
 	}
 	j := newRelayJudge(v)
-	requests, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return r.PermissionRequestsForSpawnWithin(row.InstanceID, readerLockWait) }, j)
+	requests, verdicts, err := readManyJudged(func() ([]PermissionRow, error) {
+		return r.PermissionRequestsForSpawnWithin(row.InstanceID, readerLockWait)
+	}, j)
 	if err != nil {
-		return previous
+		return previous, nil
 	}
+	judged := &judgedRequestSet{rows: requests, verdicts: verdicts}
 	now := j.now()
 	samples := make([]store.PermissionSample, 0, len(requests))
 	for _, pr := range requests {
@@ -80,9 +97,9 @@ func permissionDisplay(s any, v RelayView, settle store.SettleRead, row Spawn) s
 	}
 	display, err := r.ObservePermissionStuck(row, samples, now, timeout, settle)
 	if err != nil {
-		return previous
+		return previous, judged
 	}
-	return display
+	return display, judged
 }
 
 func stuckInfo(d store.StuckDisplay) StuckInfo {

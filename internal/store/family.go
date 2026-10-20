@@ -65,9 +65,10 @@ var errFamilyWriteNotApplied = errors.New("store: family lifecycle write not app
 
 // execFamily keeps an individual lifecycle statement and all affected family
 // histories atomic. Preserve its result, including RowsAffected, for guards.
-func (s *Store) execFamily(query string, args ...any) (sql.Result, error) {
+// instanceID names the one row query writes.
+func (s *Store) execFamily(instanceID, query string, args ...any) (sql.Result, error) {
 	var result sql.Result
-	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		result, err = conn.ExecContext(ctx, query, args...)
 		if err != nil {

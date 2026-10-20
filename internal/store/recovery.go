@@ -150,7 +150,7 @@ func emitOrphanCloseoutTickContext(ctx context.Context, instanceID, requestToken
 // statement of their own.
 func (s *Store) DeleteSpawn(instanceID string) error {
 	const q = `DELETE FROM spawns WHERE instance_id = ?`
-	res, err := s.execFamily(q, instanceID)
+	res, err := s.execFamily(instanceID, q, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: delete spawn: %w", err)
 	}

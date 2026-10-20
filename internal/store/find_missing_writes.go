@@ -239,7 +239,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	exits, err := takeStuckExits(ctx, conn, "")
+	exits, err := takeStuckExits(ctx, conn, instanceID)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -402,7 +402,7 @@ func (s *Store) NoteUnreportedIfSameLife(instanceID string, examined RowSnapshot
 		LivenessNoteUnreported,
 		instanceID, StatePending, LivenessNoteProvenanceConflict,
 	}, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(noteUnreportedIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, noteUnreportedIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -434,7 +434,7 @@ func (s *Store) SetLivenessNoteIfSameLife(instanceID string, examined RowSnapsho
 	const errPrefix = "store: set liveness note if same life"
 	args := append([]any{note, instanceID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(setLivenessNoteIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, setLivenessNoteIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -464,7 +464,7 @@ func (s *Store) ClearLivenessIfSameLife(instanceID string, examined RowSnapshot)
 	const errPrefix = "store: clear liveness if same life"
 	args := append([]any{instanceID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(clearLivenessIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, clearLivenessIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -517,7 +517,7 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 	args := append(adoptIdentityArgs(id), instanceID)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(adoptIdentityIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, adoptIdentityIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, RowSnapshot{}, err
 	}
@@ -592,7 +592,7 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 	const errPrefix = "store: repair check_permission if same life"
 	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
 		snapshotMatchArgs(examined)...)
-	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		return conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&newState)
 	})
 	switch {
@@ -608,8 +608,8 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 // execGuarded runs one guarded UPDATE or DELETE and reports whether it
 // matched a row.
 // errPrefix names the write in a driver error.
-func (s *Store) execGuarded(q string, args []any, errPrefix string) (bool, error) {
-	r, err := s.execFamily(q, args...)
+func (s *Store) execGuarded(instanceID, q string, args []any, errPrefix string) (bool, error) {
+	r, err := s.execFamily(instanceID, q, args...)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}

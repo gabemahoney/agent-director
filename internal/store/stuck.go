@@ -126,11 +126,41 @@ func (sp Spawn) CommittedStuckDisplay() StuckDisplay {
 
 var errStuckSampleChanged = errors.New("store: stuck sample changed")
 
+// permissionCandidate reports whether pr, judged as sample at now, belongs to
+// row's current permission interval with a fallback clock already started.
+// The unlocked pre-check and the locked re-check share it so they cannot drift.
+func permissionCandidate(row Spawn, pr PermissionRow, sample PermissionSample, now time.Time) bool {
+	return row.State == StateCheckPermission && (row.Agent == AgentClaude || row.Agent == AgentCodex || row.Agent == AgentCursor) &&
+		pr.OwnerLaunchToken == row.Identity.Token && pr.OwnerPermissionEpoch == row.PermissionEpoch &&
+		pr.SupersededAt.IsZero() && pr.AwaitsAnswer() && !pr.ProvenGone() &&
+		!sample.FallbackAt.IsZero() && !sample.FallbackAt.After(now)
+}
+
+// observationWrites reports whether observing samples on examined can commit
+// anything: a retained observation to advance or clear, a fallback clock to
+// establish, or a request past its timeout. Otherwise the read is answered
+// from examined alone and takes no write lock.
+func observationWrites(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration) bool {
+	if examined.StuckObservation != "" {
+		return true
+	}
+	for _, sample := range samples {
+		if permissionCandidate(examined, sample.Request, sample, now) &&
+			(sample.Request.FallbackAt.IsZero() || now.Sub(sample.FallbackAt) >= timeout) {
+			return true
+		}
+	}
+	return false
+}
+
 // ObservePermissionStuck commits one nonwaiting observation. The write lock
 // protects request facts as well as row ownership; row_version alone does not
 // detect a concurrent pane answer, ack, proof or explicit supersession.
 func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (StuckDisplay, error) {
 	previous := examined.CommittedStuckDisplay()
+	if !observationWrites(examined, samples, now, timeout) {
+		return previous, nil
+	}
 	var result StuckDisplay
 	var event *stuckTransition
 	err := s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
@@ -155,20 +185,16 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 		}
 		var representative *PermissionRow
 		var earliest time.Time
+		clocked := false
 		for _, pr := range current {
 			sample, ok := byID[pr.RequestID]
 			if !ok || pr != sample.Request {
 				return errStuckSampleChanged
 			}
-			if row.State != StateCheckPermission || (row.Agent != AgentClaude && row.Agent != AgentCodex && row.Agent != AgentCursor) ||
-				pr.OwnerLaunchToken != row.Identity.Token || pr.OwnerPermissionEpoch != row.PermissionEpoch ||
-				!pr.SupersededAt.IsZero() || !pr.AwaitsAnswer() || pr.ProvenGone() || sample.FallbackAt.IsZero() {
+			if !permissionCandidate(row, pr, sample, now) {
 				continue
 			}
 			start := sample.FallbackAt
-			if start.After(now) {
-				continue
-			}
 			// Clock and display are one sample: failed persistence publishes
 			// neither a newly observed process death nor its derived eligibility.
 			if pr.FallbackAt.IsZero() {
@@ -176,6 +202,7 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
  hook_gone_at=COALESCE(hook_gone_at,?) WHERE request_id=?`, millisArg(start), sample.Basis, millisArg(now), pr.RequestID); err != nil {
 					return err
 				}
+				clocked = true
 			}
 			if now.Sub(start) < timeout {
 				continue
@@ -199,6 +226,10 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 		if old.State != StateStuck && target != StateStuck {
 			// Ordinary state settling continues to be derived by settle.go.
 			result = StuckDisplay{State: examined.ReportedState}
+			if examined.StuckObservation == "" && !clocked {
+				// Nothing to clear: only a race since the pre-check reaches here.
+				return nil
+			}
 			_, err := conn.ExecContext(ctx, `UPDATE spawns SET stuck_observation=NULL,stuck_version=stuck_version+1 WHERE instance_id=?`, row.InstanceID)
 			return err
 		}
@@ -272,14 +303,11 @@ func (e stuckTransition) emit() {
 // takeStuckExits consumes immediate lifecycle exits under the existing writer
 // transaction. Its caller emits only after that same transaction commits.
 // This marker is never background work and cannot produce a duplicate attempt.
-// An instance ID limits bounded lifecycle work to the row it changed.
+// It reads only instanceID, the row the lifecycle write changed: every exit is
+// written and drained by the same transaction, so no other row holds one.
 func takeStuckExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]stuckTransition, error) {
-	where := `stuck_exit IS NOT NULL`
-	var args []any
-	if instanceID != "" {
-		where += ` AND instance_id=?`
-		args = append(args, instanceID)
-	}
+	const where = `instance_id=? AND stuck_exit IS NOT NULL`
+	args := []any{instanceID}
 	rows, err := conn.QueryContext(ctx, `SELECT instance_id,stuck_exit FROM spawns WHERE `+where, args...)
 	if err != nil {
 		return nil, err

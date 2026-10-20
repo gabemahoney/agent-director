@@ -169,8 +169,11 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 
 // listSettled is List with the reader's settle time and clock settle (b.3ie),
 // passed to the store as ListFilters.Settle: each row's state field is its
-// settled state, and the State filter matches the settled state in the
-// store's statement, ahead of its LIMIT. launch_started_at and whether a
+// settled state. The State filter and LIMIT apply to the displayed state:
+// in the store's statement for a store with no permission observation; for
+// one that observes, the statement keeps every row that may display a
+// filtered state (ListFilters.StuckCandidates) and listFiltered matches each
+// row's displayed state before the limit. launch_started_at and whether a
 // row's permission requests are read and shown key on the raw state, as
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
@@ -211,8 +214,10 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
 	fetch := filters
 	_, observes := s.(permissionStuckStore)
-	if observes {
-		fetch.State, fetch.Limit = nil, 0
+	if observes && len(filters.State) > 0 {
+		// The statement keeps every row that may display a filtered state;
+		// the displayed state is matched, and the limit applied, below.
+		fetch.StuckCandidates, fetch.Limit = true, 0
 	}
 	rows, err := s.ListSpawns(fetch)
 	if err != nil {
@@ -227,8 +232,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			reported = r.ReportedState
 		}
 		display := store.StuckDisplay{State: reported}
+		var judged *judgedRequestSet
 		if observes {
-			display = permissionDisplay(s, v, filters.Settle, r)
+			display, judged = permissionObservation(s, v, filters.Settle, r)
 		}
 		if observes && len(filters.State) > 0 {
 			matched := false
@@ -258,7 +264,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			LivenessNote:            nullableString(r.LivenessNote),
 			PermissionRequests:      []PermissionRequestInfo{},
 		}
-		if r.State == store.StateCheckPermission {
+		if r.State == store.StateCheckPermission && judged != nil {
+			row.PermissionRequests = judgedOpenInfos(judged, j)
+		} else if r.State == store.StateCheckPermission {
 			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.InstanceID)
 			if err != nil {
 				return ListResult{Spawns: []ListRow{}}, err

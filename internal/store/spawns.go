@@ -344,7 +344,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
 	args = append(args, StatePending, sp.Agent, sp.Agent)
-	_, err = s.execFamily(stmt, args...)
+	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
 		if errors.As(err, &serr) {
@@ -863,7 +863,7 @@ const releaseLaunchOwnerSQL = `UPDATE spawns
 // like RecordLaunchIdentity.
 func (s *Store) ReleaseLaunchOwner(instanceID, token string) (CondResult, error) {
 	const errPrefix = "store: release launch owner"
-	applied, err := s.execGuarded(releaseLaunchOwnerSQL, []any{instanceID, StatePending, token}, errPrefix)
+	applied, err := s.execGuarded(instanceID, releaseLaunchOwnerSQL, []any{instanceID, StatePending, token}, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -938,7 +938,7 @@ const endHeldLaunchSQL = `UPDATE spawns
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
 	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
 		instanceID, StatePending, insertLaunchStartedAtMillis)
-	res, err := s.execFamily(endHeldLaunchSQL, args...)
+	res, err := s.execFamily(instanceID, endHeldLaunchSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("store: end held launch: %w", err)
 	}
@@ -1062,7 +1062,7 @@ func (s *Store) SetParentID(instanceID, parentID string) error {
 	} else {
 		parent = nil
 	}
-	res, err := s.execFamily(q, parent, instanceID)
+	res, err := s.execFamily(instanceID, q, parent, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: set parent id: %w", err)
 	}

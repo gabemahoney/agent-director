@@ -317,7 +317,8 @@ func retryBusy(ctx context.Context, busyMs int, fn func() error) error {
 // move to pending, a hook's ended transition). When fn returns an error, or
 // the commit fails, the transaction is rolled back and nothing is written;
 // fn's error is returned as it is. fn must use conn alone (see withConn).
-func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error) error {
+// fn writes only instanceID's row, so only that row's stuck exit is drained.
+func (s *Store) inImmediateTx(instanceID string, fn func(ctx context.Context, conn *sql.Conn) error) error {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -339,7 +340,7 @@ func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return err
 	}
-	exits, err := takeStuckExits(ctx, conn, "")
+	exits, err := takeStuckExits(ctx, conn, instanceID)
 	if err != nil {
 		return err
 	}

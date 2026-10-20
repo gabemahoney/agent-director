@@ -140,7 +140,15 @@ func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 var proxyWrites = []proxyWrite{
 	{
 		name: "commit permission observation", kind: storefix.WriteFailStuckObservation,
-		seed: seedState(store.StateWaiting, ""),
+		// A retained candidate is what this read must clear; a row with no
+		// observation and no eligible request reads without writing.
+		seed: func(t *testing.T, _ *store.Store, dbPath, id string) {
+			t.Helper()
+			candidate := `{"state":"working","candidate":"stuck","candidate_since_ms":1,"observed_at_ms":1}`
+			if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", false, apitest.WithStuckObservation(candidate)); err != nil {
+				t.Fatalf("SeedSpawn(%q): %v", id, err)
+			}
+		},
 		write: func(s *store.Store, id string) error {
 			row, err := s.GetSpawn(id)
 			if err != nil {

@@ -485,6 +485,30 @@ func openRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge, 
 	return infos, nil
 }
 
+// judgedOpenInfos is openRequestInfos projected from requests already read
+// and judged: those that await an answer, oldest first (created_at, then
+// request id), as OpenPermissionRequestsForSpawn selects and orders them.
+func judgedOpenInfos(r *judgedRequestSet, j relayJudge) []PermissionRequestInfo {
+	open := make([]PermissionRow, 0, len(r.rows))
+	for _, pr := range r.rows {
+		if pr.AwaitsAnswer() {
+			open = append(open, pr)
+		}
+	}
+	slices.SortStableFunc(open, func(a, b PermissionRow) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.RequestID, b.RequestID)
+	})
+	now := j.now()
+	infos := make([]PermissionRequestInfo, 0, len(open))
+	for _, pr := range open {
+		infos = append(infos, permissionRequestInfo(pr, j.delivery(pr, r.verdicts[pr.RequestID], now)))
+	}
+	return infos
+}
+
 // spawnRequestInfos reads every permission request of instanceID through
 // read, once, by the check-before-read rule, and projects from that one read,
 // oldest first (created_at, then request id), with their delivery facts at

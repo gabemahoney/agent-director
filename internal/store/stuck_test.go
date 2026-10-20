@@ -159,6 +159,62 @@ func TestPermissionStuckRollbackAndNonwaitingLock(t *testing.T) {
 	}
 }
 
+// A read with nothing to commit answers from its snapshot without taking the
+// write lock; only a new clock or a timed-out request needs the transaction.
+func TestPermissionStuckReadWithoutChangeTakesNoWriteLock(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		writes bool
+		facts  func(now time.Time) []apitest.PermissionOption
+		start  time.Duration // sample fallback, before now
+	}{
+		{"persisted clock under timeout", false, func(now time.Time) []apitest.PermissionOption {
+			return []apitest.PermissionOption{apitest.PermissionTimes(now.Add(-time.Hour), time.Time{}, now.Add(-10*time.Second), time.Time{}, now.Add(-10*time.Second), store.FallbackDeadline)}
+		}, 10 * time.Second},
+		{"answered", false, func(time.Time) []apitest.PermissionOption {
+			return []apitest.PermissionOption{apitest.PermissionAnswer(store.PaneAnswerOutside)}
+		}, time.Minute},
+		{"unowned history", false, func(time.Time) []apitest.PermissionOption {
+			return []apitest.PermissionOption{apitest.PermissionOwner("", 0)}
+		}, time.Minute},
+		{"new clock under timeout", true, func(time.Time) []apitest.PermissionOption { return nil }, 10 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, path, id, samples, now := permissionObservation(t)
+			if facts := tc.facts(now); facts != nil {
+				if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, facts...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pr, err := s.GetPermissionRequest(id, samples[0].Request.RequestToken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samples[0].Request, samples[0].FallbackAt = pr, now.Add(-tc.start)
+			row, err := s.GetSpawnSettled(id, store.SettleRead{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			release := apitest.HoldWriteLock(t, path, time.Minute)
+			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
+			if got != row.CommittedStuckDisplay() || (err != nil) != tc.writes {
+				t.Fatalf("observation=%+v err=%v; want %+v, needs write lock %v", got, err, row.CommittedStuckDisplay(), tc.writes)
+			}
+			release()
+			after, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.StuckObservation != row.StuckObservation || after.StuckVersion != row.StuckVersion {
+				t.Errorf("read wrote report: before=%+v after=%+v", row, after)
+			}
+			if stored, err := s.GetPermissionRequest(id, pr.RequestToken); err != nil || stored != pr {
+				t.Errorf("read wrote request: before=%+v after=%+v %v", pr, stored, err)
+			}
+		})
+	}
+}
+
 func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
 	s, _, id, samples, now := permissionObservation(t)
 	row, err := s.GetSpawnSettled(id, store.SettleRead{})
