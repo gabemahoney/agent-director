@@ -229,9 +229,10 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 }
 
 // inWriteTxContext allows post-commit work to share the transaction's deadline.
+// A lifecycle callback collects its own stuck exit; authority and request
+// transactions must not inspect unrelated rows' report-only history.
 func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
-	var exits []stuckTransition
-	err := s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
+	return s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
 		if err := beginWithin(ctx, conn, busyMs); err != nil {
 			if isBusy(err) || ctx.Err() != nil {
 				return fmt.Errorf("%w: the write lock was not free within %d ms: %w", ErrStoreBusy, busyMs, err)
@@ -246,11 +247,6 @@ func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn 
 			if ctx.Err() != nil {
 				return fmt.Errorf("%w: before commit: %w", ErrStoreBusy, err)
 			}
-			return err
-		}
-		var err error
-		exits, err = takeStuckExits(ctx, conn)
-		if err != nil {
 			return err
 		}
 		if cleanup.operation != nil {
@@ -274,10 +270,6 @@ func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn 
 		cleanup.rollback = false
 		return nil
 	})
-	if err == nil {
-		emitStuckTransitions(exits)
-	}
-	return err
 }
 
 // beginWithin never gives SQLite a relative busy allowance that can outlive
@@ -347,7 +339,7 @@ func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return err
 	}
-	exits, err := takeStuckExits(ctx, conn)
+	exits, err := takeStuckExits(ctx, conn, "")
 	if err != nil {
 		return err
 	}

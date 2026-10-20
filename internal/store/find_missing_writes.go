@@ -239,7 +239,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	exits, err := takeStuckExits(ctx, conn)
+	exits, err := takeStuckExits(ctx, conn, "")
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -262,11 +262,15 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	var prior string
 	var res CondResult
 	var closed []closedRequest
+	var exits []stuckTransition
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
 		if err == nil && res == CondApplied {
-			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing)
+			if err := s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing); err != nil {
+				return err
+			}
+			exits, err = takeStuckExits(ctx, conn, instanceID)
 		}
 		return err
 	})
@@ -274,6 +278,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if res == CondApplied {
+		emitStuckTransitions(exits)
 		emitTerminalCloseout(ctx, closed, instanceID, reason)
 	}
 	return prior, res, nil

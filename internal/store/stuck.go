@@ -272,8 +272,15 @@ func (e stuckTransition) emit() {
 // takeStuckExits consumes immediate lifecycle exits under the existing writer
 // transaction. Its caller emits only after that same transaction commits.
 // This marker is never background work and cannot produce a duplicate attempt.
-func takeStuckExits(ctx context.Context, conn *sql.Conn) ([]stuckTransition, error) {
-	rows, err := conn.QueryContext(ctx, `SELECT instance_id,stuck_exit FROM spawns WHERE stuck_exit IS NOT NULL`)
+// An instance ID limits bounded lifecycle work to the row it changed.
+func takeStuckExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]stuckTransition, error) {
+	where := `stuck_exit IS NOT NULL`
+	var args []any
+	if instanceID != "" {
+		where += ` AND instance_id=?`
+		args = append(args, instanceID)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT instance_id,stuck_exit FROM spawns WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +305,7 @@ func takeStuckExits(ctx context.Context, conn *sql.Conn) ([]stuckTransition, err
 		return nil, err
 	}
 	if len(events) > 0 {
-		if _, err := conn.ExecContext(ctx, `UPDATE spawns SET stuck_exit=NULL WHERE stuck_exit IS NOT NULL`); err != nil {
+		if _, err := conn.ExecContext(ctx, `UPDATE spawns SET stuck_exit=NULL WHERE `+where, args...); err != nil {
 			return nil, err
 		}
 	}

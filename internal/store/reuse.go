@@ -460,7 +460,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	exits, err := takeStuckExits(ctx, conn)
+	exits, err := takeStuckExits(ctx, conn, "")
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
