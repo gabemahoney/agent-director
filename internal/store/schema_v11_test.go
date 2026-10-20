@@ -248,7 +248,7 @@ func TestLegacyNullAgentGatedWritesAndProof(t *testing.T) {
 					t.Fatalf("historical non-Cursor legacy %+v %v", a, err)
 				}
 			case "proof":
-				n, err := s.ProveRequestsGone("pre", gate, RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt})
+				n, err := s.ProveRequestsGone("pre", gate, turnEndProof())
 				if err != nil || n != 1 {
 					t.Fatalf("historical non-Cursor proof %d %v; want 1", n, err)
 				}
@@ -274,7 +274,7 @@ func TestLegacyNullAgentGatedWritesAndProof(t *testing.T) {
 				wantProof++
 			}
 			gate.Event = "Stop"
-			if n, err := s.ProveRequestsGone("pre", gate, RequestProof{How: ProvenGoneTurnEnd, RecordedBefore: startAfterAll, At: proofAt}); err != nil || n != wantProof {
+			if n, err := s.ProveRequestsGone("pre", gate, turnEndProof()); err != nil || n != wantProof {
 				t.Fatalf("historical NULL-agent main proof %d %v; want %d", n, err, wantProof)
 			}
 			if got, err := s.GetPermissionRequest("pre", tokenB); err != nil || got.ProvenGone() != tc.want || got.MainTurnEndEligible != tc.want {

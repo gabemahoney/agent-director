@@ -247,7 +247,7 @@ func TestRecordPaneAnswerClosesAPreV7Request(t *testing.T) {
 	if n := p.prove(t, toolRan("toolu_01ANY")); n != 0 {
 		t.Fatalf("a PostToolUse proved %d; want none (the request has no tool_use_id)", n)
 	}
-	if n := p.prove(t, turnEnd); n != 1 {
+	if n := p.prove(t, turnEnd()); n != 1 {
 		t.Fatalf("the agent's next Stop proved %d; want the request", n)
 	}
 	p.rec.Reset()

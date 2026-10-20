@@ -44,7 +44,7 @@ func TestAdviceFollow_E14_CodexDialogMaybeOpenNamesItsProofs(t *testing.T) {
 			r7Acked(t, p)
 			assertWording(t, p, store.StateCheckPermission)
 
-			p.prove(t, turnEnd)
+			p.prove(t, turnEnd())
 			if a := apitest.ApplyAgentHook(t, p.dbPath, p.r.ID, event, "", apitest.HookAgent("codex")); !a.Applied {
 				t.Fatalf("the main agent's %s not applied: %s", event, a.Reason)
 			}

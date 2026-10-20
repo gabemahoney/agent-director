@@ -242,7 +242,7 @@ func TestRelayFallenBackIncidentRegression(t *testing.T) {
 	_, err = e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"})
 	assertDialogMaybeOpen(t, err, storefix.TestRequestTokenA, store.StateCheckPermission)
 	e.assertNoTmuxCall(t)
-	proveGone(t, e, r.ID, turnEnd)
+	proveGone(t, e, r.ID, turnEnd())
 	if _, err := e.sendKeysAt(relayGuardWindow, now, api.SendKeysParams{InstanceID: r.ID, Text: "2"}); err != nil {
 		t.Fatalf("plain SendKeys once the agent's Stop proved the request gone: %v", err)
 	}

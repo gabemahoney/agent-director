@@ -63,10 +63,10 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 	// main agent's Interrupt (turn_end) proves it.
 	type proofCase struct {
 		name  string
-		proof store.RequestProof
+		proof func() store.RequestProof
 	}
 	proofsOf := map[string][]proofCase{
-		"claude": {{"its tool's PostToolUse", toolRan(paToolUseID)}, {"the main agent's Stop", turnEnd}},
+		"claude": {{"its tool's PostToolUse", func() store.RequestProof { return toolRan(paToolUseID) }}, {"the main agent's Stop", turnEnd}},
 		"codex":  {{"the main agent's Interrupt", turnEnd}},
 	}
 	for _, ag := range paAgents {
@@ -111,15 +111,16 @@ func TestPlainSendKeysHeldUntilProven(t *testing.T) {
 						t.Fatalf("request A = %+v; want closed in agent-director's records, not proven gone", pr)
 					}
 
-					if n := p.prove(t, pf.proof); n != 1 {
+					proof := pf.proof()
+					if n := p.prove(t, proof); n != 1 {
 						t.Fatalf("%s proved %d; want request A", pf.name, n)
 					}
 					run := p.sendKeysRun(p.plain("hi"))
 					if run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
 						t.Fatalf("plain send-keys once proven = %v, calls %v; want it typed", run.err, paKinds(run.calls))
 					}
-					if pr := p.request(t, tok); pr.ProvenGoneHow != pf.proof.How {
-						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, pf.proof.How)
+					if pr := p.request(t, tok); pr.ProvenGoneHow != proof.How {
+						t.Errorf("request A proven_gone_how = %q; want %q", pr.ProvenGoneHow, proof.How)
 					}
 				})
 			}
@@ -236,7 +237,7 @@ func TestNoPermissionRequestNeverHeld(t *testing.T) {
 		t.Parallel()
 		p := newPAEnv(t)
 		r7Acked(t, p)
-		p.prove(t, turnEnd)
+		p.prove(t, turnEnd())
 		if run := p.sendKeysRun(p.plain("go")); run.err != nil || !slices.Equal(paKinds(run.calls), paneSendCalls) {
 			t.Errorf("send-keys = %v, calls %v; want it typed", run.err, paKinds(run.calls))
 		}
@@ -279,7 +280,7 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 				if before.AgentID != "" || before.MainTurnEndEligible || before.ProvenGone() {
 					t.Fatalf("unknown request %+v", before)
 				}
-				if n := p.prove(t, turnEnd); n != 0 {
+				if n := p.prove(t, turnEnd()); n != 0 {
 					t.Fatalf("main turn proved unknown: %d", n)
 				}
 				run := p.sendKeysRun(p.plain("hi"))

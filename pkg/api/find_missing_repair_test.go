@@ -148,7 +148,7 @@ func TestRepairCheckPermission(t *testing.T) {
 					case "denyB":
 						timeoutDeny(t, e.s, e.id, storefix.TestRequestTokenB)
 					case "turnEnd":
-						if n := proveOn(t, e.s, e.dbPath, e.id, turnEnd); n != 1 {
+						if n := proveOn(t, e.s, e.dbPath, e.id, turnEnd()); n != 1 {
 							t.Fatalf("the main agent's turn end proved %d; want request A", n)
 						}
 					}

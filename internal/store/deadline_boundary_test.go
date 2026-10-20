@@ -232,6 +232,16 @@ func TestDecisionAbsoluteDeadlineAtSQLiteBoundaries(t *testing.T) {
 			s, path := newRelayRow(t, "on", StateWorking)
 			insertRelay(t, s, relayReq(tokenA))
 			b := installDeadlineBoundary(t, s, path)
+			if phase == "commit response" {
+				// Establish the replacement physical connection before the original SQL budget.
+				lease, err := s.db.Conn(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := lease.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 			defer cancel()
 			deadline, _ := ctx.Deadline()
