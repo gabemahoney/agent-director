@@ -80,7 +80,7 @@ func TestPermissionStuckCodexTurnEndPreservesIndependentChildHold(t *testing.T) 
 			if pr := p.request(t, storefix.TestRequestTokenA); pr.ProvenGone() || pr.ToolUseID != "" {
 				t.Fatalf("Codex invented proof/tool id: %+v", pr)
 			}
-			p.prove(t, turnEnd)
+			p.prove(t, turnEnd())
 			if applied := apitest.ApplyAgentHook(t, p.dbPath, p.r.ID, event, "", apitest.HookAgent(store.AgentCodex)); !applied.Applied {
 				t.Fatal(applied)
 			}
