@@ -10,9 +10,10 @@
 
 import { test, expect } from "bun:test";
 import * as path from "path";
+import * as fs from "fs";
 import { withTempHome } from "../internal/tempHome.js";
-import { runHelper, seedFallenBackRelayRow, paneSends, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
-import { ErrDialogMaybeOpen, ErrRelayFallenBack, ErrSpawnNotPausable, type AgentDirectorError, type DialogMaybeOpenDetails,
+import { runHelper, seedFallenBackRelayRow, privateTmuxSocket, fakeTmuxCalls, paneSends, withProcessEnv, homeStore, openClient, rejection } from "../internal/helper.js";
+import { ErrPauseTimeout, ErrDialogMaybeOpen, ErrRelayFallenBack, ErrSpawnNotPausable, type PauseTimeoutDetails, type AgentDirectorError, type DialogMaybeOpenDetails,
   type RelayFallenBackDetails } from "../../src/index.js";
 
 test("pause: happy path — no-op for already-terminal spawn", async () => {
@@ -62,3 +63,32 @@ test("pause: error — held as a plain sendKeys: ErrRelayFallenBack, then ErrDia
     ]);
   });
 }, 15_000);
+
+test("pause: timeout preserves inspection details and sends no follow-up input", async () => {
+  await withTempHome(async (homeDir) => {
+    const store = homeStore(homeDir);
+    const id = "smoke-pause-timeout";
+    const logPath = path.join(homeDir, "fake-tmux.log");
+    const configPath = path.join(homeDir, ".config", "agent-director", "config.toml");
+    runHelper("seed-spawn", { store, state: "waiting", id, "create-store": true, socket: privateTmuxSocket(homeDir) });
+    fs.writeFileSync(configPath, "[pause]\ntimeout_seconds = 1\n");
+    const paneId = runHelper("seed-row-session", { store, id, capture: "Background work is running\n1. Exit and stop tasks / 2. Stay\n" })["pane_id"] as string;
+
+    const err = await withProcessEnv({ FAKE_TMUX_LOG: logPath }, async () => {
+      using client = await openClient(store);
+      return await rejection(client.pause({ instance_id: id })) as AgentDirectorError;
+    });
+
+    expect(err).toBeInstanceOf(ErrPauseTimeout);
+    expect(err.verb).toBe("pause");
+    const details = { inspection_required: true, exit_keys_sent: true, exit_confirmed: false, row_state: "waiting" } satisfies PauseTimeoutDetails;
+    expect(err.errDetails).toEqual(details);
+    expect(err.errDescription).toContain("do not retry pause automatically");
+    expect(paneSends(logPath)).toEqual([
+      ["send-keys", "-t", paneId, "C-u"],
+      ["send-keys", "-t", paneId, "-l", "--", "/exit"],
+      ["send-keys", "-t", paneId, "Enter"],
+    ]);
+    expect(fakeTmuxCalls(logPath).some((args) => args.includes("capture-pane"))).toBe(false);
+  });
+}, 10_000);

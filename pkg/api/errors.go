@@ -54,8 +54,9 @@ var ErrSpawnNotPausable = errors.New("ErrSpawnNotPausable")
 
 // ErrPauseTimeout is returned by the pause verb when the target Spawn
 // did not transition to `ended` within `pause.timeout_seconds` after
-// the `/exit` command was sent. The caller's recourse is to retry the
-// pause; the agent may still be running.
+// `/exit` and Enter keys were sent. Its PauseTimeoutDetails require session
+// inspection and a caller's decision before more input, not an automatic
+// retry. An exit prompt may be open, but no prompt or cause is proven.
 var ErrPauseTimeout = errors.New("ErrPauseTimeout")
 
 // ErrSpawnNotResumable is returned by the resume verb when the target

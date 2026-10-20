@@ -1050,6 +1050,11 @@ still a no-op success, and a spawn in any other live state still gets
 `ErrSpawnNotPausable`, except a Codex spawn whose agent already exited with an
 end report (above).
 
+An `ErrPauseTimeout` after the exit keys were sent is distinct from these
+permission refusals. Its inspection outcome and recovery are defined in
+[When pause cannot confirm exit](caller-contract.md#when-pause-cannot-confirm-exit);
+it does not prove that any dialog is open.
+
 `pause` takes no pane hash, so it has no way past the dialog hold, which
 lasts until the agent's own hooks prove each request gone, whatever is
 done at the pane. A subagent's request denied at the pane gets no

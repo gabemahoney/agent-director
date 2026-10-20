@@ -227,7 +227,8 @@ var pauseSleep = time.Sleep
 //
 // The wait, once C-u, `/exit` and Enter went through: the row's state is
 // polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
-// elapse on the real clock (ErrPauseTimeout); ctx.Done() during the wait
+// elapse on the real clock (ErrPauseTimeout with PauseTimeoutDetails requiring
+// session inspection before further input); ctx.Done() during the wait
 // returns ctx.Err() so the caller's cancel-on-signal handler can cut a long
 // wait short. timeoutSeconds is used as given, with no default applied: 0 or
 // less times out at the first state check that does not find `ended`. On a
@@ -496,8 +497,16 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 		}
 
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("%w: spawn %s did not reach ended within %s",
-				ErrPauseTimeout, instanceID, timeout)
+			return &DetailedError{
+				Err: fmt.Errorf("%w: spawn %s did not reach ended within %s after exit keys were sent; exit is unconfirmed and may be waiting for input; inspect with get and read-pane, and pass this outcome to a caller that can inspect the session and decide before sending more keys; do not retry pause automatically",
+					ErrPauseTimeout, instanceID, timeout),
+				Details: PauseTimeoutDetails{
+					InspectionRequired: true,
+					ExitKeysSent:       true,
+					ExitConfirmed:      false,
+					RowState:           state,
+				},
+			}
 		}
 
 		// Sleep at the polling cadence, but never past the deadline —
@@ -569,7 +578,12 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //     records say it closed, since when, and the Spawn's other such
 //     requests. The way past it is above: SendKeys `/exit` with the judged
 //     pane's ExpectPaneSHA256, or Kill.
-//   - [ErrPauseTimeout]: the Spawn did not reach ended within the timeout.
+//   - [ErrPauseTimeout]: the exit keys were sent but the Spawn did not reach
+//     ended within the timeout. Its err_details ([PauseTimeoutDetails]) require
+//     session inspection and a caller's decision before more input; they do
+//     not prove a prompt is open. Pass the outcome to a caller that can inspect
+//     get and read-pane, then decide whether to send guarded keys or Kill.
+//     Never retry Pause automatically on this outcome.
 //   - [ErrTmuxSendKeys]: the row's tmux session is not there; `/exit` was
 //     not sent or, when the Enter call failed after it, may be typed but not
 //     submitted.

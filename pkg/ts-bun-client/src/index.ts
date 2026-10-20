@@ -118,6 +118,7 @@ export type {
 
 // err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.
 export type {
+  PauseTimeoutDetails,
   RelayFallenBackDetails,
   OpenRequestFacts,
   PaneAnswerInProgressDetails,

@@ -13,7 +13,8 @@ import (
 // matches through DetailedError), or none for an unnamed error (ErrInternal),
 // and its text is the description. Details is the err_details object, one of
 // RelayFallenBackDetails, PaneAnswerInProgressDetails, ClaimTooSoonDetails,
-// PaneChangedDetails, PaneKeySentDetails and DialogMaybeOpenDetails.
+// PaneChangedDetails, PaneKeySentDetails, DialogMaybeOpenDetails and
+// PauseTimeoutDetails.
 //
 // The CLI writes Details as the error envelope's err_details key, the MCP
 // server as its error data's err_details, and the TypeScript client exposes
@@ -40,6 +41,23 @@ func ErrDetails(err error) any {
 		return de.Details
 	}
 	return nil
+}
+
+// PauseTimeoutDetails is ErrPauseTimeout's err_details after pause sent the
+// exit keys but did not observe ended before its deadline. It requires a
+// caller that can inspect the session to decide what to do before more input
+// is sent. It does not establish that a prompt is open or why exit is delayed.
+type PauseTimeoutDetails struct {
+	// InspectionRequired is true: pass this outcome up to a caller that can
+	// inspect the session and decide how to continue; do not retry blindly.
+	InspectionRequired bool `json:"inspection_required"`
+	// ExitKeysSent is true: tmux accepted /exit and Enter, not proof that the
+	// agent consumed the command or exited.
+	ExitKeysSent bool `json:"exit_keys_sent"`
+	// ExitConfirmed is false: pause did not observe the row reach ended.
+	ExitConfirmed bool `json:"exit_confirmed"`
+	// RowState is the last raw state read, not a judgement about the pane.
+	RowState string `json:"row_state"`
 }
 
 // RelayFallenBackDetails is ErrRelayFallenBack's err_details (b.146 rule 15),

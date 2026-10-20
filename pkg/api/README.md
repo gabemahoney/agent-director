@@ -631,6 +631,12 @@ are not detectable at compile time.
 Named errors can wrap sentinel values and structured details. Use `errors.Is`
 to inspect them — never compare error strings.
 
+`ErrPauseTimeout` matches with `errors.Is`; `api.ErrDetails(err)`
+returns an `api.PauseTimeoutDetails` value after exit keys were sent but
+`ended` was not observed. Its fields are `InspectionRequired`, `ExitKeysSent`,
+`ExitConfirmed` and `RowState`, with the shared meanings and recovery in
+[When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
+
 ```go
 res, err := c.SendKeys(api.SendKeysParams{
     InstanceID: id,
@@ -664,6 +670,7 @@ Common sentinels across verbs:
 | `ErrSendKeysWhileRelayed` | The Spawn's request relay may still answer (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |
 | `ErrRelayFallenBack` | A permission request fell back (relay settled without acknowledgement, no pane answer recorded; from `Decide`, a plain `SendKeys` and `Pause`) — `ErrDetails` gives its facts; the relevant API methods are `SendKeys` with `RequestToken` and `RecordPaneAnswer`; shared pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
 | `ErrDialogMaybeOpen` | A plain `SendKeys` without `ExpectPaneSHA256`, or a `Pause`, while a permission request of the Spawn is not proven gone by valid agent evidence; nothing was sent — `ErrDetails` gives its facts; shared retry, escalation and pane handling is in [Permission relay](../../docs/caller-contract.md#permission-relay) |
+| `ErrPauseTimeout` | Exit keys were sent but `ended` was not observed; `ErrDetails` gives `PauseTimeoutDetails`. See [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit). |
 | `ErrListInvalidLabel` | Label filter not in `key=value` form |
 
 ---

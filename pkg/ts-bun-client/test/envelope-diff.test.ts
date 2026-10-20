@@ -20,7 +20,7 @@
  * See docs/architecture.md "TS envelope-diff regression" for design notes.
  */
 
-import { test, describe, expect } from "bun:test";
+import { test, describe, expect, beforeEach, afterEach } from "bun:test";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -50,6 +50,19 @@ const FAKE_TMUX_DIR =
   process.env.FAKE_TMUX_DIR ??
   path.resolve(import.meta.dir, "../../../test/fake-tmux");
 const FAKE_TMUX_BIN = path.join(FAKE_TMUX_DIR, "tmux");
+
+// Helpers and Client subprocesses can emit audit events independently of storePath.
+const inheritedHome = process.env.HOME;
+let testHome: string;
+beforeEach(() => {
+  testHome = fs.mkdtempSync(path.join(os.tmpdir(), "ed-home-"));
+  process.env.HOME = testHome;
+});
+afterEach(() => {
+  if (inheritedHome === undefined) delete process.env.HOME;
+  else process.env.HOME = inheritedHome;
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -1291,7 +1304,7 @@ describe("expire", () => {
       const tablesClient = path.join(tmuxDir, "tables-client");
       const logCli = path.join(tmuxDir, "log-cli");
       const logClient = path.join(tmuxDir, "log-client");
-      const { homeA, storeA, storeB, cleanup } = prepareStores((store) => {
+      const { homeA, homeB, storeA, storeB, cleanup } = prepareStores((store) => {
         for (const id of [goneId, keptId]) {
           runHelper("seed-spawn", { store, id, state: "ended", "create-store": true, socket });
         }
@@ -1312,6 +1325,7 @@ describe("expire", () => {
         const ts = await withProcessEnv({ FAKE_TMUX_TABLES: tablesClient, FAKE_TMUX_LOG: logClient }, async () => {
           using client = await Client.create({
             storePath: storeB,
+            home: homeB,
             tmuxCommand: FAKE_TMUX_BIN, _cliPath: process.env.CLI_PATH
           } as any);
           return await client.expire({ older_than: "0d" });
@@ -1325,15 +1339,17 @@ describe("expire", () => {
         const want = { count: 1, ids: [goneId], kept: 1, kept_ids: [keptId] };
         expect(cliEnvelope).toEqual(want);
         expect(ts).toEqual(want);
-        // The CLI run (HOME=homeA) trails one ad.expire.kept, reason ours.
-        const kept = fs
-          .readFileSync(path.join(homeA, ".config", "agent-director", "ad-trail.jsonl"), "utf8")
-          .split("\n")
-          .filter((line) => line !== "")
-          .map((line) => JSON.parse(line) as Record<string, unknown>)
-          .filter((rec) => rec["event"] === "ad.expire.kept");
-        expect(kept).toHaveLength(1);
-        expect(kept[0]).toMatchObject({ instance_id: keptId, reason: "ours", source: "ad_expire" });
+        // Each side writes its audit event under its own HOME, beside its store.
+        for (const home of [homeA, homeB]) {
+          const kept = fs
+            .readFileSync(path.join(home, ".config", "agent-director", "ad-trail.jsonl"), "utf8")
+            .split("\n")
+            .filter((line) => line !== "")
+            .map((line) => JSON.parse(line) as Record<string, unknown>)
+            .filter((rec) => rec["event"] === "ad.expire.kept");
+          expect(kept).toHaveLength(1);
+          expect(kept[0]).toMatchObject({ instance_id: keptId, reason: "ours", source: "ad_expire" });
+        }
 
         // Each run: one lookup for the socket both rows share, and no other
         // tmux call (expire never lists panes or kills) (SR-12.2, SR-5.8).

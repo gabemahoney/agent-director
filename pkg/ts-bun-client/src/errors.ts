@@ -472,7 +472,11 @@ export class ErrSubmissionUnconfirmed extends AgentDirectorError {}
 export class ErrSendKeysWhileRelayed extends AgentDirectorError {}
 /** Mirrors ErrSpawnNotPausable (package: api) */
 export class ErrSpawnNotPausable extends AgentDirectorError {}
-/** Mirrors ErrPauseTimeout (package: api) */
+/**
+ * Exit keys were sent but ended was not observed before the pause deadline.
+ * `errDetails` is a `PauseTimeoutDetails` requiring session inspection and a caller's
+ * decision before more input. It does not prove a prompt is open; never retry pause automatically.
+ */
 export class ErrPauseTimeout extends AgentDirectorError {}
 /** Mirrors ErrListInvalidLabel (package: api) */
 export class ErrListInvalidLabel extends AgentDirectorError {}

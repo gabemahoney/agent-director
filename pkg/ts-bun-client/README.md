@@ -311,6 +311,10 @@ await client.pause({ instance_id: "<id>" });
 For input ownership or journal failures (`ErrInternal` before any input), see
 [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership).
 
+For `ErrPauseTimeout`, `errDetails` has the exported `PauseTimeoutDetails`
+shape. Its fields and required inspection procedure are defined in
+[When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit).
+
 `pause` is held like a `sendKeys` without `request_token` and without
 `expect_pane_sha256`: on a Spawn with `relay_mode: "on"` it throws
 `ErrSendKeysWhileRelayed`, `ErrRelayFallenBack` or `ErrDialogMaybeOpen`,
@@ -542,12 +546,13 @@ try {
 ```
 
 Every `AgentDirectorError` has `errName`, `errDescription` and `errDetails`:
-the error envelope's optional `err_details` object, or `null`. Six errors
+the error envelope's optional `err_details` object, or `null`. Seven errors
 carry one, typed as exported interfaces: `ErrRelayFallenBack`
 (`RelayFallenBackDetails`, with `OpenRequestFacts`), `ErrPaneAnswerInProgress`
 (`PaneAnswerInProgressDetails`), `ErrClaimTooSoon` (`ClaimTooSoonDetails`),
 `ErrPaneChanged` (`PaneChangedDetails`), `ErrDialogMaybeOpen`
-(`DialogMaybeOpenDetails`) and `ErrSubmissionUnconfirmed`
+(`DialogMaybeOpenDetails`), `ErrPauseTimeout` (`PauseTimeoutDetails`) and
+`ErrSubmissionUnconfirmed`
 (`SubmissionUnconfirmedDetails`, for fallback pending-Codex uncertainty).
 Native submission facts remain available through the generic `errDetails`
 record. So does the `ErrInternal` of a
@@ -637,7 +642,7 @@ These classes correspond to the shared CLI `err_name` contract. They surface bad
 | `ErrSpawnNotInteractive` | New input requires a live interactive state (`waiting`/`working`/`ask_user`/`check_permission`); `pending`, `ended`, and `missing` are rejected. With `allow_pending: true`, `sendKeys` allows a `pending` row but delivers keys only to a session started by the row's current launch: a `pending` row with no launch start or launch token recorded, or where only a session an earlier launch left behind is found, is still refused and nothing is sent. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission). |
 | `ErrSubmissionUnconfirmed` | `SubmissionUnconfirmedDetails` describes fallback pending-Codex uncertainty; native outcome fields are available through the generic `errDetails` record. See [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) for automatic delivery and [Manual input ownership](../../docs/caller-contract.md#manual-input-ownership) for manual `sendKeys`. |
 | `ErrSpawnNotPausable` | The target spawn is not in a pausable (`waiting`) state. |
-| `ErrPauseTimeout` | The spawn did not reach `ended` within `pause.timeout_seconds` after `/exit`. The agent may still be running; see [Caller contract](../../docs/caller-contract.md). |
+| `ErrPauseTimeout` | Exit keys were sent but `ended` was not observed; `errDetails` has the `PauseTimeoutDetails` shape. See [When pause cannot confirm exit](../../docs/caller-contract.md#when-pause-cannot-confirm-exit). |
 | `ErrSpawnNotResumable` | `resume` applies only to a finished (`ended`/`missing`) spawn. A live spawn is refused because its agent is running. A `pending` spawn is refused too: it is a launch (spawn, reuse or resume) in progress whose agent has not reported in, a resumed row included. Abandoned or failed launch handling is owned by [Caller contract](../../docs/caller-contract.md) and [Maintenance](../../docs/maintenance.md). Also returned when the row changed after `resume` examined it; nothing is written. |
 | `ErrNoSessionId` | The spawn has no `session_id`, so there is nothing to resume. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |
 | `ErrJsonlMissing` | The current session's transcript is unavailable. Cursor requires its protected gateway transcript; native session availability is decided later during load. Older sessions are never tried. For any agent, spawn the same `instance_id` again with `reuse_finished: true` and the row's `agent` (`get` shows it), starting a fresh conversation with no memory of the old conversation; see [Transcript recovery](../../docs/caller-contract.md#transcript-recovery). For an artifact-preserving fresh generated-ID alternative, follow [Cursor operation boundaries](../../docs/caller-contract.md#cursor-operation-boundaries). |

@@ -856,66 +856,44 @@ func TestAdviceFollow_F7_DecideFinishedSpawnNothingRecorded(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_E8_PauseTimeoutRetryPause: E8 Go doc "The caller's
-// recourse is to retry the pause; the agent may still be running."; the
-// retried pause must leave the row ended. The wait's deadline is real time,
-// so a 0 s timeout makes the first wait time out at its first poll.
-// A Codex agent's SessionEnd only records an end report, so on its row the
-// retried pause itself moves the row to ended, with no tmux call.
-func TestAdviceFollow_E8_PauseTimeoutRetryPause(t *testing.T) {
+// E8 follows the inspection advice before a caller chooses guarded input.
+func TestAdviceFollow_E8_PauseTimeoutInspectBeforeInput(t *testing.T) {
 	t.Parallel()
-	adviceAssertGoDoc(t, "errors.go", "ErrPauseTimeout", "The caller's recourse is to retry the pause; the agent may still be running.")
-	cases := []struct {
-		name   string
-		exitOn int      // the /exit the agent ends on (0: none typed by pause)
-		late   bool     // the agent ends after the first wait timed out
-		exits  []string // what the agent got submitted, both calls
-		calls  int      // tmux calls the retry makes
-		codex  bool     // a Codex row: its agent's SessionEnd only records an end report, and the exit ends the row at the next pause
-	}{
-		{name: "the agent ended after the wait timed out", late: true, exits: []string{exitText}},
-		{name: "a Codex agent sent its SessionEnd and exited after the wait timed out", late: true, codex: true,
-			exits: []string{exitText}},
-		{name: "the agent ignored the first /exit", exitOn: 2, exits: []string{exitText, exitText},
-			calls: len(pauseSendCalls)},
-	}
-	pause := func(e *killEnv, r killRow) (api.PauseResult, error) {
-		return e.pauseWithin(context.Background(), 0, pauseParams(r))
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newKillEnv(t)
-			spec := killRowSpec{}
-			if tc.codex {
-				spec = codexSpec(store.StateWaiting, agentAlive, false)
-			}
-			r := e.seedRow(t, spec)
-			in := paneAgentExiting(t, e, r, false, tc.exitOn)
+	adviceAssertGoDoc(t, "errors.go", "ErrPauseTimeout", "require session inspection and a caller's decision before more input")
+	e := newKillEnv(t)
+	r := e.seedRow(t, killRowSpec{})
+	in := watchPaneInput(e, r.Spawn.Identity.PaneID, false)
+	const prompt = "Background work is running\n1. Exit and stop tasks / 2. Stay\n"
 
-			if _, err := pause(e, r); !errors.Is(err, api.ErrPauseTimeout) {
-				t.Fatalf("pause = %v; want ErrPauseTimeout", err)
-			}
-			switch {
-			case tc.late && tc.codex:
-				e.codexExits(t, r, nil)
-			case tc.late:
-				if a := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "SessionEnd", ""); !a.Applied {
-					t.Fatalf("late SessionEnd not applied: %s", a.Reason)
-				}
-			}
+	_, err := e.pauseWithin(context.Background(), 0, pauseParams(r))
 
-			retry := runVerb(e, func() (api.PauseResult, error) { return pause(e, r) })
-
-			if retry.err != nil {
-				t.Fatalf("retried pause: %v; want the row ended (agent got %q)", retry.err, in.submitted)
-			}
-			if len(retry.calls) != tc.calls || !slices.Equal(in.submitted, tc.exits) {
-				t.Errorf("retried pause made tmux calls %+v, agent got %q; want %d calls, %q", retry.calls,
-					in.submitted, tc.calls, tc.exits)
-			}
-			pauAssertState(t, e, r.ID, store.StateEnded)
-		})
+	assertPauseInspectionDetails(t, err, store.StateWaiting)
+	in.assertSubmittedOnce(t, exitText)
+	e.assertExitDelivered(t, r.Socket, r.Spawn.Identity.PaneID)
+	e.rec.SetCapture(r.Socket, r.Spawn.Identity.PaneID, prompt)
+	row, err := e.st.GetSpawn(r.ID)
+	if err != nil || row.State != store.StateWaiting {
+		t.Fatalf("get after timeout = %+v, %v; want waiting", row, err)
 	}
+	pane, err := e.readPane(api.ReadPaneParams{InstanceID: r.ID})
+	if err != nil || pane.Pane != prompt {
+		t.Fatalf("read-pane = %+v, %v; want the prompt for caller inspection", pane, err)
+	}
+	// The test caller chooses the answer; pause never interprets the capture.
+	in.onSubmit = func(line string) {
+		if line == "1" {
+			if ok, why := e.endAsAgent(t, r); !ok {
+				t.Errorf("SessionEnd: %s", why)
+			}
+		}
+	}
+	if _, err := e.sendKeys(api.SendKeysParams{InstanceID: r.ID, Text: "1", ExpectPaneSHA256: pane.PaneSHA256}); err != nil {
+		t.Fatalf("guarded caller answer: %v", err)
+	}
+	if !slices.Equal(in.submitted, []string{exitText, "1"}) {
+		t.Errorf("submitted = %q; want /exit, then caller's answer once", in.submitted)
+	}
+	pauAssertState(t, e, r.ID, store.StateEnded)
 }
 
 // TestAdviceFollow_E9_SendKeysPendingAllowPending: E9 a pending row's

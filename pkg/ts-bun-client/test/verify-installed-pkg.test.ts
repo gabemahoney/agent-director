@@ -10,6 +10,7 @@ import { test, expect } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { withTempHome } from "./internal/tempHome.js";
 
 const PKG_ROOT = path.resolve(import.meta.dir, "..");
 const SRC_INDEX = path.join(PKG_ROOT, "src/index.ts");
@@ -32,9 +33,16 @@ async function runDriver(args: string[], env: Record<string, string> = {}) {
 test.each(["--smoke", "--full"])(
   "%s happy path: exits 0 against the in-repo Client and CLI",
   async (flag) => {
-    const r = await runDriver([flag], { AD_VERIFY_AGAINST: SRC_INDEX, AD_CLI_PATH: process.env.CLI_PATH! });
-    expect(r.exitCode, r.stderr).toBe(0);
-    expect(r.stdout + r.stderr).not.toMatch(CRASH);
+    await withTempHome(async (home) => {
+      const r = await runDriver([flag], { AD_VERIFY_AGAINST: SRC_INDEX, AD_CLI_PATH: process.env.CLI_PATH! });
+      expect(r.exitCode, r.stderr).toBe(0);
+      expect(r.stdout + r.stderr).not.toMatch(CRASH);
+      if (flag === "--full") {
+        const events = fs.readFileSync(path.join(home, ".config", "agent-director", "ad-trail.jsonl"), "utf8")
+          .trim().split("\n").map((line) => JSON.parse(line));
+        expect(events).toContainEqual(expect.objectContaining({ event: "ad.decide.called", outcome: "ErrInvalidFlags" }));
+      }
+    });
   },
   30_000
 );

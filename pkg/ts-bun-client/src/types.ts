@@ -852,6 +852,22 @@ export interface RecordPaneAnswerResult {
 // ---------------------------------------------------------------------------
 
 /**
+ * ErrPauseTimeout's errDetails after exit keys were sent but ended was not
+ * observed. Pass the outcome to a caller that can inspect the session and
+ * decide before more input; it does not prove a prompt is open or why exit is delayed.
+ */
+export interface PauseTimeoutDetails {
+  /** Session inspection and a caller's decision are required before further input. */
+  inspection_required: true;
+  /** tmux accepted /exit and Enter; the agent's consumption is unknown. */
+  exit_keys_sent: true;
+  /** The row was not observed to reach ended before the deadline. */
+  exit_confirmed: false;
+  /** Last raw state read, not a judgement about the pane. */
+  row_state: string;
+}
+
+/**
  * One other open request of the Spawn in
  * {@link RelayFallenBackDetails}.
  */

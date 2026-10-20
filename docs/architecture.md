@@ -11707,12 +11707,14 @@ CLI's stderr envelope (`errorEnvelope.ErrDetails`, written by
 `writeVerbError` in `cmd/agent-director/spawn_cmd.go` for every verb), the
 MCP error's `data` (`ToolErrorData.ErrDetails`) and the TypeScript
 client's `AgentDirectorError.errDetails` (`null` when absent). A client
-that does not know the key ignores it. Five named errors carry it today:
+that does not know the key ignores it. Named errors carrying it include:
 `ErrRelayFallenBack` (`RelayFallenBackDetails`, from `decide`, `send-keys`
 and `pause`), `ErrPaneAnswerInProgress` (`PaneAnswerInProgressDetails`),
 `ErrClaimTooSoon` (`ClaimTooSoonDetails`), `ErrPaneChanged`
-(`PaneChangedDetails`) and `ErrDialogMaybeOpen` (`DialogMaybeOpenDetails`,
-from a plain `send-keys` and `pause`). One unnamed error does too: the `ErrInternal` of a
+(`PaneChangedDetails`), `ErrDialogMaybeOpen` (`DialogMaybeOpenDetails`,
+from a plain `send-keys` and `pause`), and `ErrPauseTimeout`
+(`PauseTimeoutDetails`, after the exit keys were sent; see [`pause`](#pause)).
+One unnamed error does too: the `ErrInternal` of a
 pane answer through `send-keys` whose key was sent but whose `sent` write
 failed (`PaneKeySentDetails`: `key_sent` true and `request_token`), so a
 caller tells it from an error that sent nothing and reads the pane before
@@ -17652,9 +17654,10 @@ for process exit and `decide` for relay delivery or legacy settlement:
 7. **The wait**, only once `C-u`, `/exit` and Enter went through:
    poll the row's state column every `pausePollInterval` (200 ms) until
    `state == ended` (success) or the wait elapses on the real clock
-   (`ErrPauseTimeout`). On a Codex row each poll that does not read `ended`
-   also makes the end check (`waitEnded`'s `gone`, built by
-   `endIfGoneInWait`): it re-reads the row, leaves a row on another launch
+   (`ErrPauseTimeout` with `PauseTimeoutDetails`, below). On a Codex row
+   each poll that does not read `ended` also makes the end check
+   (`waitEnded`'s `gone`, built by `endIfGoneInWait`): it re-reads the row,
+   leaves a row on another launch
    than the one the keys went to alone (a resume or a reuse rewrote the
    launch token or the life number; an adoption write that fills in the
    server or pane identity on the same launch does not count), and otherwise
@@ -17670,6 +17673,26 @@ for process exit and `decide` for relay delivery or legacy settlement:
    key or 0 (b.8q2). `config.Load` refuses a negative value and one above
    `config.MaxPauseTimeoutSeconds` (9223372036, the largest whole number of
    seconds a `time.Duration` holds), so the wait never wraps.
+
+**Unconfirmed exit requires inspection.** The shared post-delivery deadline
+for Claude, Codex and Cursor returns `DetailedError` wrapping the existing
+`ErrPauseTimeout` sentinel. `PauseTimeoutDetails` records
+`inspection_required: true`, `exit_keys_sent: true`, `exit_confirmed: false`
+and `row_state`, the last raw state read by the wait. tmux accepting the
+keys does not establish consumption or exit. The wait never captures pane
+text, classifies prompts, answers them or retries; timeout alone cannot
+prove an exit confirmation or any other cause. Keep this outcome on the
+shared wait path and use the existing details transport on every surface,
+including the exported TypeScript `PauseTimeoutDetails` shape.
+
+Callers inspect `get` and `read-pane`, passing the outcome unchanged up their
+chain until a caller can inspect and decide before further input. Only that
+decision authorizes guarded `send-keys` with the inspected pane's hash or
+`kill`; existing ownership and relay guards still apply. Recovery belongs to
+[When pause cannot confirm exit](caller-contract.md#when-pause-cannot-confirm-exit).
+Claude's documented `SessionEnd` hook runs after exit and has no decision
+control; it supplies no confirmation bypass. The lifecycle wait does not
+infer that any prompt is present from a missing end event.
 
 **Why the relay guard (b.zdz).** A relay-on row can read `waiting` while
 one of its requests is not proven gone (a subagent's request after the

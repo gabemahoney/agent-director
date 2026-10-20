@@ -177,6 +177,9 @@ func TestPauseWait(t *testing.T) {
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v; want %v", err, tc.want)
 			}
+			if details := api.ErrDetails(err); details != nil {
+				t.Errorf("non-timeout err_details = %#v; want none", details)
+			}
 			if len(*slept) != tc.at {
 				t.Errorf("sleeps = %v; want %d", *slept, tc.at)
 			}

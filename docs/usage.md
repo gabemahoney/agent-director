@@ -844,6 +844,9 @@ agent-director pause --instance-id "$id"
 agent-director resume --instance-id "$id"
 ```
 
+Run `resume` after `pause` succeeds. If exit is not confirmed, follow the
+[pause timeout procedure](caller-contract.md#when-pause-cannot-confirm-exit).
+
 On a Codex row `pause` clears a draft of up to 64 lines before it types
 `/exit`, and ends the row itself once the agent exits (see the
 [caller contract](caller-contract.md#when-a-codex-agent-exits), which also

@@ -515,7 +515,9 @@ export class SubprocessClient {
    * done at the pane. Past it: readPane, answer any dialog, then sendKeys `/exit` with the judged
    * pane's expect_pane_sha256; or kill. On a Codex row whose agent process is gone and which
    * holds an end report, pause moves the row to `ended` (before typing anything, or while it
-   * waits) and succeeds.
+   * waits) and succeeds. ErrPauseTimeout carries PauseTimeoutDetails with
+   * inspection_required: true: pass it to a caller that can inspect get/readPane and decide
+   * before more input. A prompt may be open, but is not proven; never retry pause automatically.
    */
   async pause(params: PauseParams): Promise<PauseResult> {
     this.#assertOpen();

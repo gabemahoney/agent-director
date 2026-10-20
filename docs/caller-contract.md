@@ -7,8 +7,8 @@ error:
 - Only a GONE answer means a row's session is not there. Any other tmux error
   means "don't know", never "dead".
 - Row state, reconciled by `find-missing` and the [Cursor read checks](#cursor-operation-boundaries),
-  is the liveness authority. Poll a
-  launch with `status`; call `read-pane` only while the row is `pending`, at
+  is the liveness authority. For launch readiness, poll with `status`;
+  call `read-pane` only while the row is `pending`, at
   most once a second.
 - Run as the same user, in the same tmux environment, as the agents.
 - No verb removes a row you name; only a scheduled `expire` does.
@@ -29,6 +29,8 @@ error:
 - `ErrSubmissionUnconfirmed`: for automatic `send-keys`, follow
   [Ordinary text submission](#ordinary-text-submission); for manual
   `send-keys`, follow [Manual input ownership](#manual-input-ownership).
+- `ErrPauseTimeout`: inspect before further input; never retry `pause`
+  automatically. Follow [When pause cannot confirm exit](#when-pause-cannot-confirm-exit).
 - `resume`, or a supported `spawn --reuse-finished` refused as "still stopping" or "still
   starting": wait and retry. Refused with "this row's own id", or
   `ErrTmuxSessionConflict` "this id's own abandoned launch": surface the named
@@ -665,6 +667,34 @@ history, successful input execution or confirmed termination, and do not replay
 uncertain work. A persistence failure cannot produce a successful intentional
 end report.
 
+## When pause cannot confirm exit
+
+For Claude, Codex and Cursor, `ErrPauseTimeout` means `/exit` and Enter
+were sent, but the row was not observed to reach `ended` within
+`pause.timeout_seconds`. Its `err_details` object contains:
+
+| Field | Meaning |
+|---|---|
+| `inspection_required: true` | A caller able to inspect the session must decide before further input. |
+| `exit_keys_sent: true` | tmux accepted the exit keys; this does not prove the agent consumed them. |
+| `exit_confirmed: false` | The wait did not confirm `ended`. |
+| `row_state` | The last raw row state observed, without the configured settle delay. |
+
+This does not establish why exit is delayed or prove that a prompt is open.
+An exit confirmation, including Claude's background-work confirmation, is
+one possible cause. Agent-director does not interpret the pane or answer it.
+
+Read `get` and `read-pane`. A caller unable to inspect the session and
+decide must pass the error and its details up to one that can, before
+sending any more input. That caller may choose `send-keys` with the
+inspected pane's `pane_sha256` as `--expect-pane-sha256`, or choose `kill`.
+Existing input ownership and permission holds still apply. Do not choose
+keys or force termination automatically from the timeout alone.
+
+Observe the resulting row state before relaunching; a timeout does not
+authorize `resume`. A Codex agent that exits after inspection follows
+[When a Codex agent exits](#when-a-codex-agent-exits).
+
 ## When a Codex agent exits
 
 A Claude row's clean exit ends the row at once. A Codex agent that exits other
@@ -687,7 +717,8 @@ its lists (see [How a Codex row ends](hooks.md#how-a-codex-row-ends)).
 
 If a live Codex row has a draft exceeding 64 lines, `pause` submits the
 rest of the draft and the `/exit` to the agent as a prompt, the row goes
-`working`, and `pause` returns `ErrPauseTimeout`.
+`working`, and `pause` returns `ErrPauseTimeout`. Follow the
+[inspection procedure](#when-pause-cannot-confirm-exit) before further input.
 
 The look-and-send recovery for a held agent (send `/exit` with the pane's hash,
 poll `status` until `ended`) gains, on a Codex row, one step: once the agent has
@@ -866,8 +897,9 @@ supplies neither ACP approval authority nor proof.
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):
   `ErrRelayFallenBack`, `ErrPaneAnswerInProgress`, `ErrClaimTooSoon`,
-  `ErrPaneChanged`, `ErrDialogMaybeOpen`, and an `ErrInternal` from a pane
-  answer whose key was sent (`key_sent` true: read the pane before you
+  `ErrPaneChanged`, `ErrDialogMaybeOpen`,
+  [`ErrPauseTimeout`](#when-pause-cannot-confirm-exit), and an `ErrInternal`
+  from a pane answer whose key was sent (`key_sent` true: read the pane before you
   send anything again). Read facts from it, never from the description; a
   caller that does not use it ignores it.
 
