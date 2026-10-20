@@ -56,11 +56,6 @@ func PermissionOwner(launch string, epoch int64) PermissionOption {
 	}
 }
 
-// PermissionSuperseded marks a request explicitly replaced.
-func PermissionSuperseded(at time.Time) PermissionOption {
-	return func(m map[string]any) { m["superseded_at"] = at.UnixMilli() }
-}
-
 // PermissionAnswer records a pane answer without proving the dialog gone.
 func PermissionAnswer(answer string) PermissionOption {
 	return func(m map[string]any) { m["pane_answer"] = answer }
@@ -74,7 +69,8 @@ func PermissionProof(at time.Time) PermissionOption {
 	}
 }
 
-// PermissionDecision seeds a closed request, independently of proof.
+// PermissionDecision records a decision without delivering it or proving the
+// dialog gone, so the request still awaits an answer.
 func PermissionDecision(decision, reason string) PermissionOption {
 	return func(m map[string]any) { m["decision"] = decision; m["decision_reason"] = nullIfZero(reason) }
 }
@@ -104,10 +100,16 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 // SeedPermissionSurface uses a precommitted episode so independent processes share an exact since.
 func SeedPermissionSurface(dbPath string) error {
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+	// The row's permission epoch and the observation's agree: an observation
+	// of another epoch is a finished episode, not the committed one.
+	const epoch = 3
 	for _, agent := range []string{store.AgentClaude, store.AgentCodex, store.AgentCursor} {
 		id := "stuck-" + agent
-		observation, _ := json.Marshal(map[string]any{"state": "stuck", "reason": "permission_unanswered", "since_ms": since.UnixMilli(), "request_token": storefix.TestRequestTokenA, "tool_name": "Bash", "candidate": "stuck", "candidate_since_ms": since.UnixMilli(), "observed_at_ms": since.UnixMilli()})
-		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithStuckObservation(string(observation))); err != nil {
+		observation, err := json.Marshal(map[string]any{"state": "stuck", "reason": "permission_unanswered", "since_ms": since.UnixMilli(), "request_token": storefix.TestRequestTokenA, "tool_name": "Bash", "candidate": "stuck", "candidate_since_ms": since.UnixMilli(), "observed_at_ms": since.UnixMilli(), "permission_epoch": epoch})
+		if err != nil {
+			return err
+		}
+		if _, err := SeedSpawn(dbPath, id, store.StateCheckPermission, "/tmp", "on", "", true, WithAgent(agent), WithNoPane(), WithStartedAt(since.Add(-time.Hour)), WithPermissionEpoch(epoch), WithStuckObservation(string(observation))); err != nil {
 			return err
 		}
 		if _, err := SeedPermissionRequest(dbPath, id, "Bash", PermissionToken(storefix.TestRequestTokenA), PermissionTimes(since.Add(-time.Hour), since.Add(-time.Hour), since.Add(-time.Minute), time.Time{}, since.Add(-time.Minute), store.FallbackDeadline)); err != nil {
@@ -125,8 +127,6 @@ func CheckPermissionWire(t testing.TB, raw []byte, agent, verb string) {
 	if err := json.Unmarshal(raw, &row); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join("testdata", "stuck", "permission.json")
-	// The caller supplies the repository-relative fixture through LoadPermissionWire.
 	expected := LoadPermissionWire(t)
 	if row["state"] != "stuck" {
 		t.Fatalf("%s/%s state: %s", agent, verb, raw)
@@ -139,7 +139,7 @@ func CheckPermissionWire(t testing.TB, raw []byte, agent, verb string) {
 			continue
 		}
 		if row[k] != v {
-			t.Errorf("%s/%s %s=%v; want %v (%s)", agent, verb, k, row[k], v, path)
+			t.Errorf("%s/%s %s=%v; want %v", agent, verb, k, row[k], v)
 		}
 	}
 	if row["tmux_session_name"] != "ts-stuck-"+agent {
@@ -192,4 +192,73 @@ func PermissionCreation(raw string) PermissionOption {
 // PermissionDelivered records a relay acknowledgement independently of proof.
 func PermissionDelivered(at time.Time) PermissionOption {
 	return func(m map[string]any) { m["delivered_at"] = at.UnixMilli() }
+}
+
+// StuckProbe is the committed-row read the observation helper needs; both
+// *store.Store and the reopened stores of other packages satisfy it.
+type StuckProbe interface {
+	GetSpawn(id string) (store.Spawn, error)
+}
+
+// StuckReading is the display part of one reader result.
+type StuckReading struct {
+	State, Reason, Since, RequestToken, ToolName string
+}
+
+// observeAttempts bounds how often a read that had to commit may be repeated.
+const observeAttempts = 3
+
+// CommitCheck reports whether the commit a read was expected to make landed,
+// judged from the row before and after the read.
+type CommitCheck func(before, after store.Spawn) bool
+
+// VersionAdvanced is the CommitCheck of a read that stores an observation or
+// starts a request's fallback clock: the observer advances stuck_version in the
+// one transaction that does either.
+func VersionAdvanced(before, after store.Spawn) bool {
+	return after.StuckVersion != before.StuckVersion
+}
+
+// ObserveStuckRead runs one reader and checks it against the committed row.
+// The observation write is nonwaiting and best effort, so a read that had to
+// commit may lose a race for the write lock and answer from its snapshot.
+// When commit is non-nil and reports no commit, the same read is repeated at
+// the same injected time, without sleeping, up to observeAttempts times, and
+// the test then fails with "observation never committed". Once the commit
+// landed (or none was expected) the display must be want and, for stuck, equal
+// the committed detail of the row.
+func ObserveStuckRead(t testing.TB, probe StuckProbe, id, want string, commit CommitCheck, read func() (StuckReading, error)) StuckReading {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		before, err := probe.GetSpawn(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := read()
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err := probe.GetSpawn(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if commit != nil && !commit(before, after) {
+			t.Logf("observation attempt %d/%d did not commit (read=%+v stuck_version %d -> %d)", attempt, observeAttempts, got, before.StuckVersion, after.StuckVersion)
+			if attempt == observeAttempts {
+				t.Fatalf("observation never committed: read=%+v", got)
+			}
+			continue
+		}
+		if got.State != want {
+			t.Fatalf("read=%+v; want state %s (stuck_version %d -> %d)", got, want, before.StuckVersion, after.StuckVersion)
+		}
+		if want == store.StateStuck {
+			committed := after.CommittedStuckDisplay()
+			if committed.State != store.StateStuck ||
+				got != (StuckReading{State: committed.State, Reason: committed.Reason, Since: time.UnixMilli(committed.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"), RequestToken: committed.RequestToken, ToolName: committed.ToolName}) {
+				t.Fatalf("stuck read=%+v is not the committed display %+v (stuck_version %d -> %d)", got, committed, before.StuckVersion, after.StuckVersion)
+			}
+		}
+		return got
+	}
 }

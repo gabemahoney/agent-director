@@ -1185,7 +1185,7 @@ var Verbs = []VerbDef{
 			{
 				Name:          "state",
 				Type:          "[]string",
-				Description:   "Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. With [state] settle_ms set it matches the settled state each row's state shows, before limit applies.",
+				Description:   "Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. The filter matches the displayed state, including `stuck`, and is applied before limit.",
 				Required:      false,
 				Nullable:      false,
 				AllowEmpty:    true,

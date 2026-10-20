@@ -30,6 +30,7 @@ busy_timeout_ms = 10000
 
 [state]
 settle_ms = 0   # 0 = off
+permission_unanswered_timeout_seconds = 30
 
 [launch]   # optional; absolute or "~/" paths; empty or omitted = unset
 # claude_path = "/opt/claude/bin/claude"
@@ -70,6 +71,7 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
+| `[state] permission_unanswered_timeout_seconds` | 1 to 9223372036 | 30 | How long a permission request whose agent fell back to its own prompt must stay unanswered before `status`, `get` and `list` can show `stuck` (see [Permission-unanswered timeout](#permission-unanswered-timeout-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
@@ -110,7 +112,7 @@ Three waits keep their time limits whatever `busy_timeout_ms` is:
 |---|---|---|
 | `decide --max-wait-ms N` | the caller's deadline | waits for the store at most until N ms after it started (`ErrStoreBusy`, nothing recorded) |
 | the relay hook | the agent ending it | each write waits for the store at most until 2 s before that end; if the store stays busy, its first write gives way to a deny, and any later one to no answer, so the agent asks in its own permission prompt |
-| `get`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
+| `status`, `get`, `list`, `get-permission` | the caller's | never wait for the store's write lock |
 
 `decide` without `--max-wait-ms` waits up to `busy_timeout_ms` per write,
 and the other hooks can still be killed by a long store wait.
@@ -171,6 +173,22 @@ on CLI, MCP and the Go and TypeScript clients:
   replaced it; the current value uses the reader's setting. After a setting
   change, a reported value can have held for less than the new interval.
   A wall-clock step back delays settling; a jump forward can settle early.
+
+## Permission-unanswered timeout (`[state]`)
+
+`[state] permission_unanswered_timeout_seconds` is how long an agent's own
+permission prompt may stay unanswered before `status`, `get` and `list`
+show the agent as `stuck`. Which requests count, and when their clock
+starts, is in [permissions](permissions.md#stuck-on-an-unanswered-permission); the
+fields it adds are in the [caller contract](caller-contract.md#stuck-rows).
+
+- **Range.** Whole seconds from 1 to 9223372036. A missing key, or 0, reads
+  30. A negative value or one above the maximum is refused, never capped (see
+  [Refused values](#refused-values)).
+- **Settling.** `stuck` is shown and cleared under
+  [`settle_ms`](#settle-time-state), like any other change of `state`.
+- **When a change takes effect.** As [any other](#when-a-change-takes-effect):
+  each reader judges with the value it has loaded.
 
 ## Timing settings (`[tmux]`)
 

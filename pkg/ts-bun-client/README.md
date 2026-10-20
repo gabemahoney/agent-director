@@ -153,6 +153,15 @@ console.log(result.state);
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+`state` is a `string` and can be `"stuck"`. Then `StatusResult` and `GetResult`
+carry the optional `stuck_reason` (`"permission_unanswered"`), `since` (RFC3339
+UTC string with millisecond precision), `request_token` and `tool_name`;
+`StatusResult` also carries `tmux_session_name`, and each `ListRow` carries
+`stuck_reason` only. In any other state these keys are absent from the result,
+never `null`, so test for presence (`result.stuck_reason !== undefined`). The
+[caller contract](../../docs/caller-contract.md#stuck-rows) defines the fields,
+omissions and detection.
+
 `status`, `get` and `list` use `[state] settle_ms` in the CLI's
 `~/.config/agent-director/config.toml` for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Verbs that act on a
@@ -170,6 +179,7 @@ for (const spawn of result.spawns) {
 ```
 
 Each row, like `get`'s result, carries `agent` (`"claude"`, `"codex"` or `"cursor"`), the agent the row runs.
+A `state` filter of `"stuck"` is matched on the displayed state, before any `limit`.
 
 ### listSubagents
 

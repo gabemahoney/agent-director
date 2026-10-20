@@ -1019,11 +1019,6 @@ test_J5_DotfilesSkillNotChecked() {
 # conflicting column is hidden from table_info; repair allows an exact retry.
 j6_break_hop() {
     case "$SCHEMA" in
-        13)
-            J6_FIRST_COLUMN=codex_startup J6_CONFLICT_COLUMN=claude_capacity
-            "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_startup;
-                ALTER TABLE spawns DROP COLUMN claude_capacity;" || return 1
-            ;;
         14)
             J6_FIRST_COLUMN=permission_epoch J6_CONFLICT_COLUMN=stuck_version
             "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN permission_epoch;
@@ -1034,8 +1029,7 @@ j6_break_hop() {
                 ALTER TABLE permission_requests DROP COLUMN owner_permission_epoch;
                 ALTER TABLE permission_requests DROP COLUMN admitted_at;
                 ALTER TABLE permission_requests DROP COLUMN fallback_at;
-                ALTER TABLE permission_requests DROP COLUMN fallback_basis;
-                ALTER TABLE permission_requests DROP COLUMN superseded_at;" || return 1
+                ALTER TABLE permission_requests DROP COLUMN fallback_basis;" || return 1
             ;;
         *) bad "j6_break_hop has no failure injection for v$SCHEMA"; return 1 ;;
     esac
@@ -1096,7 +1090,7 @@ test_J6_MigrationFailedRerunRetries() {
     if [[ "$SCHEMA" == 14 ]]; then
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT permission_epoch=0 AND stuck_version=0 AND stuck_observation IS NULL AND stuck_exit IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated permission observations for the historical spawn"
-        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL AND superseded_at IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated historical ownership or fallback facts"
     fi
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"

@@ -367,6 +367,7 @@ func docConfigKeys() []struct {
 		{"store.db_path", c.Store.DbPath, "", false},
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
 		{"state.settle_ms", itoa(int64(c.State.SettleMs)), "", false},
+		{"state.permission_unanswered_timeout_seconds", itoa(int64(c.State.EffectivePermissionUnansweredTimeoutSeconds())), rng(int64(config.MaxPermissionUnansweredTimeoutSeconds)), false},
 		{"launch.claude_path", "unset", "", true},
 		{"launch.codex_path", "unset", "", true},
 		{"launch.cursor_path", "unset", "", true},

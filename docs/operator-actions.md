@@ -915,8 +915,8 @@ when it cannot write the crontab back.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, v10→v11, v11→v12 and v12→v13, the old-layout
-steps below do not apply. Before upgrading, stop agents, servers and callers
+including schema v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14, the
+old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
 and keep a copy of the actual store (`[store] db_path` when set), including its `-wal` and
 `-shm` files.
 To roll back, stop them again, restore that pre-upgrade copy and install the
@@ -924,10 +924,10 @@ previous release with its own `install.sh` and the original install flags.
 Restore the store with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. This loses all writes made since
 the backup. The installer does not make this backup; a binary swap cannot
-make a v13 store readable by a v9, v10, v11 or v12 binary. There is no
-supported in-place downgrade from v13. The tested v12→v11 family-history
+make a v14 store readable by a v9, v10, v11, v12 or v13 binary. There is no
+supported in-place downgrade from v14. The tested v12→v11 family-history
 recipe applies only to a genuine family-only v12 store and cannot operate
-on v13; see the migration guide's emergency downgrade recipe. No supported
+on v13 or v14; see the migration guide's emergency downgrade recipe. No supported
 in-place reverse path crosses v11→v10 or v10→v9. A copy made after migration
 cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
 and obtain human help.

@@ -19,7 +19,8 @@ func TestPermissionStuckSettlementAndActualTransitionTime(t *testing.T) {
 			c := stuckClient(t, e, delay.Milliseconds(), 0)
 			mark := trailMark(t)
 			if delay > 0 {
-				assertStuckState(t, c, e.id, store.StateCheckPermission)
+				// The candidate must be committed here: its start is the settle clock.
+				observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 				e.now = stuckAt.Add(delay - time.Millisecond)
 				assertStuckState(t, c, e.id, store.StateCheckPermission)
 				// A delayed first committing read must stamp itself, not the earlier deadline.
@@ -33,7 +34,8 @@ func TestPermissionStuckSettlementAndActualTransitionTime(t *testing.T) {
 			entryTime := e.now
 			stuckFacts(t, e, apitest.PermissionAnswer(store.PaneAnswerOutside))
 			if delay > 0 {
-				got := assertStuckState(t, c, e.id, "stuck")
+				// The clearing candidate is committed while the stuck display holds.
+				got := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
 				if got.StuckInfo != entered.StuckInfo {
 					t.Errorf("clearing details changed: %+v", got)
 				}
@@ -41,7 +43,7 @@ func TestPermissionStuckSettlementAndActualTransitionTime(t *testing.T) {
 				assertStuckState(t, c, e.id, "stuck")
 				e.now = e.now.Add(time.Millisecond)
 			}
-			assertStuckState(t, c, e.id, store.StateCheckPermission)
+			observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 			var events []map[string]any
 			for _, ev := range readAPITrailLines(t)[mark:] {
 				if ev["instance_id"] != e.id {
@@ -84,17 +86,17 @@ func TestPermissionStuckRepresentativeContinuity(t *testing.T) {
 	}
 	c := stuckClient(t, e, 1000, 0)
 	mark := trailMark(t)
-	assertStuckState(t, c, e.id, store.StateCheckPermission)
+	observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 	// Removing the representative during the candidate must not restart settling.
 	a, err := e.s.GetPermissionRequest(e.id, storefix.TestRequestTokenA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := apitest.SetPermissionFacts(e.dbPath, a.RequestID, apitest.PermissionSuperseded(stuckAt)); err != nil {
+	if err := apitest.SetPermissionFacts(e.dbPath, a.RequestID, apitest.PermissionProof(stuckAt)); err != nil {
 		t.Fatal(err)
 	}
 	e.now = e.now.Add(time.Second)
-	first := assertStuckState(t, c, e.id, "stuck")
+	first := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
 	if first.RequestToken != storefix.TestRequestTokenB {
 		t.Fatalf("tie representative=%+v", first)
 	}
@@ -106,7 +108,7 @@ func TestPermissionStuckRepresentativeContinuity(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.now = e.now.Add(time.Millisecond)
-	next := assertStuckState(t, c, e.id, "stuck")
+	next := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
 	if next.RequestToken != storefix.TestRequestTokenC || next.Since != first.Since {
 		t.Errorf("replacement restarted episode: first=%+v next=%+v", first, next)
 	}
@@ -128,7 +130,7 @@ func TestPermissionStuckCandidateCanceledByInterveningTurn(t *testing.T) {
 	stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(-time.Minute), time.Time{}, time.Time{}, ""))
 	c := stuckClient(t, e, 1000, 0)
 	mark := trailMark(t)
-	assertStuckState(t, c, e.id, store.StateCheckPermission)
+	observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 	// No state read occurs during the authoritative move out and back.
 	for _, state := range []string{store.StateWaiting, store.StateCheckPermission} {
 		if err := seedAgentState(e.s, e.dbPath, e.id, state); err != nil {
@@ -142,7 +144,8 @@ func TestPermissionStuckCandidateCanceledByInterveningTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.now = e.now.Add(time.Hour)
-	assertStuckState(t, c, e.id, store.StateCheckPermission)
+	// The new interval starts its own candidate at this read.
+	observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 	for _, ev := range readAPITrailLines(t)[mark:] {
 		if ev["instance_id"] == e.id && ev["event"] == "ad.spawn.stuck_transition" {
 			t.Errorf("canceled candidate emitted %v", ev)
@@ -152,32 +155,64 @@ func TestPermissionStuckCandidateCanceledByInterveningTurn(t *testing.T) {
 	assertStuckState(t, c, e.id, "stuck")
 }
 
+// An authoritative write that ends the displayed episode records the exit at
+// its own commit time, not at a later read: a terminal write and the
+// find-missing repair of a check_permission row nothing holds any more.
 func TestPermissionStuckTerminalExitIsImmediate(t *testing.T) {
 	// Serial: it reads the shared trail using fixture row ids reused by other tests.
-	for _, state := range []string{store.StateEnded, store.StateMissing} {
-		t.Run(state, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, state string
+		write       func(*testing.T, *relayEnv)
+	}{
+		{"ended", store.StateEnded, func(t *testing.T, e *relayEnv) {
+			if err := seedAgentState(e.s, e.dbPath, e.id, store.StateEnded); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"missing", store.StateMissing, func(t *testing.T, e *relayEnv) {
+			row, err := e.s.GetSpawn(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, res, err := e.s.MarkMissingIfSameLife(e.id, row.Snapshot); err != nil || res != store.CondApplied {
+				t.Fatalf("missing=%v %v", res, err)
+			}
+		}},
+		{"repair", store.StateWorking, func(t *testing.T, e *relayEnv) {
+			// Nothing holds the row once its only request is proven gone.
+			stuckFacts(t, e, apitest.PermissionProof(stuckAt))
+			row, err := e.s.GetSpawn(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state, res, err := e.s.RepairCheckPermissionIfSameLife(e.id, row.Snapshot); err != nil || res != store.CondApplied || state != store.StateWorking {
+				t.Fatalf("repair=%q %v %v", state, res, err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			e := newRelayEnv(t, store.ProcessIdentity{})
 			e.now = stuckAt
 			stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(-time.Minute), time.Time{}, time.Time{}, ""))
 			c := stuckClient(t, e, 0, 0)
 			assertStuckState(t, c, e.id, "stuck")
 			c = stuckClient(t, e, settleMax, 0)
-			mark := trailMark(t)
-			if state == store.StateEnded {
-				if err := seedAgentState(e.s, e.dbPath, e.id, state); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				row, err := e.s.GetSpawn(e.id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, res, err := e.s.MarkMissingIfSameLife(e.id, row.Snapshot); err != nil || res != store.CondApplied {
-					t.Fatalf("missing=%v %v", res, err)
-				}
+			before, err := e.s.GetSpawn(e.id)
+			if err != nil {
+				t.Fatal(err)
 			}
-			assertStuckState(t, c, e.id, state)
-			assertStuckState(t, c, e.id, state)
+			mark := trailMark(t)
+			tc.write(t, e)
+			// The write itself ended the episode: no read has happened yet.
+			after, err := e.s.GetSpawn(e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.StuckObservation != "" || after.StuckVersion <= before.StuckVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
+				t.Errorf("write left the episode behind: before=%+v after=%+v", before, after)
+			}
+			assertStuckState(t, c, e.id, tc.state)
+			assertStuckState(t, c, e.id, tc.state)
 			_, stamp, err := apitest.ReadSettle(e.dbPath, e.id)
 			if err != nil {
 				t.Fatal(err)
@@ -192,7 +227,7 @@ func TestPermissionStuckTerminalExitIsImmediate(t *testing.T) {
 				t.Fatalf("immediate exit attempts=%v", events)
 			}
 			ev := events[0]
-			if ev["prior_state"] != "stuck" || ev["new_state"] != state || ev["stuck_reason"] != "permission_unanswered" || ev["ts"] != time.UnixMilli(stamp).UTC().Format("2006-01-02T15:04:05.000Z") {
+			if ev["prior_state"] != "stuck" || ev["new_state"] != tc.state || ev["stuck_reason"] != "permission_unanswered" || ev["ts"] != time.UnixMilli(stamp).UTC().Format("2006-01-02T15:04:05.000Z") {
 				t.Errorf("exit must use authoritative commit time: %v stamp=%d", ev, stamp)
 			}
 		})

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -36,6 +37,24 @@ func permissionObservation(t *testing.T) (*store.Store, string, string, []store.
 	return s, path, id, []store.PermissionSample{{Request: pr, FallbackAt: now.Add(-time.Minute), Basis: store.FallbackDeadline}}, now
 }
 
+// observeUnlessBusy is ObservePermissionStuck for a call that must commit. The
+// write never waits for the write lock, so a busy store is the one failure
+// that is repeated, at the same time and without sleeping; any other error,
+// and a third busy answer, fail the test.
+func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration) store.StuckDisplay {
+	t.Helper()
+	for attempt := 1; ; attempt++ {
+		display, err := s.ObservePermissionStuck(row, samples, now, timeout, store.SettleRead{})
+		if err == nil {
+			return display
+		}
+		if !errors.Is(err, store.ErrStoreBusy) || attempt == 3 {
+			t.Fatalf("observation did not commit: %+v %v", display, err)
+		}
+		t.Logf("attempt %d: store busy: %v", attempt, err)
+	}
+}
+
 func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -53,11 +72,6 @@ func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
 		}},
 		{"proof", func(t *testing.T, s *store.Store, path, id string, pr store.PermissionRow, now time.Time) {
 			if err := apitest.SetPermissionFacts(path, pr.RequestID, apitest.PermissionProof(now)); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"supersession", func(t *testing.T, s *store.Store, path, id string, pr store.PermissionRow, now time.Time) {
-			if err := apitest.SetPermissionFacts(path, pr.RequestID, apitest.PermissionSuperseded(now)); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -83,9 +97,18 @@ func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
 				t.Fatalf("new launch=%v %v", res, err)
 			}
 		}},
+		// A real turn: the row is in check_permission again, but through
+		// waiting, so it is a new permission interval (the epoch advanced).
 		{"turn", func(t *testing.T, s *store.Store, path, id string, pr store.PermissionRow, now time.Time) {
-			if got := apitest.ApplyAgentHook(t, path, id, "SessionEnd", ""); !got.Applied {
-				t.Fatal(got)
+			for _, state := range []string{store.StateWaiting, store.StateCheckPermission} {
+				if err := storefix.WithSeedPane(path, id, func(gate store.HookGate) error {
+					return storefix.SeedAgentWrites(s, gate, id, "", state)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if after, err := s.GetSpawn(id); err != nil || after.State != store.StateCheckPermission || after.PermissionEpoch == pr.OwnerPermissionEpoch {
+				t.Fatalf("turn did not start a new interval: %+v %v", after, err)
 			}
 		}},
 	} {
@@ -222,9 +245,9 @@ func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	mark := store.TrailMark(t)
-	first, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
-	if err != nil || first.State != "stuck" {
-		t.Fatalf("entry=%+v %v", first, err)
+	first := observeUnlessBusy(t, s, row, samples, now, 30*time.Second)
+	if first.State != "stuck" {
+		t.Fatalf("entry=%+v", first)
 	}
 	for _, at := range []time.Time{now, now.Add(time.Hour)} {
 		if _, err := s.ObservePermissionStuck(row, samples, at, 30*time.Second, store.SettleRead{}); err == nil {

@@ -19,7 +19,6 @@ var stuckColumns = []struct{ table, name, kind, def string }{
 	{"permission_requests", "admitted_at", "INTEGER", ""},
 	{"permission_requests", "fallback_at", "INTEGER", ""},
 	{"permission_requests", "fallback_basis", "TEXT", ""},
-	{"permission_requests", "superseded_at", "INTEGER", ""},
 }
 
 // migrateV13toV14 retains report-only history without inventing an earlier
@@ -156,14 +155,16 @@ func migrateV13toV14(db *sql.DB) error {
 	// interval acquire compatibility ownership. SQLite's historical created_at
 	// has second precision: only a creation definitely at or after the interval
 	// can establish ownership. Ambiguous same-second historical requests keep
-	// NULL ownership. NULL ownership on an
-	// explicitly retained partial column is conservative and stays untouched.
+	// NULL ownership, as do those of a row whose interval start is unknown
+	// (state_changed_ms 0). NULL ownership on an explicitly retained partial
+	// column is conservative and stays untouched.
 	if !found["permission_requests.owner_permission_epoch"] && !found["permission_requests.owner_launch_token"] {
 		if _, err := tx.Exec(`UPDATE permission_requests SET
  owner_launch_token = (SELECT launch_token FROM spawns WHERE spawns.instance_id=permission_requests.instance_id),
  owner_permission_epoch = (SELECT permission_epoch FROM spawns WHERE spawns.instance_id=permission_requests.instance_id)
  WHERE EXISTS (SELECT 1 FROM spawns WHERE spawns.instance_id=permission_requests.instance_id
- AND state='check_permission' AND unixepoch(permission_requests.created_at) * 1000 >= state_changed_ms)`); err != nil {
+ AND state='check_permission' AND state_changed_ms > 0
+ AND unixepoch(permission_requests.created_at) * 1000 >= state_changed_ms)`); err != nil {
 			return err
 		}
 	}

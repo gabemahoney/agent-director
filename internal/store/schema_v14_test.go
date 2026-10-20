@@ -4,22 +4,26 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestV14MigrationPreservationAndReentry(t *testing.T) {
+	full := len(v14ColumnSpecs)
 	for _, tc := range []struct {
 		prefix                  int
 		name, observation, exit string
 	}{
 		{0, "no columns", "", ""}, {1, "first epoch", "", ""}, {4, "spawn columns", "", ""},
 		{5, "partial owner", "", ""}, {6, "both owner columns", "", ""},
-		{10, "pending candidate", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001}`, ""},
-		{10, "displayed episode", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"check_permission","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001}`, ""},
-		{10, "pending lifecycle exit", "", `{"new_state":"waiting","reason":"permission_unanswered","at_ms":1792411209000}`},
+		{full, "pending candidate", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001,"permission_epoch":8}`, ""},
+		{full, "displayed episode", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"check_permission","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "observation without epoch", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001}`, ""},
+		{full, "pending lifecycle exit", "", `{"new_state":"waiting","reason":"permission_unanswered","at_ms":1792411209000}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prefix := tc.prefix
@@ -33,11 +37,11 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			spawn := readRawSpawn(t, path, "pre", spawnCols)
 			requests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)
 			preAddV14Columns(t, path, v14ColumnSpecs[:prefix])
-			if prefix == 10 {
+			if prefix == full {
 				withRaw(t, path, func(db *sql.DB) {
 					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,stuck_version=4,stuck_observation=?,stuck_exit=?`, nullableStringArg(tc.observation), nullableStringArg(tc.exit))
 					mustExec(t, db, `UPDATE permission_requests SET owner_launch_token=?,owner_permission_epoch=8,
-						admitted_at=1792411201123,fallback_at=1792411206000,fallback_basis='process',superseded_at=1792411209000
+						admitted_at=1792411201123,fallback_at=1792411206000,fallback_basis='process'
 						WHERE request_token=?`, testLaunchToken, tokenA)
 				})
 			}
@@ -74,7 +78,7 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 					t.Fatalf("fabricated historic display/observation: %v", got)
 				}
 				for _, r := range readQuotedRows(t, path, "permission_requests", "pre", "request_id", v14ColumnNames("permission_requests")) {
-					if r["owner_launch_token"] != "'"+testLaunchToken+"'" || r["owner_permission_epoch"] != "0" || r["fallback_at"] != "NULL" || r["admitted_at"] != "NULL" || r["fallback_basis"] != "NULL" || r["superseded_at"] != "NULL" {
+					if r["owner_launch_token"] != "'"+testLaunchToken+"'" || r["owner_permission_epoch"] != "0" || r["fallback_at"] != "NULL" || r["admitted_at"] != "NULL" || r["fallback_basis"] != "NULL" {
 						t.Fatalf("ownership/defaults: %v", r)
 					}
 				}
@@ -149,9 +153,15 @@ func TestV14MigrationCommitRollback(t *testing.T) {
 }
 
 func TestV14MigrationDoesNotEnrollEarlierPermissionIntervals(t *testing.T) {
-	for _, tc := range []struct{ name, state, created string }{
-		{"earlier interval", StateCheckPermission, "2026-10-19 11:59:59"},
-		{"authoritative state moved on", StateWorking, "2026-10-19 12:00:01"},
+	for _, tc := range []struct {
+		name, state, created string
+		startUnknown         bool
+	}{
+		{"earlier interval", StateCheckPermission, "2026-10-19 11:59:59", false},
+		{"authoritative state moved on", StateWorking, "2026-10-19 12:00:01", false},
+		// A zero state_changed_ms means the interval start is unknown, so no
+		// creation time can prove the request is inside it.
+		{"unknown interval start", StateCheckPermission, "2026-10-19 12:00:01", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -159,6 +169,9 @@ func TestV14MigrationDoesNotEnrollEarlierPermissionIntervals(t *testing.T) {
 			seedV13PermissionFixture(t, path)
 			withRaw(t, path, func(db *sql.DB) {
 				mustExec(t, db, `UPDATE spawns SET state=?,settled_state=?`, tc.state, tc.state)
+				if tc.startUnknown {
+					mustExec(t, db, `UPDATE spawns SET state_changed_ms=0`)
+				}
 				mustExec(t, db, `UPDATE permission_requests SET created_at=?`, tc.created)
 			})
 			writeSentinel(t, dir, 13, schemaVersion)
@@ -176,31 +189,53 @@ func TestV14MigrationDoesNotEnrollEarlierPermissionIntervals(t *testing.T) {
 	}
 }
 
+// v14RefusalShape turns a refusal naming one table.column into the generic
+// "<table>.<column>" form the install skill's advice quotes.
+var v14RefusalShape = regexp.MustCompile(`^v13→v14 (incompatible|invalid) [a-z_]+\.[a-z_]+$`)
+
+// v14InstallSkillRefusalAdvice is the whitespace-normalized "Authorized
+// migration refuses permission observation or ownership facts" paragraph of
+// skills/install-agent-director/SKILL.md, which quotes the refusal names.
+func v14InstallSkillRefusalAdvice(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("../../skills/install-agent-director/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, rest, ok := strings.Cut(string(b), "**Authorized migration refuses permission observation or ownership facts**")
+	if !ok {
+		t.Fatal("install skill lacks the v13→v14 refusal advice paragraph")
+	}
+	para, _, _ := strings.Cut(rest, "\n\n")
+	return strings.Join(strings.Fields(para), " ")
+}
+
 func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
-	for _, tc := range []struct{ name, ddl, update string }{
-		{"case conflict", `ALTER TABLE permission_requests ADD COLUMN Fallback_Basis TEXT`, ""},
-		{"wrong type", `ALTER TABLE permission_requests ADD COLUMN fallback_at TEXT`, ""},
-		{"nullable epoch", `ALTER TABLE spawns ADD COLUMN permission_epoch INTEGER DEFAULT 0`, ""},
-		{"wrong default", `ALTER TABLE spawns ADD COLUMN stuck_version INTEGER NOT NULL DEFAULT 1`, ""},
-		{"unexpected default", `ALTER TABLE spawns ADD COLUMN stuck_observation TEXT DEFAULT NULL`, ""},
-		{"unexpected not null", `ALTER TABLE permission_requests ADD COLUMN owner_launch_token TEXT NOT NULL DEFAULT ''`, ""},
-		{"negative epoch", "", `UPDATE spawns SET permission_epoch=-1`},
-		{"fractional version", "", `UPDATE spawns SET stuck_version=0.5`},
-		{"text admission", "", `UPDATE permission_requests SET admitted_at='bad'`},
-		{"negative fallback", "", `UPDATE permission_requests SET fallback_at=-1,fallback_basis='process'`},
-		{"negative supersession", "", `UPDATE permission_requests SET superseded_at=-1`},
-		{"blob owner", "", `UPDATE permission_requests SET owner_launch_token=x'6162'`},
-		{"negative owner", "", `UPDATE permission_requests SET owner_permission_epoch=-1`},
-		{"unknown basis", "", `UPDATE permission_requests SET fallback_at=123,fallback_basis='guessed'`},
-		{"unpaired clock", "", `UPDATE permission_requests SET fallback_at=123`},
-		{"unpaired basis", "", `UPDATE permission_requests SET fallback_basis='deadline'`},
-		{"malformed observation", "", `UPDATE spawns SET stuck_observation='{'`},
-		{"trailing observation", "", `UPDATE spawns SET stuck_observation='{}{}'`},
-		{"unknown observation key", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"working","invented":true}'`},
-		{"invalid display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"guessed","request_token":"x"}'`},
-		{"blob observation", "", `UPDATE spawns SET stuck_observation=x'7b7d'`},
-		{"oversized observation", "", `UPDATE spawns SET stuck_observation=printf('%17000s','{}')`},
-		{"invalid exit", "", `UPDATE spawns SET stuck_exit='{"new_state":"stuck","reason":"permission_unanswered","at_ms":123}'`},
+	for _, tc := range []struct{ name, ddl, update, msg string }{
+		{"case conflict", `ALTER TABLE permission_requests ADD COLUMN Fallback_Basis TEXT`, "", "v13→v14 incompatible permission_requests.fallback_basis"},
+		{"wrong type", `ALTER TABLE permission_requests ADD COLUMN fallback_at TEXT`, "", "v13→v14 incompatible permission_requests.fallback_at"},
+		{"nullable epoch", `ALTER TABLE spawns ADD COLUMN permission_epoch INTEGER DEFAULT 0`, "", "v13→v14 incompatible spawns.permission_epoch"},
+		{"wrong default", `ALTER TABLE spawns ADD COLUMN stuck_version INTEGER NOT NULL DEFAULT 1`, "", "v13→v14 incompatible spawns.stuck_version"},
+		{"unexpected default", `ALTER TABLE spawns ADD COLUMN stuck_observation TEXT DEFAULT NULL`, "", "v13→v14 incompatible spawns.stuck_observation"},
+		{"unexpected not null", `ALTER TABLE permission_requests ADD COLUMN owner_launch_token TEXT NOT NULL DEFAULT ''`, "", "v13→v14 incompatible permission_requests.owner_launch_token"},
+		{"negative epoch", "", `UPDATE spawns SET permission_epoch=-1`, "v13→v14 invalid spawns.permission_epoch"},
+		{"fractional version", "", `UPDATE spawns SET stuck_version=0.5`, "v13→v14 invalid spawns.stuck_version"},
+		{"text admission", "", `UPDATE permission_requests SET admitted_at='bad'`, "v13→v14 invalid permission_requests.admitted_at"},
+		{"negative fallback", "", `UPDATE permission_requests SET fallback_at=-1,fallback_basis='process'`, "v13→v14 invalid permission_requests.fallback_at"},
+		{"blob owner", "", `UPDATE permission_requests SET owner_launch_token=x'6162'`, "v13→v14 invalid permission_requests.owner_launch_token"},
+		{"negative owner", "", `UPDATE permission_requests SET owner_permission_epoch=-1`, "v13→v14 invalid permission_requests.owner_permission_epoch"},
+		{"unknown basis", "", `UPDATE permission_requests SET fallback_at=123,fallback_basis='guessed'`, "v13→v14 invalid fallback basis"},
+		{"unpaired clock", "", `UPDATE permission_requests SET fallback_at=123`, "v13→v14 incomplete fallback clock"},
+		{"unpaired basis", "", `UPDATE permission_requests SET fallback_basis='deadline'`, "v13→v14 incomplete fallback clock"},
+		{"malformed observation", "", `UPDATE spawns SET stuck_observation='{'`, "v13→v14 invalid stuck_observation"},
+		{"trailing observation", "", `UPDATE spawns SET stuck_observation='{}{}'`, "v13→v14 invalid stuck_observation"},
+		{"negative observation epoch", "", `UPDATE spawns SET stuck_observation='{"state":"check_permission","candidate":"stuck","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":-1}'`, "v13→v14 invalid stuck_observation"},
+		{"fractional observation epoch", "", `UPDATE spawns SET stuck_observation='{"state":"check_permission","candidate":"stuck","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":0.5}'`, "v13→v14 invalid stuck_observation"},
+		{"unknown observation key", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"working","invented":true}'`, "v13→v14 invalid stuck_observation"},
+		{"invalid display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"guessed","request_token":"x"}'`, "v13→v14 invalid stuck_observation"},
+		{"blob observation", "", `UPDATE spawns SET stuck_observation=x'7b7d'`, "v13→v14 invalid spawns.stuck_observation"},
+		{"oversized observation", "", `UPDATE spawns SET stuck_observation=printf('%17000s','{}')`, "v13→v14 invalid stuck_observation"},
+		{"invalid exit", "", `UPDATE spawns SET stuck_exit='{"new_state":"stuck","reason":"permission_unanswered","at_ms":123}'`, "v13→v14 invalid stuck_exit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -220,6 +255,14 @@ func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
 			}
 			if !errors.Is(err, ErrSchemaMismatch) {
 				t.Fatalf("Open=%v; want schema mismatch", err)
+			}
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("Open=%v; want it to name %q, as the install skill's refusal advice quotes", err, tc.msg)
+			}
+			quoted := v14RefusalShape.ReplaceAllString(tc.msg, "v13→v14 $1 <table>.<column>")
+			advice := v14InstallSkillRefusalAdvice(t)
+			if !strings.Contains(advice, `"`+quoted+`"`) && !strings.Contains(advice, `"`+strings.TrimPrefix(quoted, "v13→v14 ")+`"`) {
+				t.Fatalf("install skill's v13→v14 refusal advice does not quote %q", quoted)
 			}
 			if readUserVersion(t, path) != 13 || !reflect.DeepEqual(before, dbDump(t, path)) {
 				t.Fatal("refusal changed schema, data or version before validation completed")

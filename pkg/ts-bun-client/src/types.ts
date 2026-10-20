@@ -254,7 +254,7 @@ export interface ListRow {
   /** Parent Spawn id (omitted when launched from a plain shell). */
   parent_id?: string;
   /**
-   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history.
@@ -486,7 +486,7 @@ export interface StatusResult {
   /** Experimental context estimate for the current session. */
   context: ContextReading;
   /**
-   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a caller tells it
@@ -556,7 +556,7 @@ export interface GetResult {
   instance_id: string;
   parent_id: string;
   /**
-   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing).
+   * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a non-empty
@@ -1163,8 +1163,8 @@ export interface MakeTemplateResult {
 /** Filters for listing tracked agent rows. */
 export interface ListParams {
   /**
-   * Filter by state (multiple values OR together). With `[state] settle_ms` set it matches the
-   * settled state each row's `state` shows, before `limit` applies.
+   * Filter by state (multiple values OR together). The filter matches the displayed state,
+   * including `stuck`, and is applied before `limit`.
    */
   state?: string[];
   /** Filter by label k=v pairs (multiple entries AND together). */

@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,9 +71,12 @@ func TestPermissionStuckTrailFailOpen(t *testing.T) {
 		}
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestPermissionStuckTrailFailOpen$", "-test.count=1")
+	// The child must actually run and pass this test: an unmatched -test.run
+	// pattern exits 0 having run nothing.
+	cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.v")
 	cmd.Env = append(os.Environ(), "AD_TEST_STUCK_TRAIL_CHILD=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "--- PASS: "+t.Name()) {
 		t.Fatalf("unwritable trail child: %v\n%s", err, out)
 	}
 }

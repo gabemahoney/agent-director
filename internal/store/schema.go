@@ -210,7 +210,6 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     admitted_at INTEGER,
     fallback_at INTEGER,
     fallback_basis TEXT,
-    superseded_at INTEGER,
     UNIQUE(instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);

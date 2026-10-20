@@ -191,6 +191,67 @@ remain errors; never treat a failed read as `waiting` or invent a third
 family value. Reading a family value adds no wait for settling or writer
 lock acquisition.
 
+## Stuck rows
+
+A row reads `state` `stuck` with `stuck_reason` `permission_unanswered` while
+its agent's own permission prompt has stayed unanswered past
+[the timeout](configuration.md#permission-unanswered-timeout-state). Which
+requests count is in
+[permissions](permissions.md#stuck-on-an-unanswered-permission). Stuck is a
+report only: it changes no refusal, hold or guard, and `send-keys`, `decide`
+and `pause` judge the row's real state. How the row counts toward
+`family_state` is in [Family state](usage.md#family-state).
+
+A request recorded before the upgrade to schema v14, in the same second as or
+before the row entered `check_permission` (or with an unknown interval start),
+never qualifies; its record, hold and clock are kept.
+
+- **Fields.** `status` and `get` carry `state`, `stuck_reason`, `since`
+  (RFC3339 UTC with exactly millisecond precision), `request_token` and
+  `tool_name`, the last two naming the request the row reports. `status` adds
+  `tmux_session_name` only while the row is stuck (`get` carries it always).
+  A `list` row carries `stuck_reason` but not `since`, `request_token` or
+  `tool_name`; call `get` for them.
+- **Omissions.** Outside `stuck`, these fields are absent, never `null` or
+  empty. Test for presence, not for a value.
+- **Filtering.** `list --state stuck` matches the state `list` shows, before
+  `--limit` is applied, so a limit never hides a stuck row behind others. A
+  row displayed `stuck` no longer matches `--state check_permission`; filter
+  on `stuck` to see it. A polling loop that tests for `check_permission`
+  therefore stops seeing the row once it reads `stuck`.
+- **Detection happens on reads.** Nothing runs between your calls: a row
+  becomes stuck on the first `status`, `get` or `list` after the timeout, so
+  your usual polling of `status` is enough and no pane polling is needed.
+  With a [settle time](configuration.md#settle-time-state), entering and
+  leaving `stuck` must hold that long, so it shows up to that much later;
+  until an entry has held, the row shows its ordinary settled state.
+- **`since`.** The time of the read that first showed `stuck`, not the moment
+  the timeout ran out. It is kept while the row clears under settling and
+  when a different request becomes the one reported. A row's new unbroken stay
+  in `check_permission` starts a fresh episode: it never inherits the earlier
+  one's `since` or request, and the earlier one ends first.
+- **Skipped writes.** A read writes only to commit something new: a request's
+  fallback clock newly established, a change of the displayed state or its
+  settling candidate, or a change of the request reported. Otherwise it writes
+  nothing, a repeated read of a row already displayed `stuck` included. Its
+  write never waits for the store's lock: a read that cannot commit returns
+  the state and detail committed before, together, and a later read tries
+  again.
+- **Clearing.** The row returns to its real state when no request qualifies
+  or the agent moves on, after the settle time. `ended`, `missing` and a state
+  a command sets (including `find-missing`'s repair of a stale
+  `check_permission` row) show at once. Each entry and exit appends an
+  `ad.spawn.stuck_transition` trail record with `instance_id`, `prior_state`,
+  `new_state`, `stuck_reason` and `ts`; the trail is audit only and a failed
+  append changes nothing.
+- **Attaching.** Treat `stuck` as a request for a deliberate human or caller
+  choice at the agent's own prompt. Read the row's `tmux_socket` and
+  `tmux_session_name` with `get` and attach as in
+  [Usage](usage.md#fresh-cursor-use), which works for every agent, or read the
+  request with `get-permission` and its `request_token` and follow
+  [Permission relay](#permission-relay); the report adds no verb and no
+  automatic answer.
+
 ## Ordinary text submission
 
 A nonempty `text` with Enter, without `key`, `request_token` or

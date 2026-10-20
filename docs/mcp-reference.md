@@ -440,7 +440,7 @@ Enumerate rows. All filters AND together. Unordered; callers sort.
 
 ### Input schema
 
-- `state`: type=[]string, required=false — Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. With [state] settle_ms set it matches the settled state each row's state shows, before limit applies.
+- `state`: type=[]string, required=false — Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. The filter matches the displayed state, including `stuck`, and is applied before limit.
 - `label`: type=[]string, required=false — Filter by label k=v. Repeatable on CLI; each entry must contain a literal `=`. Multiple entries AND together.
 - `parent`: type=string, required=false — Filter by parent_id exact match.
 - `cwd`: type=string, required=false — Filter by canonicalized cwd exact match.

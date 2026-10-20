@@ -28,6 +28,11 @@ type permissionStuckStore interface {
 	ObservePermissionStuck(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.StuckDisplay, error)
 }
 
+var (
+	_ permissionStuckStore = (*store.Store)(nil)
+	_ permissionStuckStore = (*store.CursorMissingReads)(nil)
+)
+
 // permissionDisplay shares one all-agent evaluation across status/get/list.
 // Sampling and persistence are best effort; an uncommitted observation returns
 // the coherent display from the original row snapshot, including its detail.
@@ -67,27 +72,7 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		d := j.delivery(pr, verdict, now)
 		sample := store.PermissionSample{Request: pr}
 		if d.Delivery == DeliveryFallenBack {
-			switch {
-			case !pr.FallbackAt.IsZero():
-				sample.FallbackAt, sample.Basis = pr.FallbackAt, pr.FallbackBasis
-			case row.Agent == store.AgentCursor && row.RelayMode == "off":
-				sample.FallbackAt, sample.Basis = pr.AdmittedAt, store.FallbackAdmission
-				// Historical admission has second precision but is still an
-				// established admission fact, independent of read time.
-				if sample.FallbackAt.IsZero() {
-					sample.FallbackAt = pr.CreatedAt
-				}
-			case row.Agent == store.AgentCursor || verdict == hookCantTell || pr.PreV7():
-				sample.FallbackAt, sample.Basis = d.ConfirmBy, store.FallbackDeadline
-			case verdict == hookGone:
-				sample.FallbackAt, sample.Basis = pr.HookGoneAt, store.FallbackProcess
-				if sample.FallbackAt.IsZero() {
-					sample.FallbackAt = now
-				}
-			}
-		}
-		if (pr.PreV7() && pr.CreatedAt.IsZero()) || (!sample.FallbackAt.IsZero() && (sample.FallbackAt.UnixMilli() <= 0 || sample.FallbackAt.Year() > 9999)) {
-			sample.FallbackAt, sample.Basis = time.Time{}, ""
+			sample.FallbackAt, sample.Basis = store.FallbackClock(row.Agent, row.RelayMode, pr, d.fallbackObservation, now)
 		}
 		samples = append(samples, sample)
 	}

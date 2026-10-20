@@ -553,7 +553,7 @@ func WithStuckObservation(raw string) SpawnOption {
 	return func(o *spawnOpts) { o.set("stuck_observation", nullIfZero(raw)) }
 }
 
-// WithStuckVersion seeds the observer's optimistic concurrency version.
-func WithStuckVersion(version int64) SpawnOption {
-	return func(o *spawnOpts) { o.set("stuck_version", version) }
+// WithStuckExit seeds a pending stuck exit record (valid or malformed).
+func WithStuckExit(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("stuck_exit", nullIfZero(raw)) }
 }

@@ -236,7 +236,7 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 		alive := false
 		d.HookAlive = &alive
 	}
-	d.fallbackObservation = store.FallbackObservation{RequestID: pr.RequestID, ConfirmBy: d.ConfirmBy, ProcessGone: v == hookGone}
+	d.fallbackObservation = store.FallbackObservation{RequestID: pr.RequestID, ConfirmBy: d.ConfirmBy, ProcessGone: v == hookGone, CantTell: v == hookCantTell}
 	d.fallbackRecorded = !pr.FallbackAt.IsZero()
 	d.Delivery = deliveryOf(pr, v, !now.Before(d.ConfirmBy))
 	return d
@@ -356,6 +356,17 @@ type hookGoneRecorder interface {
 	RecordHookGone(at time.Time, maxWait time.Duration, requestIDs ...int64) (map[int64]time.Time, error)
 }
 
+// permissionFallbackRecorder is the store write of hook_gone_at and the stable
+// fallback clock (SR-2.4). The store, and its Cursor read view, satisfy it.
+type permissionFallbackRecorder interface {
+	RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
+}
+
+var (
+	_ permissionFallbackRecorder = (*store.Store)(nil)
+	_ permissionFallbackRecorder = (*store.CursorMissingReads)(nil)
+)
+
 // goneSlot is one returned request a reader derived fallen back with no
 // hook_gone_at yet, and the delivery facts to fill once it is written.
 type goneSlot struct {
@@ -389,9 +400,7 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
 	}
 	var stored map[int64]time.Time
 	var err error
-	if r, ok := s.(interface {
-		RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
-	}); ok {
+	if r, ok := s.(permissionFallbackRecorder); ok {
 		observations := make([]store.FallbackObservation, 0, len(slots))
 		for _, sl := range slots {
 			observations = append(observations, sl.d.fallbackObservation)

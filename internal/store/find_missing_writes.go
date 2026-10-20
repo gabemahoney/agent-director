@@ -278,7 +278,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if res == CondApplied {
-		emitStuckTransitions(exits)
+		emitStuckTransitionsContext(ctx, exits)
 		emitTerminalCloseout(ctx, closed, instanceID, reason)
 	}
 	return prior, res, nil
@@ -540,10 +540,19 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // answer, b.146 rule 9, and not proven gone, b.omt).
 // The move is an immediate write (b.3ie): settled_state takes the same value
 // as state, and state_changed_ms the statement's clock (the WHERE pins
-// check_permission, so the value always changes).
+// check_permission, so the value always changes). Like every immediate write
+// it advances permission_epoch, advances stuck_version, clears the stuck
+// observation and, when that observation displayed stuck, records the stuck
+// exit that the transaction drains and emits after commit.
 var repairCheckPermissionSQL = `UPDATE spawns
-    SET state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
-        settled_state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
+    SET state = ` + repairNewStateSQL + `,
+        permission_epoch = permission_epoch + 1,
+        stuck_exit = CASE WHEN ` + stuckObservedStateSQL + ` = 'stuck'
+          THEN json_object('new_state', ` + repairNewStateSQL + `, 'reason', json_extract(stuck_observation, '$.reason'), 'at_ms', ` + nowMsSQL + `)
+          ELSE stuck_exit END,
+        stuck_observation = NULL,
+        stuck_version = stuck_version + 1,
+        settled_state = ` + repairNewStateSQL + `,
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -551,6 +560,12 @@ var repairCheckPermissionSQL = `UPDATE spawns
     AND NOT EXISTS (SELECT 1 FROM permission_requests pr
                      WHERE pr.instance_id = spawns.instance_id AND ` + holdsRowSQL + `)
   RETURNING state`
+
+// repairNewStateSQL is the state the repair writes: waiting when idle_since
+// is set on a non-Codex row, working otherwise. Its two placeholders are
+// waiting and working; the statement uses it three times (state, the stuck
+// exit and the settled value), so the caller repeats the pair.
+const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END`
 
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale
 // check_permission row (b.146 rule 9, problem 3): one conditional statement
@@ -590,8 +605,12 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // trail event: the tick is the caller's.
 func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowSnapshot) (newState string, res CondResult, err error) {
 	const errPrefix = "store: repair check_permission if same life"
-	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
-		snapshotMatchArgs(examined)...)
+	var args []any
+	for range 3 {
+		args = append(args, StateWaiting, StateWorking)
+	}
+	args = append(args, instanceID, StateCheckPermission)
+	args = append(args, snapshotMatchArgs(examined)...)
 	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		return conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&newState)
 	})

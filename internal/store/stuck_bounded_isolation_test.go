@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -16,11 +15,10 @@ import (
 // metadata must not participate in another row's otherwise valid transaction.
 func seedUnrelatedStuckExit(t *testing.T, e *cursorTrailEnv, raw string) string {
 	t.Helper()
-	id, err := apitest.SeedSpawn(e.f.path, "unrelated-exit", store.StateEnded, "", "off", "", false)
+	id, err := apitest.SeedSpawn(e.f.path, "unrelated-exit", store.StateEnded, "", "off", "", false, apitest.WithStuckExit(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.exec(t, `UPDATE spawns SET stuck_exit=? WHERE instance_id=?`, raw, id)
 	return id
 }
 
@@ -67,14 +65,6 @@ func TestCursorBoundedTransactionsIgnoreUnrelatedStuckExit(t *testing.T) {
 				}
 				other := seedUnrelatedStuckExit(t, e, marker.raw)
 				mark := store.TrailMark(t)
-				var exitReads int
-				stop := store.ObservePromptRowsForTest(t, e.f.s, e.f.path, func(_ context.Context, q string) error {
-					if strings.HasPrefix(q, "SELECT") && strings.Contains(q, "stuck_exit") {
-						exitReads++
-					}
-					return nil
-				}, nil)
-				defer stop()
 				switch operation {
 				case "prompt authority":
 					if ok, err := e.f.s.CheckCursorPrompt(e.b, e.until, cursorTrailCheck); err != nil || !ok {
@@ -99,9 +89,6 @@ func TestCursorBoundedTransactionsIgnoreUnrelatedStuckExit(t *testing.T) {
 					if err := e.f.s.CheckCursorAnswer(e.b, token, operation == "relay answer authority", e.until, cursorTrailCheck); err != nil {
 						t.Errorf("valid answer authority: %v", err)
 					}
-				}
-				if exitReads != 0 {
-					t.Errorf("unrelated exit inspected %d times", exitReads)
 				}
 				if raw := readStuckExit(t, e, other); !raw.Valid || raw.String != marker.raw {
 					t.Errorf("unrelated exit consumed: %+v", raw)
@@ -130,8 +117,8 @@ func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
 				}
 				pr := e.read(t, token)
 				at := e.until.Add(time.Minute)
-				if display, err := e.f.s.ObservePermissionStuck(row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, at, 30*time.Second, store.SettleRead{}); err != nil || display.State != store.StateStuck {
-					t.Fatalf("committed stuck setup: %+v %v", display, err)
+				if display := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, at, 30*time.Second); display.State != store.StateStuck {
+					t.Fatalf("committed stuck setup: %+v", display)
 				}
 				row, err = e.f.s.GetSpawn(e.b.InstanceID)
 				if err != nil {

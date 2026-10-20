@@ -140,7 +140,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 }
 
 // Status returns the current state column (pending/waiting/working/ask_user/
-// check_permission/ended/missing) for the identified Spawn. On a pending row
+// check_permission/ended/missing/stuck) for the identified Spawn. On a pending row
 // the result also carries launch_started_at, when the agent's launch began.
 // With [state] settle_ms set, the state is the settled state: a hook-written
 // change shows only once it has held that long, the last settled state until

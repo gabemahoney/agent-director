@@ -737,7 +737,9 @@ spawn marked `missing` or ended by its agent never keeps an open request.
 
 Every relayed request carries its delivery facts. They are worked out each
 time the request is read, by `decide`, `get`, `list` and `get-permission`;
-nothing but `hook_gone_at` is written for them. `proven_gone_at` and
+the only writes for them are `hook_gone_at` and the request's fallback clock
+(see [Stuck on an unanswered permission](#stuck-on-an-unanswered-permission)).
+`proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks or validated Cursor
 invocation proof, by the close of its spawn's requests and, for a spawn already
 finished, by the upgrade to this release, never by a reader (see "The dialog hold" below):
@@ -836,7 +838,10 @@ bounds the whole call, from its start, and has no default:
 `hook_gone_at` the first time they find a request fallen back only if the
 store's write lock is free at that moment; otherwise they skip the write
 and report `hook_gone_at` as stored. `decide` always writes it (within its
-bound).
+bound). `status`, `get`, `list` and `get-permission` may set a request's
+fallback clock, and `status`, `get` and `list` may commit the row's stuck
+display, on the same terms (see
+[Stuck on an unanswered permission](#stuck-on-an-unanswered-permission)).
 
 **Which requests `get` and `list` show.** A row in `check_permission`
 lists, in `permission_requests`, the requests that still await an answer:
@@ -936,6 +941,49 @@ that binary judged it:
   answer it at the pane). Eviction at the cap keeps the spawn's newest
   request while this one is open, so a later request stays visible to that
   check.
+
+### Stuck on an unanswered permission
+
+A row whose agent has fallen back to its own permission prompt, and whose
+prompt nobody answers, reads `stuck` with `stuck_reason`
+`permission_unanswered`. It is a report for callers to act on; it changes no
+guard or hold (see the [caller contract](caller-contract.md#stuck-rows)). The
+timeout is
+[`[state] permission_unanswered_timeout_seconds`](configuration.md#permission-unanswered-timeout-state);
+the fields, the omissions and what a caller does with them are in the
+[caller contract](caller-contract.md#stuck-rows).
+
+- **Every agent.** Claude, Codex and Cursor rows are judged the same way. A
+  Claude or Codex row qualifies only with `relay_mode` `on`, because with the
+  relay off no request is recorded for it; a Cursor row qualifies with the
+  relay on or off. A row qualifies only while it is in `check_permission`.
+- **Each request on its own.** A request counts while it is still awaiting an
+  answer and is not proven gone (see [The dialog hold](#the-dialog-hold)), was
+  recorded during the row's current unbroken stay in `check_permission` under
+  its current launch, and has fallen back for at least the timeout. Another
+  request being admitted or answered neither retires it nor restarts its
+  time. A request recorded before the row's last change of state, or under
+  an earlier launch, never counts.
+- **When a request's time starts.** The first basis found is kept, and the
+  time is never moved later. A Claude or Codex request whose hook is positively
+  alive has no time yet, and a request whose own recorded time is not
+  trustworthy never gets one:
+  - Claude and Codex, hook found gone: when a reader first found the hook
+    gone (`hook_gone_at`).
+  - Claude and Codex, hook that cannot be checked: its `confirm_by`.
+  - Cursor with relay `on`: its `confirm_by`, the decision deadline plus 4 s.
+  - Cursor with relay `off`: its admission, since it reads `fallen_back` at
+    once.
+- **The request a row reports.** When several requests qualify, the one that
+  fell back first; ties go to the lexically smaller `request_token`. Its
+  token and tool name are the row's.
+- **How it ends.** A request stops counting when it is answered at the pane,
+  recorded with `record-pane-answer`, proven gone, or closed with the spawn.
+  When none counts any more, or the agent's own hook moves the row out of
+  `check_permission`, the row returns to its real state, as the
+  [caller contract](caller-contract.md#stuck-rows) says.
+- **Older requests.** Which historical requests can never qualify is in the
+  [caller contract](caller-contract.md#stuck-rows).
 
 ### Send-keys interaction
 

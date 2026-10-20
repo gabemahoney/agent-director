@@ -192,7 +192,9 @@ Exported factories (in pkg/api/apitest/seeds.go):
   `WithLaunchStartedAt`, `WithNoLaunchToken`, `WithAgent`) set further spawn columns;
   a seeded row is a Claude row unless `WithAgent` says otherwise.
 - `SeedParentChild(dbPath, parentID, childID string) error`
-- `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
+- `SeedPermissionRequest(dbPath, spawnID, toolName string, opts ...PermissionOption) (PermissionRequestSeed, error)`
+  — the `Permission…` options (see "Permission stuck fixtures" below) set exact
+  request facts.
 - `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
   — backdates a seeded request's `created_at` (past the relay window it has
   fallen back) and records its `hook_gone_at` in the past (old enough for
@@ -215,6 +217,56 @@ Why this matters (SR-19.2): re-implementing seeding inline tends to drift
 from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by every consumer, so any schema break is
 caught early.
+
+## Permission stuck fixtures
+
+Tests of the `stuck` display, the request ownership and fallback clocks, and the
+schema v14 migration seed and assert through one shared set. Do not seed the
+new columns with raw SQL or keep a second copy of the expected wire detail.
+
+- `pkg/api/apitest/stuck.go`: the `PermissionOption` set (`PermissionToken`,
+  `PermissionTimes`, `PermissionOwner`, `PermissionAnswer`,
+  `PermissionProof`, `PermissionDecision`, `PermissionClosed`,
+  `PermissionCreation`, `PermissionDelivered`) for
+  `SeedPermissionRequest`, and `SetPermissionFacts` to change named facts of a
+  seeded request. Each option sets only its own facts, so clocks, ownership,
+  answer, proof and decision stay independent. `SeedPermissionSurface` seeds one
+  stuck row per agent with a precommitted episode at permission epoch 3, so
+  independent processes share an exact `since`. `CheckPermissionWire` checks one read row of any verb
+  against the hand-authored `cmd/agent-director/testdata/stuck/permission.json`
+  (loaded by `LoadPermissionWire`); every surface test (pkg/api, CLI, MCP and
+  the TypeScript client) reuses it.
+- `pkg/api/apitest/options.go`: the spawn options `WithPermissionEpoch`,
+  `WithStuckObservation` and `WithStuckExit` (a pending exit record, valid or
+  malformed). `pkg/api/apitest/tmux_config.go`:
+  `ConfigKeys.PermissionUnansweredTimeoutSeconds` for the generated config.
+- `pkg/api/apitest/stuck.go` also holds the observation helpers `StuckProbe`,
+  `StuckReading`, `CommitCheck`, `VersionAdvanced` and `ObserveStuckRead`. A
+  read that must commit is nonwaiting and best effort, so `ObserveStuckRead`
+  repeats it at the same injected instant, never sleeping, a bounded number of
+  times until `stuck_version` confirms the commit (it then fails with
+  "observation never committed"), and checks the display against the committed
+  row. Use it instead of a sleep or a retry loop of your own.
+- `storefix.WriteFailStuckObservation` (`writefailfix.StuckObservation`) fails
+  the observation write so a test can prove a read that cannot commit returns
+  the previously committed display.
+- `internal/store/migration_fixtures_test.go`: `v14ColumnSpecs`,
+  `preAddV14Columns` and `seedV13PermissionFixture` build partial-column and
+  physical-v13 stores for `schema_v14_test.go` and the shared matrices.
+- The `permission-stuck` Epic in `test/docker-epics.txt` holds the testplans;
+  their driver is `test/driver/permission-stuck.cjs`. Run it, like every Epic,
+  only through the scheduler workflow. **Reviewed exception to the raw-SQL
+  rule:** the Docker plan seeds the v14 ownership and clock columns
+  (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
+  `fallback_at`, `fallback_basis`) and `spawns.permission_epoch` through
+  `/opt/driver/sql.sh`, because they have no public writer; the shipped binary
+  still creates the schema and makes every observation. The exception covers
+  that plan only.
+- Lifecycle and read-write coverage lives in
+  `internal/store/stuck_lifecycle_test.go` (find-missing's repair, unreadable
+  stuck metadata, reads that write nothing, an unconfirmed commit, the fallback
+  clock rule), `internal/store/connection_gate_release_test.go` and
+  `pkg/api/stuck_epoch_test.go` (a new interval never inherits an old episode).
 
 ## Context fullness captures and fixtures
 
@@ -364,7 +416,7 @@ Omitting the flag preserves existing helper behavior. The registered
 `test/driver/context-fullness.cjs`. Execute tests only through the repository
 sandbox and the required scheduler workflow for heavy suites.
 
-The unreleased v13 provenance migration belongs in `internal/store/schema_v13_test.go`
+The v13 provenance migration belongs in `internal/store/schema_v13_test.go`
 and the shared migration matrices: test physical-v12 preservation, including
 family history, NULL/no backfill, compatible marker reentry, incompatible shape/value refusal,
 commit rollback and corrected retry, fresh/migrated convergence and reopen.
@@ -383,7 +435,18 @@ refuses the migrated current schema, then restore a stopped-writer
 pre-upgrade DB/WAL/SHM set at default and configured paths. Verify stale
 companions are removed, prior rows/settings are restored and post-backup
 writes are lost. A copy made after migration cannot qualify as the backup;
-there is no v13 reverse recipe to test or imply.
+there is no v13 or v14 reverse recipe to test or imply.
+
+The v14 permission observation and ownership migration belongs in
+`internal/store/schema_v14_test.go`: test physical-v13 preservation and
+reentry, no invented history, incompatible partial-column refusal, commit
+rollback and corrected retry, that earlier or ambiguous permission requests
+keep NULL ownership while later admissions qualify, and fresh/migrated
+convergence. Build every store through the v14 helpers in
+`internal/store/migration_fixtures_test.go`. Its recovery text is the same
+"Going back to the previous release" section, so a wording change there needs
+the three-copy identity and literal policy checks above updated in the same
+change.
 
 ## pkg/api tests: parallel or serial
 

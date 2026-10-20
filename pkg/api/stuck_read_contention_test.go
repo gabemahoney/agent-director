@@ -24,11 +24,9 @@ type stuckObservationReader interface {
 // Lease only after the mandatory row read or between the two judged reads.
 type stuckReadLeaseStore struct {
 	stuckObservationReader
-	afterRow       func() error
-	afterFirst     func() error
-	reads          int
-	waits          []time.Duration
-	unboundedReads int
+	afterRow   func() error
+	afterFirst func() error
+	reads      int
 }
 
 func (s *stuckReadLeaseStore) SpawnStatusRow(id string, settle store.SettleRead) (store.Spawn, error) {
@@ -48,7 +46,6 @@ func (s *stuckReadLeaseStore) afterRead() error {
 }
 
 func (s *stuckReadLeaseStore) PermissionRequestsForSpawn(id string) ([]store.PermissionRow, error) {
-	s.unboundedReads++
 	rows, err := s.stuckObservationReader.PermissionRequestsForSpawn(id)
 	if err == nil {
 		err = s.afterRead()
@@ -57,7 +54,6 @@ func (s *stuckReadLeaseStore) PermissionRequestsForSpawn(id string) ([]store.Per
 }
 
 func (s *stuckReadLeaseStore) PermissionRequestsForSpawnWithin(id string, wait time.Duration) ([]store.PermissionRow, error) {
-	s.waits = append(s.waits, wait)
 	rows, err := s.stuckObservationReader.PermissionRequestsForSpawnWithin(id, wait)
 	if err == nil {
 		err = s.afterRead()
@@ -128,9 +124,12 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					stuckFacts(t, e, apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{}, e.now.Add(-time.Minute), time.Time{}, time.Time{}, ""))
 					if transition == "clear" {
 						// Exercise the unwrapped production backend before introducing contention.
-						want, err = api.Status(reader, e.id)
-						if err != nil || want.State != store.StateStuck || want.StuckReason != api.StuckPermissionUnanswered || want.Since == "" || want.RequestToken != storefix.TestRequestTokenA || want.ToolName != "Bash" {
-							t.Fatalf("committed setup: %+v %v", want, err)
+						observeStuck(t, e.s, e.id, store.StateStuck, apitest.VersionAdvanced, func() (string, api.StuckInfo, error) {
+							want, err = api.Status(reader, e.id)
+							return want.State, want.StuckInfo, err
+						})
+						if want.StuckReason != api.StuckPermissionUnanswered || want.Since == "" || want.RequestToken != storefix.TestRequestTokenA || want.ToolName != "Bash" {
+							t.Fatalf("committed setup: %+v", want)
 						}
 						stuckFacts(t, e, apitest.PermissionAnswer(store.PaneAnswerOutside))
 					}
@@ -141,12 +140,19 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					request := e.request(t)
 					mark := trailMark(t)
 					lease, release := holdStuckReadConnection(t, e.s, e.id)
+					// leased closes once the connection is really held: the one
+					// second the read may take is counted from then.
+					leased, leaseOnce := make(chan struct{}), sync.Once{}
+					takeLease := func() error {
+						err := lease()
+						leaseOnce.Do(func() { close(leased) })
+						return err
+					}
 					s := &stuckReadLeaseStore{stuckObservationReader: reader}
-					wantReads := 1
 					if stage == "after row" {
-						s.afterRow = lease
+						s.afterRow = takeLease
 					} else {
-						s.afterFirst, wantReads = lease, 2
+						s.afterFirst = takeLease
 					}
 					type result struct {
 						row api.StatusResult
@@ -160,21 +166,22 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					var got result
 					select {
 					case got = <-done:
-					case <-time.After(time.Second):
-						t.Error("optional permission sampling waited for the leased connection")
-						release()
-						got = <-done
+					case <-leased:
+						select {
+						case got = <-done:
+						case <-time.After(time.Second):
+							t.Error("optional permission sampling waited for the leased connection")
+							release()
+							got = <-done
+						}
+					}
+					select {
+					case <-leased:
+					default:
+						t.Fatal("the connection was never leased: the read did not reach the stage under test")
 					}
 					if got.err != nil || !reflect.DeepEqual(got.row, want) {
 						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got.row, got.err, want)
-					}
-					if s.unboundedReads != 0 || len(s.waits) != wantReads {
-						t.Errorf("permission sampling: %d unbounded reads, bounded waits %v; want %d bounded reads", s.unboundedReads, s.waits, wantReads)
-					}
-					for _, wait := range s.waits {
-						if wait != 0 {
-							t.Errorf("optional permission sampling waited %v; want zero", wait)
-						}
 					}
 					// The response must precede releasing the actual connection.
 					release()

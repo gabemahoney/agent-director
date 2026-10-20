@@ -56,10 +56,17 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 		admitCtx, cancel = context.WithTimeout(ctx, connGrab)
 		defer cancel()
 	}
+	// A free gate is always admitted. When both the gate and an already
+	// expired admitCtx are ready, a single select picks at random, so a
+	// descheduled caller could be refused a gate nobody holds.
 	select {
 	case lane.operationGate <- struct{}{}:
-	case <-admitCtx.Done():
-		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, admitCtx.Err())
+	default:
+		select {
+		case lane.operationGate <- struct{}{}:
+		case <-admitCtx.Done():
+			return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, admitCtx.Err())
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		<-lane.operationGate
@@ -68,11 +75,23 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 	op := &connectionOperation{}
 	done := make(chan struct{})
 	go func() {
-		defer func() { <-lane.operationGate }()
+		// The gate is released before completion is signalled: a caller woken
+		// by done may start its next nonwaiting operation at once, and its 1 ms
+		// admission must not lose to a release that has not happened yet. A
+		// panic still releases it.
+		released := false
+		release := func() {
+			if !released {
+				released = true
+				<-lane.operationGate
+			}
+		}
+		defer release()
 		err := fn(op)
 		op.mu.Lock()
 		op.err, op.completed = err, true
 		op.mu.Unlock()
+		release()
 		close(done)
 	}()
 	// Cancellation stops SQL immediately through ctx. When an absolute bound

@@ -84,6 +84,15 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
+A row in `check_permission` whose agent has fallen back to its own permission
+prompt, left unanswered for the
+[configured time](configuration.md#permission-unanswered-timeout-state), reads
+`stuck` instead, with a `stuck_reason`. It is computed when you call `status`,
+`get` or `list`; nothing runs in the background. Which requests count is in
+[permissions](permissions.md#stuck-on-an-unanswered-permission); the fields,
+filtering and what to do about it are in the
+[caller contract](caller-contract.md#stuck-rows).
+
 ## Family state
 
 `status`, `get` and each row returned by `list`, on CLI and MCP, include
@@ -97,6 +106,8 @@ live descendants. Before [settling](configuration.md#settle-time-state),
 the family is `waiting` exactly when every live member's stored state is
 `waiting`; no live members also means `waiting`. Any other live state,
 including `pending`, `ask_user` or `check_permission`, makes it `working`.
+A member shown `stuck` is in `check_permission` underneath, so it counts as
+`working` too.
 
 Each returned agent's family covers the full stored tree, including members
 hidden by list filters or limits. Resume, reuse and deletion follow the
@@ -335,7 +346,9 @@ while sleep 1; do
 done
 ```
 
-It never sees a turn shorter than the settle time.
+It never sees a turn shorter than the settle time. Its `case` list names the
+states it reports; a row displayed [`stuck`](#spawn-states) matches none of
+them (see the [caller contract](caller-contract.md#stuck-rows)).
 
 ## Read an agent's subagent records
 

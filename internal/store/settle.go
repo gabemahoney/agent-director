@@ -24,11 +24,21 @@ package store
 // v1.34.0 bundles 3.46.0.
 const nowMsSQL = `CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)`
 
+// stuckObservedStateSQL is the displayed state kept in stuck_observation, NULL
+// when the column is NULL or not valid JSON. The nested CASE guarantees
+// json_extract never sees malformed report-only data, which must not be able
+// to fail a lifecycle write.
+const stuckObservedStateSQL = `CASE WHEN json_valid(stuck_observation) THEN json_extract(stuck_observation, '$.state') END`
+
 // hookStateSet is the SET fragment of a hook's write of a non-terminal value
 // V, written by the hook process whose settle time is Tw (Store.settleMs). Its
-// placeholders are V, Tw, Tw, V, V (hookStateArgs). SET sees the row as it was
-// before the statement, so the same-value test and the base are decided in
-// this one statement:
+// placeholders are V, V, V, V, Tw, Tw, V, V (hookWriteStateSet): the epoch, the
+// observation, the version, the settled value, the two settle tests, the clock
+// and the state. SET sees the row as it was before the statement, so the
+// same-value test and the base are decided in this one statement. A raw change also advances permission_epoch and
+// stuck_version; it keeps a displayed-stuck observation (clearing its
+// candidate, so the display settles out like any other state) and drops any
+// other observation, a malformed one included:
 //   - V equal to the raw state: no column changes, so a same-value write
 //     never restarts the clock;
 //   - otherwise the old raw value becomes the base when it had settled (Tw
@@ -39,7 +49,7 @@ const nowMsSQL = `CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)`
 //     state becomes V and state_changed_ms now.
 const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        stuck_observation = CASE WHEN state = ? THEN stuck_observation
-         WHEN json_extract(stuck_observation, '$.state') = 'stuck'
+         WHEN ` + stuckObservedStateSQL + ` = 'stuck'
          THEN json_set(stuck_observation, '$.candidate', '', '$.candidate_since_ms', 0)
          ELSE NULL END,
        stuck_version = stuck_version + CASE WHEN state = ? THEN 0 ELSE 1 END,
@@ -55,7 +65,7 @@ const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? 
 // state_changed_ms now when V is not the raw state already (kept when it is).
 // Its placeholders are V four times: epoch, exit, settled value and clock.
 const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
-       stuck_exit = CASE WHEN json_extract(stuck_observation, '$.state') = 'stuck'
+       stuck_exit = CASE WHEN ` + stuckObservedStateSQL + ` = 'stuck'
          THEN json_object('new_state', ?, 'reason', json_extract(stuck_observation, '$.reason'), 'at_ms', ` + nowMsSQL + `)
          ELSE stuck_exit END,
        stuck_observation = NULL,

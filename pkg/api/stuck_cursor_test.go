@@ -27,6 +27,7 @@ func TestPermissionStuckCursorMissingPrecedesFilterAndLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ := e.client(t)
+	watchStuckClient(c, e.st)
 	assertStuckState(t, c, binding.InstanceID, "stuck")
 	survivor, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "on", "", false)
 	if err != nil {
@@ -39,6 +40,10 @@ func TestPermissionStuckCursorMissingPrecedesFilterAndLimit(t *testing.T) {
 	listed, err := c.List(api.ListParams{State: []string{"stuck"}, Limit: 1})
 	if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].InstanceID != survivor {
 		t.Fatalf("missing consumed stuck limit: %+v %v", listed, err)
+	}
+	// The row the limit skipped is persisted missing, whatever the row order.
+	if row, err := e.st.GetSpawn(binding.InstanceID); err != nil || row.State != store.StateMissing {
+		t.Fatalf("binding row not persisted missing: %+v %v", row, err)
 	}
 	missing, err := c.List(api.ListParams{State: []string{store.StateMissing}, Limit: 1})
 	if err != nil || len(missing.Spawns) != 1 || missing.Spawns[0].InstanceID != binding.InstanceID || missing.Spawns[0].StuckReason != "" || len(missing.Spawns[0].PermissionRequests) != 0 {

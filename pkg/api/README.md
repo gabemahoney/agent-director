@@ -197,7 +197,7 @@ See `(*Client).Spawn` godoc for the full enumeration.
 
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
-`missing`.
+`missing`, `stuck`.
 `pending` means a launch (spawn, reuse or resume) is in progress and the
 agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
@@ -216,6 +216,15 @@ Returns `StatusResult` (`.State`, `.FamilyState`, and `.LaunchStartedAt`, the st
 the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
+
+While `State` is `"stuck"`, `StatusResult` and `Get`'s `SpawnRow` carry the
+embedded `StuckInfo` (`.StuckReason`, `.Since`, `.RequestToken`, `.ToolName`;
+JSON `stuck_reason`, `since`, `request_token`, `tool_name`), and
+`StatusResult.TmuxSessionName` (JSON `tmux_session_name`) is set; `ListRow`
+carries `.StuckReason` only. Each is an empty string, and absent from the
+JSON, in any other state. `Since` is a string in RFC3339 UTC with
+millisecond precision. The [caller contract](../../docs/caller-contract.md#stuck-rows)
+defines the fields, omissions and detection.
 
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
 `FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
@@ -260,9 +269,9 @@ for _, row := range res.Spawns {
 
 Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 `"codex"` or `"cursor"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
-encodes as `[]` when empty. With `[state] settle_ms` set, `State` filters
-on the settled state each row reports (see Status). `Limit` caps the rows
-returned; 0 means no cap. Sentinel errors, each returned before the store is
+encodes as `[]` when empty. The `State` filter matches the displayed state
+(see Status), including `"stuck"`, and is applied before `Limit`.
+`Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
 

@@ -440,7 +440,7 @@ Enumerate rows. All filters AND together. Unordered; callers sort.
 
 ### Parameters
 
-- `state` ([]string, optional): Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. With [state] settle_ms set it matches the settled state each row's state shows, before limit applies.
+- `state` ([]string, optional): Filter by state. Multiple values OR together. Comma-separated on CLI; JSON array via MCP. The filter matches the displayed state, including `stuck`, and is applied before limit.
 - `label` ([]string, optional): Filter by label k=v. Repeatable on CLI; each entry must contain a literal `=`. Multiple entries AND together.
 - `parent` (string, optional): Filter by parent_id exact match.
 - `cwd` (string, optional): Filter by canonicalized cwd exact match.

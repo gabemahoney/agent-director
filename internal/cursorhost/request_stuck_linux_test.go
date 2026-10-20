@@ -11,7 +11,21 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// observeGet is api.Get judged against the committed row: see
+// apitest.ObserveStuckRead.
+func observeGet(t *testing.T, s *store.Store, v api.RelayView, id, want string, commit apitest.CommitCheck) api.SpawnRow {
+	t.Helper()
+	var row api.SpawnRow
+	apitest.ObserveStuckRead(t, s, id, want, commit, func() (apitest.StuckReading, error) {
+		var err error
+		row, err = api.Get(s, v, id)
+		return apitest.StuckReading{State: row.State, Reason: row.StuckReason, Since: row.Since, RequestToken: row.RequestToken, ToolName: row.ToolName}, err
+	})
+	return row
+}
 
 func TestPermissionStuckCursorValidatedAdmissions(t *testing.T) {
 	for _, relay := range []string{"on", "off"} {
@@ -49,17 +63,14 @@ func TestPermissionStuckCursorValidatedAdmissions(t *testing.T) {
 				for _, offset := range []time.Duration{-time.Millisecond, 0, 30*time.Second - time.Millisecond, 30 * time.Second} {
 					now := start.Add(offset)
 					v := api.RelayView{Now: func() time.Time { return now }}
-					row, err := api.Get(reopened, v, e.binding.InstanceID)
-					if err != nil {
-						t.Fatal(err)
-					}
-					want := store.StateCheckPermission
+					want, commit := store.StateCheckPermission, apitest.CommitCheck(nil)
 					if offset == 30*time.Second {
-						want = "stuck"
-						since = row.Since
+						// The entry is the one read that must commit.
+						want, commit = "stuck", apitest.VersionAdvanced
 					}
-					if row.State != want {
-						t.Fatalf("%s %+v at %s; want %s", relay, row, offset, want)
+					row := observeGet(t, reopened, v, e.binding.InstanceID, want, commit)
+					if offset == 30*time.Second {
+						since = row.Since
 					}
 					delivery, err := api.GetPermission(reopened, v, api.GetPermissionParams{RequestToken: r.token})
 					if err != nil {
@@ -81,9 +92,9 @@ func TestPermissionStuckCursorValidatedAdmissions(t *testing.T) {
 					}
 				}
 				now := start.Add(time.Minute)
-				row, err := api.Get(reopened, api.RelayView{Now: func() time.Time { return now }}, e.binding.InstanceID)
-				if err != nil || row.State != "stuck" || row.Since != since {
-					t.Fatalf("native hold lost/restarted: %+v %v", row, err)
+				row := observeGet(t, reopened, api.RelayView{Now: func() time.Time { return now }}, e.binding.InstanceID, "stuck", nil)
+				if row.Since != since {
+					t.Fatalf("native hold restarted: %+v; want since %s", row, since)
 				}
 				if pr := e.request(t, r.token); !pr.AwaitsAnswer() || pr.ProvenGone() {
 					t.Fatalf("native hold consumed: %+v", pr)

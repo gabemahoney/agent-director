@@ -12,7 +12,12 @@ import (
 // variant's stdout as each case's golden instead of comparing it. The goldens
 // pin the output from before b.3ie's settle time, so they are captured once on
 // that code and are regenerated only for a deliberate change to get's or list's
-// output: E2's agent field (b.ssz) is the one so far, the only byte it changed.
+// output. So far: E2's agent field (b.ssz), the one byte it changed, and the
+// two state-filtered list goldens (list-state-waiting-working and
+// list-state-pending-ended-missing), regenerated for the order of their rows
+// only: a state-filtered list now also reads the rows that may display as
+// stuck (ListFilters.StuckCandidates), a different query whose row order is
+// unspecified. The rows and their bytes are unchanged.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 
 // TestSettleOffCLI: with [state] settle_ms unset or 0, status, get and list

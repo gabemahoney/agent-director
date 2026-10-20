@@ -1759,7 +1759,6 @@ var v14ColumnSpecs = []columnSpec{
 	{"permission_requests", "admitted_at", "INTEGER", false, ""},
 	{"permission_requests", "fallback_at", "INTEGER", false, ""},
 	{"permission_requests", "fallback_basis", "TEXT", false, ""},
-	{"permission_requests", "superseded_at", "INTEGER", false, ""},
 }
 
 func v14ColumnNames(table string) []string {

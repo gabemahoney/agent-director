@@ -236,7 +236,6 @@ type PermissionRow struct {
 	AdmittedAt           time.Time
 	FallbackAt           time.Time
 	FallbackBasis        string
-	SupersededAt         time.Time
 }
 
 // ProvenGone reports whether Claude Code proved r's permission dialog gone
@@ -337,7 +336,7 @@ const permissionColumns = `pr.request_id, pr.instance_id, pr.tool_name, pr.tool_
        pr.pane_intent_at, pr.closed_at,
        pr.proven_gone_at, COALESCE(pr.proven_gone_how, ''), pr.main_turn_end_eligible,
        COALESCE(pr.owner_launch_token, ''), COALESCE(pr.owner_permission_epoch, -1),
-       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, ''), pr.superseded_at`
+       pr.admitted_at, pr.fallback_at, COALESCE(pr.fallback_basis, '')`
 
 // scanPermissionRow scans one row selected with permissionColumns. The Scan
 // error is returned as is, so callers can still detect sql.ErrNoRows.
@@ -347,7 +346,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		decidedAt                                                           sql.NullTime
 		deliveredAt, settledAt, hookGoneAt, attemptedAt, intentAt, closedAt sql.NullInt64
 		provenAt                                                            sql.NullInt64
-		admittedAt, fallbackAt, supersededAt                                sql.NullInt64
+		admittedAt, fallbackAt                                              sql.NullInt64
 	)
 	err := sc.Scan(&r.RequestID, &r.InstanceID, &r.ToolName, &r.ToolInput,
 		&r.Decision, &r.DecisionReason, &r.CreatedAt, &r.RequestToken, &decidedAt,
@@ -359,7 +358,7 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 		&r.PaneSender.PID, &r.PaneSender.Starttime, &r.PaneSender.PIDNamespace,
 		&intentAt, &closedAt,
 		&provenAt, &r.ProvenGoneHow, &r.MainTurnEndEligible,
-		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis, &supersededAt)
+		&r.OwnerLaunchToken, &r.OwnerPermissionEpoch, &admittedAt, &fallbackAt, &r.FallbackBasis)
 	if err != nil {
 		return PermissionRow{}, err
 	}
@@ -375,7 +374,6 @@ func scanPermissionRow(sc rowScanner) (PermissionRow, error) {
 	r.ProvenGoneAt = millisTime(provenAt)
 	r.AdmittedAt = millisTime(admittedAt)
 	r.FallbackAt = millisTime(fallbackAt)
-	r.SupersededAt = millisTime(supersededAt)
 	return r, nil
 }
 

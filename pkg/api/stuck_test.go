@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ func stuckClient(t *testing.T, e *relayEnv, settle, timeout int64) *api.Client {
 	api.SetClockForTest(c, func() time.Time { return e.now })
 	api.SetSelfPIDNSForTest(c, func() (string, bool) { return e.ns, e.ns != "" })
 	api.SetSleepForTest(c, func(d time.Duration) { t.Errorf("read slept %s", d) })
+	watchStuckClient(c, e.s)
 	return c
 }
 
@@ -47,15 +49,37 @@ func stuckFacts(t *testing.T, e *relayEnv, opts ...apitest.PermissionOption) {
 	}
 }
 
-func assertStuckState(t *testing.T, c *api.Client, id, want string) api.StatusResult {
+// stuckProbes maps a client to the store its committed rows are read from, so
+// the observation helpers can tell whether a read committed.
+var stuckProbes sync.Map
+
+func watchStuckClient(c *api.Client, probe apitest.StuckProbe) { stuckProbes.Store(c, probe) }
+
+// observeStuck runs one reader through apitest.ObserveStuckRead. commit is
+// nil for a read that is not expected to commit.
+func observeStuck(t *testing.T, probe apitest.StuckProbe, id, want string, commit apitest.CommitCheck, read func() (string, api.StuckInfo, error)) {
 	t.Helper()
-	got, err := c.Status(id)
-	if err != nil {
-		t.Fatal(err)
+	apitest.ObserveStuckRead(t, probe, id, want, commit, func() (apitest.StuckReading, error) {
+		state, info, err := read()
+		return apitest.StuckReading{State: state, Reason: info.StuckReason, Since: info.Since, RequestToken: info.RequestToken, ToolName: info.ToolName}, err
+	})
+}
+
+// observeStatus is c.Status judged against the committed row: see
+// apitest.ObserveStuckRead. commit names the commit the read must make (nil
+// when it makes none).
+func observeStatus(t *testing.T, c *api.Client, id, want string, commit apitest.CommitCheck) api.StatusResult {
+	t.Helper()
+	probe, ok := stuckProbes.Load(c)
+	if !ok {
+		t.Fatal("client is not watched: build it with stuckClient or watchStuckClient")
 	}
-	if got.State != want {
-		t.Fatalf("Status=%+v; want %s", got, want)
-	}
+	var got api.StatusResult
+	observeStuck(t, probe.(apitest.StuckProbe), id, want, commit, func() (string, api.StuckInfo, error) {
+		var err error
+		got, err = c.Status(id)
+		return got.State, got.StuckInfo, err
+	})
 	if want == "stuck" {
 		if got.StuckReason != "permission_unanswered" || got.RequestToken == "" || got.Since == "" {
 			t.Fatalf("incoherent stuck: %+v", got)
@@ -64,6 +88,28 @@ func assertStuckState(t *testing.T, c *api.Client, id, want string) api.StatusRe
 		t.Fatalf("ordinary row leaked details: %+v", got)
 	}
 	return got
+}
+
+// assertStuckState reads Status and requires want. Entering stuck must commit
+// (stuck_version advances); an already committed stuck display must be read
+// back unchanged without any commit.
+func assertStuckState(t *testing.T, c *api.Client, id, want string) api.StatusResult {
+	t.Helper()
+	var commit apitest.CommitCheck
+	if want == "stuck" {
+		probe, ok := stuckProbes.Load(c)
+		if !ok {
+			t.Fatal("client is not watched: build it with stuckClient or watchStuckClient")
+		}
+		before, err := probe.(apitest.StuckProbe).GetSpawn(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.CommittedStuckDisplay().State != "stuck" {
+			commit = apitest.VersionAdvanced
+		}
+	}
+	return observeStatus(t, c, id, want, commit)
 }
 
 func TestPermissionStuckFallbackBoundaries(t *testing.T) {
@@ -91,7 +137,8 @@ func TestPermissionStuckFallbackBoundaries(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					stuckFacts(t, e, apitest.PermissionSuperseded(start))
+					// Retire the original request so only the legacy one qualifies.
+					stuckFacts(t, e, apitest.PermissionProof(start))
 				case "admission":
 					// A synthetic relay-off Cursor row uses a real admission fact, not creation age.
 					id, err := apitest.SeedSpawn(e.dbPath, "cursor-off", store.StateCheckPermission, "", "off", "", false, apitest.WithAgent(agent), apitest.WithNoPane())
@@ -139,7 +186,8 @@ func TestPermissionStuckProcessStartsAtFirstCommittedObservation(t *testing.T) {
 	}
 	release()
 	e.now = e.now.Add(time.Hour)
-	assertStuckState(t, c, e.id, store.StateCheckPermission)
+	// The first committed observation starts the process clock at this read.
+	observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 	first := e.now
 	if pr := e.request(t); !pr.FallbackAt.Equal(first) || pr.FallbackBasis != store.FallbackProcess {
 		t.Fatalf("first committed observation=%+v", pr)
@@ -157,7 +205,7 @@ func TestPermissionStuckDeadlineSurvivesLaterProcessObservation(t *testing.T) {
 	e.ns = ""
 	stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt, time.Time{}, time.Time{}, ""))
 	c := stuckClient(t, e, 0, 0)
-	assertStuckState(t, c, e.id, store.StateCheckPermission)
+	observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 	e.ns = relayNS
 	e.pc.Set(relayEnvHook.PID, procfix.Gone())
 	e.now = stuckAt.Add(30 * time.Second)
@@ -173,15 +221,19 @@ func TestPermissionStuckExcludesNoncurrentAndAnsweredRequests(t *testing.T) {
 		name   string
 		option apitest.PermissionOption
 		live   bool
+		want   string
 	}{
-		{"live hook", nil, true},
-		{"stale launch", apitest.PermissionOwner("0000000000000000", 1), false},
-		{"stale interval", apitest.PermissionOwner("", 0), false},
-		{"explicitly superseded", apitest.PermissionSuperseded(stuckAt), false},
-		{"pane answer", apitest.PermissionAnswer(store.PaneAnswerOutside), false},
-		{"acknowledged", apitest.PermissionDelivered(stuckAt), false},
-		{"proven gone", apitest.PermissionProof(stuckAt), false},
-		{"closed historical", apitest.PermissionClosed(stuckAt), false},
+		// Positive controls: the same row is stuck unless a fact below excludes it.
+		{"unchanged request", nil, false, "stuck"},
+		// A decision that was never delivered does not close the dialog.
+		{"decided but undelivered", apitest.PermissionDecision("allow", ""), false, "stuck"},
+		{"live hook", nil, true, store.StateCheckPermission},
+		{"stale launch", apitest.PermissionOwner("0000000000000000", 1), false, store.StateCheckPermission},
+		{"stale interval", apitest.PermissionOwner("", 0), false, store.StateCheckPermission},
+		{"pane answer", apitest.PermissionAnswer(store.PaneAnswerOutside), false, store.StateCheckPermission},
+		{"acknowledged", apitest.PermissionDelivered(stuckAt), false, store.StateCheckPermission},
+		{"proven gone", apitest.PermissionProof(stuckAt), false, store.StateCheckPermission},
+		{"closed historical", apitest.PermissionClosed(stuckAt), false, store.StateCheckPermission},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRelayEnv(t, relayEnvHook)
@@ -194,7 +246,7 @@ func TestPermissionStuckExcludesNoncurrentAndAnsweredRequests(t *testing.T) {
 				e.ns = ""
 			}
 			c := stuckClient(t, e, 0, 0)
-			assertStuckState(t, c, e.id, store.StateCheckPermission)
+			assertStuckState(t, c, e.id, tc.want)
 		})
 	}
 }
@@ -212,11 +264,53 @@ func TestPermissionStuckWriteFailureIsLocalToListRow(t *testing.T) {
 	}
 	storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailStuckObservation, e.id)
 	c := stuckClient(t, e, 0, 0)
-	listed, err := c.List(api.ListParams{State: []string{"stuck"}, Limit: 1})
+	// No limit: the failing row is filtered out whatever the row order, and
+	// the other row's own write is unaffected.
+	listed, err := c.List(api.ListParams{State: []string{"stuck"}})
 	if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].InstanceID != "other" {
 		t.Fatalf("row-local failure/list filtering: %+v %v", listed, err)
 	}
 	assertStuckState(t, c, e.id, store.StateCheckPermission)
+}
+
+// A row displayed stuck matches --state stuck and no longer --state
+// check_permission, which keeps only rows really displayed check_permission
+// (docs/caller-contract.md "Filtering").
+func TestPermissionStuckListFilterMatchesDisplayedState(t *testing.T) {
+	t.Parallel()
+	e := newRelayEnv(t, store.ProcessIdentity{})
+	e.now = stuckAt.Add(time.Minute)
+	stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt, time.Time{}, time.Time{}, ""))
+	plain, err := apitest.SeedSpawn(e.dbPath, "plain", store.StateCheckPermission, "", "on", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := stuckClient(t, e, 0, 0)
+	for _, tc := range []struct {
+		states []string
+		want   []string
+	}{
+		{[]string{"stuck"}, []string{e.id}},
+		{[]string{store.StateCheckPermission}, []string{plain}},
+		{[]string{"stuck", store.StateCheckPermission}, []string{e.id, plain}},
+	} {
+		listed, err := c.List(api.ListParams{State: tc.states})
+		if err != nil {
+			t.Fatalf("%v: %v", tc.states, err)
+		}
+		got := map[string]bool{}
+		for _, row := range listed.Spawns {
+			got[row.InstanceID] = true
+		}
+		if len(got) != len(tc.want) || len(listed.Spawns) != len(tc.want) {
+			t.Fatalf("filter %v matched %+v; want %v", tc.states, listed.Spawns, tc.want)
+		}
+		for _, id := range tc.want {
+			if !got[id] {
+				t.Errorf("filter %v missing %s: %+v", tc.states, id, listed.Spawns)
+			}
+		}
+	}
 }
 
 func TestPermissionStuckNoRequestOrTrustworthyClock(t *testing.T) {
