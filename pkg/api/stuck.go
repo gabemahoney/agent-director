@@ -24,7 +24,7 @@ type StuckInfo struct {
 }
 
 type permissionStuckStore interface {
-	PermissionRequestsForSpawn(string) ([]PermissionRow, error)
+	PermissionRequestsForSpawnWithin(string, time.Duration) ([]PermissionRow, error)
 	ObservePermissionStuck(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.StuckDisplay, error)
 }
 
@@ -39,7 +39,7 @@ func permissionDisplay(s any, v RelayView, settle store.SettleRead, row Spawn) s
 		return previous
 	}
 	j := newRelayJudge(v)
-	requests, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return r.PermissionRequestsForSpawn(row.InstanceID) }, j)
+	requests, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return r.PermissionRequestsForSpawnWithin(row.InstanceID, readerLockWait) }, j)
 	if err != nil {
 		return previous
 	}
