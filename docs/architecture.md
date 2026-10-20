@@ -22954,9 +22954,11 @@ each file's doc comments carry the detail.
     fixture's relay window, so a request recorded before v7 is judged by
     it as `api.Pause` judges it).
   - relay proofs (`pane_answer_fixture_test.go`): `toolRan(id)` and
-    `turnEnd`, a `turn_end` proof whose `RecordedBefore` is an hour after
-    the test binary started, so its age cut covers every eligible main request a test records
-    (b.omt); `proveOn(t, s, dbPath, id, proof)` writes one as `id`'s own
+    `turnEnd()`, a `turn_end` proof whose `RecordedBefore` is one second
+    after construction, beyond the whole second of requests already recorded.
+    Call it after request setup, inside each leaf of a table-driven test;
+    keep proof factories in tables so repeated runs cannot outlive a shared
+    cutoff. `proveOn(t, s, dbPath, id, proof)` writes one as `id`'s own
     agent's hook does (`ProveRequestsGone` through the row's gate) and
     returns how many it proved, `proveGone(t, e, id, proof)` is it on a
     kill fixture's store and `p.prove(t, proof)` on a pane-answer env;

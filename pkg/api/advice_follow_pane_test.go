@@ -522,7 +522,7 @@ func TestAdviceFollow_E6_SendKeysWhileRelayedDecidedRequestRetryLater(t *testing
 			}
 			assertDialogMaybeOpen(t, send(), tok, row.State)
 			e.assertNoTmuxCall(t)
-			proveGone(t, e, r.ID, turnEnd) // the agent's next Stop
+			proveGone(t, e, r.ID, turnEnd()) // the agent's next Stop
 			if err := send(); err != nil {
 				t.Fatalf("send-keys retried later: %v; want delivery", err)
 			}
@@ -579,7 +579,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 					t.Errorf("request A = %+v; want it closed", pr)
 				}
 				assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), tok, store.StateCheckPermission)
-				p.prove(t, turnEnd)
+				p.prove(t, turnEnd())
 				if err := p.sendKeys(p.plain("next")); err != nil {
 					t.Errorf("plain send-keys once the main agent's Stop proved it gone: %v; want it typed", err)
 				}

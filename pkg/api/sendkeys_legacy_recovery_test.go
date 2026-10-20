@@ -209,7 +209,7 @@ func TestLegacyRecoveryKeepsCurrentRequestHeld(t *testing.T) {
 					e.pc.Set(relayEnvHook.PID, procfix.Alive(relayEnvHook.Starttime))
 				}
 				if name == "modern_live_turn_end" || name == "modern_live_tool_ran" {
-					proof := turnEnd
+					proof := turnEnd()
 					if name == "modern_live_tool_ran" {
 						proof = toolRan("toolu_current")
 					}

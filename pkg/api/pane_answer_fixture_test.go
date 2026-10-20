@@ -151,7 +151,7 @@ func (p *paEnv) seedRequest(t *testing.T, token, toolUseID string, hook api.Proc
 // row as the hook handler does: its turn_end proof (requests with no agent_id), then the move to waiting.
 func (p *paEnv) mainAgentStop(t *testing.T) {
 	t.Helper()
-	p.prove(t, turnEnd)
+	p.prove(t, turnEnd())
 	event, opts := "Stop", []apitest.HookOption(nil)
 	if p.isCodex() {
 		// Codex's turn end is the main agent's Interrupt (no agent_id).
@@ -242,9 +242,11 @@ func toolRan(toolUseID string) store.RequestProof {
 	return store.RequestProof{How: store.ProvenGoneToolRan, ToolUseID: toolUseID}
 }
 
-// turnEnd's hook started an hour after the test binary did, so after every
-// request a test records (b.omt: it covers only those recorded before its start).
-var turnEnd = store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: time.Now().Add(time.Hour)}
+// turnEnd starts after the requests already recorded, beyond their whole second.
+// Construct it when needed so repeated runs cannot outlive a shared cutoff.
+func turnEnd() store.RequestProof {
+	return store.RequestProof{How: store.ProvenGoneTurnEnd, RecordedBefore: time.Now().Add(time.Second)}
+}
 
 // proveGone is proveOn with e's store.
 func proveGone(t *testing.T, e *killEnv, id string, proof store.RequestProof) int64 {
