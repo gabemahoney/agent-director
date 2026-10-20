@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -351,6 +352,10 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			e := newRequestEnv(t, "on", "synthetic-session")
 			e.rep.cfg.Relay.TimeoutSeconds = 20
 			wire := &observedWire{}
+			firstByte := make(chan time.Time, 1)
+			if tc.loss == "runtime death" {
+				wire.first = func() error { firstByte <- time.Now(); return nil }
+			}
 			c := e.controller(t, wire, io.Discard)
 			first := e.admit(t, c, `"first"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "first", "execute"))
 			second := e.admit(t, c, `"second"`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "second", "execute"))
@@ -385,7 +390,11 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			guardEntered := make(chan time.Time, 1)
 			guardReturned := make(chan guardObservation, 1)
 			var guardCalls atomic.Int32
-			finished := make(chan error, 1)
+			type writeObservation struct {
+				at  time.Time
+				err error
+			}
+			finished := make(chan writeObservation, 1)
 			next.guard = func() error {
 				firstCall := guardCalls.Add(1) == 1
 				observation := guardObservation{entry: time.Now(), deadline: next.deadline}
@@ -408,7 +417,11 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				}
 				return err
 			}
-			next.done = func(err error) { originalDone(err); finished <- err }
+			next.done = func(err error) {
+				observation := writeObservation{at: time.Now(), err: err}
+				originalDone(err)
+				finished <- observation
+			}
 			c.protocol.outgoing <- next
 
 			var once sync.Once
@@ -468,18 +481,54 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 			holderEntered := time.Now()
 			remaining := time.Until(next.deadline)
 			started := time.Now()
-			timer := time.AfterFunc(holdFor, unhold)
+			if tc.loss != "runtime death" {
+				timer := time.AfterFunc(holdFor, unhold)
+				defer timer.Stop()
+			}
 			if tc.loss == "cancel" {
 				cancelTimer := time.AfterFunc(40*time.Millisecond, c.cancel)
 				defer cancelTimer.Stop()
 			}
-			var runtimeGone chan error
-			if tc.loss == "runtime death" {
-				runtimeGone = make(chan error, 1)
-				go func() { time.Sleep(40 * time.Millisecond); runtimeGone <- e.process.terminate() }()
-			}
-			defer timer.Stop()
 			releaseWriter()
+			if tc.loss == "runtime death" {
+				var guardEntry time.Time
+				select {
+				case guardEntry = <-guardEntered:
+				case <-time.After(transportWriteWait + time.Second):
+					t.Fatalf("runtime-death guard did not enter: holder=%s deadline=%s", holderEntered, next.deadline)
+				}
+				if guardEntry.Before(holderEntered) || !guardEntry.Before(next.deadline) {
+					t.Fatalf("runtime-death guard missed held-store precondition: holder=%s guardEntry=%s deadline=%s", holderEntered, guardEntry, next.deadline)
+				}
+				// Keep the original 40 ms loss point, but release contention only after real death.
+				deathTimer := time.NewTimer(time.Until(started.Add(40 * time.Millisecond)))
+				defer deathTimer.Stop()
+				<-deathTimer.C
+				deathRequested := time.Now()
+				if err := e.process.terminate(); err != nil {
+					t.Fatalf("runtime retirement: %v (guardEntry=%s requested=%s deadline=%s)", err, guardEntry, deathRequested, next.deadline)
+				}
+				if _, err := os.Stat(fmt.Sprintf("/proc/%d/stat", e.process.pid)); !os.IsNotExist(err) {
+					t.Fatalf("terminated runtime pid=%d start=%s not independently confirmed gone: %v", e.process.pid, e.process.start, err)
+				}
+				deathConfirmed := time.Now()
+				if !deathConfirmed.Before(next.deadline) {
+					t.Fatalf("runtime death missed original frame deadline: guardEntry=%s requested=%s confirmed=%s deadline=%s", guardEntry, deathRequested, deathConfirmed, next.deadline)
+				}
+				holderReleased := time.Now()
+				unhold()
+				t.Logf("runtime death pid=%d start=%s holder=%s guardEntry=%s requested=%s confirmed=%s holderReleased=%s deadline=%s", e.process.pid, e.process.start, holderEntered, guardEntry, deathRequested, deathConfirmed, holderReleased, next.deadline)
+				var observation guardObservation
+				select {
+				case observation = <-guardReturned:
+				case <-time.After(transportWriteWait + time.Second):
+					t.Fatalf("runtime-death guard did not return: guardEntry=%s confirmed=%s holderReleased=%s deadline=%s", guardEntry, deathConfirmed, holderReleased, next.deadline)
+				}
+				t.Logf("runtime-death guardExit=%s holderReleased=%v guardErr=%v", observation.exit, observation.holderReleased, observation.err)
+				if observation.exit.Before(deathConfirmed) || observation.exit.Before(holderReleased) || !observation.holderReleased {
+					t.Errorf("runtime-death guard returned before confirmed death and holder release: guardExit=%s confirmed=%s holderReleased=%s observedRelease=%v err=%v", observation.exit, deathConfirmed, holderReleased, observation.holderReleased, observation.err)
+				}
+			}
 			if tc.loss == "expiry" {
 				var guardEntry time.Time
 				select {
@@ -505,17 +554,23 @@ func TestCursorAcknowledgedAnswerSurvivesFiniteStoreContention(t *testing.T) {
 				}
 				unhold()
 			}
-			var writeErr error
+			var writeResult writeObservation
 			select {
-			case writeErr = <-finished:
+			case writeResult = <-finished:
 			case <-time.After(transportWriteWait + time.Second):
 				t.Fatal("answer did not finish within existing frame budget")
 			}
+			writeErr := writeResult.err
 			elapsed := time.Since(started)
 			frameComplete := time.Now()
-			if runtimeGone != nil {
-				if err := <-runtimeGone; err != nil {
-					t.Fatalf("runtime retirement: %v", err)
+			if tc.loss == "runtime death" {
+				frameComplete = writeResult.at
+				elapsed = frameComplete.Sub(started)
+				select {
+				case at := <-firstByte:
+					t.Logf("runtime-death firstByte=%s frameComplete=%s", at, frameComplete)
+				default:
+					t.Logf("runtime-death firstByte=none frameComplete=%s", frameComplete)
 				}
 			}
 			if err := <-holderDone; err != nil && tc.loss != "expiry" {
