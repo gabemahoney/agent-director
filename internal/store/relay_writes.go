@@ -78,8 +78,10 @@ var errRelayNotApplied = errors.New("store: relay request not applied")
 // relayInsertSQL is the request insert of InsertRelayRequest.
 const relayInsertSQL = `INSERT INTO permission_requests
 	  (instance_id, request_token, tool_name, tool_input,
-	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at, main_turn_end_eligible)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	   hook_pid, hook_starttime, hook_pidns, tool_use_id, agent_id, settled_at, main_turn_end_eligible,
+       owner_launch_token, owner_permission_epoch, admitted_at)
+	SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, launch_token, permission_epoch, ` + nowMsSQL + `
+    FROM spawns WHERE instance_id = ?`
 
 // InsertRelayRequest is the relay hook's first write (b.146 rule 1): in ONE
 // transaction it moves instanceID's row to check_permission, as the
@@ -138,7 +140,7 @@ func (s *Store) InsertRelayRequest(instanceID string, gate HookGate, req RelayRe
 			return errRelayNotApplied
 		}
 		insArgs := append([]any{instanceID, req.RequestToken, req.ToolName, req.ToolInput}, processIdentityArgs(req.Hook)...)
-		insArgs = append(insArgs, nullableStringArg(req.ToolUseID), nullableStringArg(req.AgentID), millisArg(req.SettledAt), req.mainTurnEndEligible(agent))
+		insArgs = append(insArgs, nullableStringArg(req.ToolUseID), nullableStringArg(req.AgentID), millisArg(req.SettledAt), req.mainTurnEndEligible(agent), instanceID)
 		ins, err := conn.ExecContext(ctx, relayInsertSQL, insArgs...)
 		if err != nil {
 			var serr *sqlite.Error

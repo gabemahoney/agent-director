@@ -49,6 +49,8 @@ type PermissionRequestInfo struct {
 // match the SRD §4.2 column names so callers reading the verb output can
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
+	StuckInfo
+
 	// Context is an experimental on-demand reading for the current session.
 	Context ContextReading `json:"context"`
 	// InstanceID is the stable id of the Spawn (UUID4 or caller-supplied).
@@ -58,7 +60,7 @@ type SpawnRow struct {
 	// launched from a plain shell.
 	ParentID string `json:"parent_id"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing. pending means a launch
+	// ask_user, check_permission, ended, missing, stuck. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
 	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history;
@@ -469,6 +471,9 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	}
 	slots := goneSlotsOf(nil, out.PermissionRequests)
 	recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
+
+	display := permissionDisplay(s, v, settle, row)
+	out.State, out.StuckInfo = display.State, stuckInfo(display)
 
 	return out, nil
 }

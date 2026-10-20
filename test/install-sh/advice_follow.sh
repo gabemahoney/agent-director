@@ -1015,21 +1015,39 @@ test_J5_DotfilesSkillNotChecked() {
 
 # ---- J6: store open failed after install ------------------------------------------
 
-# j6_break_hop <state.db>: fail v12→v13's second ADD COLUMN after its first DDL.
-# The generated capacity column is hidden from table_info but conflicts on ADD.
+# Fail the current hop's second ADD COLUMN after its first DDL. The generated
+# conflicting column is hidden from table_info; repair allows an exact retry.
 j6_break_hop() {
-    [[ "$SCHEMA" == 13 ]] || { bad "j6_break_hop breaks the v12→v13 step; update it for v$SCHEMA"; return 1; }
-    "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_startup;
-        ALTER TABLE spawns DROP COLUMN claude_capacity;
-        ALTER TABLE spawns ADD COLUMN claude_capacity TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;
+    case "$SCHEMA" in
+        13)
+            J6_FIRST_COLUMN=codex_startup J6_CONFLICT_COLUMN=claude_capacity
+            "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_startup;
+                ALTER TABLE spawns DROP COLUMN claude_capacity;" || return 1
+            ;;
+        14)
+            J6_FIRST_COLUMN=permission_epoch J6_CONFLICT_COLUMN=stuck_version
+            "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN permission_epoch;
+                ALTER TABLE spawns DROP COLUMN stuck_version;
+                ALTER TABLE spawns DROP COLUMN stuck_observation;
+                ALTER TABLE spawns DROP COLUMN stuck_exit;
+                ALTER TABLE permission_requests DROP COLUMN owner_launch_token;
+                ALTER TABLE permission_requests DROP COLUMN owner_permission_epoch;
+                ALTER TABLE permission_requests DROP COLUMN admitted_at;
+                ALTER TABLE permission_requests DROP COLUMN fallback_at;
+                ALTER TABLE permission_requests DROP COLUMN fallback_basis;
+                ALTER TABLE permission_requests DROP COLUMN superseded_at;" || return 1
+            ;;
+        *) bad "j6_break_hop has no failure injection for v$SCHEMA"; return 1 ;;
+    esac
+    "$SQLITE" "$1" "ALTER TABLE spawns ADD COLUMN $J6_CONFLICT_COLUMN TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;
         INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent,family_state,family_settled_state,family_changed_ms) VALUES ('j6','ended','/tmp','ad-j6','off','claude','waiting','waiting',0);
         INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,main_turn_end_eligible) VALUES ('j6','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}',1);"
 }
-j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN claude_capacity;"; }
+j6_repair_hop() { "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN $J6_CONFLICT_COLUMN;"; }
 
 # j6_failing_migration [pre-0.11.0]: install BIN_OLD and ADMIN_OLD (with
 # pre-0.11.0, then make that an install from before 0.11.0: j11_pre_admin),
-# make the store one version older with a failing provenance-column addition
+# make the store one version older with a failing column addition
 # (j6_break_hop), and run J6ARGV, an upgrade with --keep-prior, into that
 # failure; leaves HOME in J6H.
 j6_failing_migration() {
@@ -1045,8 +1063,8 @@ j6_failing_migration() {
     expect_advice "If this install authorized a migration above, it was NOT consumed; re-running this install will retry it."
     [[ -f "$(sentinel "$J6H")" ]] || bad "the authorized migration's sentinel is gone after the failed open"
     [[ "$(db_version "$J6H")" == $((SCHEMA - 1)) ]] || bad "failed migration stamped v$SCHEMA"
-    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name='codex_startup';")" == 0 ]] \
-        || bad "failed migration retained its first provenance-column addition"
+    [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name='$J6_FIRST_COLUMN';")" == 0 ]] \
+        || bad "failed migration retained its first column addition ($J6_FIRST_COLUMN)"
 }
 
 # J6: "If this install authorized a migration above, it was NOT consumed;
@@ -1075,6 +1093,12 @@ test_J6_MigrationFailedRerunRetries() {
         || bad "corrected retry fabricated provenance for the historical spawn"
     [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT family_state || '|' || family_settled_state || '|' || family_changed_ms FROM spawns WHERE instance_id='j6';")" == 'waiting|waiting|0' ]] \
         || bad "corrected retry changed the historical row's family history"
+    if [[ "$SCHEMA" == 14 ]]; then
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT permission_epoch=0 AND stuck_version=0 AND stuck_observation IS NULL AND stuck_exit IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
+            || bad "corrected retry fabricated permission observations for the historical spawn"
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL AND superseded_at IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
+            || bad "corrected retry fabricated historical ownership or fallback facts"
+    fi
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"
     grep -qF "no migration authorization needed" "$OUT" && bad "step 3 says no migration was needed after its probe ran one"

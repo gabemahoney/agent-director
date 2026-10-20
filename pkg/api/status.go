@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -16,10 +17,14 @@ type StatusStore interface {
 // plus launch_started_at on a pending row, surfaced as a JSON object on the
 // CLI.
 type StatusResult struct {
+	StuckInfo
+	// TmuxSessionName is present when the displayed row is stuck.
+	TmuxSessionName string `json:"tmux_session_name,omitempty"`
+
 	// Context is an experimental on-demand reading; unavailable values are null.
 	Context ContextReading `json:"context"`
 	// State is the current lifecycle state of the Spawn. One of:
-	// pending, waiting, working, ask_user, check_permission, ended, missing.
+	// pending, waiting, working, ask_user, check_permission, ended, missing, stuck.
 	// pending means a launch (spawn, reuse or resume) is in progress and the
 	// agent has not reported in yet (its SessionStart hook); it may be
 	// loading or waiting at a startup prompt. A resumed pending row keeps its
@@ -53,6 +58,12 @@ type contextStatusReader interface {
 	SpawnStatusContext(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, evidence store.SpawnContext, err error)
 }
 
+// permissionStatusReader retains only the evidence needed for the shared
+// permission report, including its exact row and launch ownership snapshot.
+type permissionStatusReader interface {
+	SpawnStatusRow(instanceID string, r store.SettleRead) (Spawn, error)
+}
+
 // familyStatusReader keeps family and own-state reports in the same read.
 type familyStatusReader interface {
 	SpawnStatusWithFamily(instanceID string, r store.SettleRead) (reported, raw, family string, launchStartedAtMillis int64, err error)
@@ -73,6 +84,24 @@ func Status(s StatusStore, instanceID string) (StatusResult, error) {
 // read's own statement); launch_started_at still keys on the raw state. With
 // no settle time it is Status exactly as before b.3ie. It never waits.
 func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	return statusSettledWithRelay(s, RelayView{Window: config.DefaultRelayTimeoutSeconds * time.Second}, settle, instanceID)
+}
+
+func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	if r, ok := s.(permissionStatusReader); ok {
+		row, err := r.SpawnStatusRow(instanceID, settle)
+		if err != nil {
+			return StatusResult{}, err
+		}
+		display := permissionDisplay(s, v, settle, row)
+		out := StatusResult{State: display.State, StuckInfo: stuckInfo(display), FamilyState: row.FamilyState,
+			LaunchStartedAt: launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
+		if display.State == store.StateStuck {
+			out.TmuxSessionName = row.TmuxSessionName
+		}
+		return out, nil
+	}
+
 	if sr, ok := s.(contextStatusReader); ok {
 		reported, raw, launchMillis, evidence, err := sr.SpawnStatusContext(instanceID, settle)
 		if err != nil {
@@ -137,7 +166,7 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if proof != nil {
 		proofs = append(proofs, *proof)
 	}
-	out, err := statusSettled(c.st.WithCursorMissingReads(proofs), c.settleRead(), instanceID)
+	out, err := statusSettledWithRelay(c.st.WithCursorMissingReads(proofs), c.relayView(), c.settleRead(), instanceID)
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -151,9 +180,11 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 // Status uses, so the production wiring keeps showing the launch start, and
 // the settled read the Client's status uses with a settle time.
 var (
-	_ familyStatusReader  = (*store.Store)(nil)
-	_ statusReader        = (*store.Store)(nil)
-	_ settledStatusReader = (*store.Store)(nil)
-	_ contextStatusReader = (*store.Store)(nil)
-	_ contextStatusReader = (*store.CursorMissingReads)(nil)
+	_ familyStatusReader     = (*store.Store)(nil)
+	_ statusReader           = (*store.Store)(nil)
+	_ settledStatusReader    = (*store.Store)(nil)
+	_ contextStatusReader    = (*store.Store)(nil)
+	_ contextStatusReader    = (*store.CursorMissingReads)(nil)
+	_ permissionStatusReader = (*store.Store)(nil)
+	_ permissionStatusReader = (*store.CursorMissingReads)(nil)
 )

@@ -340,3 +340,15 @@ test("public-surface: ContextReading requires every nullable field and is export
  }
  expect(fs.readFileSync(path.join(fixtureDir,"index.d.ts.golden"),"utf8")).toMatch(/\bContextReading\b/);
 });
+
+test.each(["StatusResult", "GetResult", "ListRow"])(
+  "public-surface: %s has optional permission stuck reason and the correct detail subset", (name) => {
+    const body = interfaceBody(typesGolden(), name);
+    expect(body).toMatch(/\bstuck_reason\?\s*:\s*"permission_unanswered"\s*;/);
+    for (const field of ["since", "request_token", "tool_name"]) {
+      const declaration = new RegExp(`\\b${field}\\?\\s*:\\s*string\\s*;`);
+      if (name === "ListRow") expect(body).not.toMatch(declaration);
+      else expect(body).toMatch(declaration);
+    }
+  }
+);

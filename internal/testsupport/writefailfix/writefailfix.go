@@ -88,6 +88,8 @@ const (
 	// seeding. Writes to the id's spawns row itself, and every write to another
 	// id's subagent rows, are not matched.
 	SubagentRecord Kind = 7
+	// StuckObservation fails the final report write after request clocks are written.
+	StuckObservation Kind = 8
 )
 
 // String names the kind, for test failure messages.
@@ -107,6 +109,8 @@ func (k Kind) String() string {
 		return "permission decision"
 	case SubagentRecord:
 		return "subagent record"
+	case StuckObservation:
+		return "stuck observation"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -114,7 +118,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, StuckObservation}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -136,6 +140,11 @@ type trigger struct {
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
 // The kind number in each WHEN clause is the Kind constant's fixed value.
 var triggersByKind = map[Kind][]trigger{
+	StuckObservation: {{name: "ad_test_fail_stuck_observation", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_stuck_observation
+ BEFORE UPDATE OF stuck_observation ON spawns
+ WHEN NEW.row_version IS OLD.row_version AND NEW.permission_epoch IS OLD.permission_epoch
+ AND EXISTS (SELECT 1 FROM ad_test_write_failure WHERE kind=8 AND instance_id=OLD.instance_id)
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: stuck observation'); END`}},
 	ReuseArchive: {
 		{
 			name: "ad_test_fail_reuse_archive_insert",

@@ -542,3 +542,18 @@ func WithClaimableType(t string) SubagentLaunchOption {
 func WithClaimableOpenedAt(ms int64) SubagentLaunchOption {
 	return func(o *subagentLaunchOpts) { o.openedAt = ms }
 }
+
+// WithPermissionEpoch seeds the current continuous permission interval.
+func WithPermissionEpoch(epoch int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("permission_epoch", epoch) }
+}
+
+// WithStuckObservation seeds committed report detail or a pending candidate.
+func WithStuckObservation(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("stuck_observation", nullIfZero(raw)) }
+}
+
+// WithStuckVersion seeds the observer's optimistic concurrency version.
+func WithStuckVersion(version int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("stuck_version", version) }
+}

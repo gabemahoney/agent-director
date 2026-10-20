@@ -239,10 +239,15 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+	exits, err := takeStuckExits(ctx, conn)
+	if err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
+	emitStuckTransitions(exits)
 
 	emitTerminalCloseout(ctx, closed, instanceID, reason)
 	return prior, CondApplied, nil

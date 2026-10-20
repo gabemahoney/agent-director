@@ -48,6 +48,9 @@ type RelayView struct {
 	// a request recorded before schema v7, with no settle instant on record,
 	// falls back.
 	Window time.Duration
+	// PermissionUnansweredTimeout is independent of relay delivery deadlines.
+	// Zero uses the configured default of thirty seconds.
+	PermissionUnansweredTimeout time.Duration
 }
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),
@@ -57,6 +60,9 @@ type RelayView struct {
 // derived from the record and a check of the request's relay hook process
 // each time they are read; nothing but hook_gone_at is written for them.
 type RequestDelivery struct {
+	fallbackObservation store.FallbackObservation
+	fallbackRecorded    bool
+
 	// Delivery is delivered, not_confirmed or fallen_back (DeliveryDelivered,
 	// DeliveryNotConfirmed, DeliveryFallenBack). decide's result is never
 	// fallen_back: decide refuses such a request with ErrRelayFallenBack.
@@ -230,6 +236,8 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 		alive := false
 		d.HookAlive = &alive
 	}
+	d.fallbackObservation = store.FallbackObservation{RequestID: pr.RequestID, ConfirmBy: d.ConfirmBy, ProcessGone: v == hookGone}
+	d.fallbackRecorded = !pr.FallbackAt.IsZero()
 	d.Delivery = deliveryOf(pr, v, !now.Before(d.ConfirmBy))
 	return d
 }
@@ -358,7 +366,7 @@ type goneSlot struct {
 // addGone appends id's slot to slots when d is fallen back with no
 // hook_gone_at.
 func addGone(slots []goneSlot, id int64, d *RequestDelivery) []goneSlot {
-	if d.Delivery == DeliveryFallenBack && d.HookGoneAt == nil {
+	if d.Delivery == DeliveryFallenBack && (d.HookGoneAt == nil || !d.fallbackRecorded) {
 		slots = append(slots, goneSlot{id: id, d: d})
 	}
 	return slots
@@ -376,18 +384,30 @@ const readerLockWait time.Duration = 0
 // failed write, writes nothing and leaves the slots' HookGoneAt null, and the
 // read that found them is answered as it is.
 func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
-	r, ok := s.(hookGoneRecorder)
-	if !ok || len(slots) == 0 {
+	if len(slots) == 0 {
 		return
 	}
-	ids := make([]int64, 0, len(slots))
-	for _, sl := range slots {
-		ids = append(ids, sl.id)
+	var stored map[int64]time.Time
+	var err error
+	if r, ok := s.(interface {
+		RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
+	}); ok {
+		observations := make([]store.FallbackObservation, 0, len(slots))
+		for _, sl := range slots {
+			observations = append(observations, sl.d.fallbackObservation)
+		}
+		stored, err = r.RecordPermissionFallbacks(at, maxWait, observations)
+	} else if r, ok := s.(hookGoneRecorder); ok {
+		ids := make([]int64, 0, len(slots))
+		for _, sl := range slots {
+			ids = append(ids, sl.id)
+		}
+		stored, err = r.RecordHookGone(at, maxWait, ids...)
 	}
-	stored, err := r.RecordHookGone(at, maxWait, ids...)
 	if err != nil {
 		return
 	}
+
 	for _, sl := range slots {
 		if t, ok := stored[sl.id]; ok && !t.IsZero() {
 			sl.d.HookGoneAt = &t

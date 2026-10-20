@@ -96,6 +96,7 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 		{"[pre_trust] lock_wait_seconds ", &keys.preTrust},
 		{"[store] busy_timeout_ms ", &keys.busyTimeout},
 		{"[state] settle_ms ", &keys.settle},
+		{"[state] permission_unanswered_timeout_seconds ", &keys.permission},
 	} {
 		if strings.Contains(desc, k.name) {
 			*k.key = value
@@ -117,6 +118,7 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"pre_trust lock_wait_seconds", cfg.PreTrust.EffectiveLockWaitSeconds(), config.DefaultPreTrustLockWaitSeconds},
 		{"store busy_timeout_ms", cfg.Store.EffectiveBusyTimeoutMs(), config.DefaultStoreBusyTimeoutMs},
 		{"state settle_ms", cfg.State.EffectiveSettleMs(), config.DefaultStateSettleMs},
+		{"state permission_unanswered_timeout_seconds", cfg.State.EffectivePermissionUnansweredTimeoutSeconds(), config.DefaultPermissionUnansweredTimeoutSeconds},
 	} {
 		if k.got != k.want {
 			t.Errorf("effective %s = %d after the follow; want its default %d", k.name, k.got, k.want)
@@ -260,8 +262,11 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		{"store busy timeout above the largest", rangeKeys{busyTimeout: "2147483648"}, nil},
 		{"state settle time negative", rangeKeys{settle: "-1"}, nil},
 		{"state settle time above the largest", rangeKeys{settle: "60001"}, nil},
+		{"state permission timeout negative", rangeKeys{permission: "-1"}, nil},
+		{"state permission timeout above the largest", rangeKeys{permission: "9223372037"}, nil},
+		{"state permission and settle refused", rangeKeys{permission: "-1", settle: "60001"}, nil},
 		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1", busyTimeout: "-1",
-			settle: "60001"}, killNegativeTmux},
+			settle: "60001", permission: "-1"}, killNegativeTmux},
 	}
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {

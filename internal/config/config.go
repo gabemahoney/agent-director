@@ -359,8 +359,18 @@ func (s Store) refusals() []string {
 	return nil
 }
 
-// State holds the settings of the state status, get and list report (b.3ie).
+// DefaultPermissionUnansweredTimeoutSeconds is measured from established fallback.
+const DefaultPermissionUnansweredTimeoutSeconds = 30
+
+// MaxPermissionUnansweredTimeoutSeconds is the whole-second duration ceiling.
+const MaxPermissionUnansweredTimeoutSeconds = MaxPauseTimeoutSeconds
+
+// State holds configuration for displayed row state and stuck eligibility.
 type State struct {
+	// PermissionUnansweredTimeoutSeconds is the age of an unanswered fallback
+	// before it becomes a report-only stuck candidate. Zero uses the default.
+	PermissionUnansweredTimeoutSeconds int `toml:"permission_unanswered_timeout_seconds"`
+
 	// SettleMs is the settle time, in whole milliseconds: with a positive
 	// value, the state status, get and list report (and list --state filters
 	// on) moves to a new value only once a hook-written raw state has held
@@ -400,16 +410,26 @@ func (s State) EffectiveSettleMs() int {
 	return DefaultStateSettleMs
 }
 
-// refusals returns the description of each refused [state] value, in table
-// order, or nil when every value loads. Only settle_ms is checked: a negative
-// value and one above MaxStateSettleMs are refused, never replaced by the
-// default or capped; 0 turns the settle time off (b.3ie).
-func (s State) refusals() []string {
-	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
-		return []string{fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
-			v, MaxStateSettleMs)}
+// EffectivePermissionUnansweredTimeoutSeconds returns the configured positive
+// timeout, or thirty seconds for an omitted/zero value. Load owns validation.
+func (s State) EffectivePermissionUnansweredTimeoutSeconds() int {
+	if s.PermissionUnansweredTimeoutSeconds > 0 {
+		return s.PermissionUnansweredTimeoutSeconds
 	}
-	return nil
+	return DefaultPermissionUnansweredTimeoutSeconds
+}
+
+// refusals reports out-of-range state controls without clamping.
+func (s State) refusals() []string {
+	var out []string
+	if v := s.PermissionUnansweredTimeoutSeconds; v < 0 || int64(v) > MaxPermissionUnansweredTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] permission_unanswered_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxPermissionUnansweredTimeoutSeconds))
+	}
+	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
+		out = append(out, fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
+			v, MaxStateSettleMs))
+	}
+	return out
 }
 
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
@@ -531,7 +551,8 @@ func Default() Config {
 			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
 		},
 		State: State{
-			SettleMs: DefaultStateSettleMs,
+			PermissionUnansweredTimeoutSeconds: DefaultPermissionUnansweredTimeoutSeconds,
+			SettleMs:                           DefaultStateSettleMs,
 		},
 		Log: Log{
 			ErrorLogPath: layout.DisplayErrorLogPath,

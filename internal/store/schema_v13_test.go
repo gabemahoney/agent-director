@@ -20,7 +20,7 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			withRaw(t, path, func(db *sql.DB) {
 				mustExec(t, db, `UPDATE spawns SET family_state='working',family_settled_state='waiting',family_changed_ms=99`)
 			})
-			var cols []string
+			var cols, requestCols []string
 			var marker any
 			var capacity any
 			if pre == "partial marker" {
@@ -41,6 +41,7 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			}
 			withRaw(t, path, func(db *sql.DB) {
 				cols = tableColumnNames(t, db, "spawns")
+				requestCols = tableColumnNames(t, db, "permission_requests")
 				if pre != "no column" && pre != "capacity null" && pre != "capacity marker" {
 					mustExec(t, db, `ALTER TABLE spawns ADD COLUMN codex_startup TEXT`)
 					mustExec(t, db, `UPDATE spawns SET codex_startup=?`, marker)
@@ -52,6 +53,7 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			})
 			before := dbDump(t, path)
 			prior := readQuotedRows(t, path, "spawns", "pre", "instance_id", cols)
+			priorRequests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)
 			id := assertOneStoreID(t, path)
 			writeSentinel(t, dir, 12, schemaVersion)
 			s, err := Open(path)
@@ -81,14 +83,20 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if err := runMigrationChain(s.db, 13); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(prior, readQuotedRows(t, path, "spawns", "pre", "instance_id", cols)) {
 				t.Fatal("migration changed existing spawn data")
 			}
+			if !reflect.DeepEqual(priorRequests, readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)) {
+				t.Fatal("migration changed existing request data")
+			}
 			after := dbDump(t, path)
-			for _, table := range []string{"permission_requests", "session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
+			for _, table := range []string{"session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 					t.Errorf("migration changed %s", table)
 				}
@@ -216,8 +224,8 @@ func TestV13MigrationCommitRollbackAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if userVersion(t, s.db) != 13 {
-		t.Fatal("retry did not stamp v13")
+	if userVersion(t, s.db) != schemaVersion {
+		t.Fatal("retry did not finish the current migration chain")
 	}
 	assertSentinel(t, dir, false)
 }

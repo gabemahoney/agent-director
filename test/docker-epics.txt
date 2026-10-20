@@ -41,3 +41,4 @@ cursor-groups
 cursor-callers-help
 family-state
 context-fullness
+permission-stuck

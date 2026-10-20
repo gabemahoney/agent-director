@@ -72,8 +72,10 @@ const (
 	StateWorking         = "working"
 	StateAskUser         = "ask_user"
 	StateCheckPermission = "check_permission"
-	StateEnded           = "ended"
-	StateMissing         = "missing"
+	// StateStuck is a displayed state only; it must never be written to state.
+	StateStuck   = "stuck"
+	StateEnded   = "ended"
+	StateMissing = "missing"
 )
 
 // liveStates is the set of live state values (anything except the terminal
@@ -230,6 +232,10 @@ type Spawn struct {
 	// ListFilters.Settle), and State itself for every other read. Every read
 	// fills it, so it is never "" on a row a read returned. Guards never read
 	// it: they act on State, the raw state.
+	PermissionEpoch  int64
+	StuckVersion     int64
+	StuckObservation string
+
 	ReportedState string
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string
@@ -458,7 +464,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, '')`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -517,7 +523,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.StuckVersion, &sp.StuckObservation)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}

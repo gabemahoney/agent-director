@@ -90,6 +90,9 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 						if after["spawns"]["row_version"] != before["spawns"]["row_version"].(int64)+1 || after["spawns"]["ended_at"] == nil || !reflect.DeepEqual(before["cursor_runtimes"], after["cursor_runtimes"]) {
 							t.Fatalf("terminal persistence changed binding or lacked terminal facts: %+v", after)
 						}
+						if after["spawns"]["permission_epoch"] != before["spawns"]["permission_epoch"].(int64)+1 || after["spawns"]["stuck_version"] != before["spawns"]["stuck_version"].(int64)+1 || after["spawns"]["stuck_observation"] != nil {
+							t.Fatalf("pending to missing did not invalidate permission ownership and reset the stuck observation exactly once: before=%+v after=%+v", before["spawns"], after["spawns"])
+						}
 						changed := after["spawns"]["family_changed_ms"].(int64)
 						if after["spawns"]["family_state"] != store.StateWaiting || after["spawns"]["family_settled_state"] != store.StateWorking || changed < getStarted.UnixMilli() || changed > getFinished.UnixMilli() {
 							t.Fatalf("terminal persistence did not record the family transition independently: %+v", after["spawns"])
@@ -97,6 +100,9 @@ func TestCursorResumedGatewayReadUsesCurrentPaneWithRetainedDescriptor(t *testin
 						for column, value := range before["spawns"] {
 							switch column {
 							case "state", "settled_state", "state_changed_ms", "ended_at", "last_seen_at", "liveness_unverified_since", "liveness_note", "launch_started_at", "row_version", "family_state", "family_settled_state", "family_changed_ms":
+								continue
+							case "permission_epoch", "stuck_version", "stuck_observation":
+								// Exact invalidation/reset expectations are checked above.
 								continue
 							}
 							if !reflect.DeepEqual(value, after["spawns"][column]) {

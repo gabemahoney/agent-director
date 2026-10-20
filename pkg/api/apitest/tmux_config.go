@@ -97,6 +97,7 @@ func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...Tmu
 type ConfigKeys struct {
 	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds, PreTrustLockWaitSeconds, StoreBusyTimeoutMs int64
 	StateSettleMs                                                                                        int64
+	PermissionUnansweredTimeoutSeconds                                                                   int64
 
 	ClaudePath, CodexPath, CursorPath                               string
 	WriteEmptyClaudePath, WriteEmptyCodexPath, WriteEmptyCursorPath bool
@@ -118,9 +119,15 @@ func WriteKeysConfig(t testing.TB, path string, keys ConfigKeys, settings ...Tmu
 		{"pre_trust", "lock_wait_seconds", keys.PreTrustLockWaitSeconds},
 		{"store", "busy_timeout_ms", keys.StoreBusyTimeoutMs},
 		{"state", "settle_ms", keys.StateSettleMs},
+		{"state", "permission_unanswered_timeout_seconds", keys.PermissionUnansweredTimeoutSeconds},
 	} {
 		if k.value != 0 {
-			tables[k.table] = map[string]any{k.key: k.value}
+			table, ok := tables[k.table].(map[string]any)
+			if !ok {
+				table = map[string]any{}
+				tables[k.table] = table
+			}
+			table[k.key] = k.value
 		}
 	}
 	launch := map[string]any{}

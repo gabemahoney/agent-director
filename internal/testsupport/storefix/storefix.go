@@ -355,7 +355,8 @@ const (
 	// the caps' evictions and a cascaded delete from the spawns row included, and
 	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install it after
 	// seeding. Used only through InjectWriteFailure.
-	WriteFailSubagentRecord = writefailfix.SubagentRecord
+	WriteFailSubagentRecord   = writefailfix.SubagentRecord
+	WriteFailStuckObservation = writefailfix.StuckObservation
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

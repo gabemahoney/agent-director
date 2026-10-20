@@ -262,6 +262,11 @@ func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 		}
 	}
 	for _, req := range readSurfaceRequests {
+		if !req.relay {
+			if _, err := tx.Exec(`UPDATE permission_requests SET owner_launch_token=NULL, owner_permission_epoch=NULL WHERE instance_id=? AND request_token=?`, req.spawnID, req.token); err != nil {
+				return err
+			}
+		}
 		var gone any
 		if !req.hookGone.IsZero() {
 			gone = req.hookGone.UnixMilli()

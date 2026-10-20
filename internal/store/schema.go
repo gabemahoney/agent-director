@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v13 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v14 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -164,7 +164,11 @@ CREATE TABLE IF NOT EXISTS spawns (
     family_settled_state       TEXT NOT NULL DEFAULT '',
     family_changed_ms          INTEGER NOT NULL DEFAULT 0,
     codex_startup              TEXT,
-    claude_capacity            TEXT
+    claude_capacity            TEXT,
+    permission_epoch           INTEGER NOT NULL DEFAULT 0,
+    stuck_version              INTEGER NOT NULL DEFAULT 0,
+    stuck_observation          TEXT,
+    stuck_exit                 TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -201,6 +205,12 @@ CREATE TABLE IF NOT EXISTS permission_requests (
     proven_gone_at      INTEGER,
     proven_gone_how     TEXT,
     main_turn_end_eligible INTEGER NOT NULL DEFAULT 0,
+    owner_launch_token TEXT,
+    owner_permission_epoch INTEGER,
+    admitted_at INTEGER,
+    fallback_at INTEGER,
+    fallback_basis TEXT,
+    superseded_at INTEGER,
     UNIQUE(instance_id, request_token)
 );
 CREATE INDEX IF NOT EXISTS idx_permission_requests_instance_decision   ON permission_requests(instance_id, decision);
@@ -294,6 +304,7 @@ var migrationSteps = []migrationStep{
 	{from: 10, apply: migrateV10toV11},
 	{from: 11, apply: migrateV11toV12},
 	{from: 12, apply: migrateV12toV13},
+	{from: 13, apply: migrateV13toV14},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

@@ -112,3 +112,26 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// cmdSeedPermissionSurface shares the precommitted all-agent wire fixture.
+func cmdSeedPermissionSurface(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("seed-permission-surface", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("store", "", "store path")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if *path == "" {
+		printError(stderr, errors.New("--store is required"))
+		return 1
+	}
+	if err := apitest.SeedPermissionSurface(*path); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if err := printResult(stdout, map[string]any{"seeded": true}); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	return 0
+}

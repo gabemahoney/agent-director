@@ -64,6 +64,9 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			if err := migrateV12toV13(s.db); err != nil {
 				t.Fatal(err)
 			}
+			if err := runMigrationChain(s.db, 13); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -153,6 +156,9 @@ func TestV11MigrationExistingColumn(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err = migrateV12toV13(s.db); err != nil {
+				t.Fatal(err)
+			}
+			if err = runMigrationChain(s.db, 13); err != nil {
 				t.Fatal(err)
 			}
 			s.Close()

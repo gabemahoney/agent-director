@@ -97,7 +97,8 @@ func checkAdvice(t *testing.T, desc string) {
 	list = strings.TrimSuffix(strings.TrimSuffix(list, raisedTail), refusalTail)
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
-		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms "} {
+		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
+		"[state] permission_unanswered_timeout_seconds "} {
 		refused += strings.Count(list, k)
 	}
 	above := false
@@ -264,6 +265,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 			caseVariantText("[store] BUSY_TIMEOUT_MS and [store] busy_timeout_ms")},
 		{"settle_refused_value_under_one_name", "[State]\nsettle_ms = -1\n\n[state]\nsettle_ms = 1000\n",
 			caseVariantText("[State] settle_ms and [state] settle_ms")},
+		{"permission_refused_value_under_one_name", "[state]\npermission_unanswered_timeout_seconds = -1\nPERMISSION_UNANSWERED_TIMEOUT_SECONDS = 30\n",
+			caseVariantText("[state] permission_unanswered_timeout_seconds and [state] PERMISSION_UNANSWERED_TIMEOUT_SECONDS")},
 		{"beside_refused_value", "[pause]\ntimeout_seconds = -1\n\n" + dbPathTwice,
 			caseVariantText("[Store] db_path and [store] db_path")},
 		{"two_keys_interleaved", "[Store]\ndb_path = \"/upper.db\"\n\n[relay]\ntimeout_seconds = 60\n\n" +
@@ -350,6 +353,28 @@ func TestTmuxRefusesNonInteger(t *testing.T) {
 						t.Errorf("error does not name the key: %q", desc)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestPermissionTimeoutRefusesNonInteger rejects malformed controls without defaulting or clamping.
+func TestPermissionTimeoutRefusesNonInteger(t *testing.T) {
+	for _, tc := range []struct{ name, value string }{
+		{"fractional", "30.5"},
+		{"whole_float", "30.0"},
+		{"string", `"30"`},
+		{"boolean", "true"},
+		{"array", "[30]"},
+		{"table", "{ seconds = 30 }"},
+		{"not_a_number", "nan"},
+		{"infinity", "inf"},
+		{"integer_overflow", "9223372036854775808"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ce := loadConfigError(t, keysFile(t, rangeKeys{permission: tc.value, settle: "1500"}))
+			if desc := ce.Err.Error(); !strings.Contains(desc, "permission_unanswered_timeout_seconds") {
+				t.Errorf("error does not name the key: %q", desc)
 			}
 		})
 	}

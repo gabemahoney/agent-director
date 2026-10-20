@@ -326,7 +326,7 @@ type PermissionRequestSeed struct {
 // the row's pane and process identity are left as they were). Returns both
 // the request_id (AUTOINCREMENT) and the request_token (UUIDv4) so callers can
 // reference the row by either key.
-func SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error) {
+func SeedPermissionRequest(dbPath, spawnID, toolName string, opts ...PermissionOption) (PermissionRequestSeed, error) {
 	s, err := store.Open(dbPath)
 	if err != nil {
 		return PermissionRequestSeed{}, fmt.Errorf("SeedPermissionRequest: open store: %w", err)
@@ -348,7 +348,14 @@ func SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestS
 	if err != nil {
 		return PermissionRequestSeed{}, fmt.Errorf("SeedPermissionRequest: get: %w", err)
 	}
-	return PermissionRequestSeed{RequestID: row.RequestID, RequestToken: requestToken}, nil
+	if err := SetPermissionFacts(dbPath, row.RequestID, opts...); err != nil {
+		return PermissionRequestSeed{}, err
+	}
+	row, err = s.GetPermissionRequest(spawnID, permissionToken(opts, requestToken))
+	if err != nil {
+		return PermissionRequestSeed{}, err
+	}
+	return PermissionRequestSeed{RequestID: row.RequestID, RequestToken: row.RequestToken}, nil
 }
 
 // AgePermissionRequest backdates the created_at of request requestID by

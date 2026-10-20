@@ -72,6 +72,7 @@ var availableSubcmds = []string{
 	"seed-row-session",
 	"fake-pane-owner",
 	"seed-read-surface-store",
+	"seed-permission-surface",
 	"set-settle",
 	"json-schema",
 }
@@ -104,6 +105,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedRowSession(args[1:], stdout, stderr)
 	case "fake-pane-owner":
 		return cmdFakePaneOwner(args[1:], stdout, stderr)
+	case "seed-permission-surface":
+		return cmdSeedPermissionSurface(args[1:], stdout, stderr)
 	case "seed-read-surface-store":
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
@@ -573,6 +576,7 @@ var resultSchemas = map[string]map[string]string{
 		"pane_id":    "string",
 		"table":      "string",
 	},
+	"seed-permission-surface": {"seeded": "boolean"},
 	"seed-read-surface-store": {
 		"ids":     "array",
 		"settled": "object",

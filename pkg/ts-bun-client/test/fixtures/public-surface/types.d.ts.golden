@@ -234,6 +234,8 @@ export interface PermissionRequestInfo extends RequestDelivery {
 }
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
+    /** Report-only condition; live command guards continue to apply. */
+    stuck_reason?: "permission_unanswered";
     /** Stable Spawn id. */
     instance_id: string;
     /** Parent Spawn id (omitted when launched from a plain shell). */
@@ -442,6 +444,15 @@ export interface StatusParams {
 }
 /** The row's reported lifecycle state. */
 export interface StatusResult {
+    /** Report-only condition; live command guards continue to apply. */
+    stuck_reason?: "permission_unanswered";
+    /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
+    since?: string;
+    /** Earliest qualifying fallback, lexical request-token tie break. */
+    request_token?: string;
+    tool_name?: string;
+    /** Attach target, present when displayed stuck. */
+    tmux_session_name?: string;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
     /**
@@ -499,6 +510,13 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
+    /** Report-only condition; live command guards continue to apply. */
+    stuck_reason?: "permission_unanswered";
+    /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
+    since?: string;
+    /** Earliest qualifying fallback, lexical request-token tie break. */
+    request_token?: string;
+    tool_name?: string;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
     instance_id: string;

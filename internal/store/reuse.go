@@ -460,10 +460,15 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+	exits, err := takeStuckExits(ctx, conn)
+	if err != nil {
+		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
+	emitStuckTransitions(exits)
 	return CondApplied, sessionID, examined.RowVersion + 1, nil
 }
 
@@ -551,7 +556,7 @@ func (s *Store) RestoreAfterFailedReuse(instanceID string, resetVersion int64, p
 	if prior.endedAt.class == "null" {
 		endedAt = storeTimestamp(failedAt)
 	}
-	args = append(args, endedAt, prior.parentID.arg(), prior.state.arg(), prior.state.arg(),
+	args = append(args, endedAt, prior.parentID.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg(), prior.state.arg(),
 		instanceID, StatePending, resetVersion)
 	applied, err := s.execGuarded(restoreAfterFailedReuseSQL, args, errPrefix)
 	if err != nil {

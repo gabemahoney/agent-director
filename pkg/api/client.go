@@ -116,10 +116,11 @@ type Client struct {
 // effective relay window.
 func (c *Client) relayView() RelayView {
 	return RelayView{
-		Procs:        c.procChecker,
-		PIDNamespace: c.selfPIDNS,
-		Now:          c.now,
-		Window:       time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
+		Procs:                       c.procChecker,
+		PIDNamespace:                c.selfPIDNS,
+		Now:                         c.now,
+		Window:                      time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
+		PermissionUnansweredTimeout: time.Duration(c.cfg.State.EffectivePermissionUnansweredTimeoutSeconds()) * time.Second,
 	}
 }
 

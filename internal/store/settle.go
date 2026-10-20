@@ -37,7 +37,13 @@ const nowMsSQL = `CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)`
 //     there is none (the empty string, as a hand-inserted row has), the same
 //     fallback as SettleRead.stateExpr, so the stored base is never empty;
 //     state becomes V and state_changed_ms now.
-const hookStateSet = `settled_state = CASE WHEN state = ? THEN settled_state
+const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       stuck_observation = CASE WHEN state = ? THEN stuck_observation
+         WHEN json_extract(stuck_observation, '$.state') = 'stuck'
+         THEN json_set(stuck_observation, '$.candidate', '', '$.candidate_since_ms', 0)
+         ELSE NULL END,
+       stuck_version = stuck_version + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       settled_state = CASE WHEN state = ? THEN settled_state
                             WHEN ? = 0 OR ` + nowMsSQL + ` - state_changed_ms >= ? THEN state
                             ELSE COALESCE(NULLIF(settled_state, ''), state) END,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END,
@@ -47,20 +53,26 @@ const hookStateSet = `settled_state = CASE WHEN state = ? THEN settled_state
 // of V, for a statement whose own SET writes state = V elsewhere (the reuse
 // restore's generated list): settled_state V, so V reports at once, and
 // state_changed_ms now when V is not the raw state already (kept when it is).
-// Its placeholders are V, V.
-const immediateSettleSet = `settled_state = ?,
+// Its placeholders are V four times: epoch, exit, settled value and clock.
+const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       stuck_exit = CASE WHEN json_extract(stuck_observation, '$.state') = 'stuck'
+         THEN json_object('new_state', ?, 'reason', json_extract(stuck_observation, '$.reason'), 'at_ms', ` + nowMsSQL + `)
+         ELSE stuck_exit END,
+       stuck_observation = NULL,
+       stuck_version = stuck_version + 1,
+       settled_state = ?,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END`
 
 // immediateStateSet is the SET fragment of an immediate write of V: any
 // terminal value (ended, missing), a hook's included, and every write that is
 // not a hook's (find-missing's mark, EndHeldLaunch, MoveToPending,
 // ResetForReuse, resume's and reuse's restores). V reports at once and becomes
-// the last settled value. Its placeholders are V, V, V (immediateStateArgs).
+// the last settled value. Its placeholders are V five times (immediateStateArgs).
 const immediateStateSet = `state = ?, ` + immediateSettleSet
 
 // immediateStateArgs returns immediateStateSet's arguments for the value v.
 func immediateStateArgs(v string) []any {
-	return []any{v, v, v}
+	return []any{v, v, v, v, v}
 }
 
 // isTerminalState reports whether v is a terminal state (ended, missing),
@@ -77,7 +89,7 @@ func (s *Store) hookWriteStateSet(v string) (string, []any) {
 	if isTerminalState(v) {
 		return immediateStateSet, immediateStateArgs(v)
 	}
-	return hookStateSet, []any{v, s.settleMs, s.settleMs, v, v}
+	return hookStateSet, []any{v, v, v, v, s.settleMs, s.settleMs, v, v}
 }
 
 // SetSettleMs sets the settle time, in whole milliseconds, with which this

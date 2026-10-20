@@ -56,12 +56,15 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
+	// StuckReason is present only while displayed stuck.
+	StuckReason string `json:"stuck_reason,omitempty"`
+
 	// InstanceID is the stable id of the Spawn.
 	InstanceID string `json:"instance_id"`
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing. pending means a launch
+	// ask_user, check_permission, ended, missing, stuck. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
 	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history.
@@ -206,7 +209,12 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 }
 
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
-	rows, err := s.ListSpawns(filters)
+	fetch := filters
+	_, observes := s.(permissionStuckStore)
+	if observes {
+		fetch.State, fetch.Limit = nil, 0
+	}
+	rows, err := s.ListSpawns(fetch)
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
@@ -218,10 +226,24 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		if filters.Settle.SettleMs > 0 {
 			reported = r.ReportedState
 		}
+		display := store.StuckDisplay{State: reported}
+		if observes {
+			display = permissionDisplay(s, v, filters.Settle, r)
+		}
+		if observes && len(filters.State) > 0 {
+			matched := false
+			for _, state := range filters.State {
+				matched = matched || state == display.State
+			}
+			if !matched {
+				continue
+			}
+		}
 		row := ListRow{
 			InstanceID:              r.InstanceID,
 			ParentID:                r.ParentID,
-			State:                   reported,
+			State:                   display.State,
+			StuckReason:             display.Reason,
 			FamilyState:             r.FamilyState,
 			CWD:                     r.CWD,
 			Agent:                   r.Agent,
@@ -244,6 +266,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			row.PermissionRequests = infos
 		}
 		out = append(out, row)
+		if observes && filters.Limit > 0 && len(out) >= filters.Limit {
+			break
+		}
 	}
 	// Every row is built, so the slots below point at their final elements.
 	var slots []goneSlot

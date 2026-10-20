@@ -139,6 +139,27 @@ func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 
 var proxyWrites = []proxyWrite{
 	{
+		name: "commit permission observation", kind: storefix.WriteFailStuckObservation,
+		seed: seedState(store.StateWaiting, ""),
+		write: func(s *store.Store, id string) error {
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				return err
+			}
+			_, err = s.ObservePermissionStuck(row, nil, time.Now(), 30*time.Second, store.SettleRead{})
+			return err
+		},
+		observe: func(t *testing.T, s *store.Store, _, id string) any {
+			t.Helper()
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return row.StuckVersion
+		},
+	},
+
+	{
 		name:     "SessionStart rotation archive",
 		kind:     storefix.WriteFailReuseArchive,
 		failOpen: true,
