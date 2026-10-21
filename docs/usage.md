@@ -345,19 +345,26 @@ change it sees, with no count of identical polls:
 ```sh
 last=""
 while sleep 1; do
-  state=$(agent-director status --instance-id "$id" | jq -r .state)
-  if [ "$state" != "$last" ]; then
-    last=$state
-    case "$state" in waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;; esac
+  row=$(agent-director status --instance-id "$id")
+  state=$(printf '%s\n' "$row" | jq -r .state)
+  seen="$state $(printf '%s\n' "$row" | jq -r '.stuck_reason // ""')"
+  if [ "$seen" != "$last" ]; then
+    last=$seen
+    case "$state" in
+      waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;;
+      stuck) echo "$id: stuck $(printf '%s\n' "$row" | jq -r '.stuck_reason + ", session " + .tmux_session_name')" ;;
+    esac
   fi
 done
 ```
 
-It never sees a turn shorter than the settle time. Its `case` list names the
-states it reports; a row displayed [`stuck`](#spawn-states) matches none of
-them (see the [caller contract](caller-contract.md#stuck-rows)). To learn
-whether the state changed since a time of your own, compare that time with
-`state_changed_at` from `get` or `list` (see
+It never sees a turn shorter than the settle time. A row reads
+[`stuck`](#spawn-states) when its agent may need you:
+[attach to its pane](#attach-to-a-spawns-pane), or, for
+`permission_unanswered`, read the request with `get-permission` and the
+row's `request_token` (see [Stuck rows](caller-contract.md#stuck-rows)). To
+learn whether the state changed since a time of your own, compare that time
+with `state_changed_at` from `get` or `list` (see
 [State change time](caller-contract.md#state-change-time)).
 
 ## Read an agent's subagent records

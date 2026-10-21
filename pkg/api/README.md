@@ -224,17 +224,17 @@ the launch in progress, set only while the row is `pending`; JSON key
 
 While `State` is `"stuck"`, `StatusResult` and `Get`'s `SpawnRow` carry the
 embedded `StuckInfo` (`.StuckReason`, `api.StuckPermissionUnanswered` or
-`api.StuckNoScreenChange`; `.Since`; and the reason's detail, `.RequestToken`
-and `.ToolName`, or `.UnchangedMinutes`, an `*int64`; JSON `stuck_reason`,
-`since`, `request_token`, `tool_name`, `unchanged_minutes`), and
-`StatusResult.TmuxSessionName` (JSON `tmux_session_name`) is set; `ListRow`
-carries `.StuckReason` only. A field that does not apply is empty (nil), and
-absent from the JSON. `Since` is a string in RFC3339 UTC with millisecond
-precision. `StatusResult`, `SpawnRow` and `ListRow` also carry
-`NoScreenChangeAvailability` (JSON `no_screen_change_availability`):
-`api.NoScreenChangeAvailable` for Claude and Codex, `api.NoScreenChangeUnavailable`
-for Cursor. The [caller contract](../../docs/caller-contract.md#stuck-rows)
-defines the fields, omissions and detection.
+`api.StuckNoScreenChange`; `.Since`, a string; and the reason's detail,
+`.RequestToken` and `.ToolName`, or `.UnchangedMinutes`, an `*int64`; JSON
+`stuck_reason`, `since`, `request_token`, `tool_name`, `unchanged_minutes`),
+and `StatusResult.TmuxSessionName` (JSON `tmux_session_name`) is set;
+`ListRow` carries `.StuckReason` only. A field that does not apply is empty
+(nil), and absent from the JSON. `StatusResult`, `SpawnRow` and `ListRow`
+also carry `NoScreenChangeAvailability` (JSON
+`no_screen_change_availability`): `api.NoScreenChangeAvailable` for Claude
+and Codex, `api.NoScreenChangeUnavailable` for Cursor. The
+[caller contract](../../docs/caller-contract.md#stuck-rows) defines the
+fields, omissions and detection.
 
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
 `FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
@@ -243,10 +243,10 @@ aggregation; the [caller contract](../../docs/caller-contract.md#family-reportin
 defines reporting limits.
 
 `Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
-`state_changed_at`), when the raw state last changed, with millisecond
-precision; `StatusResult` does not. The
-[caller contract](../../docs/caller-contract.md#state-change-time) defines it
-and how it differs from `LastSeenAt`, the settled `State` and `Since`.
+`state_changed_at`), when the raw state last changed; `StatusResult` does
+not. The [caller contract](../../docs/caller-contract.md#state-change-time)
+defines it and how it differs from `LastSeenAt`, the settled `State` and
+`Since`.
 
 `Client.Status`, `Client.Get` and `Client.List` use the config loaded when
 the client was built for [independent state and family

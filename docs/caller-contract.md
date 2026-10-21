@@ -303,7 +303,9 @@ hold and clock are kept.
   Each entry and exit appends an `ad.spawn.stuck_transition` trail record with
   `instance_id`, `prior_state`, `new_state`, `stuck_reason` (the reason of the
   episode entered or left) and `ts`; the trail is audit only and a failed
-  append changes nothing.
+  append changes nothing. Rarely, under heavy store load, a read whose write
+  is slow to commit appends no record for that entry or exit; the state and
+  detail stay correct.
 - **Attaching.** Treat `stuck` as a request for a deliberate human or caller
   choice at the agent's own prompt or pane:
   [attach to its pane](usage.md#attach-to-a-spawns-pane), or, for

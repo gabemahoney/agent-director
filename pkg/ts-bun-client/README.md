@@ -160,23 +160,21 @@ defines reporting limits.
 
 `state` is a `string` and can be `"stuck"`. Then `StatusResult` and `GetResult`
 carry the optional `stuck_reason` (`StuckReason`: `"permission_unanswered"` or
-`"no_screen_change"`), `since` (RFC3339 UTC string with millisecond precision)
-and the reason's detail: `request_token` and `tool_name`, or
-`unchanged_minutes`; `StatusResult` also carries `tmux_session_name`, and each
-`ListRow` carries `stuck_reason` only. A key that does not apply is absent from
-the result, never `null`, so test for presence
-(`result.stuck_reason !== undefined`). Every `StatusResult`, `GetResult` and
-`ListRow` carries `no_screen_change_availability`
+`"no_screen_change"`), `since` and the reason's detail: `request_token` and
+`tool_name`, or `unchanged_minutes`; `StatusResult` also carries
+`tmux_session_name`, and each `ListRow` carries `stuck_reason` only. A key
+that does not apply is absent from the result, never `null`, so test for
+presence (`result.stuck_reason !== undefined`). Every `StatusResult`,
+`GetResult` and `ListRow` carries `no_screen_change_availability`
 (`NoScreenChangeAvailability`: `"available"` for Claude and Codex,
 `"unavailable"` for Cursor).
 The [caller contract](../../docs/caller-contract.md#stuck-rows) defines the
 fields, omissions and detection.
 
 `GetResult` and each `ListRow` carry `state_changed_at: string`, when the raw
-state last changed (RFC3339 UTC, millisecond precision); `StatusResult` does
-not. The [caller contract](../../docs/caller-contract.md#state-change-time)
-defines it and how it differs from `last_seen_at`, the settled `state` and
-`since`.
+state last changed; `StatusResult` does not. The
+[caller contract](../../docs/caller-contract.md#state-change-time) defines it
+and how it differs from `last_seen_at`, the settled `state` and `since`.
 
 `status`, `get` and `list` use `[state] settle_ms` in the CLI's
 `~/.config/agent-director/config.toml` for [independent state and family
