@@ -1,16 +1,20 @@
 # b.w21: validation evidence and merge handoff
 
-The user approved local `make sandbox CMD=...` and `make test-sandbox` on
-gmahoney-dev, with `/usr/local/go/bin` in `PATH`. A separate host is not
-required. Execution stays inside the real sandbox; host Go/Bun tests and
-repository binaries are prohibited. TLC and Docker integration groups are
-scheduler-only, submitted by the user.
+For b.w21, the user approved local `make sandbox CMD=...` and
+`make test-sandbox` on gmahoney-dev, with `/usr/local/go/bin` in `PATH`; no
+separate host was required. Execution stayed inside the real sandbox. TLC and
+Docker integration groups were scheduler-only, submitted by the user.
 
 ## Observed evidence
 
 [unit-evidence.json](unit-evidence.json) preserves concise receipts, exact
 commands, log hashes and the source identity of each unit stage. Complete
-local logs and original summaries remain under `dist/b.w21/`.
+local logs and original summaries were kept under `dist/b.w21/` in the
+original checkout. That folder is untracked, so the `dist/b.w21/` paths on
+this page are a historical record from that checkout and do not exist in any
+other, except `dist/b.w21/integration/context-9d025f8f`, which `prepare.py`
+regenerates byte-for-byte in any clone that contains commit `9d025f8f` (see
+the [integration evidence](integration/README.md)).
 
 | Stage | Observed result |
 |---|---|
@@ -41,8 +45,8 @@ the final pass are both retained in `unit-evidence.json`.
 The green runs used uncommitted changes on the red checkpoint: their source
 hashes, rather than the unchanged HEAD alone, identify the repair tested.
 The tested runtime is now committed at
-`9d025f8f2caf176f3a60421f52ba94b293021bdb`; its hashes match the
-[final full-suite receipt](../../dist/b.w21/unit-green-final/summary.json).
+`9d025f8f2caf176f3a60421f52ba94b293021bdb`; its hashes match the final
+full-suite receipt, `dist/b.w21/unit-green-final/summary.json`.
 The integration context remains pinned to this source revision even if
 handoff documentation receives a later commit.
 
@@ -60,24 +64,24 @@ pending/check_permission × ACKed live, unACKed unknown before confirmation,
 ACKed unknown, ACKed gone × plain, valid hash, stale hash, obsolete legacy token.
 A current live or unconfirmed hook remains held before any pane access;
 ACKed unknown/gone controls retain the dialog, hash and obsolete-token refusals.
-[Targeted sandbox evidence](../../dist/b.w21/model-r2-unit/summary.json) records
+Targeted sandbox evidence (`dist/b.w21/model-r2-unit/summary.json`) records
 118 passing API/store cases and eight artifact cases, zero failures/skips;
 all 32 new cases pass. Two prior attempts corrected fixture/assertion mistakes
 and remain archived; they were not runtime failures. `TestCodexJobArtifacts`
 now also requires the round-2 manifest and its declared contexts.
 
-The historical round-2 [full-suite receipt](../../dist/b.w21/model-r2-unit-full/summary.json)
-records `env PATH="/usr/local/go/bin:$PATH" make test-sandbox`, exit 0,
-from 23:25:35 to 23:29:12 UTC on 2026-10-14. Its SHA-256 is
+The historical round-2 full-suite receipt
+(`dist/b.w21/model-r2-unit-full/summary.json`) records
+`env PATH="/usr/local/go/bin:$PATH" make test-sandbox`, exit 0, from 23:25:35
+to 23:29:12 UTC on 2026-10-14. Its SHA-256 is
 `f08b2931a4dcf238dac59d190bc7aa911a2fc6a165374af888a8d475528d4050`.
 All 269 production Go files matched `9d025f8f` before and after; all 713
 hashed test files were unchanged during the run. Nonverbose Go output gives
 package results, so individual test and skip counts are unavailable. Bun
 emitted no skip lines; this is not an independent count of all skipped cases.
-The receipt predates this documentation-only receipt and pin refresh; current
-pins identify current file bytes, without attributing them to that run.
+Current pins identify current file bytes, without attributing them to that run.
 
-The fresh [post-merge receipt](../../dist/b.w21/merge-main-unit/summary.json)
+The fresh post-merge receipt (`dist/b.w21/merge-main-unit/summary.json`)
 records the same exact command, exit 0, in 216.812 seconds on 2026-10-15
 (01:13:54–01:17:31 UTC), with merge parents `b9f73c45` and `728180eb`.
 Its SHA-256 is
@@ -85,9 +89,8 @@ Its SHA-256 is
 All 269 production Go files still match `9d025f8f`; all 714 test-file hashes
 were unchanged during the run. Main’s imported README tests match its bytes,
 and the b.w21 regressions remain intact. Individual Go test/skip counts are
-unavailable from nonverbose output; Bun emitted no skip lines. This receipt
-precedes the final documentation-only receipt and provenance refresh; its
-source hashes identify the tested bytes.
+unavailable from nonverbose output; Bun emitted no skip lines. Its source
+hashes identify the tested bytes.
 
 ## Recovery contract and limit
 
@@ -108,7 +111,7 @@ See the [caller contract](../../docs/caller-contract.md#permission-relay).
 ## Commands and scheduler gates
 
 [unit-red-commands.txt](unit-red-commands.txt) records the approved local
-method and historical red command. Do not reset this active worktree to
+method and historical red command. Do not reset a working checkout to
 reproduce red. The existing red logs already establish the prerequisite;
 a historical reproduction belongs in a distinct disposable checkout with
 the release tag `v0.11.1` retained.
@@ -131,7 +134,8 @@ Every raw run log attests source commit `9d025f8f` and context payload SHA-256
 `ee259f45e8ae667ae8f083b03128ebeb2d46526903aa9d72fa2b1165822a49fe`.
 Actual `--network off` is the User's statement; historical prepared network-on
 commands and immutable context `dist/b.w21/integration/context-9d025f8f`
-remain untouched. No integration repeat is required for this model-only round.
+(untracked; regenerate it as the integration evidence describes) remain
+untouched. No integration repeat is required for this model-only round.
 The separate [observational archive](integration/integration-observed-receipts.json)
 contains all fifteen full run logs and user receipt. It does not include build
 logs or independently verify scheduler final state/network policy.

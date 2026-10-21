@@ -26,40 +26,35 @@ the large TLA contexts. Original submitted model contexts remain untouched.
 
 ## Preserved submission handoff
 
-The following describes the original handoff. All fifteen jobs have now returned;
-no further submission is pending. Its static verification command remains usable:
+All fifteen jobs have returned; no further submission is pending. Static
+verification runs from the repo root of any clone that contains commit
+`9d025f8f`. The shared context `dist/b.w21/integration/context-9d025f8f` is
+untracked, so prepare it first; `prepare.py` runs only when that destination
+does not exist:
 
 ```sh
-cd /home/horde/projects/agent-director-project/agent-director-w21-tla
+python3 test/b.w21/integration/prepare.py
 python3 test/b.w21/integration/verify.py
 ```
 
-Then run the 15 exact submission lines in `scheduler-commands.txt`, individually,
-or submit that file as a batch:
-
-```sh
-bash test/b.w21/integration/scheduler-commands.txt
-```
-
-Only the User runs those submissions. Record each printed job ID against its
-job name/slug. The batch contains independent commands and does not retry or
-stop subsequent submissions if one fails; inspect all 15 submission results.
-The prepared shared context is
-`dist/b.w21/integration/context-9d025f8f`. Keep **every file in that context
-immutable until all 15 jobs finish**: the scheduler reads it again after queueing.
-Do not regenerate it, edit it or delete it while queued. The generator refuses
-to overwrite an existing context, even if its contents would be unchanged.
+The rest of this section describes the original handoff. It submitted the 15
+lines in `scheduler-commands.txt` individually or as one batch. That file is a
+historical record, not a command to run: its `--context` is repo-relative, but
+every submission line starts with the original host's `jobsched` path and
+requests `--network on`. The User ran the submissions and recorded each job
+ID against its slug. The batch's commands were independent, with no retry or
+stop on failure. The scheduler reads the context again after queueing, so it
+stayed immutable until all 15 jobs finished.
 
 The manifest pins every context file and its aggregate payload hash. The static
 verifier reconstructs the archive and Dockerfile from the pinned Git tree and
 reviewed templates, compares all bytes, rejects unexpected/non-regular entries,
 and checks Python/Bash syntax. It never builds, executes repository binaries,
-runs suites, contacts a model or submits jobs. To regenerate after moving this
-handoff to another checkout, retain the pinned source commit and run
-`python3 test/b.w21/integration/prepare.py` only when its destination does not
-exist. Different revised contexts and manifests must use new paths via
-`--context` and `--handoff-dir`, and get reviewed before submission; there is
-no force-overwrite option. Those options also apply to `verify.py`.
+runs suites, contacts a model or submits jobs. The generator refuses to
+overwrite an existing context, even with unchanged contents; there is no
+force-overwrite option. Revised contexts and manifests must use new paths via
+`--context` and `--handoff-dir` (which `verify.py` also takes) and get reviewed
+before submission.
 
 ## How the scheduler image follows the canonical harness
 

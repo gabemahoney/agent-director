@@ -59,7 +59,7 @@ def verify_text(record, source, expected_hash=None):
         assert sha(path) == record["sha256"], source
 
 
-def verify_metadata(record, job, name, context):
+def verify_metadata(record, job, name, context, red):
     """Archive only allowlisted fields; never copy job env/secrets or container inspect."""
     assert set(record) == {"source", "sha256", "values"}
     source = f"/home/horde/.job-scheduler/jobs/{job}/job.json"
@@ -67,9 +67,13 @@ def verify_metadata(record, job, name, context):
     values = record["values"]
     assert set(values) == set(METADATA_FIELDS)
     big = job == RERUN_JOB
+    if big:
+        assert values["context_dir"] == RERUN_CONTEXT
+    else:
+        red.check_archived_context(values["context_dir"], context)
     assert values == {
         "id": job, "name": "b-w21-" + name.removeprefix("w21_").replace("_", "-") + ("-big" if big else ""),
-        "context_dir": context, "dockerfile": "Dockerfile",
+        "context_dir": values["context_dir"], "dockerfile": "Dockerfile",
         "context_bytes": values["context_bytes"], "context_sha256": values["context_sha256"],
         "memory": 25769803776 if big else 4294967296, "cpus": 4,
         "timeout_s": 10800 if big else 900, "network": "off", "state": "succeeded",
@@ -145,7 +149,7 @@ def verify_log(log, attempt, cfg):
     return verdict, job_line
 
 
-def verify_receipts(manifest, baseline):
+def verify_receipts(manifest, baseline, red):
     """Observed overlay schema (all text hashes use UTF-8 bytes):
 
     manifest adds receipts {file,sha256} and resource_overlay. Each case adds
@@ -195,8 +199,7 @@ def verify_receipts(manifest, baseline):
         for attempt in attempts:
             log = archive["logs"][attempt[0]]
             verify_log(log, attempt, cfg)
-            context = RERUN_CONTEXT if attempt[0] == RERUN_JOB else str((HERE / original["context"]).resolve())
-            verify_metadata(log["metadata"], attempt[0], case["name"], context)
+            verify_metadata(log["metadata"], attempt[0], case["name"], HERE / original["context"], red)
         assert case["observed"] == attempts[-1][2] == original["expected"]
         assert case["evidence"] == {"attempts": [a[0] for a in attempts],
                                     "final_job_id": attempts[-1][0], "expected_matches": True}
@@ -252,13 +255,14 @@ def main():
     generator = load("r2_generator", HERE / "mkcontexts.py")
     frozen_verifier = load("submitted_fixed_verifier", generator.FIXED / "verifycontexts.py")
     frozen_verifier.main()
+    red = load("red_verifier", generator.FIXED.parent / "verifycontexts.py")
     for path in (HERE / "mkcontexts.py", HERE / "verifycontexts.py"):
         ast.parse(path.read_text(), filename=str(path))
     manifest = json.loads((HERE / "manifest.json").read_text())
     baseline_bytes = frozen_bytes(generator, "spec/tla/codex/b.w21/fixed-r2/manifest.json")
     assert hashlib.sha256(baseline_bytes).hexdigest() == SUBMITTED_MANIFEST_SHA256
     baseline = json.loads(baseline_bytes)
-    verify_receipts(manifest, baseline)
+    verify_receipts(manifest, baseline, red)
     assert manifest["bug"] == "b.w21" and manifest["round"] == "fixed-r2"
     assert manifest["runtime_identity"] == generator.runtime_identity()
     submitted = manifest["submitted_source"]
@@ -330,7 +334,9 @@ def main():
         assert (context / "tlcjob.sh").stat().st_mode & 0o111
         assert (context / "runs").read_text().splitlines() == [
             f"# b.w21 r2 expected={expected}; observed=NOT_RUN", f"B146R5Cx {name} @700"]
-        assert command == generator.command(context, name)
+        archived = red.command_context(command)
+        red.check_archived_context(archived, context)
+        assert command.replace(archived, str(context.resolve())) == generator.command(context, name)
         assert "observed NOT_RUN" in (context / "Dockerfile").read_text()
         print(f"STATIC-OK {name} expected={expected} observed={case['observed']} variant={variant}")
     print(f"STATIC-OK six r2 contexts, {total} bytes; NoRace/actions/time abstraction preserved; production Go unchanged; no model execution.")

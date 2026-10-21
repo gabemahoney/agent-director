@@ -12,7 +12,9 @@ failures; this original mismatch remains historical evidence.
 
 The submitted `cfg/`, `jobs/`, predictions and context hashes remain unchanged.
 [scheduler-commands.txt](scheduler-commands.txt) is the historical submission
-record; the round-2 archive records the affected cases and resource rerun.
+record; its absolute `--context` and scheduler paths name the original
+checkout and host. The round-2 archive records the affected cases and
+resource rerun.
 The original nine
 [red contexts and receipts](../README.md) also remain frozen.
 
@@ -84,6 +86,8 @@ python3 spec/tla/codex/b.w21/fixed/verifycontexts.py
 This verifies frozen contexts, preserved predictions and archived logs without
 TLC, parsing, JVM, container or scheduler execution. A model verdict is distinct
 from scheduler completion; the `NoRace` failure is not a passing model result.
+It passes only in a full-history checkout whose runtime still matches
+`9d025f8f`; once the runtime changes, it fails by design.
 
 All fifteen [integration run receipts](../../../../../test/b.w21/integration/README.md)
 PASS against the unchanged runtime and source/context identity at `9d025f8f`.
