@@ -21,6 +21,13 @@ import (
 // bound is reached before the verdict commits.
 var ErrStoreBusy = errors.New("ErrStoreBusy")
 
+// errCommitUnconfirmed marks a write whose COMMIT was sent but whose outcome
+// is unknown: the transaction may or may not have landed, so the caller reads
+// the durable state before retrying rather than assume either. It never wraps
+// ErrStoreBusy. Every site that produces this outcome wraps it, with its
+// branch and cause; callers match it with errors.Is, never by its text.
+var errCommitUnconfirmed = errors.New("store: commit outcome unconfirmed; read the request before retrying")
+
 // DefaultLockWait asks a bounded-wait store call for the store's own waits,
 // as every other store call waits: for the store's one connection without a
 // bound, and for a lock another connection holds up to the store's busy
@@ -355,7 +362,7 @@ func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn 
 			return fmt.Errorf("%w: before commit: %w", ErrStoreBusy, err)
 		}
 		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=commit_exec): %w", err)
+			return fmt.Errorf("%w (branch=commit_exec): %w", errCommitUnconfirmed, err)
 		}
 		cleanup.rollback = false
 		return nil

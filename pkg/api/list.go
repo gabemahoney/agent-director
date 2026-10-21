@@ -309,11 +309,12 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 	// Once an observation write of this read found the store busy, hook_gone_at
 	// is left unwritten without another attempt, as a busy write leaves it.
 	if !storeBusy {
+		now := j.now()
 		var slots []goneSlot
 		for i := range out {
-			slots = goneSlotsOf(slots, out[i].PermissionRequests)
+			slots = goneSlotsOf(slots, out[i].PermissionRequests, out[i].Agent, out[i].RelayMode, now)
 		}
-		recordGone(s, j.now(), readerLockWait, slots)
+		recordGone(s, now, readerLockWait, slots)
 	}
 	return ListResult{Spawns: out}, nil
 }

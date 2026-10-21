@@ -107,6 +107,9 @@ func ObserveDecisionBoundaryForTest(t *testing.T, s *Store, path string, before 
 	b.before, b.afterCommit = before, afterCommit
 }
 
+// ErrCommitUnconfirmedForTest is errCommitUnconfirmed for those external recovery tests.
+var ErrCommitUnconfirmedForTest = errCommitUnconfirmed
+
 // ObserveReturningRowsForTest shares actual native rows with this package's external tests.
 func ObserveReturningRowsForTest(t *testing.T, s *Store, path string, afterNext func(context.Context, string, error)) func() {
 	t.Helper()

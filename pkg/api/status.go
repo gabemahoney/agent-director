@@ -3,7 +3,6 @@ package api
 import (
 	"time"
 
-	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 )
 
@@ -77,23 +76,21 @@ type familyStatusReader interface {
 // Status returns the current state column for the given instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
-// the canonical err_name envelope. It reads with no settle time and samples
-// no pane, so a working Claude or Codex row keeps its pane's current
-// no_screen_change finding as committed; the Client applies its [state]
-// settle_ms and samples panes.
-func Status(s StatusStore, instanceID string) (StatusResult, error) {
-	return statusSettled(s, store.SettleRead{}, instanceID)
+// the canonical err_name envelope. v judges each permission request's relay
+// hook for the row's stuck observation, as for [Get] and [List] (see
+// [RelayView]). It reads with no settle time and samples no pane, so a
+// working Claude or Codex row keeps its pane's current no_screen_change
+// finding as committed; the Client applies its [state] settle_ms and samples
+// panes. It never waits.
+func Status(s StatusStore, v RelayView, instanceID string) (StatusResult, error) {
+	return statusSettledWithRelay(s, v, store.SettleRead{}, instanceID)
 }
 
-// statusSettled is Status with the reader's settle time and clock settle
-// (b.3ie). With a settle time, and a store that provides the settled read,
-// the state is the settled state (store.SettleRead's derivation, in the
-// read's own statement); launch_started_at still keys on the raw state. With
-// no settle time it is Status exactly as before b.3ie. It never waits.
-func statusSettled(s StatusStore, settle store.SettleRead, instanceID string) (StatusResult, error) {
-	return statusSettledWithRelay(s, RelayView{Window: config.DefaultRelayTimeoutSeconds * time.Second}, settle, instanceID)
-}
-
+// statusSettledWithRelay is Status with the reader's settle time and clock
+// settle (b.3ie). With a settle time, and a store that provides the settled
+// read, the state is the settled state (store.SettleRead's derivation, in the
+// read's own statement); launch_started_at still keys on the raw state. It
+// never waits.
 func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
 	if r, ok := s.(permissionStatusReader); ok {
 		row, err := r.SpawnStatusRow(instanceID, settle)

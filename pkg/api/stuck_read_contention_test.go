@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
@@ -180,7 +181,8 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					if backend == "cursor missing view" {
 						reader = e.s.WithCursorMissingReads(nil)
 					}
-					want, err := api.Status(reader, e.id)
+					view := api.RelayView{Window: config.DefaultRelayTimeoutSeconds * time.Second}
+					want, err := api.Status(reader, view, e.id)
 					if err != nil || want.State != store.StateCheckPermission || want.StuckInfo != (api.StuckInfo{}) {
 						t.Fatalf("ordinary setup: %+v %v", want, err)
 					}
@@ -188,7 +190,7 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					if transition == "clear" {
 						// Exercise the unwrapped production backend before introducing contention.
 						observeStuck(t, e.s, e.id, store.StateStuck, apitest.VersionAdvanced, func() (string, api.StuckInfo, error) {
-							want, err = api.Status(reader, e.id)
+							want, err = api.Status(reader, view, e.id)
 							return want.State, want.StuckInfo, err
 						})
 						if want.StuckReason != api.StuckPermissionUnanswered || want.Since == "" || want.RequestToken != storefix.TestRequestTokenA || want.ToolName != "Bash" {
@@ -210,7 +212,7 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 						s.afterFirst = take
 					}
 					var got api.StatusResult
-					readUnderLease(t, leased, release, time.Second, func() { got, err = api.Status(s, e.id) })
+					readUnderLease(t, leased, release, time.Second, func() { got, err = api.Status(s, view, e.id) })
 					if err != nil || !reflect.DeepEqual(got, want) {
 						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got, err, want)
 					}

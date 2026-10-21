@@ -237,6 +237,59 @@ func TestPermissionStuckProcessStartsAtFirstCommittedObservation(t *testing.T) {
 	assertStuckState(t, c, e.id, "permission_unanswered")
 }
 
+// Package-level Status judges the relay hook with the caller's view
+// (t2.sp6.2z.ej F2): a live hook stores no clock even past when a deadline
+// clock would be stuck, and its death starts a process clock at the first read
+// that sees it gone.
+func TestPermissionStuckPackageStatusJudgesHookWithCallersView(t *testing.T) {
+	// Serial: it reads the shared trail using fixture row ids reused by other tests.
+	e := newRelayEnv(t, relayEnvHook)
+	confirmBy := stuckAt.Add(-time.Hour)
+	stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-24*time.Hour), time.Time{}, confirmBy, time.Time{}, time.Time{}, ""))
+	timeout := time.Duration(config.DefaultPermissionUnansweredTimeoutSeconds) * time.Second
+	var got api.StatusResult
+	read := func() (string, api.StuckInfo, error) {
+		var err error
+		got, err = api.Status(e.s, e.view(), e.id)
+		return got.State, got.StuckInfo, err
+	}
+	before, err := e.s.GetSpawn(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := trailMark(t)
+	e.now = confirmBy.Add(timeout)
+	observeStuck(t, e.s, e.id, store.StateCheckPermission, nil, read)
+	after, err := e.s.GetSpawn(e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr := e.request(t); !pr.FallbackAt.IsZero() || pr.FallbackBasis != "" || !pr.HookGoneAt.IsZero() ||
+		after.StuckObservation != before.StuckObservation || after.StuckVersion != before.StuckVersion {
+		t.Fatalf("live hook stored facts: request=%+v stuck_observation %q -> %q, stuck_version %d -> %d",
+			pr, before.StuckObservation, after.StuckObservation, before.StuckVersion, after.StuckVersion)
+	}
+	e.pc.Set(relayEnvHook.PID, procfix.Gone())
+	e.now = stuckAt
+	gone := e.now
+	observeStuck(t, e.s, e.id, store.StateCheckPermission, apitest.VersionAdvanced, read)
+	if pr := e.request(t); !pr.FallbackAt.Equal(gone) || pr.FallbackBasis != store.FallbackProcess || !pr.HookGoneAt.Equal(gone) {
+		t.Fatalf("first gone read=%+v; want a process clock and hook_gone_at at %s", pr, gone)
+	}
+	e.now = gone.Add(timeout - time.Millisecond)
+	observeStuck(t, e.s, e.id, store.StateCheckPermission, nil, read)
+	e.now = gone.Add(timeout)
+	observeStuck(t, e.s, e.id, store.StateStuck, apitest.VersionAdvanced, read)
+	if got.StuckReason != api.StuckPermissionUnanswered || got.Since != e.now.Format(stuckTS) {
+		t.Errorf("stuck read=%+v; want permission_unanswered since %s", got.StuckInfo, e.now.Format(stuckTS))
+	}
+	events := stuckEventsSince(t, mark, e.id)
+	if len(events) != 1 {
+		t.Fatalf("events=%v; want the entry once", events)
+	}
+	assertStuckEvent(t, events[0], store.StateCheckPermission, "stuck", e.now)
+}
+
 func TestPermissionStuckDeadlineSurvivesLaterProcessObservation(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, relayEnvHook)
@@ -374,13 +427,23 @@ func TestPermissionStuckNoRequestOrTrustworthyClock(t *testing.T) {
 			}
 		})
 	}
-	for _, raw := range []string{"", "not-a-time", "10000-01-01 00:00:00"} {
-		t.Run("untrustworthy="+raw, func(t *testing.T) {
+	// A pre-v7 request whose created_at reads as zero gives no clock; the
+	// trustworthy row is the positive control at the same instant. Text that
+	// does not scan fails the read instead (the store tests cover the rest).
+	for _, tc := range []struct {
+		created time.Time
+		want    string
+	}{
+		{stuckAt.Add(-time.Hour), "permission_unanswered"},
+		{time.Time{}, store.StateCheckPermission},
+	} {
+		raw := tc.created.Format("2006-01-02 15:04:05")
+		t.Run("created_at="+raw, func(t *testing.T) {
 			e := newRelayEnv(t, store.ProcessIdentity{})
 			e.now = stuckAt.Add(24 * time.Hour)
 			stuckFacts(t, e, apitest.PermissionTimes(time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}, ""), apitest.PermissionCreation(raw))
 			c := stuckClient(t, e, 0, 0)
-			assertStuckState(t, c, e.id, store.StateCheckPermission)
+			assertStuckState(t, c, e.id, tc.want)
 		})
 	}
 }

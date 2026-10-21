@@ -35,7 +35,7 @@ func (s *interleavedClaudeStore) RecordClaudeCapacity(id string, gate store.Hook
 
 func claudePairReadings(t *testing.T, st *store.Store, id string) (api.ContextReading, api.ContextReading) {
 	t.Helper()
-	parent, err := api.Status(st, id)
+	parent, err := api.Status(st, api.RelayView{}, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestClaudeCapacityRetryCannotCrossLaunch(t *testing.T) {
 	if sp := mustGetSpawn(t, st, id); sp.State != store.StateWaiting || sp.ClaudeCapacity != nil {
 		t.Fatalf("retry changed new launch: %+v", sp)
 	}
-	status, err := api.Status(st, id)
+	status, err := api.Status(st, api.RelayView{}, id)
 	if err != nil || !reflect.DeepEqual(status.Context, api.ContextReading{}) {
 		t.Fatalf("old callback restored public context: %+v %v", status.Context, err)
 	}
@@ -212,7 +212,7 @@ func TestClaudeCapacityResolvedModelPairing(t *testing.T) {
 					want.Expected = []byte(contextfix.UnknownJSON)
 				}
 				if sample.ChildID == "" {
-					status, err := api.Status(st, id)
+					status, err := api.Status(st, api.RelayView{}, id)
 					if err != nil {
 						t.Fatal(err)
 					}

@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -276,89 +276,121 @@ func TestPermissionStuckDisplayedEpisodeReadWritesNothing(t *testing.T) {
 	}
 }
 
-// An unconfirmed COMMIT is settled by one nonwaiting re-read: when the write
-// landed the caller gets the committed display and the transition is emitted;
-// otherwise it gets the previous view with the error and nothing is emitted.
-func TestPermissionStuckUnconfirmedCommit(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		landed bool
-	}{{"landed", true}, {"not landed", false}} {
-		t.Run(tc.name, func(t *testing.T) {
+// An unconfirmed COMMIT (errCommitUnconfirmed) is settled by one nonwaiting
+// re-read at either observer: when the write landed the caller gets the
+// committed display and the transition is emitted once; otherwise it gets the
+// previous view with the error, and nothing is stored or emitted.
+func TestStuckObservationUnconfirmedCommit(t *testing.T) {
+	type observation func(store.Spawn) (store.StuckDisplay, error)
+	for _, obs := range []struct {
+		name, prior, reason string
+		setup               func(*testing.T) (*store.Store, string, string, observation) // a row the observation moves to stuck
+	}{
+		{"permission", store.StateCheckPermission, store.StuckPermissionUnanswered, func(t *testing.T) (*store.Store, string, string, observation) {
 			s, path, id, samples, now := permissionObservation(t)
-			row, err := s.GetSpawnSettled(id, store.SettleRead{})
+			return s, path, id, func(row store.Spawn) (store.StuckDisplay, error) {
+				return s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
+			}
+		}},
+		{"pane", store.StateWorking, store.StuckNoScreenChange, func(t *testing.T) (*store.Store, string, string, observation) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+			// The committed baseline has been unchanged for an hour.
+			id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
+				apitest.WithPaneBaseline("abc", now.Add(-time.Hour).UnixMilli(), int64(7)))
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Only the observation's own write transaction is disturbed: it
-			// begins with BEGIN IMMEDIATE, and its COMMIT is the one affected.
-			var writing atomic.Bool
-			lost := errors.New("injected: COMMIT response lost")
-			before := func(_ context.Context, q string) error {
-				if q == "BEGIN IMMEDIATE" {
-					writing.Store(true)
-				}
-				// The COMMIT never reaches SQLite, so the transaction rolls back.
-				if !tc.landed && q == "COMMIT" && writing.CompareAndSwap(true, false) {
-					return lost
-				}
-				return nil
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
 			}
-			afterCommit := func(context.Context) error {
-				// SQLite has committed; only its answer is uncertain.
-				if tc.landed && writing.CompareAndSwap(true, false) {
-					return lost
-				}
-				return nil
+			t.Cleanup(func() { _ = s.Close() })
+			return s, path, id, func(row store.Spawn) (store.StuckDisplay, error) {
+				return s.ObservePaneStuck(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
 			}
-			store.ObserveDecisionBoundaryForTest(t, s, path, before, afterCommit)
-			mark := store.TrailMark(t)
-			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
-			reader, rerr := store.Open(path)
-			if rerr != nil {
-				t.Fatal(rerr)
-			}
-			defer reader.Close()
-			after, rerr := reader.GetSpawn(id)
-			if rerr != nil {
-				t.Fatal(rerr)
-			}
-			events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id)
-			pr, rerr := reader.GetPermissionRequest(id, samples[0].Request.RequestToken)
-			if rerr != nil {
-				t.Fatal(rerr)
-			}
-			if tc.landed {
+		}},
+	} {
+		for _, tc := range []struct {
+			name   string
+			landed bool
+		}{{"landed", true}, {"not landed", false}} {
+			t.Run(obs.name+", "+tc.name, func(t *testing.T) {
+				s, path, id, observe := obs.setup(t)
+				row, err := s.GetSpawnSettled(id, store.SettleRead{})
 				if err != nil {
-					t.Fatalf("landed observation=%+v %v; want the committed display and no error", got, err)
+					t.Fatal(err)
 				}
-				if want := after.CommittedStuckDisplay(); got.State != store.StateStuck || got != want {
-					t.Errorf("display=%+v; want the committed %+v", got, want)
+				requests, err := s.PermissionRequestsForSpawn(id)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if after.StuckVersion != row.StuckVersion+1 {
-					t.Errorf("version=%d; want %d", after.StuckVersion, row.StuckVersion+1)
+				// Only the observation's own write transaction is disturbed: it
+				// begins with BEGIN IMMEDIATE, and its COMMIT is the one affected.
+				var writing atomic.Bool
+				lost := errors.New("injected: COMMIT response lost")
+				before := func(_ context.Context, q string) error {
+					if q == "BEGIN IMMEDIATE" {
+						writing.Store(true)
+					}
+					// The COMMIT never reaches SQLite, so the transaction rolls back.
+					if !tc.landed && q == "COMMIT" && writing.CompareAndSwap(true, false) {
+						return lost
+					}
+					return nil
 				}
-				if len(events) != 1 || events[0]["new_state"] != store.StateStuck || events[0]["prior_state"] != store.StateCheckPermission {
-					t.Errorf("events=%v; want the entry once", events)
+				afterCommit := func(context.Context) error {
+					// SQLite has committed; only its answer is uncertain.
+					if tc.landed && writing.CompareAndSwap(true, false) {
+						return lost
+					}
+					return nil
 				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), "commit outcome unconfirmed") {
-				t.Fatalf("observation=%+v %v; want the unconfirmed-commit error", got, err)
-			}
-			if got != row.CommittedStuckDisplay() {
-				t.Errorf("display=%+v; want the previous %+v", got, row.CommittedStuckDisplay())
-			}
-			if after.StuckVersion != row.StuckVersion || after.StuckObservation != row.StuckObservation {
-				t.Errorf("row changed though nothing landed: %+v", after)
-			}
-			if pr != samples[0].Request {
-				t.Errorf("request clock landed without the observation: %+v", pr)
-			}
-			if len(events) != 0 {
-				t.Errorf("events=%v; want none", events)
-			}
-		})
+				store.ObserveDecisionBoundaryForTest(t, s, path, before, afterCommit)
+				mark := store.TrailMark(t)
+				got, err := observe(row)
+				reader, rerr := store.Open(path)
+				if rerr != nil {
+					t.Fatal(rerr)
+				}
+				defer reader.Close()
+				after, rerr := reader.GetSpawn(id)
+				if rerr != nil {
+					t.Fatal(rerr)
+				}
+				events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id)
+				if tc.landed {
+					if err != nil {
+						t.Fatalf("landed observation=%+v %v; want the committed display and no error", got, err)
+					}
+					if want := after.CommittedStuckDisplay(); got.State != store.StateStuck || got.Reason != obs.reason || got != want {
+						t.Errorf("display=%+v; want the committed %s entry %+v", got, obs.reason, want)
+					}
+					if after.StuckVersion != row.StuckVersion+1 {
+						t.Errorf("version=%d; want %d", after.StuckVersion, row.StuckVersion+1)
+					}
+					if len(events) != 1 || events[0]["prior_state"] != obs.prior || events[0]["new_state"] != store.StateStuck || events[0]["stuck_reason"] != obs.reason {
+						t.Errorf("events=%v; want the %s entry from %s once", events, obs.reason, obs.prior)
+					}
+					return
+				}
+				if !errors.Is(err, store.ErrCommitUnconfirmedForTest) {
+					t.Fatalf("observation=%+v %v; want the unconfirmed-commit error", got, err)
+				}
+				if got != row.CommittedStuckDisplay() {
+					t.Errorf("display=%+v; want the previous %+v", got, row.CommittedStuckDisplay())
+				}
+				if after.StuckVersion != row.StuckVersion || after.StuckObservation != row.StuckObservation {
+					t.Errorf("row changed though nothing landed: %+v", after)
+				}
+				if stored, rerr := reader.PermissionRequestsForSpawn(id); rerr != nil || !reflect.DeepEqual(stored, requests) {
+					t.Errorf("requests=%+v %v; want them unchanged %+v", stored, rerr, requests)
+				}
+				if len(events) != 0 {
+					t.Errorf("events=%v; want none", events)
+				}
+			})
+		}
 	}
 }
 

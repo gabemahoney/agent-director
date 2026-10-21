@@ -196,10 +196,10 @@ type stateOnlyStore struct{ state string }
 
 func (s stateOnlyStore) GetSpawnState(string) (string, error) { return s.state, nil }
 
-// The exported StatusStore and Status keep their signatures.
+// The exported StatusStore and Status pin their signatures.
 var (
-	_ api.StatusStore                                         = stateOnlyStore{}
-	_ func(api.StatusStore, string) (api.StatusResult, error) = api.Status
+	_ api.StatusStore                                                        = stateOnlyStore{}
+	_ func(api.StatusStore, api.RelayView, string) (api.StatusResult, error) = api.Status
 )
 
 // TestLaunchStartedAtStatusNarrowRead: api.Status shows the launch start with
@@ -229,7 +229,7 @@ func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 		{"GetSpawnState only", stateOnlyStore{state: store.StatePending}, "narrow-pending", 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := api.Status(tc.st, tc.id)
+			res, err := api.Status(tc.st, api.RelayView{}, tc.id)
 			if err != nil || res.State != store.StatePending {
 				t.Fatalf("Status = %+v, %v; want pending, nil", res, err)
 			}
@@ -237,7 +237,7 @@ func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 			assertLaunchJSON(t, res, tc.wantJSON)
 		})
 	}
-	if _, err := api.Status(s, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
+	if _, err := api.Status(s, api.RelayView{}, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
 		t.Errorf("Status of an unknown id: %v; want ErrSpawnNotFound", err)
 	}
 }

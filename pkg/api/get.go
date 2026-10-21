@@ -487,9 +487,15 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		}
 		out.UnprovenRequests = unproven
 	}
-	slots := goneSlotsOf(nil, out.PermissionRequests)
-	attempted, err := recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
+	now := j.now()
+	slots := goneSlotsOf(nil, out.PermissionRequests, row.Agent, row.RelayMode, now)
+	attempted, err := recordGone(s, now, readerLockWait, goneSlotsOf(slots, out.UnprovenRequests, row.Agent, row.RelayMode, now))
 
+	// A store that does not observe permissions keeps the state computed
+	// above, with no stuck fields, as list does.
+	if _, observes := s.(permissionStuckStore); !observes {
+		return out, nil
+	}
 	// The observation reuses the requests read above while no write has been
 	// attempted over them; after a busy write it attempts none of its own.
 	read := permissionRead{storeBusy: errors.Is(err, store.ErrStoreBusy)}

@@ -636,7 +636,7 @@ pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
 naming its `PaneAnswer`, as `SendKeys` and `RecordPaneAnswer` do, and
 records nothing.
 
-The exported functions `api.Decide`, `api.Get`, `api.List` and
+The exported functions `api.Decide`, `api.Status`, `api.Get`, `api.List` and
 `api.GetPermission` take a `RelayView`, and `api.SendKeys`,
 `api.RecordPaneAnswer` and `api.Pause` (`PauseEnv`) an env holding one (the
 `Client` methods pass their own); `DecideResult` embeds `RequestDelivery`.

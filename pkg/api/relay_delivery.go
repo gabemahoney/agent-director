@@ -30,7 +30,7 @@ const (
 // with (b.146 rules 5 and 14): the start-time reader, the reader's own pid
 // namespace, its clock and the effective relay window. The Client builds it
 // from its own start-time reader, clock and configuration; a caller of the
-// exported verb functions (Get, List, GetPermission, Decide,
+// exported verb functions (Status, Get, List, GetPermission, Decide,
 // RepairCheckPermission) passes its own.
 type RelayView struct {
 	// Procs reads a recorded relay hook's start time. nil judges every hook
@@ -68,10 +68,16 @@ type RelayView struct {
 // request of get's and list's permission_requests and get's
 // unproven_requests, on get-permission and on decide's result. They are
 // derived from the record and a check of the request's relay hook process
-// each time they are read; nothing but hook_gone_at is written for them.
+// each time they are read; nothing but hook_gone_at and the fallback clock
+// (fallback_at with its basis) is written for them.
 type RequestDelivery struct {
+	// fallbackObservation is what this read established about the request's
+	// relay hook, from which store.FallbackClock starts its fallback clock.
 	fallbackObservation store.FallbackObservation
-	fallbackRecorded    bool
+	// fallbackRequest is the request as read, which store.FallbackClock judges
+	// when a reader decides whether the fallback write would store anything
+	// for it (addGone).
+	fallbackRequest PermissionRow
 
 	// Delivery is delivered, not_confirmed or fallen_back (DeliveryDelivered,
 	// DeliveryNotConfirmed, DeliveryFallenBack). decide's result is never
@@ -247,7 +253,7 @@ func (j relayJudge) delivery(pr PermissionRow, v hookVerdict, now time.Time) Req
 		d.HookAlive = &alive
 	}
 	d.fallbackObservation = store.FallbackObservation{RequestID: pr.RequestID, ConfirmBy: d.ConfirmBy, ProcessGone: v == hookGone, CantTell: v == hookCantTell}
-	d.fallbackRecorded = !pr.FallbackAt.IsZero()
+	d.fallbackRequest = pr
 	d.Delivery = deliveryOf(pr, v, !now.Before(d.ConfirmBy))
 	return d
 }
@@ -377,17 +383,33 @@ var (
 	_ permissionFallbackRecorder = (*store.CursorMissingReads)(nil)
 )
 
-// goneSlot is one returned request a reader derived fallen back with no
-// hook_gone_at yet, and the delivery facts to fill once it is written.
+// goneSlot is one returned request a reader derived fallen back for which
+// the fallback write would store something (addGone), and the delivery facts
+// to fill once it is written.
 type goneSlot struct {
 	id int64
 	d  *RequestDelivery
 }
 
-// addGone appends id's slot to slots when d is fallen back with no
-// hook_gone_at.
-func addGone(slots []goneSlot, id int64, d *RequestDelivery) []goneSlot {
-	if d.Delivery == DeliveryFallenBack && (d.HookGoneAt == nil || !d.fallbackRecorded) {
+// addGone appends id's slot to slots when d is fallen back and the fallback
+// write would store something for it: its hook_gone_at is still unrecorded
+// (the write records this read's observation), or its fallback_at is still
+// unrecorded and store.FallbackClock, with the request's Spawn agent and
+// relayMode, gives it a clock at now. A request with neither is left out, so
+// a read attempts no write that would store nothing (SR-4.3). FallbackClock
+// is the rule the write itself applies, so the pick-up cannot drift from the
+// stored clock.
+func addGone(slots []goneSlot, id int64, d *RequestDelivery, agent, relayMode string, now time.Time) []goneSlot {
+	if d.Delivery != DeliveryFallenBack {
+		return slots
+	}
+	if d.HookGoneAt == nil {
+		return append(slots, goneSlot{id: id, d: d})
+	}
+	if !d.fallbackRequest.FallbackAt.IsZero() {
+		return slots
+	}
+	if start, _ := store.FallbackClock(agent, relayMode, d.fallbackRequest, d.fallbackObservation, now); !start.IsZero() {
 		slots = append(slots, goneSlot{id: id, d: d})
 	}
 	return slots
@@ -399,12 +421,14 @@ func addGone(slots []goneSlot, id int64, d *RequestDelivery) []goneSlot {
 const readerLockWait time.Duration = 0
 
 // recordGone writes at as hook_gone_at on every slot's request in one
-// transaction through s (when it is a hookGoneRecorder), waiting at most
-// maxWait for the write lock, and fills each slot's HookGoneAt with the
+// transaction through s, with the request's fallback clock when s is a
+// permissionFallbackRecorder; a store that is only a hookGoneRecorder stores
+// hook_gone_at alone, so only the slots with none are written. It waits at
+// most maxWait for the write lock, and fills each slot's HookGoneAt with the
 // stored value. It is fail-open: a lock not free within maxWait, or a
-// failed write, writes nothing and leaves the slots' HookGoneAt null, and the
-// read that found them is answered as it is. It reports whether it attempted
-// the write, and the write's error.
+// failed write, writes nothing and leaves each slot's HookGoneAt as read, and
+// the read that found them is answered as it is. It reports whether it
+// attempted the write, and the write's error.
 func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, error) {
 	if len(slots) == 0 {
 		return false, nil
@@ -420,7 +444,12 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (b
 	} else if r, ok := s.(hookGoneRecorder); ok {
 		ids := make([]int64, 0, len(slots))
 		for _, sl := range slots {
-			ids = append(ids, sl.id)
+			if sl.d.HookGoneAt == nil {
+				ids = append(ids, sl.id)
+			}
+		}
+		if len(ids) == 0 {
+			return false, nil
 		}
 		stored, err = r.RecordHookGone(at, maxWait, ids...)
 	} else {
@@ -493,8 +522,8 @@ func permissionRequestInfo(pr PermissionRow, d RequestDelivery) PermissionReques
 // openRequestInfos reads instanceID's open permission requests (those still
 // awaiting an answer) through read, by the check-before-read rule, and
 // projects them with their delivery facts at j's now. The caller collects
-// those fallen back with no hook_gone_at (goneSlotsOf) for its one
-// recordGone.
+// those the fallback write would store something for (goneSlotsOf) for its
+// one recordGone.
 func openRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) ([]PermissionRequestInfo, error) {
 	prs, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
 	if err != nil {
@@ -548,8 +577,8 @@ func readJudgedRequests(read func(string) ([]PermissionRow, error), j relayJudge
 // answer (PermissionRow.AwaitsAnswer, as OpenPermissionRequestsForSpawn
 // selects them), and unproven, those Claude Code has not proven gone (b.146
 // step 2c). A request in both lists is judged once and carries the same facts
-// in each. Both are non-nil. The caller collects those fallen back with no
-// hook_gone_at (goneSlotsOf) for its one recordGone.
+// in each. Both are non-nil. The caller collects those the fallback write
+// would store something for (goneSlotsOf) for its one recordGone.
 func judgedSpawnInfos(r *judgedRequestSet, j relayJudge) (open, unproven []PermissionRequestInfo) {
 	prs := slices.Clone(r.rows)
 	slices.SortStableFunc(prs, func(a, b PermissionRow) int {
@@ -572,12 +601,13 @@ func judgedSpawnInfos(r *judgedRequestSet, j relayJudge) (open, unproven []Permi
 	return open, unproven
 }
 
-// goneSlotsOf appends to slots those of infos fallen back with no
-// hook_gone_at. The slots point into infos, which the caller must not append
-// to before recordGone.
-func goneSlotsOf(slots []goneSlot, infos []PermissionRequestInfo) []goneSlot {
+// goneSlotsOf appends to slots those of infos, the requests of one Spawn whose
+// agent and relayMode are given, for which the fallback write would store
+// something at now (addGone). The slots point into infos, which the caller
+// must not append to before recordGone.
+func goneSlotsOf(slots []goneSlot, infos []PermissionRequestInfo, agent, relayMode string, now time.Time) []goneSlot {
 	for i := range infos {
-		slots = addGone(slots, infos[i].RequestID, &infos[i].RequestDelivery)
+		slots = addGone(slots, infos[i].RequestID, &infos[i].RequestDelivery, agent, relayMode, now)
 	}
 	return slots
 }

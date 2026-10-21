@@ -232,14 +232,24 @@ type Spawn struct {
 	// it (b.k6i). No write takes it from a Spawn: the writers stamp it in SQL.
 	StateChangedMillis int64
 
-	// ReportedState is the state status, get and list report (b.3ie): the
-	// settled state a read with a SettleRead that settles derives
-	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
-	// ListFilters.Settle), and State itself for every other read. Every read
-	// fills it, so it is never "" on a row a read returned. Guards never read
-	// it: they act on State, the raw state.
-	PermissionEpoch  int64
-	StuckVersion     int64
+	// PermissionEpoch is permission_epoch, the raw-state interval counter: each
+	// write that changes the raw state advances it (hookStateSet,
+	// immediateSettleSet, find-missing's check_permission repair). A permission
+	// request is owned by the check_permission interval it was recorded in
+	// (owner_permission_epoch), and a stuck observation and a pane baseline by
+	// the interval they were made in, so neither counts in a later interval.
+	PermissionEpoch int64
+	// StuckVersion is stuck_version, advanced by every write of the stored
+	// stuck observation or pane baseline: the observers' commits
+	// (ObservePermissionStuck, ObservePaneStuck) and the lifecycle writes that
+	// keep or clear the observation (hookStateSet on a raw-state change,
+	// immediateSettleSet, find-missing's check_permission repair).
+	// lockedObservationRow refuses a plan made from another version, and
+	// observationLanded recognises its own commit as the next one.
+	StuckVersion int64
+	// StuckObservation is the stored stuck_observation JSON, "" for NULL,
+	// decoded by decodeStuckObservation: the committed stuck display with its
+	// settling candidate (CommittedStuckDisplay).
 	StuckObservation string
 
 	// NoScreenChangeTimeoutSeconds is the row's per-spawn unchanged-pane
@@ -256,6 +266,12 @@ type Spawn struct {
 	PaneSinceMillis int64
 	PaneEpoch       int64
 
+	// ReportedState is the state status, get and list report (b.3ie): the
+	// settled state a read with a SettleRead that settles derives
+	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
+	// ListFilters.Settle), and State itself for every other read. Every read
+	// fills it, so it is never "" on a row a read returned. Guards never read
+	// it: they act on State, the raw state.
 	ReportedState string
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string

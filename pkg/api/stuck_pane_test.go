@@ -580,7 +580,7 @@ var unsampledReaders = []struct {
 	read func(*store.Store, string) (string, string, error)
 }{
 	{"status", func(s *store.Store, id string) (string, string, error) {
-		got, err := api.Status(s, id)
+		got, err := api.Status(s, api.RelayView{}, id)
 		return got.State, got.StuckReason, err
 	}},
 	{"get", func(s *store.Store, id string) (string, string, error) {

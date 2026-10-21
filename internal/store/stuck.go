@@ -53,7 +53,7 @@ type FallbackObservation struct {
 // and relayMode are the request's Spawn's. A clock already stored is kept. The
 // zero time and "" mean no clock: the request is not fallen back by a basis
 // the rule knows, or its time is untrustworthy (non-positive, beyond year
-// 9999, or recorded before schema v7 with an unparseable created_at).
+// 9999, or recorded before schema v7 with a zero created_at).
 func FallbackClock(agent, relayMode string, pr PermissionRow, o FallbackObservation, now time.Time) (time.Time, string) {
 	var start time.Time
 	var basis string
@@ -390,7 +390,7 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 		return err
 	})
 	if err != nil {
-		if !strings.Contains(err.Error(), "commit outcome unconfirmed") || !s.observationLanded(examined, plan, nil) {
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil) {
 			return previous, err
 		}
 	}
@@ -427,7 +427,7 @@ func (s *Store) ObservePaneStuck(examined Spawn, sample PaneSample, now time.Tim
 		return err
 	})
 	if err != nil {
-		if !strings.Contains(err.Error(), "commit outcome unconfirmed") || !s.observationLanded(examined, plan, &baseline) {
+		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline) {
 			return previous, err
 		}
 	}
@@ -450,10 +450,15 @@ func lockedObservationRow(ctx context.Context, conn *sql.Conn, examined Spawn) (
 	return row, nil
 }
 
-// observationLanded is the one nonwaiting re-read after an unconfirmed COMMIT:
-// whether this plan's write, with baseline when the observer stored one, is
-// what the row now holds. Any doubt, a busy store included, answers false, and
-// the caller keeps the previous view.
+// observationLanded is the one nonwaiting re-read after an unconfirmed COMMIT
+// (errCommitUnconfirmed): whether this plan's write, with baseline when the
+// observer stored one, is what the row now holds. Any doubt, a busy store
+// included, answers false, and the caller keeps the previous view. It does not
+// wait for the write's own abandoned operation either: a caller released at
+// its deadline while the COMMIT still runs (runConnectionOperation's
+// operation_guard branch) usually finds that operation still holding the
+// store's operation slot, so a COMMIT that lands is then answered as not
+// landed and its transitions are not emitted by this read.
 func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline *paneBaseline) bool {
 	var row Spawn
 	err := s.readWithin(0, "", func(ctx context.Context, conn *sql.Conn) error {
@@ -485,12 +490,8 @@ func decodeStuckExit(raw string) (stuckTransition, bool) {
 	return e, true
 }
 
-func (e stuckTransition) emit() {
-	e.emitContext(context.Background())
-}
-
-// emitContext is emit under ctx, for a caller whose other post-commit trail
-// writes share one bound.
+// emitContext writes e's ad.spawn.stuck_transition trail event under ctx, so
+// a caller whose other post-commit trail writes share one bound can pass it.
 func (e stuckTransition) emitContext(ctx context.Context) {
 	_ = trail.Emit(ctx, "ad.spawn.stuck_transition", map[string]any{
 		"instance_id": e.InstanceID, "prior_state": e.Prior, "new_state": e.Next,
