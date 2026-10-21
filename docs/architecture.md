@@ -2125,8 +2125,10 @@ not bind those details to a compaction generation. Captured token details lack
 a usage measurement time or generation/compaction sequence. Conversation start
 and assistant timestamps, external hook generation IDs and collector chronology
 cannot establish checkpoint-local, restart-safe ordering. Missing initial
-summary markers likewise do not prove freshness. See the
-[fixture evidence](test-writing-guide.md#context-fullness-captures-and-fixtures).
+summary markers likewise do not prove freshness. The captures are under
+`internal/testsupport/contextfix/testdata/cursor/`; see the
+[fixture evidence](https://github.com/gabemahoney/agent-director/blob/53d0dcf248d60af143444ef56487c2601ebff273/docs/test-writing-guide.md#context-fullness-captures-and-fixtures)
+as written before the test guide dropped it.
 Future Cursor numeric support requires qualified managed
 usage/capacity and compaction evidence before adding a source at `contextOf`;
 native payload identity alone must never grant lifecycle or permission
