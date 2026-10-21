@@ -1,19 +1,15 @@
 # agent-director
 
-The Project's Apiary guides (`guide:<file>`) live in `../.apiary/`.
-
 ## Documentation Locations
 
-- **Engineering best practices**: the Project's `guide:engineering-best-practices.md`, with background in docs/engineering-guide.md
-- **Build and test commands**: the Project's `guide:build-commands.md`
-- **Internal architecture, user and developer docs**: listed in the Project's `guide:doc-writing-guide.md`, "The docs to keep current"
-- **Test writing and review guide**: the Project's `guide:test-guide.md`, plus repo conventions in docs/test-writing-guide.md
+- **Engineering rules**: docs/engineering-guide.md "Rules"
+- **Build and test commands**: docs/engineering-guide.md §10 "Build and test commands"
+- **Test rules and conventions**: docs/test-writing-guide.md
+- **Doc rules, and the docs to keep current**: docs/user-docs-guide.md, plus docs/architecture-docs-guide.md
+- **Bug writing guide**: docs/bug-writing-guide.md
 - **Schema migration guide**: docs/migration-guide.md
-- **Doc writing guide**: the Project's `guide:doc-writing-guide.md`
-- **Bug writing guide**: the Project's `guide:bug-writing-guide.md`
-- **Release guide**: the Project's `guide:release-guide.md`
 
-**Commit subjects** follow the Project's `guide:engineering-best-practices.md`:
+**Commit subjects** follow docs/engineering-guide.md "Rules":
 the scope is the Idea's or Bug's ID (`fix(b.zr5): …`).
 
 ## Running tests / built artifacts
@@ -25,6 +21,7 @@ a host not yet moved (the b.8dr incident hit the latter). Host `go test`, `bun t
 `go run`, and direct `bin/` executions are **denied** by
 `.claude/settings.json`.
 
-Run them as the Project's `guide:build-commands.md` says: one-off commands in
-`make sandbox CMD="…"`, test suites on the job scheduler. See
-docs/engineering-guide.md "Sandboxed execution" for the full rationale.
+Run them as docs/engineering-guide.md §10 "Build and test commands" says:
+one-off commands in `make sandbox CMD="…"`, test suites in an isolated
+environment. See docs/engineering-guide.md "Sandboxed execution" for the full
+rationale.

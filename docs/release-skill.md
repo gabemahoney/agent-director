@@ -16,8 +16,8 @@ version collisions, source-of-truth violations, and build-config drift before
 anything escapes to npm or GitHub. The pipeline halts on first failure and always
 writes a machine-readable run report, so failed runs are inspectable.
 
-**How releases run here.** agent-director's own releases follow the Project's
-`guide:release-guide.md`, which wins where this doc differs: it uses this skill
+**How releases run here.** agent-director's own releases follow the
+maintainers' release process, which wins where this doc differs: it uses this skill
 in dry-run mode only, to prepare a candidate, and publishes without the
 publish phase.
 
