@@ -344,6 +344,23 @@ const (
 	observeWindow   = 10 * time.Second
 )
 
+// RepeatUntilCommitted is the one bounded repeat of a nonwaiting write that
+// had to commit (ObserveStuckRead and internal/store's commitUnlessBusy): it
+// calls try, which keeps the caller's injected time and must not sleep, until
+// try reports the commit landed, giving up only after at least observeAttempts
+// calls and observeWindow of real time. It returns the calls made, the time
+// they took and whether the last one committed.
+func RepeatUntilCommitted(try func() bool) (attempts int, elapsed time.Duration, committed bool) {
+	start := time.Now()
+	for attempts = 1; ; attempts++ {
+		committed = try()
+		elapsed = time.Since(start)
+		if committed || attempts >= observeAttempts && elapsed >= observeWindow {
+			return attempts, elapsed, committed
+		}
+	}
+}
+
 // CommitCheck reports whether the commit a read was expected to make landed,
 // judged from the row before and after the read.
 type CommitCheck func(before, after store.Spawn) bool
@@ -359,47 +376,43 @@ func VersionAdvanced(before, after store.Spawn) bool {
 // The observation write is nonwaiting and best effort, so a read that had to
 // commit may lose a race for the write lock and answer from its snapshot.
 // When commit is non-nil and reports no commit, the same read is repeated at
-// the same injected time, without sleeping, at least observeAttempts times and
-// until observeWindow has passed, and the test then fails with "observation
-// never committed".
+// the same injected time, without sleeping, under RepeatUntilCommitted's
+// bound, and the test then fails with "observation never committed".
 // Once the commit landed (or none was expected) the display must be want and,
 // for stuck, equal the committed detail of the row.
 func ObserveStuckRead(t testing.TB, probe StuckProbe, id, want string, commit CommitCheck, read func() (StuckReading, error)) StuckReading {
 	t.Helper()
-	start := time.Now()
-	for attempt := 1; ; attempt++ {
-		before, err := probe.GetSpawn(id)
-		if err != nil {
+	var got StuckReading
+	var before, after store.Spawn
+	attempts, elapsed, committed := RepeatUntilCommitted(func() bool {
+		var err error
+		if before, err = probe.GetSpawn(id); err != nil {
 			t.Fatal(err)
 		}
-		got, err := read()
-		if err != nil {
+		if got, err = read(); err != nil {
 			t.Fatal(err)
 		}
-		after, err := probe.GetSpawn(id)
-		if err != nil {
+		if after, err = probe.GetSpawn(id); err != nil {
 			t.Fatal(err)
 		}
-		if commit != nil && !commit(before, after) {
-			if attempt >= observeAttempts && time.Since(start) >= observeWindow {
-				t.Fatalf("observation never committed in %d attempts over %v: read=%+v (stuck_version %d -> %d)", attempt, time.Since(start), got, before.StuckVersion, after.StuckVersion)
-			}
-			continue
-		}
-		if attempt > 1 {
-			t.Logf("observation committed on attempt %d after %v", attempt, time.Since(start))
-		}
-		if got.State != want {
-			t.Fatalf("read=%+v; want state %s (stuck_version %d -> %d)", got, want, before.StuckVersion, after.StuckVersion)
-		}
-		if want == store.StateStuck {
-			committed := after.CommittedStuckDisplay()
-			if committed.State != store.StateStuck ||
-				got != (StuckReading{State: committed.State, Reason: committed.Reason, Since: time.UnixMilli(committed.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
-					RequestToken: committed.RequestToken, ToolName: committed.ToolName, UnchangedMinutes: committed.UnchangedMinutes}) {
-				t.Fatalf("stuck read=%+v is not the committed display %+v (stuck_version %d -> %d)", got, committed, before.StuckVersion, after.StuckVersion)
-			}
-		}
-		return got
+		return commit == nil || commit(before, after)
+	})
+	if !committed {
+		t.Fatalf("observation never committed in %d attempts over %v: read=%+v (stuck_version %d -> %d)", attempts, elapsed, got, before.StuckVersion, after.StuckVersion)
 	}
+	if attempts > 1 {
+		t.Logf("observation committed on attempt %d after %v", attempts, elapsed)
+	}
+	if got.State != want {
+		t.Fatalf("read=%+v; want state %s (stuck_version %d -> %d)", got, want, before.StuckVersion, after.StuckVersion)
+	}
+	if want == store.StateStuck {
+		committed := after.CommittedStuckDisplay()
+		if committed.State != store.StateStuck ||
+			got != (StuckReading{State: committed.State, Reason: committed.Reason, Since: time.UnixMilli(committed.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
+				RequestToken: committed.RequestToken, ToolName: committed.ToolName, UnchangedMinutes: committed.UnchangedMinutes}) {
+			t.Fatalf("stuck read=%+v is not the committed display %+v (stuck_version %d -> %d)", got, committed, before.StuckVersion, after.StuckVersion)
+		}
+	}
+	return got
 }

@@ -6785,7 +6785,9 @@ or a second copy:
   `since`) and `SeedPaneSurface` (a precommitted `no_screen_change` episode on
   a working Claude and Codex row at one `since`, and a working Cursor row);
   the observation helpers `StuckProbe`, `StuckReading`,
-  `CommitCheck`, `VersionAdvanced` and `ObserveStuckRead`; and the
+  `CommitCheck`, `VersionAdvanced` and `ObserveStuckRead`;
+  `RepeatUntilCommitted`, the one bounded repeat that `ObserveStuckRead` and
+  `commitUnlessBusy` share; and the
   wire checks `CheckPermissionWire` / `LoadPermissionWire`, `CheckPaneWire` /
   `LoadPaneWire`, `CheckOrdinaryWire` and `CheckListedStuckWire` over
   `StuckWireSurfaces` and `StuckWireOrdinary`, which every surface test
@@ -6809,14 +6811,18 @@ or a second copy:
   seeds it from a `paneSpec`; `client` builds a Client with given config keys;
   `show` changes what the pane captures; `addRow` adds another working row on
   a given socket and pane; `row` reads the committed row. The package function
-  `failOnce(e, call)` fails the next lookup or capture of `e`'s pane. Every
+  `failOnce(e, call)` makes the next sample of `e`'s pane fail (lookup or
+  capture) and returns the `CommitCheck` to pass to the read that must commit
+  that failure; the check scripts the failure again after each attempt that
+  did not commit. Every
   pane test (`stuck_pane_test.go`, `stuck_pane_settle_test.go`) uses them.
 - `storefix.WriteFailStuckObservation` (`writefailfix.StuckObservation`): fails
   a read's `stuck_observation` commit.
 - `internal/store/stuck_test.go` `commitUnlessBusy` (package-internal): the
   store-level counterpart of `ObserveStuckRead`, repeating an observer call
-  that must commit at the same instant while the store is busy
-  (`observeUnlessBusy` wraps it for `ObservePermissionStuck`).
+  that must commit at the same instant while the store is busy, under
+  `RepeatUntilCommitted`'s bound (`observeUnlessBusy` wraps it for
+  `ObservePermissionStuck`).
 - `internal/store/migration_fixtures_test.go`: `v14ColumnSpecs`,
   `preAddV14Columns` and `seedV13PermissionFixture` for the v13 to v14
   matrices.
@@ -23295,8 +23301,12 @@ each file's doc comments carry the detail.
     name-based call), `e.assertCaptured`, `e.assertDelivered` (text after
     CR stripping, then Enter), `e.assertEnterOnly` (`send-keys` with empty
     text: the lookup, the listing and one Enter, an empty text call
-    aside), `e.assertTextSent`, `e.assertNothingSent` (no text, Enter or
-    line-clear call), `e.assertNoTmuxCall`, `e.assertNoCalls(kinds...)`;
+    aside), `e.assertNothingSent` (no text, Enter or line-clear call),
+    `e.assertNoTmuxCall`, `e.assertNoCalls(kinds...)`; and two package
+    functions over any `*tmuxfix.Recorder`, so `paneEnv` tests use them
+    too: `assertTextSent(t, rec, socket, paneID, text)` (exactly one text
+    call, Enter asked for) and `assertEnterSent(t, rec, socket, paneID)`
+    (exactly one Enter);
   - "changes nothing" readers: `e.assertRowUnchanged(t, id, e.columns(t,
     id))` (every column, `row_version` and the snapshot included),
     `trailMark` / `assertNoTrailSince` (no trail record for the id), and

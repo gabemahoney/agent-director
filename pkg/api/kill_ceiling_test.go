@@ -277,7 +277,7 @@ func TestPaneVerbsCeilingVirtualTime(t *testing.T) {
 				case "read-pane":
 					e.assertCaptured(t, pane, api.DefaultReadPaneLines, false)
 				case "send-keys":
-					e.assertTextSent(t, r.Socket, pane, "hello")
+					assertTextSent(t, e.rec, r.Socket, pane, "hello")
 				default:
 					e.assertExitTyped(t, r.Socket, pane)
 				}

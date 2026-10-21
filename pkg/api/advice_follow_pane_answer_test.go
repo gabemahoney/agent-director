@@ -234,8 +234,8 @@ func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 				t.Fatalf("send-keys /exit with the pane's hash: %v; want it typed", err)
 			}
 
-			p.assertTextSent(t, p.r.Socket, p.r.Spawn.Identity.PaneID, exitText)
-			p.assertEnterSent(t, p.r.Socket, p.r.Spawn.Identity.PaneID)
+			assertTextSent(t, p.rec, p.r.Socket, p.r.Spawn.Identity.PaneID, exitText)
+			assertEnterSent(t, p.rec, p.r.Socket, p.r.Spawn.Identity.PaneID)
 			pauAssertState(t, p.killEnv, p.r.ID, store.StateEnded)
 			if run := p.pauseRun(t, false); run.err != nil || len(run.calls) != 0 {
 				t.Errorf("pause once the agent ended = %v, calls %v; want the no-op success", run.err, run.calls)

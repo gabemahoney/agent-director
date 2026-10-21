@@ -248,9 +248,10 @@ func TestPaneStuckTerminalExitIsImmediate(t *testing.T) {
 	}
 }
 
-// TestPaneStuckLeavesCommandGuards: a displayed no_screen_change grants no
-// command: pause still refuses the raw working row, typing nothing, and the
-// observation itself only looked up, listed and captured the pane.
+// TestPaneStuckLeavesCommandGuards: a displayed no_screen_change grants and
+// refuses no command: pause still refuses the raw working row, typing
+// nothing, send-keys still types into it, and the observation itself only
+// looked up, listed and captured the pane. Neither touches the episode.
 func TestPaneStuckLeavesCommandGuards(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
@@ -269,6 +270,15 @@ func TestPaneStuckLeavesCommandGuards(t *testing.T) {
 	}
 	if got := observeStatus(t, c, e.id, api.StuckNoScreenChange, nil); got.Since != entered.Since || e.row(t).State != store.StateWorking {
 		t.Errorf("after the refusal: %+v, raw %s; want the same episode on a raw working row", got, e.row(t).State)
+	}
+	e.rec.Reset()
+	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: e.id, Text: "go on"}); err != nil {
+		t.Fatalf("send-keys on a displayed stuck row: %v; want delivered", err)
+	}
+	assertTextSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID, "go on")
+	assertEnterSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID)
+	if got := observeStatus(t, c, e.id, api.StuckNoScreenChange, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {
+		t.Errorf("after send-keys: %+v, raw %s; want the episode %+v on a raw working row", got, e.row(t).State, entered)
 	}
 }
 

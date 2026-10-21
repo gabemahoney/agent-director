@@ -143,10 +143,13 @@ func holdStuckReadConnection(t *testing.T, s *store.Store, id string) (take func
 	return take, held, release
 }
 
-// readUnderLease fails when read is still running within after leased closes
-// (it waited for the lease, then released) or never reached the lease.
-func readUnderLease(t *testing.T, leased <-chan struct{}, release func(), within time.Duration, read func()) {
+// readUnderLease fails when read is still running 10 s after leased closes
+// (it waited for the lease, then released) or never reached the lease. The
+// store has one connection, so a waiting read never returns under the lease:
+// the bound is generous so suite load cannot fail a read that did not wait.
+func readUnderLease(t *testing.T, leased <-chan struct{}, release func(), read func()) {
 	t.Helper()
+	const within = 10 * time.Second
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -212,7 +215,7 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 						s.afterFirst = take
 					}
 					var got api.StatusResult
-					readUnderLease(t, leased, release, time.Second, func() { got, err = api.Status(s, view, e.id) })
+					readUnderLease(t, leased, release, func() { got, err = api.Status(s, view, e.id) })
 					if err != nil || !reflect.DeepEqual(got, want) {
 						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got, err, want)
 					}
@@ -234,7 +237,7 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 }
 
 // t2.sp6.rk.1k review b5a9c71c: list --state stuck never waits for a dropped
-// row's requests. A waiting read never returns under the lease: generous bound.
+// row's requests.
 func TestListStateFilterSkipsLeasedConnection(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, relayEnvHook)
@@ -243,7 +246,7 @@ func TestListStateFilterSkipsLeasedConnection(t *testing.T) {
 	s := &stuckReadLeaseStore{stuckObservationReader: e.s, afterRow: take}
 	var res api.ListResult
 	var err error
-	readUnderLease(t, leased, release, 10*time.Second, func() { res, err = api.List(s, e.view(), api.ListParams{State: []string{store.StateStuck}}) })
+	readUnderLease(t, leased, release, func() { res, err = api.List(s, e.view(), api.ListParams{State: []string{store.StateStuck}}) })
 	if err != nil || len(res.Spawns) != 0 {
 		t.Errorf("list --state stuck = %+v, %v; want no rows", res.Spawns, err)
 	}

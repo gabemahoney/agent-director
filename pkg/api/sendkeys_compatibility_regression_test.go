@@ -38,8 +38,8 @@ func TestSendKeysPlainLaunchRetainsEstablishedInput(t *testing.T) {
 					}
 					e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey)
 				} else {
-					e.assertTextSent(t, r.Socket, r.Spawn.Identity.PaneID, strings.ReplaceAll(p.Text, "\r", ""))
-					e.assertEnterSent(t, r.Socket, r.Spawn.Identity.PaneID)
+					assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, strings.ReplaceAll(p.Text, "\r", ""))
+					assertEnterSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID)
 				}
 			}
 		})

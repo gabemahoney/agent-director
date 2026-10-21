@@ -138,8 +138,8 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 						assertDialogMaybeOpen(t, run.err, current, state)
 					}
 					if want == nil {
-						e.assertTextSent(t, r.Socket, r.Spawn.Identity.PaneID, "continue")
-						e.assertEnterSent(t, r.Socket, r.Spawn.Identity.PaneID)
+						assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, "continue")
+						assertEnterSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID)
 					}
 					legacyRecoveryAssertVerdict(t, legacy, legacyRecoveryRead(t, e.st, r.ID, old))
 					legacyRecoveryAssertVerdict(t, row, legacyRecoveryRead(t, e.st, r.ID, current))

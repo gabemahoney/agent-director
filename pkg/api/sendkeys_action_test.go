@@ -47,7 +47,7 @@ func (v paneVerb) assertTyped(t *testing.T, e *killEnv, r killRow, action tmux.C
 		}
 		text = exitText
 	}
-	e.assertTextSent(t, r.Socket, pane, text)
+	assertTextSent(t, e.rec, r.Socket, pane, text)
 	enters := e.rec.SocketCallsOf(tmux.CallSendEnter)
 	if want := action == tmux.CallSendEnter; want != (len(enters) == 1) || len(enters) > 1 || (want && enters[0].Target != pane) {
 		t.Errorf("Enter calls = %+v; want one to %s: %v", enters, pane, want)

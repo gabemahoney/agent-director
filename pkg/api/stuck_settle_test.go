@@ -4,8 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
@@ -120,6 +122,74 @@ func TestPermissionStuckRepresentativeContinuity(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("representative change emitted %d transitions", n)
+	}
+}
+
+// An independent request admitted mid-episode, once displayed (settle 0) or
+// while the entry candidate is pending (settle 5 s), keeps the episode: its
+// deadline, since, representative and one entry. The admitted request has the
+// lexically first token but the later fallback clock, and once the first is
+// answered it carries the same episode on.
+func TestPermissionStuckAdmissionMidEpisode(t *testing.T) {
+	// Serial: it reads the shared trail using fixture row ids reused by other tests.
+	timeout := time.Duration(config.DefaultPermissionUnansweredTimeoutSeconds) * time.Second
+	for _, delay := range []time.Duration{0, 5 * time.Second} {
+		t.Run(delay.String(), func(t *testing.T) {
+			e := newRelayEnv(t, store.ProcessIdentity{})
+			e.now = stuckAt
+			stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(-timeout), time.Time{}, time.Time{}, ""), apitest.PermissionToken(storefix.TestRequestTokenC))
+			c := stuckClient(t, e, delay.Milliseconds(), 0)
+			mark := trailMark(t)
+			entry := stuckAt.Add(delay)
+			keeps := func(got api.StatusResult) {
+				t.Helper()
+				if got.RequestToken != storefix.TestRequestTokenC || got.ToolName != "Bash" || got.Since != entry.Format(stuckTS) {
+					t.Errorf("admission moved the episode: %+v; want C/Bash since %s", got.StuckInfo, entry.Format(stuckTS))
+				}
+			}
+			if delay == 0 {
+				assertStuckState(t, c, e.id, "permission_unanswered")
+				e.now = entry.Add(time.Second)
+			} else {
+				observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
+				e.now = stuckAt.Add(delay / 2)
+			}
+			admitted := e.now
+			if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Read", apitest.PermissionToken(storefix.TestRequestTokenA), apitest.PermissionTimes(admitted, time.Time{}, admitted, time.Time{}, time.Time{}, "")); err != nil {
+				t.Fatal(err)
+			}
+			if delay == 0 {
+				// Committing the admitted, still unqualified request's clock keeps the displayed episode.
+				keeps(observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced))
+			} else {
+				// Committing the admitted request's clock must not restart the candidate.
+				observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
+				e.now = entry.Add(-time.Millisecond)
+				assertStuckState(t, c, e.id, store.StateCheckPermission)
+				e.now = entry
+				assertStuckState(t, c, e.id, "permission_unanswered")
+			}
+			// Once the admitted request qualifies too, the earlier clock still decides.
+			e.now = admitted.Add(timeout)
+			keeps(assertStuckState(t, c, e.id, "permission_unanswered"))
+			first, err := e.s.GetPermissionRequest(e.id, storefix.TestRequestTokenC)
+			if err != nil || !first.AwaitsAnswer() {
+				t.Fatalf("first request no longer awaits an answer: %+v %v", first, err)
+			}
+			// Answering the first request hands the episode to the admitted one.
+			if err := apitest.SetPermissionFacts(e.dbPath, first.RequestID, apitest.PermissionAnswer(store.PaneAnswerOutside)); err != nil {
+				t.Fatal(err)
+			}
+			next := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
+			if next.RequestToken != storefix.TestRequestTokenA || next.ToolName != "Read" || next.Since != entry.Format(stuckTS) {
+				t.Errorf("admitted request did not continue the episode: %+v; want A/Read since %s", next.StuckInfo, entry.Format(stuckTS))
+			}
+			events := stuckEventsSince(t, mark, e.id)
+			if len(events) != 1 {
+				t.Fatalf("events=%v; want the entry once", events)
+			}
+			assertStuckEvent(t, events[0], store.StateCheckPermission, "stuck", entry)
+		})
 	}
 }
 

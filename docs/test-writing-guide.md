@@ -83,14 +83,18 @@ columns with raw SQL or keep a second copy of the expected wire detail.
   committed detail.
 - A read that must commit is nonwaiting and best effort. Confirm it with
   `ObserveStuckRead`, or `commitUnlessBusy` in `internal/store`, never with a
-  sleep or a retry loop of your own. `ObserveStuckRead` repeats the read at
-  the same injected instant for a bounded time until `stuck_version`
-  confirms the commit (it then fails with "observation never committed"), and
-  checks the display against the committed row.
+  sleep or a retry loop of your own. Both repeat at the same injected
+  instant under one bound, `apitest.RepeatUntilCommitted`, giving up only
+  after at least 3 attempts and 10 s: `ObserveStuckRead` until its
+  `CommitCheck` (usually `VersionAdvanced` on `stuck_version`) confirms the
+  commit (failing with "observation never committed" once the bound runs
+  out) and checks the display against the committed row; `commitUnlessBusy` while the store
+  answers `ErrStoreBusy`, failing at once on any other error.
 - Pane tests use `paneEnv`. Interleave a write between a sample and its
   commit with `Recorder.AfterCall` on the capture, and skip a write with
   `apitest.HoldWriteLock` or `storefix.WriteFailStuckObservation`, never with
-  a sleep.
+  a sleep. Fail a sample with `failOnce`, and pass the `CommitCheck` it
+  returns to the committing read, not `apitest.VersionAdvanced`.
 - The `permission-stuck` and `pane-stuck` Docker Epics run, like every Epic,
   only through the scheduler workflow. **Reviewed exceptions to the raw-SQL
   rule,** each through `/opt/driver/sql.sh` and each because the columns have

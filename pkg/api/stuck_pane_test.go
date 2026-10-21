@@ -260,9 +260,20 @@ func stuckEvents(t *testing.T, mark int, id string) []map[string]any {
 }
 
 // failOnce makes the next sample of e's pane fail: its capture, or the lookup
-// of its session.
-func failOnce(e *paneEnv, call tmux.Call) {
-	e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, call)
+// of its session. It returns the CommitCheck of a read that must commit that
+// failed sample: apitest.VersionAdvanced, scripting the failure again after
+// each attempt that did not commit, as a repeat after a write that lost the
+// lock race under load would otherwise sample the unchanged pane.
+func failOnce(e *paneEnv, call tmux.Call) apitest.CommitCheck {
+	fail := func() { e.rec.Script(apitest.TestSocket, tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, call) }
+	fail()
+	return func(before, after store.Spawn) bool {
+		if apitest.VersionAdvanced(before, after) {
+			return true
+		}
+		fail()
+		return false
+	}
 }
 
 // TestPaneStuckObservesOnlyOwnedWorkingPanes: only a raw working Claude or
@@ -315,47 +326,86 @@ func TestPaneStuckObservesOnlyOwnedWorkingPanes(t *testing.T) {
 	}
 }
 
-// TestPaneStuckFailedCaptureResets: a failed or unowned capture before, while
-// pending or after the visible entry is a sample that resets the committed
-// baseline (and withdraws the eligibility or display); the read still
-// succeeds, and the next success starts a fresh period at its own read.
+// TestPaneStuckFailedCaptureResets: a failed or unowned capture (the row's
+// session now labelled for another row) before, while pending or after the
+// visible entry is a sample that resets the committed baseline and withdraws
+// the eligibility or display, a displayed one only once its exit settles, with
+// one exit at that deadline; the read still succeeds, and the next owned
+// success starts a fresh period at its own read.
 func TestPaneStuckFailedCaptureResets(t *testing.T) {
 	t.Parallel()
-	for _, phase := range []string{"before", "pending", "after"} {
-		for _, call := range []tmux.Call{tmux.CallCapture, tmux.CallLookup} {
-			t.Run(phase+"/"+string(call), func(t *testing.T) {
+	for _, tc := range []struct {
+		phase  string
+		settle time.Duration
+	}{{"before", 0}, {"pending", 5 * time.Second}, {"after", 0}, {"after", 5 * time.Second}} {
+		for _, failure := range []string{string(tmux.CallCapture), string(tmux.CallLookup), "unowned"} {
+			t.Run(tc.phase+"/settle "+tc.settle.String()+"/"+failure, func(t *testing.T) {
 				t.Parallel()
 				e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
-				var settle int64
-				if phase == "pending" {
-					settle = 5000
-				}
-				c := e.client(t, apitest.ConfigKeys{StateSettleMs: settle, NoScreenChangeTimeoutSeconds: 60})
-				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-				switch phase {
+				c := e.client(t, apitest.ConfigKeys{StateSettleMs: tc.settle.Milliseconds(), NoScreenChangeTimeoutSeconds: 60})
+				var shown api.StatusResult
+				switch tc.phase {
+				case "before":
+					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 				case "pending": // the entry candidate is committed, not yet displayed
+					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 					e.now = e.now.Add(time.Minute)
 					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 				case "after":
-					e.now = e.now.Add(time.Minute)
-					assertStuckState(t, c, e.id, api.StuckNoScreenChange)
+					shown = enterPane(t, e, c, tc.settle)
+				}
+				// label labels the row's session for the row id, on the row's own launch token.
+				label := func(id string) {
+					t.Helper()
+					if err := e.rec.SetLabel(apitest.TestSocket, e.rec.Sessions(apitest.TestSocket)[0].ID, apitest.TestPaneID, e.row(t).Identity.Token, id, e.s.StoreID()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				failedCommit := apitest.CommitCheck(apitest.VersionAdvanced)
+				if failure == "unowned" {
+					label(e.id + "-foreign")
+				} else {
+					failedCommit = failOnce(e, tmux.Call(failure))
+				}
+				exiting := tc.phase == "after" && tc.settle > 0
+				// read is a committing read: working, or the shown detail while the exit settles.
+				read := func(commit apitest.CommitCheck) {
+					t.Helper()
+					if !exiting {
+						observeStatus(t, c, e.id, store.StateWorking, commit)
+					} else if got := observeStatus(t, c, e.id, api.StuckNoScreenChange, commit); got.Since != shown.Since || minutes(t, got) != minutes(t, shown) {
+						t.Fatalf("the detail changed before the exit's deadline: %+v; want %+v", got, shown)
+					}
 				}
 				e.now = e.now.Add(time.Second)
-				failOnce(e, call)
+				failed := e.now
 				mark := trailMark(t)
-				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-				if row := e.row(t); row.PaneSHA256 != "" || row.PaneSinceMillis != 0 || row.StuckObservation != "" {
+				read(failedCommit)
+				if row := e.row(t); row.PaneSHA256 != "" || row.PaneSinceMillis != 0 || (row.StuckObservation != "") != exiting {
 					t.Fatalf("a failed sample left the baseline or eligibility: %+v", row)
 				}
-				if events, want := stuckEvents(t, mark, e.id), map[bool]int{false: 0, true: 1}[phase == "after"]; len(events) != want ||
-					want == 1 && (events[0]["new_state"] != store.StateWorking || events[0]["stuck_reason"] != api.StuckNoScreenChange) {
-					t.Fatalf("events = %v; want %d exit", events, want)
+				if failure == "unowned" {
+					label(e.id)
 				}
-				e.now = e.now.Add(10 * time.Second)
+				e.now = failed.Add(10 * time.Second)
+				if exiting {
+					e.now = failed.Add(tc.settle - time.Millisecond)
+				}
 				fresh := e.now
-				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+				read(apitest.VersionAdvanced)
 				if row := e.row(t); row.PaneSinceMillis != fresh.UnixMilli() {
 					t.Fatalf("the next success did not start fresh: %+v", row)
+				}
+				exitAt := failed
+				if exiting {
+					e.now = failed.Add(tc.settle)
+					exitAt = e.now
+					observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+				}
+				if events, want := stuckEvents(t, mark, e.id), map[bool]int{false: 0, true: 1}[tc.phase == "after"]; len(events) != want ||
+					want == 1 && (events[0]["new_state"] != store.StateWorking || events[0]["stuck_reason"] != api.StuckNoScreenChange ||
+						events[0]["ts"] != exitAt.Format("2006-01-02T15:04:05.000Z")) {
+					t.Fatalf("events = %v; want %d exit at %s", events, want, exitAt)
 				}
 				e.now = fresh.Add(time.Minute - time.Millisecond)
 				assertStuckState(t, c, e.id, store.StateWorking)
@@ -432,8 +482,7 @@ func TestPaneStuckOlderSampleNeverOverwrites(t *testing.T) {
 			observeStatus(t, other, e.id, store.StateWorking, apitest.VersionAdvanced)
 		}},
 		{"newer reset", func(t *testing.T, e *paneEnv, other *api.Client) {
-			failOnce(e, tmux.CallCapture)
-			observeStatus(t, other, e.id, store.StateWorking, apitest.VersionAdvanced)
+			observeStatus(t, other, e.id, store.StateWorking, failOnce(e, tmux.CallCapture))
 		}},
 		{"turn", func(t *testing.T, e *paneEnv, _ *api.Client) {
 			for _, state := range []string{store.StateWaiting, store.StateWorking} {

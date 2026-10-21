@@ -632,11 +632,11 @@ func (e *killEnv) assertCaptured(t *testing.T, paneID string, nLines int, ansi b
 	}
 }
 
-// assertTextSent fails unless exactly one text call was made, typing text
+// assertTextSent fails unless rec recorded exactly one text call, typing text
 // (as delivered: CR stripped) into paneID on socket, with Enter asked for.
-func (e *killEnv) assertTextSent(t *testing.T, socket, paneID, text string) {
+func assertTextSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID, text string) {
 	t.Helper()
-	got := e.rec.SocketCallsOf(tmux.CallSendText)
+	got := rec.SocketCallsOf(tmux.CallSendText)
 	if len(got) != 1 {
 		t.Fatalf("text calls = %+v; want one to %s", got, paneID)
 	}
@@ -646,10 +646,10 @@ func (e *killEnv) assertTextSent(t *testing.T, socket, paneID, text string) {
 	}
 }
 
-// assertEnterSent fails unless exactly one Enter call was made, to paneID on socket.
-func (e *killEnv) assertEnterSent(t *testing.T, socket, paneID string) {
+// assertEnterSent fails unless rec recorded exactly one Enter call, to paneID on socket.
+func assertEnterSent(t *testing.T, rec *tmuxfix.Recorder, socket, paneID string) {
 	t.Helper()
-	if got := e.rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
+	if got := rec.SocketCallsOf(tmux.CallSendEnter); len(got) != 1 || got[0].Socket != socket || got[0].Target != paneID {
 		t.Errorf("Enter calls = %+v; want one to %s on %s", got, paneID, socket)
 	}
 }
@@ -659,8 +659,8 @@ func (e *killEnv) assertEnterSent(t *testing.T, socket, paneID string) {
 func (e *killEnv) assertDelivered(t *testing.T, socket, paneID, text string) {
 	t.Helper()
 	e.assertPaneCalls(t, paneSendCalls...)
-	e.assertTextSent(t, socket, paneID, text)
-	e.assertEnterSent(t, socket, paneID)
+	assertTextSent(t, e.rec, socket, paneID, text)
+	assertEnterSent(t, e.rec, socket, paneID)
 }
 
 // assertEnterOnly fails unless the calls were the lookup, the pane listing
@@ -678,7 +678,7 @@ func (e *killEnv) assertEnterOnly(t *testing.T, socket, paneID string) {
 	if want := []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallSendEnter}; !slices.Equal(got, want) {
 		t.Errorf("tmux calls, an empty text call aside = %v; want %v", got, want)
 	}
-	e.assertEnterSent(t, socket, paneID)
+	assertEnterSent(t, e.rec, socket, paneID)
 }
 
 // assertNothingSent fails when a text, Enter or line-clear call was made
@@ -866,7 +866,7 @@ func (e *killEnv) assertExitDelivered(t *testing.T, socket, paneID string) {
 	t.Helper()
 	e.assertPaneCalls(t, pauseSendCalls...)
 	e.assertExitTyped(t, socket, paneID)
-	e.assertEnterSent(t, socket, paneID)
+	assertEnterSent(t, e.rec, socket, paneID)
 }
 
 // assertExitTyped fails unless paneID's input line was cleared on socket
@@ -875,7 +875,7 @@ func (e *killEnv) assertExitDelivered(t *testing.T, socket, paneID string) {
 func (e *killEnv) assertExitTyped(t *testing.T, socket, paneID string) {
 	t.Helper()
 	e.assertLineCleared(t, socket, paneID)
-	e.assertTextSent(t, socket, paneID, exitText)
+	assertTextSent(t, e.rec, socket, paneID, exitText)
 }
 
 // assertLineCleared fails unless exactly one key send was made, paneClearKey
@@ -934,8 +934,8 @@ func (e *killEnv) assertExitDeliveredTimes(t *testing.T, socket, paneID string, 
 	t.Helper()
 	e.assertPaneCalls(t, pauseSendCalls...)
 	e.assertLineClearedTimes(t, socket, paneID, presses)
-	e.assertTextSent(t, socket, paneID, exitText)
-	e.assertEnterSent(t, socket, paneID)
+	assertTextSent(t, e.rec, socket, paneID, exitText)
+	assertEnterSent(t, e.rec, socket, paneID)
 }
 
 // codexSpec is the killRowSpec of a Codex row (agent codex, subagent_tracking 0

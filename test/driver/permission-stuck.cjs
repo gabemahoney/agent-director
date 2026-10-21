@@ -16,8 +16,10 @@
 // state, and only then asserted. Reads that change nothing never bump it.
 //
 // Stdout is one compact JSON evidence line of the observed values; the harness
-// keeps only its first 200 characters, so it stays short. Exit 77 with
-// availability:unavailable means the binary lacks the schema (never a pass).
+// keeps only its first 200 characters, so it stays short. It holds no run-time
+// timestamp: since is shown as the relative facts asserted about it, so every
+// passing run prints the same line. Exit 77 with availability:unavailable
+// means the binary lacks the schema (never a pass).
 const assert = require('node:assert/strict');
 const {spawnSync} = require('node:child_process');
 const fs = require('node:fs');
@@ -33,6 +35,7 @@ for (const key of ['state', 'stuck_reason', 'since', 'request_token', 'tool_name
 const sinceShape = new RegExp('^' + [...wire.since].map(c => /\d/.test(c) ? '\\d' : c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('') + '$');
 const db = path.join(os.homedir(), '.config/agent-director/state.db');
 const MAX_READS = 5;
+const BUSY_RETRY_MS = 10000;
 const q = value => "'" + String(value).replaceAll("'", "''") + "'";
 
 function sql(statement, readonly = false) {
@@ -52,6 +55,17 @@ function read(verb, id) {
  assert.equal(result.status, 0, `${verb} ${id}: ${result.stderr}`);
  assert.ok(result.data, `${verb} ${id}: no JSON result`);
  return result.data;
+}
+// Runs a command that may refuse with a false ErrStoreBusy under load, having
+// recorded nothing: retries only that refusal, for at most BUSY_RETRY_MS, and
+// returns the first other outcome (or the last busy one once the time is up).
+function callUnlessBusy(verb, ...args) {
+ const deadline = Date.now() + BUSY_RETRY_MS;
+ for (;;) {
+  const result = call(verb, ...args);
+  if (result.status === 0 || result.envelope?.err_name !== 'ErrStoreBusy' || Date.now() >= deadline) return result;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+ }
 }
 const version = id => Number(sql(`SELECT stuck_version FROM spawns WHERE instance_id=${q(id)}`, true));
 const rawState = id => sql(`SELECT state FROM spawns WHERE instance_id=${q(id)}`, true);
@@ -117,7 +131,7 @@ function check(row, label, token = A, tool = wire.tool_name) {
 const mode = process.argv[2];
 if (mode === 'public') {
  const agents = ['claude', 'codex', 'cursor'];
- const since = [], versions = [];
+ const versions = [];
  for (const agent of agents) {
   const id = 'public-' + agent;
   seed(id, agent);
@@ -135,7 +149,6 @@ if (mode === 'public') {
   assert.equal(get.unproven_requests.length, 1, `${agent}: unproven requests`);
   assert.equal(version(id), committed.version, `${agent}: repeated reads must not bump stuck_version`);
   assert.equal(rawState(id), 'check_permission', `${agent}: raw state must stay check_permission`);
-  since.push(status.since);
   versions.push(committed.version);
  }
  const list = call('list', '--state', 'stuck', '--limit', '3');
@@ -147,7 +160,8 @@ if (mode === 'public') {
   assert.equal(row.stuck_reason, wire.stuck_reason);
   for (const key of ['since', 'request_token', 'tool_name', 'unchanged_minutes']) assert.ok(!(key in row), `list row must not carry ${key}`);
  }
- console.log(JSON.stringify({case: mode, token: A.slice(0, 8), tool: wire.tool_name, list: rows.length, v: versions, since}));
+ // Each agent's since was asserted at or after the case start and equal across status and get.
+ console.log(JSON.stringify({case: mode, token: A.slice(0, 8), tool: wire.tool_name, list: rows.length, v: versions, since: '>=start,get=status'}));
 } else if (mode === 'representative') {
  const id = 'representative';
  seed(id, 'claude');
@@ -176,7 +190,8 @@ if (mode === 'public') {
  assert.equal(version(id), third.version, 'repeated reads must not bump stuck_version');
  steps.push([C.slice(0, 8), s3.tool_name, third.version]);
  assert.equal(rawState(id), 'check_permission', 'raw state must stay check_permission');
- console.log(JSON.stringify({case: mode, steps, since: s1.since, raw: rawState(id)}));
+ // S (s1.since) was asserted at or after the case start and kept by both representative changes.
+ console.log(JSON.stringify({case: mode, steps, since: '>=start,kept', raw: rawState(id)}));
 } else if (mode === 'guards') {
  const expected = {'send-keys': 'ErrRelayFallenBack', decide: 'ErrRelayFallenBack', pause: 'ErrSpawnNotPausable'};
  const observed = {'send-keys': [], decide: [], pause: []};
@@ -194,7 +209,10 @@ if (mode === 'public') {
    pause: ['--instance-id', id],
   };
   for (const [verb, args] of Object.entries(commands)) {
-   const result = call(verb, ...args);
+   // decide --max-wait-ms 0 cannot wait for a store lock, so load can make it
+   // refuse ErrStoreBusy, recording nothing; the other verbs wait up to the
+   // store's busy timeout.
+   const result = verb === 'decide' ? callUnlessBusy(verb, ...args) : call(verb, ...args);
    assert.notEqual(result.status, 0, `${agent}/${verb} unexpectedly permitted: ${result.stdout}`);
    assert.ok(result.envelope, `${agent}/${verb}: no error envelope on stderr: ${result.stderr}`);
    assert.equal(result.envelope.err_name, expected[verb], `${agent}/${verb}: ${result.stderr}`);

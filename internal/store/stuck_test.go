@@ -49,20 +49,25 @@ func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []
 
 // commitUnlessBusy runs observe, an observation that must commit. The write
 // never waits for the write lock, so a busy store is the one failure that is
-// repeated, at the same time and without sleeping; any other error, and a
-// third busy answer, fail the test.
+// repeated, at the same time and without sleeping, under
+// apitest.RepeatUntilCommitted's bound; any other error fails the test at once.
 func commitUnlessBusy(t *testing.T, observe func() (store.StuckDisplay, error)) store.StuckDisplay {
 	t.Helper()
-	for attempt := 1; ; attempt++ {
-		display, err := observe()
-		if err == nil {
-			return display
-		}
-		if !errors.Is(err, store.ErrStoreBusy) || attempt == 3 {
+	var display store.StuckDisplay
+	var err error
+	attempts, elapsed, committed := apitest.RepeatUntilCommitted(func() bool {
+		if display, err = observe(); err != nil && !errors.Is(err, store.ErrStoreBusy) {
 			t.Fatalf("observation did not commit: %+v %v", display, err)
 		}
-		t.Logf("attempt %d: store busy: %v", attempt, err)
+		return err == nil
+	})
+	if !committed {
+		t.Fatalf("observation did not commit in %d attempts over %v: %+v %v", attempts, elapsed, display, err)
 	}
+	if attempts > 1 {
+		t.Logf("observation committed on attempt %d after %v", attempts, elapsed)
+	}
+	return display
 }
 
 func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
@@ -163,10 +168,14 @@ func TestPermissionStuckRollbackAndNonwaitingLock(t *testing.T) {
 			} else {
 				storefix.InjectWriteFailure(t, path, storefix.WriteFailStuckObservation, id)
 			}
+			// A write that waited would wait out the store's busy timeout (the
+			// lock is held for a minute), so half of it separates the two
+			// under suite load.
+			limit := store.DefaultBusyTimeoutMs * time.Millisecond / 2
 			start := time.Now()
 			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
-			if elapsed := time.Since(start); elapsed > time.Second {
-				t.Errorf("nonwaiting write took %s", elapsed)
+			if elapsed := time.Since(start); elapsed >= limit {
+				t.Errorf("nonwaiting write took %s; a write that waits for the lock takes the %d ms busy timeout", elapsed, store.DefaultBusyTimeoutMs)
 			}
 			if err == nil || got != row.CommittedStuckDisplay() {
 				t.Fatalf("failed observation=%+v %v; want %+v", got, err, row.CommittedStuckDisplay())
