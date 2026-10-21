@@ -462,3 +462,144 @@ func TestDecisionZeroWaitAllowsSQLBeyondAcquisitionAllowance(t *testing.T) {
 		t.Errorf("timely cleanup unnecessarily discarded connection: opens=%d", b.opens.Load())
 	}
 }
+
+// stalledDone delays each Done() past connGrab, as b.q5r's CPU throttling did:
+// a deadline derived from it has passed by the time Done returns.
+type stalledDone struct{ context.Context }
+
+func (c stalledDone) Done() <-chan struct{} {
+	// The defect needs real elapsed time. Sleep lasts at least this long, so
+	// the derived deadline has passed however goroutines are scheduled.
+	time.Sleep(2 * connGrab)
+	return c.Context.Done()
+}
+
+// cancelOnErr ends the caller with cause the first time the store asks for its
+// error, which a zero-wait call does only once refused a held connection.
+type cancelOnErr struct {
+	context.Context
+	cancel context.CancelCauseFunc
+	cause  error
+}
+
+func (c cancelOnErr) Err() error {
+	c.cancel(c.cause)
+	return context.Cause(c.Context)
+}
+
+// TestZeroWaitAdmissionAfterStall (b.q5r): a zero-wait call that reaches the
+// free connection or operation slot only after its connGrab has elapsed still
+// takes it, and a returned operation call has freed its slot. A connection
+// another lease holds is refused after the call has queued for it exactly once:
+// ErrStoreBusy, also when the caller's deadline has passed by then, or the
+// caller's own error if it was canceled.
+func TestZeroWaitAdmissionAfterStall(t *testing.T) {
+	const refused = "ErrStoreBusy: the store's connection was not free within 0 ms: another call of this process held it"
+	grabConn := func(s *Store, ctx context.Context) error {
+		conn, _, err := s.boundedConnContext(ctx, 0)
+		if err == nil {
+			_ = conn.Close()
+		}
+		return err
+	}
+	callerEnds := func(cause error) func(*Store, context.Context) error {
+		return func(s *Store, ctx context.Context) error {
+			ctx, cancel := context.WithCancelCause(ctx)
+			defer cancel(nil)
+			return grabConn(s, cancelOnErr{ctx, cancel, cause})
+		}
+	}
+	runOperation := func(s *Store, ctx context.Context) error {
+		// Hold the worker in its last step until the slot is checked: the
+		// slot must already be free when the call returns, not soon after.
+		hold := make(chan struct{})
+		defer close(hold)
+		s.cleanup.hookAfterOperationForTest = func() { <-hold }
+		if err := s.runConnectionOperation(ctx, 0, func(*connectionOperation) error { return nil }); err != nil {
+			return err
+		}
+		select {
+		case s.cleanup.operationGate <- struct{}{}:
+			<-s.cleanup.operationGate
+			return nil
+		default:
+			return errors.New("a returned operation call still held the slot")
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		held    bool   // another lease holds the store's one connection
+		wantErr string // "" for none
+		// An admission that arms connGrab before taking a free slot fails
+		// only 1 time in 2 (random select), so repeat.
+		attempts int
+		admit    func(*Store, context.Context) error
+	}{
+		{"free connection", false, "", 1, grabConn},
+		{"connection held by another lease", true, refused, 1, grabConn},
+		{"caller canceled once refused a held connection", true, "store: connection: context canceled", 1, callerEnds(context.Canceled)},
+		{"caller's deadline passed once refused a held connection", true, refused, 1, callerEnds(context.DeadlineExceeded)},
+		{"free operation slot", false, "", 20, runOperation},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTempStore(t)
+			if tc.held {
+				defer holdConnection(t, s)()
+			}
+			if st := s.db.Stats(); st.OpenConnections != 1 || (st.InUse == 1) != tc.held {
+				t.Fatalf("pool before the call: %+v; want its one connection held=%v", st, tc.held)
+			}
+			for i := 1; i <= tc.attempts; i++ {
+				ctx, cancel := s.operationContext(0)
+				waits := s.db.Stats().WaitCount
+				err := tc.admit(s, stalledDone{ctx})
+				cancel()
+				got := ""
+				if err != nil {
+					got = err.Error()
+				}
+				if got != tc.wantErr {
+					t.Fatalf("attempt %d after a stall = %q; want %q", i, got, tc.wantErr)
+				}
+				// Refused only after it queued behind the holder, exactly once.
+				if queued := s.db.Stats().WaitCount - waits; tc.held && queued != 1 {
+					t.Fatalf("refused after queuing %d times; want once", queued)
+				}
+			}
+		})
+	}
+}
+
+// TestConnGrabStartsAtSecondLook (b.q5r): database/sql looks at
+// connGrabContext's Done once to take a free connection and twice to wait for
+// a held one; only the second look starts the grab, and a look after release
+// arms nothing.
+func TestConnGrabStartsAtSecondLook(t *testing.T) {
+	s, _ := openTempStore(t)
+	free := newConnGrabContext(context.Background(), s.db)
+	conn, err := s.db.Conn(free)
+	if err != nil {
+		t.Fatalf("the free connection was refused: %v", err)
+	}
+	_ = conn.Close()
+	if free.looks != 1 || free.timer != nil {
+		t.Fatalf("taking the free connection: %d looks, timer armed=%v; want 1 look, unarmed", free.looks, free.timer != nil)
+	}
+	free.release()
+	free.Done()
+	if free.timer != nil {
+		t.Error("a look after release armed the grab timer")
+	}
+
+	defer holdConnection(t, s)()
+	held := newConnGrabContext(context.Background(), s.db)
+	defer held.release()
+	start := time.Now()
+	if conn, err := s.db.Conn(held); err == nil {
+		_ = conn.Close()
+		t.Fatal("the held connection was taken; want it refused once the grab ran out")
+	}
+	if cause, elapsed := context.Cause(held), time.Since(start); held.looks != 2 || cause != errConnGrabElapsed || elapsed < connGrab {
+		t.Errorf("held connection: %d looks, grab ended with %v after %v; want 2 looks, %v after at least %v", held.looks, cause, elapsed, errConnGrabElapsed, connGrab)
+	}
+}

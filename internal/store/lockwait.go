@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"modernc.org/sqlite"
@@ -26,12 +27,14 @@ var ErrStoreBusy = errors.New("ErrStoreBusy")
 // timeout ([store] busy_timeout_ms).
 const DefaultLockWait time.Duration = -1
 
-// connGrab is the least time a bounded call allows itself to take the store's
-// one connection. database/sql refuses a context that has already expired
-// even when the connection is free, so a call with no wait left (a reading
-// verb's hook_gone_at write, b.146 problem 4) still gets this long to take a
-// free connection; it is too short to amount to a wait for a connection
-// another call of this process holds.
+// connGrab is how long a zero-wait call waits for the store's one connection,
+// or for a bounded operation's admission (runConnectionOperation), once it
+// has to wait because another call of this process holds it. The wait counts
+// from then, never from when the call was made, so a call with no wait left
+// (a reading verb's hook_gone_at write, b.146 problem 4) takes a free
+// connection or slot however long a scheduling stall delays it on its way
+// (b.q5r; connGrabContext says what that relies on in database/sql). It is
+// too short to amount to a wait for a holder.
 const connGrab = time.Millisecond
 
 // A zero lock wait permits an uncontended write, including its commit. It
@@ -78,11 +81,14 @@ func isBusy(err error) bool {
 // other store call does, without a bound, and returns the store's busy
 // timeout. Otherwise both waits share one deadline, maxWait from now: it
 // waits for the connection, which the pool's one connection makes a wait for
-// any other call of this process using the store, until the deadline (at
-// least connGrab), and returns what is left of maxWait after it as the busy
-// timeout, cut at the store's busy timeout (a bound never waits longer than
-// the store would) and never below 0, which makes SQLite answer busy at once.
-// A connection not taken by the deadline is an error wrapping ErrStoreBusy.
+// any other call of this process using the store, until the deadline, and
+// returns what is left of maxWait after it as the busy timeout, cut at the
+// store's busy timeout (a bound never waits longer than the store would) and
+// never below 0, which makes SQLite answer busy at once. Zero wait takes a
+// free connection however late it reaches the pool, waits connGrab for one
+// another call holds (connGrabContext, with its limits), and returns a busy
+// timeout of 0. A connection not taken in time is an error wrapping
+// ErrStoreBusy; the caller's own cancellation is not.
 func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (*sql.Conn, int, error) {
 	// Explicit acquisition carries its own provenance; database/sql's pool
 	// replacement opener must never borrow another operation's context.
@@ -96,13 +102,22 @@ func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (
 	}
 	deadline, _ := ctx.Deadline()
 	if maxWait == 0 {
-		var cancel context.CancelFunc
-		acquireCtx, cancel = context.WithTimeout(acquireCtx, connGrab)
-		defer cancel()
+		grab := newConnGrabContext(acquireCtx, s.db)
+		defer grab.release()
+		acquireCtx = grab
 	}
 	conn, err := s.db.Conn(acquireCtx)
+	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(acquireCtx), errConnGrabElapsed) {
+		// connGrab ran out, a refusal as busy. If the caller's context has
+		// ended since, its own error decides, as if it had ended first: a
+		// passed deadline is busy, a cancellation is not.
+		err = ctx.Err()
+		if err == nil {
+			err = errConnGrabElapsed
+		}
+	}
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, errConnGrabElapsed):
 		return nil, 0, fmt.Errorf("%w: the store's connection was not free within %d ms: another call of this process held it", ErrStoreBusy, maxWait.Milliseconds())
 	case err != nil:
 		return nil, 0, fmt.Errorf("store: connection: %w", err)
@@ -114,9 +129,84 @@ func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (
 	return conn, int(min(left, int64(s.busyTimeoutMs))), nil
 }
 
+// errConnGrabElapsed is the cause a connGrabContext ends with when its
+// connGrab runs out.
+var errConnGrabElapsed = errors.New("store: connection grab elapsed")
+
+// connGrabContext bounds a zero-wait call's wait for the store's one
+// connection to connGrab, counted from when database/sql starts to wait for
+// it, so a call a scheduling stall delays on its way still takes a free
+// connection however late it arrives (b.q5r). Zero-wait connection
+// acquisition must use it; never pre-arm a connGrab timeout.
+//
+// It relies on how database/sql's DB.conn (Go 1.22.10, as in 1.26.1) uses
+// the context. Each attempt first looks at Done once, holding db.mu, and
+// refuses an ended context; it then takes a free connection without looking
+// again (the store's SessionResetters never look at Done), or looks at Done
+// again to wait for one. So the first Done never arms the timer and every
+// later one does: a free connection never arms it, and a queued call arms it
+// as its wait starts. A later Done can also be a retry's first look (after
+// driver.ErrBadConn), made holding db.mu, so the timer takes db.mu (through
+// Stats) before it cancels, by when that look is over. Opening a new
+// connection also arms it (callerOwnedConnector looks at Done), harmlessly:
+// the native open runs under the operation's context, not this one.
+//
+// One contended case stays. A queued call that stalls for connGrab after its
+// wait look, while the holder releases within connGrab, finds both the
+// connection and the ended grab ready, and database/sql's wait select picks
+// either at random: the call can get ErrStoreBusy after a hold shorter than
+// connGrab. That is accepted, because only a retry could close it and a
+// zero-wait call makes none.
+//
+// If database/sql stopped looking at Done before taking a free connection,
+// a queued call's wait would be its first look and would last the
+// operation's immediateWorkBudget instead of connGrab. If it looked at Done
+// again, outside db.mu, before taking a free connection, a stall of connGrab
+// after that look could again refuse a free connection.
+type connGrabContext struct {
+	context.Context // a cancelable child of the call's acquisition context
+	cancel          context.CancelCauseFunc
+	db              *sql.DB
+	mu              sync.Mutex
+	looks           int
+	timer           *time.Timer
+	released        bool
+}
+
+func newConnGrabContext(parent context.Context, db *sql.DB) *connGrabContext {
+	ctx, cancel := context.WithCancelCause(parent)
+	ctx.Done() // made now, so no look allocates it
+	return &connGrabContext{Context: ctx, cancel: cancel, db: db}
+}
+
+func (c *connGrabContext) Done() <-chan struct{} {
+	c.mu.Lock()
+	c.looks++
+	if c.looks > 1 && c.timer == nil && !c.released {
+		c.timer = time.AfterFunc(connGrab, func() {
+			c.db.Stats() // takes db.mu: a look that armed the timer under it has finished
+			c.cancel(errConnGrabElapsed)
+		})
+	}
+	c.mu.Unlock()
+	return c.Context.Done()
+}
+
+// release ends the grab once acquisition has returned, leaving no timer or
+// registration on the parent behind.
+func (c *connGrabContext) release() {
+	c.mu.Lock()
+	c.released = true // a later Done arms nothing
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.mu.Unlock()
+	c.cancel(nil)
+}
+
 // withConn runs fn on the store's one connection, its waits bounded by
-// maxWait (boundedConn): the wait for the connection, and, through that
-// context-aware retries, the wait for a lock another connection holds.
+// maxWait (boundedConnContext): the wait for the connection, and, through
+// that context-aware retries, the wait for a lock another connection holds.
 // All SQL and cleanup retain the same context. A connection not taken in time returns an error
 // wrapping ErrStoreBusy, having run nothing. The store's own busy timeout is
 // put back before the connection returns to the pool; if that fails the
@@ -172,7 +262,7 @@ func (s *Store) withConnOperation(ctx context.Context, maxWait time.Duration, op
 	}
 	if sqliteBusyMs != s.busyTimeoutMs {
 		// PRAGMA busy_timeout takes no bound parameter; busyMs is an int the
-		// store computed (boundedConn), never input.
+		// store computed (boundedConnContext), never input.
 		if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout = %d", sqliteBusyMs)); err != nil {
 			cleanup.discard = true
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -212,8 +302,8 @@ func (s *Store) readWithin(maxWait time.Duration, errPrefix string, fn func(ctx 
 
 // inWriteTx runs fn inside one BEGIN IMMEDIATE transaction on the store's
 // connection, waiting at most maxWait in all for the connection and the write
-// lock (DefaultLockWait: as every other write waits; boundedConn). The
-// transaction holds the write lock from its first statement, so nothing
+// lock (DefaultLockWait: as every other write waits; boundedConnContext).
+// The transaction holds the write lock from its first statement, so nothing
 // inside it waits for the lock again.
 //
 // When the connection or the lock is not taken within the wait, it returns an
