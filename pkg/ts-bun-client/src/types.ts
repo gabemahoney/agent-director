@@ -417,8 +417,9 @@ export interface SpawnParams {
    * removed tokens appear in `dropped_args`; the agent starts fresh and resumes nothing.
    * Exact denied long tokens owned as option values always refuse. For codex, a Codex subcommand in
    * command position, `--remote`, `--remote-auth-token-env`, `-c`/`--config` keys at, above or
-   * under `hooks`, `tui.disable_paste_burst` or `features.hooks`, and `--disable hooks` are
-   * refused (`ErrSpawnDeniedFlag`); with `disable_ask_user` on, `--enable
+   * under `hooks`, `tui.disable_paste_burst`, `features.hooks` or its alias
+   * `features.codex_hooks`, and `--disable hooks` or `codex_hooks` are refused
+   * (`ErrSpawnDeniedFlag`); with `disable_ask_user` on, `--enable
    * default_mode_request_user_input` and the question-tool keys are refused too. agent-director
    * adds no second `--no-daemon`, `--dangerously-bypass-hook-trust` (pre-trust ok) or
    * `--enable write_stdin_approval` when the arguments already carry one before any `--`;

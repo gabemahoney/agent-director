@@ -535,9 +535,10 @@ against a folder you accept that in.
   grep -sn 'hooks' '<folder>/config.toml' '<project>/.codex/config.toml' /etc/codex/*.toml
   ```
 
-  Fix: remove `hooks = false` under `[features]`, or the managed-hooks-only
-  setting, from the layer that has it. A spawn's own arguments cannot do this:
-  `spawn` refuses `--disable hooks` and `features.hooks` (see the [caller
+  Fix: remove `hooks = false` or `codex_hooks = false` under `[features]`, or
+  the managed-hooks-only setting, from the layer that has it. A spawn's own
+  arguments cannot do this: `spawn` refuses `--disable hooks`,
+  `features.hooks` and the `codex_hooks` spellings of both (see the [caller
   contract](caller-contract.md#spawn-and-template-input-refusals)).
 - **A newer Codex rejects the hook-trust hash agent-director computes.**
   agent-director trusts each of its hook entries by a hash of the entry, so a

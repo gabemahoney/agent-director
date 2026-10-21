@@ -289,9 +289,10 @@ func hasControlChar(id string) bool {
 //     on a verified finished-agent switch. Exact denied long tokens owned as
 //     option values are always refused. For a codex spawn a Codex subcommand
 //     in command position, --remote, or a setting agent-director owns (a
-//     -c/--config key at, above or under hooks, tui.disable_paste_burst or
-//     features.hooks, --disable hooks, and while disable_ask_user is on the
-//     question-tool keys and --enable default_mode_request_user_input).
+//     -c/--config key at, above or under hooks, tui.disable_paste_burst,
+//     features.hooks or its alias features.codex_hooks, --disable hooks or
+//     codex_hooks, and while disable_ask_user is on the question-tool keys
+//     and --enable default_mode_request_user_input).
 //     Cursor accepts model selection, explicit agent/plan/ask mode and one
 //     initial prompt. Unsupported or malformed Cursor arguments are refused;
 //     remove the named argument and any owned value, then retry. Explicit mode is established through

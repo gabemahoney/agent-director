@@ -39,11 +39,11 @@ var ErrRelayModeInvalid = errors.New("ErrRelayModeInvalid")
 // where they are dropped and the agent starts fresh. --setting-sources is not
 // on the refused list (SRD §19 Q5). For a codex spawn (CheckCodexArgs): a Codex subcommand in
 // command position, --remote, --remote-auth-token-env, a -c/--config key at,
-// above or under hooks, tui.disable_paste_burst or features.hooks, and
-// --disable hooks; while disable_ask_user is on, also --enable
-// default_mode_request_user_input and a -c/--config key at, above or under
-// features.default_mode_request_user_input or
-// tools.experimental_request_user_input.
+// above or under hooks, tui.disable_paste_burst, features.hooks or its alias
+// features.codex_hooks, and --disable hooks or codex_hooks; while
+// disable_ask_user is on, also --enable default_mode_request_user_input and a
+// -c/--config key at, above or under features.default_mode_request_user_input
+// or tools.experimental_request_user_input.
 var ErrSpawnDeniedFlag = errors.New("ErrSpawnDeniedFlag")
 
 // ErrReservedEnvKey is returned when extra_env contains a key whose env-var

@@ -13,24 +13,32 @@ import (
 // what is an option, a value, a prompt word and the first `--`.
 
 // Codex's option names that agent-director names or compares. Long names are
-// written with their dashes.
+// written with their dashes. codex_hooks is Codex's deprecated alias of the
+// hooks feature, still honoured by --enable/--disable and the [features]
+// table (codex-rs/features legacy.rs ALIASES, checked at 0.159.2 and 0.163.0;
+// b.fqk); it is the only Codex feature or config key alias of a setting
+// agent-director protects, so its spellings are refused as hooks' are. The
+// legacy top-level disable_paste_burst is deliberately not refused: Codex
+// reads tui.disable_paste_burst first, and every launch sets it.
 const (
-	codexOptConfig                = "--config"
-	codexOptEnable                = "--enable"
-	codexOptDisable               = "--disable"
-	codexOptRemote                = "--remote"
-	codexOptRemoteAuthTokenEnv    = "--remote-auth-token-env"
-	codexOptImage                 = "--image"
-	codexOptNoDaemon              = "--no-daemon"
-	codexOptBypassHookTrust       = "--dangerously-bypass-hook-trust"
-	codexFeatureHooks             = "hooks"
-	codexFeatureWriteStdin        = "write_stdin_approval"
-	codexFeatureQuestionTool      = "default_mode_request_user_input"
-	codexConfigKeyHooks           = "hooks"
-	codexConfigKeyPasteBurst      = "tui.disable_paste_burst"
-	codexConfigKeyFeaturesHooks   = "features.hooks"
-	codexConfigKeyQuestionFeature = "features.default_mode_request_user_input"
-	codexConfigKeyQuestionTool    = "tools.experimental_request_user_input"
+	codexOptConfig                   = "--config"
+	codexOptEnable                   = "--enable"
+	codexOptDisable                  = "--disable"
+	codexOptRemote                   = "--remote"
+	codexOptRemoteAuthTokenEnv       = "--remote-auth-token-env"
+	codexOptImage                    = "--image"
+	codexOptNoDaemon                 = "--no-daemon"
+	codexOptBypassHookTrust          = "--dangerously-bypass-hook-trust"
+	codexFeatureHooks                = "hooks"
+	codexFeatureHooksAlias           = "codex_hooks"
+	codexFeatureWriteStdin           = "write_stdin_approval"
+	codexFeatureQuestionTool         = "default_mode_request_user_input"
+	codexConfigKeyHooks              = "hooks"
+	codexConfigKeyPasteBurst         = "tui.disable_paste_burst"
+	codexConfigKeyFeaturesHooks      = "features.hooks"
+	codexConfigKeyFeaturesHooksAlias = "features.codex_hooks"
+	codexConfigKeyQuestionFeature    = "features.default_mode_request_user_input"
+	codexConfigKeyQuestionTool       = "tools.experimental_request_user_input"
 )
 
 // codexValueLong is the constant list of Codex's long options that take a
@@ -300,6 +308,7 @@ var codexConfigRefusals = []struct {
 	{codexConfigKeyHooks, false, "agent-director sets the hooks and their trust for every Codex launch"},
 	{codexConfigKeyPasteBurst, false, "agent-director sets the typing setting for every Codex launch"},
 	{codexConfigKeyFeaturesHooks, false, "agent-director needs Codex's hooks on for every launch"},
+	{codexConfigKeyFeaturesHooksAlias, false, "agent-director needs Codex's hooks on for every launch"},
 	{codexConfigKeyQuestionFeature, true, "disable_ask_user keeps Codex's question tool off"},
 	{codexConfigKeyQuestionTool, true, "disable_ask_user keeps Codex's question tool off"},
 }
@@ -318,6 +327,7 @@ var codexFeatureRefusals = []struct {
 	why          string
 }{
 	{codexFeatureHooks, false, true, false, "agent-director needs Codex's hooks on for every launch"},
+	{codexFeatureHooksAlias, false, true, false, "agent-director needs Codex's hooks on for every launch"},
 	{codexFeatureQuestionTool, true, false, true, "disable_ask_user keeps Codex's question tool off"},
 }
 
@@ -327,8 +337,9 @@ var codexFeatureRefusals = []struct {
 //   - a Codex subcommand or alias in command position (every one, codexSubcommands);
 //   - --remote, --remote-auth-token-env, or existing-session selectors;
 //   - -c/--config whose key path (split on `.` as Codex does) equals, lies
-//     above or lies under hooks, tui.disable_paste_burst or features.hooks;
-//   - --disable hooks;
+//     above or lies under hooks, tui.disable_paste_burst, features.hooks or
+//     its alias features.codex_hooks;
+//   - --disable hooks or --disable codex_hooks (its alias);
 //   - while questionToolOff (disable_ask_user is on): --enable
 //     default_mode_request_user_input, and -c/--config at, above or under
 //     features.default_mode_request_user_input or

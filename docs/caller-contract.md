@@ -981,8 +981,9 @@ repair that selection; follow the [fresh-instance boundary](#cursor-operation-bo
     is refused (the `=` form takes one value, so `exec` is in command
     position). `--remote` and
     `--remote-auth-token-env`; `-c` or `--config` with a key at, above or
-    under `hooks`, `tui.disable_paste_burst` or `features.hooks`;
-    and `--disable hooks`. While `disable_ask_user` is on, also
+    under `hooks`, `tui.disable_paste_burst`, `features.hooks` or its alias
+    `features.codex_hooks`; and `--disable hooks` or `--disable codex_hooks`
+    (Codex's alias of `hooks`). While `disable_ask_user` is on, also
     `--enable default_mode_request_user_input` and `-c` keys at, above or under
     `features.default_mode_request_user_input` or
     `tools.experimental_request_user_input` (see
