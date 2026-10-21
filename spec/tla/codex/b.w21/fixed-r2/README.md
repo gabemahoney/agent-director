@@ -61,10 +61,12 @@ invariants; their counterexamples are retained in the archive.
 
 The original six contexts, cfgs, predictions, hashes and
 [scheduler commands](scheduler-commands.txt) remain byte-identical to
-`b9f73c45f3802feb8cc02a9b03f4873f4dd859bb`. Their historical `NOT_RUN`
-comments describe preparation, not current observations. The manifest's
-`resource_overlay` records the separate rerun context
-`/tmp/claude-1000/ad-codex/w21-r2-initial-big`, all six actual file hashes,
+`b9f73c45f3802feb8cc02a9b03f4873f4dd859bb`; the commands' absolute
+`--context` and scheduler paths name the original checkout and host. Their
+historical `NOT_RUN` comments describe preparation, not current
+observations. The manifest's `resource_overlay` records the separate rerun
+context `/tmp/claude-1000/ad-codex/w21-r2-initial-big` (a historical record
+from the original host; it is not in the repo), all six actual file hashes,
 and the exact changed Dockerfile and `runs` bytes. The model, cfg, jar and
 runner are identical to the original initial context; no obligation, model
 behavior or configuration was weakened.
@@ -84,7 +86,10 @@ The archive contains the exact user receipt and seven full run logs with
 SHA-256 hashes. Job metadata includes only the verifier's allowlisted fields,
 plus the source path and hash of each whole `job.json`; it excludes environment
 and container-inspect data. Static verification compares the current context
-bytes and safe scheduler metadata with the archived records while available.
+bytes and safe scheduler metadata with the archived records. Its comparisons
+with the live scheduler logs and `job.json`, the rerun context and the ticket
+receipt run only where those original files still exist; elsewhere only
+archived copies are checked.
 The scheduler's context tar hash is opaque here: these checks do not establish
 independent image-time identity. Each verdict applies to its archived model
 and configuration, with the time-abstraction limit described above.
@@ -111,7 +116,11 @@ python3 spec/tla/codex/b.w21/fixed-r2/verifycontexts.py
 This checks frozen hashes, source correspondence, all seven archived attempts,
 allowlisted metadata, resource differences and final prediction matches without
 executing or parsing TLA+. Model execution was performed by the User through
-the scheduler; no new job is required.
+the scheduler; no new job is required. It passes only in a full-history
+checkout whose production runtime still matches `9d025f8f` and whose canonical
+`src/B146R5Cx.tla` still matches the corrected model recorded in
+[manifest.json](manifest.json) (`source_sha256`); once either changes, it
+fails by design.
 
 The [unit handoff](../../../../../test/b.w21/README.md) records 32 new public
 API cases: pending/check_permission × ACKed live, unACKed unknown before

@@ -23,7 +23,6 @@ Scope of historical results and current files
   420 Bun tests across 57 files and make exit 0. All 714 test-file hashes
   were unchanged during that run; the unit handoff preserves the exact
   command, merge parents, source hashes and complete receipt references.
-  This final documentation-only receipt and pin refresh follows that run.
   See b.w21/README.md, fixed/README.md and fixed-r2/README.md. Every pin
   identifies current file bytes; execution claims belong to archived receipts.
 
@@ -75,8 +74,13 @@ Not wired into make tla
   No model-execution target runs these files. `make tla` runs ci/suite.tsv only,
   and ci/run_ci.sh never reads codex/. To run a job again, copy
   spec/tla/tla2tools.jar into its job-<run>/ directory and submit that
-  directory to the job scheduler. b.w21 contexts already include the jar;
-  use their separate exact user-submission commands.
+  directory to the job scheduler. b.w21 contexts already include the jar:
+  submit b.w21/[fixed/|fixed-r2/]jobs/<case>/ from this checkout with the
+  flags in that round's scheduler-commands.txt, except fixed-r2's
+  w21_r2_initial, whose completed run used the resource overlay in
+  fixed-r2/manifest.json (see fixed-r2/README.md). The absolute --context
+  and scheduler paths in those files are a historical record of the original
+  checkout and host.
 
 Source
   Bee b.ssz, directory tickets/Ideas/b.ssz/tla/ of the ticket tree
@@ -160,7 +164,7 @@ b.w21 additions (separate from the historical b.ssz layout)
 
 Pins (sha256sum format, paths relative to spec/tla/codex/)
 facdc7569c3126631230f614b8f65acdb7bcf467d6abca080a6f23593fe3982e  README.md
-d598b6f2bd23b0a72568249bca509ed7eb9205522efa842bc55c326bbcedf865  b.w21/README.md
+903fa29c73354a6e7b59373ed2e785d8bc388a99b9dd791937459b0b83eec699  b.w21/README.md
 4a32aa242f83aebb73fae8687775f7482b74e147e90c42a414b8c383e93eb8b7  b.w21/cfg/w21_current_launch_control.cfg
 79ff72074bcf256f73767b4e73202f7afeb2644b59c522d129454daca9b09912  b.w21/cfg/w21_expired_deny_live_red.cfg
 4c53c668af09c2b0929a0105f38b90547f372864670630e599dd99cb9e368462  b.w21/cfg/w21_expired_deny_red.cfg
@@ -170,7 +174,7 @@ d888a897dba6088418746c3f15e69250aa52bcc58553892b3335515409a82591  b.w21/cfg/w21_
 0662bf35a4803cb7b277fe7cc90c542de54f857cdbfd3a5e076bc113a536aa50  b.w21/cfg/w21_pane_write_probe.cfg
 e88015ef3ff408c9f0e7d5fd4fd28966c9a91a02739126982afb64ee9559e6ef  b.w21/cfg/w21_relaunch_probe.cfg
 d89beb1ae4a5e8a73b13f0d53ef8f60edd05700dfdf85808ead2d34b3fd195b3  b.w21/cfg/w21_relaunch_red.cfg
-dd9d2e385cdc6ab86be37f4ed7bcdb23e8e6c8efaef50249e132cb3724d56a9b  b.w21/fixed-r2/README.md
+bac28044e68d9df37f9c6a2b2b7b94a437e8a58a4bc7da9b1c7b9107332e56ad  b.w21/fixed-r2/README.md
 e23740fbcc30fa43262be68f87ceed7c941585754ffb2c3c8b2c8b116fe65c8d  b.w21/fixed-r2/cfg/w21_r2_initial.cfg
 35b76444c400860eb954c97b8536c44424abc0cc6ff88714fa6b8c8332b8d924  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_exact.cfg
 420e4df08fd499ae427f0bbba7925b07f4b18793c092e9581181ef3aeb2b757d  b.w21/fixed-r2/cfg/w21_r2_mixed_acked_live_probe.cfg
@@ -217,8 +221,8 @@ be9903f704ac2afba71fbd40ca34c9f83cbd183d7f1d78a678453bac1dee4ab3  b.w21/fixed-r2
 f53fd19b98ce40bf5565e01d55791c4cf8b95dac48cc96862ab1aef65af69474  b.w21/fixed-r2/mkcontexts.py
 6d0ae0ac3ed2120384750fb3b8412e61aadf5dee29962a2a161701ec413785d4  b.w21/fixed-r2/model-r2-receipts.json
 27cbfbbeb56bdf3b941cad76ecdeb63f2fd9fde0859e5b74d2a03e47832991ab  b.w21/fixed-r2/scheduler-commands.txt
-4118460509968c2f149622034ad113fe626d78f84b8a6499987b6187936bbd3d  b.w21/fixed-r2/verifycontexts.py
-5aca36d6dbd1b4b6462ec04221cbae41810179e60a381133800d761cb201b82a  b.w21/fixed/README.md
+e38f7b213f3d4e18bb3e6f0f7a3b69ab0cabfeb96074cddff57518f14341b17a  b.w21/fixed-r2/verifycontexts.py
+e182f5b52bf9e9e8b88cae9c77f0fe8d36894bd38b3af724ed6966f519fab27e  b.w21/fixed/README.md
 2752bb2de719bc577be6b77d18c9d31d7deb6bf87e18c77e8fa242e3037f841a  b.w21/fixed/cfg/w21_fixed_current_launch_control.cfg
 5e25933a518c9c8945808499d4401fc6d1fa80e7c8c75fd28312f5de73fbf24f  b.w21/fixed/cfg/w21_fixed_expired_deny.cfg
 edf54841d68f6b3dbca905eddd4b42bfb133b1055e4a16c5a09c916597122b77  b.w21/fixed/cfg/w21_fixed_expired_deny_live.cfg
@@ -321,7 +325,7 @@ daf2633d330751b964f52cab15d7af7f013a7f404b9641abdb8c85c53a4c6f03  b.w21/fixed/jo
 7b275147ece5782b36f05691f08fa70a166ce7302cdaa086538a80ab76f96790  b.w21/fixed/mkcontexts.py
 7ff902d9c633389019e6f60719f0c4c3283d14941410c1989b856e9a6e0bd4c3  b.w21/fixed/model-fixed-receipts.json
 626a2973ff3f4b834d68f3282794e0cb590b071884caa7a1f2ba1ef66a51996b  b.w21/fixed/scheduler-commands.txt
-de2e69810ef4533f5da8650b7ea653bbdfba092f7dfd9e3e8b85497581fceaba  b.w21/fixed/verifycontexts.py
+f8a279275958ef95d4411bf76c8669b462fd3e23a181a031e014f2ac98aaed07  b.w21/fixed/verifycontexts.py
 3901dee2cefba073cff3ef53c9b511af16d5d84b9836d2a92d64ca15a723e43e  b.w21/jobs/w21_current_launch_control/B146R5Cx.tla
 ccf4685a9bc884bb1a15241dc857787ce4b3154c72eae289e75742e8f5f5b7a1  b.w21/jobs/w21_current_launch_control/Dockerfile
 0270c4470a044b32a95c14afe6b679c1fed4b16741c3da72a6d0829924af2e5f  b.w21/jobs/w21_current_launch_control/runs
@@ -380,7 +384,7 @@ d89beb1ae4a5e8a73b13f0d53ef8f60edd05700dfdf85808ead2d34b3fd195b3  b.w21/jobs/w21
 dafcfc7364db4871269b61d1030e74827057a99d72d271f4862886b04e64c088  b.w21/mkcontexts.py
 d39512d29e6e136f34f250ab80a6c744c022ee243ab1ff3af816b334f7620965  b.w21/model-red-receipts.json
 c240475546c2b1df77b31e317919a4d7a0249f4d25c52cf2a1e43b45e1aa9c30  b.w21/scheduler-commands.txt
-dc5913a64197df1385fff152aabb6e07bf65b8bbad8b1e16796dcb186a130710  b.w21/verifycontexts.py
+b66357c74d97d3440258125dc0a1ef0ffe4f353fda1df35e6fe30aba9a361e2f  b.w21/verifycontexts.py
 1f28d9640c7a7d98c1abb5d02e48d7497d28e37631a626646d83531bea8aea73  job-hx_C_endnow/Dockerfile
 87d081da7aa11424058f8ba5b375f4ec0a0b9d5a981357cdb59d38511c2f987c  job-hx_C_endnow/Phase5HookCx.tla
 4a45419b04df889e2011b7b348603dd6fe7a1244975b4342137f9a19c2afec91  job-hx_C_endnow/hx_C_endnow.cfg

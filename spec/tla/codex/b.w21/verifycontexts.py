@@ -8,6 +8,7 @@ import re
 
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[3]
 BASELINE_COMMIT = "8c6998d4f978312cdd557a27483c2c6929f205e8"
 BASELINE_MANIFEST_SHA256 = "0ab9035d9bad9b83963c666ef4f41d31f1be857d417443b3e3eca53dfb520a45"
 BASELINE_MODEL_SHA256 = "3901dee2cefba073cff3ef53c9b511af16d5d84b9836d2a92d64ca15a723e43e"
@@ -18,6 +19,24 @@ RECEIPTS_ARCHIVE_SHA256 = "d39512d29e6e136f34f250ab80a6c744c022ee243ab1ff3af816b
 
 def sha256(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def check_archived_context(archived, context):
+    """Accept a recorded absolute context path from any checkout.
+
+    Scheduler records keep the path of the checkout that submitted the job,
+    so it must end in the context's repo-relative path here, not equal it.
+    """
+    relative = context.resolve().relative_to(ROOT).parts
+    path = Path(archived)
+    assert path.is_absolute() and path.parts[-len(relative):] == relative, (archived, context)
+
+
+def command_context(command):
+    """Return the single --context path of an archived scheduler command."""
+    contexts = re.findall(r"--context '([^']*)'", command)
+    assert len(contexts) == 1, command
+    return contexts[0]
 
 
 def checks(cfg, kind):
@@ -218,7 +237,7 @@ def main():
     commands = (HERE / "scheduler-commands.txt").read_text().splitlines()
     assert len(commands) == len(manifest["cases"])
     for command, case in zip(commands, manifest["cases"]):
-        assert f"--context '{(HERE / case['context']).resolve()}'" in command, command
+        check_archived_context(command_context(command), HERE / case["context"])
         assert "--channel C0B3X876XSB --network off --memory 4g --cpus 4 --timeout 15m" in command, command
     print(f"STATIC-OK {len(commands)} immutable baseline contexts, {total} total context bytes; "
           "nine archived scheduler receipts verified; no model or scheduler execution.")

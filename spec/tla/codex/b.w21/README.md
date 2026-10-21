@@ -92,9 +92,10 @@ reached before SessionStart.
 ## Scheduler evidence and baseline preservation
 
 The submitted commands are preserved in
-[scheduler-commands.txt](scheduler-commands.txt). Those nine commands use the absolute
-contexts in this worktree, channel `C0B3X876XSB`, network off, 4 GiB memory,
-4 CPUs and a 15-minute timeout. Each context is self-contained and uses the
+[scheduler-commands.txt](scheduler-commands.txt). Those nine commands are a
+historical record: their absolute `--context` and scheduler paths name the
+original checkout and host, not this one. They use channel `C0B3X876XSB`,
+network off, 4 GiB memory, 4 CPUs and a 15-minute timeout. Each context is self-contained and uses the
 existing `tlcjob.sh`; its run has a 700-second TLC budget. Do not execute
 TLC, the JVM, container engines, tests or repository binaries on the host.
 
@@ -116,10 +117,12 @@ configuration symbol names, knob defaults, nine-case membership and
 scheduler-command consistency. Its text checks cover the `nl` initializer and sole
 relaunch assignment, crash/find-missing/relaunch wiring, scoped settlement
 and inherited-property replacement, and the relaunch probe's configuration
-and independence from hold predicates:
+and independence from hold predicates. It accepts each archived `--context`
+path from any checkout when that path ends in the context's repo-relative path.
+Run it from the repo root:
 
 ```sh
-python3 /home/horde/projects/agent-director-project/agent-director-w21-tla/spec/tla/codex/b.w21/verifycontexts.py
+python3 spec/tla/codex/b.w21/verifycontexts.py
 ```
 
 It invokes no TLC, JVM, scheduler, container or product binary. It verifies

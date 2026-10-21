@@ -89,6 +89,7 @@ RUN apt-get update \
         jq \
         make \
         procps \
+        python3 \
         sqlite3 \
         tmux \
         unzip \

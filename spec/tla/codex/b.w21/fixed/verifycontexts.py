@@ -158,7 +158,8 @@ def check_fidelity(source):
 
 def main():
     # Anchor and verify every frozen RED context/receipt with its own verifier.
-    load_module("red_verifier", RED / "verifycontexts.py").main()
+    red = load_module("red_verifier", RED / "verifycontexts.py")
+    red.main()
     generator = load_module("fixed_generator", HERE / "mkcontexts.py")
     for path in (HERE / "mkcontexts.py", HERE / "verifycontexts.py"):
         ast.parse(path.read_text(), filename=str(path))
@@ -210,7 +211,7 @@ def main():
         assert (context / "runs").read_text().splitlines() == [
             f"# b.w21 expected={case['expected']}; observed=NOT_RUN",
             f"B146R5Cx {case['name']} @700"]
-        assert f"--context '{context.resolve()}'" in command
+        red.check_archived_context(red.command_context(command), context)
         assert "--channel C0B3X876XSB --network off --memory 4g --cpus 4 --timeout 15m" in command
         assert "observed NOT_RUN" in (context / "Dockerfile").read_text()
         print(f"STATIC-OK {case['name']} expected={case['expected']} observed={case['observed']}")
