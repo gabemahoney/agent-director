@@ -227,9 +227,7 @@ test-image-smoke: test-image
 		exit 1; \
 	fi
 
-# test-docker is the canonical command form every functional Epic's
-# Progression Contract references. Exact form is fixed here — changing it
-# requires updating every Epic ticket that gates on it.
+# test-docker runs one testplan group in the harness container.
 #
 #   EPIC      — testplan slug (required). Resolved by the driver to the t1
 #               collector whose title contains the slug.
