@@ -34,6 +34,13 @@ type connectionCleanupLane struct {
 	jobs          []connectionCleanupJob
 	operationOnce sync.Once
 	operationGate chan struct{}
+	// hookAfterOperationForTest is a test seam, nil in production: when set,
+	// each runConnectionOperation worker calls it last, after it has freed
+	// the operation slot and released its caller, so a test can hold the
+	// worker there and check from the caller that the slot is already free
+	// (b.q5r). Set only by this package's tests, on their own Store and
+	// before the call.
+	hookAfterOperationForTest func()
 }
 
 // Admission precedes goroutine creation, including connection opening. A
@@ -50,16 +57,8 @@ type connectionOperation struct {
 func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duration, fn func(*connectionOperation) error) error {
 	lane := s.cleanup
 	lane.operationOnce.Do(func() { lane.operationGate = make(chan struct{}, 1) })
-	admitCtx := ctx
-	if maxWait == 0 {
-		var cancel context.CancelFunc
-		admitCtx, cancel = context.WithTimeout(ctx, connGrab)
-		defer cancel()
-	}
-	select {
-	case lane.operationGate <- struct{}{}:
-	case <-admitCtx.Done():
-		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, admitCtx.Err())
+	if err := lane.admitOperation(ctx, maxWait); err != nil {
+		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, err)
 	}
 	if err := ctx.Err(); err != nil {
 		<-lane.operationGate
@@ -67,13 +66,23 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 	}
 	op := &connectionOperation{}
 	done := make(chan struct{})
+	// Test seam (connectionCleanupLane.hookAfterOperationForTest; nil in
+	// production), read by the caller so a test may set it between calls.
+	afterForTest := lane.hookAfterOperationForTest
 	go func() {
-		defer func() { <-lane.operationGate }()
 		err := fn(op)
 		op.mu.Lock()
 		op.err, op.completed = err, true
 		op.mu.Unlock()
+		// fn has disposed of its connection. Free the slot before closing
+		// done, so a caller released by done finds the slot free on its next
+		// call; a caller released by its deadline (returnCtx below) may return
+		// while the slot is still held.
+		<-lane.operationGate
 		close(done)
+		if afterForTest != nil {
+			afterForTest()
+		}
 	}()
 	// Cancellation stops SQL immediately through ctx. When an absolute bound
 	// exists, allow a cooperative driver to publish its actual error within
@@ -103,6 +112,40 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): %w", cause)
 		}
 		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, cause)
+	}
+}
+
+// admitOperation takes the operation slot. A free slot is taken however late
+// the call reaches it. A held one is waited for until ctx ends or, with zero
+// wait, until it has stayed held for connGrab since the call found it held.
+// Zero-wait admission to the operation slot must use it; never pre-arm a
+// connGrab timeout.
+func (lane *connectionCleanupLane) admitOperation(ctx context.Context, maxWait time.Duration) error {
+	select {
+	case lane.operationGate <- struct{}{}:
+		return nil
+	default:
+	}
+	var grab <-chan time.Time
+	if maxWait == 0 {
+		timer := time.NewTimer(connGrab)
+		defer timer.Stop()
+		grab = timer.C
+	}
+	select {
+	case lane.operationGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-grab:
+	}
+	// A select picks at random among ready cases: look once more, so a slot
+	// freed as connGrab ran out is still taken.
+	select {
+	case lane.operationGate <- struct{}{}:
+		return nil
+	default:
+		return context.DeadlineExceeded
 	}
 }
 

@@ -3293,12 +3293,20 @@ still the one it read, so it knows the row has not changed since. As built:
     by both the available busy allowance and the context. Callbacks use only
     their leased connection, never the one-connection pool.
 
-    Zero wait retains `connGrab` (1 ms) for acquisition and zero SQLite lock
-    allowance without retries. Immediately available execution and cleanup
-    get one fixed `immediateWorkBudget` (1 s), intersected with any enclosing
-    original deadline. An expired positive call cannot start SQL through a
-    renewed zero-wait allowance. `DefaultLockWait` (negative) retains the
-    store's configured waits unless an enclosing context cuts them shorter.
+    Zero wait takes a free connection or operation slot however late a
+    scheduling stall lets the call reach it, and waits `connGrab` (1 ms) only
+    for one another call holds, counted from when that wait starts (b.q5r).
+    **Must use:** `connGrabContext` (`lockwait.go`, which names the
+    database/sql behaviour it relies on) and `admitOperation`
+    (`connection_cleanup.go`); never pre-arm a `connGrab` timeout. Accepted
+    residue: a connection holder releasing just as `connGrab` runs out can
+    still yield `ErrStoreBusy` (database/sql's random select). Zero wait has
+    zero SQLite lock allowance and no retries. Immediately available
+    execution and cleanup get one fixed `immediateWorkBudget` (1 s),
+    intersected with any enclosing original deadline. An expired positive
+    call cannot start SQL through a renewed zero-wait allowance.
+    `DefaultLockWait` (negative) retains the store's configured waits unless
+    an enclosing context cuts them shorter.
     Setup context cancellation before BEGIN and precommit exhaustion wrap
     `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
     ordinary I/O errors returned within the original bound retain their
@@ -3319,10 +3327,12 @@ still the one it read, so it knows the row has not changed since. As built:
     Waiting callers create no worker or job queue. The admitted worker owns
     acquisition, initialization, callback, rows and direct `cleanup.finish`
     through rollback/restoration or `Raw(driver.ErrBadConn)` disposal and
-    lease release, even after its caller returns. Repeated timeouts cannot
-    accumulate workers behind blocked native work. Contextless default-wait
-    calls remain synchronous and use `releaseConn`'s existing cleanup lane;
-    they do not acquire the cancelable operation slot.
+    lease release, even after its caller returns. It frees the slot before
+    releasing its caller, so that caller's next call finds it free (a caller
+    released by its deadline may not). Repeated timeouts cannot accumulate
+    workers behind blocked native work. Contextless default-wait calls
+    remain synchronous and use `releaseConn`'s existing cleanup lane; they
+    do not acquire the cancelable operation slot.
 
     SQL receives cancellation immediately. If cancellation arrives before an
     absolute deadline, the reporting wait can observe a cooperative driver's
@@ -3898,10 +3908,11 @@ borrower SQL; native Open or disposal can still block under that ownership.
 
 Explicit `boundedConnContext` acquisition carries an immutable private
 context marker and keeps the eager path. It preserves the distinction
-between zero-wait 1 ms admission and its fixed 1 s SQL-work allowance, cut
-by the original enclosing deadline; it never renews an expired positive
-budget. `ReconcileCursorRotation` also marks its explicit context acquisition
-and retains its established synchronous context behavior.
+between zero-wait admission (`connGrab`) and its fixed 1 s SQL-work
+allowance, cut by the original enclosing deadline; it never renews an
+expired positive budget. `ReconcileCursorRotation` also marks its
+explicit context acquisition and retains its established synchronous
+context behavior.
 
 The pool's background replacement opener has no borrowing caller context.
 `callerOwnedConnector` returns a successful, unopened `lazySQLiteConn` for
@@ -12459,12 +12470,11 @@ await an answer (`PermissionRow.AwaitsAnswer`, the Go form of
 `awaitingAnswerSQL`), only while the row is in `check_permission`; and
 `unproven_requests`, those not proven gone (`ProvenGone()` false). Its
 fallen-back requests with no `hook_gone_at`, from either list, join the
-same one `recordGone`. With no wait left, the zero-wait write still gets
-the `connGrab` window (1 ms) to take a free connection. With `[state]
-settle_ms` set, `status`, `get` and `list` derive the settled state inside
-their own SELECT from the reader's clock (`SettleRead.stateExpr`), so
-settling adds no read, write or wait; the requests they list follow the
-raw state, never the settled one (see
+same one `recordGone`. With no wait left, the zero-wait write still takes
+a free connection. With `[state] settle_ms` set, `status`, `get` and
+`list` derive the settled state inside their own SELECT from the reader's
+clock (`SettleRead.stateExpr`), so settling adds no read, write or wait;
+the requests they list follow the raw state, never the settled one (see
 [Settle time (b.3ie)](#settle-time-b3ie)).
 
 Public `get`, `status` and `list` also perform the separate guarded
@@ -13178,9 +13188,9 @@ reserve; this repair imposes no shorter bound on those retained holds.
   rolls back and is returned as it is). Each returns an error wrapping
   `ErrStoreBusy`, having written nothing, when its wait for the store's
   connection or its write lock runs out. `internal/store/lockwait.go`
-  holds `ErrStoreBusy`, `DefaultLockWait`, `connGrab`, `boundedConn`,
-  `withConn`, `readWithin`, `inWriteTx`, `inImmediateTx` and the
-  epoch-millisecond helpers of the v7 instants.
+  holds `ErrStoreBusy`, `DefaultLockWait`, `connGrab`, `connGrabContext`,
+  `boundedConnContext`, `withConn`, `readWithin`, `inWriteTx`,
+  `inImmediateTx` and the epoch-millisecond helpers of the v7 instants.
 
 - **`internal/store/permission.go`** — the reads and `decide`'s write:
   - `GetPermissionRequest` (pair-keyed), `GetPermissionRequestWithin` (the
