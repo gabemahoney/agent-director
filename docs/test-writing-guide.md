@@ -27,11 +27,9 @@ with a message naming the missing files, not an ENOENT or a short tarball list.
 Use it rather than writing your own check. A test that builds the output it
 reads does not need it: `public-surface.test.ts` emits its own `.d.ts` files
 and `release-version-coherence.test.ts` builds in a staged copy. To run a test
-that calls `requireBuiltDist()` alone, install and build first, in the sandbox:
-
-```sh
-make sandbox CMD='cd pkg/ts-bun-client && bun install --frozen-lockfile && bun run build && bun test test/packaging.test.ts'
-```
+that calls `requireBuiltDist()` alone, run `bun install --frozen-lockfile` and
+`bun run build` in `pkg/ts-bun-client` first, in the same throwaway sandbox
+script (`guide:build-commands.md`).
 
 ## pkg/api/apitest Seed* factory contract
 

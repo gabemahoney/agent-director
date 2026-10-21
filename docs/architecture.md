@@ -2146,9 +2146,10 @@ writer with `ContextWriter` and admits the fresh startup with
 `AdmitClaudeCapacity`; `SeedContextChild` / `AdmitClaudeChild` install the
 already-visible child's own native path and metadata. Future Go/API/CLI/MCP context tests MUST reuse these
 helpers; TypeScript tests MUST use `seed-spawn --context-fixture` with
-`--context-writer-pid` for positive Codex cases and `expectedContext`. See
+`--context-writer-pid` for positive Codex cases and `expectedContext`. The
+supported sample names are the cases `contextfix.Load` accepts; see
 [fixture selection](test-writing-guide.md#context-fullness-captures-and-fixtures)
-for supported names, isolation and evidence limits. Synthetic `cursorfix`
+for isolation and evidence limits. Synthetic `cursorfix`
 history is not numeric qualification.
 
 ### `pkg/api` Client lifecycle

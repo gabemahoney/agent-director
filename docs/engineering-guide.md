@@ -44,6 +44,10 @@ Every CLI verb must have an MCP-tool equivalent, and both must go through the sh
 
 ## 10. Sandboxed execution (`make test-sandbox`)
 
+This section explains the sandbox. Where each command runs on this Project's
+host (test suites go to the job scheduler) is set by the Project's
+`guide:build-commands.md`.
+
 ### Why this exists
 
 The b.8dr incident: running `bun test` on the b.aaj branch (schema v3
@@ -85,22 +89,8 @@ one-off `./bin/agent-director …`, not `go generate`, not a bun script.
 Every executed artifact can open the store. Run all of it through
 `make test-sandbox` / `make sandbox-shell` / `make sandbox CMD="…"`, which
 put the process inside a container whose HOME has neither `.config/agent-director`
-nor `.agent-director`.
-
-### When sandbox execution is mandatory
-
-Use `make test-sandbox` instead of bare `go test ./...` or `bun test` on
-any branch that touches:
-
-- `internal/store/` schema definitions or migration code
-- Any path that composes the DB file path (spawn/env composition, config
-  path resolution, `expandTilde`)
-
-Running host-side tests on those branches risks silently migrating the
-production database to an incompatible schema version. When you are *writing*
-that schema change, follow docs/migration-guide.md — it covers the
-one-tx-per-hop rule, the two-places rule, the run-the-upgrade-twice test
-recipe, and this sandbox-only execution rule with b.8dr as the case study.
+nor `.agent-director`. This holds on every branch; a schema change also
+follows docs/migration-guide.md.
 
 ### Fail-fast sandbox guard
 
