@@ -28,7 +28,7 @@ Not wired into make tla
   directory to the job scheduler.
 
 Source
-  Bee b.36h, directory tickets/Bugs/b.36h/ of the Apiary ticket tree
+  Bee b.36h, directory tickets/Bugs/b.36h/ of the ticket tree
   (outside this repo). Copied byte for byte with rsync -a on 2026-10-10 and
   checked equal to the source with diff -r. Not copied: the bee's ticket
   file, its fix plan, and each job directory's tla2tools.jar. Every one of

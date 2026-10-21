@@ -17,7 +17,7 @@ Not wired into make tla
   job-pass_tchange_before-long/ is one such context, as it was submitted.
 
 Source
-  Bee b.3ie, directory tickets/Bugs/b.3ie/ of the Apiary ticket tree
+  Bee b.3ie, directory tickets/Bugs/b.3ie/ of the ticket tree
   (outside this repo). Copied byte for byte with cp on 2026-10-10. Each
   file was checked equal to its source with diff at copy time. After the
   rerun came back, verdicts.txt was copied again (the bee folder's copy had

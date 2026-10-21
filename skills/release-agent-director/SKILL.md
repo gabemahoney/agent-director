@@ -14,7 +14,7 @@ description: |-
 ---
 
 agent-director's own releases use this skill in dry-run mode only and follow
-the Project's `guide:release-guide.md`; see docs/release-skill.md "How
+the maintainers' release process; see docs/release-skill.md "How
 releases run here".
 
 ## When to invoke

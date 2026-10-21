@@ -1,6 +1,65 @@
 # Engineering Guide
 
-Background for the agent-director rules in the Project's `guide:engineering-best-practices.md`, which wins where the two differ. General engineering, testing, release and review rules live in the Project's guides, not here.
+agent-director's engineering rules, then the background for them. Focus on what breaks, leaks or rots, not on style. Where the background differs from the rules, the rules win.
+
+## Rules
+
+### agent-director rules
+
+- **Stay generic.** Build a client's request as a capability any caller could use. No client names, behaviour or wording in code, errors or the API.
+- **Serve human, bot and code callers.** Every outcome a caller must act on is machine-readable: an `err_name` or a structured field. English advice is an optional extra. Prefer behaviour that's safe to repeat.
+- **Subscription logins.** Everything must work when the agent is logged in with a subscription account (Claude plan, ChatGPT plan for Codex, Cursor plan), not only with API-key metered billing. Never depend on an API key or an API-only interface.
+- **Stable provider interfaces.** Build on interfaces the agent provider documents as stable. Disfavor anything experimental, beta, preview or undocumented, because providers drop them (Claude Channels did). If one is the only way, use it as a stated fallback and record what breaks if it's removed.
+- **Every supported agent at once.** A feature covers Claude Code, Codex and Cursor in the same change. Where one can't be supported yet, measure first, make the gap a documented machine-readable outcome (such as `unknown`) and record it on the ticket for the maintainers.
+- **Never hardcode an agent's strings.** No product code branches on any agent's (Claude Code, Codex, Cursor) screen text, patterns, glyphs or layout, because they change without notice. Learn its state from hooks, settings, exit codes, transcripts, and content-agnostic OS facts about its own process (such as terminal raw mode, the foreground process group, or input-queue length). When only the screen can tell, return an `err_name` and leave reading the pane to the caller. Comparing agent-director's own earlier pane captures is fine.
+- **CLI/MCP parity.** Every verb and flag lands on both surfaces through `pkg/api`, except the CLI-only verbs §2 lists.
+- **Never execute on the host.** Run tests and binaries only as §10 "Build and test commands" says, because they can rewrite the real agent-director store.
+- **Schema changes** follow `docs/migration-guide.md`.
+- **Reuse first.** Check the reusable components in `docs/architecture.md` before adding a helper or fixture.
+- **Commit subjects** are `type(<id>): imperative description`, where `<id>` is the Idea's or Bug's ID, e.g. `fix(b.zr5): …`, because the release notes group commits by it (§11). Types: `feat`, `fix`, `docs`, `chore`, `test`, `refactor`, `build`. Name the Task, if any, in the body.
+
+### Fit the codebase
+
+- **Match existing patterns.** Follow the codebase's conventions, and don't add a second way of doing something it already does.
+- **Separate concerns.** Keep business logic, interfaces and data access apart.
+- **Build only what's needed.** Don't add abstractions for imagined future needs; three similar lines beat the wrong helper.
+- **The deletion test.** Before adding an abstraction, imagine deleting it. If deleting it removes complexity, don't add it; if the complexity would spread into its callers, it earns its place. (Adapted from Matt Pocock's `codebase-design` skill, MIT licence: github.com/mattpocock/skills.)
+
+### Leave no dead code
+
+Remove commented-out code, unused functions and imports, old implementations left after a refactor, and debugging output. Version control keeps the history.
+
+### Security and correctness
+
+- Validate input at system boundaries.
+- Use parameterized queries, never string-built ones.
+- Check file paths against the expected workspace before using them.
+- Load secrets from the environment or config, never from source.
+- Check authorization on every protected path.
+- Keep stack traces, internal paths and secrets out of user-facing errors.
+
+### Readable code
+
+- Name things for what they do or hold, and use named constants instead of magic values.
+- Split functions that grow long or deeply nested.
+- Comment the why, not the what, and fix any comment your change made false.
+
+### Errors
+
+- Catch specific errors; never swallow them silently.
+- Clean up resources with the language's own mechanism.
+- Handle failure on every I/O, network and external call.
+- Write error messages that say what went wrong and what to do.
+
+### Performance
+
+Avoid the obvious traps: queries in loops, loading whole files you could stream, blocking calls in async code, and caches with no rule for when they expire.
+
+### Beyond the diff
+
+- **Callers.** For anything whose behaviour, signature or ordering you change, check that its callers' assumptions still hold.
+- **Second-order effects.** Ask what the change newly exposes or can now fail: a new call on a path that couldn't fail before, a renamed field that dashboards or logs still read, code moved across a guard.
+- **Symmetry.** When you add a new kind of resource, update every path that cleans up its siblings too.
 
 ## Core Principle: Stay Generic
 
@@ -44,9 +103,8 @@ Every CLI verb must have an MCP-tool equivalent, and both must go through the sh
 
 ## 10. Sandboxed execution (`make test-sandbox`)
 
-This section explains the sandbox. Where each command runs on this Project's
-host (test suites go to the job scheduler) is set by the Project's
-`guide:build-commands.md`.
+This section explains the sandbox and lists the build and test commands
+("Build and test commands" below).
 
 ### Why this exists
 
@@ -91,6 +149,57 @@ Every executed artifact can open the store. Run all of it through
 put the process inside a container whose HOME has neither `.config/agent-director`
 nor `.agent-director`. This holds on every branch; a schema change also
 follows docs/migration-guide.md.
+
+### Build and test commands
+
+Run each from the checkout root; worktrees use the same commands. Light
+commands run in the sandbox: `make sandbox CMD="<command>"`. `CMD` holds one
+plain command with no `$`, backticks, pipes, `&&` or `;`, because the host
+shell can expand them before the sandbox starts. Put anything longer in a
+throwaway `scripts/tmp-<name>.sh` in the worktree, run it with
+`make sandbox CMD="bash scripts/tmp-<name>.sh"`, and delete it uncommitted.
+
+Test suites are memory-heavy, so they run in an isolated environment, never on
+the host.
+
+#### Compile
+
+`make sandbox CMD="make build"`. When a change touches verb descriptions, the
+manifest or `err_name`s, also run `make sandbox CMD="make generate"` and commit
+what it regenerates (CI `doc-drift` fails otherwise).
+
+#### Lint
+
+`make sandbox CMD="make lint"` (`go vet ./...`). Until b.hhi is fixed it
+reports known `unreachable code` findings under
+`skills/release-agent-director/tests/synthetic-regressions/`; it passes when it
+reports nothing else. Formatting: none, because no format check exists yet
+(b.7ep).
+
+#### Unit tests
+
+Run one isolated job from the source under test and a Dockerfile based on
+`test/sandbox/Dockerfile`. The build sets `AGENT_DIRECTOR_TEST_SANDBOX=1` and
+runs `bun install --frozen-lockfile` and `bun run build` in
+`pkg/ts-bun-client`. The command runs `go test -timeout 30m ./...` and
+`bun test` (in `pkg/ts-bun-client`), then prints one last line:
+`VERDICT: PASS` or `VERDICT: FAIL`.
+
+#### Integration tests
+
+Each slug `make list-test-docker-epics` prints is one isolated job running that
+slug's testplan (`make test-docker EPIC=<slug>`). When a change edits
+`spec/tla/`, also run the fast model check.
+
+#### Model check
+
+TLA+ with TLC; the suite is in `spec/tla/`. Run it as an isolated job, never on
+the host: `make tla` submits it through the job runner named by `TLA_JOBSCHED`
+and `TLA_CHANNEL`, which your host supplies. `TLA_TIER=fast` is the default, `full` is for releases;
+`make tla-print` shows the plan without submitting. Give a new formal model its
+own `suite.tsv` and `cfg/` folder, like `spec/tla/launch/`, and point
+`TLA_SUITE` and `TLA_SPEC_DIR` at them (see the header of
+`spec/tla/ci/run_ci.sh`).
 
 ### Fail-fast sandbox guard
 
@@ -312,7 +421,7 @@ podman host.
 
 ## 11. Commit subjects
 
-The rule is in the Project's `guide:engineering-best-practices.md`. Why the
+The rule is under "Rules" above. Why the
 subject matters: the release-notes generator (`notes.generate` in
 docs/release-skill.md) groups commits by the Idea's or Bug's ID with
 `EPIC_RE = /^\w+\((b\.\w+)\)/` in

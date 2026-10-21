@@ -2,7 +2,7 @@
 # install.sh — install or upgrade agent-director on this machine.
 #
 # Per SRD §16.2. The script is deliberately bash + jq + standard
-# coreutils — no Go, no exotic deps. The Apiary skill harness invokes
+# coreutils — no Go, no exotic deps. The install skill invokes
 # it; an operator can also run it directly from a checked-out tree.
 #
 # It installs two binaries from the same build: agent-director at

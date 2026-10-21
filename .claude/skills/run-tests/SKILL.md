@@ -1,6 +1,6 @@
 ---
 name: run-tests
-description: Run this repo's tests and any built binary, never on the host. Test suites (unit and integration) run on the job scheduler per the Project's `guide:build-commands.md`; light one-off commands run in `make sandbox CMD="…"`. Host execution can silently rewrite the real agent-director store (the b.8dr incident). Use when asked to run tests, `go test`, `bun test`, `go run`, or to execute a built binary in the agent-director repo.
+description: Run this repo's tests and any built binary, never on the host. Test suites (unit and integration) run in an isolated job per docs/engineering-guide.md "Build and test commands"; light one-off commands run in `make sandbox CMD="…"`. Host execution can silently rewrite the real agent-director store (the b.8dr incident). Use when asked to run tests, `go test`, `bun test`, `go run`, or to execute a built binary in the agent-director repo.
 ---
 
 # Running tests (and any built artifact) for agent-director
@@ -14,22 +14,19 @@ it. Don't set `AGENT_DIRECTOR_TEST_SANDBOX` or
 
 ## Where things run
 
-Follow the Project's `guide:build-commands.md`
-(`../.apiary/build-commands.md`) for every command and recipe:
+Follow docs/engineering-guide.md "Build and test commands" for every command
+and recipe:
 
-- **Test suites** (unit and integration): submit to the job scheduler with the
-  guide's `jobsched submit` command on channel `C0B3X876XSB`, never on this
-  host.
+- **Test suites** (unit and integration): run them in an isolated job, never on
+  this host. Your host's own instructions say how to submit one.
 - **Light one-off commands** (build, lint, generate): `make sandbox CMD="…"`.
   `CMD` holds one plain command, with no `&&`, `;`, pipes, `$(…)` or backticks.
   Anything longer goes in a throwaway script, as the guide says.
 
 ## Reading the results
 
-`jobsched results <job ID>` prints the paths of the job's `build.log`,
-`run.log`, `result.json` and `container-inspect.json` (`--json` for one JSON
-document). Read `run.log` for test output and `build.log` if the image build
-failed.
+Read the job's run log for test output, and its build log if the image build
+failed. Your host's instructions say where the job runner keeps them.
 
 - **The verdict line is authoritative.** A unit-test job ends `run.log` with
   `VERDICT: PASS` or `VERDICT: FAIL`. A missing verdict means the job broke

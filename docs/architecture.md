@@ -39,7 +39,7 @@ Nothing in that directory may rely on a file or directory named `.git`,
 writable root, and a Codex agent's sandbox may name that directory as one (see
 [Usage](usage.md#drive-a-spawn-from-another-agent)).
 
-See the SRD (Apiary Ideas hive: `t1.jus.x5`) for the full design.
+See the SRD (Ideas hive: `t1.jus.x5`) for the full design.
 
 ## Supported platforms (v1)
 

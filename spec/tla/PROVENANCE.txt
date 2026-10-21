@@ -68,7 +68,7 @@ Changed here, not from b.zuj (bee b.xjn, subagent records, 2026-10-11)
   subagent/suite.tsv and subagent/cfg/*.cfg (the b.xjn runs).
 
 Source
-  Bee b.zuj, directory tickets/Ideas/b.zuj/ of the Apiary ticket tree (outside
+  Bee b.zuj, directory tickets/Ideas/b.zuj/ of the ticket tree (outside
   this repo). Copied byte for byte with cp on 2026-10-02. Each file was
   checked equal to its b.zuj source with sha256sum at copy time. The pin list
   below has those SHA-256s, except for the three files changed since; their

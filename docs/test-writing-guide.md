@@ -1,7 +1,56 @@
 # Test Writing Guide
 
-agent-director's test conventions. The general rules and the review checklist
-are the Project's `guide:test-guide.md`, which wins where the two differ.
+agent-director's test rules, then its test conventions. Where a convention
+differs from the rules, the rules win.
+
+## Rules
+
+### agent-director rules
+
+- **Run tests only as docs/engineering-guide.md §10 "Build and test commands" says**, never on the host, because they can rewrite the real agent-director store.
+- **Integration tests** are the Docker testplans "Writing Testplans" below describes.
+- **Fixtures.** Reuse the fixtures whose `docs/architecture.md` headings are marked "(reusable …)". Register a new reusable one the same way and in its doc comment.
+- **Advice text.** Adding or changing error advice that tells a caller what to do next needs a literal-follow test that does exactly what it says.
+- **Size guards.** Don't raise a recorded baseline (such as `helpStdoutBytes`) to make a test pass. A few bytes under the hard cap is fine, with the reason in the commit; otherwise stop and ask.
+- **Regression tests** name the Bug's ID in a comment.
+
+### Keep the suite lean
+
+Aim for about 80% coverage with as few lines of test code as possible, because every extra test costs maintenance without adding confidence. Don't gold-plate: you don't need a test for every scenario.
+
+- **Choose cases by distinct regressions.** Acceptance criteria are obligations, not a test inventory. Combine related requirements in representative cases; add a case only when it catches a plausible failure the existing cases would miss.
+- **Parameterize.** When three or more tests differ only in their inputs, make them one parameterized test.
+- **Delete as readily as you add.** Deleting tests matters as much as adding them: remove duplicated tests, tests a change made obsolete, and tests that no longer earn their maintenance, whenever you touch the suite.
+
+### Reuse the existing test setup
+
+Before writing a test, find the fixtures, factories, helpers and constants the repo already has, and reuse them. If one doesn't do exactly what you need, change it, then update every test that uses it, rather than adding a near-copy. Do that work, because one unified set of fixtures is what keeps the suite consistent and small. Add new setup only where nothing fits, in the place the repo keeps shared setup, and extend existing test files before adding new ones.
+
+When splitting test work between writers, name the setup each one reuses, changes or adds, and the test files it extends or creates, so parallel writers don't duplicate or clash over it.
+
+### Test behaviour, not implementation
+
+Assert on what the code produces, not how it works inside, so tests survive refactoring.
+
+- **Mock sparingly.** Mock external services, expensive operations and injected errors. Use real files in a temporary directory, and real functions, rather than mocks. A test with more than about three mocks is usually testing implementation; test it at a higher level instead.
+- **Assert exactly.** Check the exact value or output the contract promises, not a loose substring.
+- **Cover changed edges.** Add edge and error cases where the change introduces or alters a failure path; rely on existing tests for unchanged shared paths.
+- **Never weaken a test to make it pass.** If the code is wrong, report the bug; don't encode it into the suite.
+
+### Keep tests self-contained
+
+Write files only under a temporary directory, never in the repo or a real shared location. Undo any global change a test makes. Don't depend on system tools behaving the same everywhere, and don't sleep: inject the time instead.
+
+### Avoid test bloat
+
+- **No meta-tests.** Don't test the test setup itself; if a fixture breaks, the real tests fail anyway.
+- **Inline simple values.** Use `"open"` rather than a constant like `STATUS_OPEN`; keep constants for complex formats or values used in many places.
+- **Import only what you use.**
+- **Keep test docs short.** One or two lines per fixture, with longer explanations in this guide.
+
+### Cover regressions where they occur
+
+Exercise the boundary where the defect occurs. Use unit coverage for an isolated rule and integration coverage for interacting components, because a component test can pass while the reported interaction still fails.
 
 ## Test isolation: tmux session names
 
@@ -29,7 +78,7 @@ reads does not need it: `public-surface.test.ts` emits its own `.d.ts` files
 and `release-version-coherence.test.ts` builds in a staged copy. To run a test
 that calls `requireBuiltDist()` alone, run `bun install --frozen-lockfile` and
 `bun run build` in `pkg/ts-bun-client` first, in the same throwaway sandbox
-script (`guide:build-commands.md`).
+script (docs/engineering-guide.md §10 "Build and test commands").
 
 ## pkg/api/apitest Seed* factory contract
 
@@ -594,6 +643,6 @@ run `sql.sh`.
    list controls execution order.
 3. Add the slug as a line of `test/docker-epics.txt`, and commit
    `tickets/testplans/...` with the change it tests.
-4. Run it as `guide:build-commands.md ## Integration tests` says:
+4. Run it as docs/engineering-guide.md "Integration tests" says:
    `make test-docker EPIC=<slug>` exits 0 with one `{"status":"pass"}`
    line per case.

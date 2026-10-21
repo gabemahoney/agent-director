@@ -79,7 +79,7 @@ Not wired into make tla
   use their separate exact user-submission commands.
 
 Source
-  Bee b.ssz, directory tickets/Ideas/b.ssz/tla/ of the Apiary ticket tree
+  Bee b.ssz, directory tickets/Ideas/b.ssz/tla/ of the ticket tree
   (outside this repo). Copied byte for byte with rsync -a on 2026-10-12,
   after the last result came in, and checked equal to the source with diff
   -r. Not copied: each job directory's tla2tools.jar. Every one of those 41
