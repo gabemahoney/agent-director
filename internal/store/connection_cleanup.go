@@ -58,11 +58,11 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 	lane := s.cleanup
 	lane.operationOnce.Do(func() { lane.operationGate = make(chan struct{}, 1) })
 	if err := lane.admitOperation(ctx, maxWait); err != nil {
-		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, err)
+		return operationBusy(err)
 	}
 	if err := ctx.Err(); err != nil {
 		<-lane.operationGate
-		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, err)
+		return operationBusy(err)
 	}
 	op := &connectionOperation{}
 	done := make(chan struct{})
@@ -111,8 +111,27 @@ func (s *Store) runConnectionOperation(ctx context.Context, maxWait time.Duratio
 		if op.commitStarted {
 			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=operation_guard): %w", cause)
 		}
-		return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, cause)
+		return operationBusy(cause)
 	}
+}
+
+// operationBusy is the error for a connection operation ended by cause before
+// its commit started, so nothing was written. It wraps cause as well as
+// ErrStoreBusy, so a caller can still tell its own cancellation
+// (context.Canceled) from a wait that ran out. It is runConnectionOperation's
+// error for a caller that abandons its operation before its commit started.
+// An operation its context ends before its first statement (a cancellation,
+// or a deadline under DefaultLockWait) must name its error with operationBusy
+// too, so its caller gets one error whichever of its worker and its abandon
+// branch returns first. Two cases can still differ: a bounded call
+// (maxWait >= 0) whose deadline ends the connection wait, whose worker gives
+// boundedConnContext's refusal ("not free within N ms", wrapping ErrStoreBusy
+// but not context.DeadlineExceeded); and a caller that abandons once its first
+// statement has started, whose worker reports its own step's error (the setup
+// PRAGMA, BEGIN, the callback or precommit), wrapping ErrStoreBusy only when
+// the context ended that step.
+func operationBusy(cause error) error {
+	return fmt.Errorf("%w: connection operation: %w", ErrStoreBusy, cause)
 }
 
 // admitOperation takes the operation slot. A free slot is taken however late
