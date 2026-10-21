@@ -131,8 +131,10 @@ columns with raw SQL or keep a second copy of the expected wire detail.
   them under `apitest.SettleOnConfig`, within its settle time, to keep the
   committed detail.
 - A read that must commit is nonwaiting and best effort. Confirm it with
-  `ObserveStuckRead`, or `commitUnlessBusy` in `internal/store`, never with a
-  sleep or a retry loop of your own. Both repeat at the same injected
+  `ObserveStuckRead`, `commitUnlessBusy` in `internal/store`, or
+  `apitest.RepeatUntilCommitted` directly when the commit is checked on
+  request columns (`TestReadersSkipFallbackWritesThatStoreNothing`), never with a
+  sleep or a retry loop of your own. The first two repeat at the same injected
   instant under one bound, `apitest.RepeatUntilCommitted`, giving up only
   after at least 3 attempts and 10 s: `ObserveStuckRead` until its
   `CommitCheck` (usually `VersionAdvanced` on `stuck_version`) confirms the

@@ -304,8 +304,9 @@ hold and clock are kept.
   `instance_id`, `prior_state`, `new_state`, `stuck_reason` (the reason of the
   episode entered or left) and `ts`; the trail is audit only and a failed
   append changes nothing. Rarely, under heavy store load, a read whose write
-  is slow to commit appends no record for that entry or exit; the state and
-  detail stay correct.
+  is slow to commit may still show the previous state and detail and append
+  no record for that entry or exit; a later read shows the committed state,
+  with `since` from the earlier read.
 - **Attaching.** Treat `stuck` as a request for a deliberate human or caller
   choice at the agent's own prompt or pane:
   [attach to its pane](usage.md#attach-to-a-spawns-pane), or, for

@@ -472,19 +472,40 @@ func TestReadersSkipFallbackWritesThatStoreNothing(t *testing.T) {
 				basis = store.FallbackProcess
 			}
 			for i, want := range []int{1, 0} {
-				s := &stuckReadLeaseStore{stuckObservationReader: e.s}
-				if err := tc.read(e, s); err != nil {
-					t.Fatalf("read %d: %v", i+1, err)
+				var (
+					s        *stuckReadLeaseStore
+					attempts int
+					pr       store.PermissionRow
+				)
+				stored := func() bool {
+					return pr.HookGoneAt.Equal(tc.wantGone) && pr.FallbackAt.Equal(tc.wantFallback) && pr.FallbackBasis == basis
 				}
-				attempts := 0
-				for _, w := range s.writes {
-					if w == "RecordPermissionFallbacks" {
-						attempts++
+				// Read 1's write is zero-wait best effort and may lose the lock
+				// race under load, so it repeats at the same injected time until
+				// its write is stored (t2.sp6.2z.rd PM-E2); read 2 runs once.
+				tries, elapsed, ok := apitest.RepeatUntilCommitted(func() bool {
+					s = &stuckReadLeaseStore{stuckObservationReader: e.s}
+					if err := tc.read(e, s); err != nil {
+						t.Fatalf("read %d: %v", i+1, err)
 					}
+					attempts = 0
+					for _, w := range s.writes {
+						if w == "RecordPermissionFallbacks" {
+							attempts++
+						}
+					}
+					pr = e.request(t)
+					return want == 0 || stored()
+				})
+				if !ok {
+					t.Fatalf("read 1: fallback write never stored hook_gone_at %v, fallback_at %v %q in %d attempts over %v; "+
+						"last attempt made %d fallback writes (writes %v), stored %v, %v %q",
+						tc.wantGone, tc.wantFallback, basis, tries, elapsed, attempts, s.writes, pr.HookGoneAt, pr.FallbackAt, pr.FallbackBasis)
 				}
-				pr := e.request(t)
-				if attempts != want || (want == 0 && s.reads != 2) || !pr.HookGoneAt.Equal(tc.wantGone) ||
-					!pr.FallbackAt.Equal(tc.wantFallback) || pr.FallbackBasis != basis {
+				if tries > 1 {
+					t.Logf("read 1: fallback write stored on attempt %d after %v", tries, elapsed)
+				}
+				if attempts != want || (want == 0 && s.reads != 2) || !stored() {
 					t.Errorf("read %d: %d fallback writes, %d request reads, stored hook_gone_at %v, fallback_at %v %q; "+
 						"want %d writes (2 reads, one judged read, when none), hook_gone_at %v, fallback_at %v %q",
 						i+1, attempts, s.reads, pr.HookGoneAt, pr.FallbackAt, pr.FallbackBasis, want, tc.wantGone, tc.wantFallback, basis)
