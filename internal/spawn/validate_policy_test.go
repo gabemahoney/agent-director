@@ -215,6 +215,8 @@ func TestValidateResumeRefusalAndRemainderOrder(t *testing.T) {
 		{"codex fork hidden flag not stripped", "codex", "--include-non-interactive", []string{"fork", "S1", "--include-non-interactive"}, true},
 		{"codex earlier config beats owned long", "codex", "-c hooks.Stop: agent-director sets the hooks and their trust for every Codex launch", []string{"-c", "hooks.Stop=[]", "--model", "--last"}, false},
 		{"codex earlier owned long beats config", "codex", "--last", []string{"--model", "--last", "-c", "hooks.Stop=[]"}, false},
+		// b.fqk: the hooks alias is still refused after the selector drop.
+		{"codex hooks alias refused after selector drop", "codex", "-c features.codex_hooks: agent-director needs Codex's hooks on for every launch", []string{"resume", "S1", "-c", "features.codex_hooks=false"}, true},
 		{"codex earlier command beats raw long", "codex", "codex subcommand resume: a spawn launches the interactive agent, and this subcommand picks or resumes another session, runs non-interactively or attaches to a remote or shared service", []string{"resume", "--last"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
