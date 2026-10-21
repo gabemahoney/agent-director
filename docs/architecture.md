@@ -6829,14 +6829,24 @@ and the others call it.
   reader of what is an option, a value, a prompt word and the first `--`,
   so they cannot disagree. The refusals are two tables,
   `codexConfigRefusals` (`-c` keys at, above or under `hooks`,
-  `tui.disable_paste_burst`, `features.hooks`, and, only while
-  `disable_ask_user` is on, the two question-tool keys) and
-  `codexFeatureRefusals` (`--disable hooks`, and the question-tool
-  `--enable` while the setting is on), plus the Codex subcommand names
+  `tui.disable_paste_burst`, `features.hooks`, its alias
+  `features.codex_hooks`, and, only while `disable_ask_user` is on, the
+  two question-tool keys) and `codexFeatureRefusals` (`--disable hooks` or
+  its alias `codex_hooks`, and the question-tool `--enable` while the
+  setting is on), plus the Codex subcommand names
   (`codexSubcommands`) in command position and `--remote` and
-  `--remote-auth-token-env`. An option form is refused even after the
-  first `--` (the check reads options there too), while a subcommand
-  name after it is only a prompt word and passes. `Validate` reads
+  `--remote-auth-token-env`. A Codex alias of a refused feature or
+  config key gets its own row with the same reason; check Codex's alias
+  tables (`ALIASES` in `codex-rs/features/src/legacy.rs` and
+  `CONFIG_KEY_ALIASES` in `codex-rs/config/src/key_aliases.rs`) at each
+  supported version (at 0.159.2 and 0.163.0 only `codex_hooks` names a
+  refused setting).
+  The legacy top-level `disable_paste_burst` key is deliberately not
+  refused: Codex reads `tui.disable_paste_burst` before that fallback, so
+  the launch's own `-c tui.disable_paste_burst=true` always wins. An
+  option form is refused even after the first `--` (the check reads
+  options there too), while a subcommand name after it is only a prompt
+  word and passes. `Validate` reads
   `Resolved.DisableAskUser`, the composer reads
   `cfg.Defaults.DisableAskUser`; both values come from the same loaded
   config. `resume` never calls the check.
@@ -6929,7 +6939,10 @@ complete endpoint tables,
 embedded Commander traces, native Codex probes and upstream source hashes
 are in the external probe's `b.ssz/probe/resume-parsers-20261013/findings.md`
 and `claude-validator-review.json`, alongside `answers.md`. Update tables
-from actual parsers at the pre-release check; runtime reads no agent help.
+from actual parsers at the pre-release check, and check Codex's alias tables
+there too (see the argument check in
+[Per-agent launch composition](#per-agent-launch-composition)); runtime reads
+no agent help.
 The 2026-10-13 prerelease checks used only installed native Codex 0.159.2
 and Claude Code 2.1.296 and found no table or extraction correction. Claude's
 embedded-parser traces use a registration adapter; native missing-value and

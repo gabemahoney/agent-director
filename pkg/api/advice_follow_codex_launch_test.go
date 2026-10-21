@@ -28,7 +28,8 @@ import (
 func TestAdviceFollow_A23_CodexDeniedFlagDropTheArgument(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
 	adviceAssertManifest(t, "spawn", "agent_args", "For a codex agent, refused (ErrSpawnDeniedFlag): a Codex subcommand in command position",
-		"--remote, --remote-auth-token-env", "-c/--config keys at, above or under hooks, tui.disable_paste_burst or features.hooks", "--disable hooks")
+		"--remote, --remote-auth-token-env", "-c/--config keys at, above or under hooks, tui.disable_paste_burst, features.hooks or its alias features.codex_hooks",
+		"--disable hooks or codex_hooks")
 	cases := []struct {
 		name    string
 		refused []string // the arguments to drop, placed after the kept ones
@@ -40,6 +41,8 @@ func TestAdviceFollow_A23_CodexDeniedFlagDropTheArgument(t *testing.T) {
 		{"a key under hooks", []string{"--config=hooks.Stop=[]"}, "--config hooks.Stop: "},
 		{"disable_paste_burst", []string{"-c", "tui.disable_paste_burst=true"}, "-c tui.disable_paste_burst: "},
 		{"--disable hooks", []string{"--disable", "hooks"}, "--disable hooks: agent-director needs Codex's hooks on for every launch"},
+		// b.fqk: Codex's alias of hooks.
+		{"--disable codex_hooks", []string{"--disable", "codex_hooks"}, "--disable codex_hooks: agent-director needs Codex's hooks on for every launch"},
 		{"a subcommand", []string{"resume"}, "codex subcommand resume: "},
 	}
 	for _, tc := range cases {

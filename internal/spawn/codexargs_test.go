@@ -141,6 +141,9 @@ func TestCheckCodexArgs(t *testing.T) {
 		{"tui={disable_paste_burst=false}", whyPaste, "tui"},
 		{"features.hooks=false", whyFeatHooks, "features.hooks"},
 		{"features={hooks=false}", whyFeatHooks, "features"},
+		// b.fqk: codex_hooks is Codex's live deprecated alias of the hooks feature.
+		{"features.codex_hooks=false", whyFeatHooks, "features.codex_hooks"},
+		{"features.codex_hooks.x=1", whyFeatHooks, "features.codex_hooks.x"},
 		{" hooks.Stop = []", whyHooks, "hooks.Stop"},
 	} {
 		forms := map[string][]string{
@@ -162,16 +165,19 @@ func TestCheckCodexArgs(t *testing.T) {
 	add("override after a prompt word", "-c hooks.Stop: "+whyHooks, false, "hello", "-c", "hooks.Stop=[]")
 	add("sibling keys sharing a prefix string pass", "", false,
 		"-c", "tui.theme=dark", "-c", "features.fast_mode=true", "-c", "hooksx=1", "-c", "tui.disable_paste_burst_x=1",
-		"-c", "features.hooks2=1", "-c", "tools.web_search=live")
+		"-c", "features.hooks2=1", "-c", "features.codex_hooks2=1", "-c", "tools.web_search=live")
 	add("projects passes", "", false, "-c", `projects={"/a"={trust_level="trusted"}}`)
 	add("-c with no value passes", "", false, "-c")
 
 	// --enable and --disable.
-	for _, form := range [][]string{{"--disable", "hooks"}, {"--disable=hooks"}} {
-		add(strings.Join(form, " "), "--disable hooks: "+whyFeatHooks, false, form...)
+	// b.fqk: codex_hooks is Codex's alias of hooks.
+	for _, feature := range []string{"hooks", "codex_hooks"} {
+		for _, form := range [][]string{{"--disable", feature}, {"--disable=" + feature}} {
+			add(strings.Join(form, " "), "--disable "+feature+": "+whyFeatHooks, false, form...)
+		}
+		add("--enable "+feature+" passes", "", false, "--enable", feature)
 	}
 	add("--disable hooks after --", "--disable hooks: "+whyFeatHooks, false, "--", "--disable", "hooks")
-	add("--enable hooks passes", "", false, "--enable", "hooks")
 	add("--disable of another feature passes", "", false, "--disable", "fast_mode")
 	add("--enable write_stdin_approval passes", "", false, "--enable", "write_stdin_approval")
 	add("--disable write_stdin_approval passes", "", false, "--disable", "write_stdin_approval")
