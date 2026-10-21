@@ -193,9 +193,9 @@ slug's testplan (`make test-docker EPIC=<slug>`). When a change edits
 
 #### Model check
 
-TLA+ with TLC; the suite is in `spec/tla/`. `make tla` submits it to the job
-scheduler named by `TLA_JOBSCHED` and `TLA_CHANNEL` and waits; TLC never runs
-on the host. `TLA_TIER=fast` is the default, `full` is for releases;
+TLA+ with TLC; the suite is in `spec/tla/`. Run it as an isolated job, never on
+the host: `make tla` submits it through the job runner named by `TLA_JOBSCHED`
+and `TLA_CHANNEL`, which your host supplies. `TLA_TIER=fast` is the default, `full` is for releases;
 `make tla-print` shows the plan without submitting. Give a new formal model its
 own `suite.tsv` and `cfg/` folder, like `spec/tla/launch/`, and point
 `TLA_SUITE` and `TLA_SPEC_DIR` at them (see the header of

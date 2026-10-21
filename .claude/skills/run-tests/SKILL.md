@@ -25,10 +25,8 @@ and recipe:
 
 ## Reading the results
 
-`jobsched results <job ID>` prints the paths of the job's `build.log`,
-`run.log`, `result.json` and `container-inspect.json` (`--json` for one JSON
-document). Read `run.log` for test output and `build.log` if the image build
-failed.
+Read the job's run log for test output, and its build log if the image build
+failed. Your host's instructions say where the job runner keeps them.
 
 - **The verdict line is authoritative.** A unit-test job ends `run.log` with
   `VERDICT: PASS` or `VERDICT: FAIL`. A missing verdict means the job broke
