@@ -1025,6 +1025,10 @@ j6_break_hop() {
                 ALTER TABLE spawns DROP COLUMN stuck_version;
                 ALTER TABLE spawns DROP COLUMN stuck_observation;
                 ALTER TABLE spawns DROP COLUMN stuck_exit;
+                ALTER TABLE spawns DROP COLUMN no_screen_change_timeout_seconds;
+                ALTER TABLE spawns DROP COLUMN pane_sha256;
+                ALTER TABLE spawns DROP COLUMN pane_since_ms;
+                ALTER TABLE spawns DROP COLUMN pane_epoch;
                 ALTER TABLE permission_requests DROP COLUMN owner_launch_token;
                 ALTER TABLE permission_requests DROP COLUMN owner_permission_epoch;
                 ALTER TABLE permission_requests DROP COLUMN admitted_at;
@@ -1088,8 +1092,8 @@ test_J6_MigrationFailedRerunRetries() {
     [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT family_state || '|' || family_settled_state || '|' || family_changed_ms FROM spawns WHERE instance_id='j6';")" == 'waiting|waiting|0' ]] \
         || bad "corrected retry changed the historical row's family history"
     if [[ "$SCHEMA" == 14 ]]; then
-        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT permission_epoch=0 AND stuck_version=0 AND stuck_observation IS NULL AND stuck_exit IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
-            || bad "corrected retry fabricated permission observations for the historical spawn"
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT permission_epoch=0 AND stuck_version=0 AND stuck_observation IS NULL AND stuck_exit IS NULL AND no_screen_change_timeout_seconds IS NULL AND pane_sha256 IS NULL AND pane_since_ms IS NULL AND pane_epoch IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
+            || bad "corrected retry fabricated permission observations, a pane baseline or a timeout override for the historical spawn"
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated historical ownership or fallback facts"
     fi

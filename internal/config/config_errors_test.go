@@ -86,7 +86,7 @@ const raisedTail = ". A missing key, or 0, gives the default, or for [tmux] pend
 // splits on it into one part per refused key, and desc ends with raisedTail
 // exactly when a refused [tmux] key states a safe minimum above its default,
 // otherwise with refusalTail, that a missing key, or 0, gives the default.
-// The refused keys outside [tmux] are b.sgw's, b.8q2's, b.kr4's, b.c7f's and b.3ie's.
+// The refused keys outside [tmux] are b.sgw's, b.8q2's, b.kr4's, b.c7f's, b.3ie's and b.sp6's.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
 	_, list, ok := strings.Cut(desc, " values: ")
@@ -98,7 +98,7 @@ func checkAdvice(t *testing.T, desc string) {
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
 		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
-		"[state] permission_unanswered_timeout_seconds "} {
+		"[state] permission_unanswered_timeout_seconds ", "[state] no_screen_change_timeout_seconds "} {
 		refused += strings.Count(list, k)
 	}
 	above := false
@@ -358,8 +358,15 @@ func TestTmuxRefusesNonInteger(t *testing.T) {
 	}
 }
 
-// TestPermissionTimeoutRefusesNonInteger rejects malformed controls without defaulting or clamping.
-func TestPermissionTimeoutRefusesNonInteger(t *testing.T) {
+// TestStateTimeoutRefusesNonInteger rejects malformed [state] timeouts without defaulting or clamping.
+func TestStateTimeoutRefusesNonInteger(t *testing.T) {
+	keys := []struct {
+		name string
+		set  func(v string) rangeKeys
+	}{
+		{"permission_unanswered_timeout_seconds", func(v string) rangeKeys { return rangeKeys{permission: v, settle: "1500"} }},
+		{"no_screen_change_timeout_seconds", func(v string) rangeKeys { return rangeKeys{noScreenChange: v, permission: "47"} }},
+	}
 	for _, tc := range []struct{ name, value string }{
 		{"fractional", "30.5"},
 		{"whole_float", "30.0"},
@@ -371,12 +378,14 @@ func TestPermissionTimeoutRefusesNonInteger(t *testing.T) {
 		{"infinity", "inf"},
 		{"integer_overflow", "9223372036854775808"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ce := loadConfigError(t, keysFile(t, rangeKeys{permission: tc.value, settle: "1500"}))
-			if desc := ce.Err.Error(); !strings.Contains(desc, "permission_unanswered_timeout_seconds") {
-				t.Errorf("error does not name the key: %q", desc)
-			}
-		})
+		for _, k := range keys {
+			t.Run(k.name+"/"+tc.name, func(t *testing.T) {
+				ce := loadConfigError(t, keysFile(t, k.set(tc.value)))
+				if desc := ce.Err.Error(); !strings.Contains(desc, k.name) {
+					t.Errorf("error does not name the key: %q", desc)
+				}
+			})
+		}
 	}
 }
 

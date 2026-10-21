@@ -8,42 +8,39 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-func TestPermissionStuckMCPWire(t *testing.T) {
+// TestStuckMCPWire: the status, get and list tools over the shared
+// permission and pane surfaces return each reason's exact detail (list only
+// the reason, filtered before the limit) and every row its agent's
+// no_screen_change_availability, read under the largest settle time
+// (apitest.SeedPaneSurface).
+func TestStuckMCPWire(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	if err := apitest.SeedPermissionSurface(path); err != nil {
 		t.Fatal(err)
 	}
-	d := settleDispatcher(t, path, nil)
-	for _, agent := range []string{"claude", "codex", "cursor"} {
-		for _, verb := range []string{"status", "get"} {
-			raw := toolText(t, callTool(t, d, verb, paramJSON(t, map[string]any{"instance_id": "stuck-" + agent})))
-			apitest.CheckPermissionWire(t, []byte(raw), agent, verb)
-		}
-	}
-	list := callToolText(t, d, "list", paramJSON(t, map[string]any{"state": []string{"stuck"}, "limit": 3}))
-	var rows []json.RawMessage
-	if err := json.Unmarshal(list["spawns"], &rows); err != nil {
+	if err := apitest.SeedPaneSurface(path); err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("list=%s", list["spawns"])
+	d := settleDispatcher(t, path, &apitest.SettleOnConfig)
+	read := func(verb, id string) []byte {
+		return []byte(toolText(t, callTool(t, d, verb, paramJSON(t, map[string]any{"instance_id": id}))))
+	}
+	for _, surface := range apitest.StuckWireSurfaces {
+		for _, agent := range surface.Agents {
+			for _, verb := range []string{"status", "get"} {
+				surface.Check(t, read(verb, surface.Prefix+agent), agent, verb)
+			}
+		}
+	}
+	list := callToolText(t, d, "list", paramJSON(t, map[string]any{"state": []string{"stuck"}, "limit": 5}))
+	var rows []json.RawMessage
+	if err := json.Unmarshal(list["spawns"], &rows); err != nil || len(rows) != 5 {
+		t.Fatalf("list=%s; want the 5 stuck rows", list["spawns"])
 	}
 	for _, raw := range rows {
-		var row struct {
-			Agent string `json:"agent"`
-		}
-		if err := json.Unmarshal(raw, &row); err != nil {
-			t.Fatal(err)
-		}
-		apitest.CheckPermissionWire(t, raw, row.Agent, "list")
+		apitest.CheckListedStuckWire(t, raw)
 	}
-	ordinary := callToolText(t, d, "status", paramJSON(t, map[string]any{"instance_id": "ordinary"}))
-	for k := range apitest.LoadPermissionWire(t) {
-		if k == "state" {
-			continue
-		}
-		if _, ok := ordinary[k]; ok {
-			t.Errorf("ordinary emitted %s", k)
-		}
+	for id, agent := range apitest.StuckWireOrdinary {
+		apitest.CheckOrdinaryWire(t, read("status", id), agent)
 	}
 }

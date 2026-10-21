@@ -2305,12 +2305,14 @@ for the resulting version.
 (the error names "v13→v14 incompatible <table>.<column>", "v13→v14 invalid
 <table>.<column>", "v13→v14 invalid stuck_observation" or "invalid
 stuck_exit", "v13→v14 invalid fallback basis" or "v13→v14 incomplete
-fallback clock"): a `spawns` or `permission_requests` column of the v14 stuck
-and ownership set already exists with a different shape (name case, type,
-primary key, nullability or default), or its stored values fail validation (a
-negative or non-integer number, an undecodable observation or exit record, a
-fallback basis other than `process`, `deadline` or `admission`, or a
-fallback time and basis that are not both set or both empty). The failed hop
+fallback clock"): a `spawns` or `permission_requests` column the v14 hop adds
+(stuck observation, pane baseline, timeout override or request ownership)
+already exists with a different shape (name case, type, primary key,
+nullability or default), or its stored values fail validation (a value of the
+wrong type, a negative or non-integer number, an undecodable observation or
+exit record, a fallback basis other than `process`, `deadline` or
+`admission`, or a fallback time and basis that are not both set or both
+empty). The failed hop
 rolls back; earlier committed hops remain. Stop all writers and follow "Going
 back to the previous release" with the actual DB path and matching pre-upgrade
 WAL/SHM set, or obtain human help. A backup cannot be created retroactively

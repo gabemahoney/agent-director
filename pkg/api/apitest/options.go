@@ -564,3 +564,20 @@ func WithStuckObservation(raw string) SpawnOption {
 func WithStuckExit(raw string) SpawnOption {
 	return func(o *spawnOpts) { o.set("stuck_exit", nullIfZero(raw)) }
 }
+
+// WithNoScreenChangeTimeout seeds the row's per-spawn timeout override as
+// stored: any value, a malformed one included; nil stores NULL (no override).
+func WithNoScreenChangeTimeout(raw any) SpawnOption {
+	return func(o *spawnOpts) { o.set("no_screen_change_timeout_seconds", raw) }
+}
+
+// WithPaneBaseline seeds the committed pane baseline as stored: the
+// fingerprint, the start of its unchanged period (Unix ms) and the permission
+// epoch it belongs to, any value a malformed one included; nil stores NULL.
+func WithPaneBaseline(sha, sinceMs, epoch any) SpawnOption {
+	return func(o *spawnOpts) {
+		o.set("pane_sha256", sha)
+		o.set("pane_since_ms", sinceMs)
+		o.set("pane_epoch", epoch)
+	}
+}

@@ -168,7 +168,11 @@ CREATE TABLE IF NOT EXISTS spawns (
     permission_epoch           INTEGER NOT NULL DEFAULT 0,
     stuck_version              INTEGER NOT NULL DEFAULT 0,
     stuck_observation          TEXT,
-    stuck_exit                 TEXT
+    stuck_exit                 TEXT,
+    no_screen_change_timeout_seconds INTEGER,
+    pane_sha256                TEXT,
+    pane_since_ms              INTEGER,
+    pane_epoch                 INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);

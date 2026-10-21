@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -69,6 +70,10 @@ type SpawnRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// NoScreenChangeAvailability is, as StatusResult's, available for Claude
+	// and Codex and unavailable for Cursor. Present on every row; omitted only
+	// from the empty result of a failed call.
+	NoScreenChangeAvailability string `json:"no_screen_change_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -372,8 +377,9 @@ func emptySpawnRow() SpawnRow {
 // the row it read, then drops the entry for the row's current session id
 // (a row with no current session id drops nothing).
 //
-// Get reads with no settle time; the Client applies its [state] settle_ms
-// (getSettled).
+// Get reads with no settle time and samples no pane, so a working Claude or
+// Codex row keeps its pane's current no_screen_change finding as committed;
+// the Client applies its [state] settle_ms and samples panes (getSettled).
 func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 	return getSettled(s, v, store.SettleRead{}, instanceID)
 }
@@ -411,30 +417,31 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
-		Context:                 contextOf(row.ContextEvidence()),
-		InstanceID:              row.InstanceID,
-		ParentID:                row.ParentID,
-		State:                   reported,
-		FamilyState:             row.FamilyState,
-		CWD:                     row.CWD,
-		Agent:                   row.Agent,
-		TmuxSessionName:         row.TmuxSessionName,
-		TmuxSocket:              row.Identity.Socket,
-		AgentArgs:               row.AgentArgs,
-		RelayMode:               row.RelayMode,
-		JSONLPath:               row.JSONLPath,
-		SessionID:               row.SessionID,
-		Labels:                  row.Labels,
-		StartedAt:               row.StartedAt,
-		LastSeenAt:              row.LastSeenAt,
-		StateChangedAt:          millisToUTC(row.StateChangedMillis),
-		EndedAt:                 row.EndedAt,
-		LaunchStartedAt:         launchStartedAt(row.State, row.LaunchStartedAtMillis),
-		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
-		LivenessNote:            nullableString(row.LivenessNote),
-		PermissionRequests:      []PermissionRequestInfo{},
-		UnprovenRequests:        []PermissionRequestInfo{},
-		PriorSessions:           []PriorSession{},
+		Context:                    contextOf(row.ContextEvidence()),
+		InstanceID:                 row.InstanceID,
+		ParentID:                   row.ParentID,
+		State:                      reported,
+		FamilyState:                row.FamilyState,
+		NoScreenChangeAvailability: noScreenChangeAvailability(row.Agent),
+		CWD:                        row.CWD,
+		Agent:                      row.Agent,
+		TmuxSessionName:            row.TmuxSessionName,
+		TmuxSocket:                 row.Identity.Socket,
+		AgentArgs:                  row.AgentArgs,
+		RelayMode:                  row.RelayMode,
+		JSONLPath:                  row.JSONLPath,
+		SessionID:                  row.SessionID,
+		Labels:                     row.Labels,
+		StartedAt:                  row.StartedAt,
+		LastSeenAt:                 row.LastSeenAt,
+		StateChangedAt:             millisToUTC(row.StateChangedMillis),
+		EndedAt:                    row.EndedAt,
+		LaunchStartedAt:            launchStartedAt(row.State, row.LaunchStartedAtMillis),
+		LivenessUnverifiedSince:    nullableTimestamp(row.LivenessUnverifiedSince),
+		LivenessNote:               nullableString(row.LivenessNote),
+		PermissionRequests:         []PermissionRequestInfo{},
+		UnprovenRequests:           []PermissionRequestInfo{},
+		PriorSessions:              []PriorSession{},
 	}
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
@@ -468,20 +475,28 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	// debounced (b.3ie), so the settled state can be any state, even ended or
 	// missing, while the raw check_permission shows its open requests.
 	j := newRelayJudge(v)
+	var judged *judgedRequestSet
 	if !finishedState(row.State) {
-		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
+		judged, err = readJudgedRequests(s.PermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
 			return emptySpawnRow(), err
 		}
+		open, unproven := judgedSpawnInfos(judged, j)
 		if row.State == store.StateCheckPermission {
 			out.PermissionRequests = open
 		}
 		out.UnprovenRequests = unproven
 	}
 	slots := goneSlotsOf(nil, out.PermissionRequests)
-	recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
+	attempted, err := recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
 
-	display := permissionDisplay(s, v, settle, row)
+	// The observation reuses the requests read above while no write has been
+	// attempted over them; after a busy write it attempts none of its own.
+	read := permissionRead{storeBusy: errors.Is(err, store.ErrStoreBusy)}
+	if !attempted {
+		read.requests = judged
+	}
+	display, _, _ := observeStuck(s, v, settle, row, read)
 	out.State, out.StuckInfo = display.State, stuckInfo(display)
 
 	return out, nil
@@ -507,7 +522,9 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // change shows only once it has held that long, the last settled state until
 // then; terminal states and command-driven changes show at once. The
 // permission requests and launch_started_at follow the live state.
-// Get never waits for the store's write lock, nor for a state to settle.
+// Get never waits for the store's write lock, nor for a state to settle. Like
+// [Client.Status] it samples a working Claude or Codex row's own pane for
+// no_screen_change and carries no_screen_change_availability.
 //
 // CLI: agent-director get
 //

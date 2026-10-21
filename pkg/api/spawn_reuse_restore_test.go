@@ -122,15 +122,26 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					// The old life opted out of pre-trust and the call does not: the restore brings 1 back. A missing
 					// row's NULL ended_at is restored as the failure time, read from the Client clock. The call launches
 					// Claude, so a codex row's agent column and its subagent_tracking 0 are the ones the reset moved and the restore brings back.
-					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true, Opts: agentRowOpts(rowAgent)}
+					// The old life's no_screen_change override (90) comes back over the call's (30), on every agent's row.
+					spec := reuseRowSpec{State: prior, Age: time.Hour, NoPreTrust: true,
+						Opts: append(agentRowOpts(rowAgent), apitest.WithNoScreenChangeTimeout(int64(90)))}
 					if prior == store.StateMissing {
 						spec.EndedAt = endedNull
 					}
 					r := e.seedReusable(t, agentGone, spec)
 					tr.arrange(e, r)
 					before, hist := e.columns(t, r.ID), rrHistory(t, e, r.ID)
+					var launching any // the override while the reuse launched
+					e.rec.AfterCall(tmux.CallCreate, func(tmuxfix.SocketCall, error) {
+						if launching == nil {
+							launching = e.columns(t, r.ID).NoScreenChangeTimeoutSeconds
+						}
+					})
 
-					_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{}))
+					_, _, err := e.reuse(t, reuseParams(t, r, reuseRequest{Timeout: 30}))
+					if launching != int64(30) {
+						t.Errorf("override while launching = %v; want the call's 30", launching)
+					}
 					assertLaunchSentinel(t, err, tr.want)
 					c := rlOneCreate(t, e, r.Socket, tr.calls...)
 					restore := apitest.ResumeRestore{Outcome: apitest.RestoreApplied, PriorState: prior, Launch: apitest.LaunchReuse}
@@ -155,8 +166,9 @@ func TestSpawnReuseRestoreAfterEachLaunchFailure(t *testing.T) {
 					if r.Spawn.Agent != "claude" {
 						wantLife++
 					}
-					if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != wantLife {
-						t.Errorf("after the second reuse: state %v, life %v; want pending, %d", cols.State, cols.LifeNumber, wantLife)
+					if cols := e.columns(t, r.ID); cols.State != store.StatePending || cols.LifeNumber != wantLife || cols.NoScreenChangeTimeoutSeconds != nil {
+						t.Errorf("after the second reuse: state %v, life %v, override %v; want pending, %d and the omitted override cleared",
+							cols.State, cols.LifeNumber, cols.NoScreenChangeTimeoutSeconds, wantLife)
 					}
 				})
 			}

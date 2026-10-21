@@ -368,6 +368,7 @@ func docConfigKeys() []struct {
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
 		{"state.settle_ms", itoa(int64(c.State.SettleMs)), "", false},
 		{"state.permission_unanswered_timeout_seconds", itoa(int64(c.State.EffectivePermissionUnansweredTimeoutSeconds())), rng(int64(config.MaxPermissionUnansweredTimeoutSeconds)), false},
+		{"state.no_screen_change_timeout_seconds", itoa(int64(c.State.EffectiveNoScreenChangeTimeoutSeconds())), rng(int64(config.MaxNoScreenChangeTimeoutSeconds)), false},
 		{"launch.claude_path", "unset", "", true},
 		{"launch.codex_path", "unset", "", true},
 		{"launch.cursor_path", "unset", "", true},

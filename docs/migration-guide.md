@@ -19,7 +19,7 @@ runtime-table DDL live in
 in `internal/store/family_schema.go`; the v12→v13 Codex startup and
 Claude capacity provenance hop lives in `internal/store/codex_startup.go`
 with `migrateClaudeCapacity` in `internal/store/claude_capacity.go`; the
-current v13→v14 permission observation and ownership hop lives in
+current v13→v14 stuck observation and ownership hop lives in
 `internal/store/stuck_schema.go`.
 The current schema has seven tables: `spawns`, `permission_requests`,
 `session_history`, `store_meta`, `subagents`, `subagent_launches` and
@@ -196,9 +196,12 @@ appending the step makes both a v14→v15 upgrade and a v1→v15 chain work.
 ### Current worked example: v13 → v14
 
 `migrateV13toV14` (`stuck_schema.go`) adds the columns behind the report-only
-`stuck` display of an unanswered permission request. On `spawns`:
-`permission_epoch INTEGER NOT NULL DEFAULT 0`, `stuck_version INTEGER NOT NULL
-DEFAULT 0`, and nullable `stuck_observation TEXT` and `stuck_exit TEXT`. On
+`stuck` display of an unanswered permission request or an unchanged working
+pane. On `spawns`: `permission_epoch INTEGER NOT NULL DEFAULT 0`,
+`stuck_version INTEGER NOT NULL DEFAULT 0`, and nullable `stuck_observation
+TEXT`, `stuck_exit TEXT`, `no_screen_change_timeout_seconds INTEGER` (the
+per-spawn override), `pane_sha256 TEXT`, `pane_since_ms INTEGER` and
+`pane_epoch INTEGER` (the committed pane baseline). On
 `permission_requests`, all nullable: `owner_launch_token TEXT`,
 `owner_permission_epoch INTEGER`, `admitted_at INTEGER`, `fallback_at INTEGER`
 and `fallback_basis TEXT`. Fresh `schemaDDL` creates
@@ -206,18 +209,21 @@ the same shape directly at v14, and the registered `{from: 13, apply:
 migrateV13toV14}` step runs after the v12→v13 hop; authorization must match
 the actual starting version and target 14. Existing migrations through v13
 stay unchanged. The runtime behaviour is in
-[Permission stuck reporting](architecture.md#permission-stuck-reporting).
+[Stuck reporting](architecture.md#stuck-reporting).
 
 The hop invents no history: no stuck episode, no observation, no fallback
-clock and no process-death observation. It validates first, and changes
-nothing until every column of these names that already exists passes. A
-case-conflicting name, a wrong type, a primary key, or a nullability or default
-that differs from the list above is refused with `ErrSchemaMismatch`. Existing
-integer values must be non-negative integers; `stuck_observation` and
-`stuck_exit` must decode as their strict bounded JSON; a `fallback_basis` must
-be `process`, `deadline` or `admission`; and `fallback_at` and `fallback_basis`
-must be both set or both NULL on every row. Compatible reentry keeps all of
-these unchanged.
+clock, no process-death observation, no pane baseline and no override. The
+pane and override columns start NULL, so an upgraded row uses each reader's
+configured timeout and its first successful pane sample starts a fresh
+period. The hop validates first, and changes nothing until every column of
+these names that already exists passes. A case-conflicting name, a wrong
+type, a primary key, or a nullability or default that differs from the list
+above is refused with `ErrSchemaMismatch`. Existing values must have their
+column's type, and integers must be non-negative; `stuck_observation` and
+`stuck_exit` must decode as their strict bounded JSON, for either reason; a
+`fallback_basis` must be `process`, `deadline` or `admission`; and
+`fallback_at` and `fallback_basis` must be both set or both NULL on every
+row. Compatible reentry keeps all of these unchanged.
 
 The one backfill is conservative ownership. Only if neither ownership column
 already existed, a request of a spawn currently in `check_permission` acquires
@@ -237,11 +243,12 @@ before retry. The store id and all existing rows and columns in all seven tables
 are preserved. Successful migration consumes authorization; reopening v14 does
 not replay it.
 
-`schema_v14_test.go` covers physical-v13 preservation and reentry, commit
-rollback and corrected retry, incompatible partial-state refusal, no enrolment
-of earlier or unknown-start permission intervals, historic fallback usability, and new
-admissions qualifying beside ambiguous history. It builds its partial and
-physical-v13 stores through the shared fixtures in
+`schema_v14_test.go` covers physical-v13 preservation and reentry (pane and
+override columns included), commit rollback and corrected retry, incompatible
+partial-state refusal, no enrolment of earlier or unknown-start permission
+intervals, no invented pane baseline or override, historic fallback
+usability, and new admissions qualifying beside ambiguous history. It builds
+its partial and physical-v13 stores through the shared fixtures in
 `migration_fixtures_test.go` (`v14ColumnSpecs`, `preAddV14Columns`,
 `seedV13PermissionFixture`); reuse them, not new raw SQL, for any later change
 to these columns. Recovery is restore-only (§5); no v14 reverse recipe is
@@ -357,7 +364,7 @@ reverse those earlier commits. After successful authorization consumption,
 reopen at v11 does not replay migration.
 
 Fresh DDL retains `cursorRuntimeDDL`, the identical eligibility column,
-v12 family history, v13 startup/capacity provenance and v14 permission
+v12 family history, v13 startup/capacity provenance and v14 stuck
 observation and ownership columns.
 `schema_v11_test.go` covers physical-v10 preservation,
 NULL/malformed historical agents, Cursor/child/orphan false, compatible
@@ -374,9 +381,11 @@ b.146 steps 2, 2b and 2c, which ship together, and a later step of that
 release appends its columns to `v7Columns` (`schema.go`) and the same text to
 `schemaDDL`, and extended that release's supported v7 → v6 recipe (§5) and its
 test copy. For a restore-only version, retain the documented recovery exception
-instead. Once a version has shipped, its hop never changes. The settled Cursor
-runtime, proof and context provenance changes explicitly use distinct
-v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14 hops; do not fold them into earlier hops.
+instead: v14's pane baseline and override columns joined its permission
+columns this way, and v14 stays restore-only. Once a version has shipped, its
+hop never changes. The settled Cursor runtime, proof and context provenance
+changes explicitly use distinct v9→v10, v10→v11, v11→v12, v12→v13 and
+v13→v14 hops; do not fold them into earlier hops.
 
 ## 1b. Refusal semantics — `ErrSchemaMigrationRequired`
 
@@ -770,8 +779,8 @@ Restating the two-places rule because it is the most common way a migration
 goes wrong: **fresh databases never replay hops.** The current v14 fresh DDL
 includes `cursorRuntimeDDL`, the eligibility column, the three v12
 family-history columns, nullable `spawns.codex_startup TEXT` and
-`spawns.claude_capacity TEXT`, and the four `spawns` and six
-`permission_requests` columns of the v14 permission observation and
+`spawns.claude_capacity TEXT`, and the eight `spawns` and five
+`permission_requests` columns of the v14 stuck observation and
 ownership; the v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14
 hops use the same respective definitions. Future changes must update
 both fresh DDL and the next hop. The §3 step 4
@@ -856,7 +865,7 @@ v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
 **Current recovery policy.** Schema v14 is restore-only: there is no
-supported v14→v13 reverse recipe for the permission observation and ownership
+supported v14→v13 reverse recipe for the stuck observation and ownership
 columns, and no supported v13→v12 reverse recipe for the context provenance
 columns. The v12 → v11 recipe below applies only to genuine family-only v12
 stores; it must never be run against v13 or v14, or a store whose version was
@@ -1266,7 +1275,7 @@ installing.
 
 ## References
 
-- `internal/store/stuck_schema.go` — guarded v13→v14 permission observation
+- `internal/store/stuck_schema.go` — guarded v13→v14 stuck observation
   and ownership hop, with conservative ownership backfill.
 - `internal/store/schema_v14_test.go` — preservation, reentry, refusal,
   rollback/retry and ownership checks; fixtures in

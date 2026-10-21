@@ -37,7 +37,8 @@ const stuckObservedStateSQL = `CASE WHEN json_valid(stuck_observation) THEN json
 // and the state. SET sees the row as it was before the statement, so the
 // same-value test and the base are decided in this one statement. A raw change also advances permission_epoch and
 // stuck_version; it keeps a displayed-stuck observation (clearing its
-// candidate, so the display settles out like any other state) and drops any
+// candidate, and any replacement reason that only a stuck candidate may
+// carry, so the display settles out like any other state) and drops any
 // other observation, a malformed one included:
 //   - V equal to the raw state: no column changes, so a same-value write
 //     never restarts the clock;
@@ -50,7 +51,7 @@ const stuckObservedStateSQL = `CASE WHEN json_valid(stuck_observation) THEN json
 const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
        stuck_observation = CASE WHEN state = ? THEN stuck_observation
          WHEN ` + stuckObservedStateSQL + ` = 'stuck'
-         THEN json_set(stuck_observation, '$.candidate', '', '$.candidate_since_ms', 0)
+         THEN json_remove(json_set(stuck_observation, '$.candidate', '', '$.candidate_since_ms', 0), '$.candidate_reason')
          ELSE NULL END,
        stuck_version = stuck_version + CASE WHEN state = ? THEN 0 ELSE 1 END,
        settled_state = CASE WHEN state = ? THEN settled_state

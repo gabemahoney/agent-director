@@ -97,6 +97,7 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 		{"[store] busy_timeout_ms ", &keys.busyTimeout},
 		{"[state] settle_ms ", &keys.settle},
 		{"[state] permission_unanswered_timeout_seconds ", &keys.permission},
+		{"[state] no_screen_change_timeout_seconds ", &keys.noScreenChange},
 	} {
 		if strings.Contains(desc, k.name) {
 			*k.key = value
@@ -119,6 +120,7 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"store busy_timeout_ms", cfg.Store.EffectiveBusyTimeoutMs(), config.DefaultStoreBusyTimeoutMs},
 		{"state settle_ms", cfg.State.EffectiveSettleMs(), config.DefaultStateSettleMs},
 		{"state permission_unanswered_timeout_seconds", cfg.State.EffectivePermissionUnansweredTimeoutSeconds(), config.DefaultPermissionUnansweredTimeoutSeconds},
+		{"state no_screen_change_timeout_seconds", cfg.State.EffectiveNoScreenChangeTimeoutSeconds(), config.DefaultNoScreenChangeTimeoutSeconds},
 	} {
 		if k.got != k.want {
 			t.Errorf("effective %s = %d after the follow; want its default %d", k.name, k.got, k.want)
@@ -242,7 +244,8 @@ func TestAdviceFollow_G2_RaisedGraceMinimumMissingOrZeroGivesIt(t *testing.T) {
 // [defaults] values: ... . A missing key, or 0, gives the default." (b.sgw),
 // and the same for [relay] and [pause] timeout_seconds (b.8q2), [pre_trust]
 // lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
-// settle_ms (b.3ie, whose default is off), alone or listed with other tables. Each refused file is rewritten as the tail says
+// settle_ms (b.3ie, whose default is off), permission_unanswered_timeout_seconds and
+// no_screen_change_timeout_seconds (b.sp6), alone or listed with other tables. Each refused file is rewritten as the tail says
 // and must then load with the defaults.
 func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 	cases := []struct {
@@ -265,8 +268,9 @@ func TestAdviceFollow_G2_RangeRefusalMissingOrZeroGivesDefault(t *testing.T) {
 		{"state permission timeout negative", rangeKeys{permission: "-1"}, nil},
 		{"state permission timeout above the largest", rangeKeys{permission: "9223372037"}, nil},
 		{"state permission and settle refused", rangeKeys{permission: "-1", settle: "60001"}, nil},
+		{"state no-screen-change timeout above the largest", rangeKeys{noScreenChange: "9223372037"}, nil},
 		{"every table refused", rangeKeys{days: "-1", relay: "9223372036", pause: "-1", preTrust: "-1", busyTimeout: "-1",
-			settle: "60001", permission: "-1"}, killNegativeTmux},
+			settle: "60001", permission: "-1", noScreenChange: "-1"}, killNegativeTmux},
 	}
 	for _, tc := range cases {
 		for _, f := range advPaneFollows {

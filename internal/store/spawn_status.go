@@ -12,10 +12,12 @@ import (
 const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
  codex_startup, claude_capacity, permission_epoch, stuck_version,
- COALESCE(stuck_observation, ''), ` + lifeColumns
+ COALESCE(stuck_observation, ''), ` + lifeColumns + `, ` + paneColumns
 
-// SpawnStatusRow reads only status, context and permission-observation evidence
-// in one snapshot. Malformed labels, arguments or environment cannot fail it.
+// SpawnStatusRow reads only status, context and stuck-observation evidence in
+// one snapshot: the stored observation, the no_screen_change timeout override
+// and the committed pane baseline. Malformed labels, arguments or environment
+// cannot fail it.
 func (s *Store) SpawnStatusRow(instanceID string, r SettleRead) (Spawn, error) {
 	return s.spawnStatusRow(instanceID, r, nil)
 }
@@ -51,11 +53,13 @@ func (s *Store) spawnStatusRow(instanceID string, r SettleRead, proofs []CursorM
 func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 	var row Spawn
 	var life lifeScan
+	var pane paneScan
 	var launch, agent, path, endReport, startup, capacity any
 	dest := []any{&row.InstanceID, &row.State, &launch, &row.FamilyState,
 		&row.RelayMode, &row.LifeNumber, &agent, &path, &endReport,
 		&startup, &capacity, &row.PermissionEpoch, &row.StuckVersion, &row.StuckObservation}
 	dest = append(dest, life.dest()...)
+	dest = append(dest, pane.dest()...)
 	if reported {
 		dest = append(dest, &row.ReportedState, &row.FamilyState)
 	}
@@ -75,5 +79,6 @@ func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 	row.EndReportedAtMillis = decodeEndReportedAt(endReport)
 	row.CodexStartup = decodeCodexStartup(startup)
 	row.ClaudeCapacity = decodeClaudeCapacity(capacity)
+	pane.apply(&row)
 	return row, nil
 }

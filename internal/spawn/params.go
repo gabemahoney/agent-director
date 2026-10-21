@@ -119,6 +119,17 @@ type SpawnParams struct {
 	// callers detect it by the binary's version (the manifest's
 	// reuse_finished text gives each surface's source).
 	ReuseFinished bool
+
+	// NoScreenChangeTimeoutSeconds overrides [state]
+	// no_screen_change_timeout_seconds for this row, in whole seconds from 1
+	// to config.MaxNoScreenChangeTimeoutSeconds; 0 (omitted) gives no override,
+	// so readers use their own configuration. A negative or larger value is
+	// refused with ErrInvalidFlags before anything is written or launched. The
+	// choice is recorded on the row: resume keeps it, and the next spawn or
+	// reuse replaces it, clearing it when that call gives none. Cursor rows
+	// keep it too, though no_screen_change is unavailable for them. Templates
+	// never carry it.
+	NoScreenChangeTimeoutSeconds int
 }
 
 // Permissions captures the three SRD §6.1 arrays. Nil entries are omitted

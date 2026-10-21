@@ -65,6 +65,10 @@ type SpawnColumns struct {
 	// current launch registered the agent's subagent events, 0 for a row from
 	// before the upgrade. A default seed reads 1 (int64).
 	SubagentTracking any
+
+	// The schema-v14 spawns column no_screen_change_timeout_seconds (b.ob8):
+	// the row's per-spawn timeout override; nil = none.
+	NoScreenChangeTimeoutSeconds any
 }
 
 // ReadSpawnColumns reads every column of instanceID's spawns row from the
@@ -89,7 +93,8 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 	                  tmux_server_started, tmux_server_starttime, pane_id,
 	                  pane_pid, pane_starttime, launch_owner_pid,
 	                  launch_owner_starttime, launch_owner_pidns, idle_since,
-		                  agent, end_reported_at, subagent_tracking
+		                  agent, end_reported_at, subagent_tracking,
+	                  no_screen_change_timeout_seconds
 	             FROM spawns
 	            WHERE instance_id = ?`
 	var c SpawnColumns
@@ -104,6 +109,7 @@ func ReadSpawnColumns(dbPath, instanceID string) (SpawnColumns, error) {
 		&c.PanePID, &c.PaneStarttime, &c.LaunchOwnerPID,
 		&c.LaunchOwnerStarttime, &c.LaunchOwnerPIDNS, &c.IdleSince,
 		&c.Agent, &c.EndReportedAt, &c.SubagentTracking,
+		&c.NoScreenChangeTimeoutSeconds,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SpawnColumns{}, fmt.Errorf("ReadSpawnColumns: %w: %s", store.ErrSpawnNotFound, instanceID)

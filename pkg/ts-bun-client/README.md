@@ -119,6 +119,11 @@ Cursor reports `"failed"` for unsupported pre-trust or `"skipped"` for its saved
 opt-out, never a validated `"ok"`; see
 [Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
 
+`no_screen_change_timeout_seconds` gives the row its own `no_screen_change`
+timeout in whole seconds (`0`, `null` or omitted for none); its range and
+lifecycle are in
+[Configuration](../../docs/configuration.md#no-screen-change-timeout-state).
+
 For all agents, same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
 `resume` continues only the recorded agent's latest reported session and
@@ -154,13 +159,18 @@ aggregation; the [caller contract](../../docs/caller-contract.md#family-reportin
 defines reporting limits.
 
 `state` is a `string` and can be `"stuck"`. Then `StatusResult` and `GetResult`
-carry the optional `stuck_reason` (`"permission_unanswered"`), `since` (RFC3339
-UTC string with millisecond precision), `request_token` and `tool_name`;
-`StatusResult` also carries `tmux_session_name`, and each `ListRow` carries
-`stuck_reason` only. In any other state these keys are absent from the result,
-never `null`, so test for presence (`result.stuck_reason !== undefined`). The
-[caller contract](../../docs/caller-contract.md#stuck-rows) defines the fields,
-omissions and detection.
+carry the optional `stuck_reason` (`StuckReason`: `"permission_unanswered"` or
+`"no_screen_change"`), `since` (RFC3339 UTC string with millisecond precision)
+and the reason's detail: `request_token` and `tool_name`, or
+`unchanged_minutes`; `StatusResult` also carries `tmux_session_name`, and each
+`ListRow` carries `stuck_reason` only. A key that does not apply is absent from
+the result, never `null`, so test for presence
+(`result.stuck_reason !== undefined`). Every `StatusResult`, `GetResult` and
+`ListRow` carries `no_screen_change_availability`
+(`NoScreenChangeAvailability`: `"available"` for Claude and Codex,
+`"unavailable"` for Cursor).
+The [caller contract](../../docs/caller-contract.md#stuck-rows) defines the
+fields, omissions and detection.
 
 `GetResult` and each `ListRow` carry `state_changed_at: string`, when the raw
 state last changed (RFC3339 UTC, millisecond precision); `StatusResult` does

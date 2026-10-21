@@ -51,6 +51,16 @@ type RelayView struct {
 	// PermissionUnansweredTimeout is independent of relay delivery deadlines.
 	// Zero uses the configured default of thirty seconds.
 	PermissionUnansweredTimeout time.Duration
+
+	// samplePane captures a working Claude or Codex row's own pane for its
+	// no_screen_change observation (Client.paneSampler, one per read); nil
+	// samples no pane, as a caller of the exported verb functions, which have
+	// no tmux, does.
+	samplePane func(Spawn) store.PaneSample
+	// noScreenChangeTimeout is the Client's configured no_screen_change
+	// timeout for rows without their own override; only a view that samples
+	// panes uses it. Zero uses the configured default of twenty minutes.
+	noScreenChangeTimeout time.Duration
 }
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),
@@ -393,10 +403,11 @@ const readerLockWait time.Duration = 0
 // maxWait for the write lock, and fills each slot's HookGoneAt with the
 // stored value. It is fail-open: a lock not free within maxWait, or a
 // failed write, writes nothing and leaves the slots' HookGoneAt null, and the
-// read that found them is answered as it is.
-func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
+// read that found them is answered as it is. It reports whether it attempted
+// the write, and the write's error.
+func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) (bool, error) {
 	if len(slots) == 0 {
-		return
+		return false, nil
 	}
 	var stored map[int64]time.Time
 	var err error
@@ -412,9 +423,11 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
 			ids = append(ids, sl.id)
 		}
 		stored, err = r.RecordHookGone(at, maxWait, ids...)
+	} else {
+		return false, nil
 	}
 	if err != nil {
-		return
+		return true, err
 	}
 
 	for _, sl := range slots {
@@ -422,6 +435,7 @@ func recordGone(s any, at time.Time, maxWait time.Duration, slots []goneSlot) {
 			sl.d.HookGoneAt = &t
 		}
 	}
+	return true, nil
 }
 
 // paneAnswerOf is pr's pane_answer as the wire gives it: none for a row built
@@ -518,21 +532,26 @@ func judgedOpenInfos(r *judgedRequestSet, j relayJudge) []PermissionRequestInfo 
 	return infos
 }
 
-// spawnRequestInfos reads every permission request of instanceID through
-// read, once, by the check-before-read rule, and projects from that one read,
-// oldest first (created_at, then request id), with their delivery facts at
-// j's now: open, the requests that still await an answer
-// (PermissionRow.AwaitsAnswer, as OpenPermissionRequestsForSpawn selects
-// them), and unproven, those Claude Code has not proven gone (b.146 step 2c).
-// A request in both lists is judged once and carries the same facts in each.
-// Both are non-nil. The caller collects those fallen back with no
-// hook_gone_at (goneSlotsOf) for its one recordGone.
-func spawnRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) (open, unproven []PermissionRequestInfo, err error) {
-	prs, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
+// readJudgedRequests reads every permission request of instanceID through
+// read, once, by the check-before-read rule (readManyJudged).
+func readJudgedRequests(read func(string) ([]PermissionRow, error), j relayJudge, instanceID string) (*judgedRequestSet, error) {
+	rows, verdicts, err := readManyJudged(func() ([]PermissionRow, error) { return read(instanceID) }, j)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	prs = slices.Clone(prs)
+	return &judgedRequestSet{rows: rows, verdicts: verdicts}, nil
+}
+
+// judgedSpawnInfos projects every request of r, one read
+// (readJudgedRequests), oldest first (created_at, then request id), with
+// their delivery facts at j's now: open, the requests that still await an
+// answer (PermissionRow.AwaitsAnswer, as OpenPermissionRequestsForSpawn
+// selects them), and unproven, those Claude Code has not proven gone (b.146
+// step 2c). A request in both lists is judged once and carries the same facts
+// in each. Both are non-nil. The caller collects those fallen back with no
+// hook_gone_at (goneSlotsOf) for its one recordGone.
+func judgedSpawnInfos(r *judgedRequestSet, j relayJudge) (open, unproven []PermissionRequestInfo) {
+	prs := slices.Clone(r.rows)
 	slices.SortStableFunc(prs, func(a, b PermissionRow) int {
 		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
 			return c
@@ -542,7 +561,7 @@ func spawnRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge,
 	now := j.now()
 	open, unproven = []PermissionRequestInfo{}, []PermissionRequestInfo{}
 	for _, pr := range prs {
-		info := permissionRequestInfo(pr, j.delivery(pr, verdicts[pr.RequestID], now))
+		info := permissionRequestInfo(pr, j.delivery(pr, r.verdicts[pr.RequestID], now))
 		if pr.AwaitsAnswer() {
 			open = append(open, info)
 		}
@@ -550,7 +569,7 @@ func spawnRequestInfos(read func(string) ([]PermissionRow, error), j relayJudge,
 			unproven = append(unproven, info)
 		}
 	}
-	return open, unproven, nil
+	return open, unproven
 }
 
 // goneSlotsOf appends to slots those of infos fallen back with no

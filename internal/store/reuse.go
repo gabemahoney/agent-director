@@ -46,7 +46,9 @@ type ReuseRow struct {
 // SR-10.3, SR-10.4): every spawns column except instance_id,
 // row_version, launch_started_at and the settle columns settled_state and
 // state_changed_ms (the restore writes those as an immediate write of the
-// prior state, b.3ie), each with its stored value and SQLite
+// prior state, b.3ie), and the report-only stuck and pane observation columns
+// (that write starts a new permission epoch, which no earlier observation
+// belongs to), each with its stored value and SQLite
 // storage class, NULL distinct from an empty value. Its fields are unexported:
 // only ReadForReuse fills it, and only RestoreAfterFailedReuse reads it. The
 // zero RawLife was not produced by ReadForReuse, and the restore refuses it.
@@ -86,6 +88,7 @@ type RawLife struct {
 	subagentTracking        rawValue
 	codexStartup            rawValue
 	claudeCapacity          rawValue
+	noScreenChangeTimeout   rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -159,6 +162,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"subagent_tracking", func(l *RawLife) *rawValue { return &l.subagentTracking }},
 	{"codex_startup", func(l *RawLife) *rawValue { return &l.codexStartup }},
 	{"claude_capacity", func(l *RawLife) *rawValue { return &l.claudeCapacity }},
+	{"no_screen_change_timeout_seconds", func(l *RawLife) *rawValue { return &l.noScreenChangeTimeout }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -275,6 +279,7 @@ const resetForReuseSQL = `UPDATE spawns
         agent                     = ?,
         end_reported_at           = NULL,
         subagent_tracking         = ` + subagentTrackedParamSQL + `,
+        no_screen_change_timeout_seconds = ?,
         life_number               = life_number + CASE WHEN ` + reuseAgentTextSQL + ` = ? THEN 0 ELSE 1 END,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND ` + reuseAgentTextSQL + ` = ?`
@@ -325,7 +330,9 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     codex or cursor (checked before anything is written: ErrRowAgentInvalid) and
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
-//     for codex or cursor, over whatever the row held; row_version advanced by one, and
+//     for codex or cursor, over whatever the row held; the timeout override
+//     fresh.NoScreenChangeTimeoutSeconds (0 as NULL, so an omitted override
+//     clears the old one); row_version advanced by one, and
 //     life_number advanced by one only if the exact stored agent differs
 //     from fresh.Agent. Same-agent reuse keeps the life. The store reads no
 //     clock: the caller supplies
@@ -432,7 +439,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
 	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
-	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent, fresh.Agent)
+	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent, positiveIntArg(fresh.NoScreenChangeTimeoutSeconds), fresh.Agent)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)
@@ -515,8 +522,8 @@ var restoreAfterFailedReuseSQL = func() string {
 // last_seen_at, liveness_unverified_since, liveness_note, cwd,
 // tmux_session_name, agent_args, relay_mode, labels, extra_env,
 // launch_token, tmux_socket, the six server and pane identity columns, the
-// three launch-owner columns, agent, end_reported_at and subagent_tracking),
-// so the row returns to its pre-reuse life and
+// three launch-owner columns, agent, end_reported_at, subagent_tracking and
+// the timeout override), so the row returns to its pre-reuse life and
 // that life's history is visible again (SR-5.9). ended_at is prior's as stored, or failedAt in the store's
 // CURRENT_TIMESTAMP layout when it was NULL. parent_id is prior's only while a
 // row with that id still exists, otherwise NULL, decided in the same

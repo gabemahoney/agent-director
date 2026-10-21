@@ -81,10 +81,19 @@ var stateEnum = []string{
 // permissionStuckText describes a generic report, shared by all caller surfaces.
 const permissionStuckText = "stuck with stuck_reason permission_unanswered reports a current unanswered, unproven fallen-back request on Claude, Codex or Cursor after [state] permission_unanswered_timeout_seconds (whole seconds, default/zero 30, range 1 to 9223372036), measured from its established fallback, followed by ordinary settling detected on reads. Independent requests remain eligible; detail selects earliest fallback, then lexical request token. since is the successful read that committed displayed entry, in RFC3339 UTC with exactly millisecond precision. Clearing retains displayed detail through settlement; representative changes preserve since. Observation writes never wait and skipped samples retain the committed display. This is report-only: raw command guards and dialog holds remain authoritative; live stuck members contribute working to family_state. No background observation is added."
 
-var stuckReasonField = FieldDef{Name: "stuck_reason", Type: "string?", Description: "Present only while displayed stuck. " + permissionStuckText, Nullable: true, AllowEmpty: false, AllowedValues: nil}
-var stuckSinceField = FieldDef{Name: "since", Type: "string?", Description: "Actual committed displayed stuck entry, RFC3339 UTC with exactly millisecond precision; omitted otherwise. Retained while clearing settles and when representative request changes.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
+// paneStuckText describes the pane reason and its availability, shared by
+// all caller surfaces.
+const paneStuckText = "stuck with stuck_reason no_screen_change reports a working Claude or Codex row whose own pane fingerprint (read-pane's default pane_sha256) stayed identical across successful reads for the row's spawn no_screen_change_timeout_seconds, else [state] no_screen_change_timeout_seconds (whole seconds, default/zero 1200, range 1 to 9223372036), followed by ordinary settling detected on reads. Panes are sampled only while callers read status, get or list: nothing observes them between reads, and identical samples are a hint, not proof of inactivity (healthy quiet work can qualify). The first successful read starts the baseline, a changed fingerprint restarts it and clears the condition, and a failed or untrusted capture resets it; an earlier turn or launch supplies no evidence. check_permission and ask_user never qualify. Cursor reports no_screen_change_availability unavailable and never this reason. A reason change while displayed stuck settles reason and detail together and keeps since."
+
+var stuckReasonField = FieldDef{Name: "stuck_reason", Type: "string?", Description: "Present only while displayed stuck: permission_unanswered or no_screen_change. " + permissionStuckText + " " + paneStuckText, Nullable: true, AllowEmpty: false, AllowedValues: []string{"permission_unanswered", "no_screen_change"}}
+var stuckSinceField = FieldDef{Name: "since", Type: "string?", Description: "Actual committed displayed stuck entry, RFC3339 UTC with exactly millisecond precision; omitted otherwise. Retained while clearing settles, when representative request changes and when the reason changes.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
 var stuckTokenField = FieldDef{Name: "request_token", Type: "string?", Description: "Selected qualifying permission request token; only while displayed permission_unanswered. Earliest fallback, then ascending lexical token.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
 var stuckToolField = FieldDef{Name: "tool_name", Type: "string?", Description: "Selected qualifying request's tool name; only while displayed permission_unanswered.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
+var stuckMinutesField = FieldDef{Name: "unchanged_minutes", Type: "int?", Description: "Completed minutes, rounded down, of the committed unchanged observation period; only while displayed no_screen_change.", Nullable: true, AllowEmpty: false, AllowedValues: nil}
+
+// availabilityField is no_screen_change_availability on every status, get and
+// list row: a capability outcome, never a stuck reason.
+var availabilityField = FieldDef{Name: "no_screen_change_availability", Type: "string", Description: "Whether no_screen_change can apply to the row's agent: available for Claude and Codex, unavailable for Cursor, whose healthy quiet work can leave its pane unchanged. A capability outcome, not a stuck reason: Cursor rows still report permission_unanswered.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"available", "unavailable"}}
 
 // ReuseOptInSpelling is the reuse opt-in's one spelling in advice every
 // surface shows (b.c4u): its param name, which MCP takes and the TypeScript
@@ -472,6 +481,15 @@ var Verbs = []VerbDef{
 				AllowEmpty:    false,
 				AllowedValues: nil,
 			},
+			{
+				Name:          "no_screen_change_timeout_seconds",
+				Type:          "int",
+				Description:   "This row's no_screen_change timeout in whole seconds, 1 to 9223372036, used by every status, get and list in place of their [state] no_screen_change_timeout_seconds. 0, null or omitted gives no override. A negative, fractional, non-numeric or larger value is refused with ErrInvalidFlags before anything is written or launched, never clamped. Recorded on the row: resume keeps it; the next spawn or reuse replaces it, clearing it when that call gives none; a reuse whose launch fails restores the earlier one. Cursor rows keep it, but no_screen_change is unavailable for them.",
+				Required:      false,
+				Nullable:      false,
+				AllowEmpty:    false,
+				AllowedValues: nil,
+			},
 		},
 		ResultFields: []FieldDef{
 			{
@@ -521,7 +539,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "status",
-		Description: "Row state: pending/waiting/working/ask_user/check_permission/ended/missing/stuck. stuck: unanswered permission fallback. pending: launch (spawn/reuse/resume) underway; no SessionStart hook report yet; may be loading or at a startup prompt. Resumed pending keeps session id/history.",
+		Description: "State: pending/waiting/working/ask_user/check_permission/ended/missing/stuck. stuck: unanswered permission fallback or working pane unchanged across reads. pending: launch (spawn/reuse/resume) underway; no SessionStart hook report yet; may be loading or at a startup prompt. Resumed pending keeps session id/history.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -546,7 +564,8 @@ var Verbs = []VerbDef{
 			},
 			{Name: "context", Type: "object", Description: contextDescription, Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			familyStateField,
-			stuckReasonField, stuckSinceField, stuckTokenField, stuckToolField,
+			availabilityField,
+			stuckReasonField, stuckSinceField, stuckTokenField, stuckToolField, stuckMinutesField,
 			{Name: "tmux_session_name", Type: "string?", Description: "Attach target; present only while displayed stuck.", Nullable: true, AllowEmpty: false, AllowedValues: nil},
 			{
 				Name:          "launch_started_at",
@@ -563,7 +582,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "get",
-		Description: "Return the full row, including identity, state, session and tmux socket.",
+		Description: "Return the full row: identity, state, session and tmux socket.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -583,7 +602,8 @@ var Verbs = []VerbDef{
 			{Name: "parent_id", Type: "string", Description: "Parent Spawn id (AGENT_DIRECTOR_INSTANCE_ID env at spawn time), empty when launched by a human shell.", Nullable: false, AllowEmpty: true, AllowedValues: nil},
 			{Name: "state", Type: "string", Description: "Current state, one of the allowed values. pending: a launch (spawn, reuse or resume) is in progress and the agent has not reported in yet (its SessionStart hook); it may be loading or waiting at a startup prompt. A resumed pending row keeps its session id and history (non-empty session_id). `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText, Nullable: false, AllowEmpty: false, AllowedValues: stateEnum},
 			familyStateField,
-			stuckReasonField, stuckSinceField, stuckTokenField, stuckToolField,
+			availabilityField,
+			stuckReasonField, stuckSinceField, stuckTokenField, stuckToolField, stuckMinutesField,
 			{Name: "cwd", Type: "string", Description: "Canonicalized cwd.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
 			{Name: "agent", Type: "string", Description: "The agent the row runs: claude (Claude Code), codex (Codex) or cursor (Cursor). Set at spawn, replaced by a reuse, followed by resume.", Nullable: false, AllowEmpty: false, AllowedValues: []string{"claude", "codex", "cursor"}},
 			{Name: "tmux_session_name", Type: "string", Description: "tmux session under which the Spawn is running.", Nullable: false, AllowEmpty: false, AllowedValues: nil},
@@ -722,7 +742,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "read-pane",
-		Description: "Capture the last N lines of the agent's own pane (default 25, no upper cap). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Capture the last N lines of the agent's own pane (default 25, uncapped). ANSI escapes stripped, unicode glyphs kept, unless `ansi=true` (raw bytes). tmux errors: ErrTmuxCaptureFailed (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1184,7 +1204,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "list",
-		Description: "Enumerate rows. All filters AND together. Unordered; callers sort.",
+		Description: "Enumerate rows. Filters AND together. Unordered; callers sort.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1244,7 +1264,7 @@ var Verbs = []VerbDef{
 			},
 		},
 		ResultFields: []FieldDef{
-			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Displayed state filtering occurs before limit. Rows displayed stuck carry only stuck_reason, with since/request_token/tool_name omitted. " + permissionStuckText + " Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
+			{Name: "spawns", Type: "[]Spawn", Description: "Matching rows. Displayed state filtering occurs before limit. Rows displayed stuck carry only stuck_reason (permission_unanswered or no_screen_change), with since/request_token/tool_name/unchanged_minutes omitted. " + permissionStuckText + " " + paneStuckText + " Every row carries no_screen_change_availability (string: available for Claude and Codex, unavailable for Cursor), a capability outcome, not a stuck reason. Empty array when none match (never null). Each row carries family_state (string: working or waiting). " + familyStateText + " Each row carries agent (string: claude, codex or cursor, the agent it runs) and liveness_unverified_since (timestamp?, the time a sweep first noted the row, kept while the note changes) and liveness_note (string?, the latest sweep's reason token, overwritten when the reason changes; or unreported on a pending row whose agent is alive but has not reported through any hook since its launch, kept by a sweep that finds the agent alive and cleared by the agent's next hook: read-pane, and only having looked, send-keys with allow_pending (--allow-pending on the CLI)), both omitted while NULL and cleared together when a sweep finds the agent process alive (except on a pending row noted unreported or provenance_conflict), and launch_started_at (timestamp?), the start of the launch in progress (RFC3339 UTC with millisecond precision), omitted unless the row is pending. " + launchStartLiveSentence + " Each row carries state_changed_at (timestamp), as get's: " + stateChangedAtText + " Each row's state takes the same values as status, with the same meaning of pending: a launch (spawn, reuse or resume) in progress whose agent has not reported in yet; a resumed pending row keeps its session id and history. `missing` is the sweep's judgement on the evidence available to it, not proof that the agent has exited. " + settledStateText + " Each row also carries permission_requests, as get's: " + permissionRequestsDescription, Nullable: false, AllowEmpty: true, AllowedValues: nil},
 		},
 		ErrorNames: []string{
 			"ErrInvalidFlags",
@@ -1253,7 +1273,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "list-subagents",
-		Description: "Return an agent's subagent records and whether they are tracked.",
+		Description: "Return an agent's subagent records and their tracked status.",
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1307,7 +1327,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "serve",
-		Description: "Start the long-lived MCP server: the CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as MCP tools, JSON-RPC on stdio.",
+		Description: "Run the long-lived MCP server, JSON-RPC on stdio: CLI verbs except `hook`, `serve`, `trail-emit` and `cursor-host` as tools.",
 		Callable:    false,
 		HandleFree:  false,
 		Params: []ParamDef{

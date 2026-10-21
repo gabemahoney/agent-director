@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -37,8 +38,16 @@ func TestPermissionStuckPreservesLiveCommandGuards(t *testing.T) {
 			p := agent.env(t)
 			p.enterStuck(t)
 			assertOneSentinel(t, p.sendKeys(p.plain("1")), api.ErrRelayFallenBack)
+			// Under load max_wait_ms 0 may answer its documented ErrStoreBusy, having
+			// recorded nothing; repeat it then, for at most 10 s (t2.sp6.rk.1k).
 			zero := int64(0)
-			_, err := api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: &zero})
+			var err error
+			for start := time.Now(); ; {
+				_, err = api.Decide(p.st, p.view(), api.DecideParams{InstanceID: p.r.ID, RequestToken: storefix.TestRequestTokenA, Decision: "allow", MaxWaitMs: &zero})
+				if !errors.Is(err, api.ErrStoreBusy) || time.Since(start) >= 10*time.Second {
+					break
+				}
+			}
 			assertOneSentinel(t, err, api.ErrRelayFallenBack)
 			result := p.pauseRun(t, false)
 			assertOneSentinel(t, result.err, api.ErrSpawnNotPausable)

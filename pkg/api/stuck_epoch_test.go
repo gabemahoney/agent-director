@@ -55,7 +55,7 @@ func committedStuck(t *testing.T, settle int64) (*relayEnv, *api.Client) {
 		observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 		e.now = e.now.Add(time.Duration(settle) * time.Millisecond)
 	}
-	observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	return e, c
 }
 
@@ -70,7 +70,7 @@ func TestPermissionStuckNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 		t.Run(fmt.Sprintf("settle_%dms", settle), func(t *testing.T) {
 			e, c := committedStuck(t, settle)
 			first := e.now
-			old := observeStatus(t, c, e.id, "stuck", nil)
+			old := observeStatus(t, c, e.id, "permission_unanswered", nil)
 			if old.RequestToken != storefix.TestRequestTokenA || old.Since != first.Format(stuckTS) {
 				t.Fatalf("setup episode=%+v", old)
 			}
@@ -92,7 +92,7 @@ func TestPermissionStuckNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 			e.now = first.Add(time.Hour)
 			secondRead := e.now
 			if settle == 0 {
-				got := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+				got := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 				if got.RequestToken != storefix.TestRequestTokenB || got.ToolName != "Read" || got.Since != secondRead.Format(stuckTS) {
 					t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
 				}
@@ -114,7 +114,7 @@ func TestPermissionStuckNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 			e.now = e.now.Add(time.Duration(settle)*time.Millisecond - time.Millisecond)
 			observeStatus(t, c, e.id, store.StateCheckPermission, nil)
 			e.now = e.now.Add(time.Millisecond)
-			got := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+			got := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 			if got.RequestToken != storefix.TestRequestTokenB || got.Since != e.now.Format(stuckTS) {
 				t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
 			}
@@ -143,9 +143,9 @@ func TestPermissionStuckRawChangeOutOfCheckPermissionSettlesOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The settle candidate starts at this read and the episode stays displayed.
-	observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	e.now = e.now.Add(999 * time.Millisecond)
-	observeStatus(t, c, e.id, "stuck", nil)
+	observeStatus(t, c, e.id, "permission_unanswered", nil)
 	if events := stuckEventsSince(t, mark, e.id); len(events) != 0 {
 		t.Fatalf("exit before the settle time: %v", events)
 	}
@@ -199,7 +199,7 @@ func TestPermissionStuckEntrySettleReadersAgreeWithReportedState(t *testing.T) {
 	}
 	// By the settle time the raw state reports as itself, and that is the prior.
 	e.now = e.now.Add(time.Second)
-	entered := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	entered := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	if entered.Since != e.now.Format(stuckTS) {
 		t.Errorf("entry=%+v; want the entry read's time", entered)
 	}
@@ -231,7 +231,7 @@ func TestPermissionStuckReadsThatChangeNothingWriteNothing(t *testing.T) {
 	}
 	// The boundary commits the entry.
 	e.now = stuckAt.Add(time.Second)
-	observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	if got := stuckVersion(t, e); got != version+1 {
 		t.Fatalf("entry stuck_version %d; want %d", got, version+1)
 	}
@@ -239,7 +239,7 @@ func TestPermissionStuckReadsThatChangeNothingWriteNothing(t *testing.T) {
 	// Displayed episode: later reads, and every other reader, write nothing.
 	for _, offset := range []time.Duration{0, 1, time.Minute, time.Hour} {
 		e.now = stuckAt.Add(time.Second + offset)
-		observeStatus(t, c, e.id, "stuck", nil)
+		observeStatus(t, c, e.id, "permission_unanswered", nil)
 		if row, err := c.Get(e.id); err != nil || row.State != "stuck" {
 			t.Fatalf("Get=%+v %v", row, err)
 		}

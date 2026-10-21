@@ -242,6 +242,20 @@ type Spawn struct {
 	StuckVersion     int64
 	StuckObservation string
 
+	// NoScreenChangeTimeoutSeconds is the row's per-spawn unchanged-pane
+	// timeout override in whole seconds; 0 = none (NULL), so readers use their
+	// configured timeout. The insert and reuse's reset write it from a Spawn,
+	// an applied reuse restore writes the old life's value back, and every
+	// other write, resume's included, leaves it.
+	NoScreenChangeTimeoutSeconds int
+	// PaneSHA256, PaneSinceMillis and PaneEpoch are the committed pane
+	// baseline (ObservePaneStuck): the last committed sample's fingerprint,
+	// the start of its unchanged period and the permission epoch it was
+	// sampled in; "", 0 and -1 when none is stored.
+	PaneSHA256      string
+	PaneSinceMillis int64
+	PaneEpoch       int64
+
 	ReportedState string
 	// FamilyState is the independently settled aggregate of this stored family.
 	FamilyState string
@@ -301,7 +315,8 @@ func boolInt(b bool) int {
 // the statement's own clock, so the new row reports pending at once whatever
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
 // launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
-// (subagentTrackedParamSQL).
+// (subagentTrackedParamSQL), and the timeout override from
+// sp.NoScreenChangeTimeoutSeconds (0 as NULL).
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -327,8 +342,9 @@ func (s *Store) InsertPending(sp Spawn) error {
             agent_args, relay_mode, labels, extra_env,
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
-            settled_state, state_changed_ms, agent, subagent_tracking
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `)
+            settled_state, state_changed_ms, agent, subagent_tracking,
+            no_screen_change_timeout_seconds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -349,7 +365,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent, sp.Agent)
+	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.NoScreenChangeTimeoutSeconds))
 	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -458,7 +474,8 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // zero value; any other stored value scans normally). The v6 launch-owner
 // columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
 // the v7 idle_since, then the v9 agent, end_reported_at and subagent_tracking,
-// and the later columns after them, state_changed_ms last.
+// and the later columns after them, state_changed_ms and then the pane
+// observation columns (paneColumns) last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -470,7 +487,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, ''), state_changed_ms`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, ''), state_changed_ms, ` + paneColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -517,6 +534,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		codexStartup    any
 		claudeCapacity  any
 		life            lifeScan
+		pane            paneScan
 	)
 	dest := append([]any{
 		&sp.InstanceID, &sp.ParentID, &sp.State, &sp.CWD,
@@ -530,6 +548,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
 	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.StuckVersion, &sp.StuckObservation, &sp.StateChangedMillis)
+	dest = append(dest, pane.dest()...)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
@@ -562,6 +581,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	sp.EndedAtText = endedAtText.String
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
+	pane.apply(&sp)
 	return sp, nil
 }
 

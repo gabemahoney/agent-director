@@ -72,9 +72,11 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 // [tmux] with a range: [defaults] expire_retention_days (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds (b.8q2), [pre_trust]
 // lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
-// settle_ms (b.3ie) and permission_unanswered_timeout_seconds (b.sp6).
-// "" leaves the key out.
-type rangeKeys struct{ days, relay, pause, preTrust, busyTimeout, settle, permission string }
+// settle_ms (b.3ie), permission_unanswered_timeout_seconds and
+// no_screen_change_timeout_seconds (b.sp6). "" leaves the key out.
+type rangeKeys struct {
+	days, relay, pause, preTrust, busyTimeout, settle, permission, noScreenChange string
+}
 
 // keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
 func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
@@ -89,6 +91,7 @@ func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 		{"store", "busy_timeout_ms", k.busyTimeout},
 		{"state", "settle_ms", k.settle},
 		{"state", "permission_unanswered_timeout_seconds", k.permission},
+		{"state", "no_screen_change_timeout_seconds", k.noScreenChange},
 	} {
 		if kv.value != "" {
 			if table != kv.table {

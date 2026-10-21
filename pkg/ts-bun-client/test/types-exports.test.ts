@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
-import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
+import type { DialogMaybeOpenDetails, ProvenGoneHow, StuckReason, NoScreenChangeAvailability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -125,3 +125,20 @@ function _assertFamilyTypes(status: StatusResult, get: GetResult, row: ListRow):
   void [values, waiting, working, listed, badStatus, badGet, badList];
 }
 void _assertFamilyTypes;
+
+// Typecheck (b.ob8): the stuck reasons and the availability values are closed unions on every
+// read result, unchanged_minutes is a status/get detail only, and spawn's override takes a number or null.
+function _assertPaneTypes(status: StatusResult, get: GetResult, row: ListRow): void {
+  const reasons: (StuckReason | undefined)[] = [status.stuck_reason, get.stuck_reason, row.stuck_reason];
+  const availability: NoScreenChangeAvailability[] = [status.no_screen_change_availability, get.no_screen_change_availability, row.no_screen_change_availability];
+  const minutes: (number | undefined)[] = [status.unchanged_minutes, get.unchanged_minutes];
+  const override: SpawnParams = { cwd: "/ws", no_screen_change_timeout_seconds: null };
+  // @ts-expect-error — unavailable is a capability outcome, never a stuck reason
+  const badReason: StuckReason = "unavailable";
+  // @ts-expect-error — availability is available or unavailable only
+  const badAvailability: NoScreenChangeAvailability = "no_screen_change";
+  // @ts-expect-error — list rows carry only the reason
+  const listMinutes = row.unchanged_minutes;
+  void [reasons, availability, minutes, override, badReason, badAvailability, listMinutes];
+}
+void _assertPaneTypes;

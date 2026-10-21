@@ -424,6 +424,51 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 	}
 }
 
+// TestMCPParamSpawnNoScreenChangeTimeout: an MCP spawn's
+// no_screen_change_timeout_seconds is recorded on the row, the range's top
+// without truncation; 0, null and absence record no override; a negative,
+// above-range, fractional or text value is ErrInvalidFlags before anything is
+// written or created.
+func TestMCPParamSpawnNoScreenChangeTimeout(t *testing.T) {
+	const absent = "absent"
+	for _, tc := range []struct {
+		name  string
+		value any
+		want  any // the stored override; "" for a refusal
+	}{
+		{"top of the range", int64(9223372036), int64(9223372036)},
+		{"zero", 0, nil},
+		{"null", nil, nil},
+		{absent, nil, nil},
+		{"negative", -1, ""},
+		{"above the range", int64(9223372037), ""},
+		{"fractional", 1.5, ""},
+		{"text", "90", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, c := newReuseParamEnv(t)
+			id := "nsc-" + uuid.NewString()[:8]
+			extra := map[string]any{"instance_id": id}
+			if tc.name != absent {
+				extra["no_screen_change_timeout_seconds"] = tc.value
+			}
+			args := spawnArgs(t, t.TempDir(), c, extra)
+			if tc.want == "" {
+				if data := toolErrorData(t, callTool(t, e.d, "spawn", args)); data.ErrName != "ErrInvalidFlags" {
+					t.Errorf("refusal = %s: %q; want ErrInvalidFlags", data.ErrName, data.ErrDescription)
+				}
+				assertNothingCreated(t, e.d, e.rec)
+				return
+			}
+			callToolText(t, e.d, "spawn", args)
+			assertCreates(t, e.rec)
+			if got := readColumns(t, e.storePath, id).NoScreenChangeTimeoutSeconds; got != tc.want {
+				t.Errorf("override = %v; want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMCPParamListFilters: list's tmux_session_name and state reach the
 // filter together: of three rows, only the waiting one using the name is
 // listed (b.7or).

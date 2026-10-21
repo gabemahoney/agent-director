@@ -53,6 +53,7 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Store.DbPath", d.Store.DbPath, "~/.config/agent-director/state.db"},
 		{"Store.BusyTimeoutMs", d.Store.BusyTimeoutMs, 10000},
 		{"State.SettleMs", d.State.SettleMs, 0}, // b.3ie: off by default
+		{"State.NoScreenChangeTimeoutSeconds", d.State.NoScreenChangeTimeoutSeconds, 1200},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.config/agent-director/errors.log"},
 	}
 	for _, tc := range cases {

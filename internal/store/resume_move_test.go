@@ -85,7 +85,7 @@ func seedMoveRow(t *testing.T, f *v5Store, spec moveSpec) moveRow {
 		apitest.WithTmuxSessionName("move-ts"), apitest.WithRawLabels(`{"team":  "a", "b":"2"}`),
 		apitest.WithRawAgentArgs(`["--model",   "opus"]`), apitest.WithRawExtraEnv(`{"K":  "v"}`),
 		apitest.WithJsonlPath("/tmp/ad-move-test/cur.jsonl"), apitest.WithPID(4242),
-		apitest.WithAgent(agent), apitest.WithEndReportedAt(moveEndReported),
+		apitest.WithAgent(agent), apitest.WithEndReportedAt(moveEndReported), apitest.WithNoScreenChangeTimeout(int64(90)),
 		apitest.WithSessionHistory(apitest.SessionHistorySeed{SessionID: "sess-move-old", JSONLPath: "/tmp/ad-move-test/old.jsonl",
 			Life: 2, RecordedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}),
 	}
@@ -112,6 +112,7 @@ func moveKept(c apitest.SpawnColumns) map[string]any {
 		"no_pre_trust": c.NoPreTrust, "started_at": c.StartedAt, "last_seen_at": c.LastSeenAt, "cwd": c.CWD,
 		"tmux_session_name": c.TmuxSessionName, "agent_args": c.AgentArgs, "relay_mode": c.RelayMode,
 		"labels": c.Labels, "extra_env": c.ExtraEnv, "agent": c.Agent,
+		"no_screen_change_timeout_seconds": c.NoScreenChangeTimeoutSeconds,
 	}
 }
 
@@ -131,7 +132,8 @@ func requireSet(t *testing.T, cols map[string]any) {
 // subagent_tracking is the agent's (claude 1 over the seeded 0, codex 0 over
 // the seeded 1); the launch start, token, socket
 // and parent (NULL for "") are the move's, also over a row with no token; every
-// kept column (the agent included) and the history are byte for byte unchanged.
+// kept column (the agent and the no_screen_change override included) and the
+// history are byte for byte unchanged.
 // The move closes the row's close mix at the launch start it records: every
 // running entry lost (agent_gone), every claimable launch deleted, every closed
 // entry and another row's records untouched (SR-8.1).

@@ -26,21 +26,21 @@ func TestPermissionStuckSettlementAndActualTransitionTime(t *testing.T) {
 				// A delayed first committing read must stamp itself, not the earlier deadline.
 				e.now = stuckAt.Add(delay + time.Hour)
 			}
-			entered := assertStuckState(t, c, e.id, "stuck")
+			entered := assertStuckState(t, c, e.id, "permission_unanswered")
 			if entered.Since != e.now.Format("2006-01-02T15:04:05.000Z") {
 				t.Errorf("entry backdated: %+v", entered)
 			}
-			assertStuckState(t, c, e.id, "stuck")
+			assertStuckState(t, c, e.id, "permission_unanswered")
 			entryTime := e.now
 			stuckFacts(t, e, apitest.PermissionAnswer(store.PaneAnswerOutside))
 			if delay > 0 {
 				// The clearing candidate is committed while the stuck display holds.
-				got := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+				got := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 				if got.StuckInfo != entered.StuckInfo {
 					t.Errorf("clearing details changed: %+v", got)
 				}
 				e.now = e.now.Add(delay - time.Millisecond)
-				assertStuckState(t, c, e.id, "stuck")
+				assertStuckState(t, c, e.id, "permission_unanswered")
 				e.now = e.now.Add(time.Millisecond)
 			}
 			observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
@@ -96,7 +96,7 @@ func TestPermissionStuckRepresentativeContinuity(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.now = e.now.Add(time.Second)
-	first := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	first := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	if first.RequestToken != storefix.TestRequestTokenB {
 		t.Fatalf("tie representative=%+v", first)
 	}
@@ -108,7 +108,7 @@ func TestPermissionStuckRepresentativeContinuity(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.now = e.now.Add(time.Millisecond)
-	next := observeStatus(t, c, e.id, "stuck", apitest.VersionAdvanced)
+	next := observeStatus(t, c, e.id, "permission_unanswered", apitest.VersionAdvanced)
 	if next.RequestToken != storefix.TestRequestTokenC || next.Since != first.Since {
 		t.Errorf("replacement restarted episode: first=%+v next=%+v", first, next)
 	}
@@ -152,7 +152,7 @@ func TestPermissionStuckCandidateCanceledByInterveningTurn(t *testing.T) {
 		}
 	}
 	e.now = e.now.Add(time.Second)
-	assertStuckState(t, c, e.id, "stuck")
+	assertStuckState(t, c, e.id, "permission_unanswered")
 }
 
 // An authoritative write that ends the displayed episode records the exit at
@@ -195,7 +195,7 @@ func TestPermissionStuckTerminalExitIsImmediate(t *testing.T) {
 			e.now = stuckAt
 			stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(-time.Minute), time.Time{}, time.Time{}, ""))
 			c := stuckClient(t, e, 0, 0)
-			assertStuckState(t, c, e.id, "stuck")
+			assertStuckState(t, c, e.id, "permission_unanswered")
 			c = stuckClient(t, e, settleMax, 0)
 			before, err := e.s.GetSpawn(e.id)
 			if err != nil {
@@ -246,7 +246,7 @@ func TestPermissionStuckFamilyRemainsBinaryAndChildLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := stuckClient(t, e, 0, 0)
-	child := assertStuckState(t, c, e.id, "stuck")
+	child := assertStuckState(t, c, e.id, "permission_unanswered")
 	parent := assertStuckState(t, c, "parent", store.StateWaiting)
 	if child.FamilyState != store.StateWorking || parent.FamilyState != store.StateWorking {
 		t.Errorf("family must count live stuck as working: child=%+v parent=%+v", child, parent)
@@ -259,21 +259,21 @@ func TestPermissionStuckFamilySettlesIndependently(t *testing.T) {
 	e.now = stuckAt
 	stuckFacts(t, e, apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(-time.Minute), time.Time{}, time.Time{}, ""))
 	c := stuckClient(t, e, 0, 0)
-	assertStuckState(t, c, e.id, "stuck")
+	assertStuckState(t, c, e.id, "permission_unanswered")
 	if err := apitest.SetFamilyHistory(e.dbPath, e.id, store.StateWorking, store.StateWaiting, stuckAt.UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	c = stuckClient(t, e, 1000, 0)
-	before := assertStuckState(t, c, e.id, "stuck")
+	before := assertStuckState(t, c, e.id, "permission_unanswered")
 	if before.FamilyState != store.StateWaiting {
 		t.Fatalf("own stuck bypassed family settle: %+v", before)
 	}
 	e.now = e.now.Add(time.Second - time.Millisecond)
-	if row := assertStuckState(t, c, e.id, "stuck"); row.FamilyState != store.StateWaiting {
+	if row := assertStuckState(t, c, e.id, "permission_unanswered"); row.FamilyState != store.StateWaiting {
 		t.Fatalf("family settled early: %+v", row)
 	}
 	e.now = e.now.Add(time.Millisecond)
-	after := assertStuckState(t, c, e.id, "stuck")
+	after := assertStuckState(t, c, e.id, "permission_unanswered")
 	if after.FamilyState != store.StateWorking || after.Since != before.Since {
 		t.Fatalf("independent family settlement=%+v", after)
 	}
@@ -289,7 +289,7 @@ func TestPermissionStuckEarliestFallbackPrecedesLexicalToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := stuckClient(t, e, 0, 0)
-	got := assertStuckState(t, c, e.id, "stuck")
+	got := assertStuckState(t, c, e.id, "permission_unanswered")
 	if got.RequestToken != storefix.TestRequestTokenC || got.ToolName != "Read" {
 		t.Fatalf("creation age or lexical order displaced earlier fallback: %+v", got)
 	}

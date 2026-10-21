@@ -123,6 +123,9 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err := validateExplicitInstanceID(params.InstanceID); err != nil {
 		return SpawnResult{}, err
 	}
+	if err := validateNoScreenChangeTimeout(params.NoScreenChangeTimeoutSeconds); err != nil {
+		return SpawnResult{}, err
+	}
 	r, err := spawn.Resolve(params, cfg)
 	if err != nil {
 		return SpawnResult{}, err
@@ -171,6 +174,17 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 func validateExplicitInstanceID(id string) error {
 	if hasControlChar(id) {
 		return fmt.Errorf("%w: the instance id contains a control character", ErrInvalidFlags)
+	}
+	return nil
+}
+
+// validateNoScreenChangeTimeout refuses a per-spawn no_screen_change timeout
+// override outside its whole-second range with ErrInvalidFlags, never
+// clamping it; 0 is no override.
+func validateNoScreenChangeTimeout(seconds int) error {
+	if seconds < 0 || int64(seconds) > config.MaxNoScreenChangeTimeoutSeconds {
+		return fmt.Errorf("%w: no_screen_change_timeout_seconds = %d is outside its range 1 to %d seconds; pass 0 (or omit it) to use [state] no_screen_change_timeout_seconds",
+			ErrInvalidFlags, seconds, config.MaxNoScreenChangeTimeoutSeconds)
 	}
 	return nil
 }
@@ -250,6 +264,13 @@ func hasControlChar(id string) bool {
 // the row is a human's decision (see "Operator actions" in agent-director's
 // docs/operator-actions.md).
 //
+// NoScreenChangeTimeoutSeconds, when positive, is the row's own
+// no_screen_change timeout: status, get and list use it instead of their
+// [state] no_screen_change_timeout_seconds, and resume keeps it. A spawn or
+// reuse without it records none, clearing a reused row's earlier one; a reuse
+// whose launch fails restores the earlier one with the row. Cursor rows keep
+// it, but no_screen_change is unavailable for them.
+//
 // CLI: agent-director spawn
 //
 // Errors:
@@ -294,7 +315,9 @@ func hasControlChar(id string) bool {
 //     valid env-var name and says what is wrong with it. A key that is both
 //     reserved and malformed (such as "HOME=/x") gets the reserved-name
 //     message. Nothing is written or launched.
-//   - ErrInvalidFlags: InstanceID contains an ASCII control character.
+//   - ErrInvalidFlags: InstanceID contains an ASCII control character, or
+//     NoScreenChangeTimeoutSeconds is negative or above 9223372036; nothing
+//     is written or launched.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit InstanceID, in any state (the pre-check refuses
 //     it before anything is written; the insert's primary key refuses a row

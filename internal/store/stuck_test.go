@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -37,14 +38,23 @@ func permissionObservation(t *testing.T) (*store.Store, string, string, []store.
 	return s, path, id, []store.PermissionSample{{Request: pr, FallbackAt: now.Add(-time.Minute), Basis: store.FallbackDeadline}}, now
 }
 
-// observeUnlessBusy is ObservePermissionStuck for a call that must commit. The
-// write never waits for the write lock, so a busy store is the one failure
-// that is repeated, at the same time and without sleeping; any other error,
-// and a third busy answer, fail the test.
+// observeUnlessBusy is ObservePermissionStuck for a call that must commit,
+// through commitUnlessBusy.
 func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration) store.StuckDisplay {
 	t.Helper()
+	return commitUnlessBusy(t, func() (store.StuckDisplay, error) {
+		return s.ObservePermissionStuck(row, samples, now, timeout, store.SettleRead{})
+	})
+}
+
+// commitUnlessBusy runs observe, an observation that must commit. The write
+// never waits for the write lock, so a busy store is the one failure that is
+// repeated, at the same time and without sleeping; any other error, and a
+// third busy answer, fail the test.
+func commitUnlessBusy(t *testing.T, observe func() (store.StuckDisplay, error)) store.StuckDisplay {
+	t.Helper()
 	for attempt := 1; ; attempt++ {
-		display, err := s.ObservePermissionStuck(row, samples, now, timeout, store.SettleRead{})
+		display, err := observe()
 		if err == nil {
 			return display
 		}
@@ -268,5 +278,104 @@ func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
 	}
 	if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id); len(events) != 1 {
 		t.Errorf("entry attempts=%v", events)
+	}
+}
+
+// TestPaneBaselineDecodesTolerantly: a stored baseline that is not a whole
+// one of the row's current epoch (an earlier epoch's, or one with no
+// fingerprint, a text start or a negative epoch) is none: the read never fails
+// on it and the next sample starts a fresh period, however old the start.
+func TestPaneBaselineDecodesTolerantly(t *testing.T) {
+	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+	old := now.Add(-24 * time.Hour).UnixMilli()
+	for _, tc := range []struct {
+		name              string
+		sha, since, epoch any
+	}{
+		{"earlier epoch", "abc", old, int64(6)},
+		{"no fingerprint", nil, old, int64(7)},
+		{"blob fingerprint", []byte("abc"), old, int64(7)},
+		{"text start", "abc", "yesterday", int64(7)},
+		{"negative epoch", "abc", old, int64(-1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7),
+				apitest.WithPaneBaseline(tc.sha, tc.since, tc.epoch))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			row, err := s.SpawnStatusRow(id, store.SettleRead{})
+			if err != nil {
+				t.Fatalf("read failed on the stored baseline: %v", err)
+			}
+			got := commitUnlessBusy(t, func() (store.StuckDisplay, error) {
+				return s.ObservePaneStuck(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+			})
+			if got.State != store.StateWorking {
+				t.Fatalf("observation=%+v; want working", got)
+			}
+			if after, err := s.GetSpawn(id); err != nil || after.PaneSHA256 != "abc" || after.PaneSinceMillis != now.UnixMilli() || after.PaneEpoch != 7 {
+				t.Fatalf("baseline=%+v %v; want a fresh one at %s in epoch 7", after, err, now)
+			}
+		})
+	}
+}
+
+// TestRawHookDuringReasonSwitchKeepsDisplay: a raw state change while the
+// other reason settles in behind a displayed episode drops that pending reason
+// with the candidate, so the observation still decodes: the display stands
+// until a read, which ends it with exactly one exit.
+func TestRawHookDuringReasonSwitchKeepsDisplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
+	since := now.Add(-time.Hour).UnixMilli()
+	switching := fmt.Sprintf(`{"state":"stuck","reason":"permission_unanswered","since_ms":%d,"request_token":%q,"tool_name":"Bash",`+
+		`"candidate":"stuck","candidate_reason":"no_screen_change","candidate_since_ms":%d,"observed_at_ms":%d,"permission_epoch":7}`,
+		since, storefix.TestRequestTokenA, since, since)
+	id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7), apitest.WithStuckObservation(switching))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	seeded, err := s.GetSpawn(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	displayed := seeded.CommittedStuckDisplay()
+	if displayed.State != store.StateStuck {
+		t.Fatalf("setup is not displayed stuck: %+v", seeded)
+	}
+	if got := apitest.ApplyAgentHook(t, path, id, "Stop", ""); !got.Applied {
+		t.Fatal(got)
+	}
+	row, err := s.GetSpawnSettled(id, store.SettleRead{})
+	if err != nil || row.State != store.StateWaiting || row.CommittedStuckDisplay() != displayed {
+		t.Fatalf("after the hook: %+v %v; want raw waiting still displaying %+v", row, err, displayed)
+	}
+	mark := store.TrailMark(t)
+	if got := observeUnlessBusy(t, s, row, nil, now, 30*time.Second); got != (store.StuckDisplay{State: store.StateWaiting}) {
+		t.Fatalf("read=%+v; want the episode settled out", got)
+	}
+	settled, err := s.GetSpawnSettled(id, store.SettleRead{})
+	if err != nil || settled.StuckObservation != "" {
+		t.Fatalf("settled row=%+v %v; want no observation", settled, err)
+	}
+	if got, err := s.ObservePermissionStuck(settled, nil, now.Add(time.Second), 30*time.Second, store.SettleRead{}); err != nil || got.State != store.StateWaiting {
+		t.Fatalf("next read=%+v %v", got, err)
+	}
+	events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id)
+	if len(events) != 1 || events[0]["prior_state"] != store.StateStuck || events[0]["new_state"] != store.StateWaiting ||
+		events[0]["stuck_reason"] != store.StuckPermissionUnanswered || events[0]["ts"] != now.Format(lifecycleTS) {
+		t.Fatalf("events=%v; want one exit to waiting at %s", events, now)
 	}
 }

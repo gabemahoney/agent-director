@@ -837,8 +837,9 @@ bounds the whole call, from its start, and has no default:
 **Reading verbs never wait.** `get`, `list` and `get-permission` write
 `hook_gone_at` the first time they find a request fallen back only if the
 store's write lock is free at that moment; otherwise they skip the write
-and report `hook_gone_at` as stored. `decide` always writes it (within its
-bound). `status`, `get`, `list` and `get-permission` may set a request's
+and report `hook_gone_at` as stored. `list` also skips it once a stuck
+display write of the same read found the lock taken. `decide` always writes
+it (within its bound). `status`, `get`, `list` and `get-permission` may set a request's
 fallback clock, and `status`, `get` and `list` may commit the row's stuck
 display, on the same terms (see
 [Stuck on an unanswered permission](#stuck-on-an-unanswered-permission)).
@@ -951,7 +952,8 @@ guard or hold (see the [caller contract](caller-contract.md#stuck-rows)). The
 timeout is
 [`[state] permission_unanswered_timeout_seconds`](configuration.md#permission-unanswered-timeout-state);
 the fields, the omissions and what a caller does with them are in the
-[caller contract](caller-contract.md#stuck-rows).
+[caller contract](caller-contract.md#stuck-rows), as is the other reason,
+`no_screen_change`.
 
 - **Every agent.** Claude, Codex and Cursor rows are judged the same way. A
   Claude or Codex row qualifies only with `relay_mode` `on`, because with the

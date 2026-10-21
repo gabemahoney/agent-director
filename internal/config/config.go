@@ -365,11 +365,25 @@ const DefaultPermissionUnansweredTimeoutSeconds = 30
 // MaxPermissionUnansweredTimeoutSeconds is the whole-second duration ceiling.
 const MaxPermissionUnansweredTimeoutSeconds = MaxPauseTimeoutSeconds
 
+// DefaultNoScreenChangeTimeoutSeconds is the unchanged-pane period (20
+// minutes) before a working Claude or Codex row becomes a stuck candidate.
+const DefaultNoScreenChangeTimeoutSeconds = 1200
+
+// MaxNoScreenChangeTimeoutSeconds is the whole-second duration ceiling, for
+// the configuration and the per-spawn override alike.
+const MaxNoScreenChangeTimeoutSeconds = MaxPauseTimeoutSeconds
+
 // State holds configuration for displayed row state and stuck eligibility.
 type State struct {
 	// PermissionUnansweredTimeoutSeconds is the age of an unanswered fallback
 	// before it becomes a report-only stuck candidate. Zero uses the default.
 	PermissionUnansweredTimeoutSeconds int `toml:"permission_unanswered_timeout_seconds"`
+
+	// NoScreenChangeTimeoutSeconds is how long sampled pane fingerprints must
+	// stay identical before a working row becomes a report-only stuck
+	// candidate, for rows spawned without their own override. Zero uses the
+	// default.
+	NoScreenChangeTimeoutSeconds int `toml:"no_screen_change_timeout_seconds"`
 
 	// SettleMs is the settle time, in whole milliseconds: with a positive
 	// value, the state status, get and list report (and list --state filters
@@ -419,11 +433,23 @@ func (s State) EffectivePermissionUnansweredTimeoutSeconds() int {
 	return DefaultPermissionUnansweredTimeoutSeconds
 }
 
+// EffectiveNoScreenChangeTimeoutSeconds returns the configured positive
+// timeout, or twenty minutes for an omitted/zero value. Load owns validation.
+func (s State) EffectiveNoScreenChangeTimeoutSeconds() int {
+	if s.NoScreenChangeTimeoutSeconds > 0 {
+		return s.NoScreenChangeTimeoutSeconds
+	}
+	return DefaultNoScreenChangeTimeoutSeconds
+}
+
 // refusals reports out-of-range state controls without clamping.
 func (s State) refusals() []string {
 	var out []string
 	if v := s.PermissionUnansweredTimeoutSeconds; v < 0 || int64(v) > MaxPermissionUnansweredTimeoutSeconds {
 		out = append(out, fmt.Sprintf("[state] permission_unanswered_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxPermissionUnansweredTimeoutSeconds))
+	}
+	if v := s.NoScreenChangeTimeoutSeconds; v < 0 || int64(v) > MaxNoScreenChangeTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] no_screen_change_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxNoScreenChangeTimeoutSeconds))
 	}
 	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
 		out = append(out, fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
@@ -552,6 +578,7 @@ func Default() Config {
 		},
 		State: State{
 			PermissionUnansweredTimeoutSeconds: DefaultPermissionUnansweredTimeoutSeconds,
+			NoScreenChangeTimeoutSeconds:       DefaultNoScreenChangeTimeoutSeconds,
 			SettleMs:                           DefaultStateSettleMs,
 		},
 		Log: Log{

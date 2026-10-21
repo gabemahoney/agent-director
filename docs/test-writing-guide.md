@@ -193,8 +193,8 @@ Exported factories (in pkg/api/apitest/seeds.go):
   a seeded row is a Claude row unless `WithAgent` says otherwise.
 - `SeedParentChild(dbPath, parentID, childID string) error`
 - `SeedPermissionRequest(dbPath, spawnID, toolName string, opts ...PermissionOption) (PermissionRequestSeed, error)`
-  — the `Permission…` options (see "Permission stuck fixtures" below) set exact
-  request facts.
+  — the `Permission…` options (registered in
+  [Stuck reporting](architecture.md#stuck-reporting)) set exact request facts.
 - `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
   — backdates a seeded request's `created_at` (past the relay window it has
   fallen back) and records its `hook_gone_at` in the past (old enough for
@@ -218,55 +218,48 @@ from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by every consumer, so any schema break is
 caught early.
 
-## Permission stuck fixtures
+## Stuck fixtures
 
-Tests of the `stuck` display, the request ownership and fallback clocks, and the
-schema v14 migration seed and assert through one shared set. Do not seed the
-new columns with raw SQL or keep a second copy of the expected wire detail.
+Tests of the `stuck` display of either reason, the request ownership and
+fallback clocks, the pane baseline and timeout override, and the schema v14
+migration seed and assert only through the shared fixtures registered in
+[Stuck reporting](architecture.md#stuck-reporting). Do not seed those
+columns with raw SQL or keep a second copy of the expected wire detail.
 
-- `pkg/api/apitest/stuck.go`: the `PermissionOption` set (`PermissionToken`,
-  `PermissionTimes`, `PermissionOwner`, `PermissionAnswer`,
-  `PermissionProof`, `PermissionDecision`, `PermissionClosed`,
-  `PermissionCreation`, `PermissionDelivered`) for
-  `SeedPermissionRequest`, and `SetPermissionFacts` to change named facts of a
-  seeded request. Each option sets only its own facts, so clocks, ownership,
-  answer, proof and decision stay independent. `SeedPermissionSurface` seeds one
-  stuck row per agent with a precommitted episode at permission epoch 3, so
-  independent processes share an exact `since`. `CheckPermissionWire` checks one read row of any verb
-  against the hand-authored `cmd/agent-director/testdata/stuck/permission.json`
-  (loaded by `LoadPermissionWire`); every surface test (pkg/api, CLI, MCP and
-  the TypeScript client) reuses it.
-- `pkg/api/apitest/options.go`: the spawn options `WithPermissionEpoch`,
-  `WithStuckObservation` and `WithStuckExit` (a pending exit record, valid or
-  malformed). `pkg/api/apitest/tmux_config.go`:
-  `ConfigKeys.PermissionUnansweredTimeoutSeconds` for the generated config.
-- `pkg/api/apitest/stuck.go` also holds the observation helpers `StuckProbe`,
-  `StuckReading`, `CommitCheck`, `VersionAdvanced` and `ObserveStuckRead`. A
-  read that must commit is nonwaiting and best effort, so `ObserveStuckRead`
-  repeats it at the same injected instant, never sleeping, a bounded number of
-  times until `stuck_version` confirms the commit (it then fails with
-  "observation never committed"), and checks the display against the committed
-  row. Use it instead of a sleep or a retry loop of your own.
-- `storefix.WriteFailStuckObservation` (`writefailfix.StuckObservation`) fails
-  the observation write so a test can prove a read that cannot commit returns
-  the previously committed display.
-- `internal/store/migration_fixtures_test.go`: `v14ColumnSpecs`,
-  `preAddV14Columns` and `seedV13PermissionFixture` build partial-column and
-  physical-v13 stores for `schema_v14_test.go` and the shared matrices.
-- The `permission-stuck` Epic in `test/docker-epics.txt` holds the testplans;
-  their driver is `test/driver/permission-stuck.cjs`. Run it, like every Epic,
-  only through the scheduler workflow. **Reviewed exception to the raw-SQL
-  rule:** the Docker plan seeds the v14 ownership and clock columns
-  (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
-  `fallback_at`, `fallback_basis`) and `spawns.permission_epoch` through
-  `/opt/driver/sql.sh`, because they have no public writer; the shipped binary
-  still creates the schema and makes every observation. The exception covers
-  that plan only.
+- `SeedPermissionSurface` and `SeedPaneSurface` rows have no pane, so read
+  them under `apitest.SettleOnConfig`, within its settle time, to keep the
+  committed detail.
+- A read that must commit is nonwaiting and best effort. Confirm it with
+  `ObserveStuckRead`, or `commitUnlessBusy` in `internal/store`, never with a
+  sleep or a retry loop of your own. `ObserveStuckRead` repeats the read at
+  the same injected instant for a bounded time until `stuck_version`
+  confirms the commit (it then fails with "observation never committed"), and
+  checks the display against the committed row.
+- Pane tests use `paneEnv`. Interleave a write between a sample and its
+  commit with `Recorder.AfterCall` on the capture, and skip a write with
+  `apitest.HoldWriteLock` or `storefix.WriteFailStuckObservation`, never with
+  a sleep.
+- The `permission-stuck` and `pane-stuck` Docker Epics run, like every Epic,
+  only through the scheduler workflow. **Reviewed exceptions to the raw-SQL
+  rule,** each through `/opt/driver/sql.sh` and each because the columns have
+  no public writer; the shipped binary still creates the schema and makes
+  every observation:
+  - `permission-stuck` seeds the v14 ownership and clock columns
+    (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
+    `fallback_at`, `fallback_basis`) and `spawns.permission_epoch`.
+  - `pane-stuck` moves a committed baseline's start (`spawns.pane_since_ms`)
+    back instead of waiting out a timeout (a read is the baseline's only
+    writer), and its Cursor case seeds its rows (an override and an old
+    baseline included) and a request, as `permission-stuck` does.
+
+  The exceptions cover those two plans only.
 - Lifecycle and read-write coverage lives in
   `internal/store/stuck_lifecycle_test.go` (find-missing's repair, unreadable
   stuck metadata, reads that write nothing, an unconfirmed commit, the fallback
   clock rule), `internal/store/connection_gate_release_test.go` and
-  `pkg/api/stuck_epoch_test.go` (a new interval never inherits an old episode).
+  `pkg/api/stuck_epoch_test.go` (a new interval never inherits an old episode);
+  pane sampling, settling and reason replacement in
+  `pkg/api/stuck_pane_test.go` and `stuck_pane_settle_test.go`.
 
 ## Context fullness captures and fixtures
 
@@ -437,9 +430,10 @@ companions are removed, prior rows/settings are restored and post-backup
 writes are lost. A copy made after migration cannot qualify as the backup;
 there is no v13 or v14 reverse recipe to test or imply.
 
-The v14 permission observation and ownership migration belongs in
+The v14 stuck observation and ownership migration belongs in
 `internal/store/schema_v14_test.go`: test physical-v13 preservation and
-reentry, no invented history, incompatible partial-column refusal, commit
+reentry, no invented history (no pane baseline or override), incompatible
+partial-column refusal, commit
 rollback and corrected retry, that earlier or ambiguous permission requests
 keep NULL ownership while later admissions qualify, and fresh/migrated
 convergence. Build every store through the v14 helpers in

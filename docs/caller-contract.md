@@ -211,9 +211,9 @@ Every row of every agent has it, `pending` rows included; it is never `null`.
   does not hold for the settle time can move `state_changed_at` without ever
   showing in `state`.
 - **Not `since`.** A [stuck](#stuck-rows) row's `since` dates the display, not
-  a state change: the stuck display never moves `state_changed_at`, but the
-  raw change that ends it (the agent leaving `check_permission`, or
-  `find-missing`'s repair) does.
+  a state change: the stuck display never moves `state_changed_at`, but a
+  raw change that ends it (the agent moving on, or `find-missing`'s repair)
+  does.
 - **Epoch.** `1970-01-01T00:00:00Z` means the raw state has not changed since
   agent-director began recording this time. It is not the time of a change,
   and reads as "no change since" any time you compare it with.
@@ -223,64 +223,127 @@ Every row of every agent has it, `pending` rows included; it is never `null`.
 
 ## Stuck rows
 
-A row reads `state` `stuck` with `stuck_reason` `permission_unanswered` while
-its agent's own permission prompt has stayed unanswered past
-[the timeout](configuration.md#permission-unanswered-timeout-state). Which
-requests count is in
-[permissions](permissions.md#stuck-on-an-unanswered-permission). Stuck is a
-report only: it changes no refusal, hold or guard, and `send-keys`, `decide`
-and `pause` judge the row's real state. How the row counts toward
+A row reads `state` `stuck`, with a `stuck_reason`, when its agent may need a
+deliberate human or caller choice:
+
+- `permission_unanswered`: the agent's own permission prompt has stayed
+  unanswered past [its timeout](configuration.md#permission-unanswered-timeout-state).
+  Which requests count is in
+  [permissions](permissions.md#stuck-on-an-unanswered-permission).
+- `no_screen_change`: a `working` agent's pane has looked the same on every
+  read for [its timeout](configuration.md#no-screen-change-timeout-state); see
+  [Unchanged panes](#unchanged-panes).
+
+| Agent | `permission_unanswered` | `no_screen_change` | `no_screen_change_availability` |
+|---|---|---|---|
+| Claude | yes | yes | `available` |
+| Codex | yes | yes | `available` |
+| Cursor | yes | never | `unavailable` |
+
+Every `status`, `get` and `list` row carries `no_screen_change_availability`.
+`unavailable` is not a reason: a Cursor row still reads `stuck` with
+`permission_unanswered`. Why Cursor never reads `no_screen_change` is in
+[architecture](architecture.md#cursor-and-no_screen_change).
+
+Stuck is a report only: it changes no refusal, hold or guard, and `send-keys`,
+`decide` and `pause` judge the row's real state. How the row counts toward
 `family_state` is in [Family state](usage.md#family-state).
 
-A request recorded before the upgrade to schema v14, in the same second as or
-before the row entered `check_permission` (or with an unknown interval start),
-never qualifies; its record, hold and clock are kept.
+A request recorded before the upgrade to schema v14 that was not provably
+created after the row entered `check_permission` never qualifies; its record,
+hold and clock are kept.
 
 - **Fields.** `status` and `get` carry `state`, `stuck_reason`, `since`
-  (RFC3339 UTC with exactly millisecond precision), `request_token` and
-  `tool_name`, the last two naming the request the row reports. `status` adds
-  `tmux_session_name` only while the row is stuck (`get` carries it always).
-  A `list` row carries `stuck_reason` but not `since`, `request_token` or
-  `tool_name`; call `get` for them.
-- **Omissions.** Outside `stuck`, these fields are absent, never `null` or
-  empty. Test for presence, not for a value.
+  (RFC3339 UTC with exactly millisecond precision) and the reason's detail:
+  `request_token` and `tool_name`, naming the request the row reports, for
+  `permission_unanswered`; `unchanged_minutes`, the whole minutes (rounded
+  down) the pane had stayed the same at the last committed read, for
+  `no_screen_change`. `status` adds `tmux_session_name` only while the row is
+  stuck (`get` carries it always). A `list` row carries `stuck_reason` only;
+  call `get` for the rest.
+- **Omissions.** Outside `stuck`, these fields are absent, and so is the other
+  reason's detail: never `null`, empty or zero. Test for presence, not for a
+  value.
 - **Filtering.** `list --state stuck` matches the state `list` shows, before
   `--limit` is applied, so a limit never hides a stuck row behind others. A
-  row displayed `stuck` no longer matches `--state check_permission`; filter
-  on `stuck` to see it. A polling loop that tests for `check_permission`
-  therefore stops seeing the row once it reads `stuck`.
+  row displayed `stuck` no longer matches its real state (`--state
+  check_permission` or `--state working`); filter on `stuck` to see it. A
+  polling loop that tests for those states therefore stops seeing the row
+  once it reads `stuck`.
 - **Detection happens on reads.** Nothing runs between your calls: a row
   becomes stuck on the first `status`, `get` or `list` after the timeout, so
-  your usual polling of `status` is enough and no pane polling is needed.
+  your usual polling of `status` is enough and you need not read panes
+  yourself. A row nobody reads never becomes stuck.
   With a [settle time](configuration.md#settle-time-state), entering and
   leaving `stuck` must hold that long, so it shows up to that much later;
   until an entry has held, the row shows its ordinary settled state.
 - **`since`.** The time of the read that first showed `stuck`, not the moment
-  the timeout ran out. It is kept while the row clears under settling and
-  when a different request becomes the one reported. A row's new unbroken stay
-  in `check_permission` starts a fresh episode: it never inherits the earlier
-  one's `since` or request, and the earlier one ends first.
+  the timeout ran out. It is kept while the row clears under settling, when a
+  different request becomes the one reported and when the reason changes. An
+  episode of the same reason after the agent's state changed (a new unbroken
+  stay in `check_permission`, or a new working turn) starts fresh: it never
+  inherits the earlier one's `since` or detail, and the earlier one ends
+  first.
+- **Reason changes.** When the other reason qualifies while the row still
+  shows `stuck`, `stuck_reason` and its detail change together once the
+  change has held for the settle time; `since` is kept and no exit or entry is
+  recorded.
 - **Skipped writes.** A read writes only to commit something new: a request's
-  fallback clock newly established, a change of the displayed state or its
-  settling candidate, or a change of the request reported. Otherwise it writes
-  nothing, a repeated read of a row already displayed `stuck` included. Its
+  fallback clock newly established, a pane fingerprint period started,
+  restarted or reset, a change of the displayed state or its settling
+  candidate, or a change of the detail reported (another request, or a new
+  whole minute of `unchanged_minutes`). Otherwise it writes nothing. Its
   write never waits for the store's lock: a read that cannot commit returns
   the state and detail committed before, together, and a later read tries
   again.
-- **Clearing.** The row returns to its real state when no request qualifies
-  or the agent moves on, after the settle time. `ended`, `missing` and a state
-  a command sets (including `find-missing`'s repair of a stale
-  `check_permission` row) show at once. Each entry and exit appends an
-  `ad.spawn.stuck_transition` trail record with `instance_id`, `prior_state`,
-  `new_state`, `stuck_reason` and `ts`; the trail is audit only and a failed
+- **Clearing.** The row returns to its real state when no request qualifies,
+  its pane changes or cannot be sampled, or the agent moves on, after the
+  settle time. `ended`, `missing` and a state a command sets (including
+  `find-missing`'s repair of a stale `check_permission` row) show at once.
+  Each entry and exit appends an `ad.spawn.stuck_transition` trail record with
+  `instance_id`, `prior_state`, `new_state`, `stuck_reason` (the reason of the
+  episode entered or left) and `ts`; the trail is audit only and a failed
   append changes nothing.
 - **Attaching.** Treat `stuck` as a request for a deliberate human or caller
-  choice at the agent's own prompt. Read the row's `tmux_socket` and
-  `tmux_session_name` with `get` and attach as in
-  [Usage](usage.md#fresh-cursor-use), which works for every agent, or read the
-  request with `get-permission` and its `request_token` and follow
-  [Permission relay](#permission-relay); the report adds no verb and no
-  automatic answer.
+  choice at the agent's own prompt or pane:
+  [attach to its pane](usage.md#attach-to-a-spawns-pane), or, for
+  `permission_unanswered`, read the request with `get-permission` and its
+  `request_token` and follow [Permission relay](#permission-relay). The report
+  adds no verb and no automatic answer.
+
+### Unchanged panes
+
+`status`, `get` and `list` sample the pane of every `working` Claude or Codex
+row they read: the agent's own pane of the row's current launch, fingerprinted
+as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
+kept; nothing reads what the pane says.
+
+- **The unchanged period.** The first successful sample starts it. An
+  identical fingerprint keeps its start; a different one restarts it at that
+  read and clears a `no_screen_change` row. A read at or after the period's
+  start plus the timeout qualifies. `check_permission`, `ask_user` and every
+  other state never do, and a change of the agent's state (a new turn, a new
+  launch) starts over with no earlier evidence.
+- **Only while you read.** Nothing samples between reads. The period starts
+  at the first read that saw the current pane, so infrequent reads delay
+  detection, and identical samples do not show that the pane never changed
+  between them.
+- **A hint, not proof.** Healthy quiet work, such as a long tool with no
+  output, can qualify. Look before acting, and give such work a longer
+  [timeout](configuration.md#no-screen-change-timeout-state), configured or per
+  spawn.
+- **Failed samples.** A sample that fails or cannot be trusted (the session
+  gone or not this launch's, the pane not found, tmux not answering) resets
+  the period: an entry not yet shown is dropped, and a shown row clears after
+  the settle time. It never fails the read or other rows. The next
+  successful sample starts a fresh period. A read that
+  cannot commit skips its sample, a reset included, so a later read may
+  continue the committed period.
+- **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
+  and a capture), each bounded by
+  [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
+  Within one `list`, a tmux server that does not answer a lookup or pane
+  listing is not asked again: its later rows count as failed samples.
 
 ## Ordinary text submission
 

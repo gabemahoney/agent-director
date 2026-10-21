@@ -199,7 +199,8 @@ func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 // schema (the two-places rule, foreign keys included), consumes the sentinel
 // with one ad.schema.migrated line, keeps a pre-existing row with the new
 // columns' defaults (agent claude, no end report, subagent_tracking 0, no
-// subagent entry or claimable launch) and one store id, and does
+// subagent entry or claimable launch, no timeout override or pane baseline)
+// and one store id, and does
 // not backfill v1's permission rows. A reopen is a clean no-op, and a stale
 // sentinel beside the current store is left alone (SR-1, SR-2, SR-5.4).
 func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
@@ -230,8 +231,9 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
-				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking {
-				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report and untracked", sp, err)
+				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking ||
+				sp.NoScreenChangeTimeoutSeconds != 0 || sp.PaneSHA256 != "" || sp.PaneSinceMillis != 0 {
+				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report, untracked, no timeout override and no pane baseline", sp, err)
 			}
 			id := s.StoreID()
 			if err := s.Close(); err != nil {

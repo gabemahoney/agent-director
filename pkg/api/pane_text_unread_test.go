@@ -16,8 +16,9 @@ import (
 )
 
 // TestNoCodePathReadsPaneText: in pkg/api's production code only readPane
-// (read-pane, which returns the text to its caller) and capturePaneHash (the
-// hash check) capture the pane, and the captured value goes only to
+// (read-pane, which returns the text to its caller), capturePaneHash (the
+// hash check) and samplePane (the no_screen_change fingerprint) capture the
+// pane, and the captured value goes only to
 // paneSHA256, the result's Pane field and tmux.StripANSI, whose result goes
 // back into the same variable or straight to one of the other two: nothing
 // compares, searches or branches on what it says. No other function reads a
@@ -65,8 +66,8 @@ func TestNoCodePathReadsPaneText(t *testing.T) {
 	for name := range capturers {
 		got = append(got, name)
 	}
-	if slices.Sort(got); !slices.Equal(got, []string{"capturePaneHash", "readPane"}) {
-		t.Errorf("functions capturing the pane = %v; want only capturePaneHash and readPane", got)
+	if slices.Sort(got); !slices.Equal(got, []string{"capturePaneHash", "readPane", "samplePane"}) {
+		t.Errorf("functions capturing the pane = %v; want only capturePaneHash, readPane and samplePane", got)
 	}
 }
 

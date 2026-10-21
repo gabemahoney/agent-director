@@ -172,6 +172,11 @@ transcript exists. See [Transcript recovery](../../docs/caller-contract.md#trans
 for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
 for restoration and children.
 
+`SpawnParams.NoScreenChangeTimeoutSeconds` gives the row its own
+`no_screen_change` timeout in whole seconds (0 for none); its range and
+lifecycle are in
+[Configuration](../../docs/configuration.md#no-screen-change-timeout-state).
+
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`, `.DroppedArgs`).
 `.DroppedArgs` lists removed original argument tokens in argv order on a
 switching reuse, which starts fresh and resumes nothing. JSON omits
@@ -218,12 +223,17 @@ the launch in progress, set only while the row is `pending`; JSON key
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
 While `State` is `"stuck"`, `StatusResult` and `Get`'s `SpawnRow` carry the
-embedded `StuckInfo` (`.StuckReason`, `.Since`, `.RequestToken`, `.ToolName`;
-JSON `stuck_reason`, `since`, `request_token`, `tool_name`), and
+embedded `StuckInfo` (`.StuckReason`, `api.StuckPermissionUnanswered` or
+`api.StuckNoScreenChange`; `.Since`; and the reason's detail, `.RequestToken`
+and `.ToolName`, or `.UnchangedMinutes`, an `*int64`; JSON `stuck_reason`,
+`since`, `request_token`, `tool_name`, `unchanged_minutes`), and
 `StatusResult.TmuxSessionName` (JSON `tmux_session_name`) is set; `ListRow`
-carries `.StuckReason` only. Each is an empty string, and absent from the
-JSON, in any other state. `Since` is a string in RFC3339 UTC with
-millisecond precision. The [caller contract](../../docs/caller-contract.md#stuck-rows)
+carries `.StuckReason` only. A field that does not apply is empty (nil), and
+absent from the JSON. `Since` is a string in RFC3339 UTC with millisecond
+precision. `StatusResult`, `SpawnRow` and `ListRow` also carry
+`NoScreenChangeAvailability` (JSON `no_screen_change_availability`):
+`api.NoScreenChangeAvailable` for Claude and Codex, `api.NoScreenChangeUnavailable`
+for Cursor. The [caller contract](../../docs/caller-contract.md#stuck-rows)
 defines the fields, omissions and detection.
 
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
@@ -242,7 +252,8 @@ and how it differs from `LastSeenAt`, the settled `State` and `Since`.
 the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Other result fields
 and verbs that act on a row follow its live state. The package-level
-`api.Status`, `api.Get` and `api.List` functions use no settle time.
+`api.Status`, `api.Get` and `api.List` functions use no settle time and
+sample no pane, so only a `Client` detects `no_screen_change`.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is

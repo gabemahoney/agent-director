@@ -318,6 +318,38 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 	}
 }
 
+// TestSpawnCLINoScreenChangeTimeout: --no-screen-change-timeout-seconds
+// records its whole seconds on the row, the range's top without truncation
+// and 0 as no override; a negative, above-range, fractional, non-numeric or
+// overflowing value is ErrInvalidFlags with no row and no tmux call.
+func TestSpawnCLINoScreenChangeTimeout(t *testing.T) {
+	fakeDir := buildFakeTmux(t)
+	for _, tc := range []struct {
+		value string
+		want  any
+	}{{"9223372036", int64(9223372036)}, {"1", int64(1)}, {"0", nil}} {
+		t.Run(tc.value, func(t *testing.T) {
+			home := t.TempDir()
+			id := spawnOK(t, home, fakeDir, "--cwd", t.TempDir(), "--no-screen-change-timeout-seconds", tc.value)
+			if got := rowColumns(t, home, id).NoScreenChangeTimeoutSeconds; got != tc.want {
+				t.Errorf("override = %v; want %v", got, tc.want)
+			}
+		})
+	}
+	for _, value := range []string{"-1", "9223372037", "1.5", "x", "99999999999999999999"} {
+		t.Run(value, func(t *testing.T) {
+			home := t.TempDir()
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", "--cwd", t.TempDir(),
+				"--no-screen-change-timeout-seconds", value)...)
+			assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInvalidFlags")
+			assertInvocationKinds(t, home)
+			if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
+				t.Errorf("rows = %v; want none", ids)
+			}
+		})
+	}
+}
+
 // jsonOf is v encoded as JSON.
 func jsonOf(t *testing.T, v any) string {
 	t.Helper()

@@ -37,8 +37,9 @@ type ListFilters struct {
 	StuckCandidates bool
 }
 
-// stuckRawStates are the raw states a read can display as stuck.
-var stuckRawStates = []string{StateCheckPermission}
+// stuckRawStates are the raw states a read can display as stuck: an
+// unanswered permission request's and an unchanged working pane's.
+var stuckRawStates = []string{StateCheckPermission, StateWorking}
 
 // ListSpawns runs the filtered query and returns rows in unspecified
 // order. SRD §4.2 explicitly accepts the linear scan + json_extract

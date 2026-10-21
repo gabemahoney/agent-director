@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
@@ -15,18 +16,23 @@ import (
 
 type stuckObservationReader interface {
 	api.StatusStore
+	api.GetStore
+	api.ListStore
 	SpawnStatusRow(string, store.SettleRead) (store.Spawn, error)
-	PermissionRequestsForSpawn(string) ([]store.PermissionRow, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]store.PermissionRow, error)
 	ObservePermissionStuck(store.Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.StuckDisplay, error)
+	RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
 }
 
-// Lease only after the mandatory row read or between the two judged reads.
+// Lease only after the mandatory row read (status's row, list's rows) or
+// between the two judged reads. reads counts the request reads that returned;
+// writes names each stuck or fallback write called, in order.
 type stuckReadLeaseStore struct {
 	stuckObservationReader
 	afterRow   func() error
 	afterFirst func() error
 	reads      int
+	writes     []string
 }
 
 func (s *stuckReadLeaseStore) SpawnStatusRow(id string, settle store.SettleRead) (store.Spawn, error) {
@@ -35,6 +41,24 @@ func (s *stuckReadLeaseStore) SpawnStatusRow(id string, settle store.SettleRead)
 		err = s.afterRow()
 	}
 	return row, err
+}
+
+func (s *stuckReadLeaseStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
+	rows, err := s.stuckObservationReader.ListSpawns(f)
+	if err == nil && s.afterRow != nil {
+		err = s.afterRow()
+	}
+	return rows, err
+}
+
+func (s *stuckReadLeaseStore) ObservePermissionStuck(row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration, settle store.SettleRead) (store.StuckDisplay, error) {
+	s.writes = append(s.writes, "ObservePermissionStuck")
+	return s.stuckObservationReader.ObservePermissionStuck(row, samples, now, timeout, settle)
+}
+
+func (s *stuckReadLeaseStore) RecordPermissionFallbacks(at time.Time, wait time.Duration, observations []store.FallbackObservation) (map[int64]time.Time, error) {
+	s.writes = append(s.writes, "RecordPermissionFallbacks")
+	return s.stuckObservationReader.RecordPermissionFallbacks(at, wait, observations)
 }
 
 func (s *stuckReadLeaseStore) afterRead() error {
@@ -61,9 +85,20 @@ func (s *stuckReadLeaseStore) PermissionRequestsForSpawnWithin(id string, wait t
 	return rows, err
 }
 
+func (s *stuckReadLeaseStore) OpenPermissionRequestsForSpawn(id string) ([]store.PermissionRow, error) {
+	rows, err := s.stuckObservationReader.OpenPermissionRequestsForSpawn(id)
+	if err == nil {
+		err = s.afterRead()
+	}
+	return rows, err
+}
+
 // Park an actual same-pool transaction; the sentinel guarantees rollback.
-func holdStuckReadConnection(t *testing.T, s *store.Store, id string) (take func() error, release func()) {
+// leased closes once take has returned; a nil error from take means the
+// connection is held.
+func holdStuckReadConnection(t *testing.T, s *store.Store, id string) (take func() error, leased <-chan struct{}, release func()) {
 	t.Helper()
+	held := make(chan struct{})
 	start, entered, free, done := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 	abort := errors.New("release observation test lease")
 	var leaseErr error
@@ -93,17 +128,45 @@ func holdStuckReadConnection(t *testing.T, s *store.Store, id string) (take func
 	}
 	t.Cleanup(release)
 	take = func() error {
+		defer close(held)
 		close(start)
 		select {
 		case <-entered:
 			return nil
 		case <-done:
 			return errors.New("connection lease did not reach its transaction")
-		case <-time.After(time.Second):
+		case <-time.After(10 * time.Second):
 			return errors.New("connection lease did not acquire the store")
 		}
 	}
-	return take, release
+	return take, held, release
+}
+
+// readUnderLease fails when read is still running within after leased closes
+// (it waited for the lease, then released) or never reached the lease.
+func readUnderLease(t *testing.T, leased <-chan struct{}, release func(), within time.Duration, read func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		read()
+	}()
+	select {
+	case <-done:
+	case <-leased:
+		select {
+		case <-done:
+		case <-time.After(within):
+			t.Errorf("the read waited for the leased connection: still running %v after it was leased", within)
+			release()
+			<-done
+		}
+	}
+	select {
+	case <-leased:
+	default:
+		t.Fatal("the connection was never leased: the read did not reach the stage under test")
+	}
 }
 
 func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
@@ -139,49 +202,17 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 					}
 					request := e.request(t)
 					mark := trailMark(t)
-					lease, release := holdStuckReadConnection(t, e.s, e.id)
-					// leased closes once the connection is really held: the one
-					// second the read may take is counted from then.
-					leased, leaseOnce := make(chan struct{}), sync.Once{}
-					takeLease := func() error {
-						err := lease()
-						leaseOnce.Do(func() { close(leased) })
-						return err
-					}
+					take, leased, release := holdStuckReadConnection(t, e.s, e.id)
 					s := &stuckReadLeaseStore{stuckObservationReader: reader}
 					if stage == "after row" {
-						s.afterRow = takeLease
+						s.afterRow = take
 					} else {
-						s.afterFirst = takeLease
+						s.afterFirst = take
 					}
-					type result struct {
-						row api.StatusResult
-						err error
-					}
-					done := make(chan result, 1)
-					go func() {
-						row, err := api.Status(s, e.id)
-						done <- result{row, err}
-					}()
-					var got result
-					select {
-					case got = <-done:
-					case <-leased:
-						select {
-						case got = <-done:
-						case <-time.After(time.Second):
-							t.Error("optional permission sampling waited for the leased connection")
-							release()
-							got = <-done
-						}
-					}
-					select {
-					case <-leased:
-					default:
-						t.Fatal("the connection was never leased: the read did not reach the stage under test")
-					}
-					if got.err != nil || !reflect.DeepEqual(got.row, want) {
-						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got.row, got.err, want)
+					var got api.StatusResult
+					readUnderLease(t, leased, release, time.Second, func() { got, err = api.Status(s, e.id) })
+					if err != nil || !reflect.DeepEqual(got, want) {
+						t.Errorf("skipped observation: %+v %v; want coherent committed %+v", got, err, want)
 					}
 					// The response must precede releasing the actual connection.
 					release()
@@ -197,5 +228,59 @@ func TestPermissionStuckSamplingSkipsLeasedConnection(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// t2.sp6.rk.1k review b5a9c71c: list --state stuck never waits for a dropped
+// row's requests. A waiting read never returns under the lease: generous bound.
+func TestListStateFilterSkipsLeasedConnection(t *testing.T) {
+	t.Parallel()
+	e := newRelayEnv(t, relayEnvHook)
+	e.pc.Set(relayEnvHook.PID, procfix.Gone())
+	take, leased, release := holdStuckReadConnection(t, e.s, e.id)
+	s := &stuckReadLeaseStore{stuckObservationReader: e.s, afterRow: take}
+	var res api.ListResult
+	var err error
+	readUnderLease(t, leased, release, 10*time.Second, func() { res, err = api.List(s, e.view(), api.ListParams{State: []string{store.StateStuck}}) })
+	if err != nil || len(res.Spawns) != 0 {
+		t.Errorf("list --state stuck = %+v, %v; want no rows", res.Spawns, err)
+	}
+}
+
+// t2.sp6.rk.1k read cost: under a held write lock, get and list make one judged
+// read and one write attempt; after it is busy they attempt no other write. A
+// get whose hook is alive writes no hook_gone_at and gives its read to the
+// observation.
+func TestHeldWriteLockReadsWriteOnce(t *testing.T) {
+	t.Parallel()
+	get := func(e *relayEnv, s *stuckReadLeaseStore) error {
+		_, err := api.Get(s, e.view(), e.id)
+		return err
+	}
+	for _, tc := range []struct {
+		verb   string
+		gone   bool
+		read   func(*relayEnv, *stuckReadLeaseStore) error
+		writes []string
+	}{
+		{"get", true, get, []string{"RecordPermissionFallbacks"}},
+		{"get, hook alive", false, get, []string{"ObservePermissionStuck"}},
+		{"list", true, func(e *relayEnv, s *stuckReadLeaseStore) error {
+			_, err := api.List(s, e.view(), api.ListParams{})
+			return err
+		}, []string{"ObservePermissionStuck"}},
+	} {
+		t.Run(tc.verb, func(t *testing.T) {
+			t.Parallel()
+			e := newRelayEnv(t, relayEnvHook)
+			if tc.gone {
+				e.pc.Set(relayEnvHook.PID, procfix.Gone())
+			}
+			apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+			s := &stuckReadLeaseStore{stuckObservationReader: e.s}
+			if err := tc.read(e, s); err != nil || s.reads != 2 || !reflect.DeepEqual(s.writes, tc.writes) {
+				t.Errorf("%s: error %v, %d request reads, writes %v; want none, 2 (one judged read), %v", tc.verb, err, s.reads, s.writes, tc.writes)
+			}
+		})
 	}
 }

@@ -202,6 +202,7 @@ func TestSettleGuardPause(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{State: store.StateWorking})
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StateWaiting, e.clock.Now())
+	e.rec.Reset() // unsettle's status read sampled the raw working row's own pane
 
 	_, err := c.Pause(context.Background(), api.PauseParams{InstanceID: r.ID})
 

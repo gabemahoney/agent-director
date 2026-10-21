@@ -354,11 +354,12 @@ test.each(["StatusResult"])(
 );
 
 test.each(["StatusResult", "GetResult", "ListRow"])(
-  "public-surface: %s has optional permission stuck reason and the correct detail subset", (name) => {
+  "public-surface: %s has the optional stuck reason, required availability and the correct detail subset", (name) => {
     const body = interfaceBody(typesGolden(), name);
-    expect(body).toMatch(/\bstuck_reason\?\s*:\s*"permission_unanswered"\s*;/);
-    for (const field of ["since", "request_token", "tool_name"]) {
-      const declaration = new RegExp(`\\b${field}\\?\\s*:\\s*string\\s*;`);
+    expect(body).toMatch(/\bstuck_reason\?\s*:\s*StuckReason\s*;/);
+    expect(body).toMatch(/\bno_screen_change_availability\s*:\s*NoScreenChangeAvailability\s*;/);
+    for (const [field, type] of [["since", "string"], ["request_token", "string"], ["tool_name", "string"], ["unchanged_minutes", "number"]]) {
+      const declaration = new RegExp(`\\b${field}\\?\\s*:\\s*${type}\\s*;`);
       if (name === "ListRow") expect(body).not.toMatch(declaration);
       else expect(body).toMatch(declaration);
     }

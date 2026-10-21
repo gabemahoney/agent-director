@@ -116,8 +116,8 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
 				t.Fatalf("v13 upgrade lacks both provenance columns: %q", got)
 			}
-			if got := h.Sqlite(db, "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('permission_epoch','stuck_version','stuck_observation','stuck_exit'); SELECT count(*) FROM pragma_table_info('permission_requests') WHERE name IN ('owner_launch_token','owner_permission_epoch','admitted_at','fallback_at','fallback_basis');"); got != "4\n5\n" {
-				t.Fatalf("v14 upgrade lacks permission observation/ownership columns: %q", got)
+			if got := h.Sqlite(db, "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('permission_epoch','stuck_version','stuck_observation','stuck_exit','no_screen_change_timeout_seconds','pane_sha256','pane_since_ms','pane_epoch'); SELECT count(*) FROM pragma_table_info('permission_requests') WHERE name IN ('owner_launch_token','owner_permission_epoch','admitted_at','fallback_at','fallback_basis');"); got != "8\n5\n" {
+				t.Fatalf("v14 upgrade lacks permission observation/ownership or pane columns: %q", got)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("binary swap alone accepted the current schema: %+v", got)

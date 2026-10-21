@@ -8,12 +8,19 @@ import (
 
 // The permission epoch changes only on a true raw-state transition. Request
 // ownership is independent of row_version: admitting another request or a held
-// hook must not retire the other requests in the same interval.
+// hook must not retire the other requests in the same interval. The pane
+// baseline belongs to the epoch it was sampled in, so a later turn or launch
+// never continues it; the per-spawn timeout override is NULL when none was
+// given.
 var stuckColumns = []struct{ table, name, kind, def string }{
 	{"spawns", "permission_epoch", "INTEGER", "0"},
 	{"spawns", "stuck_version", "INTEGER", "0"},
 	{"spawns", "stuck_observation", "TEXT", ""},
 	{"spawns", "stuck_exit", "TEXT", ""},
+	{"spawns", "no_screen_change_timeout_seconds", "INTEGER", ""},
+	{"spawns", "pane_sha256", "TEXT", ""},
+	{"spawns", "pane_since_ms", "INTEGER", ""},
+	{"spawns", "pane_epoch", "INTEGER", ""},
 	{"permission_requests", "owner_launch_token", "TEXT", ""},
 	{"permission_requests", "owner_permission_epoch", "INTEGER", ""},
 	{"permission_requests", "admitted_at", "INTEGER", ""},
@@ -22,8 +29,10 @@ var stuckColumns = []struct{ table, name, kind, def string }{
 }
 
 // migrateV13toV14 retains report-only history without inventing an earlier
-// stuck episode or process-death observation. Recovery is by stopped-writer
-// pre-upgrade backup, as for v13; no reverse migration is implemented.
+// stuck episode, process-death observation, pane sample or timeout override:
+// the added pane and override columns start NULL. Recovery is by
+// stopped-writer pre-upgrade backup, as for v13; no reverse migration is
+// implemented.
 func migrateV13toV14(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {

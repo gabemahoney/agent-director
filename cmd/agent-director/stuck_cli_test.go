@@ -2,61 +2,51 @@ package main_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-func TestPermissionStuckCLIWire(t *testing.T) {
+// TestStuckCLIWire: the CLI's status, get and list of the shared permission
+// and pane surfaces print each reason's exact detail (list only the reason,
+// filtered before the limit) and every row its agent's
+// no_screen_change_availability, read under the largest settle time
+// (apitest.SeedPaneSurface).
+func TestStuckCLIWire(t *testing.T) {
 	home := t.TempDir()
 	if err := apitest.SeedPermissionSurface(stateDB(home)); err != nil {
 		t.Fatal(err)
 	}
-	for _, agent := range []string{"claude", "codex", "cursor"} {
-		for _, verb := range []string{"status", "get"} {
-			raw, stderr, code := runCLIWithHome(t, home, verb, "--instance-id", "stuck-"+agent)
-			if code != 0 || stderr != "" {
-				t.Fatalf("%s/%s: %d %s %s", agent, verb, code, raw, stderr)
-			}
-			apitest.CheckPermissionWire(t, []byte(raw), agent, verb)
-		}
+	if err := apitest.SeedPaneSurface(stateDB(home)); err != nil {
+		t.Fatal(err)
 	}
-	raw, stderr, code := runCLIWithHome(t, home, "list", "--state", "stuck", "--limit", "3")
-	if code != 0 || stderr != "" {
-		t.Fatalf("list: %d %s %s", code, raw, stderr)
+	apitest.SettleVariant{Config: &apitest.SettleOnConfig}.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
+	read := func(args ...string) []byte {
+		t.Helper()
+		raw, stderr, code := runCLIWithHome(t, home, args...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%q: %d %s %s", args, code, raw, stderr)
+		}
+		return []byte(raw)
+	}
+	for _, surface := range apitest.StuckWireSurfaces {
+		for _, agent := range surface.Agents {
+			for _, verb := range []string{"status", "get"} {
+				surface.Check(t, read(verb, "--instance-id", surface.Prefix+agent), agent, verb)
+			}
+		}
 	}
 	var listed struct {
 		Spawns []json.RawMessage `json:"spawns"`
 	}
-	if err := json.Unmarshal([]byte(raw), &listed); err != nil {
-		t.Fatal(err)
-	}
-	if len(listed.Spawns) != 3 {
-		t.Fatalf("list=%s", raw)
+	if raw := read("list", "--state", "stuck", "--limit", "5"); json.Unmarshal(raw, &listed) != nil || len(listed.Spawns) != 5 {
+		t.Fatalf("list=%s; want the 5 stuck rows", raw)
 	}
 	for _, row := range listed.Spawns {
-		var identity struct {
-			Agent string `json:"agent"`
-		}
-		if err := json.Unmarshal(row, &identity); err != nil {
-			t.Fatal(err)
-		}
-		apitest.CheckPermissionWire(t, row, identity.Agent, "list")
+		apitest.CheckListedStuckWire(t, row)
 	}
-	raw, _, code = runCLIWithHome(t, home, "status", "--instance-id", "ordinary")
-	if code != 0 {
-		t.Fatal(raw)
-	}
-	var ordinary map[string]any
-	if err := json.Unmarshal([]byte(raw), &ordinary); err != nil {
-		t.Fatal(err)
-	}
-	for k := range apitest.LoadPermissionWire(t) {
-		if k == "state" {
-			continue
-		}
-		if _, ok := ordinary[k]; ok {
-			t.Errorf("ordinary emitted %s", k)
-		}
+	for id, agent := range apitest.StuckWireOrdinary {
+		apitest.CheckOrdinaryWire(t, read("status", "--instance-id", id), agent)
 	}
 }

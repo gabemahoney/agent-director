@@ -84,14 +84,18 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
-A row in `check_permission` whose agent has fallen back to its own permission
-prompt, left unanswered for the
-[configured time](configuration.md#permission-unanswered-timeout-state), reads
-`stuck` instead, with a `stuck_reason`. It is computed when you call `status`,
-`get` or `list`; nothing runs in the background. Which requests count is in
-[permissions](permissions.md#stuck-on-an-unanswered-permission); the fields,
-filtering and what to do about it are in the
-[caller contract](caller-contract.md#stuck-rows).
+A row can read `stuck` in place of its own state, with a `stuck_reason`:
+`permission_unanswered` while its agent's own permission prompt stays
+unanswered past the
+[configured time](configuration.md#permission-unanswered-timeout-state), or
+`no_screen_change` while a `working` Claude or Codex agent's pane looks the
+same on every read for the
+[configured time](configuration.md#no-screen-change-timeout-state). It is computed when you call `status`, `get` or `list`; nothing runs
+in the background, so an agent nobody reads never becomes stuck. Which
+requests count is in
+[permissions](permissions.md#stuck-on-an-unanswered-permission); which agents
+each reason applies to, the fields, filtering and what to do about it are in
+the [caller contract](caller-contract.md#stuck-rows).
 
 ## Family state
 
@@ -106,8 +110,8 @@ live descendants. Before [settling](configuration.md#settle-time-state),
 the family is `waiting` exactly when every live member's stored state is
 `waiting`; no live members also means `waiting`. Any other live state,
 including `pending`, `ask_user` or `check_permission`, makes it `working`.
-A member shown `stuck` is in `check_permission` underneath, so it counts as
-`working` too.
+A member shown `stuck` is in `check_permission` or `working` underneath, so it
+counts as `working` too.
 
 Each returned agent's family covers the full stored tree, including members
 hidden by list filters or limits. Resume, reuse and deletion follow the
@@ -149,16 +153,9 @@ Caller setup is in [Drive a Spawn from another agent](#drive-a-spawn-from-anothe
 shell access and restart limits are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 
-To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
-then attach on that socket:
-
-```sh
-agent-director get --instance-id "$id"
-tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
-```
-
-The pane accepts editable Unicode text and bracketed multiline paste. Enter
-submits one complete prompt, preserving its Unicode text and newlines.
+To take over, [attach to its pane](#attach-to-a-spawns-pane). The pane
+accepts editable Unicode text and bracketed multiline paste. Enter submits
+one complete prompt, preserving its Unicode text and newlines.
 After confirmed startup, follow-ups wait in the order their submissions are
 observed at the terminal. The queue holds at most 32 waiting submissions and
 8 MiB of waiting text, in addition to one active prompt; each prompt is at
@@ -264,6 +261,16 @@ agent-director list --tmux-session-name status-agent
 The filter is exact-match, combines with `--state`, `--label`, `--parent`,
 `--cwd` and `--limit`, and returns live and ended rows, so one name can match
 several rows.
+
+## Attach to a Spawn's pane
+
+Read the row's `tmux_socket` and `tmux_session_name` with `get`, then attach
+on that socket:
+
+```sh
+agent-director get --instance-id "$id"
+tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
+```
 
 ## Drive a Spawn from another agent
 

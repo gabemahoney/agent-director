@@ -61,13 +61,45 @@ func observeStuck(t *testing.T, probe apitest.StuckProbe, id, want string, commi
 	t.Helper()
 	apitest.ObserveStuckRead(t, probe, id, want, commit, func() (apitest.StuckReading, error) {
 		state, info, err := read()
-		return apitest.StuckReading{State: state, Reason: info.StuckReason, Since: info.Since, RequestToken: info.RequestToken, ToolName: info.ToolName}, err
+		reading := apitest.StuckReading{State: state, Reason: info.StuckReason, Since: info.Since, RequestToken: info.RequestToken, ToolName: info.ToolName}
+		if info.UnchangedMinutes != nil {
+			reading.UnchangedMinutes = *info.UnchangedMinutes
+		}
+		return reading, err
 	})
 }
 
+// coherentStuck fails unless info carries exactly its reason's detail and the
+// attach target, as a displayed stuck status does.
+func coherentStuck(t *testing.T, info api.StuckInfo, session string) {
+	t.Helper()
+	ok := info.Since != "" && session != ""
+	switch info.StuckReason {
+	case api.StuckPermissionUnanswered:
+		ok = ok && info.RequestToken != "" && info.UnchangedMinutes == nil
+	case api.StuckNoScreenChange:
+		ok = ok && info.RequestToken == "" && info.ToolName == "" && info.UnchangedMinutes != nil && *info.UnchangedMinutes >= 0
+	default:
+		ok = false
+	}
+	if !ok {
+		t.Fatalf("incoherent stuck: %+v session=%q", info, session)
+	}
+}
+
+// displayState is the display state of an observeStatus want: stuck for a
+// stuck reason, else want itself.
+func displayState(want string) string {
+	if want == api.StuckPermissionUnanswered || want == api.StuckNoScreenChange {
+		return store.StateStuck
+	}
+	return want
+}
+
 // observeStatus is c.Status judged against the committed row: see
-// apitest.ObserveStuckRead. commit names the commit the read must make (nil
-// when it makes none).
+// apitest.ObserveStuckRead. want is an ordinary state or, for a displayed
+// stuck row, its stuck reason. commit names the commit the read must make
+// (nil when it makes none).
 func observeStatus(t *testing.T, c *api.Client, id, want string, commit apitest.CommitCheck) api.StatusResult {
 	t.Helper()
 	probe, ok := stuckProbes.Load(c)
@@ -75,28 +107,29 @@ func observeStatus(t *testing.T, c *api.Client, id, want string, commit apitest.
 		t.Fatal("client is not watched: build it with stuckClient or watchStuckClient")
 	}
 	var got api.StatusResult
-	observeStuck(t, probe.(apitest.StuckProbe), id, want, commit, func() (string, api.StuckInfo, error) {
+	observeStuck(t, probe.(apitest.StuckProbe), id, displayState(want), commit, func() (string, api.StuckInfo, error) {
 		var err error
 		got, err = c.Status(id)
 		return got.State, got.StuckInfo, err
 	})
-	if want == "stuck" {
-		if got.StuckReason != "permission_unanswered" || got.RequestToken == "" || got.Since == "" {
-			t.Fatalf("incoherent stuck: %+v", got)
+	if displayState(want) == store.StateStuck {
+		if got.StuckReason != want {
+			t.Fatalf("stuck_reason=%q; want %q: %+v", got.StuckReason, want, got)
 		}
+		coherentStuck(t, got.StuckInfo, got.TmuxSessionName)
 	} else if got.StuckInfo != (api.StuckInfo{}) || got.TmuxSessionName != "" {
 		t.Fatalf("ordinary row leaked details: %+v", got)
 	}
 	return got
 }
 
-// assertStuckState reads Status and requires want. Entering stuck must commit
-// (stuck_version advances); an already committed stuck display must be read
-// back unchanged without any commit.
+// assertStuckState reads Status and requires want, as observeStatus. Entering
+// stuck must commit (stuck_version advances); an already committed stuck
+// display must be read back unchanged without any commit.
 func assertStuckState(t *testing.T, c *api.Client, id, want string) api.StatusResult {
 	t.Helper()
 	var commit apitest.CommitCheck
-	if want == "stuck" {
+	if displayState(want) == store.StateStuck {
 		probe, ok := stuckProbes.Load(c)
 		if !ok {
 			t.Fatal("client is not watched: build it with stuckClient or watchStuckClient")
@@ -164,7 +197,7 @@ func TestPermissionStuckFallbackBoundaries(t *testing.T) {
 				e.now = start.Add(time.Duration(config.DefaultPermissionUnansweredTimeoutSeconds)*time.Second - time.Millisecond)
 				assertStuckState(t, c, e.id, store.StateCheckPermission)
 				e.now = e.now.Add(time.Millisecond)
-				got := assertStuckState(t, c, e.id, "stuck")
+				got := assertStuckState(t, c, e.id, "permission_unanswered")
 				if got.Since != e.now.Format("2006-01-02T15:04:05.000Z") {
 					t.Errorf("since=%s, want actual read %s", got.Since, e.now)
 				}
@@ -201,7 +234,7 @@ func TestPermissionStuckProcessStartsAtFirstCommittedObservation(t *testing.T) {
 	e.now = first.Add(30*time.Second - time.Millisecond)
 	assertStuckState(t, c, e.id, store.StateCheckPermission)
 	e.now = e.now.Add(time.Millisecond)
-	assertStuckState(t, c, e.id, "stuck")
+	assertStuckState(t, c, e.id, "permission_unanswered")
 }
 
 func TestPermissionStuckDeadlineSurvivesLaterProcessObservation(t *testing.T) {
@@ -215,7 +248,7 @@ func TestPermissionStuckDeadlineSurvivesLaterProcessObservation(t *testing.T) {
 	e.ns = relayNS
 	e.pc.Set(relayEnvHook.PID, procfix.Gone())
 	e.now = stuckAt.Add(30 * time.Second)
-	assertStuckState(t, c, e.id, "stuck")
+	assertStuckState(t, c, e.id, "permission_unanswered")
 	if pr := e.request(t); !pr.FallbackAt.Equal(stuckAt) || pr.FallbackBasis != store.FallbackDeadline {
 		t.Errorf("deadline drifted: %+v", pr)
 	}
@@ -230,9 +263,9 @@ func TestPermissionStuckExcludesNoncurrentAndAnsweredRequests(t *testing.T) {
 		want   string
 	}{
 		// Positive controls: the same row is stuck unless a fact below excludes it.
-		{"unchanged request", nil, false, "stuck"},
+		{"unchanged request", nil, false, "permission_unanswered"},
 		// A decision that was never delivered does not close the dialog.
-		{"decided but undelivered", apitest.PermissionDecision("allow", ""), false, "stuck"},
+		{"decided but undelivered", apitest.PermissionDecision("allow", ""), false, "permission_unanswered"},
 		{"live hook", nil, true, store.StateCheckPermission},
 		{"stale launch", apitest.PermissionOwner("0000000000000000", 1), false, store.StateCheckPermission},
 		{"stale interval", apitest.PermissionOwner("", 0), false, store.StateCheckPermission},
@@ -361,5 +394,5 @@ func TestPermissionStuckLoadedTimeoutControlsEligibility(t *testing.T) {
 	e.now = stuckAt.Add(7*time.Second - time.Nanosecond)
 	assertStuckState(t, c, e.id, store.StateCheckPermission)
 	e.now = e.now.Add(time.Nanosecond)
-	assertStuckState(t, c, e.id, "stuck")
+	assertStuckState(t, c, e.id, "permission_unanswered")
 }

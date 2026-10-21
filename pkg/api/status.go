@@ -34,6 +34,11 @@ type StatusResult struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// NoScreenChangeAvailability is whether no_screen_change can apply to the
+	// row's agent: available for Claude and Codex, unavailable for Cursor
+	// (NoScreenChangeAvailable, NoScreenChangeUnavailable). Present on every
+	// result; omitted only from the empty result of a failed call.
+	NoScreenChangeAvailability string `json:"no_screen_change_availability,omitempty"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
 	// with millisecond precision. Present only on a pending row; nil (and
 	// omitted from JSON) otherwise (SR-22.2).
@@ -72,8 +77,10 @@ type familyStatusReader interface {
 // Status returns the current state column for the given instance_id,
 // with launch_started_at on a pending row when s provides the narrow read.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
-// the canonical err_name envelope. It reads with no settle time; the Client
-// applies its [state] settle_ms.
+// the canonical err_name envelope. It reads with no settle time and samples
+// no pane, so a working Claude or Codex row keeps its pane's current
+// no_screen_change finding as committed; the Client applies its [state]
+// settle_ms and samples panes.
 func Status(s StatusStore, instanceID string) (StatusResult, error) {
 	return statusSettled(s, store.SettleRead{}, instanceID)
 }
@@ -93,29 +100,34 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		display := permissionDisplay(s, v, settle, row)
+		display := stuckDisplay(s, v, settle, row)
 		out := StatusResult{State: display.State, StuckInfo: stuckInfo(display), FamilyState: row.FamilyState,
-			LaunchStartedAt: launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
+			NoScreenChangeAvailability: noScreenChangeAvailability(row.Agent),
+			LaunchStartedAt:            launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
 		if display.State == store.StateStuck {
 			out.TmuxSessionName = row.TmuxSessionName
 		}
 		return out, nil
 	}
 
+	// The narrower reads below, which only stores without SpawnStatusRow
+	// reach, carry no agent but the context read's; the others report
+	// no_screen_change available, as for a Claude row.
 	if sr, ok := s.(contextStatusReader); ok {
 		reported, raw, launchMillis, evidence, err := sr.SpawnStatusContext(instanceID, settle)
 		if err != nil {
 			return StatusResult{}, err
 		}
 		return StatusResult{State: reported, FamilyState: evidence.FamilyState, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			Context: contextOf(evidence)}, nil
+			NoScreenChangeAvailability: noScreenChangeAvailability(evidence.Agent), Context: contextOf(evidence)}, nil
 	}
 	if sr, ok := s.(familyStatusReader); ok {
 		reported, raw, family, launchMillis, err := sr.SpawnStatusWithFamily(instanceID, settle)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis)}, nil
+		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
+			NoScreenChangeAvailability: NoScreenChangeAvailable}, nil
 	}
 
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
@@ -123,20 +135,20 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis)}, nil
+		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), NoScreenChangeAvailability: NoScreenChangeAvailable}, nil
 	}
 	if r, ok := s.(statusReader); ok {
 		state, launchMillis, err := r.SpawnStatus(instanceID)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis)}, nil
+		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), NoScreenChangeAvailability: NoScreenChangeAvailable}, nil
 	}
 	state, err := s.GetSpawnState(instanceID)
 	if err != nil {
 		return StatusResult{}, err
 	}
-	return StatusResult{State: state}, nil
+	return StatusResult{State: state, NoScreenChangeAvailability: NoScreenChangeAvailable}, nil
 }
 
 // Status returns the current state column (pending/waiting/working/ask_user/
@@ -147,13 +159,20 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 // then; terminal states and command-driven changes show at once. The read
 // never waits.
 //
+// A working Claude or Codex row's own pane is captured on each read and its
+// fingerprint compared with the previous read's: once identical samples have
+// spanned the row's no_screen_change timeout, the row reads stuck with
+// stuck_reason no_screen_change. Nothing observes panes between reads.
+// no_screen_change_availability says whether that can apply to the row's
+// agent (unavailable for Cursor).
+//
 // CLI: agent-director status
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for instanceID.
 //
 // Nondeterminism: none with no settle time; with one, the state depends on
-// the clock.
+// the clock. A stuck state depends on the clock and on the pane samples.
 func (c *Client) Status(instanceID string) (StatusResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return StatusResult{}, err

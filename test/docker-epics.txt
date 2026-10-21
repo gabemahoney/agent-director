@@ -43,3 +43,4 @@ family-state
 context-fullness
 permission-stuck
 state-changed-at
+pane-stuck

@@ -72,6 +72,9 @@ type ListRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// NoScreenChangeAvailability is, as StatusResult's, available for Claude
+	// and Codex and unavailable for Cursor. Present on every row.
+	NoScreenChangeAvailability string `json:"no_screen_change_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -165,10 +168,12 @@ type ListResult struct {
 // check-before-read rule, b.146 rule 5). List is a reading verb and never
 // waits for the store's write lock (b.146 problem 4): it writes hook_gone_at
 // on every request it found fallen back, in one write, only if the lock is
-// free at that moment.
+// free at that moment, and attempts no such write once a stuck observation
+// write of the same read has found the store busy.
 //
-// List reads with no settle time; the Client applies its [state] settle_ms
-// (listSettled).
+// List reads with no settle time and samples no pane, so a working Claude or
+// Codex row keeps its pane's current no_screen_change finding as committed;
+// the Client applies its [state] settle_ms and samples panes (listSettled).
 func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 	return listSettled(s, v, store.SettleRead{}, params)
 }
@@ -219,7 +224,7 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
 	fetch := filters
-	_, observes := s.(permissionStuckStore)
+	observer, observes := s.(permissionStuckStore)
 	if observes && len(filters.State) > 0 {
 		// The statement keeps every row that may display a filtered state;
 		// the displayed state is matched, and the limit applied, below.
@@ -232,6 +237,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 
 	j := newRelayJudge(v)
 	out := make([]ListRow, 0, len(rows))
+	storeBusy := false
 	for _, r := range rows {
 		reported := r.State
 		if filters.Settle.SettleMs > 0 {
@@ -240,7 +246,20 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		display := store.StuckDisplay{State: reported}
 		var judged *judgedRequestSet
 		if observes {
-			display, judged = permissionObservation(s, v, filters.Settle, r)
+			var read permissionRead
+			if r.State == store.StateCheckPermission && len(filters.State) == 0 {
+				// With no state filter the row is listed, so its open requests
+				// must be read: the observation reuses that one read instead of
+				// reading again. With a filter the row may yet be dropped, so
+				// the observation reads without waiting, and only a listed row
+				// whose observation read nothing waits for them, below.
+				if read.requests, err = readJudgedRequests(observer.PermissionRequestsForSpawn, j, r.InstanceID); err != nil {
+					return ListResult{Spawns: []ListRow{}}, err
+				}
+			}
+			var busy bool
+			display, judged, busy = observeStuck(s, v, filters.Settle, r, read)
+			storeBusy = storeBusy || busy
 		}
 		if observes && len(filters.State) > 0 {
 			matched := false
@@ -252,24 +271,25 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			}
 		}
 		row := ListRow{
-			InstanceID:              r.InstanceID,
-			ParentID:                r.ParentID,
-			State:                   display.State,
-			StuckReason:             display.Reason,
-			FamilyState:             r.FamilyState,
-			CWD:                     r.CWD,
-			Agent:                   r.Agent,
-			TmuxSessionName:         r.TmuxSessionName,
-			RelayMode:               r.RelayMode,
-			Labels:                  r.Labels,
-			StartedAt:               r.StartedAt,
-			LastSeenAt:              r.LastSeenAt,
-			StateChangedAt:          millisToUTC(r.StateChangedMillis),
-			EndedAt:                 r.EndedAt,
-			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
-			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
-			LivenessNote:            nullableString(r.LivenessNote),
-			PermissionRequests:      []PermissionRequestInfo{},
+			InstanceID:                 r.InstanceID,
+			ParentID:                   r.ParentID,
+			State:                      display.State,
+			StuckReason:                display.Reason,
+			FamilyState:                r.FamilyState,
+			NoScreenChangeAvailability: noScreenChangeAvailability(r.Agent),
+			CWD:                        r.CWD,
+			Agent:                      r.Agent,
+			TmuxSessionName:            r.TmuxSessionName,
+			RelayMode:                  r.RelayMode,
+			Labels:                     r.Labels,
+			StartedAt:                  r.StartedAt,
+			LastSeenAt:                 r.LastSeenAt,
+			StateChangedAt:             millisToUTC(r.StateChangedMillis),
+			EndedAt:                    r.EndedAt,
+			LaunchStartedAt:            launchStartedAt(r.State, r.LaunchStartedAtMillis),
+			LivenessUnverifiedSince:    nullableTimestamp(r.LivenessUnverifiedSince),
+			LivenessNote:               nullableString(r.LivenessNote),
+			PermissionRequests:         []PermissionRequestInfo{},
 		}
 		if r.State == store.StateCheckPermission && judged != nil {
 			row.PermissionRequests = judgedOpenInfos(judged, j)
@@ -286,11 +306,15 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		}
 	}
 	// Every row is built, so the slots below point at their final elements.
-	var slots []goneSlot
-	for i := range out {
-		slots = goneSlotsOf(slots, out[i].PermissionRequests)
+	// Once an observation write of this read found the store busy, hook_gone_at
+	// is left unwritten without another attempt, as a busy write leaves it.
+	if !storeBusy {
+		var slots []goneSlot
+		for i := range out {
+			slots = goneSlotsOf(slots, out[i].PermissionRequests)
+		}
+		recordGone(s, j.now(), readerLockWait, slots)
 	}
-	recordGone(s, j.now(), readerLockWait, slots)
 	return ListResult{Spawns: out}, nil
 }
 
@@ -309,7 +333,10 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // examined launch and binding. It then attempts the atomic terminal write.
 // Unavailable best-effort persistence leaves the read projection valid; other
 // write errors fail the read. List never waits for a state to settle or for
-// the store's write lock. Relay-delivery writes remain best effort.
+// the store's write lock. Relay-delivery writes remain best effort. Like
+// [Client.Status] it samples the own pane of each working Claude or Codex row
+// it reads for no_screen_change, a failure affecting only that row, and every
+// row carries no_screen_change_availability.
 //
 // CLI: agent-director list
 //

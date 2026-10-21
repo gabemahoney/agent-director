@@ -18,12 +18,15 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 		prefix                  int
 		name, observation, exit string
 	}{
-		{0, "no columns", "", ""}, {1, "first epoch", "", ""}, {4, "spawn columns", "", ""},
-		{5, "partial owner", "", ""}, {6, "both owner columns", "", ""},
+		{0, "no columns", "", ""}, {1, "first epoch", "", ""}, {6, "partial pane", "", ""}, {8, "spawn columns", "", ""},
+		{9, "partial owner", "", ""}, {10, "both owner columns", "", ""},
 		{full, "pending candidate", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001,"permission_epoch":8}`, ""},
 		{full, "displayed episode", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"check_permission","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "displayed pane episode", `{"state":"stuck","reason":"no_screen_change","since_ms":1792411208000,"unchanged_minutes":20,"candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "reason replacement candidate", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"stuck","candidate_reason":"no_screen_change","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
 		{full, "observation without epoch", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001}`, ""},
 		{full, "pending lifecycle exit", "", `{"new_state":"waiting","reason":"permission_unanswered","at_ms":1792411209000}`},
+		{full, "pending pane exit", "", `{"new_state":"working","reason":"no_screen_change","at_ms":1792411209000}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prefix := tc.prefix
@@ -39,7 +42,9 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			preAddV14Columns(t, path, v14ColumnSpecs[:prefix])
 			if prefix == full {
 				withRaw(t, path, func(db *sql.DB) {
-					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,stuck_version=4,stuck_observation=?,stuck_exit=?`, nullableStringArg(tc.observation), nullableStringArg(tc.exit))
+					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,stuck_version=4,stuck_observation=?,stuck_exit=?,
+						no_screen_change_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,
+						nullableStringArg(tc.observation), nullableStringArg(tc.exit), strings.Repeat("a", 64))
 					mustExec(t, db, `UPDATE permission_requests SET owner_launch_token=?,owner_permission_epoch=8,
 						admitted_at=1792411201123,fallback_at=1792411206000,fallback_basis='process'
 						WHERE request_token=?`, testLaunchToken, tokenA)
@@ -74,8 +79,10 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			}
 			if prefix == 0 {
 				got := readRawSpawn(t, path, "pre", v14ColumnNames("spawns"))
-				if got["permission_epoch"] != "0" || got["stuck_version"] != "0" || got["stuck_observation"] != "NULL" || got["stuck_exit"] != "NULL" {
-					t.Fatalf("fabricated historic display/observation: %v", got)
+				for _, c := range v14ColumnSpecs {
+					if c.table == "spawns" && got[c.name] != c.migratedValue() {
+						t.Fatalf("fabricated historic display, observation, pane baseline or timeout override: %v", got)
+					}
 				}
 				for _, r := range readQuotedRows(t, path, "permission_requests", "pre", "request_id", v14ColumnNames("permission_requests")) {
 					if r["owner_launch_token"] != "'"+testLaunchToken+"'" || r["owner_permission_epoch"] != "0" || r["fallback_at"] != "NULL" || r["admitted_at"] != "NULL" || r["fallback_basis"] != "NULL" {
@@ -191,7 +198,7 @@ func TestV14MigrationDoesNotEnrollEarlierPermissionIntervals(t *testing.T) {
 
 // v14RefusalShape turns a refusal naming one table.column into the generic
 // "<table>.<column>" form the install skill's advice quotes.
-var v14RefusalShape = regexp.MustCompile(`^v13→v14 (incompatible|invalid) [a-z_]+\.[a-z_]+$`)
+var v14RefusalShape = regexp.MustCompile(`^v13→v14 (incompatible|invalid) [a-z_]+\.[a-z0-9_]+$`)
 
 // v14InstallSkillRefusalAdvice is the whitespace-normalized "Authorized
 // migration refuses permission observation or ownership facts" paragraph of
@@ -218,12 +225,18 @@ func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
 		{"wrong default", `ALTER TABLE spawns ADD COLUMN stuck_version INTEGER NOT NULL DEFAULT 1`, "", "v13→v14 incompatible spawns.stuck_version"},
 		{"unexpected default", `ALTER TABLE spawns ADD COLUMN stuck_observation TEXT DEFAULT NULL`, "", "v13→v14 incompatible spawns.stuck_observation"},
 		{"unexpected not null", `ALTER TABLE permission_requests ADD COLUMN owner_launch_token TEXT NOT NULL DEFAULT ''`, "", "v13→v14 incompatible permission_requests.owner_launch_token"},
+		// A default would give every legacy row a timeout override.
+		{"defaulted override", `ALTER TABLE spawns ADD COLUMN no_screen_change_timeout_seconds INTEGER DEFAULT 1200`, "", "v13→v14 incompatible spawns.no_screen_change_timeout_seconds"},
 		{"negative epoch", "", `UPDATE spawns SET permission_epoch=-1`, "v13→v14 invalid spawns.permission_epoch"},
 		{"fractional version", "", `UPDATE spawns SET stuck_version=0.5`, "v13→v14 invalid spawns.stuck_version"},
 		{"text admission", "", `UPDATE permission_requests SET admitted_at='bad'`, "v13→v14 invalid permission_requests.admitted_at"},
 		{"negative fallback", "", `UPDATE permission_requests SET fallback_at=-1,fallback_basis='process'`, "v13→v14 invalid permission_requests.fallback_at"},
 		{"blob owner", "", `UPDATE permission_requests SET owner_launch_token=x'6162'`, "v13→v14 invalid permission_requests.owner_launch_token"},
 		{"negative owner", "", `UPDATE permission_requests SET owner_permission_epoch=-1`, "v13→v14 invalid permission_requests.owner_permission_epoch"},
+		{"negative override", "", `UPDATE spawns SET no_screen_change_timeout_seconds=-1`, "v13→v14 invalid spawns.no_screen_change_timeout_seconds"},
+		{"blob fingerprint", "", `UPDATE spawns SET pane_sha256=x'6162'`, "v13→v14 invalid spawns.pane_sha256"},
+		{"text pane start", "", `UPDATE spawns SET pane_since_ms='soon'`, "v13→v14 invalid spawns.pane_since_ms"},
+		{"fractional pane epoch", "", `UPDATE spawns SET pane_epoch=0.5`, "v13→v14 invalid spawns.pane_epoch"},
 		{"unknown basis", "", `UPDATE permission_requests SET fallback_at=123,fallback_basis='guessed'`, "v13→v14 invalid fallback basis"},
 		{"unpaired clock", "", `UPDATE permission_requests SET fallback_at=123`, "v13→v14 incomplete fallback clock"},
 		{"unpaired basis", "", `UPDATE permission_requests SET fallback_basis='deadline'`, "v13→v14 incomplete fallback clock"},
@@ -233,9 +246,15 @@ func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
 		{"fractional observation epoch", "", `UPDATE spawns SET stuck_observation='{"state":"check_permission","candidate":"stuck","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":0.5}'`, "v13→v14 invalid stuck_observation"},
 		{"unknown observation key", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"working","invented":true}'`, "v13→v14 invalid stuck_observation"},
 		{"invalid display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"guessed","request_token":"x"}'`, "v13→v14 invalid stuck_observation"},
+		{"pane detail on permission display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"permission_unanswered","request_token":"x","unchanged_minutes":1}'`, "v13→v14 invalid stuck_observation"},
+		{"permission detail on pane display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","tool_name":"Read"}'`, "v13→v14 invalid stuck_observation"},
+		{"negative unchanged minutes", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","unchanged_minutes":-1}'`, "v13→v14 invalid stuck_observation"},
+		{"replacement reason off display", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"stuck","candidate_reason":"no_screen_change"}'`, "v13→v14 invalid stuck_observation"},
+		{"replacement repeats displayed reason", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","candidate_reason":"no_screen_change"}'`, "v13→v14 invalid stuck_observation"},
 		{"blob observation", "", `UPDATE spawns SET stuck_observation=x'7b7d'`, "v13→v14 invalid spawns.stuck_observation"},
 		{"oversized observation", "", `UPDATE spawns SET stuck_observation=printf('%17000s','{}')`, "v13→v14 invalid stuck_observation"},
 		{"invalid exit", "", `UPDATE spawns SET stuck_exit='{"new_state":"stuck","reason":"permission_unanswered","at_ms":123}'`, "v13→v14 invalid stuck_exit"},
+		{"unknown exit reason", "", `UPDATE spawns SET stuck_exit='{"new_state":"working","reason":"guessed","at_ms":123}'`, "v13→v14 invalid stuck_exit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

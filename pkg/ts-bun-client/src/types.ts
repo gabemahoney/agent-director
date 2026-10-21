@@ -244,10 +244,24 @@ export interface PermissionRequestInfo extends RequestDelivery {
   decision_reason: string | null;
 }
 
+/**
+ * Why a row reads `stuck`: a current unanswered permission fallback, or a working Claude or
+ * Codex pane whose fingerprint stayed identical across reads for its timeout.
+ */
+export type StuckReason = "permission_unanswered" | "no_screen_change";
+
+/**
+ * Whether `no_screen_change` can apply to a row's agent: `"available"` for Claude and Codex,
+ * `"unavailable"` for Cursor. A capability outcome, never a stuck reason.
+ */
+export type NoScreenChangeAvailability = "available" | "unavailable";
+
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
   /** Report-only condition; live command guards continue to apply. */
-  stuck_reason?: "permission_unanswered";
+  stuck_reason?: StuckReason;
+  /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
+  no_screen_change_availability: NoScreenChangeAvailability;
 
   /** Stable Spawn id. */
   instance_id: string;
@@ -443,6 +457,15 @@ export interface SpawnParams {
    * `ErrInstanceIdCollision`.
    */
   reuse_finished?: boolean;
+  /**
+   * This row's `no_screen_change` timeout in whole seconds, 1 to 9223372036, used by every
+   * `status`, `get` and `list` in place of `[state] no_screen_change_timeout_seconds`.
+   * `0`, `null` or omitted gives no override. A negative, fractional, non-numeric or larger
+   * value is refused with `ErrInvalidFlags` before anything is written or launched. Recorded
+   * on the row: `resume` keeps it; the next spawn or reuse replaces it, clearing it when that
+   * call gives none. Cursor rows keep it, but `no_screen_change` is unavailable for them.
+   */
+  no_screen_change_timeout_seconds?: number | null;
 }
 
 /**
@@ -483,14 +506,18 @@ export interface StatusParams {
 /** The row's reported lifecycle state. */
 export interface StatusResult {
   /** Report-only condition; live command guards continue to apply. */
-  stuck_reason?: "permission_unanswered";
+  stuck_reason?: StuckReason;
   /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
   since?: string;
   /** Earliest qualifying fallback, lexical request-token tie break. */
   request_token?: string;
   tool_name?: string;
+  /** Completed minutes of the committed unchanged pane period; only while `no_screen_change`. */
+  unchanged_minutes?: number;
   /** Attach target, present when displayed stuck. */
   tmux_session_name?: string;
+  /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
+  no_screen_change_availability: NoScreenChangeAvailability;
 
   /** Experimental context estimate for the current session. */
   context: ContextReading;
@@ -553,12 +580,16 @@ export interface GetParams {
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
   /** Report-only condition; live command guards continue to apply. */
-  stuck_reason?: "permission_unanswered";
+  stuck_reason?: StuckReason;
   /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
   since?: string;
   /** Earliest qualifying fallback, lexical request-token tie break. */
   request_token?: string;
   tool_name?: string;
+  /** Completed minutes of the committed unchanged pane period; only while `no_screen_change`. */
+  unchanged_minutes?: number;
+  /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
+  no_screen_change_availability: NoScreenChangeAvailability;
 
   /** Experimental context estimate for the current session. */
   context: ContextReading;

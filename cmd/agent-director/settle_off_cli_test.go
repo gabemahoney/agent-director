@@ -20,6 +20,8 @@ import (
 // unspecified. The rows and their bytes are unchanged. And b.k6i's
 // state_changed_at, added by hand to every get and list row after
 // last_seen_at as the fixture's ReadSurfaceStampMs, 2099-01-01T00:00:00.123Z;
+// no other byte changed. And no_screen_change_availability (b.ob8 rk), recaptured
+// on every row after family_state as "available" (every fixed row is Claude's);
 // no other byte changed.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 

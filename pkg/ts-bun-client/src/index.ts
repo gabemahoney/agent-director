@@ -114,6 +114,8 @@ export type {
   RequestDelivery,
   PaneAnswer,
   ProvenGoneHow,
+  StuckReason,
+  NoScreenChangeAvailability,
 } from "./types.js";
 
 // err_details shapes (b.146 rule 15), the values of AgentDirectorError.errDetails.
