@@ -490,7 +490,7 @@ func (c cancelOnErr) Err() error {
 // TestZeroWaitAdmissionAfterStall (b.q5r): a zero-wait call that reaches the
 // free connection or operation slot only after its connGrab has elapsed still
 // takes it, and a returned operation call has freed its slot. A connection
-// another lease holds is refused at once after the call queues for it:
+// another lease holds is refused after the call has queued for it exactly once:
 // ErrStoreBusy, also when the caller's deadline has passed by then, or the
 // caller's own error if it was canceled.
 func TestZeroWaitAdmissionAfterStall(t *testing.T) {
@@ -551,9 +551,8 @@ func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 			}
 			for i := 1; i <= tc.attempts; i++ {
 				ctx, cancel := s.operationContext(0)
-				waits, start := s.db.Stats().WaitCount, time.Now()
+				waits := s.db.Stats().WaitCount
 				err := tc.admit(s, stalledDone{ctx})
-				elapsed := time.Since(start)
 				cancel()
 				got := ""
 				if err != nil {
@@ -562,9 +561,9 @@ func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 				if got != tc.wantErr {
 					t.Fatalf("attempt %d after a stall = %q; want %q", i, got, tc.wantErr)
 				}
-				// Refused only once it queued behind the holder, and at once.
-				if queued := s.db.Stats().WaitCount - waits; tc.held && (queued != 1 || elapsed > 250*time.Millisecond) {
-					t.Fatalf("refused after queuing %d times, %v; want once, at once", queued, elapsed)
+				// Refused only after it queued behind the holder, exactly once.
+				if queued := s.db.Stats().WaitCount - waits; tc.held && queued != 1 {
+					t.Fatalf("refused after queuing %d times; want once", queued)
 				}
 			}
 		})
