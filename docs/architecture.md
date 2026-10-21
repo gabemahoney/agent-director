@@ -2130,8 +2130,10 @@ not bind those details to a compaction generation. Captured token details lack
 a usage measurement time or generation/compaction sequence. Conversation start
 and assistant timestamps, external hook generation IDs and collector chronology
 cannot establish checkpoint-local, restart-safe ordering. Missing initial
-summary markers likewise do not prove freshness. See the
-[fixture evidence](test-writing-guide.md#context-fullness-captures-and-fixtures).
+summary markers likewise do not prove freshness. The captures are under
+`internal/testsupport/contextfix/testdata/cursor/`; see the
+[fixture evidence](https://github.com/gabemahoney/agent-director/blob/53d0dcf248d60af143444ef56487c2601ebff273/docs/test-writing-guide.md#context-fullness-captures-and-fixtures)
+as written before the test guide dropped it.
 Future Cursor numeric support requires qualified managed
 usage/capacity and compaction evidence before adding a source at `contextOf`;
 native payload identity alone must never grant lifecycle or permission
@@ -2149,9 +2151,10 @@ writer with `ContextWriter` and admits the fresh startup with
 `AdmitClaudeCapacity`; `SeedContextChild` / `AdmitClaudeChild` install the
 already-visible child's own native path and metadata. Future Go/API/CLI/MCP context tests MUST reuse these
 helpers; TypeScript tests MUST use `seed-spawn --context-fixture` with
-`--context-writer-pid` for positive Codex cases and `expectedContext`. See
+`--context-writer-pid` for positive Codex cases and `expectedContext`. The
+supported sample names are the cases `contextfix.Load` accepts; see
 [fixture selection](test-writing-guide.md#context-fullness-captures-and-fixtures)
-for supported names, isolation and evidence limits. Synthetic `cursorfix`
+for isolation and evidence limits. Synthetic `cursorfix`
 history is not numeric qualification.
 
 ### `pkg/api` Client lifecycle
@@ -3310,12 +3313,20 @@ still the one it read, so it knows the row has not changed since. As built:
     by both the available busy allowance and the context. Callbacks use only
     their leased connection, never the one-connection pool.
 
-    Zero wait retains `connGrab` (1 ms) for acquisition and zero SQLite lock
-    allowance without retries. Immediately available execution and cleanup
-    get one fixed `immediateWorkBudget` (1 s), intersected with any enclosing
-    original deadline. An expired positive call cannot start SQL through a
-    renewed zero-wait allowance. `DefaultLockWait` (negative) retains the
-    store's configured waits unless an enclosing context cuts them shorter.
+    Zero wait takes a free connection or operation slot however late a
+    scheduling stall lets the call reach it, and waits `connGrab` (1 ms) only
+    for one another call holds, counted from when that wait starts (b.q5r).
+    **Must use:** `connGrabContext` (`lockwait.go`, which names the
+    database/sql behaviour it relies on) and `admitOperation`
+    (`connection_cleanup.go`); never pre-arm a `connGrab` timeout. Accepted
+    residue: a connection holder releasing just as `connGrab` runs out can
+    still yield `ErrStoreBusy` (database/sql's random select). Zero wait has
+    zero SQLite lock allowance and no retries. Immediately available
+    execution and cleanup get one fixed `immediateWorkBudget` (1 s),
+    intersected with any enclosing original deadline. An expired positive
+    call cannot start SQL through a renewed zero-wait allowance.
+    `DefaultLockWait` (negative) retains the store's configured waits unless
+    an enclosing context cuts them shorter.
     Setup context cancellation before BEGIN and precommit exhaustion wrap
     `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
     ordinary I/O errors returned within the original bound retain their
@@ -3336,10 +3347,12 @@ still the one it read, so it knows the row has not changed since. As built:
     Waiting callers create no worker or job queue. The admitted worker owns
     acquisition, initialization, callback, rows and direct `cleanup.finish`
     through rollback/restoration or `Raw(driver.ErrBadConn)` disposal and
-    lease release, even after its caller returns. Repeated timeouts cannot
-    accumulate workers behind blocked native work. Contextless default-wait
-    calls remain synchronous and use `releaseConn`'s existing cleanup lane;
-    they do not acquire the cancelable operation slot.
+    lease release, even after its caller returns. It frees the slot before
+    releasing its caller, so that caller's next call finds it free (a caller
+    released by its deadline may not). Repeated timeouts cannot accumulate
+    workers behind blocked native work. Contextless default-wait calls
+    remain synchronous and use `releaseConn`'s existing cleanup lane; they
+    do not acquire the cancelable operation slot.
 
     SQL receives cancellation immediately. If cancellation arrives before an
     absolute deadline, the reporting wait can observe a cooperative driver's
@@ -3920,13 +3933,11 @@ borrower SQL; native Open or disposal can still block under that ownership.
 
 Explicit `boundedConnContext` acquisition carries an immutable private
 context marker and keeps the eager path. It preserves the distinction
-between zero-wait 1 ms admission and its fixed 1 s SQL-work allowance, cut
-by the original enclosing deadline; it never renews an expired positive
-budget. The operation gate slot is released before completion is signalled
-(`runConnectionOperation`; a panic still releases it), so a zero-wait operation
-started the moment a caller is told the previous one finished is never refused
-by a release not yet made. `ReconcileCursorRotation` also marks its explicit context acquisition
-and retains its established synchronous context behavior.
+between zero-wait admission (`connGrab`) and its fixed 1 s SQL-work
+allowance, cut by the original enclosing deadline; it never renews an
+expired positive budget. `ReconcileCursorRotation` also marks its
+explicit context acquisition and retains its established synchronous
+context behavior.
 
 The pool's background replacement opener has no borrowing caller context.
 `callerOwnedConnector` returns a successful, unopened `lazySQLiteConn` for
@@ -5495,7 +5506,7 @@ was (fail-open).
 `internal/hook/testdata/codex-hook-payloads/` (the "Hook payload fixtures"
 rule under [Subagent capture](#subagent-capture)), rollout paths from
 `codexfix`, and a Codex hook fired through the store from `storefix`'s
-`HookAgent` option (see [`storefix` seeders](#storefix-seeders)).
+`HookAgent` option (see [`storefix` seeders](#storefix-seeders-reusable-test-fixtures)).
 
 ### Hooks move a row only for its own agent
 
@@ -6745,31 +6756,12 @@ their own rules.
 - *Raw guards.* `send-keys`, `decide`, `pause`, the dialog hold and every other
   verb keep reading the raw `state`; stuck changes no refusal or hold.
 
-**Schema and recovery.** Schema v14 adds `spawns.permission_epoch`,
-`stuck_version`, `stuck_observation` (strict bounded JSON), `stuck_exit`,
-`no_screen_change_timeout_seconds`, `pane_sha256`, `pane_since_ms` and
-`pane_epoch`, and `permission_requests.owner_launch_token`,
-`owner_permission_epoch`, `admitted_at`, `fallback_at` and `fallback_basis`;
-fresh `schemaDDL` creates the same shape. `migrateV13toV14` validates first and
-changes nothing until every existing column of that name is compatible
-(type, nullability, default, non-negative integers, decodable JSON, a known
-basis, and a clock and basis that are both set or both NULL), then adds the
-missing columns, backfills ownership and stamps `user_version = 14` in one
-transaction, so a refusal (`ErrSchemaMismatch`) leaves the store and its
-authorization for a corrected retry. It validates `stuck_observation` and
-`stuck_exit` with the live decoders, which accept both reasons (the pane
-columns joined the hop in the same release). It invents no history: no
-observation, no fallback clock, no process death, no pane baseline and no
-override, so an upgraded row uses its reader's timeout and its first
-successful sample starts a fresh period. Only requests of a row currently in
-`check_permission` with a known interval start (`state_changed_ms > 0`) whose
-whole-second `created_at` falls in a later whole second than that start acquire
-the row's token and epoch; ambiguous same-second and earlier requests, and
-those of a row with an unknown start, keep NULL ownership and never qualify,
-with their records and holds unchanged. Recovery is restore-only from the stopped-writer pre-upgrade
-copy (see [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release));
-no reverse recipe exists. The worked example is in the
-[migration guide](migration-guide.md#current-worked-example-v13--v14).
+**Schema and recovery.** Schema v14 (`migrateV13toV14`) adds the stuck
+observation, pane baseline and override columns to `spawns` and the request
+ownership and fallback clock columns to `permission_requests`; the worked
+example is in the [migration guide](migration-guide.md#current-worked-example-v13--v14).
+Recovery is restore-only from the stopped-writer pre-upgrade copy (see
+[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release)).
 
 **Shared fixtures (mandatory reuse).** This is the one registry; how to use
 them is in the [test writing guide](test-writing-guide.md#stuck-fixtures).
@@ -12779,8 +12771,7 @@ request judged once:
 while the row is in `check_permission`; and `unproven_requests`, those
 not proven gone (`ProvenGone()` false). Its fallen-back requests with no
 `hook_gone_at`, from either list, join the same one `recordGone`. With no
-wait left, the zero-wait write still gets the `connGrab` window (1 ms) to
-take a free connection.
+wait left, the zero-wait write still takes a free connection.
 
 After a write the store refused as busy (`ErrStoreBusy`, a refused
 connection included), a read skips its other kind of write. When `get`'s
@@ -13508,9 +13499,9 @@ reserve; this repair imposes no shorter bound on those retained holds.
   rolls back and is returned as it is). Each returns an error wrapping
   `ErrStoreBusy`, having written nothing, when its wait for the store's
   connection or its write lock runs out. `internal/store/lockwait.go`
-  holds `ErrStoreBusy`, `DefaultLockWait`, `connGrab`, `boundedConn`,
-  `withConn`, `readWithin`, `inWriteTx`, `inImmediateTx` and the
-  epoch-millisecond helpers of the v7 instants.
+  holds `ErrStoreBusy`, `DefaultLockWait`, `connGrab`, `connGrabContext`,
+  `boundedConnContext`, `withConn`, `readWithin`, `inWriteTx`,
+  `inImmediateTx` and the epoch-millisecond helpers of the v7 instants.
 
 - **`internal/store/permission.go`** — the reads and `decide`'s write:
   - `GetPermissionRequest` (pair-keyed), `GetPermissionRequestWithin` (the

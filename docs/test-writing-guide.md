@@ -1,156 +1,22 @@
 # Test Writing Guide
 
-## Purpose
+agent-director's test conventions. The general rules and the review checklist
+are the Project's `guide:test-guide.md`, which wins where the two differ.
 
-How to write unit and integration tests in this repo. The overarching goal: keep the test suite small and fast while maintaining roughly 80% coverage. Don't gold-plate — every test costs maintenance, and a bloated suite is harder to read than a missing test.
-
-## Core Principles
-
-- **Test behavior, not implementation.** Verify what a function produces or causes, not how it works internally.
-- **Parametrize over duplicate.** If three or more tests share the same shape with different inputs, collapse them with your test framework's parameterization primitive.
-- **Share setup.** Repeated boilerplate at the top of every test belongs in a fixture or helper, not in each test body.
-- **Give semantic setup a finite budget.** Repair, durable-origin and deliberate fresh-recovery calls use an explicit 5000 ms decision budget because they check repair or persisted facts. Advance an injected clock for simulated acknowledgement waits. In the parked-phase deadline test, only the later semantic recovery call uses this budget; the initial 100 ms call, 1100 ms wall bound and stale-relative/precommit assertions remain unchanged. Keep zero-wait, SQL, cleanup and trail deadline assertions at their promised bounds; do not add retries or hide setup errors. Product deadline policy is unchanged.
-- **Wait for the authority an assertion needs.** A persisted Cursor `turn_outcome` precedes Stop reporting and queue re-enablement; it does not establish refill admission. Wait for each real admission under the existing three-second fixture bound, retain its first successful claim, and emit only after the complete exact batch is admitted. Keep byte-capacity, FIFO, cancellation and no-replay assertions intact; never discard a successful probe or resubmit a prompt to establish readiness.
-- **Factories over inline data.** Build test data through small factory functions with sensible defaults — let each test override only what it cares about.
-- **Mock sparingly.** More than ~3 mocks in a single test usually means you're testing implementation. Prefer real filesystems, real data structures, and real function calls; mock only at true external boundaries (network, third-party services, expensive operations, error injection).
-- **No meta-tests.** Don't test fixtures or helpers. If they break, every real test using them will fail — that's your signal.
-- **Coverage, not completeness.** Aim for ~80%. You don't have to test every permutation. Pick the cases that catch real bugs.
-
-## Pre-Submit Checklist
-
-Before opening a test PR (or marking a task done):
-
-- [ ] **Parameterized** where 3+ cases share structure with different inputs.
-- [ ] **Uses shared fixtures / factories** instead of copy-pasted setup blocks.
-- [ ] **No unused imports.** Run the linter; clean up dead imports.
-- [ ] **No trivial constants.** Simple domain strings like `"open"` are inlined, not wrapped in a `STATUS_OPEN` constant. Constants are only worth it for complex formats or values used in 5+ places.
-- [ ] **Tests behavior.** Minimal mocking (< 3 mocks per test); asserts on observable outputs, not internal calls.
-- [ ] **No meta-tests** of fixtures, helpers, or test infrastructure.
-- [ ] **Docstrings are concise.** 1-2 lines max for fixture and test docstrings. Long-form explanations belong in a dedicated testing doc, not inside the code.
-- [ ] **Follows project patterns.** New test files match the structure of existing ones.
-
-## Red Flags
-
-If a test or test file exhibits any of these, stop and refactor before merging.
-
-### Test file > 500 lines without parameterization
-
-Likely contains copy-paste functions that differ only in input values.
-**Fix:** parameterize.
-
-### More than 3 mocks in a single test
-
-You're testing how the code works, not what it produces. The test will break on harmless refactors.
-**Fix:** drop the mocks and test at integration level with real I/O.
-
-### Copy-pasted setup boilerplate
-
-If the first 10-20 lines of multiple tests are identical, that's a fixture.
-
-**Bad:**
-```
-def test_something():
-    # 15 lines of identical setup
-    ...
-```
-
-**Fix:** extract a fixture that returns the prepared state.
-
-### Imports many constants, uses few
-
-Mass-importing constants you don't use pollutes the namespace and hides real dependencies.
-**Fix:** import only what each test uses.
-
-### Tests that verify internal implementation
-
-**Bad:**
-```
-@patch('builtins.open')
-def test_writes_with_utf8(mock_open):
-    create_record(...)
-    mock_open.assert_called_with(..., encoding='utf-8')
-```
-
-**Fix:** assert that the resulting file contains the expected content. The encoding is an implementation detail.
-
-### Meta-tests
-
-**Bad:** A test that asserts a fixture set up the directories it claimed to set up.
-**Fix:** delete it. If the fixture is broken, every real test will tell you.
-
-### Verbose inline test data
-
-Repeating a 15-line YAML/JSON/struct literal across many tests.
-**Fix:** introduce a factory function (`make_record(**overrides)`) with defaults.
-
-### Constants wrapping simple strings
-
-**Bad:** `STATUS_OPEN = "open"` then `assert record.status == STATUS_OPEN`.
-**Fix:** inline the string. Constants are for things that are complex, fragile, or reused in many places — not for stable single-word domain values.
-
-## Best Practices
-
-### Parameterize aggressively
-
-When three or more tests share structure with different inputs, collapse them with your framework's parameterization primitive. Use descriptive case IDs so a failure tells you which case failed without reading the inputs.
-
-### Use shared fixtures and data factories
-
-- **Fixtures** for setup state that multiple tests need (a configured project, a tmp directory with seeded files, a fake server).
-- **Factories** for constructing test objects with sensible defaults and per-test overrides.
-
-If you find yourself copying setup or data construction between tests, extract it.
-
-### Test behavior, not implementation
-
-**Good** — asserts on what's observable:
-```
-def test_create_record_writes_file():
-    record_id = create_record(title="Test")
-    path = output_dir / f"{record_id}.md"
-    assert path.exists()
-    assert "title: Test" in path.read_text()
-```
-
-**Bad** — asserts on internal calls:
-```
-@patch('builtins.open')
-def test_create_record_uses_utf8(mock_open):
-    create_record(title="Test")
-    mock_open.assert_called_with(..., encoding='utf-8')
-```
-
-**When to mock:**
-- External network services and third-party APIs
-- Expensive operations in fast unit tests
-- Error injection for testing error paths
-
-**When NOT to mock:**
-- The filesystem (use a temp directory)
-- Your own pure functions
-- Validation logic — test it directly
-
-### Keep it DRY
-
-- Repeated setup → fixture.
-- Repeated object construction → factory.
-- Repeated assertion logic → helper assertion function.
-- If you copy-paste in tests, extract it.
-
-### Test isolation: tmux session names
+## Test isolation: tmux session names
 
 Any test that exercises a verb which creates a tmux session (e.g. `resume`) must
 use a UUID-suffixed instance id — e.g. `` `id-resume-${crypto.randomUUID().slice(0, 8)}` `` — rather than a fixed string like `id-resume-1`.
 Fixed names collide across runs when the fake-tmux stub is bypassed (e.g. mode-644 binary) and a real tmux session leaks: a leaked session labelled for that fixed id then makes later runs refuse. If the leak is in the same store, a plain spawn's label scan refuses with `ErrTmuxSessionConflict` "left over from an earlier life", and `resume` of a finished row seeded by `apitest.SeedSpawn` (a launch token, no tmux server or pane) refuses with "this id's own abandoned launch": `ErrTmuxUnresponsive` while the leak is younger than `starting_session_seconds` (default 300 s), otherwise `ErrTmuxSessionConflict`. If the run uses a fresh test HOME (so another store's id), the session reads as `ErrTmuxSessionConflict` "another agent-director store": `resume` refuses at its pre-launch lookup, and a plain spawn hits it only after "duplicate session".
 
-### Parallel mode is pinned off (bun)
+## Parallel mode is pinned off (bun)
 
 This is about the bun suite. Go tests in `pkg/api` run in parallel; see
 "pkg/api tests: parallel or serial" below.
 
 The `/release` skill invokes `bun test --parallel=1` as the coverage gate because the suite deadlocks when bun runs files concurrently (tracked in b.w7e — parallel `make build` invocations from `test/setup.ts` preload race into `ETXTBSY` on the shared `bin/agent-director`). Until that root cause is fixed, **assume your tests run sequentially across files**. If you write a test that *requires* parallelism for correctness — don't. Order across files is deterministic but unspecified; couple state to per-test fixtures, not run order. The bunfig key `parallel = 1` is forward-looking and ignored by bun 1.3.13; when bun honors it, both invocations (release-time and ad-hoc `bun test`) will pick it up.
 
-### Bun tests that read `dist/`
+## Bun tests that read `dist/`
 
 `make test-sandbox` builds `pkg/ts-bun-client/dist/` before either suite
 (b.2b3), so no test may rely on another test file having built it. A bun test
@@ -161,27 +27,13 @@ with a message naming the missing files, not an ENOENT or a short tarball list.
 Use it rather than writing your own check. A test that builds the output it
 reads does not need it: `public-surface.test.ts` emits its own `.d.ts` files
 and `release-version-coherence.test.ts` builds in a staged copy. To run a test
-that calls `requireBuiltDist()` alone, install and build first, in the sandbox:
-
-```sh
-make sandbox CMD='cd pkg/ts-bun-client && bun install --frozen-lockfile && bun run build && bun test test/packaging.test.ts'
-```
-
-### Documentation belongs in docs
-
-Fixture docstrings stay 1-2 lines. Test docstrings stay 1-2 lines. Long-form explanations of test architecture, fixture selection, or mocking strategy go in a dedicated testing doc — not buried inside the code.
-
-## Quick Reference
-
-- **New test?** Read the file docstrings of nearby tests first to understand placement and conventions.
-- **New fixture?** Check existing fixtures first — don't duplicate.
-- **New helper?** Check existing helpers first — don't duplicate.
-- **File over 500 lines?** Parameterize or split by feature.
-- **Mocking more than 3 things?** Test at integration level instead.
+that calls `requireBuiltDist()` alone, run `bun install --frozen-lockfile` and
+`bun run build` in `pkg/ts-bun-client` first, in the same throwaway sandbox
+script (`guide:build-commands.md`).
 
 ## pkg/api/apitest Seed* factory contract
 
-Post-E1 (b.wvr), seed helpers for pkg/api tests live in `pkg/api/apitest/`
+Seed helpers for pkg/api tests live in `pkg/api/apitest/`
 under the standard build tag — no `//go:build helper` gate. New tests that
 need to populate a SQLite store with realistic spawn/permission/template
 state MUST use these factories rather than re-implementing seeding inline.
@@ -256,8 +108,8 @@ columns with raw SQL or keep a second copy of the expected wire detail.
 - Lifecycle and read-write coverage lives in
   `internal/store/stuck_lifecycle_test.go` (find-missing's repair, unreadable
   stuck metadata, reads that write nothing, an unconfirmed commit, the fallback
-  clock rule), `internal/store/connection_gate_release_test.go` and
-  `pkg/api/stuck_epoch_test.go` (a new interval never inherits an old episode);
+  clock rule) and `pkg/api/stuck_epoch_test.go` (a new interval never
+  inherits an old episode);
   pane sampling, settling and reason replacement in
   `pkg/api/stuck_pane_test.go` and `stuck_pane_settle_test.go`.
 
@@ -267,70 +119,7 @@ Reuse `internal/testsupport/contextfix` across reader, API, CLI and MCP tests.
 `Must(t, name)` or `Load(name)` supplies the agent, session, transcript bytes
 and independent expected JSON; `UnknownJSON` retains all five null fields.
 Do not embed session JSON or copy expected token counts into test bodies.
-
-| Sample | Evidence and expected result |
-| --- | --- |
-| `writer`, `reviewer` | Sanitized native Codex 0.159.2 OpenAI envelopes through the selected complete turn; numeric readings from the adjacent `.expected.json` files when startup origin and current live writer are qualified. |
-| `claude-parent`, `claude-child` | Fresh Claude 2.1.280 first-party Haiku transcript/status-line pairs; 10659/200000 and 691/200000, respectively. Expected values and original measurement times come from `live-provenance.json`. |
-| `claude-missing-capacity` | Claude Code 2.1.280 usage capture without applicable capacity; unknown. |
-| `cursor-2026.10.01-e373342`, `cursor-2026.10.12-d47ca18` | Public unknown selectors, the authorized managed result for this build; native interactive positives do not qualify ACP delivery. |
-
-Captures and provenance live under `contextfix/testdata/<agent>/<version>`.
-Codex provenance records the source report/artifact, original hash and exact
-record-selection boundary. Selection is a historical observation through a
-completed turn, not a claim about the source file's later state. Retained
-record envelopes preserve ordering and accounting while content is removed.
-Wall-clock age does not expire a reading: vary observation time without
-altering the captured measurement time. Claude `Sample` also carries its
-callback, observation time, response UUID and optional child ID. Its
-`live-parent-transcript.jsonl`, `live-child-transcript.jsonl`,
-`live-statuslines.jsonl` and `live-provenance.json` preserve same-session
-numeric/metadata evidence. Child progress 766 is distinct from occupancy 691;
-do not substitute it. The real capture has no compaction or iteration sample.
-
-The Cursor `managed-attempt.json` and `provenance.json` files record bounded
-ordinary managed turns on both versions. No configured native hook was
-observed before exit; that observation does not establish shutdown hook
-behavior. Compaction was not attempted because no control was exposed or
-advertised. Checkpoint numbers were observed after exit, without a qualified
-generation/model/provider/window pairing or accepted receipt time. These are
-negative managed qualification artifacts, not numeric or compaction-recovery
-samples. Separately, each version's `native-capture.json` and
-`native-provenance.json` retain successful interactive usage, real manual
-compaction, usage-free completion and post-compaction recovery
-(11668/200000 and 11669/200000). `native-mismatch-capture.json` retains real
-usage/checkpoint mismatch pairs for rejection; `native-first-repeat.json`,
-`native-source.json` and `native-cleanup.json` retain method/source/cleanup
-evidence. Usage adds top-level input plus output, without adding cached input
-again. Capacity is the same-session checkpoint's `max_tokens`, observed in
-the collector invocation, not a fixed 200000 fallback or preCompact window.
-Collector times are research observations, never accepted AD receipt times;
-checkpoint observations do not establish an atomic generation contract or
-an independent provider identity. Native captures cannot qualify managed ACP
-delivery. Both pinned ACP implementations lack ordinary usage-bearing
-`afterAgentResponse`/`stop` completion production, return `stopReason` only,
-and expose no manual `/summarize` control. Both shared ACP resource wrappers
-can invoke the native `preCompact` executor; automatic compaction delivery is
-still unqualified. Do not describe ACP as unable to invoke any compaction hook.
-Hook configuration cannot supply the missing ordinary usage producer. Managed
-Cursor ships explicit unknown in this build; numeric support requires upstream
-ACP to supply qualified usage evidence.
-
-The brief checkpoint alternative check reused these captures. On both versions,
-`token_details.used_tokens` remains 10772 while `summary_archives` advances from
-1 to 2; later usage becomes 11668/11669. `message_count_at_last_compaction`
-stays 3. Captured `ConversationTokenDetails` contains only fields 1–3
-(used/max/breakdown), without a usage timestamp, generation ID or compaction
-sequence. Root `turn_timings`/`turn_telemetry` are absent and conversation start
-is unchanged; a newer assistant timestamp can coexist with stale counts.
-External hook `generation_id` and collector `observed_at_unix_ms` establish
-research chronology, not checkpoint-local, restart-safe usage/compaction ordering
-or measurement time. Initial absence of summary markers is no freshness proof.
-Thus the latest checkpoint cannot prove no compaction since its last usage
-update. Preserve the mismatch cases and unknown public results; no checkpoint
-reader, invented receipt semantics or further capture campaign is required.
-`cursorfix.New`, `NewGatewayHistory` and `NewNativeHistory` remain synthetic;
-no context-event or checkpoint selection extension is implemented.
+Captures and their provenance live under `contextfix/testdata/<agent>/<version>`.
 
 `Variant(t, name)` derives explicitly synthetic reliability cases from the
 writer capture: for example `untested-version`, `wrong-session`,
@@ -340,15 +129,10 @@ stale-history or unsupported cases. Synthetic variants and
 placeholder transcripts never qualify a new version or configuration.
 Use `ClaudeVariant(t, name)` for synthetic Claude cases, including branches,
 partial/malformed tails, regressing measurements, compaction gaps/recovery,
-last ordinary iteration and invalid selected iteration. Callback admission
-tests separately cover model/window/UUID pairing, invalidation replay,
-new-response recovery and the 128-child bound. Use
+last ordinary iteration and invalid selected iteration. Use
 `ClaudeModelVariant(t, name, model, window)` for alternate resolved-model and
 capacity cases. It changes the real Haiku pair synthetically; it does not
-qualify another native model capture. Cover matching parent/child models,
-mismatched callback/transcript models and provider, endpoint, window and
-supported-capability overrides, including Fable, Opus, Sonnet, Haiku and
-custom-model options. The retained real capture remains the Haiku pair above.
+qualify another native model capture.
 
 Use `Padded(t, name, "line" | "file", offset)` for transcript size boundaries.
 It adds synthetic JSON whitespace to a captured record around the 4 MiB line
@@ -357,17 +141,6 @@ and `1` exercise either side. Record order and metadata remain intact, and
 the capture files remain unchanged. These derived samples test size handling;
 they do not qualify an agent version or add native evidence.
 
-For capacity races, interleave callbacks at the real store write after snapshot
-computation. Assert stale writes fail before a full re-read/recompute, and
-compare real `Status`, `Get` and `ListSubagents` results throughout. Cover stale
-child writes racing parent model/window invalidation, parent replay racing
-child invalidation, global clear conflicts, initial SQL NULL and launch changes.
-Preserve sticky same-response invalidation and genuinely new-response recovery;
-a retry must not cross the original launch. Settings/forwarding tests
-cover source resolution and original command stdin/stdout/stderr/exit,
-including oversized observation input. These tests do not convert synthetic
-compaction/iteration records into captured-version evidence.
-
 For positive Go/API/CLI/MCP surface tests, use `apitest.SeedContextSpawn`.
 For Codex it seeds an unbound pending row, uses `ContextWriter` to bind the
 live test process and calls `AdmitContextStartup` through the store's gated
@@ -375,9 +148,7 @@ SessionStart write. Keep that process alive throughout reads. For deliberate
 producer-attribution cases, reuse `ContextWriter`/`AdmitContextStartup`
 with `SeedSpawn`, `WithAgent`, `WithJsonlPath` and `WithLaunchIdentity`.
 Creation metadata, a transcript path or an ended seeded row alone never
-qualifies a positive reading. Cover resumed runtimes retaining tested
-creation metadata, dead/ended writers, mismatched bindings, duplicate/stale
-starts and resume/reuse invalidation without replacing the native captures.
+qualifies a positive reading.
 
 For Claude, `SeedContextSpawn` binds the live test process and calls
 `SeedClaudeCapacity` / `AdmitClaudeCapacity` with captured metadata; usage
@@ -406,41 +177,7 @@ child. Use `expectedContext("writer" | "reviewer" | "claude-parent" |
 "claude-child" | "unknown")` from `test/internal/contextFixture.ts` for shared expected JSON.
 Omitting the flag preserves existing helper behavior. The registered
 `context-fullness` shell plan exercises public results through
-`test/driver/context-fullness.cjs`. Execute tests only through the repository
-sandbox and the required scheduler workflow for heavy suites.
-
-The v13 provenance migration belongs in `internal/store/schema_v13_test.go`
-and the shared migration matrices: test physical-v12 preservation, including
-family history, NULL/no backfill, compatible marker reentry, incompatible shape/value refusal,
-commit rollback and corrected retry, fresh/migrated convergence and reopen.
-Both nullable TEXT fields, `codex_startup` and `claude_capacity`, must converge
-between fresh and migrated stores. Include Claude capacity shape/bounded JSON
-validation and retention of valid explicit markers. It stores provenance and
-capacity only, never usage; Cursor remains unknown without context persistence.
-Recovery coverage must follow the restore-only procedure in
-[Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-`TestAdviceFollow_CurrentLayoutRollback` in
-`test/install-sh/current_layout_rollback_test.go` compares that complete
-section with its install-skill and historical testplan copies. Keep all three
-identical and synchronize its literal policy checks. Behavioral coverage
-must retain the actual released prior binary, prove a binary-only swap
-refuses the migrated current schema, then restore a stopped-writer
-pre-upgrade DB/WAL/SHM set at default and configured paths. Verify stale
-companions are removed, prior rows/settings are restored and post-backup
-writes are lost. A copy made after migration cannot qualify as the backup;
-there is no v13 or v14 reverse recipe to test or imply.
-
-The v14 stuck observation and ownership migration belongs in
-`internal/store/schema_v14_test.go`: test physical-v13 preservation and
-reentry, no invented history (no pane baseline or override), incompatible
-partial-column refusal, commit
-rollback and corrected retry, that earlier or ambiguous permission requests
-keep NULL ownership while later admissions qualify, and fresh/migrated
-convergence. Build every store through the v14 helpers in
-`internal/store/migration_fixtures_test.go`. Its recovery text is the same
-"Going back to the previous release" section, so a wording change there needs
-the three-copy identity and literal policy checks above updated in the same
-change.
+`test/driver/context-fullness.cjs`.
 
 ## pkg/api tests: parallel or serial
 
@@ -705,14 +442,8 @@ to the original bug report.
 
 ## Writing Testplans
 
-Above this section is the in-repo Go unit-test guide. *Testplans* are a
-separate, complementary thing: per-Epic plain-English specs that the
-Docker harness (`make test-docker EPIC=<slug>`, built in Epic 2) ingests
-to drive integration tests. Every functional Epic (Epics 3-13) ships a
-testplan as part of its definition-of-done.
-
-Cross-reference: SRD §15 (testing strategy), §17 (audit standard), §18
-(CI environment). For the harness itself, see
+*Testplans* are the integration tests: plain-English specs that the Docker
+harness (`make test-docker EPIC=<slug>`) runs. For the harness itself, see
 `docs/architecture.md` "Test Harness".
 
 ### Structure
@@ -720,7 +451,7 @@ Cross-reference: SRD §15 (testing strategy), §17 (audit standard), §18
 Testplans live in `tickets/testplans/`. The files are shaped like bees
 tickets, but the folder is not a working bees hive: it is not registered,
 so `bees` commands cannot read or write it. Write and edit the files by
-hand. Each Epic produces a t1 collector with a clear `harness-smoke`-style
+hand. Each testplan is a t1 collector with a clear `harness-smoke`-style
 title slug; under it are t2 cases. The on-disk layout is:
 
 ```
@@ -846,15 +577,7 @@ inside a quoted string and a trailing comment. Prose outside the block may
 still say "read it with `sqlite3`": the driver-Claude's prompt tells it to
 run `sql.sh`.
 
-### Audit standard
-
-Per SRD §17, the orchestrator is the gate, not the harness exit code. The
-testplan's job is to produce *audit-grade evidence* — one JSON line per
-case on stdout, deterministic content, no flake — that the orchestrator
-can read and confirm. Write pass criteria so a reader of stdout knows
-exactly what was checked, not just that something exited 0.
-
-### Adding a testplan for a new Epic
+### Adding a testplan
 
 1. Create the t1 collector by hand at
    `tickets/testplans/b.75s/<t1-id>/<t1-id>.md`. Pick an unused id of the
@@ -866,8 +589,7 @@ exactly what was checked, not just that something exited 0.
    list its id under the t1's `children:`. Order matters: the `children:`
    list controls execution order.
 3. Add the slug as a line of `test/docker-epics.txt`, and commit
-   `tickets/testplans/...` along with the rest of the Epic's
-   implementation.
-4. Verify locally: `make test-docker EPIC=<slug>` exits 0 with one
-   `{"status":"pass"}` line per case.
-5. The orchestrator audits the output and signals "continue".
+   `tickets/testplans/...` with the change it tests.
+4. Run it as `guide:build-commands.md ## Integration tests` says:
+   `make test-docker EPIC=<slug>` exits 0 with one `{"status":"pass"}`
+   line per case.

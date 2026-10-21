@@ -244,7 +244,8 @@ are preserved. Successful migration consumes authorization; reopening v14 does
 not replay it.
 
 `schema_v14_test.go` covers physical-v13 preservation and reentry (pane and
-override columns included), commit rollback and corrected retry, incompatible
+override columns included), fresh/migrated schema convergence, commit
+rollback and corrected retry, incompatible
 partial-state refusal, no enrolment of earlier or unknown-start permission
 intervals, no invented pane baseline or override, historic fallback
 usability, and new admissions qualifying beside ambiguous history. It builds
