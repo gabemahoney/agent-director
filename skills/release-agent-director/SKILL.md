@@ -13,6 +13,10 @@ description: |-
   phrases: "release agent-director", "cut a release", "publish v<X.Y.Z>".
 ---
 
+agent-director's own releases use this skill in dry-run mode only and follow
+the Project's `guide:release-guide.md`; see docs/release-skill.md "How
+releases run here".
+
 ## When to invoke
 
 - "release agent-director"
@@ -43,16 +47,14 @@ three above; the target version is derived from the current source version.
 
 Phases are ordered most-reversible to least-reversible. The pipeline halts on
 the first failure. Each phase prefixes its terminal output with `[<phase>] `
-so a failing run is greppable. Later Epics fill in detailed sub-steps; the
-list below names each phase and its Epic owner.
+so a failing run is greppable.
 
 1. **`preflight`** — Read-only gates that prevent obviously-broken runs: gh
    auth, npm token, npm whoami, worktree clean, main synced, version novelty,
    source-of-truth invariant, supported platforms, no custom build tags.
-   Built in E4.
 
 2. **`branch-and-bump`** — Create release branch, bump
-   `pkg/ts-bun-client/package.json`, commit. Built in E5.
+   `pkg/ts-bun-client/package.json`, commit.
 
 3. **`coverage`** — Discover and run every test surface (Go full tree, bun
    test, docker-harness epic enumeration). Its five gates run through the
@@ -65,8 +67,7 @@ list below names each phase and its Epic owner.
    tree-write lock (`.tree-write.lock`) keeps writes inside the tree from
    racing docker build-context collection (holders: `gates/README.md`
    "Tree-write lock"). See `gates/README.md` "Coverage phase (parallel)"
-   for the isolation model and the executor-to-report field mapping. Built
-   in E5.
+   for the isolation model and the executor-to-report field mapping.
 
 4. **`compile`** — Cross-compile six binaries: `agent-director-<os>-<arch>`
    and the operator tool `agent-director-admin-<os>-<arch>` for linux/amd64,
@@ -74,23 +75,22 @@ list below names each phase and its Epic owner.
    must open with its human-approval statement); binary-version coherence
    for both. The sha256 manifest covers all six, and the publish preflight
    refuses an `agent-director` or `agent-director-admin` asset without its
-   pair. Built in E6.
+   pair.
 
 5. **`pack`** — `bun pm pack` of umbrella; install-verify the tarball into a
    temp HOME; tarball-coherence check (no inline version constants, etc.).
-   Built in E7.
 
 6. **`notes`** — Generate `dist/release-notes.md` from
-   `git log <prev-tag>..HEAD` grouped by Epic ID. Built in E8.
+   `git log <prev-tag>..HEAD` grouped by Idea or Bug ID.
 
 7. **`publish`** — `npm publish` + `git tag -a v<X.Y.Z> && git push origin
    v<X.Y.Z>` + `gh release create` + fast-forward main + delete remote
-   branch. Built in E9.
+   branch.
 
 8. **`finalize`** — Write `dist/release-report.json` with
    `gates/finalize/write-report.sh`, passing the phases and diagnostics
    arrays as file paths (see `gates/README.md` "Finalizing"). Print terminal
-   summary. Built incrementally; scaffolded in E4.
+   summary.
 
 ## Diagnostic shape
 

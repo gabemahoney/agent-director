@@ -16,6 +16,14 @@ version collisions, source-of-truth violations, and build-config drift before
 anything escapes to npm or GitHub. The pipeline halts on first failure and always
 writes a machine-readable run report, so failed runs are inspectable.
 
+**How releases run here.** agent-director's own releases follow the Project's
+`guide:release-guide.md`, which wins where this doc differs. It uses this skill
+in dry-run mode only, to prepare a candidate. Its gates run on the job
+scheduler and are judged by paired runs against a reference commit.
+`preflight.main-synced` fails there, because local `main` holds merged work
+not yet on origin, so preparation skips it. Publishing is one atomic push of
+`main` and the tag, not this skill's publish phase.
+
 ---
 
 ## Invocation
@@ -160,10 +168,9 @@ full positional argument contract.
 ## Subsequent phases
 
 The following phases run after preflight (in order). Each is more consequential
-than the last; the pipeline halts on any failure. These phases are being built
-in later Epics — this section will be extended as each one lands.
+than the last; the pipeline halts on any failure.
 
-**`branch-and-bump`** *(E5)* — Creates a `release/vX.Y.Z` branch off `main`,
+**`branch-and-bump`** — Creates a `release/vX.Y.Z` branch off `main`,
 bumps the version in `pkg/ts-bun-client/package.json`, and commits the bump.
 This is the first mutation in the pipeline.
 
@@ -174,7 +181,7 @@ This is the first mutation in the pipeline.
 - Gate names: `branch.worktree-create`, `branch.bump-commit`.
 - Subprocess: `skills/release-agent-director/gates/branch/create-release-worktree.sh <target-version>`.
 
-**`coverage`** *(E5)* — Discovers and runs every test surface in the repo.
+**`coverage`** — Discovers and runs every test surface in the repo.
 Sibling sub-checks run in parallel (SR-1.4); a failing sub-check does NOT
 cancel siblings (SR-6.5). All outcomes land in the run report's
 `coverage.sub_checks` array; the phase outcome is `failed` if any sub-check
@@ -233,7 +240,7 @@ run that EPIC's testplan in the harness container.
 - This is the b.b3h failure-class anchor: a binary stamped with the wrong version (or a literal default that overrode the ldflags) is caught here.
 - Subprocess: `skills/release-agent-director/gates/coherence/binary-version.sh`.
 
-**`pack`** *(E7)* — Runs `bun pm pack` on the umbrella npm package,
+**`pack`** — Runs `bun pm pack` on the umbrella npm package,
 install-verifies the tarball into a temp `HOME`, and checks the tarball for
 coherence (no inline version constants, expected files present, etc.).
 
@@ -313,19 +320,19 @@ Three distinct coherence sites cover three distinct failure modes:
 | `coherence.bump-commit-integrity` (SR-11.2) | post-pack | "did the bump commit get amended/reverted between pack and now?" — in-flight worktree check. |
 | `coherence.tarball-version` (SR-11.2) | post-pack | "does the packed tarball carry the bumped version?" — tarball content check. |
 
-**`notes`** *(E8)* — Generates `dist/release-notes.md` from
-`git log <prev-tag>..HEAD`, grouped by Epic ID, for inclusion in the GitHub
-Release body.
+**`notes`** — Generates `dist/release-notes.md` from
+`git log <prev-tag>..HEAD`, grouped by Idea or Bug ID, for inclusion in the
+GitHub Release body.
 
 ### Release notes phase
 
-- `notes.generate` — walks `git log <prev-tag>..HEAD` on the release branch, groups commits by Epic shortcode (regex `EPIC_RE = /^\w+\((b\.\w+)\)/` in `pkg/ts-bun-client/scripts/generate-release-notes.ts`, matched against subject), renders markdown. Heredoc-safe: commit message bytes pass through verbatim (no shell expansion, no string interpolation). That regex is why the commit-subject convention (`type(b.xyz): …`) is load-bearing — see docs/engineering-guide.md "11. Commit subjects". If you change `EPIC_RE` in the script, update that section to match.
+- `notes.generate` — walks `git log <prev-tag>..HEAD` on the release branch, groups commits by the Idea's or Bug's ID in the subject (see docs/engineering-guide.md "11. Commit subjects"), renders markdown. Heredoc-safe: commit message bytes pass through verbatim (no shell expansion, no string interpolation).
 - `notes.write-preview` (dry-run only) — pipes `notes.generate` output into `dist/release-notes-preview.md` for operator inspection. The file is never committed, staged, or pushed.
-- `--release` mode — notes are computed and passed directly to `gh release create --notes-file -` in the publish phase (E9). They do NOT touch the repo at any point.
+- `--release` mode — notes are computed and passed directly to `gh release create --notes-file -` in the publish phase. They do NOT touch the repo at any point.
 
 Subprocesses: `pkg/ts-bun-client/scripts/generate-release-notes.ts`, `skills/release-agent-director/gates/notes/write-preview.sh`.
 
-**`publish`** *(E9)* — The irreversible phase: `npm publish`, push annotated git
+**`publish`** — The irreversible phase: `npm publish`, push annotated git
 tag, `gh release create`, fast-forward `main` to the release branch tip, delete
 the remote release branch. Skipped entirely in dry-run mode.
 
@@ -440,6 +447,6 @@ cross-compiled binaries.
 
 Subprocess: `skills/release-agent-director/gates/finalize/cleanup.sh`.
 
-**`finalize`** *(E4+)* — Writes `dist/release-report.json` via
+**`finalize`** — Writes `dist/release-report.json` via
 `write-report.sh` and prints a condensed terminal summary. Runs unconditionally
 at end-of-run.
