@@ -3308,7 +3308,22 @@ still the one it read, so it knows the row has not changed since. As built:
     `DefaultLockWait` (negative) retains the store's configured waits unless
     an enclosing context cuts them shorter.
     Setup context cancellation before BEGIN and precommit exhaustion wrap
-    `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
+    `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. A caller
+    context that ends an operation before its first statement (a
+    cancellation, or a deadline under `DefaultLockWait`), in the slot wait,
+    the connection wait or just after taking the connection, gives an error
+    wrapping both `ErrStoreBusy` and the context's error. **Must use:**
+    `operationBusy` (`connection_cleanup.go`) for that error and for
+    `runConnectionOperation`'s abandon branch, so such an operation's caller
+    and worker report one error whichever returns first.
+    `withConnOperation` applies it where `boundedConnContext` leaves the
+    caller's context error unnamed, and just after taking the connection.
+    Two cases can still differ: a bounded call (`maxWait >= 0`) whose
+    deadline ends the connection wait (the worker's "not free within N ms"
+    refusal wraps `ErrStoreBusy` but not `context.DeadlineExceeded`), and a
+    caller that abandons once its first statement has started, whose worker
+    reports its own step's error (setup PRAGMA, BEGIN, callback, precommit),
+    wrapping `ErrStoreBusy` only when the context ended that step. Setup's
     ordinary I/O errors returned within the original bound retain their
     classification despite earlier cancellation. A COMMIT error is an
     unconfirmed internal outcome, not busy or proof of rollback; the durable
