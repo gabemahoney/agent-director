@@ -1,6 +1,6 @@
 # User Docs Best Practices
 
-User docs are for the people who install and run agent-director, and for the programs and agents that call it. The README gets a user running in five minutes (rules: `readme-guide.md`). Every other user-facing fact lives in exactly one of the files below.
+User docs are for the people who install and run agent-director, and for the programs and agents that call it. The README gets a user running in five minutes (rules: the Project's `guide:doc-writing-guide.md`). Every other user-facing fact lives in exactly one of the files below.
 
 ## Rules for every user doc
 
