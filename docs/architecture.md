@@ -2827,6 +2827,16 @@ guard reads. The writes and the derivation live in
   `Settle` are unchanged. This state projection is one SELECT and never waits
   for a state to settle. Public Client reads first apply the
   [Cursor gateway checks](#cursor-gateway-and-current-launch-binding).
+- **Where callers see the raw change time (b.k6i).** `spawnColumns` selects
+  `state_changed_ms`, so every read that returns a `Spawn` fills
+  `Spawn.StateChangedMillis` from the same SELECT. `get` and `list` report it
+  on every row as `state_changed_at`, converted by `millisToUTC` (0 gives the
+  Unix epoch); `status` does not. It is the raw stamp: neither the settle
+  derivation nor the stuck overlay changes it, and a Cursor read that projects
+  `missing` shows the stored stamp until its terminal write commits. No write
+  takes it from a `Spawn`. **Must use:** a result that reports the raw change
+  time takes `Spawn.StateChangedMillis` through `millisToUTC`; it never reads
+  the column separately or derives the time from `last_seen_at`.
 - **Must use:** every statement that writes `spawns.state` writes both
   settle columns in that same statement, through `hookWriteStateSet` (a
   hook's write or authenticated Cursor request admission) or
@@ -2864,7 +2874,7 @@ names](#store-upgrade-to-agent-generic-names)).
   write takes an agent, so no other write can change a row's.
 - **Raw-life rules for the two columns.** `Spawn.Agent` and
   `Spawn.EndReportedAtMillis` (0 = NULL) come back on every read that returns
-  a `Spawn` (`spawnColumns`, last). `RawLife` holds both as stored, so reuse
+  a `Spawn` (`spawnColumns`). `RawLife` holds both as stored, so reuse
   saves them (`ReadForReuse`) and a failed reuse puts them back
   (`RestoreAfterFailedReuse`, through `rawLifeColumns`). `ResetForReuse`
   writes the new call's agent and sets `end_reported_at` to NULL, so a reused
@@ -2872,8 +2882,8 @@ names](#store-upgrade-to-agent-generic-names)).
   `end_reported_at` to NULL, and `RestoreAfterFailedResume` writes the prior
   value back (`ResumePrior.EndReportedAtMillis`). Resume keeps `agent`: it
   neither writes nor restores it.
-- **The tracking flag's rules.** `Spawn.SubagentTracking` (bool, `spawnColumns`,
-  last) comes back on every read that returns a `Spawn`: true only for the
+- **The tracking flag's rules.** `Spawn.SubagentTracking` (bool, `spawnColumns`)
+  comes back on every read that returns a `Spawn`: true only for the
   stored integer 1, false for 0 and any other stored value, so no stored value
   fails a read (`decodeSubagentTracking` in `internal/store/rowsnapshot.go`). It
   is on no `SpawnRow` or `ListRow`. The three launch writes write one rule: 1 for a `claude`
@@ -2904,15 +2914,16 @@ names](#store-upgrade-to-agent-generic-names)).
 scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
-for NULL), `Snapshot` and `Identity`, the v6 `LaunchOwner` and the v7
-`IdleSince` (`""` for NULL), and the v9 `Agent`, `EndReportedAtMillis` (0
-for NULL) and `SubagentTracking` (see "v9 columns" above). (It also carries `ReportedState`, b.3ie,
-which is no column: see "v8 columns" above.) Two writes
-take a `Spawn`: `InsertPending` and `ResetForReuse` (its `fresh` row), each
-taking `LaunchStartedAtMillis`, `NoPreTrust`, `Identity.Token`,
-`Identity.Socket`, `LaunchOwner` and `Agent` from it (both also write the
-tracking flag by the `Spawn`'s agent, 1 for `claude` and 0 for `codex` or `cursor`, and nothing else); no write takes the other
-v5 fields from one.
+for NULL), `Snapshot` and `Identity`, the v6 `LaunchOwner`, the v7
+`IdleSince` (`""` for NULL), the v8 `StateChangedMillis`, and
+`ReportedState`, which is no column (see "v8 columns" above), and the v9
+`Agent`, `EndReportedAtMillis` (0 for NULL) and `SubagentTracking` (see "v9
+columns" above). Two writes take a `Spawn`: `InsertPending` and
+`ResetForReuse` (its `fresh` row), each taking `LaunchStartedAtMillis`,
+`NoPreTrust`, `Identity.Token`, `Identity.Socket`, `LaunchOwner` and `Agent`
+from it (both also write the tracking flag by the `Spawn`'s agent, 1 for
+`claude` and 0 for `codex` or `cursor`, and nothing else); no write takes the
+other v5 fields from one.
 Reuse reads a finished row through its own narrow read, `ReadForReuse`
 (`store.ReuseRow`, with the raw `store.RawLife`; see "Versioned writes"). A caller passes `Snapshot` to `MoveToPending`, and builds the `store.ResumePrior` that
 `RestoreAfterFailedResume` takes from `EndedAtText`, `Identity` and the other
@@ -6307,10 +6318,11 @@ under [`internal/store`](#internalstore).
   (`types.ts`, re-exported by `index.ts`) mirror the Go types: times are
   strings, unknown values `null`. The verb is in `VERBS` right after `list`.
 
-**One result everywhere.** A time is encoded by `millisToUTC` (`pkg/api/get.go`),
-the conversion `launch_started_at` uses, so the CLI, MCP, Go and TypeScript
-results are the same JSON: RFC 3339 in UTC with the millisecond fraction,
-trailing zeros dropped, no fraction on a whole second, ending `Z`.
+**One result everywhere.** A time is encoded by `millisToUTC`
+(`pkg/api/get.go`), the conversion `launch_started_at` and `state_changed_at`
+use, so the CLI, MCP, Go and TypeScript results are the same JSON: RFC 3339
+in UTC with the millisecond fraction, trailing zeros dropped, no fraction on a
+whole second, ending `Z`.
 `subagentRecordOf` projects a stored `SubagentRow` onto a `SubagentRecord`.
 
 **Old names.** `instance_id` is the only param, and its old name is refused
@@ -6401,7 +6413,8 @@ to the `state` that `status`, `get` and `list` report on every surface
 - **Off preserves existing fields.** With T = 0 or unset, `stateExpr` gives
   the bare `state` column, which the stuck overlay can still replace with
   `stuck` in the displayed result. Existing result fields keep their values; the
-  additive `family_state` reports the raw aggregate. The settle-off goldens pin this contract
+  additive `family_state` reports the raw aggregate and `state_changed_at` the
+  raw change time. The settle-off goldens pin this contract
   (`cmd/agent-director/testdata/settle_off/`, with the MCP and TypeScript
   tests over the same store).
 
@@ -21396,6 +21409,8 @@ unchanged. When two options set the same column, the later one wins.
   a `time.Time`, written as UTC `2006-01-02 15:04:05`, or a `string`, stored
   byte for byte (for unparseable text). `WithNoEndedAt()` stores NULL in
   `ended_at`: a finished row whose end time is unknown (SR-4.2).
+  `WithLastSeenAt(at)` takes a `time.Time`, written the same way, to seed a
+  past `last_seen_at` a test can watch a hook move (b.k6i).
 - Launch start:
   - `WithLaunchStartedAt(ms int64)`: epoch milliseconds.
   - `WithRawLaunchStartedAt(raw any)`: stored as bound. INTEGER affinity

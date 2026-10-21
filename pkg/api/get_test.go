@@ -42,7 +42,7 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 // every other field zero (b.4nt).
 const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","family_state":"","cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
-	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
+	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z","state_changed_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`
 
 // jsonOf returns v's JSON encoding.

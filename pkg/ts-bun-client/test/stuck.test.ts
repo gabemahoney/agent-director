@@ -19,6 +19,10 @@ test("permission stuck details agree across status/get/list and survive a fresh 
         if (verb === "get") {
           expect(row.permission_requests).toBeArray();
           expect(row.unproven_requests).toBeArray();
+          // b.k6i: the seed's zero stamp, shown as the Unix epoch.
+          expect(row.state_changed_at).toBe("1970-01-01T00:00:00Z");
+        } else {
+          expect(row).not.toHaveProperty("state_changed_at");
         }
       }
     }
@@ -26,7 +30,7 @@ test("permission stuck details agree across status/get/list and survive a fresh 
     const { spawns } = await client.list({ state: ["stuck"], limit: 3 });
     expect(spawns).toHaveLength(3);
     for (const row of spawns) {
-      expect(row).toMatchObject({ state: "stuck", stuck_reason: "permission_unanswered" });
+      expect(row).toMatchObject({ state: "stuck", stuck_reason: "permission_unanswered", state_changed_at: "1970-01-01T00:00:00Z" });
       for (const key of ["since", "request_token", "tool_name", "unchanged_minutes"]) expect(row).not.toHaveProperty(key);
     }
     const ordinary = await client.status({ instance_id: "ordinary" });

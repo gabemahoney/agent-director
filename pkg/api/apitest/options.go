@@ -138,13 +138,20 @@ func WithEndedAt[T time.Time | string](at T) SpawnOption {
 	return func(o *spawnOpts) { o.set("ended_at", v) }
 }
 
+// WithLastSeenAt seeds last_seen_at in the store's timestamp layout (UTC,
+// whole seconds), in the past so a test sees a hook move it.
+func WithLastSeenAt(at time.Time) SpawnOption {
+	v := storedTimestamp(at)
+	return func(o *spawnOpts) { o.set("last_seen_at", v) }
+}
+
 // WithNoEndedAt stores NULL in ended_at: a finished row whose end time is
 // unknown (SR-4.2).
 func WithNoEndedAt() SpawnOption {
 	return func(o *spawnOpts) { o.set("ended_at", nil) }
 }
 
-// storedTimestamp is the text WithStartedAt and WithEndedAt store.
+// storedTimestamp is the text WithStartedAt, WithEndedAt and WithLastSeenAt store.
 func storedTimestamp[T time.Time | string](at T) string {
 	switch v := any(at).(type) {
 	case time.Time:

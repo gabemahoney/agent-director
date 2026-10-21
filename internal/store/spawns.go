@@ -226,6 +226,12 @@ type Spawn struct {
 	// ListRow or any verb output.
 	SubagentTracking bool
 
+	// StateChangedMillis is state_changed_ms (b.3ie): when the raw state last
+	// changed, in milliseconds since the epoch; 0 for a row whose raw state has
+	// not changed since the v8 migration. Every read that returns a Spawn fills
+	// it (b.k6i). No write takes it from a Spawn: the writers stamp it in SQL.
+	StateChangedMillis int64
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
 	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
@@ -452,7 +458,7 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 // zero value; any other stored value scans normally). The v6 launch-owner
 // columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
 // the v7 idle_since, then the v9 agent, end_reported_at and subagent_tracking,
-// last.
+// and the later columns after them, state_changed_ms last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -464,7 +470,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, '')`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, ''), state_changed_ms`
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -523,7 +529,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.StuckVersion, &sp.StuckObservation)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.StuckVersion, &sp.StuckObservation, &sp.StateChangedMillis)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}

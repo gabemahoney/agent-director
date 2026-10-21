@@ -162,6 +162,12 @@ never `null`, so test for presence (`result.stuck_reason !== undefined`). The
 [caller contract](../../docs/caller-contract.md#stuck-rows) defines the fields,
 omissions and detection.
 
+`GetResult` and each `ListRow` carry `state_changed_at: string`, when the raw
+state last changed (RFC3339 UTC, millisecond precision); `StatusResult` does
+not. The [caller contract](../../docs/caller-contract.md#state-change-time)
+defines it and how it differs from `last_seen_at`, the settled `state` and
+`since`.
+
 `status`, `get` and `list` use `[state] settle_ms` in the CLI's
 `~/.config/agent-director/config.toml` for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Verbs that act on a

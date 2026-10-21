@@ -88,6 +88,12 @@ type ListRow struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastSeenAt is the most recent hook UPSERT time.
 	LastSeenAt time.Time `json:"last_seen_at"`
+	// StateChangedAt is, as SpawnRow.StateChangedAt, when the raw state last
+	// changed, RFC3339 UTC with millisecond precision (b.k6i); the Unix epoch
+	// when it has not changed since the stamp was added. Present on every row.
+	// A Cursor row the list finds lost shows missing at once; this moves when
+	// that mark is stored, which can be after the read that first shows missing.
+	StateChangedAt time.Time `json:"state_changed_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON while live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
@@ -258,6 +264,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			Labels:                  r.Labels,
 			StartedAt:               r.StartedAt,
 			LastSeenAt:              r.LastSeenAt,
+			StateChangedAt:          millisToUTC(r.StateChangedMillis),
 			EndedAt:                 r.EndedAt,
 			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
 			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),

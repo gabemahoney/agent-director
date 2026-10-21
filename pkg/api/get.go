@@ -108,6 +108,14 @@ type SpawnRow struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastSeenAt is the time of the most recent hook UPSERT for this Spawn.
 	LastSeenAt time.Time `json:"last_seen_at"`
+	// StateChangedAt is when the raw state last changed, RFC3339 UTC with
+	// millisecond precision (b.k6i). Soft refreshes and same-value writes
+	// leave it; State may still show the earlier settled value. The Unix
+	// epoch for a row whose raw state has not changed since the stamp was
+	// added. Present on every row. A Cursor row the read finds lost shows
+	// missing at once; this moves when that mark is stored, which can be after
+	// the read that first shows missing.
+	StateChangedAt time.Time `json:"state_changed_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON (omitempty)
 	// while the Spawn is live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
@@ -265,9 +273,9 @@ func launchStartedAt(state string, millis int64) *time.Time {
 
 // millisToUTC maps integer milliseconds since the epoch, as the store holds a
 // time, to the instant in UTC. It is the one conversion behind
-// launch_started_at and every time field of a subagent record, so they encode
-// alike: RFC3339Nano with the millisecond fraction, trailing zeros dropped, no
-// fraction on a whole second, ending Z.
+// launch_started_at, state_changed_at and every time field of a subagent
+// record, so they encode alike: RFC3339Nano with the millisecond fraction,
+// trailing zeros dropped, no fraction on a whole second, ending Z.
 func millisToUTC(millis int64) time.Time {
 	return time.UnixMilli(millis).UTC()
 }
@@ -419,6 +427,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		Labels:                  row.Labels,
 		StartedAt:               row.StartedAt,
 		LastSeenAt:              row.LastSeenAt,
+		StateChangedAt:          millisToUTC(row.StateChangedMillis),
 		EndedAt:                 row.EndedAt,
 		LaunchStartedAt:         launchStartedAt(row.State, row.LaunchStartedAtMillis),
 		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),

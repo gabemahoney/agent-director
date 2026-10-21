@@ -115,6 +115,7 @@ func TestSettleColumnsEveryWrite(t *testing.T) {
 						t.Errorf("settle columns %q, %d -> %q, %d; want both kept by a write that keeps the raw state %s",
 							kept, stamp, settled, stampAfter, raw)
 					}
+					reportedAt(t, f, id, settleT, to) // get and list carry the kept stamp (b.k6i)
 					return
 				}
 				assertStamped(t, stampAfter, from, to)

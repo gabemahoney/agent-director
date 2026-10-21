@@ -17,7 +17,10 @@ import (
 // list-state-pending-ended-missing), regenerated for the order of their rows
 // only: a state-filtered list now also reads the rows that may display as
 // stuck (ListFilters.StuckCandidates), a different query whose row order is
-// unspecified. The rows and their bytes are unchanged.
+// unspecified. The rows and their bytes are unchanged. And b.k6i's
+// state_changed_at, added by hand to every get and list row after
+// last_seen_at as the fixture's ReadSurfaceStampMs, 2099-01-01T00:00:00.123Z;
+// no other byte changed.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 
 // TestSettleOffCLI: with [state] settle_ms unset or 0, status, get and list

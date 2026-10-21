@@ -98,6 +98,7 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 }
 
 // SeedPermissionSurface uses a precommitted episode so independent processes share an exact since.
+// Its rows keep SeedSpawn's zero state_changed_ms (b.k6i).
 func SeedPermissionSurface(dbPath string) error {
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	// The row's permission epoch and the observation's agree: an observation
@@ -147,6 +148,13 @@ func CheckPermissionWire(t testing.TB, raw []byte, agent, verb string) {
 	}
 	if _, ok := row["unchanged_minutes"]; ok {
 		t.Error("permission episode emitted unchanged_minutes")
+	}
+	// b.k6i: get and list carry the raw stamp, the seed's zero stamp, shown
+	// as the Unix epoch; status carries none.
+	if at, ok := row["state_changed_at"]; verb == "status" && ok {
+		t.Errorf("%s/status emitted state_changed_at %v", agent, at)
+	} else if verb != "status" && at != "1970-01-01T00:00:00Z" {
+		t.Errorf("%s/%s state_changed_at=%v; want 1970-01-01T00:00:00Z", agent, verb, at)
 	}
 	if verb != "status" {
 		if _, ok := row["permission_requests"].([]any); !ok {

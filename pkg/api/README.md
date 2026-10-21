@@ -232,6 +232,12 @@ defines the fields, omissions and detection.
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+`Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
+`state_changed_at`), when the raw state last changed, with millisecond
+precision; `StatusResult` does not. The
+[caller contract](../../docs/caller-contract.md#state-change-time) defines it
+and how it differs from `LastSeenAt`, the settled `State` and `Since`.
+
 `Client.Status`, `Client.Get` and `Client.List` use the config loaded when
 the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Other result fields
@@ -241,7 +247,8 @@ and verbs that act on a row follow its live state. The package-level
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is
 busy or reaches its deadline. This does not confirm durable closure;
-`ended_at` remains the stored timestamp read and may be absent. The
+`ended_at` and `state_changed_at` remain the stored values read, and
+`ended_at` may be absent. The
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
 defines caller-budget errors, request proof and recovery. Package-level
 `api.Status`, `api.Get` and `api.List` do not check gateway liveness.

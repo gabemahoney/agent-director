@@ -275,6 +275,15 @@ export interface ListRow {
     started_at: string;
     /** Most recent hook UPSERT time (RFC3339). */
     last_seen_at: string;
+    /**
+     * When the raw state last changed (RFC3339 UTC, millisecond precision), on every row.
+     * Soft refreshes and same-state writes leave it; `state` may still show the earlier
+     * settled value. `1970-01-01T00:00:00Z` when the raw state has not changed since
+     * agent-director began recording it. Not a stuck row's `since`. A Cursor row that get
+     * or list finds lost reads `missing` at once; this moves when that mark is stored, which
+     * can be after the read that first shows `missing`.
+     */
+    state_changed_at: string;
     /** Set when state moves to ended (omitted while live). */
     ended_at?: string | null;
     /**
@@ -565,6 +574,15 @@ export interface GetResult {
     started_at: string;
     /** Last hook UPSERT time (RFC3339). */
     last_seen_at: string;
+    /**
+     * When the raw state last changed (RFC3339 UTC, millisecond precision), on every row.
+     * Soft refreshes and same-state writes leave it; `state` may still show the earlier
+     * settled value. `1970-01-01T00:00:00Z` when the raw state has not changed since
+     * agent-director began recording it. Not a stuck row's `since`. A Cursor row that get
+     * or list finds lost reads `missing` at once; this moves when that mark is stored, which
+     * can be after the read that first shows `missing`.
+     */
+    state_changed_at: string;
     /** Set when state moves to ended; omitted while live. */
     ended_at?: string | null;
     /**

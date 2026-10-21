@@ -191,6 +191,36 @@ remain errors; never treat a failed read as `waiting` or invent a third
 family value. Reading a family value adds no wait for settling or writer
 lock acquisition.
 
+## State change time
+
+`get` and each `list` row carry `state_changed_at`, on the Go, CLI, MCP and
+TypeScript surfaces: when the row's raw state last changed, as an RFC3339 UTC
+string with millisecond precision (`2026-10-20T14:03:07.123Z`). The fraction
+drops trailing zeros, so it has 0 to 3 digits and none on a whole second:
+parse the value as a time before comparing, and never compare the strings.
+Every row of every agent has it, `pending` rows included; it is never `null`.
+`status` does not carry it.
+
+- **Changed since T.** To learn whether a row's state changed since a time of
+  your own, compare `state_changed_at` with it. A hook or command that changes
+  the raw state moves it; a write of the same state and a hook that only
+  refreshes `last_seen_at` leave it. Never use `last_seen_at` for this: it has
+  whole-second precision and moves on every applied hook.
+- **Raw, not settled.** With a [settle time](configuration.md#settle-time-state)
+  set, `state` may still show the earlier settled value, and a change that
+  does not hold for the settle time can move `state_changed_at` without ever
+  showing in `state`.
+- **Not `since`.** A [stuck](#stuck-rows) row's `since` dates the display, not
+  a state change: the stuck display never moves `state_changed_at`, but the
+  raw change that ends it (the agent leaving `check_permission`, or
+  `find-missing`'s repair) does.
+- **Epoch.** `1970-01-01T00:00:00Z` means the raw state has not changed since
+  agent-director began recording this time. It is not the time of a change,
+  and reads as "no change since" any time you compare it with.
+- **Cursor.** A Cursor row a read finds lost can show `missing` before
+  `state_changed_at` moves; see
+  [Cursor operation boundaries](#cursor-operation-boundaries).
+
 ## Stuck rows
 
 A row reads `state` `stuck` with `stuck_reason` `permission_unanswered` while
@@ -694,10 +724,11 @@ including failed request closure, read errors and caller cancellation or deadlin
 exhaustion return an error with empty results. There is no automatic retry.
 A successful read does not confirm whether terminal closure committed.
 
-Only state is projected: `ended_at` and other timestamps remain the stored
-facts read, so the first missing result may omit `ended_at` even if closure
-subsequently commits. Terminal permission lists are empty; they prove no request
-gone, decision, receipt or delivery. Terminal closure leaves Cursor request proof
+Only state is projected: `ended_at`, `state_changed_at` and other timestamps
+remain the stored facts read, so the first missing result may omit `ended_at`
+and show the earlier `state_changed_at` even if closure subsequently commits.
+Terminal permission lists are empty; they prove no request gone, decision,
+receipt or delivery. Terminal closure leaves Cursor request proof
 unchanged, including after `delivered`; see
 [Cursor permission lifetimes](permissions.md#cursor-spawns).
 Finished rows are not checked again. These reads do not sweep outside their

@@ -1,8 +1,8 @@
 package api_test
 
-// advice_follow_misc_test.go (b.fji F2, F3, G1): list's label refusal,
-// decide's missing request token and api.New's uninitialised store, each
-// followed literally.
+// advice_follow_misc_test.go (b.fji F2, F3, G1; b.k6i F11): list's label
+// refusal, decide's missing request token, get's and list's state_changed_at
+// and api.New's uninitialised store, each followed literally.
 
 import (
 	"errors"
@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
+	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -58,6 +60,52 @@ func TestAdviceFollow_F3_DecideRequestTokenRequired(t *testing.T) {
 	if pr, err := e.st.GetPermissionRequest(r.ID, params.RequestToken); err != nil || pr.Decision != "allow" {
 		t.Errorf("request decision = %q (%v); want allow", pr.Decision, err)
 	}
+}
+
+// TestAdviceFollow_F11_StateChangedAtSinceYourTime: F11, get's and list's
+// state_changed_at (b.k6i), "compare it, not last_seen_at, with your own time
+// to learn whether the state changed since". With T taken after the row's
+// last change, a soft refresh moves last_seen_at but leaves state_changed_at
+// before T; a hook that changes the state moves it to T or later.
+func TestAdviceFollow_F11_StateChangedAtSinceYourTime(t *testing.T) {
+	t.Parallel()
+	const advice = "compare it, not last_seen_at, with your own time to learn whether the state changed since"
+	adviceAssertManifest(t, "get", "state_changed_at", advice)
+	adviceAssertManifest(t, "list", "spawns", advice)
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	old := time.Now().Add(-time.Hour).Truncate(time.Second)
+	id, err := apitest.SeedSpawn(dbPath, "", store.StateWaiting, "", "", "", true,
+		apitest.WithSettle(store.StateWaiting, old.UnixMilli()), apitest.WithLastSeenAt(old))
+	if err != nil {
+		t.Fatalf("SeedSpawn: %v", err)
+	}
+	c := settleClientFor(t, dbPath, 0, tmuxfix.NewRecorder(), time.Now)
+	since := time.Now().Truncate(time.Millisecond) // the stamp's precision
+	hook := func(event, want string) (api.SpawnRow, api.ListRow) {
+		t.Helper()
+		if a := apitest.ApplyAgentHook(t, dbPath, id, event, ""); !a.Applied {
+			t.Fatalf("%s not applied: %s", event, a.Reason)
+		}
+		got, row, listed := clientReported(t, c, id)
+		if got.State != want || !row.LastSeenAt.After(old) || !listed.LastSeenAt.After(old) {
+			t.Fatalf("after %s: state %q, last_seen_at get %v, list %v; want %s, moved past %v",
+				event, got.State, row.LastSeenAt, listed.LastSeenAt, want, old)
+		}
+		return row, listed
+	}
+
+	row, listed := hook("Notification", store.StateWaiting)
+	assertStateChangedAt(t, row, listed, old.UnixMilli())
+
+	row, listed = hook("UserPromptSubmit", store.StateWorking)
+	_, stampMs, err := apitest.ReadSettle(dbPath, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.UnixMilli(stampMs).Before(since) {
+		t.Errorf("state_changed_ms after UserPromptSubmit = %d; want at or after %v", stampMs, since)
+	}
+	assertStateChangedAt(t, row, listed, stampMs)
 }
 
 // TestAdviceFollow_G1_StoreNotInitialized: G1 Go doc "Initialize the store

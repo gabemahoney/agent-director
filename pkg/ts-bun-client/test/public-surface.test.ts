@@ -341,6 +341,18 @@ test("public-surface: ContextReading requires every nullable field and is export
  expect(fs.readFileSync(path.join(fixtureDir,"index.d.ts.golden"),"utf8")).toMatch(/\bContextReading\b/);
 });
 
+test.each(["GetResult", "ListRow"])(
+  "public-surface: %s declares required state_changed_at: string (b.k6i)", (iface) => {
+    expect(interfaceBody(typesGolden(), iface)).toMatch(/\bstate_changed_at\s*:\s*string\s*;/);
+  }
+);
+
+test.each(["StatusResult"])(
+  "public-surface: %s does not declare state_changed_at — get and list only (b.k6i)", (iface) => {
+    expect(interfaceBody(typesGolden(), iface)).not.toMatch(/\bstate_changed_at\b/);
+  }
+);
+
 test.each(["StatusResult", "GetResult", "ListRow"])(
   "public-surface: %s has optional permission stuck reason and the correct detail subset", (name) => {
     const body = interfaceBody(typesGolden(), name);

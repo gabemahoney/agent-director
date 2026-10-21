@@ -152,6 +152,11 @@ func TestPermissionStuckFallbackBoundaries(t *testing.T) {
 					e.id = id
 				}
 				c := stuckClient(t, e, 0, 0)
+				// b.k6i: a raw stamp unlike any since; the report-only stuck entry keeps it.
+				rawMs := stuckAt.Add(-2*time.Hour - 456*time.Millisecond).UnixMilli()
+				if err := apitest.SetSettle(e.dbPath, e.id, store.StateCheckPermission, rawMs); err != nil {
+					t.Fatal(err)
+				}
 				e.now = start.Add(-time.Millisecond)
 				assertStuckState(t, c, e.id, store.StateCheckPermission)
 				e.now = start
@@ -163,10 +168,11 @@ func TestPermissionStuckFallbackBoundaries(t *testing.T) {
 				if got.Since != e.now.Format("2006-01-02T15:04:05.000Z") {
 					t.Errorf("since=%s, want actual read %s", got.Since, e.now)
 				}
-				row, err := c.Get(e.id)
-				if err != nil || row.State != "stuck" || row.StuckInfo != got.StuckInfo {
-					t.Errorf("Get=%+v, %v", row, err)
+				_, row, listed := clientReported(t, c, e.id)
+				if row.State != "stuck" || row.StuckInfo != got.StuckInfo {
+					t.Errorf("Get=%+v", row)
 				}
+				assertStateChangedAt(t, row, listed, rawMs)
 			})
 		}
 	}

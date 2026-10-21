@@ -348,7 +348,10 @@ done
 
 It never sees a turn shorter than the settle time. Its `case` list names the
 states it reports; a row displayed [`stuck`](#spawn-states) matches none of
-them (see the [caller contract](caller-contract.md#stuck-rows)).
+them (see the [caller contract](caller-contract.md#stuck-rows)). To learn
+whether the state changed since a time of your own, compare that time with
+`state_changed_at` from `get` or `list` (see
+[State change time](caller-contract.md#state-change-time)).
 
 ## Read an agent's subagent records
 
