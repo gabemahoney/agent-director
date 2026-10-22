@@ -1002,6 +1002,12 @@ can last until `created_at` plus the configured relay window plus 2 s
 (24 h + 2 s at the default). A decided legacy request with `agent_gone`
 proof contributes no hold.
 
+On relay-off rows, agent-director does not guard `send-keys` against an open
+permission prompt: nothing is refused, and the keys reach the prompt, where
+they can answer it. Before sending, check that the row is not in
+`check_permission`, or have a person or an LLM read the pane and send with
+that read's `pane_sha256` as `--expect-pane-sha256`.
+
 On relay-on rows, after a permission request, a plain `send-keys` without
 `--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's
 hooks show the request's dialog gone. Follow the request's proof and delivery
