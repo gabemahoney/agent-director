@@ -3369,10 +3369,6 @@ still the one it read, so it knows the row has not changed since. As built:
     their separate bounded terminal write. Its projection is not a durable
     closeout or a change to confirmed/unconfirmed COMMIT classification.
 
-    Diagnostic observation of these boundaries must use the frozen, revision-pinned
-    [Decide/COMMIT timing components](#decidecommit-timing-diagnostic-toolsmeasure-decide),
-    including their separate acquisition/admission and operation-context facts.
-
     Its users: the relay hook's first write
     (`InsertRelayRequest`), ack (`AckRelayDecision`) and timeout deny
     (`DenyRelayTimeout`), the last two with a `check func() error`
@@ -12471,10 +12467,6 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 "no bound") and MCP's and the TS client's `max_wait_ms` reach
 `DecideParams.MaxWaitMs`; the CLI refuses a negative value itself.
 
-The frozen [diagnostic baseline](#decidecommit-timing-diagnostic-toolsmeasure-decide)
-describes the helper and Client timing boundaries and its revision/execution
-limits. Whole-test elapsed time does not identify a Decide or COMMIT duration.
-
 ### Readers never wait (problem 4)
 
 `get`, `list` and `get-permission` judge every request they return
@@ -14485,11 +14477,6 @@ MCP hosts retain process-lifetime ownership of the singleton rather than
 closing it for each Client. The Bun subprocess client scans stderr lines for
 the error JSON envelope among notices; an audit diagnostic after that
 envelope does not replace its structured error or verdict exit code.
-
-The frozen [Decide/COMMIT diagnostic](#decidecommit-timing-diagnostic-toolsmeasure-decide)
-baseline records row-mutation and deferred Client audit jobs separately through
-this writer, subject to its revision/execution limits; queue acceptance,
-write/Sync, result publication and caller return are distinct observations.
 
 ## Resume
 
@@ -18529,108 +18516,6 @@ stand-in and fires the hook through `pane-hook.sh`; never hand-roll the
 before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
-
-### Decide/COMMIT timing diagnostic (`tools/measure-decide/`)
-
-`tools/measure-decide/` is a frozen, revision-pinned diagnostic baseline for
-the earlier source revision, not a runnable observer of the current repaired
-source. Current source changes do not match its pins; do not silently repin it
-or reinterpret its retained traces as observations of the repair. **Must use:**
-any separately authorized diagnostic extension must reuse its overlay, recorder
-and driver rather than introduce competing observers, with fresh provenance and
-review. The component descriptions below apply to that frozen baseline.
-`source-overlay.mjs` verifies exact source hashes/anchors and emits
-nine source mappings plus a virtual `internal/decideobserve` package.
-`diagnostic-overlay.mjs` and `calibration-overlay.mjs` add disposable test
-instrumentation using the existing fixtures and boundary oracles. Preserve all
-source mappings and stamp the final formatted compiler inputs. Source drift
-refuses generation. The overlay itself does not modify canonical product/tests;
-ordinary builds do not import or initialize the recorder. The current
-read reconciliation repair is described in the lifecycle owner above.
-
-Actual helper/Client Decide and Client List entries create source roots;
-returns occur after existing cancellation/audit defers and retain the actual
-returned error. List binds a per-call view through `Store.WithContext`, retaining
-the original context, pool, cleanup lane, driver and path without shared Client
-mutation or a new deadline. Its terminal write retains `operationContext(0)`.
-The immutable diagnostic-only params value carries `Invocation` process, test,
-fixture-lifecycle and call IDs (`json:"-"`). External call/export/readback owners
-must join that complete tuple one-to-one to the actual source root within its
-recorder process, then verify the exact complete `operation.store_identity`
-from the opened `Store.Path()`. Repeated calls need distinct call IDs; parallel
-duplicate-token fixtures need distinct lifecycles. Missing, invalid, truncated,
-conflicting or ambiguous metadata/path/source entry/return rejects attribution;
-time or instance/token alone cannot supply it. Path aliases/reuse need external
-lifecycle validation; the source does not attest supplied IDs' uniqueness.
-
-The recorder separates admission, acquisition/setup, SQL callback, BEGIN and
-guarded UPDATE from COMMIT. Acquisition/admission events sample their actual
-short contexts alongside the original operation context at the same instant.
-`commit.started_locked` is the existing flag assignment, `commit.exec` brackets
-the actual native-driver-backed `database/sql` call, synchronized SQL publication
-precedes cleanup, and final worker publication/completion follows cleanup.
-Operation caller return and guard state/error sampled under the existing mutex
-are separate facts; timestamp adjacency does not establish a guard branch.
-COMMIT call timing includes scheduling/driver work, not isolated fsync service.
-Rollback/restoration/disposal/lease release and the two trail-job routes retain
-their original ownership. Trail acceptance/result-send markers can race dequeue
-or caller return and bound events rather than prove their ordering.
-
-Monotonic timestamps and actual absolute context deadlines measure execution;
-injected relay-clock deadlines/sleeps describe relay policy only. Cancellation
-after return defers is not the returned error. No observer renews a deadline or
-changes assertions, the semantic setup allowance, fixed one-second zero-wait
-budget, retry policy or `commit_exec`/`operation_guard` error semantics.
-
-`recorder.go.in` owns 65,536 process-lifetime atomic-reserved slots with immutable
-ready publication, no reuse/reset, recorder mutex or timed-path I/O. Export is
-outside measured calls, streams bounded metadata/error chains and never waits
-for unpublished slots. Explicit process/snapshot inventories retain caller and
-separately bounded eventual-worker cutoffs. Snapshots are reservation prefixes,
-not quiescence; merge by process/slot. Overflow, missing/partial exports, unfinished
-calls and unmatched phases remain incomplete/censored, never zero-duration
-success. `check-traces.mjs` inventories missing expected processes and missing or
-nonarray call exports, marks per-process and aggregate counts unknown where
-needed, and retains independently known call prefixes and joins. It validates
-export coverage, started/completed/unfinished counts and authoritative joins.
-Independent bounded read-only transactions capture coherent cross-table durable
-state before fixture cleanup/subsequent calls; unavailable readback remains
-unknown. A late worker result does not replace the caller error or authorize retry.
-
-`supervise.mjs` has no live recorder `Counts` consumer: exported snapshot headers
-cannot detect slot overflow during an unfinished call. Live slot coverage is
-**INCOMPLETE**, so all target execution routes, including observer-off, refuse
-admission. Only the exact driver compile-only command shapes are allowlisted;
-a build label alone cannot bypass refusal. The reusable runner is not currently
-available for target execution. Earlier pass-03 live-overflow claims are qualified
-by the [current tooling report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-04/test-writer-report.json):
-trace-byte-cap checks do not validate recorder slot-overflow coverage; original
-receipts remain retained.
-
-The supervisor preserves its first trigger and provides bounded process-group
-termination and a later-natural-admission stop. Its resource checks cover
-wall/aggregate, PID/memory, output, retained artifacts and per-process trace bytes
-across snapshots; unavailable accounting refuses admission. Fixture storage
-requires an 8 GiB tmpfs hard bound, which differs from canonical temporary
-storage. Full-route writes outside that namespace, including `/work`, also lack
-provable quota coverage. These bounds do not supply missing live slot coverage.
-A stopped process is not a successful completed call.
-
-The [measurement disposition](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/measurement-disposition.json)
-and [reviewed diagnostic report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/test-writer-report.json)
-own experimental results, provenance and resource/revision qualifications, subject
-to the current tooling report's coverage corrections. Historical cause remains
-**UNKNOWN**. The preserved
-[earlier canonical receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/final-unit/test-writer-report.json)
-for List `gone_working` (`operation_guard`) contains no phase timings that can
-attribute SQL versus COMMIT, cleanup or scheduling. Its flag establishes
-commit-start bookkeeping, not native COMMIT duration; whole-test duration is
-not operation duration. Fault-boundary regressions do not identify that historical
-cause. The corrected source/tests passed the
-[canonical sandbox gate](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/gate-repair/tests/test-writer-report.json).
-Earlier failed receipts remain immutable. This does not complete diagnostic
-measurement, make the frozen runner executable, or establish later Epic 4
-resume work; Tasks 2 and 3 have not started.
 
 ### Exit-time measurement harness (`tools/measure-exit/`)
 
