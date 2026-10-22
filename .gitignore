@@ -2,14 +2,13 @@ reference/
 bin/
 dist/
 tmpbin/
-# `make consumer-dryrun` leaves this binary in-tree as a side effect of
-# `go build ./...` from inside the mini-module.
+# `go build ./...` from inside the consumer-dryrun mini-module leaves this
+# binary in-tree.
 tools/consumer-dryrun/agent-director-consumer-dryrun
-# Repo-root `go build ./...` drops the main-package binaries next to go.mod.
-# These are build artifacts (not source) — installable via `make install`.
+# Repo-root `go build` drops the main-package binaries next to go.mod.
+# These are build artifacts, not source.
 /agent-director
 /agent-director-admin
-/cabi
 /check-doccomments
 
 # Bee hives live in the enclosing project folder, not the repo. Only the

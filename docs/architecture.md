@@ -4464,11 +4464,10 @@ version. `AGENT_DIRECTOR_BUILD_VERSION` overrides both, and then no jq runs.
 Only `release-binaries` runs jq to read the version, and make never runs
 jq while reading the Makefile (b.x7z; the Makefile comment on the
 `release-binaries:` assignments says why they must stay recursive).
-`test-image-smoke` and `release-binaries-smoke` run `jq -e` in their
-recipes to check `help` output, not to read the version. The CLI
-and the operator tool are statically linked everywhere (pure-Go SQLite via
-`modernc.org/sqlite`). Linux binaries pass an `ldd → "not a dynamic
-executable"` check in `make release-binaries-smoke`.
+The CLI and the operator tool are statically linked everywhere (pure-Go
+SQLite via `modernc.org/sqlite`). Linux binaries pass an `ldd → "not a
+dynamic executable"` check in the release's
+`gates/smoke/per-binary-smoke.sh`.
 
 ### TS Client → CLI subprocess
 
@@ -17865,8 +17864,8 @@ built and shipped, but `install.sh`, the only installer, exits 2 on
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
-dependency). The `release-binaries-smoke` target verifies static
-linkage of both binaries on every release via `ldd` ("not a dynamic
+dependency). The release's `gates/smoke/per-binary-smoke.sh` verifies
+static linkage of both binaries on every release via `ldd` ("not a dynamic
 executable"), and that the host-arch `agent-director-admin`'s `help`
 opens with the human-approval statement. The npm tarball ships neither
 binary.
@@ -18106,9 +18105,7 @@ than `go test ./...`.
   accident-prevention gate, not a security boundary.
 - Default command is `/opt/driver/run-testplan.sh`.
 
-The image is built via `make test-image`. `make test-image-smoke` exercises
-it standalone: confirms `claude --version` reports the pinned version,
-`agent-director help` exits 0, and the driver rejects an unknown EPIC.
+The image is built via `make test-image`.
 
 ### Driver
 

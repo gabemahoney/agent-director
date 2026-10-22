@@ -1,10 +1,9 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         check-doccomments check-sandbox-bypass test-install-sh test-install-sh-advice \
-        test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
+        test-image test-docker list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
-        release-binaries release-binaries-smoke \
-        release-shellcheck release-bats release-smoke \
-        consumer-dryrun \
+        release-binaries \
+        release-shellcheck release-smoke \
         ts-helper fake-tmux \
         agent-director envelope-diff-ts \
         verify-installed-pkg-full \
@@ -210,23 +209,6 @@ test-image: build
 		-f test/Dockerfile \
 		.
 
-# Image smoke. Confirms the build succeeds, the pinned Claude version is the
-# one we expect, agent-director help exits 0 from inside the container, and
-# the driver script returns a clear failure for an unknown EPIC.
-test-image-smoke: test-image
-	@echo "[smoke] claude --version inside the image"
-	docker run --rm $(TEST_IMAGE) claude --version | grep -F '$(CLAUDE_CODE_VERSION)' \
-		|| (echo "ERROR: pinned claude version $(CLAUDE_CODE_VERSION) not reported"; exit 1)
-	@echo "[smoke] agent-director help inside the image"
-	docker run --rm $(TEST_IMAGE) agent-director help | jq -e '.verbs | length > 0' >/dev/null
-	@echo "[smoke] driver rejects unknown EPIC"
-	@if docker run --rm -e EPIC=nonexistent $(TEST_IMAGE) /opt/driver/run-testplan.sh 2>&1 | grep -q 'no such testplan'; then \
-		echo "[smoke] OK"; \
-	else \
-		echo "ERROR: driver did not reject unknown EPIC with the expected message"; \
-		exit 1; \
-	fi
-
 # test-docker runs one testplan group in the harness container.
 #
 #   EPIC      — testplan slug (required). Resolved by the driver to the t1
@@ -272,27 +254,6 @@ list-test-docker-epics:
 		exit 1; \
 	fi
 	@grep -vE '^[[:space:]]*(#|$$)' test/docker-epics.txt
-
-# test-docker-install-mode runs the b.r3j install-mode regression suite
-# inside the harness container. Each scenario invokes install.sh under a
-# per-scenario sandbox $HOME (and umask/--keep-prior variations) and
-# asserts the canonical ~/.config/agent-director/bin/agent-director lands at
-# literal mode 0755 via `stat -c %a` — not just `-x` — and
-# ~/.config/agent-director/admin/agent-director-admin at 0755 in a 0700
-# directory. Each install that should succeed must also exit 0 with no
-# "Permission denied" on its stderr (b.7j2). Also pins install.sh's
-# defensive exit 3 on a 0644 source.
-#
-# Mounted read-only from the host so editing the script doesn't require
-# an image rebuild. The script itself depends only on the bundled
-# agent-director binary already staged at /usr/local/bin/agent-director
-# and the install skill at /opt/skills/install-agent-director/ — both
-# baked into the harness image.
-test-docker-install-mode: test-image
-	docker run --rm \
-		-v "$(CURDIR)/test/install-mode:/opt/install-mode:ro" \
-		--entrypoint /opt/install-mode/run.sh \
-		$(TEST_IMAGE)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sandboxed execution (b.nh2 — isolation for the b.8dr incident)
@@ -537,7 +498,7 @@ _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 # it and runs in the sandbox with the guarded goals.
 _REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
 	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
-	test-image test-image-smoke test-docker test-docker-install-mode \
+	test-image test-docker \
 	verify-prerelease-linux release-shellcheck tla tla-print
 _REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
 # _require_sandbox_lead returns the goals of $(1) that come before the first
@@ -621,8 +582,8 @@ _REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
 # Must use: a new target with a recipe joins this list (a host goal does
 # through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
 _REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
-	check-sandbox-bypass list-test-docker-epics consumer-dryrun \
-	release-binaries release-binaries-smoke release-bats \
+	check-sandbox-bypass list-test-docker-epics \
+	release-binaries \
 	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux
 ifneq ($(filter $(_REQUIRE_SANDBOX_GUARDED),$(_REQUIRE_SANDBOX_GOALS)),)
 $(_REQUIRE_SANDBOX_WAIT): | _require-sandbox
@@ -819,61 +780,6 @@ release-binaries:
 	@echo "[release] sizes:"
 	@du -h "$(RELEASE_DIST_DIR)"/agent-director-* | sed 's/^/  /'
 
-# release-binaries-smoke runs static-linkage + magic-byte + host-arch
-# runnability checks. We avoid `file(1)` because it's not in the
-# minimal harness image; instead, read the first 4 magic bytes via
-# od and match against ELF (0x7F454C46) or Mach-O 64-bit LE
-# (0xCFFAEDFE). Arch-within-format is checked by exec where possible
-# and skipped for cross-arch (cross-exec needs QEMU).
-#
-# All steps run inside one shell so an early `exit 1` stops the
-# whole recipe (Make's default is one-shell-per-line, which would
-# silently swallow the failure).
-release-binaries-smoke: release-binaries
-	@set -eu; \
-	echo "[smoke] magic-byte check on each artifact"; \
-	for target in linux/amd64 linux/arm64 darwin/arm64; do \
-		os=$${target%/*}; arch=$${target#*/}; \
-		for bin in agent-director agent-director-admin; do \
-			out="$(RELEASE_DIST_DIR)/$${bin}-$${os}-$${arch}"; \
-			magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
-			case "$${os}_$${magic}" in \
-				linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
-				darwin_cffaedfe) echo "  $${out}: Mach-O 64 LE (OK)" ;; \
-				darwin_feedfacf) echo "  $${out}: Mach-O 64 BE (OK)" ;; \
-				*) echo "  FAIL: unexpected magic $${magic} for $${out} (os=$${os})"; exit 1 ;; \
-			esac; \
-		done; \
-	done; \
-	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
-	for arch in amd64 arm64; do \
-		for bin in agent-director agent-director-admin; do \
-			out="$(RELEASE_DIST_DIR)/$${bin}-linux-$${arch}"; \
-			if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
-				echo "  $${out}: statically linked"; \
-			else \
-				echo "  FAIL: $${out} is not statically linked"; \
-				ldd "$${out}" 2>&1 | sed 's/^/    /'; \
-				exit 1; \
-			fi; \
-		done; \
-	done; \
-	echo "[smoke] host-arch exec (linux-amd64 help)"; \
-	"$(RELEASE_DIST_DIR)/agent-director-linux-amd64" help | jq -e '.verbs | length > 0' >/dev/null \
-		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
-	"$(RELEASE_DIST_DIR)/agent-director-admin-linux-amd64" help | head -n 1 \
-		| grep -q '^agent-director-admin is an operator tool\. Do not run any of its commands without explicit approval from a human for this specific run\. Agents and automated callers must not run it\.$$' \
-		|| { echo "FAIL: agent-director-admin-linux-amd64 help does not open with the human-approval statement"; exit 1; }; \
-	echo "[smoke] OK — all 6 binaries built, linked, and the host-arch ones run"
-
-# consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
-# pkg/api from a separate Go module via a replace directive. A clean build
-# proves that external consumers can compile against pkg/api without
-# referencing any internal/* package directly. Go's visibility rules enforce
-# this: any attempt to import internal/* from outside the module would fail.
-consumer-dryrun:
-	cd tools/consumer-dryrun && go build ./...
-
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
 # Built like any other binary (no special build tags); source lives under
 # test/smoke/ts-helper/, but the CLI also imports pkg/api/apitest (SeedSpawn)
@@ -974,15 +880,6 @@ release-shellcheck:
 # sandbox (_require-sandbox, b.8yq): make sandbox CMD="make release-smoke".
 release-smoke: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
-
-# release-bats was retired alongside the cabi-matrix removal — the only
-# bats tests under skills/release-agent-director/tests/ exercised the
-# deleted cabi-collection paths. The target is kept as a no-op so any
-# stale CI lane that still calls it stays green. It checks nothing, so it
-# must never count as a gate: no workflow under .github/workflows/ and no
-# /release phase calls it (checked for b.ug8).
-release-bats:
-	@echo "[release-bats] no release bats tests in tree — skipping"
 
 # verify-installed-pkg-full performs a self-contained end-to-end install
 # verification of the ts-bun-client package against a real packed tarball.

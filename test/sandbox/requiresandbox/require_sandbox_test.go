@@ -459,7 +459,7 @@ func TestRequireSandbox_NothingRunsBeforeGuard(t *testing.T) {
 	rs := rules(t, filepath.Join(root, "Makefile"))
 	recipes := targetsOf(rs, func(r rule, tg string) bool { return len(r.recipe) > 0 && tg != "_require-sandbox" })
 	guarded := guardedTargets(rs)
-	for _, want := range []string{"build", "bin/ts-helper", "test-docker", "check-sandbox-bypass", "tla", "release-bats"} {
+	for _, want := range []string{"build", "bin/ts-helper", "test-docker", "check-sandbox-bypass", "tla"} {
 		if !slices.Contains(recipes, want) {
 			t.Fatalf("recipe targets = %q, missing %q: the rule scan no longer finds the known recipes", recipes, want)
 		}
