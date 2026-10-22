@@ -55,6 +55,14 @@ func SetSelfPIDNSForTest(c *Client, read func() (string, bool)) { c.selfPIDNS = 
 // rule 8, problem 2), for this Client only.
 func SetPaneSelfForTest(c *Client, self func() ProcessIdentity) { c.paneSelf = self }
 
+// SetCursorMissingDeferredForTest sets c's observer of each deferred missing-row save of a lost Cursor launch (nil in
+// production), called with the launch's instance id and the deferred error (b.6uf), for this Client only. It is
+// reusable: a get, status or list test that must tell a deferred save from a save that never ran must use it rather
+// than add another deferral observer (docs/architecture.md).
+func SetCursorMissingDeferredForTest(c *Client, observe func(instanceID string, err error)) {
+	c.cursorMissingDeferred = observe
+}
+
 // DecideWithSleep is Decide with the sleep of its waits given (its verdict's
 // ack, b.146 rule 16; a pre-v7 request's relay hook, b.pzy), so a test stands
 // in for the hook on its own clock. External callers use Decide or

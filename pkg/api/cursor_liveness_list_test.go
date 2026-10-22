@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -21,11 +23,14 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 		state      []string
 		limit      int
 		missing    bool
+		deferSave  bool
 	}{
 		{name: "gone working", gateway: procfix.Gone(), missing: true},
 		{name: "recycled permission", gateway: procfix.Alive(apitest.DarwinProcStarttime), permission: true, missing: true},
 		{name: "missing filter includes newly missing", gateway: procfix.Gone(), state: []string{store.StateMissing}, missing: true},
 		{name: "working limit excludes newly missing", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true},
+		// b.6uf: the reported subtest, with the save forced to defer on both List calls.
+		{name: "working limit excludes newly missing save deferred", gateway: procfix.Gone(), state: []string{store.StateWorking}, limit: 1, missing: true, deferSave: true},
 		{name: "alive unchanged", gateway: procfix.Alive(apitest.LinuxProcStarttime)},
 		{name: "unknown unchanged", gateway: procfix.Unreadable()},
 	} {
@@ -51,8 +56,27 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 			}
 			e.pc.Set(b.GatewayPID+20, procfix.Alive(b.GatewayStart))
 			before, siblingBefore, survivorBefore := e.columns(t, b.InstanceID), e.columns(t, sibling), e.columns(t, survivor)
+			prBefore, err := e.st.GetPermissionRequest(b.InstanceID, token)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.deferSave {
+				storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailMissingDeadlineOverrun, b.InstanceID)
+			}
+			// Each List call's deferred missing-row saves, as "id: error", and how
+			// many were the target's on a deadline (context.DeadlineExceeded: its
+			// 1 s ran out, or its earlier abandoned save still held the store): the
+			// only deferral a fixture with no competing writer allows (b.6uf).
+			var deferred [2][]string
+			var ownDeadline [2]int
 			params := api.ListParams{Labels: []string{"list-liveness=target"}, State: tc.state, Limit: tc.limit}
 			for i := 0; i < 2; i++ {
+				api.SetCursorMissingDeferredForTest(c, func(id string, err error) {
+					deferred[i] = append(deferred[i], id+": "+err.Error())
+					if id == b.InstanceID && errors.Is(err, context.DeadlineExceeded) {
+						ownDeadline[i]++
+					}
+				})
 				got, err := c.List(params)
 				if err != nil {
 					t.Fatal(err)
@@ -87,9 +111,22 @@ func TestCursorListReconcilesGatewayBeforeProjectionAndFilters(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if n := len(deferred[0]) + len(deferred[1]); !tc.missing && n != 0 {
+				t.Errorf("alive/unknown List deferred a save; any deferral is wrong here: call 1 %q, call 2 %q", deferred[0], deferred[1])
+			} else if n != ownDeadline[0]+ownDeadline[1] {
+				t.Errorf("List deferred saves other than the missing target's on a deadline: call 1 %q, call 2 %q", deferred[0], deferred[1])
+			}
 			if tc.missing {
-				if after.State != store.StateMissing || after.RowVersion != before.RowVersion.(int64)+1 || pr.AwaitsAnswer() {
-					t.Errorf("List did not atomically mark missing once and close request: state=%v version=%v (before %v) open=%v", after.State, after.RowVersion, before.RowVersion, pr.AwaitsAnswer())
+				// The save is best effort: saved exactly once, or wholly unsaved
+				// with both calls having deferred it on a deadline.
+				rowSame, prSame := reflect.DeepEqual(before, after), reflect.DeepEqual(prBefore, pr)
+				saved := after.State == store.StateMissing && after.RowVersion == before.RowVersion.(int64)+1 && !pr.AwaitsAnswer()
+				deferredUnsaved := ownDeadline == [2]int{1, 1} && rowSame && prSame && pr.AwaitsAnswer()
+				observed := fmt.Sprintf("state=%v version=%v (before %v) open=%v, unchanged row=%v request=%v, deferred call 1 %q, call 2 %q", after.State, after.RowVersion, before.RowVersion, pr.AwaitsAnswer(), rowSame, prSame, deferred[0], deferred[1])
+				if tc.deferSave && !deferredUnsaved {
+					t.Errorf("forced deferral: want the save deferred on a deadline on both List calls and row and request unchanged, got %s", observed)
+				} else if !saved && !deferredUnsaved {
+					t.Errorf("List did not atomically mark missing once and close request: %s", observed)
 				}
 			} else if !reflect.DeepEqual(before, after) || !pr.AwaitsAnswer() {
 				t.Error("alive/unknown List mutated launch or request")
