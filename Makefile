@@ -531,16 +531,14 @@ _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 # container engine, itself or through a prerequisite (_sandbox-build or
 # test-image), and the sandbox image has none; or runs a host tool the image
 # lacks (shellcheck, the TLA job scheduler CLI); or checks or prints the
-# host's own setup (tla-print, measure-exit-print, _measure-exit-credentials).
+# host's own setup (tla-print).
 # Must use: a new target like these joins this list. A goal that runs the
 # same in either place (build, lint, list-test-docker-epics, …) stays out of
 # it and runs in the sandbox with the guarded goals.
 _REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
 	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
 	test-image test-image-smoke test-docker test-docker-install-mode \
-	verify-prerelease-linux measure-exit-dryrun measure-exit-print \
-	measure-image measure-exit _measure-exit-credentials \
-	release-shellcheck tla tla-print
+	verify-prerelease-linux release-shellcheck tla tla-print
 _REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
 # _require_sandbox_lead returns the goals of $(1) that come before the first
 # one that runs in the sandbox: all of them when none does.
@@ -734,86 +732,6 @@ sandbox: _sandbox-build
 		exit 2; \
 	fi
 	$(_SANDBOX_RUN) bash -c 'exec bash -c "$${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
-
-# ─────────────────────────────────────────────────────────────────────────
-# measure-exit (Epic 21): the Claude Code exit-time measurement harness
-# (RN-6, RN-2, RN-9 with RN-7's record; tools/measure-exit/).
-#
-#   measure-exit-dryrun  the offline dry run, inside the sandbox: stub claude,
-#                        no credentials, no network call, no operator.
-#   measure-exit-print   prints the runner's exact container command lines
-#                        (credentials as names only) and session counts for
-#                        MEASURE_MODE; builds nothing, runs nothing.
-#   measure-image        the measurement image, FROM the test image with
-#                        Claude Code $(MEASURE_CLAUDE_CODE_VERSION) under its
-#                        own tag (the test image's pin stays).
-#   measure-exit         THE GATED LIVE RUN: it starts PAID real Claude Code
-#                        agents (MEASURE_MODE measure: L1, rn9: L2) through
-#                        the configured gateway, or the offline version
-#                        probe (probe: L0). Run it only with the user's or the
-#                        operator's go-ahead. It refuses, before building
-#                        anything, unless ANTHROPIC_BASE_URL,
-#                        ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL and
-#                        ANTHROPIC_SMALL_FAST_MODEL are set (measure, rn9);
-#                        the runner forwards exactly those four, by name. It
-#                        never runs a built artifact on the host: the driver
-#                        runs only inside the container. make reports every
-#                        runner failure as its own exit 2, the probe's STOP
-#                        (run.sh exit 3) included, so the probe's outcome is
-#                        <results>/deployed-verdict.txt, not make's status.
-#                        L1 takes 22 samples per case (the runner's default
-#                        --samples: the 20-sample floor plus a buffer of 2),
-#                        176 sessions in all with no MCP configuration.
-#
-# measure-image requires the native Claude Code binary (REQUIRE_NATIVE_CLAUDE=1;
-# a launcher left by a failed postinstall would make every hook a
-# pid_mismatch); the probe's per-version builds (run.sh) record it instead.
-#
-# The engine is docker, as test-image. Not a test plan: the harness is not in
-# test/docker-epics.txt. MEASURE_ARGS passes runner options (see the header
-# of tools/measure-exit/run.sh), e.g. MEASURE_ARGS="--mcp-config F".
-# MEASURE_CLAUDE_CODE_VERSION defaults to 2.1.280, the deployed version; L0
-# probes it explicitly (run.sh --deployed).
-MEASURE_CLAUDE_CODE_VERSION ?= 2.1.280
-MEASURE_IMAGE ?= agent-director-measure:cc-$(MEASURE_CLAUDE_CODE_VERSION)
-MEASURE_MODE ?= measure
-MEASURE_ARGS ?=
-
-.PHONY: measure-exit-dryrun measure-exit-print measure-image measure-exit _measure-exit-credentials
-measure-exit-dryrun: _sandbox-build
-	$(_SANDBOX_RUN) bash tools/measure-exit/dryrun.sh
-
-measure-exit-print:
-	tools/measure-exit/run.sh $(MEASURE_MODE) --image $(MEASURE_IMAGE) \
-		--claude-code-version $(MEASURE_CLAUDE_CODE_VERSION) --base-image $(TEST_IMAGE) $(MEASURE_ARGS)
-
-measure-image: test-image
-	docker build --network=host \
-		--build-arg BASE_IMAGE=$(TEST_IMAGE) \
-		--build-arg CLAUDE_CODE_VERSION=$(MEASURE_CLAUDE_CODE_VERSION) \
-		--build-arg REQUIRE_NATIVE_CLAUDE=1 \
-		-t $(MEASURE_IMAGE) \
-		-f tools/measure-exit/Dockerfile \
-		.
-
-# Checked before any image build: the gateway pair and the two pinned models
-# for the live modes; the probe needs no credential.
-_measure-exit-credentials:
-	@case "$(MEASURE_MODE)" in \
-		probe) ;; \
-		measure|rn9) for v in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL; do \
-			if [ -z "$$(printenv $$v)" ]; then \
-				echo "ERROR: measure-exit $(MEASURE_MODE) refuses to start: $$v is not set (nothing was built or run)" >&2; \
-				exit 2; \
-			fi; \
-		done ;; \
-		*) echo "ERROR: MEASURE_MODE must be measure, rn9 or probe" >&2; exit 2 ;; \
-	esac
-
-measure-exit: _measure-exit-credentials
-	@if [ "$(MEASURE_MODE)" = probe ]; then $(MAKE) test-image; else $(MAKE) measure-image; fi
-	tools/measure-exit/run.sh $(MEASURE_MODE) --run --image $(MEASURE_IMAGE) \
-		--claude-code-version $(MEASURE_CLAUDE_CODE_VERSION) --base-image $(TEST_IMAGE) $(MEASURE_ARGS)
 
 # ─────────────────────────────────────────────────────────────────────────
 # tla (Epic 22): the TLA+ model check of the LABEL design (bee b.zuj's

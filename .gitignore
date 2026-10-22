@@ -11,7 +11,6 @@ tools/consumer-dryrun/agent-director-consumer-dryrun
 /agent-director-admin
 /cabi
 /check-doccomments
-/measure-exit
 
 # Bee hives live in the enclosing project folder, not the repo. Only the
 # testplans hive (consumed by the Docker harness) stays in-tree. If a future

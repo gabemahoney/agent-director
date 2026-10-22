@@ -150,7 +150,7 @@ func oldPathSources(t testing.TB) []scanSource {
 // scripts and the upgrade and refusal sections of the user docs. An exception
 // whose file is not scanned is stale; a section heading not in its file
 // matches nothing and is left out (later tasks add their own sections here).
-func oldPathRules(t testing.TB, srcs []scanSource) *scanRules {
+func oldPathRules(t testing.TB) *scanRules {
 	t.Helper()
 	list := []scanException{
 		{file: "internal/layout/old.go", reason: "SR-11.7: the presence rule looks for the old directory"},
@@ -170,11 +170,6 @@ func oldPathRules(t testing.TB, srcs []scanSource) *scanRules {
 		{file: installSkillMD, heading: "Upgrading an install from the old directory", anyLevel: true, reason: "SR-11.7, SR-15.3: the skill's upgrade steps name the old directory"},
 		{file: installSkillMD, heading: "Going back to the previous release", anyLevel: true, reason: "SR-11.7, SR-15.3: the skill's way back names the old directory"},
 	}
-	for _, src := range srcs {
-		if strings.HasPrefix(src.name, "tools/measure-exit/") {
-			list = append(list, scanException{file: src.name, reason: "SR-14.1: the measuring tool's guard names both directories"})
-		}
-	}
 	var keep []scanException
 	for _, e := range list {
 		// SKILL.md's two exempt headings are exact and always present: a missing
@@ -192,7 +187,7 @@ func oldPathRules(t testing.TB, srcs []scanSource) *scanRules {
 func TestOldPathAbsentFromProduct(t *testing.T) {
 	t.Parallel()
 	srcs := oldPathSources(t)
-	rules := oldPathRules(t, srcs)
+	rules := oldPathRules(t)
 	for _, hit := range oldPathHits(t, srcs, rules) {
 		t.Error(hit)
 	}
@@ -298,8 +293,7 @@ func TestInstallSkillOldPathRules(t *testing.T) {
 		t.Fatalf("%s is not scanned", installSkillMD)
 	}
 	src := repoFile(t, installSkillMD)
-	srcs := []scanSource{src}
-	rules := oldPathRules(t, srcs)
+	rules := oldPathRules(t)
 	for _, e := range rules.list {
 		if e.file == installSkillMD && !e.anyLevel {
 			t.Errorf("exception %+v: SKILL.md's exempt headings end at any heading", e)
@@ -321,7 +315,7 @@ func TestInstallSkillOldPathRules(t *testing.T) {
 	if planted.text == src.text {
 		t.Fatal("planting changed nothing")
 	}
-	got := oldPathHits(t, []scanSource{planted}, oldPathRules(t, []scanSource{planted}))
+	got := oldPathHits(t, []scanSource{planted}, oldPathRules(t))
 	if len(got) != 2 || !strings.Contains(got[0], `(section "")`) || !strings.Contains(got[1], `(section "When to invoke")`) {
 		t.Errorf("hits %q; want one in the frontmatter and one under \"When to invoke\"", got)
 	}
