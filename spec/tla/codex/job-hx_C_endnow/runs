@@ -1,2 +1,0 @@
-# b.ssz: one run per job (fast tier). Expected: FAIL CxNoEndedWhileRunning
-Phase5HookCx hx_C_endnow @800

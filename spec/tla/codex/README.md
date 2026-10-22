@@ -4,12 +4,12 @@ The b.ssz verdicts below are historical runs. Bug b.w21 later extended
 `src/B146R5Cx.tla` with default-off legacy-request scenarios and repair
 knobs; the older final-model equivalence claims below describe the submitted
 b.ssz snapshots, not the modified current source. The b.ssz job directories
-omit their jar.
+are not kept here.
 
 The design under check is `../srd-design-brief.md`, sections "Codex session-end rule" and
 "Codex state mapping and relay" (PRD t1.ssz.qi: States; Permission relay and typing; the
 differences table). Nothing here edits any repo's `spec/`. No TLC was run on the dev host: every
-verdict is a job-scheduler result (`verdicts.txt`, `job-ids.txt`). The first 21 jobs are the Codex
+verdict is a job-scheduler result. The first 21 jobs are the Codex
 design check; the Q2 gate (the `/review` thread's unmarked hooks, 15 more jobs) is the last
 section of this file's tables and finding F6.
 
@@ -18,7 +18,7 @@ section of this file's tables and finding F6.
 | Model (copy here) | Source | Why it is touched |
 |---|---|---|
 | `src/Phase5HookCx.tla` | `spec/tla/Phase5Hook.tla` (dev/v0.12.0 = feature/b.146-relay = feature/b.3ie, SHA-256 `e34dc715…`) | The hook gate and the row's life: RowOnlyByAgent, PendingResolves, ReportInResolves. The Codex session-end rule changes what SessionEnd and SessionStart write and adds `ended` by find-missing and by pause. |
-| `src/Hold36hCx.tla` | b.36h's `spec/tla/hold36h/tla/Hold36h.tla` (feature/b.146-relay 5be84a8 and feature/b.3ie, SHA-256 `7856c1d8…`) | The latest merged relay model: the working hold, the turn_end / tool_ran proofs (b.omt "fixcut"), the subagent, several turns, find-missing's check_permission repair. Codex removes tool_ran and the idle Notification and adds Interrupt as a turn end. The step-2c hold of plain send-keys and pause (ErrDialogMaybeOpen) is added as properties over its existing variables. |
+| `src/Hold36hCx.tla` | b.36h's `Hold36h.tla` (feature/b.146-relay 5be84a8 and feature/b.3ie, SHA-256 `7856c1d8…`) | The latest merged relay model: the working hold, the turn_end / tool_ran proofs (b.omt "fixcut"), the subagent, several turns, find-missing's check_permission repair. Codex removes tool_ran and the idle Notification and adds Interrupt as a turn end. The step-2c hold of plain send-keys and pause (ErrDialogMaybeOpen) is added as properties over its existing variables. |
 | `src/B146R5Cx.tla` | b.146 round 5's `spec/tla/B146R5.tla` (design/b146-timeouts, SHA-256 `53daaa8c…`) | The integrated relay model the adopted hold (Unproven + Bypass) passed on: the pane protocol, decide, the store lock, deaths. Codex removes PostToolUse's close and proof and the idle Notification. |
 
 Not changed, and why:
@@ -182,11 +182,8 @@ writes one self-contained `job-<run>/` per row that has none (Dockerfile, the un
 and `tla2tools.jar`, the spec, the cfg, `runs`). The last line of a
 job is `JOB-VERDICT <cfg>=<result>/<distinct>`. A control or probe is a match when it fails on the
 named property; a FAIL on another property is a modelling problem, not a match.
-`submit-order.txt` lists the 21 fast jobs in priority order, then 5 optional ones, then the gate
-set (15 jobs; `submit-gate.sh` submits it, appending to `job-ids.txt`; `watch-gate.sh` watches it).
-`mkjobs.sh` builds only the rows that have no job directory yet, so every submitted job directory
-stays "as submitted"; it takes `tla2tools.jar` and `tlcjob.sh` from `agent-director-bssz/spec/tla`
-(byte-identical to the copies in the 21 earlier job directories: `cmp` checked).
+`mkjobs.sh` builds only the rows that have no job directory yet; it takes `tla2tools.jar` and
+`tlcjob.sh` from `agent-director-bssz/spec/tla`.
 
 | Job | Expected | What |
 |---|---|---|

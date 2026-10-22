@@ -12550,8 +12550,8 @@ hold or concurrent request insertion can bypass the UPDATE guard. A successful
 refresh does not mean readiness; the reporter independently verifies a genuine
 hold as described in [Cursor gateway](#cursor-gateway-and-current-launch-binding).
 
-Bee b.36h's historical model in `spec/tla/hold36h/` checks the original
-working-write design. The E2 Task1 overlay
+Bee b.36h's historical model checked the original working-write design;
+`spec/tla/codex/src/Hold36hCx.tla` carries it. The E2 Task1 overlay
 has an [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
 for source `4e12100cc590c0c53e70c2e0ada336e116e713b5`, recorded in receipt
 commit `f97b3fcb`. Its scope does not prove the Task2 request controller or
@@ -19073,41 +19073,23 @@ holding the verdicts, the job ids and the rerun commands.
 
 [`spec/tla/settle/`](../spec/tla/settle/README.md) holds bee b.3ie's model
 of the settle time (`B3ieSettle.tla`; see
-[Settle time (b.3ie)](#settle-time-b3ie)): its cfgs, job generator and
-checker, and the run logs and verdicts of its 32 scheduler jobs (green,
-red per invariant, a control, a limit and probes; `verdicts.txt`), every
-one as expected, plus the vendored rerun of `pass_tchange_before`. It is
+[Settle time (b.3ie)](#settle-time-b3ie)): its cfgs and job generator. The
+32 scheduler jobs (green, red per invariant, a control, a limit and probes)
+all ended as expected; `settle/PROVENANCE.txt` lists their verdicts. It is
 copied from the bee's folder under its own pin list,
 `settle/PROVENANCE.txt`, not the main one. It is not wired into `make tla`
 or `ci/suite.tsv`; its jobs run on the scheduler by its own scripts.
-
-[`spec/tla/hold36h/`](../spec/tla/hold36h/PROVENANCE.txt) holds bee
-b.36h's model of the store's working hold as a read followed by a
-separate write, with the store's write lock (`tla/Hold36h.tla`, built on
-b.omt's `OmtHold`). `Write = "split"` is the write before b.36h's fix and
-fails `WorkingTrue` (the row never reads `working` while a dialog may be
-up or a relay hook may answer); `Write = "cond"` is the fix (see "The
-lifecycle writes carry the hold's condition" under
-[Permission relay](#permission-relay)). Every `cond_*` run passes; the
-red runs, the probes and b.omt's accepted residual
-(`lim_cond_sub_noclaim`) fail on their target, as expected. The directory
-is the record of the model checking done before b.36h's code, vendored
-under its own pin list (`hold36h/PROVENANCE.txt`, which records the
-contents, the verdicts and how to run a job again), and is not wired into
-`make tla`: `ci/run_ci.sh` never reads it.
 
 [`spec/tla/codex/`](../spec/tla/codex/README.md) holds bee b.ssz's check of
 the Codex design before the code of the find-missing and pause task and the
 permission relay task. It carries three models with Codex knobs, each a copy
 of an earlier model: `Phase5HookCx.tla` (the hook gate and the row's life;
 from the `Phase5Hook.tla` before b.xjn's change), `Hold36hCx.tla` (the
-working hold and the relay's proofs; from `hold36h/`) and `B146R5Cx.tla` (the
+working hold and the relay's proofs; from b.36h's `Hold36h.tla`) and `B146R5Cx.tla` (the
 integrated relay model; from b.146's round 5). Every knob defaults to off,
 and the historical equivalence run per model reproduced its source's distinct-state
 count exactly (11,387,737, 109,518 and 833,740). The historical suite carries
-41 cfgs and their 41 scheduler job directories as submitted (without
-`tla2tools.jar`, which the repo keeps once at `spec/tla/tla2tools.jar`),
-`suite.tsv`, `verdicts.txt`, `job-ids.txt` and its own `PROVENANCE.txt` pin
+41 cfgs, `suite.tsv` and its own `PROVENANCE.txt` pin
 list. No run was made on the dev host: every verdict is a scheduler result
 and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
@@ -19470,20 +19452,15 @@ scheduler. The suite's files:
   `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
   props ok rule, and the preflight refusals for bad props or an ambiguous or
   missing cfg.
-- **`provenance_test.go`** has eight tests:
+- **`provenance_test.go`** has six tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`,
-    `hold36h/` and `codex/` (each of the last three has its own pin list)
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`
+    and `codex/` (each of the last two has its own pin list)
     are unpinned by `spec/tla/PROVENANCE.txt`;
   - `settle/PROVENANCE.txt` pins every other file under `settle/` with its
     SHA-256, and each of its pins names one of them (`TestSettleProvenance`);
-  - `hold36h/PROVENANCE.txt` does the same for `hold36h/`
-    (`TestHold36hProvenance`);
   - `codex/PROVENANCE.txt` does the same for `codex/`
     (`TestCodexProvenance`);
-  - `codex/` holds no `.jar`, and each of its job directories' `tlcjob.sh`
-    is byte-identical to `spec/tla/jobs/lib/tlcjob.sh`
-    (`TestCodexHasNoJar`);
   - for each of `launch/` and `subagent/` (`TestRunSets`), `cfg/` holds
     exactly the cfgs `suite.tsv` names, each row has eight columns with
     the props column `-` on exactly the pass rows, every cfg turns the
