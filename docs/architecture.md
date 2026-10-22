@@ -4791,7 +4791,7 @@ that referenced it.
 ### npm packaging and version scripts
 
 **One package, no binary.** `pkg/ts-bun-client/` publishes one npm
-package, `agent-director`. Its `package.json` `files` list ships the
+package, `agent-director` (unscoped). Its `package.json` `files` list ships the
 bundle (`dist/**/*.js`, `dist/**/*.d.ts`), `dist/version-floor.json` and
 `README.md`, and no CLI binary. It has no `optionalDependencies` and no
 per-platform sub-packages.
@@ -4838,13 +4838,6 @@ see [The release skill](#the-release-skill)). The bun suite runs both
 scripts on a staged copy of the package: `test/version-bump.test.ts`,
 `test/check-version-coherence.test.ts` and
 `test/release-version-coherence.test.ts`.
-
-### Release blockers
-
-The package publishes as `agent-director` (unscoped). It is the only npm package (see
-[npm packaging and version scripts](#npm-packaging-and-version-scripts)). The H3 entry in
-[docs/release-blockers.md](release-blockers.md) records the resolution and is
-kept as the template for any future release blockers.
 
 ### Package layout
 
