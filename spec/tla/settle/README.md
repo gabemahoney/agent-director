@@ -6,9 +6,8 @@ Method and job layout follow b.146 round 6 (`../b.146/job-r6-README.md`).
 
 Files:
 - `B3ieSettle.tla`: the model (master copy).
-- `cfg/*.cfg`: one cfg per run; `gen-jobs.sh` writes them and one self-contained scheduler job
-  directory per run (`Dockerfile` from `job-Dockerfile`, `tlcjob.sh`, `tla2tools.jar`, the model,
-  the cfg and `runs`).
+- `cfg/*.cfg`: one cfg per run. A scheduler job for a run holds a Dockerfile, `tlcjob.sh`,
+  `tla2tools.jar`, the model, the cfg and `runs`.
 
 ## The design modelled
 
@@ -119,7 +118,8 @@ MaxWrites 3, migrated rows starting `waiting` or `working`, hooks write
 `waiting`/`working`/`check_permission`/`ended`, commands on, guards on, reader clock inline,
 hooks may move a terminal row (as the source allows). The job Dockerfile gives TLC `-Xmx8g`, 1 GB
 direct memory, a 3000 s budget (green runs cap themselves at 2900 s, the rest at 900 s) and an 8 GB
-disk cap; `pass_tchange_before` needs more (see `PROVENANCE.txt`). The last output line is the
+disk cap; `pass_tchange_before` needs more (`-Xmx24g`, 4 GB direct memory, a 20000 s budget, a
+60 GB disk cap and a 5.5 h run cap). The last output line is the
 verdict: `JOB-VERDICT <cfg>=<result>/<distinct states>`.
 
 | Run | What | Expected |

@@ -4,9 +4,10 @@ What this is
   Bee b.zuj's TLA+ model of the Phase 1 LABEL design and its on-demand
   model-check suite, vendored so `make tla` can submit it to the job
   scheduler (Epic 22, t1.h98.8p; subtask t3.h98.8p.q1.74). Bee b.zuj owns
-  the model and its results. Three files have since been changed here (see
-  "Changed here" below): Phase4.tla for bees b.66h and b.y88, one
-  comment in ci/mkci.py for bee b.y88, and Phase5Hook.tla for bee b.xjn.
+  the model and its results. Three files have since been changed here:
+  Phase4.tla (see "Changed here" below, plus comment-only edits), one
+  comment in ci/mkci.py that leaves its output unchanged, and Phase5Hook.tla
+  (see "Changed here" below).
   Nothing else changes b.zuj's specs, cfgs, manifest or expectations. To
   re-sync, copy the files from b.zuj again, re-apply the b.66h, b.y88 and
   b.xjn changes (or take b.zuj's adoption of them) and replace the pin
@@ -26,25 +27,10 @@ Changed here, not from b.zuj (bee b.66h, launch-scoped actions, 2026-10-03)
   so for those cfgs only the verdict is comparable. Run 4's verdicts do not
   cover the changed file until a make tla run passes. Details:
   launch/README.md.
-  Every other pinned file, except ci/mkci.py (b.y88 below) and
-  Phase5Hook.tla (b.xjn below), is still byte-identical to run 4's.
+  Every other pinned file, except ci/mkci.py (one comment) and
+  Phase5Hook.tla (below), is still byte-identical to run 4's.
   New files, written here and not pinned: launch/README.md,
   launch/suite.tsv and launch/cfg/*.cfg (the b.66h runs).
-
-Changed here, not from b.zuj (bee b.y88, operator kill comments, 2026-10-03)
-  Comments only, in Phase4.tla and ci/mkci.py. After bee b.vqr the
-  operator's finished-row kill is `agent-director-admin kill-finished`, no
-  longer a flag of the main CLI's kill, and the three comments that named
-  that flag now name the new verb: two in Phase4.tla (the header's SR-6.7
-  item and the note above HK_Lookup) and one in ci/mkci.py (ci_G3b_lab in
-  FAST_PASS). No definition, operator, variable or expression changed, so
-  the model's steps are the b.66h file's; no Python statement changed, so
-  mkci.py's output (ci/suite.tsv and the cfgs) is unchanged. Before this
-  change Phase4.tla had SHA-256
-  eeae3852078522d7bda3e391b43d3af26c26c1767e2a83e72a906ad9cc441155 (the
-  b.66h file) and ci/mkci.py had SHA-256
-  3f440fbf1599e4fca3beee91270908059046cba746c5ce9ac64896bd580d4b21 (as
-  copied from b.zuj); the pin lines below pin the changed files.
 
 Changed here, not from b.zuj (bee b.xjn, subagent records, 2026-10-11)
   Phase5Hook.tla differs from b.zuj CI run 4. Run 4's file had SHA-256
@@ -71,40 +57,7 @@ Source
   Bee b.zuj, directory tickets/Ideas/b.zuj/ of the ticket tree (outside
   this repo). Copied byte for byte with cp on 2026-10-02. Each file was
   checked equal to its b.zuj source with sha256sum at copy time. The pin list
-  below has those SHA-256s, except for the three files changed since; their
-  copied SHA-256s are under "Changed here".
-
-Delivering run: b.zuj CI run 4
-  CI-VERDICT PASS (92/92 runs ok, 364 min, tier full)
-  2026-09-30, 14:43Z to 20:47Z. Jobs, in order:
-    parse j20260930144325-5586a2   g1  j20260930144425-b76825
-    g2    j20260930144926-6e5fa6   g3  j20260930152029-24a59e
-    g4a   j20260930153030-966ca3   g4b j20260930161505-dba491
-    g5a   j20260930172541-bed0d1   g5b j20260930182818-a5b1c6
-    g5c   j20260930193024-46910e   g6  j20260930193154-3f3239
-  The inputs in that run's job contexts are byte-identical (cmp, 2026-10-02)
-  to the files vendored here: the three specs, every cfg, tla2tools.jar and
-  jobs/lib/Dockerfile. Each context's tlcjob.sh differs from
-  jobs/lib/tlcjob.sh only in the BUDGET and DISKCAP_MB defaults (lines 14 and
-  15), which the runner patches per job. The full tier is a superset of the
-  default fast tier.
-  Caveats: b.zuj wrote no delivery note. b.zuj's run_ci.sh, mkci.py and
-  suite.tsv were rewritten at 18:44Z, during run 4 (the tier column); the
-  run's inputs did not change.
-
-Generator check (decision D4, option b)
-  ci/mkci.py was not run here: there is no python3 at run time, the sandbox
-  image has none, and host python is not used. The evidence that the
-  vendored cfgs and manifest are exactly mkci.py's output is b.zuj's own
-  generation: mkci.py has mtime 2026-09-30 18:44:15.843Z, ci/suite.tsv
-  18:44:15.858Z, and every one of the 92 cfgs suite.tsv names falls between
-  18:44:15.851Z and 18:44:15.858Z, so a single mkci.py run wrote all of them;
-  run 4 above then passed on these exact bytes. b.zuj's ci/cfg/ also holds
-  six cfgs from 2026-09-29 00:35Z (ci_S1bs_ren, ci_S1bs_grp, ci_S1bs_lab,
-  ci_S1bs_rst, ci_S1bs_reb and ci_smoke) that the current mkci.py does not
-  write; they are not vendored. mkci.py is vendored for re-syncing from
-  b.zuj, with one comment changed by bee b.y88 that leaves its output
-  unchanged; the runner never runs it and checks the pins below instead.
+  below has those SHA-256s, except for the three files changed since.
 
 Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
   Phase4.tla, Phase4Split.tla, Phase5Hook.tla   the specs
@@ -119,12 +72,6 @@ Layout (b.zuj's relative layout, so mkci.py's paths stay valid)
   launch/                                       the b.66h runs (not pinned)
   subagent/                                     the b.xjn runs (not pinned)
   PROVENANCE.txt                                this file
-
-Not vendored
-  b.zuj's ci/run_ci.sh as written (the repo runner replaces it),
-  ci/targeted-*.tsv (8 one-off subset manifests), ci/README.md, ci/jobs/,
-  ci/logs/, exp/, Phase5Hook.tla.pre0930b, the six older cfgs above, the
-  older cfgs, specs and generators at the b.zuj root, and the reports.
 
 The suite
   ci/suite.tsv: 92 rows; columns group, spec, cfg, cap_s, expect, tier, what.
@@ -142,13 +89,6 @@ Design values mkci.py sets (only controls turn them off)
   Phase5Hook (decision-0929c hook identity, plus decision-0930b Q1's
     SessionStart wait): Gate = "parent" (the built gate), AdoptBy = "adpane",
     KillAll = TRUE, HookWait = TRUE, FMNoPaneGone = TRUE.
-
-Wording
-  The vendored b.zuj files, and verbatim copies of their output lines, keep
-  their own wording, which predates the repo's wording rule, apart from what
-  bees b.66h and b.y88 changed in Phase4.tla and ci/mkci.py and what bee
-  b.xjn changed in Phase5Hook.tla (see "Changed here"). Everything this
-  Epic writes follows that rule.
 
 tla2tools.jar pin (committed, not fetched)
   jar.bytes   4493033

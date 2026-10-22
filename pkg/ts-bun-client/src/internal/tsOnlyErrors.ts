@@ -24,11 +24,6 @@
  *  - ErrCallerCwdUnreachable      — caller's process.cwd() is gone at construction (b.cot).
  *  - ErrSystemInstallDisappeared  — binary gone at verb-dispatch time, after valid construction (b.xht).
  *
- * Removed in b.ue3 (vendored-binary surface dropped):
- *  - ErrUnsupportedPlatform
- *  - ErrPlatformPackageMissing
- *  - ErrCliNotExecutable
- *
  * When adding a new TS-only subclass: add its name here AND add a comment in
  * src/errors.ts near the subclass cross-referencing this allow-list.
  */

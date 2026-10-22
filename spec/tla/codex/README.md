@@ -177,13 +177,11 @@ the fix. The SRD should state that this is new behaviour of pause's wait, not ex
 ## Runs
 
 `suite.tsv` lists every run (spec, expected verdict, budget, heap, disk cap, the scheduler
-`--timeout`/`--memory` to submit with, tier). `src/gencfg.sh` writes `src/cfg/*.cfg`; `mkjobs.sh`
-writes one self-contained `job-<run>/` per row that has none (Dockerfile, the unchanged `tlcjob.sh`
-and `tla2tools.jar`, the spec, the cfg, `runs`). The last line of a
+`--timeout`/`--memory` to submit with, tier), and `src/cfg/*.cfg` holds each row's cfg. A job is
+one self-contained `job-<run>/` directory (Dockerfile, the unchanged `tlcjob.sh` and
+`tla2tools.jar` from `spec/tla/`, the spec, the cfg, `runs`). The last line of a
 job is `JOB-VERDICT <cfg>=<result>/<distinct>`. A control or probe is a match when it fails on the
 named property; a FAIL on another property is a modelling problem, not a match.
-`mkjobs.sh` builds only the rows that have no job directory yet; it takes `tla2tools.jar` and
-`tlcjob.sh` from `agent-director-bssz/spec/tla`.
 
 | Job | Expected | What |
 |---|---|---|

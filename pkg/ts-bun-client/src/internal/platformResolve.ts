@@ -1,12 +1,9 @@
 /**
  * platformResolve.ts — Bun runtime-version guard.
  *
- * The vendored-binary resolution logic that used to live here is gone as of
- * b.ue3 (Stream A).  Discovery is now run by src/internal/discovery.ts
- * against the system install (HOME → PATH).  The only piece this file still
- * owns is the Bun-runtime-version check, fired at the top of every
- * Client.create() and resolveSystemBinary() call before any filesystem stat
- * (SR-7.7).
+ * Checks the Bun runtime version at the top of every Client.create() and
+ * resolveSystemBinary() call, before any filesystem stat (SR-7.7). Binary
+ * discovery lives in src/internal/discovery.ts.
  *
  * Internal — not re-exported from src/index.ts.
  */

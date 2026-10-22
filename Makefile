@@ -310,19 +310,14 @@ CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || 
 #           already lands on the image's uid-1000 owner, so it needs neither.
 _SANDBOX_UIDMAP := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,--user $(shell id -u):$(shell id -g) --group-add 0)
 
-# _SANDBOX_NET — network namespace flag. Always --network=host (b.rx8), for both
-# the image build and every run target. Host networking sidesteps the bridge-vs-
-# uplink MTU blackhole seen 2026-09-19 on this GKE pod: docker's default bridge
-# (docker0 MTU 1500) sits above the pod uplink (eth0 MTU 1460), so large inbound
-# TLS segments from Fastly (release-assets.githubusercontent.com, serving the
-# bun release asset) exceed the uplink MTU and the PMTUD ICMP is dropped, so the
-# handshake stalls forever and the bun download in _sandbox-build hangs. The
-# host netns has no such MTU step, and also covers the original b.nh2 case (no
-# /dev/net/tun → rootless network backend fails), so the old tun detection
-# is superseded — host networking is unconditionally correct on every supported
-# host. Safe: the sandbox boundary is the filesystem/HOME, "not a security
-# boundary" (test/sandbox/Dockerfile header), and no sandbox target publishes
-# ports.
+# _SANDBOX_NET — network namespace flag. Always --network=host, for both the
+# image build and every run target. A bridge network can sit above an uplink
+# with a smaller MTU; when the path-MTU ICMP is dropped, large inbound TLS
+# segments stall and downloads in _sandbox-build hang. A host without
+# /dev/net/tun also breaks rootless network backends. The host netns has
+# neither problem. Safe: the sandbox boundary is the filesystem/HOME, "not a
+# security boundary" (test/sandbox/Dockerfile header), and no sandbox target
+# publishes ports.
 _SANDBOX_NET := --network=host
 
 # _SANDBOX_ENV — engine-specific leading env. For podman the host's stale
@@ -651,9 +646,8 @@ MAKEOVERRIDES =
 # CMD reaches the container VERBATIM (see `$(value CMD)` below): the bytes you
 # pass are the bytes the container shell sees. So a shell variable that must
 # expand in the container is written with a SINGLE `$` — `CMD='echo "$HOME"'`
-# prints the container HOME. (This is the opposite of the historical `$$`
-# convention: because the value is no longer run through Make's `$$`→`$`
-# collapse, a literal `$$` now reaches bash as `$$` = the shell PID. b.ay3.)
+# prints the container HOME. Make does not collapse `$$` to `$` here, so a
+# literal `$$` reaches bash as `$$`, the shell PID.
 #
 # CMD is threaded to the container through the ENVIRONMENT, never interpolated
 # into the recipe's shell line. The `export` line places CMD's value into the
@@ -849,9 +843,8 @@ envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
 # skills/release-agent-director/gates/. Its automated caller is the lint
 # workflow (.github/workflows/lint.yml), on every PR and push to main.
 #
-# It FAILS (exit 1) when shellcheck is not on PATH. It used to print
-# "skipping" and exit 0, so a run without shellcheck looked the same as a
-# clean one, and the target had never really run (b.ug8). To skip on
+# It FAILS (exit 1) when shellcheck is not on PATH, so a run without
+# shellcheck never looks like a clean one. To skip on
 # purpose on a machine without shellcheck, set SHELLCHECK_OPTIONAL=1
 # (`make release-shellcheck SHELLCHECK_OPTIONAL=1`): it then prints that
 # nothing was checked and exits 0. No automated caller sets it.
