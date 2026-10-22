@@ -3,7 +3,6 @@ package tla_test
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -113,47 +112,11 @@ func TestCodexProvenance(t *testing.T) {
 	checkOwnPins(t, "codex")
 }
 
-// TestCodexJobArtifacts: only manifest-declared b.w21 scheduler contexts carry
-// a canonical jar copy; every Codex job retains the canonical runner bytes.
+// TestCodexJobArtifacts: no jar is kept under codex/ (the repo keeps one, at
+// spec/tla/tla2tools.jar); every Codex job retains the canonical runner bytes.
 func TestCodexJobArtifacts(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	codex := filepath.Join(tree, "codex")
-	jar, err := os.ReadFile(filepath.Join(tree, "tla2tools.jar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jarHash := fmt.Sprintf("%x", sha256.Sum256(jar))
-	declaredJars := map[string]bool{}
-	caseName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	for _, dir := range []string{"b.w21", "b.w21/fixed", "b.w21/fixed-r2"} {
-		var manifest struct {
-			Bug   string `json:"bug"`
-			Cases []struct {
-				Name    string            `json:"name"`
-				Context string            `json:"context"`
-				SHA256  map[string]string `json:"sha256"`
-			} `json:"cases"`
-		}
-		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(codex, dir, "manifest.json"))), &manifest); err != nil {
-			t.Fatalf("%s/manifest.json: %v", dir, err)
-		}
-		if manifest.Bug != "b.w21" || len(manifest.Cases) == 0 {
-			t.Fatalf("%s/manifest.json: want b.w21 with declared cases", dir)
-		}
-		for _, c := range manifest.Cases {
-			if !caseName.MatchString(c.Name) || !fs.ValidPath(c.Context) || c.Context != "jobs/"+c.Name {
-				t.Fatalf("%s/manifest.json: unsafe or unexpected context %q for case %q", dir, c.Context, c.Name)
-			}
-			rel := filepath.Join(dir, c.Context, "tla2tools.jar")
-			if declaredJars[rel] {
-				t.Fatalf("%s/manifest.json: duplicate context %q", dir, c.Context)
-			}
-			if c.SHA256["tla2tools.jar"] != jarHash {
-				t.Errorf("%s/manifest.json: %s jar hash %q differs from canonical %s", dir, c.Name, c.SHA256["tla2tools.jar"], jarHash)
-			}
-			declaredJars[rel] = true
-		}
-	}
 	lib, err := os.ReadFile(filepath.Join(tree, "jobs", "lib", "tlcjob.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,26 +127,7 @@ func TestCodexJobArtifacts(t *testing.T) {
 			return err
 		}
 		if strings.HasSuffix(d.Name(), ".jar") {
-			rel, err := filepath.Rel(codex, p)
-			if err != nil {
-				return err
-			}
-			if !declaredJars[rel] {
-				t.Errorf("%s: jar outside declared b.w21 scheduler contexts", p)
-			} else {
-				delete(declaredJars, rel)
-				if !d.Type().IsRegular() {
-					t.Errorf("%s: scheduler jar must be a regular file", p)
-				} else {
-					b, err := os.ReadFile(p)
-					if err != nil {
-						return err
-					}
-					if !bytes.Equal(b, jar) {
-						t.Errorf("%s differs from spec/tla/tla2tools.jar", p)
-					}
-				}
-			}
+			t.Errorf("%s: jar under codex/", p)
 		}
 		if d.Name() == "tlcjob.sh" {
 			jobs++
@@ -200,131 +144,8 @@ func TestCodexJobArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rel := range declaredJars {
-		t.Errorf("%s: declared scheduler context is missing its jar", rel)
-	}
 	if jobs == 0 {
 		t.Error("no job directory under codex/")
-	}
-}
-
-// TestW21DocCommandsAreRepoRelative (b.5jg): no b.w21 doc names the original
-// checkout agent-director-w21-tla, and no command block names a machine-local
-// absolute path, so every documented command runs from any clone.
-func TestW21DocCommandsAreRepoRelative(t *testing.T) {
-	root := repoRoot(t)
-	local := regexp.MustCompile(`(^|[\s'"=:(])(/(home|Users|root|tmp|run|var|mnt|opt|srv)|~|\$\{?HOME\}?)/`)
-	docs := 0
-	for _, dir := range []string{"spec/tla/codex/b.w21", "test/b.w21"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
-				return err
-			}
-			docs++
-			rel, _ := filepath.Rel(root, p)
-			inBlock := false
-			for i, line := range strings.Split(readFile(t, p), "\n") {
-				if strings.Contains(line, "agent-director-w21-tla") {
-					t.Errorf("%s:%d: names the original checkout: %s", rel, i+1, line)
-				}
-				if fence := strings.TrimSpace(line); strings.HasPrefix(fence, "```") || strings.HasPrefix(fence, "~~~") {
-					inBlock = !inBlock
-					continue
-				}
-				if inBlock && local.MatchString(line) {
-					t.Errorf("%s:%d: command names a machine-local path: %s", rel, i+1, line)
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	if docs < 5 {
-		t.Errorf("found %d b.w21 docs, want at least 5", docs)
-	}
-}
-
-// TestW21VerifierRunsFromThisCheckout (b.5jg): the phase-1 b.w21 verifier,
-// run from this repo root as its README documents, passes in a checkout other
-// than the one that recorded scheduler-commands.txt.
-func TestW21VerifierRunsFromThisCheckout(t *testing.T) {
-	needPython3(t)
-	cmd := exec.Command("python3", "spec/tla/codex/b.w21/verifycontexts.py")
-	cmd.Dir = repoRoot(t)
-	out, err := cmd.CombinedOutput()
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	want := "STATIC-OK 9 immutable baseline contexts, 41236958 total context bytes; " +
-		"nine archived scheduler receipts verified; no model or scheduler execution."
-	if err != nil || lines[len(lines)-1] != want {
-		t.Errorf("python3 spec/tla/codex/b.w21/verifycontexts.py (%v):\n%s\nwant final line %q", err, out, want)
-	}
-}
-
-// w21ContextChecks prints each archived-context case the phase-1 or fixed-r2
-// verifier accepts or rejects wrongly; all 7 fixed-r2 receipts go through verify_receipts.
-const w21ContextChecks = `
-import copy, importlib.util, json
-def load(path):
-    spec = importlib.util.spec_from_file_location(path, path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
-v = load("spec/tla/codex/b.w21/verifycontexts.py")
-r2 = load("spec/tla/codex/b.w21/fixed-r2/verifycontexts.py")
-ctx = v.HERE / "jobs" / "w21_initial_red"
-other = "/elsewhere/clone/spec/tla/codex/b.w21/"
-v.check_archived_context(other + "jobs/w21_initial_red", ctx)
-if v.command_context("submit --context '/a/b' --memory 4g") != "/a/b":
-    print("single --context not returned")
-archive = json.loads((r2.HERE / "model-r2-receipts.json").read_text())
-manifest = json.loads((r2.HERE / "manifest.json").read_text())
-r2.verify_receipts(manifest, json.loads(archive["baseline_manifest_text"]), v)
-first, r2ctx = "j20261015000702-bf3dab", r2.HERE / "jobs" / "w21_r2_initial"
-def metadata(job, context_dir):
-    record = copy.deepcopy(archive["logs"][job]["metadata"])
-    record["values"]["context_dir"] = context_dir
-    return lambda: r2.verify_metadata(record, job, "w21_r2_initial", r2ctx, v)
-for label, call in [
-    ("wrong case", lambda: v.check_archived_context(other + "jobs/w21_relaunch_red", ctx)),
-    ("wrong round", lambda: v.check_archived_context(other + "fixed/jobs/w21_initial_red", ctx)),
-    ("relative path", lambda: v.check_archived_context("spec/tla/codex/b.w21/jobs/w21_initial_red", ctx)),
-    ("zero --context", lambda: v.command_context("submit --memory 4g")),
-    ("two --context", lambda: v.command_context("submit --context '/a' --context '/b'")),
-    ("r2 wrong case", metadata(first, other + "fixed-r2/jobs/w21_r2_modern_full_control")),
-    ("r2 wrong round", metadata(first, other + "fixed/jobs/w21_r2_initial")),
-    ("r2 rerun in a checkout", metadata(r2.RERUN_JOB, other + "fixed-r2/jobs/w21_r2_initial")),
-    ("r2 rerun elsewhere", metadata(r2.RERUN_JOB, r2.RERUN_CONTEXT + "-other")),
-]:
-    try:
-        call()
-        print(label, "accepted")
-    except AssertionError:
-        pass
-`
-
-// TestW21VerifierRejectsWrongContext (b.5jg): the phase-1 and fixed-r2
-// verifiers' checkout-independent context checks still reject a wrong archived
-// context. -B keeps __pycache__ out of the pinned codex/ tree.
-func TestW21VerifierRejectsWrongContext(t *testing.T) {
-	needPython3(t)
-	cmd := exec.Command("python3", "-B", "-c", w21ContextChecks)
-	cmd.Dir = repoRoot(t)
-	if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
-		t.Errorf("context checks (%v):\n%s", err, out)
-	}
-}
-
-// needPython3 skips without python3, except in the sandbox, whose image
-// installs it so the b.5jg verifier tests cannot pass by skipping there.
-func needPython3(t *testing.T) {
-	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		if os.Getenv("AGENT_DIRECTOR_TEST_SANDBOX") == "1" {
-			t.Fatal("python3 not on PATH in the sandbox")
-		}
-		t.Skip("python3 not on PATH")
 	}
 }
 

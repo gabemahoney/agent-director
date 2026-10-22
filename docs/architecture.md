@@ -19121,29 +19121,8 @@ historical authoring state, not a new execution claim. Historical receipts do
 not validate later model text. Task1 acceptance does not prove the Task2
 request controller, its formal assessment or current authenticated behavior.
 
-The b.w21 extension in [`codex/b.w21/`](../spec/tla/codex/b.w21/README.md)
-preserves nine frozen current-rule contexts at `8c6998d4` with all expected
-scheduler outcomes observed. The evolving `src/B146R5Cx.tla` adds default-off
-legacy seeds and repair knobs; the old equivalence results do not validate
-that modified source. The fourteen frozen [`fixed/`](../spec/tla/codex/b.w21/fixed/README.md)
-results include ten PASS, three expected failures and an unexpected `NoRace`
-failure in the seeded modern ACK branch. That branch incorrectly dropped an
-ACKed live hook's hold; production already holds a live hook independently of
-ACK and before any hash bypass. The evolving model restores `JudgedAlive`
-for modern requests. Its historical time abstraction conservatively holds
-recorded modern hooks until phase 2, including ACK, without separately modeling
-runtime ACKed/cannot-check release. `NoRace` and original actions remain
-unchanged. Six separate [`fixed-r2/`](../spec/tla/codex/b.w21/fixed-r2/README.md)
-cases now match all predictions: four PASS plus the required reachability
-and ACK-shortcut mutant failures. The full seeded case completed with
-6,289,976 distinct states, depth 43, and all 22 safety/temporal checks. Its
-initial time-budget attempt remains incomplete evidence; a separate resource
-overlay raises memory, time and disk budgets while retaining identical
-model/cfg/jar/runner bytes. Archived allowlisted scheduler metadata and current
-context hashes are verified without an independent image-time identity claim.
-`TestCodexJobArtifacts` restricts jar copies to safe,
-unique manifest-declared b.w21 contexts with exact canonical bytes and hashes;
-it also keeps every job runner equal to `jobs/lib/tlcjob.sh`.
+The evolving `src/B146R5Cx.tla` adds default-off legacy seeds and repair
+knobs; the old equivalence results do not validate that modified source.
 
 The historical b.ssz runs back the Codex rules of this file. Six findings
 came out of them, and the README states each:

@@ -1,2 +1,0 @@
-# b.w21 r2 expected=PASS; observed=NOT_RUN
-B146R5Cx w21_r2_mixed_acked_live_exact @700

@@ -1,42 +1,10 @@
 # b.ssz: TLA+ check of the Codex design changes
 
-Follow-up: [b.w21 current-rule model checkpoint](b.w21/README.md) extends
-`B146R5Cx` with default-off legacy-request scenarios and nine scheduler
-contexts. At commit `8c6998d4`, all nine b.w21 scheduler observations match
-the predictions: four bug-check failures, two reachability-probe failures
-and three passing controls. Its [manifest](b.w21/manifest.json) and
-[receipt archive](b.w21/model-red-receipts.json) preserve job IDs, counts,
-full logs and hashes. The model-failure gate is met; local sandbox regressions were then proven
-red and the repair passed all 41 targeted cases. The final full sandbox unit
-suite passed after expectation and artifact/provenance corrections: 67 Go
-packages (37 cached), 420 Bun tests, zero failures and make exit 0.
-The [submitted fixed-model results](b.w21/fixed/README.md) record ten PASS,
-three expected failures and one unexpected `NoRace` failure: thirteen of
-fourteen predictions match at `9d025f8f`. Full logs, counts and immutable
-predictions are archived. The [round-2 results](b.w21/fixed-r2/README.md) correct the seeded modern
-ACK hold in the model. All six cases match: four PASS, one reachability
-FAIL and one `NoRace` mutant FAIL. The initial case completed at 6,289,976
-distinct states, depth 43, with all 22 checks including temporal properties;
-its earlier time-budget attempt remains archived as incomplete. The rerun
-resource overlay preserves unchanged model/cfg/jar/runner bytes. No production
-runtime changed.
-The [integration evidence](../../../test/b.w21/integration/README.md) records
-all fifteen jobs PASS at unchanged source `9d025f8f`: 152 EPIC cases plus
-22 install-mode assertions/five scenarios. Actual network off is the User's
-statement; historical network-on commands remain preserved. New mixed-store
-API tests pass in targeted sandbox runs (118 API/store and eight artifact
-cases). The historical round-2 full sandbox suite also passed: 67 Go packages (39 cached),
-420 Bun tests, zero failures and make exit 0.
-See [unit receipts and review limits](../../../test/b.w21/README.md).
-
-The b.ssz verdicts below are historical runs and have not been rerun with
-these extensions. The nine current-rule contexts remain the immutable
-`8c6998d4` baseline, including its independent relaunch probe and
-`B21RecordsSettle`. `src/B146R5Cx.tla` is now the evolving model; the older
-final-model equivalence claims below describe the submitted b.ssz snapshots,
-not the modified current source. Original b.ssz job directories omit their
-jar; the manifest-declared b.w21 red/fixed/round-2 contexts include canonical jar
-copies for self-contained scheduler submission.
+The b.ssz verdicts below are historical runs. Bug b.w21 later extended
+`src/B146R5Cx.tla` with default-off legacy-request scenarios and repair
+knobs; the older final-model equivalence claims below describe the submitted
+b.ssz snapshots, not the modified current source. The b.ssz job directories
+omit their jar.
 
 The design under check is `../srd-design-brief.md`, sections "Codex session-end rule" and
 "Codex state mapping and relay" (PRD t1.ssz.qi: States; Permission relay and typing; the
