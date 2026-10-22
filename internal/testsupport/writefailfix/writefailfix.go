@@ -14,6 +14,9 @@
 // recorded there for its kind, so seeding, other rows and other ids are
 // unaffected. A matched write fails with the driver error of RAISE(ABORT),
 // which the store method returns as its error: never a silent no-op.
+// MissingDeadlineOverrun's trigger first runs CPU-bound SQL far longer than a
+// second, so a matched write with a deadline returns its deadline's error
+// instead.
 //
 // Install on a temp store only, after seeding the row: several kinds also
 // match the seeding writes (see each Kind).
@@ -88,6 +91,18 @@ const (
 	// seeding. Writes to the id's spawns row itself, and every write to another
 	// id's subagent rows, are not matched.
 	SubagentRecord Kind = 7
+	// MissingDeadlineOverrun makes an update of the id's spawns row to missing
+	// outrun its deadline (b.6uf): the trigger runs CPU-bound SQL for far longer
+	// than a second (about 10^9 rows), then RAISE(ABORT). A write with a
+	// deadline is interrupted first and returns its deadline's error (wrapping
+	// context.DeadlineExceeded), 1 s each: MarkCursorMissingIfSameLaunch (whose
+	// save get, status and list then defer) and MarkFailedCursorRuntimeMissing
+	// (cursorhost's failed-launch close, which returns the error). Also
+	// matched, with no deadline, so each spins far longer before it fails:
+	// find-missing's mark (MarkMissingIfSameLife), resume's and reuse's restore
+	// of a missing row, and SeedSpawn of a missing row. Install it only where
+	// none of these runs, after seeding.
+	MissingDeadlineOverrun Kind = 8
 )
 
 // String names the kind, for test failure messages.
@@ -107,6 +122,8 @@ func (k Kind) String() string {
 		return "permission decision"
 	case SubagentRecord:
 		return "subagent record"
+	case MissingDeadlineOverrun:
+		return "missing deadline overrun"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -114,7 +131,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -127,10 +144,14 @@ const createTargetsTable = `CREATE TABLE IF NOT EXISTS ad_test_write_failure (
     instance_id         TEXT NOT NULL
 )`
 
-// trigger is one CREATE TRIGGER statement and the trigger's name.
+// trigger is one CREATE TRIGGER statement and the trigger's name. setup,
+// when set, creates and fills (idempotently) a table only the trigger reads,
+// before it; teardown drops that table, after the trigger is dropped.
 type trigger struct {
-	name   string
-	create string
+	name     string
+	create   string
+	setup    []string
+	teardown string
 }
 
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
@@ -295,6 +316,30 @@ BEGIN
 END`,
 		},
 	},
+	// UPDATE OF state with NEW.state 'missing'. Triggers cannot use WITH, so
+	// the CPU-bound SQL cross joins a 1000-row pad table three times; the
+	// driver interrupts it when the write's context ends.
+	MissingDeadlineOverrun: {
+		{
+			name: "ad_test_fail_missing_deadline_overrun",
+			create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_missing_deadline_overrun
+    BEFORE UPDATE OF state ON spawns
+    WHEN NEW.state = 'missing'
+     AND EXISTS (SELECT 1 FROM ad_test_write_failure
+                  WHERE kind = 8 AND instance_id = OLD.instance_id)
+BEGIN
+    SELECT max(a.n + b.n + c.n)
+      FROM ad_test_overrun_pad a, ad_test_overrun_pad b, ad_test_overrun_pad c;
+    SELECT RAISE(ABORT, 'injected write failure: missing deadline overrun');
+END`,
+			setup: []string{
+				`CREATE TABLE IF NOT EXISTS ad_test_overrun_pad (n INTEGER PRIMARY KEY)`,
+				`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 1000)
+INSERT OR IGNORE INTO ad_test_overrun_pad (n) SELECT n FROM seq`,
+			},
+			teardown: `DROP TABLE IF EXISTS ad_test_overrun_pad`,
+		},
+	},
 }
 
 // Handle identifies one installed failure, for Remove.
@@ -320,6 +365,11 @@ func Install(db *sql.DB, kind Kind, instanceID string) (Handle, error) {
 		return Handle{}, fmt.Errorf("writefailfix: install %v: create table: %w", kind, err)
 	}
 	for _, tr := range triggers {
+		for _, q := range tr.setup {
+			if _, err := tx.Exec(q); err != nil {
+				return Handle{}, fmt.Errorf("writefailfix: install %v: set up trigger %s: %w", kind, tr.name, err)
+			}
+		}
 		if _, err := tx.Exec(tr.create); err != nil {
 			return Handle{}, fmt.Errorf("writefailfix: install %v: create trigger %s: %w", kind, tr.name, err)
 		}
@@ -342,8 +392,9 @@ func Install(db *sql.DB, kind Kind, instanceID string) (Handle, error) {
 }
 
 // Remove undoes one Install, in one transaction on db. It drops the kind's
-// triggers once no id is recorded for the kind, and the bookkeeping table once
-// no failure is installed at all, so the store is left as it was.
+// triggers, and any table only they read, once no id is recorded for the
+// kind, and the bookkeeping table once no failure is installed at all, so the
+// store is left as it was.
 func (h Handle) Remove(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -363,6 +414,12 @@ func (h Handle) Remove(db *sql.DB) error {
 		for _, tr := range triggersByKind[h.kind] {
 			if _, err := tx.Exec(`DROP TRIGGER IF EXISTS ` + tr.name); err != nil {
 				return fmt.Errorf("writefailfix: remove %v: drop trigger %s: %w", h.kind, tr.name, err)
+			}
+			if tr.teardown == "" {
+				continue
+			}
+			if _, err := tx.Exec(tr.teardown); err != nil {
+				return fmt.Errorf("writefailfix: remove %v: tear down trigger %s: %w", h.kind, tr.name, err)
 			}
 		}
 	}

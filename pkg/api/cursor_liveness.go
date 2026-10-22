@@ -45,6 +45,11 @@ func (c *Client) persistCursorMissing(proofs []store.CursorMissingProof) error {
 		_, result, err := c.st.MarkCursorMissingIfSameLaunch(row, b)
 		if err != nil {
 			if c.st.CanDeferCursorMissingWrite(err) {
+				// Test seam (Client.cursorMissingDeferred; nil in production):
+				// reports the deferral and changes nothing.
+				if c.cursorMissingDeferred != nil {
+					c.cursorMissingDeferred(row.InstanceID, err)
+				}
 				continue
 			}
 			return err

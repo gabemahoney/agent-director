@@ -19685,7 +19685,13 @@ MUST reuse these fixtures for their respective responsibilities. Cursor
 mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
 `BeforeCursorTrailExecForTest` (the existing transaction observer) and
 `storefix.InjectWriteFailure` for committed-row observation and failure cuts;
-do not create a second trail observer or runtime-proof fixture.
+do not create a second trail observer or runtime-proof fixture. A test that
+must tell a deferred Cursor missing-row save of `get`, `status` or `list` from
+a save that never ran observes each deferral through the observer that
+`api.SetCursorMissingDeferredForTest` sets (nil in production; available to
+`pkg/api`'s own tests through `export_test.go`); do not add another
+deferral observer. To force that deferral, see
+`WriteFailMissingDeadlineOverrun` under `InjectWriteFailure` below.
 
 **Agent of a seeded row (current schema v13).** The store refuses to insert a
 row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
@@ -19787,7 +19793,7 @@ cutoff. Tests of the time boundary itself supply their own cutoff.
 
 **`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
 write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
-seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
+eight kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
 
 - `WriteFailReuseArchive`: an insert or update of the id's
   `session_history` entry (`ResetForReuse`'s archive, whose failure holds
@@ -19842,17 +19848,34 @@ seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
   row itself or to another id's subagent rows. **Must use:** a test that a
   write of a subagent record fails, or that a delete of a row fails when its
   subagent records cannot be removed, installs this kind.
+- `WriteFailMissingDeadlineOverrun` (`writefailfix.MissingDeadlineOverrun`,
+  kind 8, named "missing deadline overrun", b.6uf): an update of the id's
+  `spawns` row to `missing`. A matched write with a deadline returns its
+  deadline's error (wrapping `context.DeadlineExceeded`), not the injected
+  failure: the Cursor terminal marks `MarkCursorMissingIfSameLaunch` (the
+  save `get`, `status` and `list` then defer) and
+  `MarkFailedCursorRuntimeMissing`, each with an allowance of up to 1 s. A
+  write the overrun cut short may still hold the store for a moment, so a
+  test whose next zero-wait write or read must run waits for the store first
+  (for example with `GetSpawnWithin`, as storefix's `observeSpawn` does).
+  Matched writes with no deadline spin far longer before they fail:
+  `find-missing`'s mark (`MarkMissingIfSameLife`), resume's and reuse's
+  restore of a `missing` row, and `SeedSpawn` of a `missing` row. Install
+  it after seeding, and only where none of those runs. **Must use:** a test
+  that forces a Cursor missing-row save to be deferred by its own deadline
+  installs this kind.
 
 How it works:
 
 - It installs BEFORE triggers through a second raw connection to the temp
   store file. Each trigger runs `RAISE(ABORT, 'injected write failure: <kind>')`,
   so the store method returns an error; the write never silently does
-  nothing.
+  nothing. The overrun kind's trigger first runs long CPU-bound SQL.
 - The trigger SQL is fixed text. The id is recorded, with bound parameters,
   in a bookkeeping table (`ad_test_write_failure`) that each trigger's WHEN
   clause checks. Other ids and other rows are unaffected.
-- The test's cleanup removes the triggers and the bookkeeping table.
+- The test's cleanup removes the triggers, the bookkeeping table and the
+  overrun kind's pad table (`ad_test_overrun_pad`).
 - Several kinds also match other existing writes, including seeding writes
   (for example, `SeedSpawn` of a finished row matches `WriteFailReuseRestore`).
   So install after seeding. Each `writefailfix.Kind` constant's doc comment

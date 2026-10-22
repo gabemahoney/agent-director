@@ -1,6 +1,8 @@
 package storefix_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -16,12 +18,13 @@ import (
 // proxyWrite is one of today's store writes a kind matches: how to seed its
 // row, run it, and observe what it changes.
 type proxyWrite struct {
-	name     string
-	kind     storefix.WriteFailureKind
-	failOpen bool // the store method swallows the failure; only the effect shows it
-	seed     func(t *testing.T, s *store.Store, dbPath, id string)
-	write    func(s *store.Store, id string) error
-	observe  func(t *testing.T, s *store.Store, dbPath, id string) any
+	name        string
+	kind        storefix.WriteFailureKind
+	failOpen    bool // the store method swallows the failure; only the effect shows it
+	ownKindOnly bool // run only with its own kind installed
+	seed        func(t *testing.T, s *store.Store, dbPath, id string)
+	write       func(s *store.Store, id string) error
+	observe     func(t *testing.T, s *store.Store, dbPath, id string) any
 }
 
 // seedState seeds id in state through apitest.SeedSpawn.
@@ -127,12 +130,41 @@ func identityColumns(c apitest.SpawnColumns) map[string]any {
 	}
 }
 
-// observeSpawn returns the whole spawns row.
+// seedCursorWorking seeds id as a working Cursor row with a launch and a
+// gateway (its pane process) and no runtime registration.
+func seedCursorWorking(t *testing.T, _ *store.Store, dbPath, id string) {
+	t.Helper()
+	launch := store.LaunchIdentity{Token: "0123456789abcdef", PanePID: apitest.TestPanePID, PaneStarttime: apitest.LinuxProcStarttime}
+	if _, err := apitest.SeedSpawn(dbPath, id, store.StateWorking, "", "", "", false,
+		apitest.WithAgent(store.AgentCursor), apitest.WithLaunchIdentity(launch)); err != nil {
+		t.Fatalf("SeedSpawn(%q, cursor working): %v", id, err)
+	}
+}
+
+// markCursorMissing runs the Cursor reconciliation's mark of a lost gateway
+// with no runtime registration (1 s deadline); anything but CondApplied is an
+// error.
+func markCursorMissing(s *store.Store, id string) error {
+	row, err := s.GetSpawn(id)
+	if err != nil {
+		return err
+	}
+	b := store.CursorRuntime{InstanceID: id, Token: row.Identity.Token, Life: row.LifeNumber, GatewayPID: row.Identity.PanePID, GatewayStart: row.Identity.PaneStarttime, SessionID: row.SessionID}
+	_, res, err := s.MarkCursorMissingIfSameLaunch(row, b)
+	if err == nil && res != store.CondApplied {
+		err = fmt.Errorf("MarkCursorMissingIfSameLaunch(%q) = %v, want CondApplied", id, res)
+	}
+	return err
+}
+
+// observeSpawn returns the whole spawns row once the store's operation slot
+// is free (GetSpawnWithin waits for it): a write its deadline cut short may
+// still hold it briefly, and the next zero-wait write would be refused.
 func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 	t.Helper()
-	sp, err := s.GetSpawn(id)
+	sp, err := s.GetSpawnWithin(id, 10*time.Second)
 	if err != nil {
-		t.Fatalf("GetSpawn(%q): %v", id, err)
+		t.Fatalf("GetSpawnWithin(%q): %v", id, err)
 	}
 	return sp
 }
@@ -256,6 +288,19 @@ var proxyWrites = []proxyWrite{
 		write:   func(s *store.Store, id string) error { return s.DeleteSpawn(id) },
 		observe: observeSubagentRows,
 	},
+	{
+		// The only proxy write that moves a row to missing, and it has a
+		// deadline: a matched write with none would spin far longer. No other
+		// kind can match this working-to-missing mark (the row has no request
+		// or subagent record), so it runs only under its own: fewer marks that
+		// must land within their 1 s, zero-wait budget.
+		name:        "Cursor lost gateway mark",
+		kind:        storefix.WriteFailMissingDeadlineOverrun,
+		ownKindOnly: true,
+		seed:        seedCursorWorking,
+		write:       markCursorMissing,
+		observe:     observeSpawn,
+	},
 }
 
 // observeSubagentRows returns the id's subagent entries and claimable launches, raw.
@@ -279,7 +324,8 @@ func observeOpenRequests(t *testing.T, s *store.Store, _, id string) any {
 }
 
 // runWrite runs w on id and asserts it was blocked by the injected blockedBy
-// failure, or took effect when blockedBy is 0 (not a kind).
+// failure (for the overrun kind, by the write's own deadline), or took effect
+// when blockedBy is 0 (not a kind).
 func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id string, blockedBy storefix.WriteFailureKind) {
 	t.Helper()
 	before := w.observe(t, s, dbPath, id)
@@ -300,13 +346,20 @@ func runWrite(t *testing.T, s *store.Store, dbPath string, w proxyWrite, id stri
 		}
 		return
 	}
+	if blockedBy == storefix.WriteFailMissingDeadlineOverrun {
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("%s on %q: err=%v, want its deadline's error (context.DeadlineExceeded)", w.name, id, err)
+		}
+		return
+	}
 	if want := "injected write failure: " + blockedBy.String(); err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("%s on %q: err=%v, want it to contain %q", w.name, id, err, want)
 	}
 }
 
 // TestInjectWriteFailure installs each kind on one id and runs every proxy
-// write: only the kind's own writes on that id fail, and cleanup lifts them.
+// write (an ownKindOnly one under its kind alone): only the kind's own writes
+// on that id fail, and cleanup lifts them.
 func TestInjectWriteFailure(t *testing.T) {
 	const target, other = "wf-target", "wf-other"
 	covered := map[storefix.WriteFailureKind]bool{}
@@ -320,6 +373,9 @@ func TestInjectWriteFailure(t *testing.T) {
 	}
 	for _, installed := range writefailfix.Kinds() {
 		for _, w := range proxyWrites {
+			if w.ownKindOnly && installed != w.kind {
+				continue
+			}
 			t.Run(fmt.Sprintf("%v/%s", installed, w.name), func(t *testing.T) {
 				s, dbPath := storefix.OpenTempStore(t)
 				w.seed(t, s, dbPath, target)
