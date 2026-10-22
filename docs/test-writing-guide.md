@@ -148,18 +148,19 @@ wire detail.
   `apitest.HoldWriteLock` or `storefix.WriteFailDisplayObservation`, never with
   a sleep. Fail a sample with `failOnce`, and pass the `CommitCheck` it
   returns to the committing read, not `apitest.VersionAdvanced`.
-- The `permission-stuck` and `pane-stuck` Docker Epics run, like every Epic,
-  only through the scheduler workflow. **Reviewed exceptions to the raw-SQL
-  rule,** each through `/opt/driver/sql.sh` and each because the columns have
-  no public writer; the shipped binary still creates the schema and makes
-  every observation:
-  - `permission-stuck` seeds the v14 ownership and clock columns
+- The `needs-intelligence` and `idle-screen` Docker Epics run, like every
+  Epic, only through the scheduler workflow. **Reviewed exceptions to the
+  raw-SQL rule,** each through `/opt/driver/sql.sh` and each because the
+  columns have no public writer; the shipped binary still creates the schema
+  and makes every observation:
+  - `needs-intelligence` seeds the v14 ownership and clock columns
     (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
     `fallback_at`, `fallback_basis`) and `spawns.permission_epoch`.
-  - `pane-stuck` moves a committed baseline's start (`spawns.pane_since_ms`)
+  - `idle-screen` moves a committed baseline's start (`spawns.pane_since_ms`)
     back instead of waiting out a timeout (a read is the baseline's only
-    writer), and its Cursor case seeds its rows (an override and an old
-    baseline included) and a request, as `permission-stuck` does.
+    writer), and its Cursor case seeds its rows (an
+    `idle_screen_timeout_seconds` override and an old baseline included) and
+    a request, as `needs-intelligence` does.
 
   The exceptions cover those two plans only.
 - Lifecycle and read-write coverage lives in

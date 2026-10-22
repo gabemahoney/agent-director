@@ -41,6 +41,6 @@ cursor-groups
 cursor-callers-help
 family-state
 context-fullness
-permission-stuck
+needs-intelligence
 state-changed-at
-pane-stuck
+idle-screen

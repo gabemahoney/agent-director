@@ -6860,9 +6860,9 @@ or a second copy:
 - `internal/store/migration_fixtures_test.go`: `v14ColumnSpecs`,
   `preAddV14Columns` and `seedV13PermissionFixture` for the v13 to v14
   matrices.
-- The `permission-stuck` and `pane-stuck` Epics in `test/docker-epics.txt`,
+- The `needs-intelligence` and `idle-screen` Epics in `test/docker-epics.txt`,
   whose testplans run on the job scheduler through the drivers
-  `test/driver/permission-stuck.cjs` and `test/driver/pane-stuck.sh`. They
+  `test/driver/needs-intelligence.cjs` and `test/driver/idle-screen.sh`. They
   write columns that have no public writer with `sql.sh`, a reviewed exception
   (see the [test writing guide](test-writing-guide.md#displayed-state-fixtures)).
 
