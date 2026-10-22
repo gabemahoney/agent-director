@@ -2125,8 +2125,9 @@ not bind those details to a compaction generation. Captured token details lack
 a usage measurement time or generation/compaction sequence. Conversation start
 and assistant timestamps, external hook generation IDs and collector chronology
 cannot establish checkpoint-local, restart-safe ordering. Missing initial
-summary markers likewise do not prove freshness. The captures are under
-`internal/testsupport/contextfix/testdata/cursor/`; see the
+summary markers likewise do not prove freshness. Only each version's
+`managed-attempt.json` stays under
+`internal/testsupport/contextfix/testdata/cursor/`; for the captures, see the
 [fixture evidence](https://github.com/gabemahoney/agent-director/blob/53d0dcf248d60af143444ef56487c2601ebff273/docs/test-writing-guide.md#context-fullness-captures-and-fixtures)
 as written before the test guide dropped it.
 Future Cursor numeric support requires qualified managed
@@ -21180,7 +21181,7 @@ A text hit is an exact name, with no letter, digit or underscore beside it.
 
 Not scanned: `internal/oldnames`, the refusal code of the config and template
 loaders, the store's column-rename hop and its fixtures, trail lines written
-earlier, `pkg/ts-bun-client/CHANGELOG.md` and the guides.
+earlier and the guides.
 
 Two exceptions keep an old name where it describes or refuses itself: the
 section of this document headed exactly "Store upgrade to agent-generic
