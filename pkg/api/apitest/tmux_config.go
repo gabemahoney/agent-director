@@ -87,7 +87,7 @@ func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...Tmu
 // sets: [defaults] expire_retention_days (b.sgw), [relay] timeout_seconds and
 // [pause] timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4),
 // [store] busy_timeout_ms (b.c7f), [state] settle_ms (b.3ie),
-// permission_unanswered_timeout_seconds and no_screen_change_timeout_seconds
+// needs_intelligence_timeout_seconds and idle_screen_timeout_seconds
 // (b.ob8), and [launch] claude_path, codex_path and cursor_path (SR-5.0). A 0
 // field leaves its key out, which loads as a written 0 does: the key's
 // default (for settle_ms, off).
@@ -99,8 +99,8 @@ func WriteRetentionConfig(t testing.TB, path string, days int64, settings ...Tmu
 type ConfigKeys struct {
 	RetentionDays, RelayTimeoutSeconds, PauseTimeoutSeconds, PreTrustLockWaitSeconds, StoreBusyTimeoutMs int64
 	StateSettleMs                                                                                        int64
-	PermissionUnansweredTimeoutSeconds                                                                   int64
-	NoScreenChangeTimeoutSeconds                                                                         int64
+	NeedsIntelligenceTimeoutSeconds                                                                      int64
+	IdleScreenTimeoutSeconds                                                                             int64
 
 	ClaudePath, CodexPath, CursorPath                               string
 	WriteEmptyClaudePath, WriteEmptyCodexPath, WriteEmptyCursorPath bool
@@ -122,8 +122,8 @@ func WriteKeysConfig(t testing.TB, path string, keys ConfigKeys, settings ...Tmu
 		{"pre_trust", "lock_wait_seconds", keys.PreTrustLockWaitSeconds},
 		{"store", "busy_timeout_ms", keys.StoreBusyTimeoutMs},
 		{"state", "settle_ms", keys.StateSettleMs},
-		{"state", "permission_unanswered_timeout_seconds", keys.PermissionUnansweredTimeoutSeconds},
-		{"state", "no_screen_change_timeout_seconds", keys.NoScreenChangeTimeoutSeconds},
+		{"state", "needs_intelligence_timeout_seconds", keys.NeedsIntelligenceTimeoutSeconds},
+		{"state", "idle_screen_timeout_seconds", keys.IdleScreenTimeoutSeconds},
 	} {
 		if k.value != 0 {
 			table, ok := tables[k.table].(map[string]any)

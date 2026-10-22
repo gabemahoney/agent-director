@@ -113,9 +113,9 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// cmdSeedSurface seeds the shared precommitted stuck wire surface seed adds
-// (apitest.SeedPermissionSurface, apitest.SeedPaneSurface) into --store, for
-// the subcommand name.
+// cmdSeedSurface seeds the shared precommitted display wire surface seed adds
+// (apitest.SeedNeedsIntelligenceSurface, apitest.SeedIdleScreenSurface) into
+// --store, for the subcommand name.
 func cmdSeedSurface(name string, seed func(string) error, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)

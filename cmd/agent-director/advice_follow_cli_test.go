@@ -502,19 +502,18 @@ const advWatchBlock = "```sh\n" + `last=""
 while sleep 1; do
   row=$(agent-director status --instance-id "$id")
   state=$(printf '%s\n' "$row" | jq -r .state)
-  seen="$state $(printf '%s\n' "$row" | jq -r '.stuck_reason // ""')"
-  if [ "$seen" != "$last" ]; then
-    last=$seen
+  if [ "$state" != "$last" ]; then
+    last=$state
     case "$state" in
       waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;;
-      stuck) echo "$id: stuck $(printf '%s\n' "$row" | jq -r '.stuck_reason + ", session " + .tmux_session_name')" ;;
+      needs_intelligence|idle_screen) echo "$id: $state, session $(printf '%s\n' "$row" | jq -r .tmux_session_name)" ;;
     esac
   fi
 done
 ` + "```"
 
-// TestAdviceFollow_F12_WatchReportsStuck follows docs/usage.md's "Watch a Spawn's state" for a stuck row of each reason (b.ob8).
-func TestAdviceFollow_F12_WatchReportsStuck(t *testing.T) {
+// TestAdviceFollow_F12_WatchReportsDisplay follows docs/usage.md's "Watch a Spawn's state" for a row of each Displayed State (b.ob8).
+func TestAdviceFollow_F12_WatchReportsDisplay(t *testing.T) {
 	usage, err := os.ReadFile("../../docs/usage.md")
 	if err != nil {
 		t.Fatal(err)
@@ -530,28 +529,25 @@ func TestAdviceFollow_F12_WatchReportsStuck(t *testing.T) {
 	}
 
 	home := t.TempDir()
-	if err := apitest.SeedPermissionSurface(stateDB(home)); err != nil {
+	if err := apitest.SeedNeedsIntelligenceSurface(stateDB(home)); err != nil {
 		t.Fatal(err)
 	}
-	if err := apitest.SeedPaneSurface(stateDB(home)); err != nil {
+	if err := apitest.SeedIdleScreenSurface(stateDB(home)); err != nil {
 		t.Fatal(err)
 	}
 	apitest.SettleVariant{Config: &apitest.SettleOnConfig}.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
 
-	reasons := map[string]bool{}
-	for _, surface := range apitest.StuckWireSurfaces {
-		id := surface.Prefix + surface.Agents[0]
+	for _, surface := range apitest.DisplayWireSurfaces {
+		id, state := surface.Prefix+surface.Agents[0], surface.State
 		t.Run(id, func(t *testing.T) {
 			raw, stderr, code := runCLIWithHome(t, home, "status", "--instance-id", id)
 			var row struct {
 				State   string `json:"state"`
-				Reason  string `json:"stuck_reason"`
 				Session string `json:"tmux_session_name"`
 			}
-			if code != 0 || json.Unmarshal([]byte(raw), &row) != nil || row.State != "stuck" || row.Reason == "" || row.Session == "" {
-				t.Fatalf("status: %d %s %s; want a stuck row with its reason and session", code, raw, stderr)
+			if code != 0 || json.Unmarshal([]byte(raw), &row) != nil || row.State != state || row.Session == "" {
+				t.Fatalf("status: %d %s %s; want a %s row with its session", code, raw, stderr, state)
 			}
-			reasons[row.Reason] = true
 
 			// The stand-in sleep succeeds once, then fails, so the loop makes one pass and ends.
 			bin := t.TempDir()
@@ -565,15 +561,10 @@ func TestAdviceFollow_F12_WatchReportsStuck(t *testing.T) {
 			}
 			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + home, "id=" + id}
 			out, errOut, code, timedOut := execCLI(t, cliOpts{bin: "sh", dir: home, env: env, deadline: surfaceDeadline}, "-c", script)
-			want := id + ": stuck " + row.Reason + ", session " + row.Session + "\n"
+			want := id + ": " + state + ", session " + row.Session + "\n"
 			if timedOut || code != 0 || out != want {
 				t.Errorf("watch loop = %q (exit %d, timedOut %v, stderr %q); want %q, exit 0", out, code, timedOut, errOut, want)
 			}
 		})
-	}
-	for _, reason := range []string{"permission_unanswered", "no_screen_change"} {
-		if !reasons[reason] {
-			t.Errorf("no displayed stuck row read %s; reasons seen %v", reason, reasons)
-		}
 	}
 }

@@ -123,7 +123,7 @@ func runSpawnWithReuseStore(s *store.Store, collisions spawn.CollisionChecker, r
 	if err := validateExplicitInstanceID(params.InstanceID); err != nil {
 		return SpawnResult{}, err
 	}
-	if err := validateNoScreenChangeTimeout(params.NoScreenChangeTimeoutSeconds); err != nil {
+	if err := validateIdleScreenTimeout(params.IdleScreenTimeoutSeconds); err != nil {
 		return SpawnResult{}, err
 	}
 	r, err := spawn.Resolve(params, cfg)
@@ -178,13 +178,13 @@ func validateExplicitInstanceID(id string) error {
 	return nil
 }
 
-// validateNoScreenChangeTimeout refuses a per-spawn no_screen_change timeout
-// override outside its whole-second range with ErrInvalidFlags, never
-// clamping it; 0 is no override.
-func validateNoScreenChangeTimeout(seconds int) error {
-	if seconds < 0 || int64(seconds) > config.MaxNoScreenChangeTimeoutSeconds {
-		return fmt.Errorf("%w: no_screen_change_timeout_seconds = %d is outside its range 1 to %d seconds; pass 0 (or omit it) to use [state] no_screen_change_timeout_seconds",
-			ErrInvalidFlags, seconds, config.MaxNoScreenChangeTimeoutSeconds)
+// validateIdleScreenTimeout refuses a per-spawn idle_screen timeout override
+// outside its whole-second range with ErrInvalidFlags, never clamping it; 0
+// is no override.
+func validateIdleScreenTimeout(seconds int) error {
+	if seconds < 0 || int64(seconds) > config.MaxIdleScreenTimeoutSeconds {
+		return fmt.Errorf("%w: idle_screen_timeout_seconds = %d is outside its range 1 to %d seconds; pass 0 (or omit it) to use [state] idle_screen_timeout_seconds",
+			ErrInvalidFlags, seconds, config.MaxIdleScreenTimeoutSeconds)
 	}
 	return nil
 }
@@ -264,12 +264,12 @@ func hasControlChar(id string) bool {
 // the row is a human's decision (see "Operator actions" in agent-director's
 // docs/operator-actions.md).
 //
-// NoScreenChangeTimeoutSeconds, when positive, is the row's own
-// no_screen_change timeout: status, get and list use it instead of their
-// [state] no_screen_change_timeout_seconds, and resume keeps it. A spawn or
-// reuse without it records none, clearing a reused row's earlier one; a reuse
-// whose launch fails restores the earlier one with the row. Cursor rows keep
-// it, but no_screen_change is unavailable for them.
+// IdleScreenTimeoutSeconds, when positive, is the row's own idle_screen
+// timeout: status, get and list use it instead of their [state]
+// idle_screen_timeout_seconds, and resume keeps it. A spawn or reuse without
+// it records none, clearing a reused row's earlier one; a reuse whose launch
+// fails restores the earlier one with the row. Cursor rows keep it, but
+// idle_screen is unavailable for them.
 //
 // CLI: agent-director spawn
 //
@@ -317,8 +317,8 @@ func hasControlChar(id string) bool {
 //     reserved and malformed (such as "HOME=/x") gets the reserved-name
 //     message. Nothing is written or launched.
 //   - ErrInvalidFlags: InstanceID contains an ASCII control character, or
-//     NoScreenChangeTimeoutSeconds is negative or above 9223372036; nothing
-//     is written or launched.
+//     IdleScreenTimeoutSeconds is negative or above 9223372036; nothing is
+//     written or launched.
 //   - ErrInstanceIdCollision: without ReuseFinished, a row already exists
 //     for the explicit InstanceID, in any state (the pre-check refuses
 //     it before anything is written; the insert's primary key refuses a row

@@ -359,31 +359,33 @@ func (s Store) refusals() []string {
 	return nil
 }
 
-// DefaultPermissionUnansweredTimeoutSeconds is measured from established fallback.
-const DefaultPermissionUnansweredTimeoutSeconds = 30
+// DefaultNeedsIntelligenceTimeoutSeconds is measured from established fallback.
+const DefaultNeedsIntelligenceTimeoutSeconds = 30
 
-// MaxPermissionUnansweredTimeoutSeconds is the whole-second duration ceiling.
-const MaxPermissionUnansweredTimeoutSeconds = MaxPauseTimeoutSeconds
+// MaxNeedsIntelligenceTimeoutSeconds is the whole-second duration ceiling.
+const MaxNeedsIntelligenceTimeoutSeconds = MaxPauseTimeoutSeconds
 
-// DefaultNoScreenChangeTimeoutSeconds is the unchanged-pane period (20
-// minutes) before a working Claude or Codex row becomes a stuck candidate.
-const DefaultNoScreenChangeTimeoutSeconds = 1200
+// DefaultIdleScreenTimeoutSeconds is the unchanged-pane period (20 minutes)
+// before a working Claude or Codex row becomes an idle_screen candidate.
+const DefaultIdleScreenTimeoutSeconds = 1200
 
-// MaxNoScreenChangeTimeoutSeconds is the whole-second duration ceiling, for
-// the configuration and the per-spawn override alike.
-const MaxNoScreenChangeTimeoutSeconds = MaxPauseTimeoutSeconds
+// MaxIdleScreenTimeoutSeconds is the whole-second duration ceiling, for the
+// configuration and the per-spawn override alike.
+const MaxIdleScreenTimeoutSeconds = MaxPauseTimeoutSeconds
 
-// State holds configuration for displayed row state and stuck eligibility.
+// State holds configuration for the displayed row state and the eligibility
+// of the Displayed States needs_intelligence and idle_screen.
 type State struct {
-	// PermissionUnansweredTimeoutSeconds is the age of an unanswered fallback
-	// before it becomes a report-only stuck candidate. Zero uses the default.
-	PermissionUnansweredTimeoutSeconds int `toml:"permission_unanswered_timeout_seconds"`
+	// NeedsIntelligenceTimeoutSeconds is the age of an unanswered fallback
+	// before it becomes a report-only needs_intelligence candidate. Zero uses
+	// the default.
+	NeedsIntelligenceTimeoutSeconds int `toml:"needs_intelligence_timeout_seconds"`
 
-	// NoScreenChangeTimeoutSeconds is how long sampled pane fingerprints must
-	// stay identical before a working row becomes a report-only stuck
+	// IdleScreenTimeoutSeconds is how long sampled pane fingerprints must stay
+	// identical before a working row becomes a report-only idle_screen
 	// candidate, for rows spawned without their own override. Zero uses the
 	// default.
-	NoScreenChangeTimeoutSeconds int `toml:"no_screen_change_timeout_seconds"`
+	IdleScreenTimeoutSeconds int `toml:"idle_screen_timeout_seconds"`
 
 	// SettleMs is the settle time, in whole milliseconds: with a positive
 	// value, the state status, get and list report (and list --state filters
@@ -424,32 +426,32 @@ func (s State) EffectiveSettleMs() int {
 	return DefaultStateSettleMs
 }
 
-// EffectivePermissionUnansweredTimeoutSeconds returns the configured positive
+// EffectiveNeedsIntelligenceTimeoutSeconds returns the configured positive
 // timeout, or thirty seconds for an omitted/zero value. Load owns validation.
-func (s State) EffectivePermissionUnansweredTimeoutSeconds() int {
-	if s.PermissionUnansweredTimeoutSeconds > 0 {
-		return s.PermissionUnansweredTimeoutSeconds
+func (s State) EffectiveNeedsIntelligenceTimeoutSeconds() int {
+	if s.NeedsIntelligenceTimeoutSeconds > 0 {
+		return s.NeedsIntelligenceTimeoutSeconds
 	}
-	return DefaultPermissionUnansweredTimeoutSeconds
+	return DefaultNeedsIntelligenceTimeoutSeconds
 }
 
-// EffectiveNoScreenChangeTimeoutSeconds returns the configured positive
-// timeout, or twenty minutes for an omitted/zero value. Load owns validation.
-func (s State) EffectiveNoScreenChangeTimeoutSeconds() int {
-	if s.NoScreenChangeTimeoutSeconds > 0 {
-		return s.NoScreenChangeTimeoutSeconds
+// EffectiveIdleScreenTimeoutSeconds returns the configured positive timeout,
+// or twenty minutes for an omitted/zero value. Load owns validation.
+func (s State) EffectiveIdleScreenTimeoutSeconds() int {
+	if s.IdleScreenTimeoutSeconds > 0 {
+		return s.IdleScreenTimeoutSeconds
 	}
-	return DefaultNoScreenChangeTimeoutSeconds
+	return DefaultIdleScreenTimeoutSeconds
 }
 
 // refusals reports out-of-range state controls without clamping.
 func (s State) refusals() []string {
 	var out []string
-	if v := s.PermissionUnansweredTimeoutSeconds; v < 0 || int64(v) > MaxPermissionUnansweredTimeoutSeconds {
-		out = append(out, fmt.Sprintf("[state] permission_unanswered_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxPermissionUnansweredTimeoutSeconds))
+	if v := s.NeedsIntelligenceTimeoutSeconds; v < 0 || int64(v) > MaxNeedsIntelligenceTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] needs_intelligence_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxNeedsIntelligenceTimeoutSeconds))
 	}
-	if v := s.NoScreenChangeTimeoutSeconds; v < 0 || int64(v) > MaxNoScreenChangeTimeoutSeconds {
-		out = append(out, fmt.Sprintf("[state] no_screen_change_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxNoScreenChangeTimeoutSeconds))
+	if v := s.IdleScreenTimeoutSeconds; v < 0 || int64(v) > MaxIdleScreenTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] idle_screen_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxIdleScreenTimeoutSeconds))
 	}
 	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
 		out = append(out, fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
@@ -577,9 +579,9 @@ func Default() Config {
 			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
 		},
 		State: State{
-			PermissionUnansweredTimeoutSeconds: DefaultPermissionUnansweredTimeoutSeconds,
-			NoScreenChangeTimeoutSeconds:       DefaultNoScreenChangeTimeoutSeconds,
-			SettleMs:                           DefaultStateSettleMs,
+			NeedsIntelligenceTimeoutSeconds: DefaultNeedsIntelligenceTimeoutSeconds,
+			IdleScreenTimeoutSeconds:        DefaultIdleScreenTimeoutSeconds,
+			SettleMs:                        DefaultStateSettleMs,
 		},
 		Log: Log{
 			ErrorLogPath: layout.DisplayErrorLogPath,

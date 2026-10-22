@@ -172,10 +172,9 @@ transcript exists. See [Transcript recovery](../../docs/caller-contract.md#trans
 for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
 for restoration and children.
 
-`SpawnParams.NoScreenChangeTimeoutSeconds` gives the row its own
-`no_screen_change` timeout in whole seconds (0 for none); its range and
-lifecycle are in
-[Configuration](../../docs/configuration.md#no-screen-change-timeout-state).
+`SpawnParams.IdleScreenTimeoutSeconds` gives the row its own `idle_screen`
+timeout in whole seconds (0 for none); its range and lifecycle are in
+[Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`, `.DroppedArgs`).
 `.DroppedArgs` lists removed original argument tokens in argv order on a
@@ -202,7 +201,7 @@ See `(*Client).Spawn` godoc for the full enumeration.
 
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
-`missing`, `stuck`.
+`missing`, `needs_intelligence`, `idle_screen`.
 `pending` means a launch (spawn, reuse or resume) is in progress and the
 agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
@@ -222,19 +221,19 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
-While `State` is `"stuck"`, `StatusResult` and `Get`'s `SpawnRow` carry the
-embedded `StuckInfo` (`.StuckReason`, `api.StuckPermissionUnanswered` or
-`api.StuckNoScreenChange`; `.Since`, a string; and the reason's detail,
-`.RequestToken` and `.ToolName`, or `.UnchangedMinutes`, an `*int64`; JSON
-`stuck_reason`, `since`, `request_token`, `tool_name`, `unchanged_minutes`),
-and `StatusResult.TmuxSessionName` (JSON `tmux_session_name`) is set;
-`ListRow` carries `.StuckReason` only. A field that does not apply is empty
-(nil), and absent from the JSON. `StatusResult`, `SpawnRow` and `ListRow`
-also carry `NoScreenChangeAvailability` (JSON
-`no_screen_change_availability`): `api.NoScreenChangeAvailable` for Claude
-and Codex, `api.NoScreenChangeUnavailable` for Cursor. The
-[caller contract](../../docs/caller-contract.md#stuck-rows) defines the
-fields, omissions and detection.
+While `State` is `api.StateNeedsIntelligence` or `api.StateIdleScreen`,
+`StatusResult` and `Get`'s `SpawnRow` carry the embedded `StateDetail`:
+`.Since`, a string, and that state's detail, `.RequestToken` and `.ToolName`
+for `needs_intelligence` or `.UnchangedMinutes`, an `*int64`, for
+`idle_screen` (JSON `since`, `request_token`, `tool_name`,
+`unchanged_minutes`); `StatusResult.TmuxSessionName` (JSON
+`tmux_session_name`) is set. `ListRow` carries the state, no detail. A field
+that does not apply is empty (nil), and absent from the JSON. `StatusResult`,
+`SpawnRow` and `ListRow` also carry `IdleScreenAvailability` (JSON
+`idle_screen_availability`): `api.IdleScreenAvailable` for Claude and Codex,
+`api.IdleScreenUnavailable` for Cursor. The
+[caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
+defines the states, fields, omissions and detection.
 
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
 `FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
@@ -253,7 +252,7 @@ the client was built for [independent state and family
 settling](../../docs/configuration.md#settle-time-state). Other result fields
 and verbs that act on a row follow its live state. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
-sample no pane, so only a `Client` detects `no_screen_change`.
+sample no pane, so only a `Client` detects `idle_screen`.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is
@@ -288,7 +287,8 @@ for _, row := range res.Spawns {
 Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 `"codex"` or `"cursor"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
 encodes as `[]` when empty. The `State` filter matches the displayed state
-(see Status), including `"stuck"`, and is applied before `Limit`.
+(see Status), including `"needs_intelligence"` and `"idle_screen"`, and is
+applied before `Limit`.
 `Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.

@@ -113,17 +113,17 @@ type Client struct {
 
 // relayView is the RelayView of the Client's reads and decide: its
 // start-time reader, its pid namespace reader, its clock, the configured
-// effective relay window and stuck timeouts, and a pane sampler of its own
-// (paneSampler). Each call is a fresh view for one read.
+// effective relay window and Displayed State timeouts, and a pane sampler of
+// its own (paneSampler). Each call is a fresh view for one read.
 func (c *Client) relayView() RelayView {
 	return RelayView{
-		Procs:                       c.procChecker,
-		PIDNamespace:                c.selfPIDNS,
-		Now:                         c.now,
-		Window:                      time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
-		PermissionUnansweredTimeout: time.Duration(c.cfg.State.EffectivePermissionUnansweredTimeoutSeconds()) * time.Second,
-		samplePane:                  c.paneSampler(),
-		noScreenChangeTimeout:       time.Duration(c.cfg.State.EffectiveNoScreenChangeTimeoutSeconds()) * time.Second,
+		Procs:                    c.procChecker,
+		PIDNamespace:             c.selfPIDNS,
+		Now:                      c.now,
+		Window:                   time.Duration(c.cfg.Relay.EffectiveTimeoutSeconds()) * time.Second,
+		NeedsIntelligenceTimeout: time.Duration(c.cfg.State.EffectiveNeedsIntelligenceTimeoutSeconds()) * time.Second,
+		samplePane:               c.paneSampler(),
+		idleScreenTimeout:        time.Duration(c.cfg.State.EffectiveIdleScreenTimeoutSeconds()) * time.Second,
 	}
 }
 

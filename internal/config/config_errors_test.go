@@ -98,7 +98,7 @@ func checkAdvice(t *testing.T, desc string) {
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
 		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
-		"[state] permission_unanswered_timeout_seconds ", "[state] no_screen_change_timeout_seconds "} {
+		"[state] needs_intelligence_timeout_seconds ", "[state] idle_screen_timeout_seconds "} {
 		refused += strings.Count(list, k)
 	}
 	above := false
@@ -265,8 +265,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 			caseVariantText("[store] BUSY_TIMEOUT_MS and [store] busy_timeout_ms")},
 		{"settle_refused_value_under_one_name", "[State]\nsettle_ms = -1\n\n[state]\nsettle_ms = 1000\n",
 			caseVariantText("[State] settle_ms and [state] settle_ms")},
-		{"permission_refused_value_under_one_name", "[state]\npermission_unanswered_timeout_seconds = -1\nPERMISSION_UNANSWERED_TIMEOUT_SECONDS = 30\n",
-			caseVariantText("[state] permission_unanswered_timeout_seconds and [state] PERMISSION_UNANSWERED_TIMEOUT_SECONDS")},
+		{"needs_intelligence_refused_value_under_one_name", "[state]\nneeds_intelligence_timeout_seconds = -1\nNEEDS_INTELLIGENCE_TIMEOUT_SECONDS = 30\n",
+			caseVariantText("[state] needs_intelligence_timeout_seconds and [state] NEEDS_INTELLIGENCE_TIMEOUT_SECONDS")},
 		{"beside_refused_value", "[pause]\ntimeout_seconds = -1\n\n" + dbPathTwice,
 			caseVariantText("[Store] db_path and [store] db_path")},
 		{"two_keys_interleaved", "[Store]\ndb_path = \"/upper.db\"\n\n[relay]\ntimeout_seconds = 60\n\n" +
@@ -364,8 +364,8 @@ func TestStateTimeoutRefusesNonInteger(t *testing.T) {
 		name string
 		set  func(v string) rangeKeys
 	}{
-		{"permission_unanswered_timeout_seconds", func(v string) rangeKeys { return rangeKeys{permission: v, settle: "1500"} }},
-		{"no_screen_change_timeout_seconds", func(v string) rangeKeys { return rangeKeys{noScreenChange: v, permission: "47"} }},
+		{"needs_intelligence_timeout_seconds", func(v string) rangeKeys { return rangeKeys{needsIntelligence: v, settle: "1500"} }},
+		{"idle_screen_timeout_seconds", func(v string) rangeKeys { return rangeKeys{idleScreen: v, needsIntelligence: "47"} }},
 	}
 	for _, tc := range []struct{ name, value string }{
 		{"fractional", "30.5"},

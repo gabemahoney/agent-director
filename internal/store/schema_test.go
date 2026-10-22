@@ -156,6 +156,12 @@ func TestFreshStoreSchema(t *testing.T) {
 	})
 	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
 	assertColumnSpecs(t, db, v14ColumnSpecs)
+	// The v14 columns' earlier names are gone; an upgrade's schema is this one.
+	for _, old := range []string{"stuck_version", "stuck_observation", "stuck_exit", "no_screen_change_timeout_seconds"} {
+		if slices.Contains(tableColumnNames(t, db, "spawns"), old) {
+			t.Errorf("spawns keeps the earlier column %s", old)
+		}
+	}
 	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"))
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
@@ -232,7 +238,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
 				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking ||
-				sp.NoScreenChangeTimeoutSeconds != 0 || sp.PaneSHA256 != "" || sp.PaneSinceMillis != 0 {
+				sp.IdleScreenTimeoutSeconds != 0 || sp.PaneSHA256 != "" || sp.PaneSinceMillis != 0 {
 				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report, untracked, no timeout override and no pane baseline", sp, err)
 			}
 			id := s.StoreID()

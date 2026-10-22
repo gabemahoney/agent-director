@@ -9,101 +9,99 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// StuckPermissionUnanswered identifies a current unanswered permission fallback.
-const StuckPermissionUnanswered = store.StuckPermissionUnanswered
-
-// StuckNoScreenChange identifies a working Claude or Codex row whose sampled
-// pane fingerprints stayed identical for its no_screen_change timeout.
-const StuckNoScreenChange = store.StuckNoScreenChange
-
-// The no_screen_change_availability values: whether no_screen_change can
-// ever apply to a row's agent. Unavailable is a capability outcome, never a
-// stuck reason.
+// The two Displayed States: a current unanswered permission fallback, which a
+// human or orchestrating agent must answer, and a working Claude or Codex row
+// whose sampled pane fingerprints stayed identical for its idle_screen
+// timeout. Both are report-only; command guards act on the raw state.
 const (
-	// NoScreenChangeAvailable: no_screen_change can apply to the row's agent
-	// (Claude, Codex).
-	NoScreenChangeAvailable = "available"
-	// NoScreenChangeUnavailable: no_screen_change never applies to the row's
-	// agent (Cursor), which is never sampled.
-	NoScreenChangeUnavailable = "unavailable"
+	StateNeedsIntelligence = store.StateNeedsIntelligence
+	StateIdleScreen        = store.StateIdleScreen
 )
 
-// noScreenChangeAvailability is the capability outcome of a row's agent, by
-// the same rule that decides which rows are sampled
-// (store.NoScreenChangeApplies).
-func noScreenChangeAvailability(agent string) string {
-	if store.NoScreenChangeApplies(agent) {
-		return NoScreenChangeAvailable
+// The idle_screen_availability values: whether idle_screen can ever apply to
+// a row's agent. Unavailable is a capability outcome, never a state.
+const (
+	// IdleScreenAvailable: idle_screen can apply to the row's agent (Claude,
+	// Codex).
+	IdleScreenAvailable = "available"
+	// IdleScreenUnavailable: idle_screen never applies to the row's agent
+	// (Cursor), which is never sampled.
+	IdleScreenUnavailable = "unavailable"
+)
+
+// idleScreenAvailability is the capability outcome of a row's agent, by the
+// same rule that decides which rows are sampled (store.IdleScreenApplies).
+func idleScreenAvailability(agent string) string {
+	if store.IdleScreenApplies(agent) {
+		return IdleScreenAvailable
 	}
-	return NoScreenChangeUnavailable
+	return IdleScreenUnavailable
 }
 
-// StuckInfo is shared by get and status. Reason-specific fields are omitted
-// together when the committed display is ordinary. Since uses exactly UTC ms.
-type StuckInfo struct {
-	// StuckReason is present only while displayed stuck.
-	StuckReason string `json:"stuck_reason,omitempty"`
+// StateDetail is shared by get and status: the detail of the Displayed State
+// shown, every field omitted while the committed display is ordinary. Since
+// uses exactly UTC ms.
+type StateDetail struct {
 	// Since is actual committed display entry in RFC3339 UTC milliseconds.
 	Since string `json:"since,omitempty"`
-	// RequestToken selects the earliest qualifying fallback, then lexical token.
+	// RequestToken selects the earliest qualifying fallback, then lexical
+	// token; only while needs_intelligence.
 	RequestToken string `json:"request_token,omitempty"`
-	// ToolName is the selected request tool.
+	// ToolName is the selected request tool; only while needs_intelligence.
 	ToolName string `json:"tool_name,omitempty"`
 	// UnchangedMinutes is the completed minutes, rounded down, of the
-	// committed unchanged observation period; only while displayed
-	// no_screen_change.
+	// committed unchanged observation period; only while idle_screen.
 	UnchangedMinutes *int64 `json:"unchanged_minutes,omitempty"`
 }
 
-type permissionStuckStore interface {
+type needsIntelligenceStore interface {
 	PermissionRequestsForSpawn(string) ([]PermissionRow, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]PermissionRow, error)
-	ObservePermissionStuck(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.StuckDisplay, error)
+	ObserveNeedsIntelligence(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, error)
 }
 
-type paneStuckStore interface {
-	ObservePaneStuck(Spawn, store.PaneSample, time.Time, time.Duration, store.SettleRead) (store.StuckDisplay, error)
+type idleScreenStore interface {
+	ObserveIdleScreen(Spawn, store.PaneSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, error)
 }
 
 var (
-	_ permissionStuckStore = (*store.Store)(nil)
-	_ permissionStuckStore = (*store.CursorMissingReads)(nil)
-	_ paneStuckStore       = (*store.Store)(nil)
-	_ paneStuckStore       = (*store.CursorMissingReads)(nil)
+	_ needsIntelligenceStore = (*store.Store)(nil)
+	_ needsIntelligenceStore = (*store.CursorMissingReads)(nil)
+	_ idleScreenStore        = (*store.Store)(nil)
+	_ idleScreenStore        = (*store.CursorMissingReads)(nil)
 )
 
-// stuckDisplay is status's evaluation through the one all-agent dispatch
-// status, get and list share (observeStuck). Sampling and persistence are
-// best effort; an uncommitted observation returns the coherent display from
-// the original row snapshot, including its detail.
-func stuckDisplay(s any, v RelayView, settle store.SettleRead, row Spawn) store.StuckDisplay {
-	display, _, _ := observeStuck(s, v, settle, row, permissionRead{})
+// displayed is status's evaluation through the one all-agent dispatch status,
+// get and list share (observeDisplay). Sampling and persistence are best
+// effort; an uncommitted observation returns the coherent display from the
+// original row snapshot, including its detail.
+func displayed(s any, v RelayView, settle store.SettleRead, row Spawn) store.DisplayDetail {
+	display, _, _ := observeDisplay(s, v, settle, row, permissionRead{})
 	return display
 }
 
-// observeStuck is stuckDisplay, also returning the permission requests it
+// observeDisplay is displayed, also returning the permission requests it
 // observed (nil when none) and whether its write found the store busy. A read
 // whose earlier write found the store busy (read.storeBusy) samples, reads and
 // writes nothing more and answers the committed display, pane rows included.
 // Otherwise a working Claude or Codex row is observed by its pane. A reader
 // that samples none (the exported verb functions) keeps such a row's current
-// no_screen_change finding (NoScreenChangeCurrent) as committed, so it never
-// settles out an episode, entry or reason change a sampling reader still
-// sees. Every other row, such a row with no current finding included, is
-// observed by its permission requests (those in read when the reader gives
-// them), which also settles out a displayed episode of either reason left by
-// an earlier interval.
-func observeStuck(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.StuckDisplay, *judgedRequestSet, bool) {
+// idle_screen finding (IdleScreenCurrent) as committed, so it never settles
+// out an episode, entry or move a sampling reader still sees. Every other row,
+// such a row with no current finding included, is observed by its permission
+// requests (those in read when the reader gives them), which also settles out
+// a display of either state left by an earlier interval.
+func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, *judgedRequestSet, bool) {
 	if read.storeBusy {
-		return row.CommittedStuckDisplay(), read.requests, true
+		return row.CommittedDisplay(), read.requests, true
 	}
 	if row.PaneObservable() {
-		if r, ok := s.(paneStuckStore); ok && v.samplePane != nil {
+		if r, ok := s.(idleScreenStore); ok && v.samplePane != nil {
 			display, busy := paneObservation(r, v, settle, row)
 			return display, nil, busy
 		}
-		if row.NoScreenChangeCurrent() {
-			return row.CommittedStuckDisplay(), nil, false
+		if row.IdleScreenCurrent() {
+			return row.CommittedDisplay(), nil, false
 		}
 	}
 	return permissionObservation(s, v, settle, row, read)
@@ -136,11 +134,11 @@ type permissionRead struct {
 // permissionObservation observes row by its permission requests, also
 // returning the requests it observed (nil when none) and whether its write
 // found the store busy.
-func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.StuckDisplay, *judgedRequestSet, bool) {
-	previous := row.CommittedStuckDisplay()
-	r, ok := s.(permissionStuckStore)
+func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, *judgedRequestSet, bool) {
+	previous := row.CommittedDisplay()
+	r, ok := s.(needsIntelligenceStore)
 	if !ok || finishedState(row.State) || row.State == store.StatePending ||
-		(row.State != store.StateCheckPermission && row.StuckObservation == "") {
+		(row.State != store.StateCheckPermission && row.DisplayObservation == "") {
 		return previous, read.requests, false
 	}
 	j := newRelayJudge(v)
@@ -165,11 +163,11 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		}
 		samples = append(samples, sample)
 	}
-	timeout := v.PermissionUnansweredTimeout
+	timeout := v.NeedsIntelligenceTimeout
 	if timeout <= 0 {
-		timeout = config.DefaultPermissionUnansweredTimeoutSeconds * time.Second
+		timeout = config.DefaultNeedsIntelligenceTimeoutSeconds * time.Second
 	}
-	display, err := r.ObservePermissionStuck(row, samples, now, timeout, settle)
+	display, err := r.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
 	if err != nil {
 		return previous, judged, errors.Is(err, store.ErrStoreBusy)
 	}
@@ -181,17 +179,17 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 // configured timeout. A failed capture is a sample that resets the baseline;
 // an uncommitted sample returns the committed display, and whether its write
 // found the store busy.
-func paneObservation(r paneStuckStore, v RelayView, settle store.SettleRead, row Spawn) (store.StuckDisplay, bool) {
+func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, bool) {
 	sample := v.samplePane(row)
-	timeout := v.noScreenChangeTimeout
-	if row.NoScreenChangeTimeoutSeconds > 0 {
-		timeout = time.Duration(row.NoScreenChangeTimeoutSeconds) * time.Second
+	timeout := v.idleScreenTimeout
+	if row.IdleScreenTimeoutSeconds > 0 {
+		timeout = time.Duration(row.IdleScreenTimeoutSeconds) * time.Second
 	} else if timeout <= 0 {
-		timeout = config.DefaultNoScreenChangeTimeoutSeconds * time.Second
+		timeout = config.DefaultIdleScreenTimeoutSeconds * time.Second
 	}
-	display, err := r.ObservePaneStuck(row, sample, relayJudge{view: v}.now(), timeout, settle)
+	display, err := r.ObserveIdleScreen(row, sample, relayJudge{view: v}.now(), timeout, settle)
 	if err != nil {
-		return row.CommittedStuckDisplay(), errors.Is(err, store.ErrStoreBusy)
+		return row.CommittedDisplay(), errors.Is(err, store.ErrStoreBusy)
 	}
 	return display, false
 }
@@ -207,8 +205,8 @@ func (c *Client) paneSampler() func(Spawn) store.PaneSample {
 	return func(row Spawn) store.PaneSample { return c.samplePane(row, stopped) }
 }
 
-// samplePane fingerprints row's own pane for its no_screen_change
-// observation: the agent's pane of the row's current launch, found as
+// samplePane fingerprints row's own pane for its idle_screen observation: the
+// agent's pane of the row's current launch, found as
 // read-pane finds it and captured as read-pane's default read
 // (DefaultReadPaneLines, ANSI stripped), so the fingerprint is the
 // pane_sha256 such a read returns. Only that pane counts: a session an earlier
@@ -244,14 +242,19 @@ func (c *Client) samplePane(row Spawn, stopped map[string]bool) store.PaneSample
 	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }
 
-func stuckInfo(d store.StuckDisplay) StuckInfo {
-	if d.State != store.StateStuck {
-		return StuckInfo{}
-	}
-	info := StuckInfo{StuckReason: d.Reason, Since: time.UnixMilli(d.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"), RequestToken: d.RequestToken, ToolName: d.ToolName}
-	if d.Reason == store.StuckNoScreenChange {
+// stateDetail is d's detail as status and get report it: only the fields of
+// the Displayed State shown, none for an ordinary state.
+func stateDetail(d store.DisplayDetail) StateDetail {
+	var detail StateDetail
+	switch d.State {
+	case StateNeedsIntelligence:
+		detail = StateDetail{RequestToken: d.RequestToken, ToolName: d.ToolName}
+	case StateIdleScreen:
 		minutes := d.UnchangedMinutes
-		info.UnchangedMinutes = &minutes
+		detail = StateDetail{UnchangedMinutes: &minutes}
+	default:
+		return StateDetail{}
 	}
-	return info
+	detail.Since = time.UnixMilli(d.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z")
+	return detail
 }

@@ -30,8 +30,8 @@ busy_timeout_ms = 10000
 
 [state]
 settle_ms = 0   # 0 = off
-permission_unanswered_timeout_seconds = 30
-no_screen_change_timeout_seconds = 1200
+needs_intelligence_timeout_seconds = 30
+idle_screen_timeout_seconds = 1200
 
 [launch]   # optional; absolute or "~/" paths; empty or omitted = unset
 # claude_path = "/opt/claude/bin/claude"
@@ -72,8 +72,8 @@ Whole numbers unless stated; 0 gives the default (not for `[relay] poll_*`).
 | `[store] db_path` | path | `~/.config/agent-director/state.db` | Where the store lives (owner-only `0600`; holds the `--extra-env` values `resume` restores); a relative path is joined onto `~/.config/agent-director`. Keep it and `busy_timeout_ms` on one line each: `install.sh` refuses anything else. |
 | `[store] busy_timeout_ms` | 1 to 2147483647 | 10000 | How long a call waits for a locked store before it fails. Above about 15 s a busy store can get a launch's SessionStart hook killed, leaving the row `pending` (noted `unreported`). |
 | `[state] settle_ms` | 0 to 60000 | 0 | 0 is off. How long a new `state` or raw family aggregate must hold before `status`, `get` and `list` show it (see [Settle time](#settle-time-state)). |
-| `[state] permission_unanswered_timeout_seconds` | 1 to 9223372036 | 30 | How long a permission request whose agent fell back to its own prompt must stay unanswered before `status`, `get` and `list` can show `stuck` (see [Permission-unanswered timeout](#permission-unanswered-timeout-state)). |
-| `[state] no_screen_change_timeout_seconds` | 1 to 9223372036 | 1200 | How long a `working` Claude or Codex agent's pane must look the same on every read before `status`, `get` and `list` can show `stuck` (see [No-screen-change timeout](#no-screen-change-timeout-state)). |
+| `[state] needs_intelligence_timeout_seconds` | 1 to 9223372036 | 30 | How long a permission request whose agent fell back to its own prompt must stay unanswered before `status`, `get` and `list` can show `needs_intelligence` (see [Needs-intelligence timeout](#needs-intelligence-timeout-state)). |
+| `[state] idle_screen_timeout_seconds` | 1 to 9223372036 | 1200 | How long a `working` Claude or Codex agent's pane must look the same on every read before `status`, `get` and `list` can show `idle_screen` (see [Idle-screen timeout](#idle-screen-timeout-state)). |
 | `[launch] claude_path` | absolute path or `~/` path | unset | The program a `claude` spawn, reuse or resume runs; a `~/` path is joined onto `HOME` at load. Empty or unset runs `claude` from the `PATH` of the agents' tmux server; set it when that `PATH` differs from the caller's. A set path runs as written: no `PATH` lookup and no shell parsing, and agent-director does not check the program. A change takes effect at the next launch (spawn, reuse or resume). Keep it on one line (`claude_path = "<path>"`, or single quotes, no backslash): `install.sh` refuses anything else (see [`install.sh` refuses config.toml or a template](operator-actions.md#installsh-refuses-configtoml-or-a-template)). When it names an executable file, `install.sh` runs it for every Claude Code command it issues. |
 | `[launch] codex_path` | absolute path or `~/` path | unset | The program a `codex` spawn, reuse or resume runs, in the same form and under the same refusals as `claude_path`: empty or unset runs `codex` from the `PATH` of the agents' tmux server, a set path runs as written with no `PATH` lookup and no shell parsing, and a change takes effect at the next launch. One line, as for `claude_path`. When it names an executable file, `install.sh` counts Codex as installed; it never runs it. Codex installed with npm needs the native program here: see [Requirements](install.md#requirements). |
 | `[launch] cursor_path` | absolute path or `~/` path | unset | The Cursor runtime program for a `cursor` spawn, reuse or resume. Empty or unset runs `agent` from the agents' tmux server `PATH`. A `~/` path expands against `HOME` at config load. A set value is one whole executable path, with no shell parsing, `PATH` lookup or fallback, not a command plus arguments. It has the same config-value refusals as the other launch paths; agent-director does not check the executable in advance. The current loaded setting takes effect at the next launch (spawn, reuse or resume); changing it does not overwrite saved cwd, arguments, environment or group configuration. Installer presence discovery does not change this setting. Cursor lifecycle limits are in [Usage](usage.md#fresh-cursor-use). |
@@ -176,44 +176,46 @@ on CLI, MCP and the Go and TypeScript clients:
   change, a reported value can have held for less than the new interval.
   A wall-clock step back delays settling; a jump forward can settle early.
 
-## Permission-unanswered timeout (`[state]`)
+## Needs-intelligence timeout (`[state]`)
 
-`[state] permission_unanswered_timeout_seconds` is how long an agent's own
+`[state] needs_intelligence_timeout_seconds` is how long an agent's own
 permission prompt may stay unanswered before `status`, `get` and `list`
-show the agent as `stuck`. Which requests count, and when their clock
-starts, is in [permissions](permissions.md#stuck-on-an-unanswered-permission); the
-fields it adds are in the [caller contract](caller-contract.md#stuck-rows).
+show the agent as `needs_intelligence`. Which requests count, and when their
+clock starts, is in
+[permissions](permissions.md#needs-intelligence-on-an-unanswered-permission);
+the fields it adds are in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 - **Range.** Whole seconds from 1 to 9223372036. A missing key, or 0, reads
   30. A negative value or one above the maximum is refused, never capped (see
   [Refused values](#refused-values)).
-- **Settling.** `stuck` is shown and cleared under
+- **Settling.** `needs_intelligence` is shown and cleared under
   [`settle_ms`](#settle-time-state), like any other change of `state`.
 - **When a change takes effect.** As [any other](#when-a-change-takes-effect):
   each reader judges with the value it has loaded.
 
-## No-screen-change timeout (`[state]`)
+## Idle-screen timeout (`[state]`)
 
-`[state] no_screen_change_timeout_seconds` is how long a `working` Claude or
+`[state] idle_screen_timeout_seconds` is how long a `working` Claude or
 Codex agent's pane must look the same on every `status`, `get` and `list`
-before they show the agent as `stuck` with `no_screen_change`. How panes are
-sampled is in the [caller contract](caller-contract.md#unchanged-panes).
+before they show the agent as `idle_screen`. How panes are sampled is in the
+[caller contract](caller-contract.md#unchanged-panes).
 
 - **Range.** Whole seconds from 1 to 9223372036. A missing key, or 0, reads
   1200 (20 minutes). A negative value or one above the maximum is refused,
   never capped (see [Refused values](#refused-values)).
-- **Per spawn.** `spawn --no-screen-change-timeout-seconds N`
-  (`no_screen_change_timeout_seconds` over MCP and in the TypeScript client,
-  `NoScreenChangeTimeoutSeconds` in Go) gives the agent its own timeout, used
-  in place of every reader's key, in the same range. 0, omitted or JSON `null`
-(MCP, TypeScript) gives none;
-  any other value outside the range, or not a whole number, is refused
-  (`ErrInvalidFlags`) before anything is written or launched. `resume` keeps
-  it; the next spawn or reuse of the id replaces it, clearing it when that
-  call gives none; a reuse whose launch fails restores the earlier one.
-  Cursor rows keep it, but it has no effect on them.
+- **Per spawn.** `spawn --idle-screen-timeout-seconds N`
+  (`idle_screen_timeout_seconds` over MCP and in the TypeScript client,
+  `IdleScreenTimeoutSeconds` in Go) gives the agent its own timeout, used
+  in place of every reader's key, in the same range. 0, omitted or JSON
+  `null` (MCP, TypeScript) gives none; any other value outside the range, or
+  not a whole number, is refused (`ErrInvalidFlags`) before anything is
+  written or launched. `resume` keeps it; the next spawn or reuse of the id
+  replaces it, clearing it when that call gives none; a reuse whose launch
+  fails restores the earlier one. Cursor rows keep it, but it has no effect
+  on them.
 - **Settling and changes.** As for the
-  [permission-unanswered timeout](#permission-unanswered-timeout-state); a
+  [needs-intelligence timeout](#needs-intelligence-timeout-state); a
   reader judges a row with no timeout of its own with the value it has loaded.
 
 ## Timing settings (`[tmux]`)

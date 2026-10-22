@@ -239,7 +239,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	exits, err := takeStuckExits(ctx, conn, instanceID)
+	exits, err := takeDisplayExits(ctx, conn, instanceID)
 	if err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -247,7 +247,7 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
-	emitStuckTransitions(exits)
+	emitDisplayTransitions(exits)
 
 	emitTerminalCloseout(ctx, closed, instanceID, reason)
 	return prior, CondApplied, nil
@@ -262,7 +262,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	var prior string
 	var res CondResult
 	var closed []closedRequest
-	var exits []stuckTransition
+	var exits []displayTransition
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
@@ -270,7 +270,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 			if err := s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing); err != nil {
 				return err
 			}
-			exits, err = takeStuckExits(ctx, conn, instanceID)
+			exits, err = takeDisplayExits(ctx, conn, instanceID)
 		}
 		return err
 	})
@@ -278,7 +278,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if res == CondApplied {
-		emitStuckTransitionsContext(ctx, exits)
+		emitDisplayTransitionsContext(ctx, exits)
 		emitTerminalCloseout(ctx, closed, instanceID, reason)
 	}
 	return prior, res, nil
@@ -541,17 +541,18 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // The move is an immediate write (b.3ie): settled_state takes the same value
 // as state, and state_changed_ms the statement's clock (the WHERE pins
 // check_permission, so the value always changes). Like every immediate write
-// it advances permission_epoch, advances stuck_version, clears the stuck
-// observation and, when that observation displayed stuck, records the stuck
-// exit that the transaction drains and emits after commit.
+// it advances permission_epoch, advances observation_version, clears the
+// display observation and, when the row showed either Displayed State as
+// committed, records the display exit that the transaction drains and emits
+// after commit.
 var repairCheckPermissionSQL = `UPDATE spawns
     SET state = ` + repairNewStateSQL + `,
         permission_epoch = permission_epoch + 1,
-        stuck_exit = CASE WHEN ` + stuckObservedStateSQL + ` = 'stuck'
-          THEN json_object('new_state', ` + repairNewStateSQL + `, 'reason', json_extract(stuck_observation, '$.reason'), 'at_ms', ` + nowMsSQL + `)
-          ELSE stuck_exit END,
-        stuck_observation = NULL,
-        stuck_version = stuck_version + 1,
+        display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
+          THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ` + repairNewStateSQL + `, 'at_ms', ` + nowMsSQL + `)
+          ELSE display_exit END,
+        display_observation = NULL,
+        observation_version = observation_version + 1,
         settled_state = ` + repairNewStateSQL + `,
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
@@ -563,7 +564,7 @@ var repairCheckPermissionSQL = `UPDATE spawns
 
 // repairNewStateSQL is the state the repair writes: waiting when idle_since
 // is set on a non-Codex row, working otherwise. Its two placeholders are
-// waiting and working; the statement uses it three times (state, the stuck
+// waiting and working; the statement uses it three times (state, the display
 // exit and the settled value), so the caller repeats the pair.
 const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END`
 

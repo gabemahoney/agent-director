@@ -67,8 +67,8 @@ test.each([
     const status = await client.status({ instance_id: spawned.instance_id });
     expect(status.state).toBe("pending");
     expect(status.family_state).toBe("working");
-    expect(Object.keys(status).sort()).toEqual(["context", "family_state", "launch_started_at", "no_screen_change_availability", "state"]);
-    expect(status.no_screen_change_availability).toBe("unavailable");
+    expect(Object.keys(status).sort()).toEqual(["context", "family_state", "idle_screen_availability", "launch_started_at", "state"]);
+    expect(status.idle_screen_availability).toBe("unavailable");
     expect(await client.listSubagents({ instance_id: spawned.instance_id })).toEqual({ tracked: false, subagents: [] });
     expect(runHelper("fake-pane-owner", { pid: String(owner.pid), store: storePath, id: spawned.instance_id })).toEqual(identity);
     } finally {

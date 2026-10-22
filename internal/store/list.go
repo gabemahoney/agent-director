@@ -22,24 +22,28 @@ import (
 // zero value is no settle time, and ListSpawns runs exactly the query it ran
 // before b.3ie, State filtering on the raw state.
 //
-// StuckCandidates widens a State filter to every row whose displayed state
-// may differ from its reported state: one with a retained stuck observation,
-// and, when State names stuck, one whose raw state can become stuck. The
-// caller filters those rows on their displayed state and applies Limit.
+// DisplayCandidates widens a State filter to every row whose displayed state
+// may differ from its reported state: one with a retained display
+// observation, and, when State names a Displayed State, one whose raw state
+// can display it. The caller filters those rows on their displayed state and
+// applies Limit.
 type ListFilters struct {
-	State           []string
-	Labels          map[string]string
-	Parent          string
-	Cwd             string
-	TmuxSessionName string
-	Limit           int
-	Settle          SettleRead
-	StuckCandidates bool
+	State             []string
+	Labels            map[string]string
+	Parent            string
+	Cwd               string
+	TmuxSessionName   string
+	Limit             int
+	Settle            SettleRead
+	DisplayCandidates bool
 }
 
-// stuckRawStates are the raw states a read can display as stuck: an
-// unanswered permission request's and an unchanged working pane's.
-var stuckRawStates = []string{StateCheckPermission, StateWorking}
+// displayRawStates are the raw states a read can display as each Displayed
+// State: an unanswered permission request's and an unchanged working pane's.
+var displayRawStates = map[string]string{
+	StateNeedsIntelligence: StateCheckPermission,
+	StateIdleScreen:        StateWorking,
+}
 
 // ListSpawns runs the filtered query and returns rows in unspecified
 // order. SRD §4.2 explicitly accepts the linear scan + json_extract
@@ -92,16 +96,17 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			args = append(args, st)
 		}
 		clause := stateExpr + " IN (" + strings.Join(placeholders, ",") + ")"
-		if f.StuckCandidates {
-			clause = "(" + clause + " OR stuck_observation IS NOT NULL"
+		if f.DisplayCandidates {
+			clause = "(" + clause + " OR display_observation IS NOT NULL"
+			var raws []any
 			for _, st := range f.State {
-				if st == StateStuck {
-					clause += " OR state IN (" + strings.TrimSuffix(strings.Repeat("?,", len(stuckRawStates)), ",") + ")"
-					for _, raw := range stuckRawStates {
-						args = append(args, raw)
-					}
-					break
+				if raw, ok := displayRawStates[st]; ok {
+					raws = append(raws, raw)
 				}
+			}
+			if len(raws) > 0 {
+				clause += " OR state IN (" + strings.TrimSuffix(strings.Repeat("?,", len(raws)), ",") + ")"
+				args = append(args, raws...)
 			}
 			clause += ")"
 		}

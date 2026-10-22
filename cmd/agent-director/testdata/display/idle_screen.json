@@ -1,6 +1,5 @@
 {
-  "state": "stuck",
-  "stuck_reason": "no_screen_change",
+  "state": "idle_screen",
   "since": "2026-10-19T23:59:59.123Z",
   "unchanged_minutes": 21
 }

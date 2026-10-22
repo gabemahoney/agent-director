@@ -56,25 +56,24 @@ type ListParams struct {
 // §12 list shape promises so future store-internal additions don't
 // leak silently.
 type ListRow struct {
-	// StuckReason is present only while displayed stuck.
-	StuckReason string `json:"stuck_reason,omitempty"`
-
 	// InstanceID is the stable id of the Spawn.
 	InstanceID string `json:"instance_id"`
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing, stuck. pending means a launch
-	// (spawn, reuse or resume) is in progress and the agent has not reported
-	// in yet (its SessionStart hook); it may be loading or waiting at a
-	// startup prompt. A resumed pending row keeps its session id and history.
+	// ask_user, check_permission, ended, missing, or a report-only Displayed
+	// State, needs_intelligence or idle_screen, whose detail only get and
+	// status carry. pending means a launch (spawn, reuse or resume) is in
+	// progress and the agent has not reported in yet (its SessionStart hook);
+	// it may be loading or waiting at a startup prompt. A resumed pending row
+	// keeps its session id and history.
 	State string `json:"state"`
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
-	// NoScreenChangeAvailability is, as StatusResult's, available for Claude
-	// and Codex and unavailable for Cursor. Present on every row.
-	NoScreenChangeAvailability string `json:"no_screen_change_availability,omitempty"`
+	// IdleScreenAvailability is, as StatusResult's, available for Claude and
+	// Codex and unavailable for Cursor. Present on every row.
+	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -168,12 +167,12 @@ type ListResult struct {
 // check-before-read rule, b.146 rule 5). List is a reading verb and never
 // waits for the store's write lock (b.146 problem 4): it writes hook_gone_at
 // on every request it found fallen back, in one write, only if the lock is
-// free at that moment, and attempts no such write once a stuck observation
+// free at that moment, and attempts no such write once a display observation
 // write of the same read has found the store busy.
 //
 // List reads with no settle time and samples no pane, so a working Claude or
-// Codex row keeps its pane's current no_screen_change finding as committed;
-// the Client applies its [state] settle_ms and samples panes (listSettled).
+// Codex row keeps its pane's current idle_screen finding as committed; the
+// Client applies its [state] settle_ms and samples panes (listSettled).
 func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 	return listSettled(s, v, store.SettleRead{}, params)
 }
@@ -183,8 +182,9 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 // settled state. The State filter and LIMIT apply to the displayed state:
 // in the store's statement for a store with no permission observation; for
 // one that observes, the statement keeps every row that may display a
-// filtered state (ListFilters.StuckCandidates) and listFiltered matches each
-// row's displayed state before the limit. launch_started_at and whether a
+// filtered state (ListFilters.DisplayCandidates) and listFiltered matches each
+// row's displayed state before the limit, so a row showing either Displayed
+// State never matches its raw state. launch_started_at and whether a
 // row's permission requests are read and shown key on the raw state, as
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
@@ -224,11 +224,11 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
 	fetch := filters
-	observer, observes := s.(permissionStuckStore)
+	observer, observes := s.(needsIntelligenceStore)
 	if observes && len(filters.State) > 0 {
 		// The statement keeps every row that may display a filtered state;
 		// the displayed state is matched, and the limit applied, below.
-		fetch.StuckCandidates, fetch.Limit = true, 0
+		fetch.DisplayCandidates, fetch.Limit = true, 0
 	}
 	rows, err := s.ListSpawns(fetch)
 	if err != nil {
@@ -243,7 +243,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		if filters.Settle.SettleMs > 0 {
 			reported = r.ReportedState
 		}
-		display := store.StuckDisplay{State: reported}
+		display := store.DisplayDetail{State: reported}
 		var judged *judgedRequestSet
 		if observes {
 			var read permissionRead
@@ -258,7 +258,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 				}
 			}
 			var busy bool
-			display, judged, busy = observeStuck(s, v, filters.Settle, r, read)
+			display, judged, busy = observeDisplay(s, v, filters.Settle, r, read)
 			storeBusy = storeBusy || busy
 		}
 		if observes && len(filters.State) > 0 {
@@ -271,25 +271,24 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			}
 		}
 		row := ListRow{
-			InstanceID:                 r.InstanceID,
-			ParentID:                   r.ParentID,
-			State:                      display.State,
-			StuckReason:                display.Reason,
-			FamilyState:                r.FamilyState,
-			NoScreenChangeAvailability: noScreenChangeAvailability(r.Agent),
-			CWD:                        r.CWD,
-			Agent:                      r.Agent,
-			TmuxSessionName:            r.TmuxSessionName,
-			RelayMode:                  r.RelayMode,
-			Labels:                     r.Labels,
-			StartedAt:                  r.StartedAt,
-			LastSeenAt:                 r.LastSeenAt,
-			StateChangedAt:             millisToUTC(r.StateChangedMillis),
-			EndedAt:                    r.EndedAt,
-			LaunchStartedAt:            launchStartedAt(r.State, r.LaunchStartedAtMillis),
-			LivenessUnverifiedSince:    nullableTimestamp(r.LivenessUnverifiedSince),
-			LivenessNote:               nullableString(r.LivenessNote),
-			PermissionRequests:         []PermissionRequestInfo{},
+			InstanceID:              r.InstanceID,
+			ParentID:                r.ParentID,
+			State:                   display.State,
+			FamilyState:             r.FamilyState,
+			IdleScreenAvailability:  idleScreenAvailability(r.Agent),
+			CWD:                     r.CWD,
+			Agent:                   r.Agent,
+			TmuxSessionName:         r.TmuxSessionName,
+			RelayMode:               r.RelayMode,
+			Labels:                  r.Labels,
+			StartedAt:               r.StartedAt,
+			LastSeenAt:              r.LastSeenAt,
+			StateChangedAt:          millisToUTC(r.StateChangedMillis),
+			EndedAt:                 r.EndedAt,
+			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
+			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
+			LivenessNote:            nullableString(r.LivenessNote),
+			PermissionRequests:      []PermissionRequestInfo{},
 		}
 		if r.State == store.StateCheckPermission && judged != nil {
 			row.PermissionRequests = judgedOpenInfos(judged, j)
@@ -336,8 +335,8 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // write errors fail the read. List never waits for a state to settle or for
 // the store's write lock. Relay-delivery writes remain best effort. Like
 // [Client.Status] it samples the own pane of each working Claude or Codex row
-// it reads for no_screen_change, a failure affecting only that row, and every
-// row carries no_screen_change_availability.
+// it reads for idle_screen, a failure affecting only that row, and every row
+// carries idle_screen_availability.
 //
 // CLI: agent-director list
 //

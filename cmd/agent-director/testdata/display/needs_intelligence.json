@@ -1,6 +1,5 @@
 {
-  "state": "stuck",
-  "stuck_reason": "permission_unanswered",
+  "state": "needs_intelligence",
   "since": "2026-10-19T23:59:59.123Z",
   "request_token": "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
   "tool_name": "Bash"

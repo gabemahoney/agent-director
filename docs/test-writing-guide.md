@@ -95,7 +95,7 @@ Exported factories (in pkg/api/apitest/seeds.go):
 - `SeedParentChild(dbPath, parentID, childID string) error`
 - `SeedPermissionRequest(dbPath, spawnID, toolName string, opts ...PermissionOption) (PermissionRequestSeed, error)`
   — the `Permission…` options (registered in
-  [Stuck reporting](architecture.md#stuck-reporting)) set exact request facts.
+  [Displayed State reporting](architecture.md#displayed-state-reporting)) set exact request facts.
 - `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
   — backdates a seeded request's `created_at` (past the relay window it has
   fallen back) and records its `hook_gone_at` in the past (old enough for
@@ -119,31 +119,33 @@ from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by every consumer, so any schema break is
 caught early.
 
-## Stuck fixtures
+## Displayed State fixtures
 
-Tests of the `stuck` display of either reason, the request ownership and
-fallback clocks, the pane baseline and timeout override, and the schema v14
-migration seed and assert only through the shared fixtures registered in
-[Stuck reporting](architecture.md#stuck-reporting). Do not seed those
-columns with raw SQL or keep a second copy of the expected wire detail.
+Tests of the `needs_intelligence` and `idle_screen` display, the request
+ownership and fallback clocks, the pane baseline and timeout override, and
+the schema v14 migration seed and assert only through the shared fixtures
+registered in
+[Displayed State reporting](architecture.md#displayed-state-reporting). Do
+not seed those columns with raw SQL or keep a second copy of the expected
+wire detail.
 
-- `SeedPermissionSurface` and `SeedPaneSurface` rows have no pane, so read
-  them under `apitest.SettleOnConfig`, within its settle time, to keep the
-  committed detail.
+- `SeedNeedsIntelligenceSurface` and `SeedIdleScreenSurface` rows have no
+  pane, so read them under `apitest.SettleOnConfig`, within its settle time,
+  to keep the committed detail.
 - A read that must commit is nonwaiting and best effort. Confirm it with
-  `ObserveStuckRead`, `commitUnlessBusy` in `internal/store`, or
+  `ObserveDisplayRead`, `commitUnlessBusy` in `internal/store`, or
   `apitest.RepeatUntilCommitted` directly when the commit is checked on
   request columns (`TestReadersSkipFallbackWritesThatStoreNothing`), never with a
   sleep or a retry loop of your own. The first two repeat at the same injected
   instant under one bound, `apitest.RepeatUntilCommitted`, giving up only
-  after at least 3 attempts and 10 s: `ObserveStuckRead` until its
-  `CommitCheck` (usually `VersionAdvanced` on `stuck_version`) confirms the
+  after at least 3 attempts and 10 s: `ObserveDisplayRead` until its
+  `CommitCheck` (usually `VersionAdvanced` on `observation_version`) confirms the
   commit (failing with "observation never committed" once the bound runs
   out) and checks the display against the committed row; `commitUnlessBusy` while the store
   answers `ErrStoreBusy`, failing at once on any other error.
 - Pane tests use `paneEnv`. Interleave a write between a sample and its
   commit with `Recorder.AfterCall` on the capture, and skip a write with
-  `apitest.HoldWriteLock` or `storefix.WriteFailStuckObservation`, never with
+  `apitest.HoldWriteLock` or `storefix.WriteFailDisplayObservation`, never with
   a sleep. Fail a sample with `failOnce`, and pass the `CommitCheck` it
   returns to the committing read, not `apitest.VersionAdvanced`.
 - The `permission-stuck` and `pane-stuck` Docker Epics run, like every Epic,
@@ -161,12 +163,12 @@ columns with raw SQL or keep a second copy of the expected wire detail.
 
   The exceptions cover those two plans only.
 - Lifecycle and read-write coverage lives in
-  `internal/store/stuck_lifecycle_test.go` (find-missing's repair, unreadable
-  stuck metadata, reads that write nothing, an unconfirmed commit, the fallback
-  clock rule) and `pkg/api/stuck_epoch_test.go` (a new interval never
+  `internal/store/display_lifecycle_test.go` (find-missing's repair, unreadable
+  display metadata, reads that write nothing, an unconfirmed commit, the fallback
+  clock rule) and `pkg/api/needs_intelligence_epoch_test.go` (a new interval never
   inherits an old episode);
-  pane sampling, settling and reason replacement in
-  `pkg/api/stuck_pane_test.go` and `stuck_pane_settle_test.go`.
+  pane sampling, settling and the direct move in
+  `pkg/api/idle_screen_test.go` and `idle_screen_settle_test.go`.
 
 ## Context fullness captures and fixtures
 

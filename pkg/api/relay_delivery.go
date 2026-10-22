@@ -48,19 +48,20 @@ type RelayView struct {
 	// a request recorded before schema v7, with no settle instant on record,
 	// falls back.
 	Window time.Duration
-	// PermissionUnansweredTimeout is independent of relay delivery deadlines.
-	// Zero uses the configured default of thirty seconds.
-	PermissionUnansweredTimeout time.Duration
+	// NeedsIntelligenceTimeout is the needs_intelligence timeout, independent
+	// of relay delivery deadlines. Zero uses the configured default of thirty
+	// seconds.
+	NeedsIntelligenceTimeout time.Duration
 
 	// samplePane captures a working Claude or Codex row's own pane for its
-	// no_screen_change observation (Client.paneSampler, one per read); nil
-	// samples no pane, as a caller of the exported verb functions, which have
-	// no tmux, does.
+	// idle_screen observation (Client.paneSampler, one per read); nil samples
+	// no pane, as a caller of the exported verb functions, which have no tmux,
+	// does.
 	samplePane func(Spawn) store.PaneSample
-	// noScreenChangeTimeout is the Client's configured no_screen_change
-	// timeout for rows without their own override; only a view that samples
-	// panes uses it. Zero uses the configured default of twenty minutes.
-	noScreenChangeTimeout time.Duration
+	// idleScreenTimeout is the Client's configured idle_screen timeout for rows
+	// without their own override; only a view that samples panes uses it. Zero
+	// uses the configured default of twenty minutes.
+	idleScreenTimeout time.Duration
 }
 
 // RequestDelivery is a permission request's delivery facts (b.146 rule 15),

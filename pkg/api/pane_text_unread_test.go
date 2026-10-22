@@ -17,7 +17,7 @@ import (
 
 // TestNoCodePathReadsPaneText: in pkg/api's production code only readPane
 // (read-pane, which returns the text to its caller), capturePaneHash (the
-// hash check) and samplePane (the no_screen_change fingerprint) capture the
+// hash check) and samplePane (the idle_screen fingerprint) capture the
 // pane, and the captured value goes only to
 // paneSHA256, the result's Pane field and tmux.StripANSI, whose result goes
 // back into the same variable or straight to one of the other two: nothing

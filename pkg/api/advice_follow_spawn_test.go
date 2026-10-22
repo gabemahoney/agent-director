@@ -498,36 +498,36 @@ func TestAdviceFollow_A8_PendingRowReuseAfterGrace(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_A26_NoScreenChangeTimeoutPassZero: a spawn whose
-// no_screen_change override is negative or above its range is refused before
-// anything is written or launched; the same call with 0, as the advice says,
-// launches with no override, and the range's ends are stored exactly.
-// A26 (b.ob8): "pass 0 (or omit it) to use [state] no_screen_change_timeout_seconds"
-func TestAdviceFollow_A26_NoScreenChangeTimeoutPassZero(t *testing.T) {
+// TestAdviceFollow_A26_IdleScreenTimeoutPassZero: a spawn whose idle_screen
+// override is negative or above its range is refused before anything is
+// written or launched; the same call with 0, as the advice says, launches with
+// no override, and the range's ends are stored exactly.
+// A26 (b.ob8): "pass 0 (or omit it) to use [state] idle_screen_timeout_seconds"
+func TestAdviceFollow_A26_IdleScreenTimeoutPassZero(t *testing.T) {
 	// Serial: it sets AGENT_DIRECTOR_INSTANCE_ID, HOME, TMUX, TMUX_TMPDIR with t.Setenv.
-	adviceAssertManifest(t, "spawn", "no_screen_change_timeout_seconds", "0, null or omitted gives no override",
+	adviceAssertManifest(t, "spawn", "idle_screen_timeout_seconds", "0, null or omitted gives no override",
 		"refused with ErrInvalidFlags before anything is written or launched")
-	maxSeconds := int(config.MaxNoScreenChangeTimeoutSeconds)
+	maxSeconds := int(config.MaxIdleScreenTimeoutSeconds)
 	for _, refused := range []int{-1, maxSeconds + 1} {
 		t.Run(fmt.Sprint(refused), func(t *testing.T) {
 			e := newScanEnv(t)
 			id := scanID()
 			p := advSpawnParams(t, id, "")
-			p.NoScreenChangeTimeoutSeconds = refused
+			p.IdleScreenTimeoutSeconds = refused
 
 			_, err := e.c.Spawn(p)
 
-			adviceAssertAdvice(t, err, api.ErrInvalidFlags, "pass 0 (or omit it) to use [state] no_screen_change_timeout_seconds")
-			adviceAssertPhrase(t, err, fmt.Sprintf("no_screen_change_timeout_seconds = %d is outside its range 1 to 9223372036 seconds", refused))
+			adviceAssertAdvice(t, err, api.ErrInvalidFlags, "pass 0 (or omit it) to use [state] idle_screen_timeout_seconds")
+			adviceAssertPhrase(t, err, fmt.Sprintf("idle_screen_timeout_seconds = %d is outside its range 1 to 9223372036 seconds", refused))
 			assertNoTmuxCalls(t, e.rec)
 			if ids := listIDs(t, e.c); len(ids) != 0 {
 				t.Fatalf("rows after the refusal = %v; want none", ids)
 			}
-			p.NoScreenChangeTimeoutSeconds = 0
+			p.IdleScreenTimeoutSeconds = 0
 			res, err := e.c.Spawn(p)
 			advSpawnLaunched(t, e.dbPath, id, nil, res, err)
-			if cols, err := apitest.ReadSpawnColumns(e.dbPath, id); err != nil || cols.NoScreenChangeTimeoutSeconds != nil {
-				t.Errorf("override = %v (%v); want none", cols.NoScreenChangeTimeoutSeconds, err)
+			if cols, err := apitest.ReadSpawnColumns(e.dbPath, id); err != nil || cols.IdleScreenTimeoutSeconds != nil {
+				t.Errorf("override = %v (%v); want none", cols.IdleScreenTimeoutSeconds, err)
 			}
 		})
 	}
@@ -536,11 +536,11 @@ func TestAdviceFollow_A26_NoScreenChangeTimeoutPassZero(t *testing.T) {
 		for _, seconds := range []int{1, maxSeconds} {
 			id := scanID()
 			p := advSpawnParams(t, id, "")
-			p.NoScreenChangeTimeoutSeconds = seconds
+			p.IdleScreenTimeoutSeconds = seconds
 			res, err := e.c.Spawn(p)
 			advSpawnLaunched(t, e.dbPath, id, nil, res, err)
-			if cols, err := apitest.ReadSpawnColumns(e.dbPath, id); err != nil || cols.NoScreenChangeTimeoutSeconds != int64(seconds) {
-				t.Errorf("override = %v (%v); want %d exactly", cols.NoScreenChangeTimeoutSeconds, err, seconds)
+			if cols, err := apitest.ReadSpawnColumns(e.dbPath, id); err != nil || cols.IdleScreenTimeoutSeconds != int64(seconds) {
+				t.Errorf("override = %v (%v); want %d exactly", cols.IdleScreenTimeoutSeconds, err, seconds)
 			}
 		}
 	})

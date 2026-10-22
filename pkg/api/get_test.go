@@ -199,8 +199,8 @@ func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.Se
 // step 2c: one read gives both permission_requests and unproven_requests),
 // history once for the row's own life, and either read's error propagates
 // (b.v2c AC6/AC8). Every failure, an unknown id's included, encodes
-// emptyGetJSON (b.4nt). A success keeps the row's computed state with no stuck
-// fields, though the double observes no permissions and its rows' reported
+// emptyGetJSON (b.4nt). A success keeps the row's computed state with no state
+// detail, though the double observes no permissions and its rows' reported
 // state is empty (t2.sp6.2z.ej F5).
 func TestGetReadsAndErrors(t *testing.T) {
 	t.Parallel()
@@ -226,9 +226,9 @@ func TestGetReadsAndErrors(t *testing.T) {
 			f := &recordingGetStore{spawn: store.Spawn{InstanceID: "id-g", State: tc.state, LifeNumber: 3},
 				permErr: tc.permErr, historyErr: tc.historyErr}
 			got, err := api.Get(f, api.RelayView{}, tc.id)
-			if !errors.Is(err, tc.want) || (err == nil && (len(got.PermissionRequests) != 0 || got.State != tc.state || got.StuckInfo != (api.StuckInfo{}))) {
-				t.Errorf("Get = state %q, stuck %+v, requests %+v, %v; want error %v, on success state %q and no stuck fields",
-					got.State, got.StuckInfo, got.PermissionRequests, err, tc.want, tc.state)
+			if !errors.Is(err, tc.want) || (err == nil && (len(got.PermissionRequests) != 0 || got.State != tc.state || got.StateDetail != (api.StateDetail{}))) {
+				t.Errorf("Get = state %q, detail %+v, requests %+v, %v; want error %v, on success state %q and no state detail",
+					got.State, got.StateDetail, got.PermissionRequests, err, tc.want, tc.state)
 			}
 			if out := jsonOf(t, got); err != nil && out != emptyGetJSON {
 				t.Errorf("Get on failure = %s; want %s", out, emptyGetJSON)

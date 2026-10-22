@@ -1751,10 +1751,10 @@ func seedV11StartupFixture(t *testing.T, path, definition string, marker any) {
 
 var v14ColumnSpecs = []columnSpec{
 	{"spawns", "permission_epoch", "INTEGER", true, "0"},
-	{"spawns", "stuck_version", "INTEGER", true, "0"},
-	{"spawns", "stuck_observation", "TEXT", false, ""},
-	{"spawns", "stuck_exit", "TEXT", false, ""},
-	{"spawns", "no_screen_change_timeout_seconds", "INTEGER", false, ""},
+	{"spawns", "observation_version", "INTEGER", true, "0"},
+	{"spawns", "display_observation", "TEXT", false, ""},
+	{"spawns", "display_exit", "TEXT", false, ""},
+	{"spawns", "idle_screen_timeout_seconds", "INTEGER", false, ""},
 	{"spawns", "pane_sha256", "TEXT", false, ""},
 	{"spawns", "pane_since_ms", "INTEGER", false, ""},
 	{"spawns", "pane_epoch", "INTEGER", false, ""},

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -13,12 +14,13 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// permissionObservation seeds current ownership and samples exact persisted records.
-func permissionObservation(t *testing.T) (*store.Store, string, string, []store.PermissionSample, time.Time) {
+// permissionObservation seeds current ownership and samples exact persisted
+// records; opts follow the row's defaults.
+func permissionObservation(t *testing.T, opts ...apitest.SpawnOption) (*store.Store, string, string, []store.PermissionSample, time.Time) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
 	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
-	id, err := apitest.SeedSpawn(path, "permission", store.StateCheckPermission, "", "on", "", true, apitest.WithPermissionEpoch(7))
+	id, err := apitest.SeedSpawn(path, "permission", store.StateCheckPermission, "", "on", "", true, append([]apitest.SpawnOption{apitest.WithPermissionEpoch(7)}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,12 +40,12 @@ func permissionObservation(t *testing.T) (*store.Store, string, string, []store.
 	return s, path, id, []store.PermissionSample{{Request: pr, FallbackAt: now.Add(-time.Minute), Basis: store.FallbackDeadline}}, now
 }
 
-// observeUnlessBusy is ObservePermissionStuck for a call that must commit,
+// observeUnlessBusy is ObserveNeedsIntelligence for a call that must commit,
 // through commitUnlessBusy.
-func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration) store.StuckDisplay {
+func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration) store.DisplayDetail {
 	t.Helper()
-	return commitUnlessBusy(t, func() (store.StuckDisplay, error) {
-		return s.ObservePermissionStuck(row, samples, now, timeout, store.SettleRead{})
+	return commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+		return s.ObserveNeedsIntelligence(row, samples, now, timeout, store.SettleRead{})
 	})
 }
 
@@ -51,9 +53,9 @@ func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []
 // never waits for the write lock, so a busy store is the one failure that is
 // repeated, at the same time and without sleeping, under
 // apitest.RepeatUntilCommitted's bound; any other error fails the test at once.
-func commitUnlessBusy(t *testing.T, observe func() (store.StuckDisplay, error)) store.StuckDisplay {
+func commitUnlessBusy(t *testing.T, observe func() (store.DisplayDetail, error)) store.DisplayDetail {
 	t.Helper()
-	var display store.StuckDisplay
+	var display store.DisplayDetail
 	var err error
 	attempts, elapsed, committed := apitest.RepeatUntilCommitted(func() bool {
 		if display, err = observe(); err != nil && !errors.Is(err, store.ErrStoreBusy) {
@@ -70,7 +72,37 @@ func commitUnlessBusy(t *testing.T, observe func() (store.StuckDisplay, error)) 
 	return display
 }
 
-func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
+// displayRecord is one ad.spawn.displayed_state_transition record a test expects.
+type displayRecord struct {
+	prior, next string
+	at          time.Time
+}
+
+// assertDisplayRecords fails unless id's display records since mark are exactly want, field set
+// included, with no ad.spawn.state_transition naming a Displayed State and no old-event record.
+func assertDisplayRecords(t *testing.T, mark int, id string, want ...displayRecord) {
+	t.Helper()
+	var wantRows []map[string]any
+	for _, w := range want {
+		wantRows = append(wantRows, map[string]any{"event": "ad.spawn.displayed_state_transition", "instance_id": id,
+			"prior_state": w.prior, "new_state": w.next, "ts": w.at.UTC().Format(lifecycleTS)})
+	}
+	if got := store.TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", id); !reflect.DeepEqual(got, wantRows) {
+		t.Errorf("display records=%v; want %v", got, wantRows)
+	}
+	for _, row := range store.TrailEventsSince(t, mark, "ad.spawn.state_transition", id) {
+		for _, state := range []any{row["prior_state"], row["new_state"]} {
+			if state == store.StateNeedsIntelligence || state == store.StateIdleScreen {
+				t.Errorf("ad.spawn.state_transition names a Displayed State: %v", row)
+			}
+		}
+	}
+	if old := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id); len(old) != 0 {
+		t.Errorf("records under the old event name: %v", old)
+	}
+}
+
+func TestNeedsIntelligenceStaleSampleCannotCommit(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*testing.T, *store.Store, string, string, store.PermissionRow, time.Time)
@@ -135,25 +167,23 @@ func TestPermissionStuckStaleSampleCannotCommit(t *testing.T) {
 			}
 			mark := store.TrailMark(t)
 			tc.change(t, s, path, id, samples[0].Request, now)
-			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
-			if err == nil || got.State == "stuck" {
-				t.Fatalf("stale observation=%+v %v", got, err)
+			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+			if err == nil || got != row.CommittedDisplay() {
+				t.Fatalf("stale observation=%+v %v; want the previous %+v", got, err, row.CommittedDisplay())
 			}
 			after, err := s.GetSpawn(id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.StuckObservation != "" {
-				t.Errorf("stale observation wrote detail: %s", after.StuckObservation)
+			if after.DisplayObservation != "" {
+				t.Errorf("stale observation wrote detail: %s", after.DisplayObservation)
 			}
-			if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id); len(events) != 0 {
-				t.Errorf("stale transition events: %v", events)
-			}
+			assertDisplayRecords(t, mark, id)
 		})
 	}
 }
 
-func TestPermissionStuckRollbackAndNonwaitingLock(t *testing.T) {
+func TestNeedsIntelligenceRollbackAndNonwaitingLock(t *testing.T) {
 	for _, mode := range []string{"locked", "failed final write"} {
 		t.Run(mode, func(t *testing.T) {
 			s, path, id, samples, now := permissionObservation(t)
@@ -166,19 +196,19 @@ func TestPermissionStuckRollbackAndNonwaitingLock(t *testing.T) {
 				release := apitest.HoldWriteLock(t, path, time.Minute)
 				defer release()
 			} else {
-				storefix.InjectWriteFailure(t, path, storefix.WriteFailStuckObservation, id)
+				storefix.InjectWriteFailure(t, path, storefix.WriteFailDisplayObservation, id)
 			}
 			// A write that waited would wait out the store's busy timeout (the
 			// lock is held for a minute), so half of it separates the two
 			// under suite load.
 			limit := store.DefaultBusyTimeoutMs * time.Millisecond / 2
 			start := time.Now()
-			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
+			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
 			if elapsed := time.Since(start); elapsed >= limit {
 				t.Errorf("nonwaiting write took %s; a write that waits for the lock takes the %d ms busy timeout", elapsed, store.DefaultBusyTimeoutMs)
 			}
-			if err == nil || got != row.CommittedStuckDisplay() {
-				t.Fatalf("failed observation=%+v %v; want %+v", got, err, row.CommittedStuckDisplay())
+			if err == nil || got != row.CommittedDisplay() {
+				t.Fatalf("failed observation=%+v %v; want %+v", got, err, row.CommittedDisplay())
 			}
 			pr, err := s.GetPermissionRequest(id, samples[0].Request.RequestToken)
 			if err != nil {
@@ -191,19 +221,17 @@ func TestPermissionStuckRollbackAndNonwaitingLock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.StuckObservation != row.StuckObservation || after.StuckVersion != row.StuckVersion {
+			if after.DisplayObservation != row.DisplayObservation || after.ObservationVersion != row.ObservationVersion {
 				t.Errorf("report persisted after failed write: %+v", after)
 			}
-			if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id); len(events) != 0 {
-				t.Errorf("uncommitted events: %v", events)
-			}
+			assertDisplayRecords(t, mark, id)
 		})
 	}
 }
 
 // A read with nothing to commit answers from its snapshot without taking the
 // write lock; only a new clock or a timed-out request needs the transaction.
-func TestPermissionStuckReadWithoutChangeTakesNoWriteLock(t *testing.T) {
+func TestNeedsIntelligenceReadWithoutChangeTakesNoWriteLock(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		writes bool
@@ -238,16 +266,16 @@ func TestPermissionStuckReadWithoutChangeTakesNoWriteLock(t *testing.T) {
 				t.Fatal(err)
 			}
 			release := apitest.HoldWriteLock(t, path, time.Minute)
-			got, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, store.SettleRead{})
-			if got != row.CommittedStuckDisplay() || (err != nil) != tc.writes {
-				t.Fatalf("observation=%+v err=%v; want %+v, needs write lock %v", got, err, row.CommittedStuckDisplay(), tc.writes)
+			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+			if got != row.CommittedDisplay() || (err != nil) != tc.writes {
+				t.Fatalf("observation=%+v err=%v; want %+v, needs write lock %v", got, err, row.CommittedDisplay(), tc.writes)
 			}
 			release()
 			after, err := s.GetSpawn(id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if after.StuckObservation != row.StuckObservation || after.StuckVersion != row.StuckVersion {
+			if after.DisplayObservation != row.DisplayObservation || after.ObservationVersion != row.ObservationVersion {
 				t.Errorf("read wrote report: before=%+v after=%+v", row, after)
 			}
 			if stored, err := s.GetPermissionRequest(id, pr.RequestToken); err != nil || stored != pr {
@@ -257,7 +285,7 @@ func TestPermissionStuckReadWithoutChangeTakesNoWriteLock(t *testing.T) {
 	}
 }
 
-func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
+func TestNeedsIntelligenceConcurrentSnapshotAndOlderClock(t *testing.T) {
 	s, _, id, samples, now := permissionObservation(t)
 	row, err := s.GetSpawnSettled(id, store.SettleRead{})
 	if err != nil {
@@ -265,11 +293,11 @@ func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
 	}
 	mark := store.TrailMark(t)
 	first := observeUnlessBusy(t, s, row, samples, now, 30*time.Second)
-	if first.State != "stuck" {
+	if first.State != store.StateNeedsIntelligence {
 		t.Fatalf("entry=%+v", first)
 	}
 	for _, at := range []time.Time{now, now.Add(time.Hour)} {
-		if _, err := s.ObservePermissionStuck(row, samples, at, 30*time.Second, store.SettleRead{}); err == nil {
+		if _, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{}); err == nil {
 			t.Error("concurrent old version overwrote committed entry")
 		}
 	}
@@ -282,12 +310,10 @@ func TestPermissionStuckConcurrentSnapshotAndOlderClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	samples[0].Request = pr
-	if got, err := s.ObservePermissionStuck(fresh, samples, now.Add(-time.Millisecond), 30*time.Second, store.SettleRead{}); err == nil || !reflect.DeepEqual(got, first) {
+	if got, err := s.ObserveNeedsIntelligence(fresh, samples, now.Add(-time.Millisecond), 30*time.Second, store.SettleRead{}); err == nil || !reflect.DeepEqual(got, first) {
 		t.Errorf("older sample=%+v %v", got, err)
 	}
-	if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id); len(events) != 1 {
-		t.Errorf("entry attempts=%v", events)
-	}
+	assertDisplayRecords(t, mark, id, displayRecord{store.StateCheckPermission, store.StateNeedsIntelligence, now})
 }
 
 // TestPaneBaselineDecodesTolerantly: a stored baseline that is not a whole
@@ -323,8 +349,8 @@ func TestPaneBaselineDecodesTolerantly(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read failed on the stored baseline: %v", err)
 			}
-			got := commitUnlessBusy(t, func() (store.StuckDisplay, error) {
-				return s.ObservePaneStuck(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+			got := commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+				return s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
 			})
 			if got.State != store.StateWorking {
 				t.Fatalf("observation=%+v; want working", got)
@@ -336,55 +362,67 @@ func TestPaneBaselineDecodesTolerantly(t *testing.T) {
 	}
 }
 
-// TestRawHookDuringReasonSwitchKeepsDisplay: a raw state change while the
-// other reason settles in behind a displayed episode drops that pending reason
-// with the candidate, so the observation still decodes: the display stands
-// until a read, which ends it with exactly one exit.
-func TestRawHookDuringReasonSwitchKeepsDisplay(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.db")
+// TestRawHookDuringSettlingMoveKeepsDisplay: a raw state change while the
+// other Displayed State settles in behind a displayed one clears only the
+// candidate: the display and its committed detail stand until a read, which
+// ends them with exactly one exit.
+func TestRawHookDuringSettlingMoveKeepsDisplay(t *testing.T) {
 	now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	since := now.Add(-time.Hour).UnixMilli()
-	switching := fmt.Sprintf(`{"state":"stuck","reason":"permission_unanswered","since_ms":%d,"request_token":%q,"tool_name":"Bash",`+
-		`"candidate":"stuck","candidate_reason":"no_screen_change","candidate_since_ms":%d,"observed_at_ms":%d,"permission_epoch":7}`,
-		since, storefix.TestRequestTokenA, since, since)
-	id, err := apitest.SeedSpawn(path, "", store.StateWorking, "", "off", "", true, apitest.WithPermissionEpoch(7), apitest.WithStuckObservation(switching))
-	if err != nil {
-		t.Fatal(err)
-	}
-	s, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	seeded, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	displayed := seeded.CommittedStuckDisplay()
-	if displayed.State != store.StateStuck {
-		t.Fatalf("setup is not displayed stuck: %+v", seeded)
-	}
-	if got := apitest.ApplyAgentHook(t, path, id, "Stop", ""); !got.Applied {
-		t.Fatal(got)
-	}
-	row, err := s.GetSpawnSettled(id, store.SettleRead{})
-	if err != nil || row.State != store.StateWaiting || row.CommittedStuckDisplay() != displayed {
-		t.Fatalf("after the hook: %+v %v; want raw waiting still displaying %+v", row, err, displayed)
-	}
-	mark := store.TrailMark(t)
-	if got := observeUnlessBusy(t, s, row, nil, now, 30*time.Second); got != (store.StuckDisplay{State: store.StateWaiting}) {
-		t.Fatalf("read=%+v; want the episode settled out", got)
-	}
-	settled, err := s.GetSpawnSettled(id, store.SettleRead{})
-	if err != nil || settled.StuckObservation != "" {
-		t.Fatalf("settled row=%+v %v; want no observation", settled, err)
-	}
-	if got, err := s.ObservePermissionStuck(settled, nil, now.Add(time.Second), 30*time.Second, store.SettleRead{}); err != nil || got.State != store.StateWaiting {
-		t.Fatalf("next read=%+v %v", got, err)
-	}
-	events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", id)
-	if len(events) != 1 || events[0]["prior_state"] != store.StateStuck || events[0]["new_state"] != store.StateWaiting ||
-		events[0]["stuck_reason"] != store.StuckPermissionUnanswered || events[0]["ts"] != now.Format(lifecycleTS) {
-		t.Fatalf("events=%v; want one exit to waiting at %s", events, now)
+	for _, tc := range []struct {
+		displayed, raw, detail, candidate string
+	}{
+		{store.StateNeedsIntelligence, store.StateWorking, fmt.Sprintf(`"request_token":%q,"tool_name":"Bash"`, storefix.TestRequestTokenA), store.StateIdleScreen},
+		{store.StateIdleScreen, store.StateCheckPermission, `"unchanged_minutes":20`, store.StateNeedsIntelligence},
+	} {
+		t.Run(tc.displayed+" to "+tc.candidate, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "state.db")
+			moving := fmt.Sprintf(`{"state":%q,"since_ms":%d,%s,"candidate":%q,"candidate_since_ms":%d,"observed_at_ms":%d,"permission_epoch":7}`,
+				tc.displayed, since, tc.detail, tc.candidate, since+1000, since+1000)
+			id, err := apitest.SeedSpawn(path, "", tc.raw, "", "off", "", true, apitest.WithPermissionEpoch(7), apitest.WithDisplayObservation(moving))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, err := store.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			seeded, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			displayed := seeded.CommittedDisplay()
+			if displayed.State != tc.displayed {
+				t.Fatalf("setup is not displayed %s: %+v", tc.displayed, seeded)
+			}
+			mark := store.TrailMark(t)
+			if got := apitest.ApplyAgentHook(t, path, id, "Stop", ""); !got.Applied {
+				t.Fatal(got)
+			}
+			row, err := s.GetSpawnSettled(id, store.SettleRead{})
+			if err != nil || row.State != store.StateWaiting || row.CommittedDisplay() != displayed {
+				t.Fatalf("after the hook: %+v %v; want raw waiting still displaying %+v", row, err, displayed)
+			}
+			var want, kept map[string]any
+			if err := json.Unmarshal([]byte(moving), &want); err != nil {
+				t.Fatal(err)
+			}
+			want["candidate"], want["candidate_since_ms"] = "", float64(0)
+			if err := json.Unmarshal([]byte(row.DisplayObservation), &kept); err != nil || !reflect.DeepEqual(kept, want) {
+				t.Fatalf("observation after the hook=%s %v; want only the candidate cleared: %v", row.DisplayObservation, err, want)
+			}
+			if got := observeUnlessBusy(t, s, row, nil, now, 30*time.Second); got != (store.DisplayDetail{State: store.StateWaiting}) {
+				t.Fatalf("read=%+v; want the display settled out", got)
+			}
+			settled, err := s.GetSpawnSettled(id, store.SettleRead{})
+			if err != nil || settled.DisplayObservation != "" {
+				t.Fatalf("settled row=%+v %v; want no observation", settled, err)
+			}
+			if got, err := s.ObserveNeedsIntelligence(settled, nil, now.Add(time.Second), 30*time.Second, store.SettleRead{}); err != nil || got.State != store.StateWaiting {
+				t.Fatalf("next read=%+v %v", got, err)
+			}
+			assertDisplayRecords(t, mark, id, displayRecord{tc.displayed, store.StateWaiting, now})
+		})
 	}
 }

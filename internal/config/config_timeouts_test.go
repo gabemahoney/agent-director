@@ -3,8 +3,8 @@ package config_test
 // config_timeouts_test.go pins the keys outside [tmux] with a range:
 // [defaults] expire_retention_days (b.sgw), [relay] and [pause]
 // timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4), [store]
-// busy_timeout_ms (b.c7f), [state] permission_unanswered_timeout_seconds and
-// no_screen_change_timeout_seconds (b.sp6) and settle_ms (b.3ie). A missing key or 0
+// busy_timeout_ms (b.c7f), [state] needs_intelligence_timeout_seconds and
+// idle_screen_timeout_seconds (b.sp6) and settle_ms (b.3ie). A missing key or 0
 // gives the default (31, 86400, 30, 12, 10000, 30, 1200; settle_ms 0, off); 1 to the
 // key's largest value (106751 days; 2147483, the largest per-hook timeout
 // Claude Code honours; 9223372036, the largest a Duration holds; 2147483647,
@@ -64,44 +64,45 @@ func settleRefusal(v string) string {
 	return "[state] settle_ms = " + v + ", outside its range 0 to 60000 milliseconds"
 }
 
-func permissionRefusal(v string) string {
-	return "[state] permission_unanswered_timeout_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
+func needsIntelligenceRefusal(v string) string {
+	return "[state] needs_intelligence_timeout_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
 }
 
-func noScreenChangeRefusal(v string) string {
-	return "[state] no_screen_change_timeout_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
+func idleScreenRefusal(v string) string {
+	return "[state] idle_screen_timeout_seconds = " + v + ", outside its range 1 to 9223372036 seconds"
 }
 
 // TestRangeKeysLoad checks the values Load accepts: the file's value is kept
 // as written; effective timeouts remain positive and settle_ms 0 remains off.
 // Duration-ceiling expectations use int64 to avoid 32-bit literal overflow.
 func TestRangeKeysLoad(t *testing.T) {
-	nsc, nscMax := int64(config.DefaultNoScreenChangeTimeoutSeconds), config.MaxNoScreenChangeTimeoutSeconds
+	idle, idleMax := int64(config.DefaultIdleScreenTimeoutSeconds), config.MaxIdleScreenTimeoutSeconds
 	cases := []struct {
-		name                                    string
-		keys                                    rangeKeys
-		days, daysEffective                     int
-		relay, relayEffective                   int
-		pause, pauseEffective                   int64
-		preTrust, preTrustEffective             int64
-		busy, busyEffective                     int
-		settle, settleEffective                 int // 0 is off, its own value (b.3ie)
-		permission, permissionEffective         int64
-		noScreenChange, noScreenChangeEffective int64
+		name                                          string
+		keys                                          rangeKeys
+		days, daysEffective                           int
+		relay, relayEffective                         int
+		pause, pauseEffective                         int64
+		preTrust, preTrustEffective                   int64
+		busy, busyEffective                           int
+		settle, settleEffective                       int // 0 is off, its own value (b.3ie)
+		needsIntelligence, needsIntelligenceEffective int64
+		idleScreen, idleScreenEffective               int64
 	}{
-		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, nsc, nsc},
-		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0", settle: "0", permission: "0",
-			noScreenChange: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 30, 0, nsc},
-		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1", settle: "1", permission: "1",
-			noScreenChange: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000", permission: "30"}, 31, 31, 86400, 86400,
-			30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, nsc, nsc},
-		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, 30, nsc, nsc},
-		{"state_keys_together", rangeKeys{settle: "1500", permission: "47", noScreenChange: "61"}, 31, 31, 86400, 86400, 30, 30, 12, 12,
-			10000, 10000, 1500, 1500, 47, 47, 61, 61},
+		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, idle, idle},
+		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0", settle: "0", needsIntelligence: "0",
+			idleScreen: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 30, 0, idle},
+		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1", settle: "1", needsIntelligence: "1",
+			idleScreen: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000", needsIntelligence: "30"}, 31, 31,
+			86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, idle, idle},
+		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, 30, idle, idle},
+		{"state_keys_together", rangeKeys{settle: "1500", needsIntelligence: "5", idleScreen: "60"}, 31, 31, 86400, 86400, 30, 30, 12, 12,
+			10000, 10000, 1500, 1500, 5, 5, 60, 60},
 		{"largest", rangeKeys{days: "106751", relay: "2147483", pause: "9223372036", preTrust: "9223372036",
-			busyTimeout: "2147483647", settle: "60000", permission: "9223372036", noScreenChange: "9223372036"}, 106751, 106751, 2147483, 2147483,
-			9223372036, 9223372036, 9223372036, 9223372036, 2147483647, 2147483647, 60000, 60000, 9223372036, 9223372036, nscMax, nscMax},
+			busyTimeout: "2147483647", settle: "60000", needsIntelligence: "9223372036", idleScreen: "9223372036"}, 106751, 106751, 2147483,
+			2147483, 9223372036, 9223372036, 9223372036, 9223372036, 2147483647, 2147483647, 60000, 60000, 9223372036, 9223372036, idleMax,
+			idleMax},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,10 +127,10 @@ func TestRangeKeysLoad(t *testing.T) {
 					int64(cfg.Store.EffectiveBusyTimeoutMs()), int64(tc.busyEffective)},
 				{"State.SettleMs", int64(cfg.State.SettleMs), int64(tc.settle),
 					int64(cfg.State.EffectiveSettleMs()), int64(tc.settleEffective)},
-				{"State.PermissionUnansweredTimeoutSeconds", int64(cfg.State.PermissionUnansweredTimeoutSeconds), tc.permission,
-					int64(cfg.State.EffectivePermissionUnansweredTimeoutSeconds()), tc.permissionEffective},
-				{"State.NoScreenChangeTimeoutSeconds", int64(cfg.State.NoScreenChangeTimeoutSeconds), tc.noScreenChange,
-					int64(cfg.State.EffectiveNoScreenChangeTimeoutSeconds()), tc.noScreenChangeEffective},
+				{"State.NeedsIntelligenceTimeoutSeconds", int64(cfg.State.NeedsIntelligenceTimeoutSeconds), tc.needsIntelligence,
+					int64(cfg.State.EffectiveNeedsIntelligenceTimeoutSeconds()), tc.needsIntelligenceEffective},
+				{"State.IdleScreenTimeoutSeconds", int64(cfg.State.IdleScreenTimeoutSeconds), tc.idleScreen,
+					int64(cfg.State.EffectiveIdleScreenTimeoutSeconds()), tc.idleScreenEffective},
 			} {
 				if c.stored != c.written || c.eff != c.wantEff {
 					t.Errorf("%s = %d (effective %d); want %d as written (effective %d)", c.name, c.stored, c.eff, c.written, c.wantEff)
@@ -156,8 +157,8 @@ func TestRangeKeysLoad(t *testing.T) {
 	if got := (config.State{SettleMs: -1}).EffectiveSettleMs(); got != config.DefaultStateSettleMs {
 		t.Errorf("State.EffectiveSettleMs() of -1 = %d; want %d (off)", got, config.DefaultStateSettleMs)
 	}
-	if got := (config.State{NoScreenChangeTimeoutSeconds: -1}).EffectiveNoScreenChangeTimeoutSeconds(); got != config.DefaultNoScreenChangeTimeoutSeconds {
-		t.Errorf("State.EffectiveNoScreenChangeTimeoutSeconds() of -1 = %d; want %d", got, config.DefaultNoScreenChangeTimeoutSeconds)
+	if got := (config.State{IdleScreenTimeoutSeconds: -1}).EffectiveIdleScreenTimeoutSeconds(); got != config.DefaultIdleScreenTimeoutSeconds {
+		t.Errorf("State.EffectiveIdleScreenTimeoutSeconds() of -1 = %d; want %d", got, config.DefaultIdleScreenTimeoutSeconds)
 	}
 }
 
@@ -240,24 +241,24 @@ func TestRangeKeysRefusalDescription(t *testing.T) {
 			"refused [store] and [state] values: " + busyTimeoutRefusal("-1") + "; " + settleRefusal("-1") + refusalTail},
 		{"settle_and_tmux", rangeKeys{settle: "60001"}, killNegativeTmux,
 			"refused [state] and [tmux] values: " + settleRefusal("60001") + "; " + killNegative + refusalTail},
-		{"permission_negative", rangeKeys{permission: "-1"}, nil,
-			"refused [state] values: " + permissionRefusal("-1") + refusalTail},
-		{"permission_above_largest", rangeKeys{permission: "9223372037"}, nil,
-			"refused [state] values: " + permissionRefusal("9223372037") + refusalTail},
-		{"permission_int64_min", rangeKeys{permission: "-9223372036854775808"}, nil,
-			"refused [state] values: " + permissionRefusal("-9223372036854775808") + refusalTail},
-		{"permission_int64_max", rangeKeys{permission: "9223372036854775807"}, nil,
-			"refused [state] values: " + permissionRefusal("9223372036854775807") + refusalTail},
-		{"permission_and_settle", rangeKeys{permission: "-1", settle: "60001"}, nil,
-			"refused [state] values: " + permissionRefusal("-1") + "; " + settleRefusal("60001") + refusalTail},
-		{"permission_and_tmux", rangeKeys{permission: "9223372037"}, killNegativeTmux,
-			"refused [state] and [tmux] values: " + permissionRefusal("9223372037") + "; " + killNegative + refusalTail},
-		{"no_screen_change_negative", rangeKeys{noScreenChange: "-1"}, nil,
-			"refused [state] values: " + noScreenChangeRefusal("-1") + refusalTail},
-		{"no_screen_change_window_wraps", rangeKeys{noScreenChange: "9223372037"}, nil,
-			"refused [state] values: " + noScreenChangeRefusal("9223372037") + refusalTail},
-		{"every_state_key", rangeKeys{settle: "60001", permission: "-1", noScreenChange: "9223372037"}, nil,
-			"refused [state] values: " + permissionRefusal("-1") + "; " + noScreenChangeRefusal("9223372037") + "; " +
+		{"needs_intelligence_negative", rangeKeys{needsIntelligence: "-1"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("-1") + refusalTail},
+		{"needs_intelligence_above_largest", rangeKeys{needsIntelligence: "9223372037"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("9223372037") + refusalTail},
+		{"needs_intelligence_int64_min", rangeKeys{needsIntelligence: "-9223372036854775808"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("-9223372036854775808") + refusalTail},
+		{"needs_intelligence_int64_max", rangeKeys{needsIntelligence: "9223372036854775807"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("9223372036854775807") + refusalTail},
+		{"needs_intelligence_and_settle", rangeKeys{needsIntelligence: "-1", settle: "60001"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("-1") + "; " + settleRefusal("60001") + refusalTail},
+		{"needs_intelligence_and_tmux", rangeKeys{needsIntelligence: "9223372037"}, killNegativeTmux,
+			"refused [state] and [tmux] values: " + needsIntelligenceRefusal("9223372037") + "; " + killNegative + refusalTail},
+		{"idle_screen_negative", rangeKeys{idleScreen: "-1"}, nil,
+			"refused [state] values: " + idleScreenRefusal("-1") + refusalTail},
+		{"idle_screen_window_wraps", rangeKeys{idleScreen: "9223372037"}, nil,
+			"refused [state] values: " + idleScreenRefusal("9223372037") + refusalTail},
+		{"every_state_key", rangeKeys{settle: "60001", needsIntelligence: "-1", idleScreen: "9223372037"}, nil,
+			"refused [state] values: " + needsIntelligenceRefusal("-1") + "; " + idleScreenRefusal("9223372037") + "; " +
 				settleRefusal("60001") + refusalTail},
 		{"defaults_and_relay", rangeKeys{days: "-1", relay: "-1"}, nil,
 			"refused [defaults] and [relay] values: " + retentionRefusal("-1") + "; " + relayRefusal("-1") + refusalTail},

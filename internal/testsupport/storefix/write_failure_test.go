@@ -139,13 +139,13 @@ func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 
 var proxyWrites = []proxyWrite{
 	{
-		name: "commit permission observation", kind: storefix.WriteFailStuckObservation,
+		name: "commit permission observation", kind: storefix.WriteFailDisplayObservation,
 		// A retained candidate is what this read must clear; a row with no
 		// observation and no eligible request reads without writing.
 		seed: func(t *testing.T, _ *store.Store, dbPath, id string) {
 			t.Helper()
-			candidate := `{"state":"working","candidate":"stuck","candidate_since_ms":1,"observed_at_ms":1}`
-			if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", false, apitest.WithStuckObservation(candidate)); err != nil {
+			candidate := `{"state":"working","candidate":"needs_intelligence","candidate_since_ms":1,"observed_at_ms":1}`
+			if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", false, apitest.WithDisplayObservation(candidate)); err != nil {
 				t.Fatalf("SeedSpawn(%q): %v", id, err)
 			}
 		},
@@ -154,7 +154,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			_, err = s.ObservePermissionStuck(row, nil, time.Now(), 30*time.Second, store.SettleRead{})
+			_, err = s.ObserveNeedsIntelligence(row, nil, time.Now(), 30*time.Second, store.SettleRead{})
 			return err
 		},
 		observe: func(t *testing.T, s *store.Store, _, id string) any {
@@ -163,7 +163,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				t.Fatal(err)
 			}
-			return row.StuckVersion
+			return row.ObservationVersion
 		},
 	},
 

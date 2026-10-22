@@ -555,20 +555,20 @@ func WithPermissionEpoch(epoch int64) SpawnOption {
 	return func(o *spawnOpts) { o.set("permission_epoch", epoch) }
 }
 
-// WithStuckObservation seeds committed report detail or a pending candidate.
-func WithStuckObservation(raw string) SpawnOption {
-	return func(o *spawnOpts) { o.set("stuck_observation", nullIfZero(raw)) }
+// WithDisplayObservation seeds committed report detail or a pending candidate.
+func WithDisplayObservation(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("display_observation", nullIfZero(raw)) }
 }
 
-// WithStuckExit seeds a pending stuck exit record (valid or malformed).
-func WithStuckExit(raw string) SpawnOption {
-	return func(o *spawnOpts) { o.set("stuck_exit", nullIfZero(raw)) }
+// WithDisplayExit seeds a pending Displayed State exit record (valid or malformed).
+func WithDisplayExit(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("display_exit", nullIfZero(raw)) }
 }
 
-// WithNoScreenChangeTimeout seeds the row's per-spawn timeout override as
+// WithIdleScreenTimeout seeds the row's per-spawn timeout override as
 // stored: any value, a malformed one included; nil stores NULL (no override).
-func WithNoScreenChangeTimeout(raw any) SpawnOption {
-	return func(o *spawnOpts) { o.set("no_screen_change_timeout_seconds", raw) }
+func WithIdleScreenTimeout(raw any) SpawnOption {
+	return func(o *spawnOpts) { o.set("idle_screen_timeout_seconds", raw) }
 }
 
 // WithPaneBaseline seeds the committed pane baseline as stored: the

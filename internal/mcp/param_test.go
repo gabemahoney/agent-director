@@ -187,7 +187,8 @@ func paramValidList(v manifest.VerbDef) string {
 // "none", and runs nothing: no row, tmux call, template or trail line (b.c4u).
 // Kill's former finished-row opt-in, in any spelling, is such a key (SR-6.8,
 // SR-6.6), as are the per-invocation params make_template's description says
-// it refuses.
+// it refuses and spawn's idle_screen override's removed name, which gets no
+// rename hint (b.ob8 SR-1.3).
 func TestMCPParamUnknownRefused(t *testing.T) {
 	type refusal struct {
 		name, verb, key string
@@ -207,6 +208,7 @@ func TestMCPParamUnknownRefused(t *testing.T) {
 		{"kill", "include-finished", true}, {"kill", "include_finished", true}, {"kill", "IncludeFinished", true}, {"kill", "includefinished", true},
 		{"make-template", "template", "tpl"}, {"make-template", "instance_id", "tpl-id"}, {"make-template", "tmux_session_name", "tpl-session"},
 		{"make-template", "reuse_finished", true}, {"make-template", "reuse-finished", true},
+		{"spawn", "no_screen_change_timeout_seconds", 60},
 	} {
 		cases = append(cases, refusal{old.verb + ", " + old.key, old.verb, old.key, old.value})
 	}
@@ -424,12 +426,12 @@ func TestMCPParamSpawnTmuxSessionName(t *testing.T) {
 	}
 }
 
-// TestMCPParamSpawnNoScreenChangeTimeout: an MCP spawn's
-// no_screen_change_timeout_seconds is recorded on the row, the range's top
-// without truncation; 0, null and absence record no override; a negative,
-// above-range, fractional or text value is ErrInvalidFlags before anything is
-// written or created.
-func TestMCPParamSpawnNoScreenChangeTimeout(t *testing.T) {
+// TestMCPParamSpawnIdleScreenTimeout: an MCP spawn's
+// idle_screen_timeout_seconds is recorded on the row, the range's top without
+// truncation; 0, null and absence record no override; a negative, above-range,
+// fractional or text value is ErrInvalidFlags before anything is written or
+// created.
+func TestMCPParamSpawnIdleScreenTimeout(t *testing.T) {
 	const absent = "absent"
 	for _, tc := range []struct {
 		name  string
@@ -447,10 +449,10 @@ func TestMCPParamSpawnNoScreenChangeTimeout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, c := newReuseParamEnv(t)
-			id := "nsc-" + uuid.NewString()[:8]
+			id := "ist-" + uuid.NewString()[:8]
 			extra := map[string]any{"instance_id": id}
 			if tc.name != absent {
-				extra["no_screen_change_timeout_seconds"] = tc.value
+				extra["idle_screen_timeout_seconds"] = tc.value
 			}
 			args := spawnArgs(t, t.TempDir(), c, extra)
 			if tc.want == "" {
@@ -462,7 +464,7 @@ func TestMCPParamSpawnNoScreenChangeTimeout(t *testing.T) {
 			}
 			callToolText(t, e.d, "spawn", args)
 			assertCreates(t, e.rec)
-			if got := readColumns(t, e.storePath, id).NoScreenChangeTimeoutSeconds; got != tc.want {
+			if got := readColumns(t, e.storePath, id).IdleScreenTimeoutSeconds; got != tc.want {
 				t.Errorf("override = %v; want %v", got, tc.want)
 			}
 		})

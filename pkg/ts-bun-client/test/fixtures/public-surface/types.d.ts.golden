@@ -233,27 +233,22 @@ export interface PermissionRequestInfo extends RequestDelivery {
     decision_reason: string | null;
 }
 /**
- * Why a row reads `stuck`: a current unanswered permission fallback, or a working Claude or
- * Codex pane whose fingerprint stayed identical across reads for its timeout.
+ * Whether `idle_screen` can apply to a row's agent: `"available"` for Claude and Codex,
+ * `"unavailable"` for Cursor. A capability outcome, never a state.
  */
-export type StuckReason = "permission_unanswered" | "no_screen_change";
-/**
- * Whether `no_screen_change` can apply to a row's agent: `"available"` for Claude and Codex,
- * `"unavailable"` for Cursor. A capability outcome, never a stuck reason.
- */
-export type NoScreenChangeAvailability = "available" | "unavailable";
+export type IdleScreenAvailability = "available" | "unavailable";
 /** One Spawn row returned by the list verb. */
 export interface ListRow {
-    /** Report-only condition; live command guards continue to apply. */
-    stuck_reason?: StuckReason;
-    /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
-    no_screen_change_availability: NoScreenChangeAvailability;
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    idle_screen_availability: IdleScreenAvailability;
     /** Stable Spawn id. */
     instance_id: string;
     /** Parent Spawn id (omitted when launched from a plain shell). */
     parent_id?: string;
     /**
-     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
+     * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
+     * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
      * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history.
@@ -291,7 +286,7 @@ export interface ListRow {
      * When the raw state last changed (RFC3339 UTC, millisecond precision), on every row.
      * Soft refreshes and same-state writes leave it; `state` may still show the earlier
      * settled value. `1970-01-01T00:00:00Z` when the raw state has not changed since
-     * agent-director began recording it. Not a stuck row's `since`. A Cursor row that get
+     * agent-director began recording it. Not a Displayed State's `since`. A Cursor row that get
      * or list finds lost reads `missing` at once; this moves when that mark is stored, which
      * can be after the read that first shows `missing`.
      */
@@ -431,14 +426,14 @@ export interface SpawnParams {
      */
     reuse_finished?: boolean;
     /**
-     * This row's `no_screen_change` timeout in whole seconds, 1 to 9223372036, used by every
-     * `status`, `get` and `list` in place of `[state] no_screen_change_timeout_seconds`.
+     * This row's `idle_screen` timeout in whole seconds, 1 to 9223372036, used by every
+     * `status`, `get` and `list` in place of `[state] idle_screen_timeout_seconds`.
      * `0`, `null` or omitted gives no override. A negative, fractional, non-numeric or larger
      * value is refused with `ErrInvalidFlags` before anything is written or launched. Recorded
      * on the row: `resume` keeps it; the next spawn or reuse replaces it, clearing it when that
-     * call gives none. Cursor rows keep it, but `no_screen_change` is unavailable for them.
+     * call gives none. Cursor rows keep it, but `idle_screen` is unavailable for them.
      */
-    no_screen_change_timeout_seconds?: number | null;
+    idle_screen_timeout_seconds?: number | null;
 }
 /**
  * The launch result. The row is `pending` from its insert until
@@ -475,23 +470,30 @@ export interface StatusParams {
 }
 /** The row's reported lifecycle state. */
 export interface StatusResult {
-    /** Report-only condition; live command guards continue to apply. */
-    stuck_reason?: StuckReason;
-    /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
+    /**
+     * When the row entered the Displayed State it shows (RFC3339 UTC, millisecond precision);
+     * only while `needs_intelligence` or `idle_screen` is displayed.
+     */
     since?: string;
-    /** Earliest qualifying fallback, lexical request-token tie break. */
+    /**
+     * The representative unanswered request (earliest qualifying fallback, lexical
+     * request-token tie break); only while `needs_intelligence`.
+     */
     request_token?: string;
+    /** That request's tool; only while `needs_intelligence`. */
     tool_name?: string;
-    /** Completed minutes of the committed unchanged pane period; only while `no_screen_change`. */
+    /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
     unchanged_minutes?: number;
-    /** Attach target, present when displayed stuck. */
+    /** Attach target, present only while `needs_intelligence` or `idle_screen` is displayed. */
     tmux_session_name?: string;
-    /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
-    no_screen_change_availability: NoScreenChangeAvailability;
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    idle_screen_availability: IdleScreenAvailability;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
     /**
-     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
+     * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
+     * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
      * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history; a caller tells it
@@ -545,23 +547,30 @@ export interface GetParams {
 }
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
-    /** Report-only condition; live command guards continue to apply. */
-    stuck_reason?: StuckReason;
-    /** Actual committed display-entry time, RFC3339 UTC with millisecond precision. */
+    /**
+     * When the row entered the Displayed State it shows (RFC3339 UTC, millisecond precision);
+     * only while `needs_intelligence` or `idle_screen` is displayed.
+     */
     since?: string;
-    /** Earliest qualifying fallback, lexical request-token tie break. */
+    /**
+     * The representative unanswered request (earliest qualifying fallback, lexical
+     * request-token tie break); only while `needs_intelligence`.
+     */
     request_token?: string;
+    /** That request's tool; only while `needs_intelligence`. */
     tool_name?: string;
-    /** Completed minutes of the committed unchanged pane period; only while `no_screen_change`. */
+    /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
     unchanged_minutes?: number;
-    /** Whether `no_screen_change` can apply to the row's agent: `"unavailable"` for Cursor. */
-    no_screen_change_availability: NoScreenChangeAvailability;
+    /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
+    idle_screen_availability: IdleScreenAvailability;
     /** Experimental context estimate for the current session. */
     context: ContextReading;
     instance_id: string;
     parent_id: string;
     /**
-     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing/stuck).
+     * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
+     * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
+     * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
      * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
      * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
      * prompt. A resumed pending row keeps its session id and history; a non-empty
@@ -608,7 +617,7 @@ export interface GetResult {
      * When the raw state last changed (RFC3339 UTC, millisecond precision), on every row.
      * Soft refreshes and same-state writes leave it; `state` may still show the earlier
      * settled value. `1970-01-01T00:00:00Z` when the raw state has not changed since
-     * agent-director began recording it. Not a stuck row's `since`. A Cursor row that get
+     * agent-director began recording it. Not a Displayed State's `since`. A Cursor row that get
      * or list finds lost reads `missing` at once; this moves when that mark is stored, which
      * can be after the read that first shows `missing`.
      */
@@ -1140,7 +1149,8 @@ export interface MakeTemplateResult {
 export interface ListParams {
     /**
      * Filter by state (multiple values OR together). The filter matches the displayed state,
-     * including `stuck`, and is applied before `limit`.
+     * including `needs_intelligence` and `idle_screen` (a row showing either does not match its
+     * raw state), and is applied before `limit`.
      */
     state?: string[];
     /** Filter by label k=v pairs (multiple entries AND together). */

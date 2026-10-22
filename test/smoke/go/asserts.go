@@ -65,7 +65,7 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 				continue
 			}
 			// A zero value tagged omitempty is absent on the wire, as
-			// stuck_reason is on a row not displayed stuck.
+			// since is on a row showing neither Displayed State.
 			if fv.IsZero() && slices.Contains(strings.Split(sf.Tag.Get("json"), ",")[1:], "omitempty") {
 				continue
 			}

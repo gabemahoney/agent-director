@@ -12,12 +12,12 @@ import (
 // baseline belongs to the epoch it was sampled in, so a later turn or launch
 // never continues it; the per-spawn timeout override is NULL when none was
 // given.
-var stuckColumns = []struct{ table, name, kind, def string }{
+var v14Columns = []struct{ table, name, kind, def string }{
 	{"spawns", "permission_epoch", "INTEGER", "0"},
-	{"spawns", "stuck_version", "INTEGER", "0"},
-	{"spawns", "stuck_observation", "TEXT", ""},
-	{"spawns", "stuck_exit", "TEXT", ""},
-	{"spawns", "no_screen_change_timeout_seconds", "INTEGER", ""},
+	{"spawns", "observation_version", "INTEGER", "0"},
+	{"spawns", "display_observation", "TEXT", ""},
+	{"spawns", "display_exit", "TEXT", ""},
+	{"spawns", "idle_screen_timeout_seconds", "INTEGER", ""},
 	{"spawns", "pane_sha256", "TEXT", ""},
 	{"spawns", "pane_since_ms", "INTEGER", ""},
 	{"spawns", "pane_epoch", "INTEGER", ""},
@@ -29,8 +29,8 @@ var stuckColumns = []struct{ table, name, kind, def string }{
 }
 
 // migrateV13toV14 retains report-only history without inventing an earlier
-// stuck episode, process-death observation, pane sample or timeout override:
-// the added pane and override columns start NULL. Recovery is by
+// displayed episode, process-death observation, pane sample or timeout
+// override: the added pane and override columns start NULL. Recovery is by
 // stopped-writer pre-upgrade backup, as for v13; no reverse migration is
 // implemented.
 func migrateV13toV14(db *sql.DB) error {
@@ -53,7 +53,7 @@ func migrateV13toV14(db *sql.DB) error {
 				rows.Close()
 				return err
 			}
-			for _, c := range stuckColumns {
+			for _, c := range v14Columns {
 				if c.table != table || !strings.EqualFold(name, c.name) {
 					continue
 				}
@@ -75,7 +75,7 @@ func migrateV13toV14(db *sql.DB) error {
 		}
 	}
 	// Validate the existing partial shape before adding any missing column.
-	for _, c := range stuckColumns {
+	for _, c := range v14Columns {
 		if !found[c.table+"."+c.name] {
 			continue
 		}
@@ -94,7 +94,7 @@ func migrateV13toV14(db *sql.DB) error {
 			return fmt.Errorf("%w: store: v13→v14 invalid %s.%s", ErrSchemaMismatch, c.table, c.name)
 		}
 	}
-	for _, name := range []string{"stuck_observation", "stuck_exit"} {
+	for _, name := range []string{"display_observation", "display_exit"} {
 		if !found["spawns."+name] {
 			continue
 		}
@@ -108,9 +108,9 @@ func migrateV13toV14(db *sql.DB) error {
 				rows.Close()
 				return err
 			}
-			_, valid := decodeStuckExit(raw)
-			if name == "stuck_observation" {
-				_, valid = decodeStuckObservation(raw)
+			_, valid := decodeDisplayExit(raw)
+			if name == "display_observation" {
+				_, valid = decodeDisplayObservation(raw)
 			}
 			if !valid {
 				rows.Close()
@@ -148,7 +148,7 @@ func migrateV13toV14(db *sql.DB) error {
 			return fmt.Errorf("%w: store: v13→v14 incomplete fallback clock", ErrSchemaMismatch)
 		}
 	}
-	for _, c := range stuckColumns {
+	for _, c := range v14Columns {
 		if found[c.table+"."+c.name] {
 			continue
 		}

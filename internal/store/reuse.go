@@ -46,7 +46,7 @@ type ReuseRow struct {
 // SR-10.3, SR-10.4): every spawns column except instance_id,
 // row_version, launch_started_at and the settle columns settled_state and
 // state_changed_ms (the restore writes those as an immediate write of the
-// prior state, b.3ie), and the report-only stuck and pane observation columns
+// prior state, b.3ie), and the report-only display and pane observation columns
 // (that write starts a new permission epoch, which no earlier observation
 // belongs to), each with its stored value and SQLite
 // storage class, NULL distinct from an empty value. Its fields are unexported:
@@ -88,7 +88,7 @@ type RawLife struct {
 	subagentTracking        rawValue
 	codexStartup            rawValue
 	claudeCapacity          rawValue
-	noScreenChangeTimeout   rawValue
+	idleScreenTimeout       rawValue
 }
 
 // rawValue is one column's value exactly as stored: class is the column's
@@ -162,7 +162,7 @@ var rawLifeColumns = []rawLifeColumn{
 	{"subagent_tracking", func(l *RawLife) *rawValue { return &l.subagentTracking }},
 	{"codex_startup", func(l *RawLife) *rawValue { return &l.codexStartup }},
 	{"claude_capacity", func(l *RawLife) *rawValue { return &l.claudeCapacity }},
-	{"no_screen_change_timeout_seconds", func(l *RawLife) *rawValue { return &l.noScreenChangeTimeout }},
+	{"idle_screen_timeout_seconds", func(l *RawLife) *rawValue { return &l.idleScreenTimeout }},
 }
 
 // rawLifeSelect is the column fragment that reads rawLifeColumns, each as
@@ -279,7 +279,7 @@ const resetForReuseSQL = `UPDATE spawns
         agent                     = ?,
         end_reported_at           = NULL,
         subagent_tracking         = ` + subagentTrackedParamSQL + `,
-        no_screen_change_timeout_seconds = ?,
+        idle_screen_timeout_seconds = ?,
         life_number               = life_number + CASE WHEN ` + reuseAgentTextSQL + ` = ? THEN 0 ELSE 1 END,
         ` + rowVersionAdvance + `
   WHERE instance_id = ? AND ` + finishedStateGuardSQL + ` AND ` + snapshotMatchSQL + ` AND ` + reuseAgentTextSQL + ` = ?`
@@ -331,7 +331,7 @@ const resetForReuseDeleteRequestsSQL = `DELETE FROM permission_requests WHERE in
 //     end_reported_at NULL; subagent_tracking from fresh.Agent, the flag of
 //     the launch it begins (SR-9; subagentTrackedParamSQL): 1 for claude, 0
 //     for codex or cursor, over whatever the row held; the timeout override
-//     fresh.NoScreenChangeTimeoutSeconds (0 as NULL, so an omitted override
+//     fresh.IdleScreenTimeoutSeconds (0 as NULL, so an omitted override
 //     clears the old one); row_version advanced by one, and
 //     life_number advanced by one only if the exact stored agent differs
 //     from fresh.Agent. Same-agent reuse keeps the life. The store reads no
@@ -439,7 +439,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		nullableStringArg(fresh.Identity.Token), nullableStringArg(fresh.Identity.Socket),
 	)
 	resetArgs = append(resetArgs, launchOwnerArgs(fresh.LaunchOwner)...)
-	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent, positiveIntArg(fresh.NoScreenChangeTimeoutSeconds), fresh.Agent)
+	resetArgs = append(resetArgs, fresh.Agent, fresh.Agent, positiveIntArg(fresh.IdleScreenTimeoutSeconds), fresh.Agent)
 	resetArgs = append(resetArgs, instanceID)
 	resetArgs = append(resetArgs, finishedStateGuardArgs()...)
 	resetArgs = append(resetArgs, snapshotMatchArgs(examined)...)
@@ -467,7 +467,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
-	exits, err := takeStuckExits(ctx, conn, instanceID)
+	exits, err := takeDisplayExits(ctx, conn, instanceID)
 	if err != nil {
 		return 0, "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -475,7 +475,7 @@ func (s *Store) ResetForReuse(instanceID string, examined RowSnapshot, examinedA
 		return 0, "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
-	emitStuckTransitions(exits)
+	emitDisplayTransitions(exits)
 	return CondApplied, sessionID, examined.RowVersion + 1, nil
 }
 

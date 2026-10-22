@@ -183,13 +183,13 @@ func TestListRowKeySet(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"agent", "cwd", "ended_at", "family_state", "instance_id", "labels", "last_seen_at", "liveness_note",
-		"liveness_unverified_since", "no_screen_change_availability", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
+	want := []string{"agent", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
+		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v", got, want)
 	}
-	if m["no_screen_change_availability"] != "available" {
-		t.Errorf("no_screen_change_availability = %v; want available on a Claude row", m["no_screen_change_availability"])
+	if m["idle_screen_availability"] != "available" {
+		t.Errorf("idle_screen_availability = %v; want available on a Claude row", m["idle_screen_availability"])
 	}
 	if reqs, ok := m["permission_requests"].([]any); !ok || len(reqs) != 0 {
 		t.Errorf("permission_requests = %v; want [] on a row not in check_permission", m["permission_requests"])

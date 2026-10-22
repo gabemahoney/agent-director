@@ -2303,10 +2303,10 @@ for the resulting version.
 
 **Authorized migration refuses permission observation or ownership facts**
 (the error names "v13→v14 incompatible <table>.<column>", "v13→v14 invalid
-<table>.<column>", "v13→v14 invalid stuck_observation" or "invalid
-stuck_exit", "v13→v14 invalid fallback basis" or "v13→v14 incomplete
+<table>.<column>", "v13→v14 invalid display_observation" or "invalid
+display_exit", "v13→v14 invalid fallback basis" or "v13→v14 incomplete
 fallback clock"): a `spawns` or `permission_requests` column the v14 hop adds
-(stuck observation, pane baseline, timeout override or request ownership)
+(display observation, pane baseline, timeout override or request ownership)
 already exists with a different shape (name case, type, primary key,
 nullability or default), or its stored values fail validation (a value of the
 wrong type, a negative or non-integer number, an undecodable observation or

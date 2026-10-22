@@ -738,7 +738,7 @@ spawn marked `missing` or ended by its agent never keeps an open request.
 Every relayed request carries its delivery facts. They are worked out each
 time the request is read, by `decide`, `get`, `list` and `get-permission`;
 the only writes for them are `hook_gone_at` and the request's fallback clock
-(see [Stuck on an unanswered permission](#stuck-on-an-unanswered-permission)).
+(see [Needs intelligence on an unanswered permission](#needs-intelligence-on-an-unanswered-permission)).
 `proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks or validated Cursor
 invocation proof, by the close of its spawn's requests and, for a spawn already
@@ -837,12 +837,13 @@ bounds the whole call, from its start, and has no default:
 **Reading verbs never wait.** `get`, `list` and `get-permission` write
 `hook_gone_at` the first time they find a request fallen back only if the
 store's write lock is free at that moment; otherwise they skip the write
-and report `hook_gone_at` as stored. `list` also skips it once a stuck
-display write of the same read found the lock taken. `decide` always writes
-it (within its bound). `status`, `get`, `list` and `get-permission` may set a request's
-fallback clock, and `status`, `get` and `list` may commit the row's stuck
+and report `hook_gone_at` as stored. `list` also skips it once a
+`needs_intelligence` or `idle_screen` display write of the same read found
+the lock taken. `decide` always writes it (within its bound). `status`,
+`get`, `list` and `get-permission` may set a request's fallback clock, and
+`status`, `get` and `list` may commit the row's `needs_intelligence`
 display, on the same terms (see
-[Stuck on an unanswered permission](#stuck-on-an-unanswered-permission)).
+[Needs intelligence on an unanswered permission](#needs-intelligence-on-an-unanswered-permission)).
 
 **Which requests `get` and `list` show.** A row in `check_permission`
 lists, in `permission_requests`, the requests that still await an answer:
@@ -943,17 +944,15 @@ that binary judged it:
   request while this one is open, so a later request stays visible to that
   check.
 
-### Stuck on an unanswered permission
+### Needs intelligence on an unanswered permission
 
 A row whose agent has fallen back to its own permission prompt, and whose
-prompt nobody answers, reads `stuck` with `stuck_reason`
-`permission_unanswered`. It is a report for callers to act on; it changes no
-guard or hold (see the [caller contract](caller-contract.md#stuck-rows)). The
-timeout is
-[`[state] permission_unanswered_timeout_seconds`](configuration.md#permission-unanswered-timeout-state);
+prompt nobody answers, reads `needs_intelligence`. It is a report for callers
+to act on; it changes no guard or hold. The timeout is
+[`[state] needs_intelligence_timeout_seconds`](configuration.md#needs-intelligence-timeout-state);
 the fields, the omissions and what a caller does with them are in the
-[caller contract](caller-contract.md#stuck-rows), as is the other reason,
-`no_screen_change`.
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows),
+as is the other such state, `idle_screen`.
 
 - **Every agent.** Claude, Codex and Cursor rows are judged the same way. A
   Claude or Codex row qualifies only with `relay_mode` `on`, because with the
@@ -983,9 +982,10 @@ the fields, the omissions and what a caller does with them are in the
   recorded with `record-pane-answer`, proven gone, or closed with the spawn.
   When none counts any more, or the agent's own hook moves the row out of
   `check_permission`, the row returns to its real state, as the
-  [caller contract](caller-contract.md#stuck-rows) says.
+  [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows)
+  says.
 - **Older requests.** Which historical requests can never qualify is in the
-  [caller contract](caller-contract.md#stuck-rows).
+  [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 ### Send-keys interaction
 

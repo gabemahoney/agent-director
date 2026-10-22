@@ -433,30 +433,30 @@ func hookGoneFailureDiagnostics(t *testing.T, path string, trace *hookGoneTrace)
 // pane-answered one.
 func TestReadersSkipFallbackWritesThatStoreNothing(t *testing.T) {
 	t.Parallel()
-	get := func(e *relayEnv, s *stuckReadLeaseStore) error {
+	get := func(e *relayEnv, s *readLeaseStore) error {
 		_, err := api.Get(s, e.view(), e.id)
 		return err
 	}
-	list := func(e *relayEnv, s *stuckReadLeaseStore) error {
+	list := func(e *relayEnv, s *readLeaseStore) error {
 		_, err := api.List(s, e.view(), api.ListParams{})
 		return err
 	}
 	answered := []apitest.PermissionOption{apitest.PermissionAnswer(store.PaneAnswerOutside)}
 	preV7 := []apitest.PermissionOption{apitest.PermissionTimes(time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}, ""),
 		apitest.PermissionCreation("0001-01-01 00:00:00")}
-	goneAt := stuckAt.Add(-time.Second)
-	goneStored := []apitest.PermissionOption{apitest.PermissionTimes(stuckAt.Add(-time.Hour), time.Time{}, stuckAt.Add(time.Hour), goneAt, time.Time{}, "")}
+	goneAt := displayAt.Add(-time.Second)
+	goneStored := []apitest.PermissionOption{apitest.PermissionTimes(displayAt.Add(-time.Hour), time.Time{}, displayAt.Add(time.Hour), goneAt, time.Time{}, "")}
 	for _, tc := range []struct {
 		name                   string
 		hook                   store.ProcessIdentity
 		dead                   bool // the hook's process is gone
 		facts                  []apitest.PermissionOption
-		read                   func(*relayEnv, *stuckReadLeaseStore) error
+		read                   func(*relayEnv, *readLeaseStore) error
 		wantGone, wantFallback time.Time // stored once read; a fallback_at has basis process
 	}{
-		{"get, alive hook answered at the pane", relayEnvHook, false, answered, get, stuckAt, time.Time{}},
-		{"get, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, get, stuckAt, time.Time{}},
-		{"list, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, list, stuckAt, time.Time{}},
+		{"get, alive hook answered at the pane", relayEnvHook, false, answered, get, displayAt, time.Time{}},
+		{"get, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, get, displayAt, time.Time{}},
+		{"list, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, list, displayAt, time.Time{}},
 		{"get, gone hook with hook_gone_at stored", relayEnvHook, true, goneStored, get, goneAt, goneAt},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,15 +465,15 @@ func TestReadersSkipFallbackWritesThatStoreNothing(t *testing.T) {
 			if tc.dead {
 				e.pc.Set(relayEnvHook.PID, procfix.Gone())
 			}
-			e.now = stuckAt
-			stuckFacts(t, e, tc.facts...)
+			e.now = displayAt
+			requestFacts(t, e, tc.facts...)
 			basis := ""
 			if !tc.wantFallback.IsZero() {
 				basis = store.FallbackProcess
 			}
 			for i, want := range []int{1, 0} {
 				var (
-					s        *stuckReadLeaseStore
+					s        *readLeaseStore
 					attempts int
 					pr       store.PermissionRow
 				)
@@ -484,7 +484,7 @@ func TestReadersSkipFallbackWritesThatStoreNothing(t *testing.T) {
 				// race under load, so it repeats at the same injected time until
 				// its write is stored (t2.sp6.2z.rd PM-E2); read 2 runs once.
 				tries, elapsed, ok := apitest.RepeatUntilCommitted(func() bool {
-					s = &stuckReadLeaseStore{stuckObservationReader: e.s}
+					s = &readLeaseStore{observationReader: e.s}
 					if err := tc.read(e, s); err != nil {
 						t.Fatalf("read %d: %v", i+1, err)
 					}

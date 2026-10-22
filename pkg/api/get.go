@@ -50,7 +50,7 @@ type PermissionRequestInfo struct {
 // match the SRD §4.2 column names so callers reading the verb output can
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
-	StuckInfo
+	StateDetail
 
 	// Context is an experimental on-demand reading for the current session.
 	Context ContextReading `json:"context"`
@@ -61,7 +61,8 @@ type SpawnRow struct {
 	// launched from a plain shell.
 	ParentID string `json:"parent_id"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing, stuck. pending means a launch
+	// ask_user, check_permission, ended, missing, or a report-only Displayed
+	// State, needs_intelligence or idle_screen. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
 	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history;
@@ -70,10 +71,10 @@ type SpawnRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
-	// NoScreenChangeAvailability is, as StatusResult's, available for Claude
-	// and Codex and unavailable for Cursor. Present on every row; omitted only
-	// from the empty result of a failed call.
-	NoScreenChangeAvailability string `json:"no_screen_change_availability,omitempty"`
+	// IdleScreenAvailability is, as StatusResult's, available for Claude and
+	// Codex and unavailable for Cursor. Present on every row; omitted only from
+	// the empty result of a failed call.
+	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -378,8 +379,8 @@ func emptySpawnRow() SpawnRow {
 // (a row with no current session id drops nothing).
 //
 // Get reads with no settle time and samples no pane, so a working Claude or
-// Codex row keeps its pane's current no_screen_change finding as committed;
-// the Client applies its [state] settle_ms and samples panes (getSettled).
+// Codex row keeps its pane's current idle_screen finding as committed; the
+// Client applies its [state] settle_ms and samples panes (getSettled).
 func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 	return getSettled(s, v, store.SettleRead{}, instanceID)
 }
@@ -417,31 +418,31 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		return emptySpawnRow(), err
 	}
 	out := SpawnRow{
-		Context:                    contextOf(row.ContextEvidence()),
-		InstanceID:                 row.InstanceID,
-		ParentID:                   row.ParentID,
-		State:                      reported,
-		FamilyState:                row.FamilyState,
-		NoScreenChangeAvailability: noScreenChangeAvailability(row.Agent),
-		CWD:                        row.CWD,
-		Agent:                      row.Agent,
-		TmuxSessionName:            row.TmuxSessionName,
-		TmuxSocket:                 row.Identity.Socket,
-		AgentArgs:                  row.AgentArgs,
-		RelayMode:                  row.RelayMode,
-		JSONLPath:                  row.JSONLPath,
-		SessionID:                  row.SessionID,
-		Labels:                     row.Labels,
-		StartedAt:                  row.StartedAt,
-		LastSeenAt:                 row.LastSeenAt,
-		StateChangedAt:             millisToUTC(row.StateChangedMillis),
-		EndedAt:                    row.EndedAt,
-		LaunchStartedAt:            launchStartedAt(row.State, row.LaunchStartedAtMillis),
-		LivenessUnverifiedSince:    nullableTimestamp(row.LivenessUnverifiedSince),
-		LivenessNote:               nullableString(row.LivenessNote),
-		PermissionRequests:         []PermissionRequestInfo{},
-		UnprovenRequests:           []PermissionRequestInfo{},
-		PriorSessions:              []PriorSession{},
+		Context:                 contextOf(row.ContextEvidence()),
+		InstanceID:              row.InstanceID,
+		ParentID:                row.ParentID,
+		State:                   reported,
+		FamilyState:             row.FamilyState,
+		IdleScreenAvailability:  idleScreenAvailability(row.Agent),
+		CWD:                     row.CWD,
+		Agent:                   row.Agent,
+		TmuxSessionName:         row.TmuxSessionName,
+		TmuxSocket:              row.Identity.Socket,
+		AgentArgs:               row.AgentArgs,
+		RelayMode:               row.RelayMode,
+		JSONLPath:               row.JSONLPath,
+		SessionID:               row.SessionID,
+		Labels:                  row.Labels,
+		StartedAt:               row.StartedAt,
+		LastSeenAt:              row.LastSeenAt,
+		StateChangedAt:          millisToUTC(row.StateChangedMillis),
+		EndedAt:                 row.EndedAt,
+		LaunchStartedAt:         launchStartedAt(row.State, row.LaunchStartedAtMillis),
+		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
+		LivenessNote:            nullableString(row.LivenessNote),
+		PermissionRequests:      []PermissionRequestInfo{},
+		UnprovenRequests:        []PermissionRequestInfo{},
+		PriorSessions:           []PriorSession{},
 	}
 
 	// b.v2c AC6/AC8: surface the visible history (the current life's archived
@@ -492,8 +493,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	attempted, err := recordGone(s, now, readerLockWait, goneSlotsOf(slots, out.UnprovenRequests, row.Agent, row.RelayMode, now))
 
 	// A store that does not observe permissions keeps the state computed
-	// above, with no stuck fields, as list does.
-	if _, observes := s.(permissionStuckStore); !observes {
+	// above, with no state detail, as list does.
+	if _, observes := s.(needsIntelligenceStore); !observes {
 		return out, nil
 	}
 	// The observation reuses the requests read above while no write has been
@@ -502,8 +503,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	if !attempted {
 		read.requests = judged
 	}
-	display, _, _ := observeStuck(s, v, settle, row, read)
-	out.State, out.StuckInfo = display.State, stuckInfo(display)
+	display, _, _ := observeDisplay(s, v, settle, row, read)
+	out.State, out.StateDetail = display.State, stateDetail(display)
 
 	return out, nil
 }
@@ -530,7 +531,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // permission requests and launch_started_at follow the live state.
 // Get never waits for the store's write lock, nor for a state to settle. Like
 // [Client.Status] it samples a working Claude or Codex row's own pane for
-// no_screen_change and carries no_screen_change_availability.
+// idle_screen and carries idle_screen_availability.
 //
 // CLI: agent-director get
 //

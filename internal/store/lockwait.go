@@ -326,7 +326,7 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 }
 
 // inWriteTxContext allows post-commit work to share the transaction's deadline.
-// A lifecycle callback collects its own stuck exit; authority and request
+// A lifecycle callback collects its own display exit; authority and request
 // transactions must not inspect unrelated rows' report-only history.
 func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
 	return s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
@@ -414,7 +414,7 @@ func retryBusy(ctx context.Context, busyMs int, fn func() error) error {
 // move to pending, a hook's ended transition). When fn returns an error, or
 // the commit fails, the transaction is rolled back and nothing is written;
 // fn's error is returned as it is. fn must use conn alone (see withConn).
-// fn writes only instanceID's row, so only that row's stuck exit is drained.
+// fn writes only instanceID's row, so only that row's display exit is drained.
 func (s *Store) inImmediateTx(instanceID string, fn func(ctx context.Context, conn *sql.Conn) error) error {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
@@ -437,7 +437,7 @@ func (s *Store) inImmediateTx(instanceID string, fn func(ctx context.Context, co
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return err
 	}
-	exits, err := takeStuckExits(ctx, conn, instanceID)
+	exits, err := takeDisplayExits(ctx, conn, instanceID)
 	if err != nil {
 		return err
 	}
@@ -445,7 +445,7 @@ func (s *Store) inImmediateTx(instanceID string, fn func(ctx context.Context, co
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
-	emitStuckTransitions(exits)
+	emitDisplayTransitions(exits)
 	return nil
 }
 

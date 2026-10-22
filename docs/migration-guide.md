@@ -19,8 +19,8 @@ runtime-table DDL live in
 in `internal/store/family_schema.go`; the v12→v13 Codex startup and
 Claude capacity provenance hop lives in `internal/store/codex_startup.go`
 with `migrateClaudeCapacity` in `internal/store/claude_capacity.go`; the
-current v13→v14 stuck observation and ownership hop lives in
-`internal/store/stuck_schema.go`.
+current v13→v14 display observation and ownership hop lives in
+`internal/store/display_schema.go`.
 The current schema has seven tables: `spawns`, `permission_requests`,
 `session_history`, `store_meta`, `subagents`, `subagent_launches` and
 `cursor_runtimes`.
@@ -195,23 +195,24 @@ appending the step makes both a v14→v15 upgrade and a v1→v15 chain work.
 
 ### Current worked example: v13 → v14
 
-`migrateV13toV14` (`stuck_schema.go`) adds the columns behind the report-only
-`stuck` display of an unanswered permission request or an unchanged working
-pane. On `spawns`: `permission_epoch INTEGER NOT NULL DEFAULT 0`,
-`stuck_version INTEGER NOT NULL DEFAULT 0`, and nullable `stuck_observation
-TEXT`, `stuck_exit TEXT`, `no_screen_change_timeout_seconds INTEGER` (the
-per-spawn override), `pane_sha256 TEXT`, `pane_since_ms INTEGER` and
-`pane_epoch INTEGER` (the committed pane baseline). On
-`permission_requests`, all nullable: `owner_launch_token TEXT`,
-`owner_permission_epoch INTEGER`, `admitted_at INTEGER`, `fallback_at INTEGER`
-and `fallback_basis TEXT`. Fresh `schemaDDL` creates
+`migrateV13toV14` (`display_schema.go`) adds the columns behind the report-only
+Displayed States: `needs_intelligence` for an unanswered permission request
+and `idle_screen` for an unchanged working pane. On `spawns`:
+`permission_epoch INTEGER NOT NULL DEFAULT 0`,
+`observation_version INTEGER NOT NULL DEFAULT 0`, and nullable
+`display_observation TEXT`, `display_exit TEXT`,
+`idle_screen_timeout_seconds INTEGER` (the per-spawn override),
+`pane_sha256 TEXT`, `pane_since_ms INTEGER` and `pane_epoch INTEGER` (the
+committed pane baseline). On `permission_requests`, all nullable:
+`owner_launch_token TEXT`, `owner_permission_epoch INTEGER`, `admitted_at
+INTEGER`, `fallback_at INTEGER` and `fallback_basis TEXT`. Fresh `schemaDDL` creates
 the same shape directly at v14, and the registered `{from: 13, apply:
 migrateV13toV14}` step runs after the v12→v13 hop; authorization must match
 the actual starting version and target 14. Existing migrations through v13
 stay unchanged. The runtime behaviour is in
-[Stuck reporting](architecture.md#stuck-reporting).
+[Displayed State reporting](architecture.md#displayed-state-reporting).
 
-The hop invents no history: no stuck episode, no observation, no fallback
+The hop invents no history: no displayed episode, no observation, no fallback
 clock, no process-death observation, no pane baseline and no override. The
 pane and override columns start NULL, so an upgraded row uses each reader's
 configured timeout and its first successful pane sample starts a fresh
@@ -219,11 +220,11 @@ period. The hop validates first, and changes nothing until every column of
 these names that already exists passes. A case-conflicting name, a wrong
 type, a primary key, or a nullability or default that differs from the list
 above is refused with `ErrSchemaMismatch`. Existing values must have their
-column's type, and integers must be non-negative; `stuck_observation` and
-`stuck_exit` must decode as their strict bounded JSON, for either reason; a
-`fallback_basis` must be `process`, `deadline` or `admission`; and
-`fallback_at` and `fallback_basis` must be both set or both NULL on every
-row. Compatible reentry keeps all of these unchanged.
+column's type, and integers must be non-negative; `display_observation` and
+`display_exit` must decode as their strict bounded JSON; a `fallback_basis`
+must be `process`, `deadline` or `admission`; and `fallback_at` and
+`fallback_basis` must be both set or both NULL on every row. Compatible
+reentry keeps all of these unchanged.
 
 The one backfill is conservative ownership. Only if neither ownership column
 already existed, a request of a spawn currently in `check_permission` acquires
@@ -365,7 +366,7 @@ reverse those earlier commits. After successful authorization consumption,
 reopen at v11 does not replay migration.
 
 Fresh DDL retains `cursorRuntimeDDL`, the identical eligibility column,
-v12 family history, v13 startup/capacity provenance and v14 stuck
+v12 family history, v13 startup/capacity provenance and v14 display
 observation and ownership columns.
 `schema_v11_test.go` covers physical-v10 preservation,
 NULL/malformed historical agents, Cursor/child/orphan false, compatible
@@ -781,7 +782,7 @@ goes wrong: **fresh databases never replay hops.** The current v14 fresh DDL
 includes `cursorRuntimeDDL`, the eligibility column, the three v12
 family-history columns, nullable `spawns.codex_startup TEXT` and
 `spawns.claude_capacity TEXT`, and the eight `spawns` and five
-`permission_requests` columns of the v14 stuck observation and
+`permission_requests` columns of the v14 display observation and
 ownership; the v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14
 hops use the same respective definitions. Future changes must update
 both fresh DDL and the next hop. The §3 step 4
@@ -866,7 +867,7 @@ v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
 **Current recovery policy.** Schema v14 is restore-only: there is no
-supported v14→v13 reverse recipe for the stuck observation and ownership
+supported v14→v13 reverse recipe for the display observation and ownership
 columns, and no supported v13→v12 reverse recipe for the context provenance
 columns. The v12 → v11 recipe below applies only to genuine family-only v12
 stores; it must never be run against v13 or v14, or a store whose version was
@@ -1276,7 +1277,7 @@ installing.
 
 ## References
 
-- `internal/store/stuck_schema.go` — guarded v13→v14 stuck observation
+- `internal/store/display_schema.go` — guarded v13→v14 display observation
   and ownership hop, with conservative ownership backfill.
 - `internal/store/schema_v14_test.go` — preservation, reentry, refusal,
   rollback/retry and ownership checks; fixtures in

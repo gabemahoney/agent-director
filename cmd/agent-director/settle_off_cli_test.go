@@ -15,13 +15,13 @@ import (
 // output. So far: E2's agent field (b.ssz), the one byte it changed, and the
 // two state-filtered list goldens (list-state-waiting-working and
 // list-state-pending-ended-missing), regenerated for the order of their rows
-// only: a state-filtered list now also reads the rows that may display as
-// stuck (ListFilters.StuckCandidates), a different query whose row order is
-// unspecified. The rows and their bytes are unchanged. And b.k6i's
+// only: a state-filtered list now also reads the rows that may show a
+// Displayed State (ListFilters.DisplayCandidates), a different query whose row
+// order is unspecified. The rows and their bytes are unchanged. And b.k6i's
 // state_changed_at, added by hand to every get and list row after
 // last_seen_at as the fixture's ReadSurfaceStampMs, 2099-01-01T00:00:00.123Z;
-// no other byte changed. And no_screen_change_availability (b.ob8 rk), recaptured
-// on every row after family_state as "available" (every fixed row is Claude's);
+// no other byte changed. And idle_screen_availability (b.ob8), recaptured on
+// every row after family_state as "available" (every fixed row is Claude's);
 // no other byte changed.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 

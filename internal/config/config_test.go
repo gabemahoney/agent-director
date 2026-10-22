@@ -53,7 +53,8 @@ func TestDefaultMatchesSRD(t *testing.T) {
 		{"Store.DbPath", d.Store.DbPath, "~/.config/agent-director/state.db"},
 		{"Store.BusyTimeoutMs", d.Store.BusyTimeoutMs, 10000},
 		{"State.SettleMs", d.State.SettleMs, 0}, // b.3ie: off by default
-		{"State.NoScreenChangeTimeoutSeconds", d.State.NoScreenChangeTimeoutSeconds, 1200},
+		{"State.NeedsIntelligenceTimeoutSeconds", d.State.NeedsIntelligenceTimeoutSeconds, 30},
+		{"State.IdleScreenTimeoutSeconds", d.State.IdleScreenTimeoutSeconds, 1200},
 		{"Log.ErrorLogPath", d.Log.ErrorLogPath, "~/.config/agent-director/errors.log"},
 	}
 	for _, tc := range cases {
@@ -123,6 +124,10 @@ func TestLoadKeepsDefaults(t *testing.T) {
 		{"unknown [launch] key ignored", makeConfigFile(t, "[launch]\nclaude_paths = \"relative\"\ngemini_path = \"x\"\nclaude_path = \"/a/claude\"\n"),
 			func(c *config.Config) { c.Launch.ClaudePath = "/a/claude" }},
 		{"old key name outside [defaults] ignored as any unknown key", makeConfigFile(t, "[relay]\ndisable_askuserquestion = true\n"),
+			func(*config.Config) {}},
+		// b.ob8: no rename hint and no alias for the [state] timeouts' earlier names.
+		{"earlier [state] timeout names ignored as any unknown key",
+			makeConfigFile(t, "[state]\npermission_unanswered_timeout_seconds = 5\nno_screen_change_timeout_seconds = 60\n"),
 			func(*config.Config) {}},
 	}
 	for _, tc := range cases {

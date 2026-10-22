@@ -4,7 +4,8 @@ package manifest_test
 // manifest and its committed surface.json: no delete verb, and no string naming
 // kill's former finished-row opt-in, the off-PATH admin binary
 // agent-director-admin or its kill-finished verb, while kill keeps only its
-// instance_id parameter and its kill_sent result.
+// instance_id parameter and its kill_sent result. The manifest also names none
+// of the Displayed State naming b.ob8 removed (SR-1.3).
 
 import (
 	"fmt"
@@ -51,8 +52,8 @@ func manifestStrings() map[string]string {
 
 // TestManifestHasNoOperatorActions: the manifest has no delete verb and no
 // string (verb, parameter or result-field name, description, allowed value)
-// naming an operator action, while kill has only instance_id and still
-// returns kill_sent.
+// naming an operator action or the Displayed State naming b.ob8 removed
+// (SR-1.3), while kill has only instance_id and still returns kill_sent.
 func TestManifestHasNoOperatorActions(t *testing.T) {
 	strs := manifestStrings()
 	if len(strs) == 0 {
@@ -61,6 +62,9 @@ func TestManifestHasNoOperatorActions(t *testing.T) {
 	for path, s := range strs {
 		if m := apitest.OperatorActionNames.FindString(s); m != "" {
 			t.Errorf("SR-6.8: manifest %s names %q; nothing shown to agents may: %q", path, m, s)
+		}
+		if m := apitest.RemovedDisplayNames.FindString(s); m != "" {
+			t.Errorf("SR-1.3: manifest %s names the removed %q: %q", path, m, s)
 		}
 	}
 	if _, ok := manifest.Lookup("delete"); ok {

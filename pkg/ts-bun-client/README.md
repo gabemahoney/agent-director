@@ -119,10 +119,9 @@ Cursor reports `"failed"` for unsupported pre-trust or `"skipped"` for its saved
 opt-out, never a validated `"ok"`; see
 [Cursor launch settings](../../docs/settings.md#cursor-launch-settings).
 
-`no_screen_change_timeout_seconds` gives the row its own `no_screen_change`
-timeout in whole seconds (`0`, `null` or omitted for none); its range and
-lifecycle are in
-[Configuration](../../docs/configuration.md#no-screen-change-timeout-state).
+`idle_screen_timeout_seconds` gives the row its own `idle_screen` timeout in
+whole seconds (`0`, `null` or omitted for none); its range and lifecycle are
+in [Configuration](../../docs/configuration.md#idle-screen-timeout-state).
 
 For all agents, same-agent reuse retains current-life session history and subagent records;
 switching agents starts another life, including when switching back.
@@ -158,18 +157,17 @@ console.log(result.state);
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
-`state` is a `string` and can be `"stuck"`. Then `StatusResult` and `GetResult`
-carry the optional `stuck_reason` (`StuckReason`: `"permission_unanswered"` or
-`"no_screen_change"`), `since` and the reason's detail: `request_token` and
-`tool_name`, or `unchanged_minutes`; `StatusResult` also carries
-`tmux_session_name`, and each `ListRow` carries `stuck_reason` only. A key
-that does not apply is absent from the result, never `null`, so test for
-presence (`result.stuck_reason !== undefined`). Every `StatusResult`,
-`GetResult` and `ListRow` carries `no_screen_change_availability`
-(`NoScreenChangeAvailability`: `"available"` for Claude and Codex,
-`"unavailable"` for Cursor).
-The [caller contract](../../docs/caller-contract.md#stuck-rows) defines the
-fields, omissions and detection.
+`state` is a `string` and can be `"needs_intelligence"` or `"idle_screen"`.
+Then `StatusResult` and `GetResult` carry `since` and that state's detail:
+`request_token` and `tool_name` for `"needs_intelligence"`, or
+`unchanged_minutes` for `"idle_screen"`; `StatusResult` also carries
+`tmux_session_name`, and each `ListRow` carries `state`, no detail. A key that
+does not apply is absent from the result, never `null`, so test for presence
+(`result.since !== undefined`). Every `StatusResult`, `GetResult` and
+`ListRow` carries `idle_screen_availability` (`IdleScreenAvailability`:
+`"available"` for Claude and Codex, `"unavailable"` for Cursor).
+The [caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
+defines the states, fields, omissions and detection.
 
 `GetResult` and each `ListRow` carry `state_changed_at: string`, when the raw
 state last changed; `StatusResult` does not. The
@@ -193,7 +191,8 @@ for (const spawn of result.spawns) {
 ```
 
 Each row, like `get`'s result, carries `agent` (`"claude"`, `"codex"` or `"cursor"`), the agent the row runs.
-A `state` filter of `"stuck"` is matched on the displayed state, before any `limit`.
+A `state` filter of `"needs_intelligence"` or `"idle_screen"` is matched on
+the displayed state, before any `limit`.
 
 ### listSubagents
 

@@ -84,18 +84,20 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
-A row can read `stuck` in place of its own state, with a `stuck_reason`:
-`permission_unanswered` while its agent's own permission prompt stays
+A row can read one of two states in place of its own:
+`needs_intelligence` while its agent's own permission prompt stays
 unanswered past the
-[configured time](configuration.md#permission-unanswered-timeout-state), or
-`no_screen_change` while a `working` Claude or Codex agent's pane looks the
-same on every read for the
-[configured time](configuration.md#no-screen-change-timeout-state). It is computed when you call `status`, `get` or `list`; nothing runs
-in the background, so an agent nobody reads never becomes stuck. Which
-requests count is in
-[permissions](permissions.md#stuck-on-an-unanswered-permission); which agents
-each reason applies to, the fields, filtering and what to do about it are in
-the [caller contract](caller-contract.md#stuck-rows).
+[configured time](configuration.md#needs-intelligence-timeout-state), or
+`idle_screen` while a `working` Claude or Codex agent's pane looks the same
+on every read for the
+[configured time](configuration.md#idle-screen-timeout-state). Both are
+computed when you call `status`, `get` or `list`; nothing runs in the
+background, so an agent nobody reads never shows either. Which requests
+count is in
+[permissions](permissions.md#needs-intelligence-on-an-unanswered-permission);
+which agents each state applies to, the fields, filtering and what to do
+about it are in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 ## Family state
 
@@ -110,8 +112,8 @@ live descendants. Before [settling](configuration.md#settle-time-state),
 the family is `waiting` exactly when every live member's stored state is
 `waiting`; no live members also means `waiting`. Any other live state,
 including `pending`, `ask_user` or `check_permission`, makes it `working`.
-A member shown `stuck` is in `check_permission` or `working` underneath, so it
-counts as `working` too.
+A member shown `needs_intelligence` or `idle_screen` is in `check_permission`
+or `working` underneath, so it counts as `working` too.
 
 Each returned agent's family covers the full stored tree, including members
 hidden by list filters or limits. Resume, reuse and deletion follow the
@@ -347,24 +349,21 @@ last=""
 while sleep 1; do
   row=$(agent-director status --instance-id "$id")
   state=$(printf '%s\n' "$row" | jq -r .state)
-  seen="$state $(printf '%s\n' "$row" | jq -r '.stuck_reason // ""')"
-  if [ "$seen" != "$last" ]; then
-    last=$seen
+  if [ "$state" != "$last" ]; then
+    last=$state
     case "$state" in
       waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;;
-      stuck) echo "$id: stuck $(printf '%s\n' "$row" | jq -r '.stuck_reason + ", session " + .tmux_session_name')" ;;
+      needs_intelligence|idle_screen) echo "$id: $state, session $(printf '%s\n' "$row" | jq -r .tmux_session_name)" ;;
     esac
   fi
 done
 ```
 
-It never sees a turn shorter than the settle time. A row reads
-[`stuck`](#spawn-states) when its agent may need you:
-[attach to its pane](#attach-to-a-spawns-pane), or, for
-`permission_unanswered`, read the request with `get-permission` and the
-row's `request_token` (see [Stuck rows](caller-contract.md#stuck-rows)). To
-learn whether the state changed since a time of your own, compare that time
-with `state_changed_at` from `get` or `list` (see
+It never sees a turn shorter than the settle time. What to do for a
+`needs_intelligence` or `idle_screen` row is in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+To learn whether the state changed since a time of your own, compare that
+time with `state_changed_at` from `get` or `list` (see
 [State change time](caller-contract.md#state-change-time)).
 
 ## Read an agent's subagent records

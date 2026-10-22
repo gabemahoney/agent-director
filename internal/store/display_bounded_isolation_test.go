@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -11,37 +10,27 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
+// unrelatedExits are the exits another row retains: a pending one and a
+// malformed one.
+var unrelatedExits = []struct{ name, raw string }{
+	{"pending", `{"prior_state":"needs_intelligence","new_state":"ended","at_ms":1792411205000}`},
+	{"malformed", `{"prior_state":`},
+}
+
 // Retained exits are deliberately seeded after opening: malformed historical
 // metadata must not participate in another row's otherwise valid transaction.
-func seedUnrelatedStuckExit(t *testing.T, e *cursorTrailEnv, raw string) string {
+func seedUnrelatedDisplayExit(t *testing.T, e *cursorTrailEnv, raw string) string {
 	t.Helper()
-	id, err := apitest.SeedSpawn(e.f.path, "unrelated-exit", store.StateEnded, "", "off", "", false, apitest.WithStuckExit(raw))
+	id, err := apitest.SeedSpawn(e.f.path, "unrelated-exit", store.StateEnded, "", "off", "", false, apitest.WithDisplayExit(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-func readStuckExit(t *testing.T, e *cursorTrailEnv, id string) sql.NullString {
-	t.Helper()
-	db, err := sql.Open("sqlite", e.f.path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	var raw sql.NullString
-	if err := db.QueryRow(`SELECT stuck_exit FROM spawns WHERE instance_id=?`, id).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	return raw
-}
-
-func TestCursorBoundedTransactionsIgnoreUnrelatedStuckExit(t *testing.T) {
+func TestCursorBoundedTransactionsIgnoreUnrelatedDisplayExit(t *testing.T) {
 	for _, operation := range []string{"prompt authority", "admission", "relay acknowledgement", "native claim", "relay answer authority", "native answer authority"} {
-		for _, marker := range []struct{ name, raw string }{
-			{"pending", `{"new_state":"ended","reason":"permission_unanswered","at_ms":1792411205000}`},
-			{"malformed", `{"new_state":`},
-		} {
+		for _, marker := range unrelatedExits {
 			t.Run(operation+"/"+marker.name, func(t *testing.T) {
 				e := newCursorTrailEnv(t)
 				token := storefix.TestRequestTokenA
@@ -63,7 +52,7 @@ func TestCursorBoundedTransactionsIgnoreUnrelatedStuckExit(t *testing.T) {
 						t.Fatalf("claim setup: %v %v", ok, err)
 					}
 				}
-				other := seedUnrelatedStuckExit(t, e, marker.raw)
+				other := seedUnrelatedDisplayExit(t, e, marker.raw)
 				mark := store.TrailMark(t)
 				switch operation {
 				case "prompt authority":
@@ -90,23 +79,18 @@ func TestCursorBoundedTransactionsIgnoreUnrelatedStuckExit(t *testing.T) {
 						t.Errorf("valid answer authority: %v", err)
 					}
 				}
-				if raw := readStuckExit(t, e, other); !raw.Valid || raw.String != marker.raw {
+				if raw := storedDisplayExit(t, e.f.path, other); !raw.Valid || raw.String != marker.raw {
 					t.Errorf("unrelated exit consumed: %+v", raw)
 				}
-				if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", other); len(events) != 0 {
-					t.Errorf("unrelated exit emitted: %v", events)
-				}
+				assertDisplayRecords(t, mark, other)
 			})
 		}
 	}
 }
 
-func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
+func TestCursorBoundedMissingDisplayExitCommitIsolation(t *testing.T) {
 	for _, outcome := range []string{"committed", "stale snapshot", "failed close", "failed commit"} {
-		for _, marker := range []struct{ name, raw string }{
-			{"pending", `{"new_state":"ended","reason":"permission_unanswered","at_ms":1792411205000}`},
-			{"malformed", `{"new_state":`},
-		} {
+		for _, marker := range unrelatedExits {
 			t.Run(outcome+"/"+marker.name, func(t *testing.T) {
 				e := newCursorTrailEnv(t)
 				token := storefix.TestRequestTokenA
@@ -117,15 +101,15 @@ func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
 				}
 				pr := e.read(t, token)
 				at := e.until.Add(time.Minute)
-				if display := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, at, 30*time.Second); display.State != store.StateStuck {
-					t.Fatalf("committed stuck setup: %+v", display)
+				if display := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, at, 30*time.Second); display.State != store.StateNeedsIntelligence {
+					t.Fatalf("committed needs_intelligence setup: %+v", display)
 				}
 				row, err = e.f.s.GetSpawn(e.b.InstanceID)
 				if err != nil {
 					t.Fatal(err)
 				}
 				before := e.read(t, token)
-				other := seedUnrelatedStuckExit(t, e, marker.raw)
+				other := seedUnrelatedDisplayExit(t, e, marker.raw)
 				examined := row
 				switch outcome {
 				case "stale snapshot":
@@ -141,9 +125,7 @@ func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
 					if q == "COMMIT" {
 						commits++
 						if commits == 1 {
-							if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", row.InstanceID); len(events) != 0 {
-								t.Errorf("exit before commit: %v", events)
-							}
+							assertDisplayRecords(t, mark, row.InstanceID)
 						}
 					}
 				})
@@ -152,24 +134,20 @@ func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
 				if readErr != nil {
 					t.Fatal(readErr)
 				}
-				events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", row.InstanceID)
 				if outcome == "committed" {
-					if err != nil || result != store.CondApplied || prior != row.State || after.State != store.StateMissing || after.StuckObservation != "" || e.read(t, token).AwaitsAnswer() || commits != 1 {
+					if err != nil || result != store.CondApplied || prior != row.State || after.State != store.StateMissing || after.DisplayObservation != "" || e.read(t, token).AwaitsAnswer() || commits != 1 {
 						t.Fatalf("committed missing: %q %v %v row=%+v commits=%d", prior, result, err, after, commits)
 					}
 					_, stamp, err := apitest.ReadSettle(e.f.path, row.InstanceID)
 					if err != nil {
 						t.Fatal(err)
 					}
-					if len(events) != 1 || events[0]["prior_state"] != "stuck" || events[0]["new_state"] != store.StateMissing || events[0]["stuck_reason"] != store.StuckPermissionUnanswered || events[0]["ts"] != time.UnixMilli(stamp).UTC().Format("2006-01-02T15:04:05.000Z") {
-						t.Fatalf("committed exit: %v stamp=%d", events, stamp)
-					}
+					exit := displayRecord{store.StateNeedsIntelligence, store.StateMissing, time.UnixMilli(stamp)}
+					assertDisplayRecords(t, mark, row.InstanceID, exit)
 					if _, result, err := e.f.s.MarkCursorMissingIfSameLaunch(examined, e.b); err != nil || result != store.CondChanged {
 						t.Errorf("repeat: %v %v", result, err)
 					}
-					if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", row.InstanceID); len(events) != 1 {
-						t.Errorf("duplicate exit: %v", events)
-					}
+					assertDisplayRecords(t, mark, row.InstanceID, exit)
 				} else {
 					if outcome == "stale snapshot" {
 						if err != nil || result != store.CondChanged || prior != "" {
@@ -178,19 +156,18 @@ func TestCursorBoundedMissingStuckExitCommitIsolation(t *testing.T) {
 					} else if err == nil || prior != "" || (outcome == "failed commit" && (commits != 1 || !strings.Contains(err.Error(), "commit"))) {
 						t.Errorf("failure not observed: %q %v %v commits=%d", prior, result, err, commits)
 					}
-					if after.State != row.State || after.RowVersion != row.RowVersion || after.StuckObservation != row.StuckObservation || e.read(t, token) != before || len(events) != 0 {
-						t.Errorf("uncommitted missing changed facts/emitted: row=%+v events=%v", after, events)
+					if after.State != row.State || after.RowVersion != row.RowVersion || after.DisplayObservation != row.DisplayObservation || e.read(t, token) != before {
+						t.Errorf("uncommitted missing changed facts: row=%+v", after)
 					}
+					assertDisplayRecords(t, mark, row.InstanceID)
 				}
-				if raw := readStuckExit(t, e, row.InstanceID); raw.Valid {
+				if raw := storedDisplayExit(t, e.f.path, row.InstanceID); raw.Valid {
 					t.Errorf("own exit retained after commit or rollback: %+v", raw)
 				}
-				if raw := readStuckExit(t, e, other); !raw.Valid || raw.String != marker.raw {
+				if raw := storedDisplayExit(t, e.f.path, other); !raw.Valid || raw.String != marker.raw {
 					t.Errorf("unrelated exit consumed: %+v", raw)
 				}
-				if events := store.TrailEventsSince(t, mark, "ad.spawn.stuck_transition", other); len(events) != 0 {
-					t.Errorf("unrelated exit emitted: %v", events)
-				}
+				assertDisplayRecords(t, mark, other)
 			})
 		}
 	}

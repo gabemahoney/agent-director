@@ -304,10 +304,10 @@ func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
 }
 
 // pinnedStateEnum retains the original state order and appends the approved
-// report-only stuck value. Ordinary-state fixtures continue covering all seven
-// authoritative lifecycle values; TypeScript state remains a plain string.
+// report-only Displayed States. Ordinary-state fixtures continue covering all
+// seven authoritative lifecycle values; TypeScript state remains a plain string.
 var pinnedStateEnum = []string{
-	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing", "stuck",
+	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing", "needs_intelligence", "idle_screen",
 }
 
 // TestStateEnumByteIdentity pins the public manifest and generated JSON together.
@@ -326,7 +326,7 @@ func TestStateEnumByteIdentity(t *testing.T) {
 			}
 			found = true
 			if !reflect.DeepEqual(f.AllowedValues, pinnedStateEnum) {
-				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (approved permission stuck contract)",
+				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (approved Displayed State contract)",
 					verbName, f.AllowedValues, pinnedStateEnum)
 			}
 		}

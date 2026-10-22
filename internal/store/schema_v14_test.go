@@ -20,13 +20,13 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 	}{
 		{0, "no columns", "", ""}, {1, "first epoch", "", ""}, {6, "partial pane", "", ""}, {8, "spawn columns", "", ""},
 		{9, "partial owner", "", ""}, {10, "both owner columns", "", ""},
-		{full, "pending candidate", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001,"permission_epoch":8}`, ""},
-		{full, "displayed episode", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"check_permission","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
-		{full, "displayed pane episode", `{"state":"stuck","reason":"no_screen_change","since_ms":1792411208000,"unchanged_minutes":20,"candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
-		{full, "reason replacement candidate", `{"state":"stuck","reason":"permission_unanswered","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"stuck","candidate_reason":"no_screen_change","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
-		{full, "observation without epoch", `{"state":"check_permission","candidate":"stuck","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001}`, ""},
-		{full, "pending lifecycle exit", "", `{"new_state":"waiting","reason":"permission_unanswered","at_ms":1792411209000}`},
-		{full, "pending pane exit", "", `{"new_state":"working","reason":"no_screen_change","at_ms":1792411209000}`},
+		{full, "pending candidate", `{"state":"check_permission","candidate":"needs_intelligence","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001,"permission_epoch":8}`, ""},
+		{full, "displayed needs_intelligence", `{"state":"needs_intelligence","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"check_permission","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "displayed idle_screen", `{"state":"idle_screen","since_ms":1792411208000,"unchanged_minutes":20,"candidate":"idle_screen","candidate_since_ms":1792411208000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "move candidate", `{"state":"needs_intelligence","since_ms":1792411208000,"request_token":"req-kept","tool_name":"Read","candidate":"idle_screen","candidate_since_ms":1792411209000,"observed_at_ms":1792411209001,"permission_epoch":8}`, ""},
+		{full, "observation without epoch", `{"state":"check_permission","candidate":"needs_intelligence","candidate_since_ms":1792411208000,"observed_at_ms":1792411208001}`, ""},
+		{full, "pending needs_intelligence exit", "", `{"prior_state":"needs_intelligence","new_state":"waiting","at_ms":1792411209000}`},
+		{full, "pending idle_screen exit", "", `{"prior_state":"idle_screen","new_state":"working","at_ms":1792411209000}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prefix := tc.prefix
@@ -42,8 +42,8 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			preAddV14Columns(t, path, v14ColumnSpecs[:prefix])
 			if prefix == full {
 				withRaw(t, path, func(db *sql.DB) {
-					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,stuck_version=4,stuck_observation=?,stuck_exit=?,
-						no_screen_change_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,
+					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,observation_version=4,display_observation=?,display_exit=?,
+						idle_screen_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,
 						nullableStringArg(tc.observation), nullableStringArg(tc.exit), strings.Repeat("a", 64))
 					mustExec(t, db, `UPDATE permission_requests SET owner_launch_token=?,owner_permission_epoch=8,
 						admitted_at=1792411201123,fallback_at=1792411206000,fallback_basis='process'
@@ -222,39 +222,39 @@ func TestV14MigrationRefusesIncompatiblePartialState(t *testing.T) {
 		{"case conflict", `ALTER TABLE permission_requests ADD COLUMN Fallback_Basis TEXT`, "", "v13→v14 incompatible permission_requests.fallback_basis"},
 		{"wrong type", `ALTER TABLE permission_requests ADD COLUMN fallback_at TEXT`, "", "v13→v14 incompatible permission_requests.fallback_at"},
 		{"nullable epoch", `ALTER TABLE spawns ADD COLUMN permission_epoch INTEGER DEFAULT 0`, "", "v13→v14 incompatible spawns.permission_epoch"},
-		{"wrong default", `ALTER TABLE spawns ADD COLUMN stuck_version INTEGER NOT NULL DEFAULT 1`, "", "v13→v14 incompatible spawns.stuck_version"},
-		{"unexpected default", `ALTER TABLE spawns ADD COLUMN stuck_observation TEXT DEFAULT NULL`, "", "v13→v14 incompatible spawns.stuck_observation"},
+		{"wrong default", `ALTER TABLE spawns ADD COLUMN observation_version INTEGER NOT NULL DEFAULT 1`, "", "v13→v14 incompatible spawns.observation_version"},
+		{"unexpected default", `ALTER TABLE spawns ADD COLUMN display_observation TEXT DEFAULT NULL`, "", "v13→v14 incompatible spawns.display_observation"},
 		{"unexpected not null", `ALTER TABLE permission_requests ADD COLUMN owner_launch_token TEXT NOT NULL DEFAULT ''`, "", "v13→v14 incompatible permission_requests.owner_launch_token"},
 		// A default would give every legacy row a timeout override.
-		{"defaulted override", `ALTER TABLE spawns ADD COLUMN no_screen_change_timeout_seconds INTEGER DEFAULT 1200`, "", "v13→v14 incompatible spawns.no_screen_change_timeout_seconds"},
+		{"defaulted override", `ALTER TABLE spawns ADD COLUMN idle_screen_timeout_seconds INTEGER DEFAULT 1200`, "", "v13→v14 incompatible spawns.idle_screen_timeout_seconds"},
 		{"negative epoch", "", `UPDATE spawns SET permission_epoch=-1`, "v13→v14 invalid spawns.permission_epoch"},
-		{"fractional version", "", `UPDATE spawns SET stuck_version=0.5`, "v13→v14 invalid spawns.stuck_version"},
+		{"fractional version", "", `UPDATE spawns SET observation_version=0.5`, "v13→v14 invalid spawns.observation_version"},
 		{"text admission", "", `UPDATE permission_requests SET admitted_at='bad'`, "v13→v14 invalid permission_requests.admitted_at"},
 		{"negative fallback", "", `UPDATE permission_requests SET fallback_at=-1,fallback_basis='process'`, "v13→v14 invalid permission_requests.fallback_at"},
 		{"blob owner", "", `UPDATE permission_requests SET owner_launch_token=x'6162'`, "v13→v14 invalid permission_requests.owner_launch_token"},
 		{"negative owner", "", `UPDATE permission_requests SET owner_permission_epoch=-1`, "v13→v14 invalid permission_requests.owner_permission_epoch"},
-		{"negative override", "", `UPDATE spawns SET no_screen_change_timeout_seconds=-1`, "v13→v14 invalid spawns.no_screen_change_timeout_seconds"},
+		{"negative override", "", `UPDATE spawns SET idle_screen_timeout_seconds=-1`, "v13→v14 invalid spawns.idle_screen_timeout_seconds"},
 		{"blob fingerprint", "", `UPDATE spawns SET pane_sha256=x'6162'`, "v13→v14 invalid spawns.pane_sha256"},
 		{"text pane start", "", `UPDATE spawns SET pane_since_ms='soon'`, "v13→v14 invalid spawns.pane_since_ms"},
 		{"fractional pane epoch", "", `UPDATE spawns SET pane_epoch=0.5`, "v13→v14 invalid spawns.pane_epoch"},
 		{"unknown basis", "", `UPDATE permission_requests SET fallback_at=123,fallback_basis='guessed'`, "v13→v14 invalid fallback basis"},
 		{"unpaired clock", "", `UPDATE permission_requests SET fallback_at=123`, "v13→v14 incomplete fallback clock"},
 		{"unpaired basis", "", `UPDATE permission_requests SET fallback_basis='deadline'`, "v13→v14 incomplete fallback clock"},
-		{"malformed observation", "", `UPDATE spawns SET stuck_observation='{'`, "v13→v14 invalid stuck_observation"},
-		{"trailing observation", "", `UPDATE spawns SET stuck_observation='{}{}'`, "v13→v14 invalid stuck_observation"},
-		{"negative observation epoch", "", `UPDATE spawns SET stuck_observation='{"state":"check_permission","candidate":"stuck","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":-1}'`, "v13→v14 invalid stuck_observation"},
-		{"fractional observation epoch", "", `UPDATE spawns SET stuck_observation='{"state":"check_permission","candidate":"stuck","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":0.5}'`, "v13→v14 invalid stuck_observation"},
-		{"unknown observation key", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"working","invented":true}'`, "v13→v14 invalid stuck_observation"},
-		{"invalid display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"guessed","request_token":"x"}'`, "v13→v14 invalid stuck_observation"},
-		{"pane detail on permission display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"permission_unanswered","request_token":"x","unchanged_minutes":1}'`, "v13→v14 invalid stuck_observation"},
-		{"permission detail on pane display", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","tool_name":"Read"}'`, "v13→v14 invalid stuck_observation"},
-		{"negative unchanged minutes", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","unchanged_minutes":-1}'`, "v13→v14 invalid stuck_observation"},
-		{"replacement reason off display", "", `UPDATE spawns SET stuck_observation='{"state":"working","candidate":"stuck","candidate_reason":"no_screen_change"}'`, "v13→v14 invalid stuck_observation"},
-		{"replacement repeats displayed reason", "", `UPDATE spawns SET stuck_observation='{"state":"stuck","candidate":"stuck","since_ms":123,"reason":"no_screen_change","candidate_reason":"no_screen_change"}'`, "v13→v14 invalid stuck_observation"},
-		{"blob observation", "", `UPDATE spawns SET stuck_observation=x'7b7d'`, "v13→v14 invalid spawns.stuck_observation"},
-		{"oversized observation", "", `UPDATE spawns SET stuck_observation=printf('%17000s','{}')`, "v13→v14 invalid stuck_observation"},
-		{"invalid exit", "", `UPDATE spawns SET stuck_exit='{"new_state":"stuck","reason":"permission_unanswered","at_ms":123}'`, "v13→v14 invalid stuck_exit"},
-		{"unknown exit reason", "", `UPDATE spawns SET stuck_exit='{"new_state":"working","reason":"guessed","at_ms":123}'`, "v13→v14 invalid stuck_exit"},
+		{"malformed observation", "", `UPDATE spawns SET display_observation='{'`, "v13→v14 invalid display_observation"},
+		{"trailing observation", "", `UPDATE spawns SET display_observation='{}{}'`, "v13→v14 invalid display_observation"},
+		{"negative observation epoch", "", `UPDATE spawns SET display_observation='{"state":"check_permission","candidate":"needs_intelligence","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":-1}'`, "v13→v14 invalid display_observation"},
+		{"fractional observation epoch", "", `UPDATE spawns SET display_observation='{"state":"check_permission","candidate":"needs_intelligence","candidate_since_ms":123,"observed_at_ms":124,"permission_epoch":0.5}'`, "v13→v14 invalid display_observation"},
+		{"unknown observation key", "", `UPDATE spawns SET display_observation='{"state":"working","candidate":"working","invented":true}'`, "v13→v14 invalid display_observation"},
+		{"unknown displayed state", "", `UPDATE spawns SET display_observation='{"state":"guessed","candidate":"guessed","since_ms":123,"request_token":"x"}'`, "v13→v14 invalid display_observation"},
+		{"idle_screen detail on needs_intelligence", "", `UPDATE spawns SET display_observation='{"state":"needs_intelligence","candidate":"needs_intelligence","since_ms":123,"request_token":"x","unchanged_minutes":1}'`, "v13→v14 invalid display_observation"},
+		{"needs_intelligence detail on idle_screen", "", `UPDATE spawns SET display_observation='{"state":"idle_screen","candidate":"idle_screen","since_ms":123,"tool_name":"Read"}'`, "v13→v14 invalid display_observation"},
+		{"negative unchanged minutes", "", `UPDATE spawns SET display_observation='{"state":"idle_screen","candidate":"idle_screen","since_ms":123,"unchanged_minutes":-1}'`, "v13→v14 invalid display_observation"},
+		{"earlier encoding's display", "", `UPDATE spawns SET display_observation='{"state":"stuck","reason":"permission_unanswered","since_ms":123,"request_token":"x","candidate":"stuck"}'`, "v13→v14 invalid display_observation"},
+		{"blob observation", "", `UPDATE spawns SET display_observation=x'7b7d'`, "v13→v14 invalid spawns.display_observation"},
+		{"oversized observation", "", `UPDATE spawns SET display_observation=printf('%17000s','{}')`, "v13→v14 invalid display_observation"},
+		{"exit into a Displayed State", "", `UPDATE spawns SET display_exit='{"prior_state":"needs_intelligence","new_state":"idle_screen","at_ms":123}'`, "v13→v14 invalid display_exit"},
+		{"exit from an ordinary state", "", `UPDATE spawns SET display_exit='{"prior_state":"working","new_state":"waiting","at_ms":123}'`, "v13→v14 invalid display_exit"},
+		{"earlier encoding's exit", "", `UPDATE spawns SET display_exit='{"new_state":"working","reason":"permission_unanswered","at_ms":123}'`, "v13→v14 invalid display_exit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -387,7 +387,7 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if pr.SettledAt.UnixMilli() != 1792411205000 || pr.HookGoneAt.UnixMilli() != 1792411206000 || !pr.FallbackAt.IsZero() || row.StuckObservation != "" {
+					if pr.SettledAt.UnixMilli() != 1792411205000 || pr.HookGoneAt.UnixMilli() != 1792411206000 || !pr.FallbackAt.IsZero() || row.DisplayObservation != "" {
 						t.Fatal("migration changed trustworthy timing or fabricated observations")
 					}
 					if tc.owned {
@@ -416,12 +416,12 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						display, err := s.ObservePermissionStuck(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
+						display, err := s.ObserveNeedsIntelligence(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
 						want := StateCheckPermission
 						if tc.owned && offset >= 30*time.Second {
-							want = StateStuck
+							want = StateNeedsIntelligence
 						}
-						if err != nil || display.State != want || (want == StateStuck && display.RequestToken != tokenB) {
+						if err != nil || display.State != want || (want == StateNeedsIntelligence && display.RequestToken != tokenB) {
 							t.Fatalf("historic %s at %s: display=%+v err=%v; want %s", basis, offset, display, err, want)
 						}
 					}
@@ -436,8 +436,8 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 						if retained != initialRequest {
 							t.Fatalf("excluded history changed on observation: before=%+v after=%+v", initialRequest, retained)
 						}
-						if events := TrailEventsSince(t, mark, "ad.spawn.stuck_transition", "pre"); len(events) != 0 {
-							t.Fatalf("ambiguous history emitted stuck transitions: %v", events)
+						if events := TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", "pre"); len(events) != 0 {
+							t.Fatalf("ambiguous history emitted display records: %v", events)
 						}
 					} else if !retained.FallbackAt.Equal(start) || retained.FallbackBasis != basis {
 						t.Fatalf("provable historical fallback clock drifted: %+v", retained)
@@ -509,8 +509,8 @@ func TestV14MigrationNewAdmissionsQualifyBesideAmbiguousHistory(t *testing.T) {
 			}
 			now := start.Add(30 * time.Second)
 			samples := []PermissionSample{{Request: old, FallbackAt: old.HookGoneAt, Basis: FallbackProcess}, {Request: current, FallbackAt: start, Basis: basis}}
-			display, err := s.ObservePermissionStuck(row, samples, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
-			if err != nil || display.State != StateStuck || display.RequestToken != tokenC {
+			display, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
+			if err != nil || display.State != StateNeedsIntelligence || display.RequestToken != tokenC {
 				t.Fatalf("new request did not qualify independently of ambiguous history: %+v %v", display, err)
 			}
 			if retained, err := s.GetPermissionRequest("pre", tokenB); err != nil || retained != old {

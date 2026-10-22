@@ -135,8 +135,8 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			NoPreTrust:      r.NoPreTrust,
 			// The one place the row's agent is set, for spawn's insert
 			// (insertPending) and reuse's reset (ResetForReuse) alike.
-			Agent:                        r.Agent,
-			NoScreenChangeTimeoutSeconds: r.NoScreenChangeTimeoutSeconds,
+			Agent:                    r.Agent,
+			IdleScreenTimeoutSeconds: r.IdleScreenTimeoutSeconds,
 		},
 	}, nil
 }

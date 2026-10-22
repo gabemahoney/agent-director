@@ -3,25 +3,17 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"time"
 
+	"modernc.org/sqlite"
+
 	"github.com/gabemahoney/agent-director/internal/trail"
 )
-
-// The two stuck reasons: a current unanswered permission fallback, and an
-// unchanged pane on a working Claude or Codex row.
-const (
-	StuckPermissionUnanswered = "permission_unanswered"
-	StuckNoScreenChange       = "no_screen_change"
-)
-
-func validStuckReason(reason string) bool {
-	return reason == StuckPermissionUnanswered || reason == StuckNoScreenChange
-}
 
 const (
 	FallbackProcess   = "process"
@@ -120,73 +112,116 @@ func (s *Store) RecordPermissionFallbacks(at time.Time, maxWait time.Duration, o
 	return stored, err
 }
 
-// StuckDisplay is committed report-only detail. SinceMillis denotes the read
-// that actually entered the displayed state, never the eligibility boundary.
-// RequestToken and ToolName belong to permission_unanswered, UnchangedMinutes
-// to no_screen_change.
-type StuckDisplay struct {
+// DisplayDetail is committed report-only detail. State is the displayed
+// state: needs_intelligence, idle_screen or an ordinary state. SinceMillis
+// denotes the read that actually entered the Displayed State, never the
+// eligibility boundary. RequestToken and ToolName belong to
+// needs_intelligence, UnchangedMinutes to idle_screen.
+type DisplayDetail struct {
 	State            string `json:"state"`
-	Reason           string `json:"reason,omitempty"`
 	SinceMillis      int64  `json:"since_ms,omitempty"`
 	RequestToken     string `json:"request_token,omitempty"`
 	ToolName         string `json:"tool_name,omitempty"`
 	UnchangedMinutes int64  `json:"unchanged_minutes,omitempty"`
 }
 
-type stuckObservation struct {
-	StuckDisplay
-	Candidate string `json:"candidate"`
-	// CandidateReason is set only while a displayed stuck row's other reason
-	// is settling in: the reason that replaces the displayed one.
-	CandidateReason string `json:"candidate_reason,omitempty"`
-	CandidateSince  int64  `json:"candidate_since_ms"`
-	ObservedAt      int64  `json:"observed_at_ms"`
+type displayObservation struct {
+	DisplayDetail
+	// Candidate is the state settling in: a Displayed State or an ordinary one.
+	Candidate      string `json:"candidate"`
+	CandidateSince int64  `json:"candidate_since_ms"`
+	ObservedAt     int64  `json:"observed_at_ms"`
 	// PermissionEpoch is the raw-state epoch of the interval this observation
-	// belongs to. A stuck observation of another epoch is a finished episode,
-	// unless the other interval's reason replaces it.
+	// belongs to. A display of another epoch is a finished episode, unless the
+	// other Displayed State moves in during this interval.
 	PermissionEpoch int64 `json:"permission_epoch"`
 }
 
-func decodeStuckObservation(raw string) (stuckObservation, bool) {
-	var o stuckObservation
+func decodeDisplayObservation(raw string) (displayObservation, bool) {
+	var o displayObservation
 	d := json.NewDecoder(strings.NewReader(raw))
 	d.DisallowUnknownFields()
 	if len(raw) > 16384 || d.Decode(&o) != nil || d.Decode(new(any)) != io.EOF ||
 		!validDisplayState(o.State) || (o.Candidate != "" && !validDisplayState(o.Candidate)) ||
-		(o.Candidate == "" && o.State != StateStuck) || o.CandidateSince < 0 || o.ObservedAt < 0 || o.PermissionEpoch < 0 ||
-		(o.State == StateStuck && (!validStuckDetail(o.StuckDisplay) || o.SinceMillis <= 0)) ||
-		(o.CandidateReason != "" && (o.State != StateStuck || o.Candidate != StateStuck || !validStuckReason(o.CandidateReason) || o.CandidateReason == o.Reason)) {
-		return stuckObservation{}, false
+		(o.Candidate == "" && !isDisplayedState(o.State)) || o.CandidateSince < 0 || o.ObservedAt < 0 || o.PermissionEpoch < 0 ||
+		(isDisplayedState(o.State) && (!validDisplayDetail(o.DisplayDetail) || o.SinceMillis <= 0)) {
+		return displayObservation{}, false
 	}
 	return o, true
 }
 
-// validStuckDetail reports whether d carries exactly its reason's detail.
-func validStuckDetail(d StuckDisplay) bool {
-	switch d.Reason {
-	case StuckPermissionUnanswered:
+// validDisplayDetail reports whether d carries exactly its Displayed State's
+// detail.
+func validDisplayDetail(d DisplayDetail) bool {
+	switch d.State {
+	case StateNeedsIntelligence:
 		return d.RequestToken != "" && d.UnchangedMinutes == 0
-	case StuckNoScreenChange:
+	case StateIdleScreen:
 		return d.RequestToken == "" && d.ToolName == "" && d.UnchangedMinutes >= 0
 	}
 	return false
 }
 
+// isDisplayedState reports whether state is one of the two Displayed States,
+// which reads derive and no write stores in state.
+func isDisplayedState(state string) bool {
+	return state == StateNeedsIntelligence || state == StateIdleScreen
+}
+
 func validDisplayState(state string) bool {
-	return IsLiveState(state) || isTerminalState(state) || state == StateStuck
+	return IsLiveState(state) || isTerminalState(state) || isDisplayedState(state)
 }
 
-// CommittedStuckDisplay returns the history from the same row snapshot. A
-// failed observation write must leave this display and detail together.
-func (sp Spawn) CommittedStuckDisplay() StuckDisplay {
-	o, ok := decodeStuckObservation(sp.StuckObservation)
-	if ok && o.State == StateStuck && !isTerminalState(sp.State) && sp.State != StatePending {
-		return o.StuckDisplay
+// CommittedDisplay returns the history from the same row snapshot. A failed
+// observation write must leave this display and detail together.
+func (sp Spawn) CommittedDisplay() DisplayDetail {
+	o, ok := decodeDisplayObservation(sp.DisplayObservation)
+	if ok && isDisplayedState(o.State) && !isTerminalState(sp.State) && sp.State != StatePending {
+		return o.DisplayDetail
 	}
-	return StuckDisplay{State: sp.ReportedState}
+	return DisplayDetail{State: sp.ReportedState}
 }
 
-var errStuckSampleChanged = errors.New("store: stuck sample changed")
+// committedDisplayStateFunc names the SQL function behind
+// committedDisplayStateSQL, so a lifecycle write keeps, and records the exit
+// of, exactly the display a read shows. SQL calls it only through
+// committedDisplayStateSQL, whose BLOB casts functionText needs. init
+// registers it on this binary's own connections only, so it must never appear
+// in a trigger, view, index, CHECK or generated column: the sqlite3 CLI that
+// skills/install-agent-director/install.sh and test/driver/sql.sh run on the
+// store cannot call it.
+const committedDisplayStateFunc = "committed_display_state"
+
+func init() {
+	sqlite.MustRegisterDeterministicScalarFunction(committedDisplayStateFunc, 2, committedDisplayState)
+}
+
+// committedDisplayState is CommittedDisplay in SQL: the Displayed State a row
+// whose raw state is args[0] and whose display_observation is args[1] shows,
+// NULL when it shows none. It never fails, so report-only data cannot fail
+// the write that asks.
+func committedDisplayState(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+	sp := Spawn{State: functionText(args[0]), DisplayObservation: functionText(args[1])}
+	if d := sp.CommittedDisplay(); isDisplayedState(d.State) {
+		return d.State, nil
+	}
+	return nil, nil
+}
+
+// functionText is the text a row read scans from the column v came from:
+// modernc passes a TEXT argument only up to its first NUL but a BLOB whole,
+// so committedDisplayStateSQL casts each column to BLOB and only a BLOB is
+// read. NULL is "", as the reads' COALESCE gives. Any other value, such as
+// TEXT from SQL that skips those casts, is "" too, so an observation passed
+// that way shows no display.
+func functionText(v driver.Value) string {
+	if b, ok := v.([]byte); ok {
+		return string(b)
+	}
+	return ""
+}
+
+var errDisplaySampleChanged = errors.New("store: display sample changed")
 
 // permissionCandidate reports whether pr, judged as sample at now, belongs to
 // row's current permission interval with a fallback clock already started.
@@ -199,10 +234,10 @@ func permissionCandidate(row Spawn, pr PermissionRow, sample PermissionSample, n
 }
 
 // planPermission judges the samples of row at now: the fallback clocks to
-// establish and the permission_unanswered target, whose detail is the
+// establish and the needs_intelligence target, whose detail is the
 // qualifying request with the earliest fallback, then the lexically first
 // token; the zero target when none qualifies.
-func planPermission(row Spawn, samples []PermissionSample, now time.Time, timeout time.Duration) ([]PermissionSample, StuckDisplay) {
+func planPermission(row Spawn, samples []PermissionSample, now time.Time, timeout time.Duration) ([]PermissionSample, DisplayDetail) {
 	var clocks []PermissionSample
 	var representative *PermissionRow
 	var earliest time.Time
@@ -226,9 +261,9 @@ func planPermission(row Spawn, samples []PermissionSample, now time.Time, timeou
 		}
 	}
 	if representative == nil {
-		return clocks, StuckDisplay{}
+		return clocks, DisplayDetail{}
 	}
-	return clocks, StuckDisplay{Reason: StuckPermissionUnanswered, RequestToken: representative.RequestToken, ToolName: representative.ToolName}
+	return clocks, DisplayDetail{State: StateNeedsIntelligence, RequestToken: representative.RequestToken, ToolName: representative.ToolName}
 }
 
 // observationPlan is the outcome of observing a row: the observation to
@@ -239,83 +274,77 @@ type observationPlan struct {
 	// ("" for NULL), to recognise a commit that landed.
 	raw    any
 	text   string
-	result StuckDisplay
-	events []stuckTransition
+	result DisplayDetail
+	events []displayTransition
 	write  bool
 }
 
-// planObservation decides, from the row as examined and target, the reason
-// and detail the read found eligible (the zero StuckDisplay for none),
-// everything an observer would commit to stuck_observation. extra is whether
-// the observer has other sampled facts to write in the same commit. It is
-// pure: the unlocked pre-check and the locked commit apply one plan, so they
-// cannot drift. The locked commit proves the plan's inputs unchanged before
-// applying it.
-func planObservation(row Spawn, target StuckDisplay, extra bool, now time.Time, settle SettleRead) (observationPlan, error) {
+// planObservation decides, from the row as examined and target, the
+// Displayed State and detail the read found eligible (the zero DisplayDetail
+// for none), everything an observer would commit to display_observation.
+// extra is whether the observer has other sampled facts to write in the same
+// commit. It is pure: the unlocked pre-check and the locked commit apply one
+// plan, so they cannot drift. The locked commit proves the plan's inputs
+// unchanged before applying it.
+func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time, settle SettleRead) (observationPlan, error) {
 	var p observationPlan
-	stored, valid := decodeStuckObservation(row.StuckObservation)
+	stored, valid := decodeDisplayObservation(row.DisplayObservation)
 	if valid && now.UnixMilli() < stored.ObservedAt {
-		return p, errStuckSampleChanged
+		return p, errDisplaySampleChanged
 	}
 	targetState := row.State
-	if target.Reason != "" {
-		targetState = StateStuck
+	if target.State != "" {
+		targetState = target.State
 	}
 	old := stored
-	continuing := valid && stored.State == StateStuck
+	continuing := valid && isDisplayedState(stored.State)
 	if !valid {
-		old = stuckObservation{}
+		old = displayObservation{}
 	}
 	if !continuing {
-		// Not displayed stuck: the display is the row's own settled state, never
-		// a stale copy of it, so readers agree and an entry's prior is current.
-		old.State = row.ReportedState
+		// Not displayed: the display is the row's own settled state, never a
+		// stale copy of it, so readers agree and an entry's prior is current.
+		old.DisplayDetail = DisplayDetail{State: row.ReportedState}
 	}
-	if continuing && targetState == StateStuck && old.PermissionEpoch != row.PermissionEpoch {
-		if target.Reason == old.Reason {
-			// A new interval never inherits the previous episode of its reason:
+	if continuing && isDisplayedState(targetState) && old.PermissionEpoch != row.PermissionEpoch {
+		if targetState == old.State {
+			// A new interval never inherits the previous episode of its state:
 			// that one ends with its own exit and the new one starts as a fresh
 			// candidate.
-			p.events = append(p.events, stuckTransition{InstanceID: row.InstanceID, Prior: StateStuck, Next: row.ReportedState,
-				Reason: old.Reason, AtMillis: now.UnixMilli()})
-			old, continuing = stuckObservation{StuckDisplay: StuckDisplay{State: row.ReportedState}}, false
+			p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: old.State, Next: row.ReportedState,
+				AtMillis: now.UnixMilli()})
+			old, continuing = displayObservation{DisplayDetail: DisplayDetail{State: row.ReportedState}}, false
 		} else {
-			// The other reason replaces the displayed one in this interval.
+			// The other Displayed State settles in during this interval: the
+			// display stays until it does.
 			old.PermissionEpoch = row.PermissionEpoch
 		}
 	}
-	if old.State != StateStuck && targetState != StateStuck {
+	if !isDisplayedState(old.State) && !isDisplayedState(targetState) {
 		// Ordinary state settling continues to be derived by settle.go.
-		p.result = StuckDisplay{State: row.ReportedState}
-		p.write = row.StuckObservation != "" || extra
+		p.result = DisplayDetail{State: row.ReportedState}
+		p.write = row.DisplayObservation != "" || extra
 		return p, nil
 	}
 	if !continuing {
 		old.PermissionEpoch = row.PermissionEpoch
 	}
-	candidateReason := ""
-	if old.State == StateStuck && targetState == StateStuck && target.Reason != old.Reason {
-		candidateReason = target.Reason
+	if old.Candidate != targetState {
+		old.Candidate, old.CandidateSince = targetState, now.UnixMilli()
 	}
-	if old.Candidate != targetState || old.CandidateReason != candidateReason {
-		old.Candidate, old.CandidateReason, old.CandidateSince = targetState, candidateReason, now.UnixMilli()
-	}
-	settled := now.UnixMilli()-old.CandidateSince >= max(settle.SettleMs, 0)
-	prior := old.State
-	switch {
-	case settled && old.State != targetState:
-		old.State = targetState
-		if targetState == StateStuck {
+	if now.UnixMilli()-old.CandidateSince >= max(settle.SettleMs, 0) && old.State != targetState {
+		// Entry, exit and a move between the two states alike: the new state
+		// shows with its own detail only, from this read.
+		prior := old.State
+		old.DisplayDetail = DisplayDetail{State: targetState}
+		if isDisplayedState(targetState) {
+			old.DisplayDetail = target
 			old.SinceMillis = now.UnixMilli()
-			old.Reason = target.Reason
 		}
-		p.events = append(p.events, stuckTransition{InstanceID: row.InstanceID, Prior: prior, Next: targetState, Reason: old.Reason, AtMillis: now.UnixMilli()})
-	case settled && old.CandidateReason != "":
-		// A reason change settles reason and detail together; the displayed
-		// episode, and its since, continue without a transition.
-		old.Reason, old.CandidateReason = old.CandidateReason, ""
+		p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: prior, Next: targetState, AtMillis: now.UnixMilli()})
 	}
-	if old.State == StateStuck && targetState == StateStuck && old.Reason == target.Reason {
+	if isDisplayedState(old.State) && old.State == targetState {
+		// The representative request or the minutes change without settling.
 		old.RequestToken, old.ToolName, old.UnchangedMinutes = target.RequestToken, target.ToolName, target.UnchangedMinutes
 	}
 	// A read that would change nothing writes nothing. The settle deadline
@@ -326,13 +355,13 @@ func planObservation(row Spawn, target StuckDisplay, extra bool, now time.Time, 
 		unchanged.ObservedAt = stored.ObservedAt
 	}
 	if valid && unchanged == stored && !extra && len(p.events) == 0 {
-		p.result = old.StuckDisplay
+		p.result = old.DisplayDetail
 		return p, nil
 	}
 	old.ObservedAt = now.UnixMilli()
 	p.write = true
-	p.result = old.StuckDisplay
-	if old.State == StateStuck || targetState == StateStuck {
+	p.result = old.DisplayDetail
+	if isDisplayedState(old.State) || isDisplayedState(targetState) {
 		encoded, err := json.Marshal(old)
 		if err != nil {
 			return p, err
@@ -340,16 +369,16 @@ func planObservation(row Spawn, target StuckDisplay, extra bool, now time.Time, 
 		p.text = string(encoded)
 		p.raw = p.text
 	} else {
-		p.result = StuckDisplay{State: targetState}
+		p.result = DisplayDetail{State: targetState}
 	}
 	return p, nil
 }
 
-// ObservePermissionStuck commits one nonwaiting observation. The write lock
+// ObserveNeedsIntelligence commits one nonwaiting observation. The write lock
 // protects request facts as well as row ownership; row_version alone does not
 // detect a concurrent pane answer, ack or proof.
-func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (StuckDisplay, error) {
-	previous := examined.CommittedStuckDisplay()
+func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, error) {
+	previous := examined.CommittedDisplay()
 	clocks, target := planPermission(examined, samples, now, timeout)
 	plan, err := planObservation(examined, target, len(clocks) > 0, now, settle)
 	if err != nil {
@@ -364,12 +393,12 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 			return err
 		}
 		current, err := queryPermissionRows(func(q string, args ...any) (*sql.Rows, error) { return conn.QueryContext(ctx, q, args...) },
-			`SELECT `+permissionColumns+` FROM permission_requests pr WHERE instance_id=? ORDER BY request_id`, "store: stuck requests", row.InstanceID)
+			`SELECT `+permissionColumns+` FROM permission_requests pr WHERE instance_id=? ORDER BY request_id`, "store: needs_intelligence requests", row.InstanceID)
 		if err != nil {
 			return err
 		}
 		if len(current) != len(samples) {
-			return errStuckSampleChanged
+			return errDisplaySampleChanged
 		}
 		byID := make(map[int64]PermissionRow, len(samples))
 		for _, sample := range samples {
@@ -377,7 +406,7 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 		}
 		for _, pr := range current {
 			if sampled, ok := byID[pr.RequestID]; !ok || pr != sampled {
-				return errStuckSampleChanged
+				return errDisplaySampleChanged
 			}
 		}
 		for _, sample := range clocks {
@@ -386,7 +415,7 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 				return err
 			}
 		}
-		_, err = conn.ExecContext(ctx, `UPDATE spawns SET stuck_observation=?,stuck_version=stuck_version+1 WHERE instance_id=?`, plan.raw, row.InstanceID)
+		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1 WHERE instance_id=?`, plan.raw, row.InstanceID)
 		return err
 	})
 	if err != nil {
@@ -394,21 +423,21 @@ func (s *Store) ObservePermissionStuck(examined Spawn, samples []PermissionSampl
 			return previous, err
 		}
 	}
-	emitStuckTransitions(plan.events)
+	emitDisplayTransitions(plan.events)
 	return plan.result, nil
 }
 
-// ObservePaneStuck commits one nonwaiting pane observation of examined: the
+// ObserveIdleScreen commits one nonwaiting pane observation of examined: the
 // baseline sample yields (planPane) and the display it derives, through the
-// same settling and trail rules as ObservePermissionStuck. timeout is the
-// row's effective no_screen_change timeout. Like that observer it never waits
-// for the write lock: a sample that cannot commit, a failed sample's reset
+// same settling and trail rules as ObserveNeedsIntelligence. timeout is the
+// row's effective idle_screen timeout. Like that observer it never waits for
+// the write lock: a sample that cannot commit, a failed sample's reset
 // included, changes nothing and returns the previously committed display, so
 // a later sample may continue the committed baseline. A row changed since
 // examined (its launch, turn, pane ownership or stored observations) refuses
 // the sample, so an older sample never overwrites a newer one.
-func (s *Store) ObservePaneStuck(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (StuckDisplay, error) {
-	previous := examined.CommittedStuckDisplay()
+func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, error) {
+	previous := examined.CommittedDisplay()
 	baseline, target := planPane(examined, sample, now, timeout)
 	plan, err := planObservation(examined, target, baseline != committedPaneBaseline(examined), now, settle)
 	if err != nil {
@@ -422,7 +451,7 @@ func (s *Store) ObservePaneStuck(examined Spawn, sample PaneSample, now time.Tim
 			return err
 		}
 		args := append([]any{plan.raw}, paneBaselineArgs(baseline, examined.PermissionEpoch)...)
-		_, err := conn.ExecContext(ctx, `UPDATE spawns SET stuck_observation=?,stuck_version=stuck_version+1,
+		_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,
  pane_sha256=?,pane_since_ms=?,pane_epoch=? WHERE instance_id=?`, append(args, examined.InstanceID)...)
 		return err
 	})
@@ -431,21 +460,21 @@ func (s *Store) ObservePaneStuck(examined Spawn, sample PaneSample, now time.Tim
 			return previous, err
 		}
 	}
-	emitStuckTransitions(plan.events)
+	emitDisplayTransitions(plan.events)
 	return plan.result, nil
 }
 
 // lockedObservationRow re-reads examined's row inside an observer's write
-// transaction, refusing with errStuckSampleChanged when anything the plan was
-// made from has changed since: its snapshot, launch identity, agent, raw
-// state, permission epoch or stored observations (stuck_version).
+// transaction, refusing with errDisplaySampleChanged when anything the plan
+// was made from has changed since: its snapshot, launch identity, agent, raw
+// state, permission epoch or stored observations (observation_version).
 func lockedObservationRow(ctx context.Context, conn *sql.Conn, examined Spawn) (Spawn, error) {
 	row, err := scanSpawnStatus(conn.QueryRowContext(ctx, `SELECT `+statusRowColumns+` FROM spawns WHERE instance_id=?`, examined.InstanceID), false)
 	if err != nil {
 		return Spawn{}, err
 	}
-	if row.Snapshot != examined.Snapshot || row.Identity != examined.Identity || row.Agent != examined.Agent || row.PermissionEpoch != examined.PermissionEpoch || row.StuckVersion != examined.StuckVersion || row.State != examined.State {
-		return Spawn{}, errStuckSampleChanged
+	if row.Snapshot != examined.Snapshot || row.Identity != examined.Identity || row.Agent != examined.Agent || row.PermissionEpoch != examined.PermissionEpoch || row.ObservationVersion != examined.ObservationVersion || row.State != examined.State {
+		return Spawn{}, errDisplaySampleChanged
 	}
 	return row, nil
 }
@@ -467,53 +496,58 @@ func (s *Store) observationLanded(examined Spawn, plan observationPlan, baseline
 		return err
 	})
 	return err == nil && row.Snapshot == examined.Snapshot && row.PermissionEpoch == examined.PermissionEpoch &&
-		row.StuckVersion == examined.StuckVersion+1 && row.StuckObservation == plan.text &&
+		row.ObservationVersion == examined.ObservationVersion+1 && row.DisplayObservation == plan.text &&
 		(baseline == nil || committedPaneBaseline(row) == *baseline)
 }
 
-type stuckTransition struct {
+// displayTransition is one committed change of Displayed State. Its JSON is
+// the exit marker a lifecycle write stores in display_exit.
+type displayTransition struct {
 	InstanceID string `json:"-"`
-	Prior      string `json:"-"`
+	Prior      string `json:"prior_state"`
 	Next       string `json:"new_state"`
-	Reason     string `json:"reason"`
 	AtMillis   int64  `json:"at_ms"`
 }
 
-func decodeStuckExit(raw string) (stuckTransition, bool) {
-	var e stuckTransition
+// decodeDisplayExit accepts only an exit from a Displayed State to an
+// ordinary one.
+func decodeDisplayExit(raw string) (displayTransition, bool) {
+	var e displayTransition
 	d := json.NewDecoder(strings.NewReader(raw))
 	d.DisallowUnknownFields()
 	if len(raw) > 1024 || d.Decode(&e) != nil || d.Decode(new(any)) != io.EOF ||
-		!validDisplayState(e.Next) || e.Next == StateStuck || !validStuckReason(e.Reason) || e.AtMillis <= 0 {
-		return stuckTransition{}, false
+		!isDisplayedState(e.Prior) || !validDisplayState(e.Next) || isDisplayedState(e.Next) || e.AtMillis <= 0 {
+		return displayTransition{}, false
 	}
 	return e, true
 }
 
-// emitContext writes e's ad.spawn.stuck_transition trail event under ctx, so
-// a caller whose other post-commit trail writes share one bound can pass it.
-func (e stuckTransition) emitContext(ctx context.Context) {
-	_ = trail.Emit(ctx, "ad.spawn.stuck_transition", map[string]any{
+// emitContext writes e's ad.spawn.displayed_state_transition trail event
+// under ctx, so a caller whose other post-commit trail writes share one bound
+// can pass it.
+func (e displayTransition) emitContext(ctx context.Context) {
+	_ = trail.Emit(ctx, "ad.spawn.displayed_state_transition", map[string]any{
 		"instance_id": e.InstanceID, "prior_state": e.Prior, "new_state": e.Next,
-		"stuck_reason": e.Reason, "ts": time.UnixMilli(e.AtMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
+		"ts": time.UnixMilli(e.AtMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
 	})
 }
 
-// takeStuckExits consumes immediate lifecycle exits under the existing writer
-// transaction. Its caller emits only after that same transaction commits.
-// This marker is never background work and cannot produce a duplicate attempt.
-// It reads only instanceID, the row the lifecycle write changed: every exit is
-// written and drained by the same transaction, so no other row holds one.
-// Report-only data never blocks a lifecycle write: an invalid exit is cleared
-// without an event rather than failing the transaction.
-func takeStuckExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]stuckTransition, error) {
-	const where = `instance_id=? AND stuck_exit IS NOT NULL`
+// takeDisplayExits consumes immediate lifecycle exits under the existing
+// writer transaction. Its caller emits only after that same transaction
+// commits. This marker is never background work and cannot produce a
+// duplicate attempt. It reads only instanceID, the row the lifecycle write
+// changed: every exit is written and drained by the same transaction, so no
+// other row holds one. Report-only data never blocks a lifecycle write: an
+// invalid exit is cleared without an event rather than failing the
+// transaction.
+func takeDisplayExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]displayTransition, error) {
+	const where = `instance_id=? AND display_exit IS NOT NULL`
 	args := []any{instanceID}
-	rows, err := conn.QueryContext(ctx, `SELECT instance_id,stuck_exit FROM spawns WHERE `+where, args...)
+	rows, err := conn.QueryContext(ctx, `SELECT instance_id,display_exit FROM spawns WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
-	var events []stuckTransition
+	var events []displayTransition
 	found := false
 	for rows.Next() {
 		var id, raw string
@@ -522,8 +556,8 @@ func takeStuckExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]s
 			return nil, err
 		}
 		found = true
-		if event, ok := decodeStuckExit(raw); ok {
-			event.InstanceID, event.Prior = id, StateStuck
+		if event, ok := decodeDisplayExit(raw); ok {
+			event.InstanceID = id
 			events = append(events, event)
 		}
 	}
@@ -533,18 +567,18 @@ func takeStuckExits(ctx context.Context, conn *sql.Conn, instanceID string) ([]s
 		return nil, err
 	}
 	if found {
-		if _, err := conn.ExecContext(ctx, `UPDATE spawns SET stuck_exit=NULL WHERE `+where, args...); err != nil {
+		if _, err := conn.ExecContext(ctx, `UPDATE spawns SET display_exit=NULL WHERE `+where, args...); err != nil {
 			return nil, err
 		}
 	}
 	return events, nil
 }
 
-func emitStuckTransitions(events []stuckTransition) {
-	emitStuckTransitionsContext(context.Background(), events)
+func emitDisplayTransitions(events []displayTransition) {
+	emitDisplayTransitionsContext(context.Background(), events)
 }
 
-func emitStuckTransitionsContext(ctx context.Context, events []stuckTransition) {
+func emitDisplayTransitionsContext(ctx context.Context, events []displayTransition) {
 	for _, event := range events {
 		event.emitContext(ctx)
 	}

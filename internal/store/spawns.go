@@ -72,10 +72,12 @@ const (
 	StateWorking         = "working"
 	StateAskUser         = "ask_user"
 	StateCheckPermission = "check_permission"
-	// StateStuck is a displayed state only; it must never be written to state.
-	StateStuck   = "stuck"
-	StateEnded   = "ended"
-	StateMissing = "missing"
+	// StateNeedsIntelligence and StateIdleScreen are the Displayed States,
+	// derived by reads only; neither must ever be written to state.
+	StateNeedsIntelligence = "needs_intelligence"
+	StateIdleScreen        = "idle_screen"
+	StateEnded             = "ended"
+	StateMissing           = "missing"
 )
 
 // liveStates is the set of live state values (anything except the terminal
@@ -236,30 +238,30 @@ type Spawn struct {
 	// write that changes the raw state advances it (hookStateSet,
 	// immediateSettleSet, find-missing's check_permission repair). A permission
 	// request is owned by the check_permission interval it was recorded in
-	// (owner_permission_epoch), and a stuck observation and a pane baseline by
-	// the interval they were made in, so neither counts in a later interval.
+	// (owner_permission_epoch), and a display observation and a pane baseline
+	// by the interval they were made in, so neither counts in a later interval.
 	PermissionEpoch int64
-	// StuckVersion is stuck_version, advanced by every write of the stored
-	// stuck observation or pane baseline: the observers' commits
-	// (ObservePermissionStuck, ObservePaneStuck) and the lifecycle writes that
-	// keep or clear the observation (hookStateSet on a raw-state change,
+	// ObservationVersion is observation_version, advanced by every write of
+	// the stored display observation or pane baseline: the observers' commits
+	// (ObserveNeedsIntelligence, ObserveIdleScreen) and the lifecycle writes
+	// that keep or clear the observation (hookStateSet on a raw-state change,
 	// immediateSettleSet, find-missing's check_permission repair).
 	// lockedObservationRow refuses a plan made from another version, and
 	// observationLanded recognises its own commit as the next one.
-	StuckVersion int64
-	// StuckObservation is the stored stuck_observation JSON, "" for NULL,
-	// decoded by decodeStuckObservation: the committed stuck display with its
-	// settling candidate (CommittedStuckDisplay).
-	StuckObservation string
+	ObservationVersion int64
+	// DisplayObservation is the stored display_observation JSON, "" for NULL,
+	// decoded by decodeDisplayObservation: the committed display with its
+	// settling candidate (CommittedDisplay).
+	DisplayObservation string
 
-	// NoScreenChangeTimeoutSeconds is the row's per-spawn unchanged-pane
-	// timeout override in whole seconds; 0 = none (NULL), so readers use their
+	// IdleScreenTimeoutSeconds is the row's per-spawn idle_screen timeout
+	// override in whole seconds; 0 = none (NULL), so readers use their
 	// configured timeout. The insert and reuse's reset write it from a Spawn,
 	// an applied reuse restore writes the old life's value back, and every
 	// other write, resume's included, leaves it.
-	NoScreenChangeTimeoutSeconds int
+	IdleScreenTimeoutSeconds int
 	// PaneSHA256, PaneSinceMillis and PaneEpoch are the committed pane
-	// baseline (ObservePaneStuck): the last committed sample's fingerprint,
+	// baseline (ObserveIdleScreen): the last committed sample's fingerprint,
 	// the start of its unchanged period and the permission epoch it was
 	// sampled in; "", 0 and -1 when none is stored.
 	PaneSHA256      string
@@ -332,7 +334,7 @@ func boolInt(b bool) int {
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
 // launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
 // (subagentTrackedParamSQL), and the timeout override from
-// sp.NoScreenChangeTimeoutSeconds (0 as NULL).
+// sp.IdleScreenTimeoutSeconds (0 as NULL).
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -359,7 +361,7 @@ func (s *Store) InsertPending(sp Spawn) error {
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
             settled_state, state_changed_ms, agent, subagent_tracking,
-            no_screen_change_timeout_seconds
+            idle_screen_timeout_seconds
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?)
     `
 	var parent any
@@ -381,7 +383,7 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.NoScreenChangeTimeoutSeconds))
+	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds))
 	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
@@ -503,7 +505,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, stuck_version, COALESCE(stuck_observation, ''), state_changed_ms, ` + paneColumns
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -563,7 +565,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.StuckVersion, &sp.StuckObservation, &sp.StateChangedMillis)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
 	dest = append(dest, pane.dest()...)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)

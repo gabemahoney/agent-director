@@ -318,30 +318,35 @@ func TestSpawnCLIReuseFinishedFlag(t *testing.T) {
 	}
 }
 
-// TestSpawnCLINoScreenChangeTimeout: --no-screen-change-timeout-seconds
-// records its whole seconds on the row, the range's top without truncation
-// and 0 as no override; a negative, above-range, fractional, non-numeric or
-// overflowing value is ErrInvalidFlags with no row and no tmux call.
-func TestSpawnCLINoScreenChangeTimeout(t *testing.T) {
+// TestSpawnCLIIdleScreenTimeout: --idle-screen-timeout-seconds records its
+// whole seconds on the row, the range's top without truncation and 0 as no
+// override; a negative, above-range, fractional, non-numeric or overflowing
+// value, or the removed old flag (the flag package's unknown-flag error, no
+// rename hint), is ErrInvalidFlags with no row and no tmux call.
+func TestSpawnCLIIdleScreenTimeout(t *testing.T) {
 	fakeDir := buildFakeTmux(t)
+	const flag = "--idle-screen-timeout-seconds"
 	for _, tc := range []struct {
 		value string
 		want  any
 	}{{"9223372036", int64(9223372036)}, {"1", int64(1)}, {"0", nil}} {
 		t.Run(tc.value, func(t *testing.T) {
 			home := t.TempDir()
-			id := spawnOK(t, home, fakeDir, "--cwd", t.TempDir(), "--no-screen-change-timeout-seconds", tc.value)
-			if got := rowColumns(t, home, id).NoScreenChangeTimeoutSeconds; got != tc.want {
+			id := spawnOK(t, home, fakeDir, "--cwd", t.TempDir(), flag, tc.value)
+			if got := rowColumns(t, home, id).IdleScreenTimeoutSeconds; got != tc.want {
 				t.Errorf("override = %v; want %v", got, tc.want)
 			}
 		})
 	}
-	for _, value := range []string{"-1", "9223372037", "1.5", "x", "99999999999999999999"} {
-		t.Run(value, func(t *testing.T) {
+	const oldFlag = "--no-screen-change-timeout-seconds"
+	for _, args := range [][]string{{flag, "-1"}, {flag, "9223372037"}, {flag, "1.5"}, {flag, "x"}, {flag, "99999999999999999999"}, {oldFlag, "60"}} {
+		t.Run(args[0]+"="+args[1], func(t *testing.T) {
 			home := t.TempDir()
-			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", "--cwd", t.TempDir(),
-				"--no-screen-change-timeout-seconds", value)...)
-			assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInvalidFlags")
+			stdout, stderr, code := runSpawnCLI(t, home, fakeDir, withAgent("claude", "spawn", append([]string{"--cwd", t.TempDir()}, args...)...)...)
+			env := assertOnlyEnvelope(t, stdout, lastJSONLine(stderr), code, "ErrInvalidFlags")
+			if want := "flag provided but not defined: " + oldFlag[1:]; args[0] == oldFlag && env.ErrDescription != want {
+				t.Errorf("err_description = %q; want %q", env.ErrDescription, want)
+			}
 			assertInvocationKinds(t, home)
 			if ids := listIDs(t, home, fakeDir); len(ids) != 0 {
 				t.Errorf("rows = %v; want none", ids)

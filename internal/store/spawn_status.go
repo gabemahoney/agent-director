@@ -11,11 +11,11 @@ import (
 // lifeColumns retains the exact snapshot used by observation revalidation.
 const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
- codex_startup, claude_capacity, permission_epoch, stuck_version,
- COALESCE(stuck_observation, ''), ` + lifeColumns + `, ` + paneColumns
+ codex_startup, claude_capacity, permission_epoch, observation_version,
+ COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns
 
-// SpawnStatusRow reads only status, context and stuck-observation evidence in
-// one snapshot: the stored observation, the no_screen_change timeout override
+// SpawnStatusRow reads only status, context and display-observation evidence
+// in one snapshot: the stored observation, the idle_screen timeout override
 // and the committed pane baseline. Malformed labels, arguments or environment
 // cannot fail it.
 func (s *Store) SpawnStatusRow(instanceID string, r SettleRead) (Spawn, error) {
@@ -57,7 +57,7 @@ func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 	var launch, agent, path, endReport, startup, capacity any
 	dest := []any{&row.InstanceID, &row.State, &launch, &row.FamilyState,
 		&row.RelayMode, &row.LifeNumber, &agent, &path, &endReport,
-		&startup, &capacity, &row.PermissionEpoch, &row.StuckVersion, &row.StuckObservation}
+		&startup, &capacity, &row.PermissionEpoch, &row.ObservationVersion, &row.DisplayObservation}
 	dest = append(dest, life.dest()...)
 	dest = append(dest, pane.dest()...)
 	if reported {

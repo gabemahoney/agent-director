@@ -1,9 +1,10 @@
 package api_test
 
-// stuck_pane_settle_test.go — how a no_screen_change episode (b.ob8) enters,
-// leaves and changes reason: settling and exact transition times, both reason
-// switches, immediate lifecycle exits, command guards and family. It reuses
-// stuck_pane_test.go's paneEnv; capture failures and races are there.
+// idle_screen_settle_test.go — how an idle_screen episode (b.ob8) enters,
+// leaves and moves to or from needs_intelligence: settling and exact
+// transition times, the direct move in each direction, immediate lifecycle
+// exits, command guards and family. It reuses idle_screen_test.go's paneEnv;
+// capture failures and races are there.
 
 import (
 	"context"
@@ -16,10 +17,10 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// enterPane commits e's baseline now, then reads the pane unchanged for its
-// 60 s timeout and, with settle, for the settle time too, so the episode is
-// displayed; it returns that entry's status.
-func enterPane(t *testing.T, e *paneEnv, c *api.Client, settle time.Duration) api.StatusResult {
+// enterIdleScreen commits e's baseline now, then reads the pane unchanged for
+// its 60 s timeout and, with settle, for the settle time too, so the episode
+// is displayed; it returns that entry's status.
+func enterIdleScreen(t *testing.T, e *paneEnv, c *api.Client, settle time.Duration) api.StatusResult {
 	t.Helper()
 	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 	e.now = e.now.Add(time.Minute)
@@ -27,21 +28,21 @@ func enterPane(t *testing.T, e *paneEnv, c *api.Client, settle time.Duration) ap
 		observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 		e.now = e.now.Add(settle)
 	}
-	return assertStuckState(t, c, e.id, api.StuckNoScreenChange)
+	return assertDisplayState(t, c, e.id, api.StateIdleScreen)
 }
 
-// TestPaneStuckSettlementAndActualTransitionTime: with zero and positive
+// TestIdleScreenSettlementAndActualTransitionTime: with zero and positive
 // settling, entry and exit display exactly at their settle boundary, a
 // delayed read stamps itself rather than the deadline, a clearing keeps the
 // displayed detail until it settles, and the trail holds exactly the entry
 // and the exit at their committing reads, never a raw state transition.
-func TestPaneStuckSettlementAndActualTransitionTime(t *testing.T) {
+func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 	t.Parallel()
 	for _, delay := range []time.Duration{0, 5 * time.Second} {
 		t.Run(delay.String(), func(t *testing.T) {
 			t.Parallel()
 			e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
-			c := e.client(t, apitest.ConfigKeys{StateSettleMs: delay.Milliseconds(), NoScreenChangeTimeoutSeconds: 60})
+			c := e.client(t, apitest.ConfigKeys{StateSettleMs: delay.Milliseconds(), IdleScreenTimeoutSeconds: 60})
 			mark := trailMark(t)
 			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
 			start := e.now
@@ -49,53 +50,50 @@ func TestPaneStuckSettlementAndActualTransitionTime(t *testing.T) {
 			if delay > 0 {
 				observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced) // the entry candidate
 				e.now = e.now.Add(delay - time.Millisecond)
-				assertStuckState(t, c, e.id, store.StateWorking)
+				assertDisplayState(t, c, e.id, store.StateWorking)
 				e.now = start.Add(time.Minute + delay + time.Hour) // a delayed first read past the deadline
 			}
-			entered := assertStuckState(t, c, e.id, api.StuckNoScreenChange)
+			entered := assertDisplayState(t, c, e.id, api.StateIdleScreen)
 			entryTime := e.now
-			if entered.Since != entryTime.Format("2006-01-02T15:04:05.000Z") || minutes(t, entered) != int64(entryTime.Sub(start)/time.Minute) {
+			if entered.Since != entryTime.Format(displayTS) || minutes(t, entered) != int64(entryTime.Sub(start)/time.Minute) {
 				t.Fatalf("entry=%+v; want since this read and the floored minutes since %s", entered, start)
 			}
 			e.show("pane 2")
 			if delay > 0 {
-				got := observeStatus(t, c, e.id, api.StuckNoScreenChange, apitest.VersionAdvanced) // the exit candidate keeps the detail
+				got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced) // the exit candidate keeps the detail
 				if got.Since != entered.Since || minutes(t, got) != minutes(t, entered) {
 					t.Fatalf("clearing changed the detail: %+v; want %+v", got, entered)
 				}
 				e.now = e.now.Add(delay - time.Millisecond)
-				assertStuckState(t, c, e.id, api.StuckNoScreenChange)
+				assertDisplayState(t, c, e.id, api.StateIdleScreen)
 				e.now = e.now.Add(time.Millisecond)
 			}
 			observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
-			var events []map[string]any
 			for _, ev := range readAPITrailLines(t)[mark:] {
 				if ev["instance_id"] == e.id && ev["event"] == "ad.spawn.state_transition" {
 					t.Errorf("the report impersonated a raw transition: %v", ev)
 				}
 			}
-			events = stuckEvents(t, mark, e.id)
+			events := displayEvents(t, mark, e.id)
 			if len(events) != 2 {
 				t.Fatalf("events=%v; want the entry and the exit once", events)
 			}
-			for i, want := range []struct {
-				prior, next string
-				at          time.Time
-			}{{store.StateWorking, "stuck", entryTime}, {"stuck", store.StateWorking, e.now}} {
-				if ev := events[i]; ev["prior_state"] != want.prior || ev["new_state"] != want.next || ev["stuck_reason"] != api.StuckNoScreenChange ||
-					ev["ts"] != want.at.Format("2006-01-02T15:04:05.000Z") {
-					t.Errorf("transition=%v; want %+v", ev, want)
-				}
-			}
+			assertDisplayEvent(t, events[0], store.StateWorking, api.StateIdleScreen, entryTime)
+			assertDisplayEvent(t, events[1], api.StateIdleScreen, store.StateWorking, e.now)
 		})
 	}
 }
 
-// TestPaneStuckReasonSwitchKeepsEpisode: while a row is displayed stuck, the
-// other reason taking over (a permission request on a stuck pane, or an
-// unchanged pane after a stuck request is answered) settles its reason and
-// detail together, keeps since and emits no exit or entry.
-func TestPaneStuckReasonSwitchKeepsEpisode(t *testing.T) {
+// TestDisplayDirectMove: while one Displayed State is shown and the other
+// qualifies (a permission request on an idle_screen pane, or an unchanged pane
+// after a needs_intelligence request is answered), the other settles in as an
+// ordinary candidate (SR-5.1): until the settle deadline the first stays with
+// its last committed detail, then the first read after it shows the second
+// with since at that read, only its own detail, and exactly one record from
+// the first to the second. The idle_screen to needs_intelligence move is a new
+// check_permission interval qualifying for the other state: the idle_screen
+// display stays while needs_intelligence settles in as its candidate.
+func TestDisplayDirectMove(t *testing.T) {
 	t.Parallel()
 	request := func(t *testing.T, e *paneEnv) apitest.PermissionRequestSeed {
 		t.Helper()
@@ -109,42 +107,53 @@ func TestPaneStuckReasonSwitchKeepsEpisode(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		delay  time.Duration
-		toPane bool
+		toIdle bool
 	}{
-		{"pane to permission/settle 0", 0, false},
-		{"pane to permission/settle 5s", 5 * time.Second, false},
-		{"permission to pane/settle 5s", 5 * time.Second, true},
+		{"idle_screen to needs_intelligence/settle 0", 0, false},
+		{"idle_screen to needs_intelligence/settle 5s", 5 * time.Second, false},
+		{"needs_intelligence to idle_screen/settle 5s", 5 * time.Second, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			spec := paneSpec{agent: store.AgentClaude}
 			var timeout int64 = 60
-			from, to := api.StuckNoScreenChange, api.StuckPermissionUnanswered
-			if tc.toPane {
+			from, to := api.StateIdleScreen, api.StateNeedsIntelligence
+			if tc.toIdle {
 				spec.state, timeout = store.StateCheckPermission, 1
 				from, to = to, from
 			}
 			e := newPaneEnv(t, spec)
-			c := e.client(t, apitest.ConfigKeys{StateSettleMs: tc.delay.Milliseconds(), NoScreenChangeTimeoutSeconds: timeout})
+			c := e.client(t, apitest.ConfigKeys{StateSettleMs: tc.delay.Milliseconds(), IdleScreenTimeoutSeconds: timeout})
 			var entered api.StatusResult
 			var req apitest.PermissionRequestSeed
-			if tc.toPane {
+			if tc.toIdle {
 				req = request(t, e)
 				observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
 				e.now = e.now.Add(tc.delay)
-				entered = assertStuckState(t, c, e.id, from)
+				entered = assertDisplayState(t, c, e.id, from)
 			} else {
-				entered = enterPane(t, e, c, tc.delay)
+				entered = enterIdleScreen(t, e, c, tc.delay)
+			}
+			// holds fails unless got still shows the first state with its
+			// detail as entered.
+			holds := func(got api.StatusResult) {
+				t.Helper()
+				if got.Since != entered.Since || got.RequestToken != entered.RequestToken || got.ToolName != entered.ToolName ||
+					(entered.UnchangedMinutes != nil && minutes(t, got) != *entered.UnchangedMinutes) {
+					t.Fatalf("settling=%+v; want the displayed %+v", got.StateDetail, entered.StateDetail)
+				}
 			}
 			mark := trailMark(t)
-			if tc.toPane {
-				// The open dialog holds the turn's next hook: the permission
-				// episode stands. Once the request is proven gone, it applies.
+			if tc.toIdle {
+				// The open dialog holds the turn's next hook: the
+				// needs_intelligence episode stands. Once the request is proven
+				// gone, it applies.
 				if err := seedAgentState(e.s, e.dbPath, e.id, store.StateWorking); err != nil {
 					t.Fatal(err)
 				}
-				if got := observeStatus(t, c, e.id, from, nil); e.row(t).State != store.StateCheckPermission || got.StuckInfo != entered.StuckInfo {
-					t.Fatalf("a held hook moved the row or its display: %+v raw %s", got, e.row(t).State)
+				holds(observeStatus(t, c, e.id, from, nil))
+				if raw := e.row(t).State; raw != store.StateCheckPermission {
+					t.Fatalf("a held hook moved the row to %s", raw)
 				}
 				if err := apitest.SetPermissionFacts(e.dbPath, req.RequestID, apitest.PermissionProof(e.now)); err != nil {
 					t.Fatal(err)
@@ -159,53 +168,55 @@ func TestPaneStuckReasonSwitchKeepsEpisode(t *testing.T) {
 				req = request(t, e)
 			}
 			wantRaw := store.StateCheckPermission
-			if tc.toPane {
+			if tc.toIdle {
 				wantRaw = store.StateWorking
 			}
 			if raw := e.row(t).State; raw != wantRaw {
 				t.Fatalf("raw state %s after the hook; want %s", raw, wantRaw)
 			}
 			e.now = e.now.Add(time.Second)
-			if tc.toPane {
+			if tc.toIdle {
 				// The answered row's first pane sample starts its baseline: a
 				// pending exit, which the pane's own timeout overtakes.
-				if got := observeStatus(t, c, e.id, from, apitest.VersionAdvanced); got.StuckInfo != entered.StuckInfo {
-					t.Fatalf("pending exit=%+v; want the permission detail %+v", got, entered)
-				}
+				holds(observeStatus(t, c, e.id, from, apitest.VersionAdvanced))
 				e.now = e.now.Add(time.Second)
 			}
 			if tc.delay > 0 {
-				// The new reason settles in behind the displayed reason and detail.
-				got := observeStatus(t, c, e.id, from, apitest.VersionAdvanced)
-				if got.Since != entered.Since || got.RequestToken != entered.RequestToken {
-					t.Fatalf("settling=%+v; want the displayed %+v", got, entered)
-				}
+				// The other state settles in as the candidate behind the
+				// displayed state and its detail.
+				holds(observeStatus(t, c, e.id, from, apitest.VersionAdvanced))
 				e.now = e.now.Add(tc.delay - time.Millisecond)
-				observeStatus(t, c, e.id, from, nil)
-				e.now = e.now.Add(time.Millisecond)
+				holds(observeStatus(t, c, e.id, from, nil))
+				if events := displayEvents(t, mark, e.id); len(events) != 0 {
+					t.Fatalf("records before the move's deadline: %v", events)
+				}
+				// The first read after the deadline, a second past it, moves.
+				e.now = e.now.Add(time.Millisecond + time.Second)
 			}
 			got := observeStatus(t, c, e.id, to, apitest.VersionAdvanced)
-			if got.Since != entered.Since {
-				t.Fatalf("switch moved since: %+v; want %s", got, entered.Since)
+			if got.Since != e.now.Format(displayTS) {
+				t.Fatalf("move=%+v; want since this read, %s", got.StateDetail, e.now.Format(displayTS))
 			}
-			if tc.toPane {
+			if tc.toIdle {
 				if minutes(t, got) != 0 {
-					t.Fatalf("switch=%+v; want no_screen_change with 0 minutes", got)
+					t.Fatalf("move=%+v; want idle_screen with 0 minutes", got)
 				}
 			} else if got.RequestToken != req.RequestToken || got.ToolName != "Bash" {
-				t.Fatalf("switch=%+v; want permission_unanswered on %s", got, req.RequestToken)
+				t.Fatalf("move=%+v; want needs_intelligence on %s", got, req.RequestToken)
 			}
-			if events := stuckEvents(t, mark, e.id); len(events) != 0 {
-				t.Fatalf("the switch emitted %v", events)
+			events := displayEvents(t, mark, e.id)
+			if len(events) != 1 {
+				t.Fatalf("events=%v; want the move once", events)
 			}
+			assertDisplayEvent(t, events[0], from, to, e.now)
 		})
 	}
 }
 
-// TestPaneStuckTerminalExitIsImmediate: a terminal write ends a displayed
-// no_screen_change episode itself, with its exit at the write's commit, read
-// at once whatever the settle time.
-func TestPaneStuckTerminalExitIsImmediate(t *testing.T) {
+// TestIdleScreenTerminalExitIsImmediate: a terminal write ends a displayed
+// idle_screen episode itself, with its exit at the write's commit, read at
+// once whatever the settle time.
+func TestIdleScreenTerminalExitIsImmediate(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		state string
@@ -225,38 +236,38 @@ func TestPaneStuckTerminalExitIsImmediate(t *testing.T) {
 		t.Run(tc.state, func(t *testing.T) {
 			t.Parallel()
 			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-			enterPane(t, e, e.client(t, apitest.ConfigKeys{NoScreenChangeTimeoutSeconds: 60}), 0)
-			c := e.client(t, apitest.ConfigKeys{StateSettleMs: settleMax, NoScreenChangeTimeoutSeconds: 60})
+			enterIdleScreen(t, e, e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60}), 0)
+			c := e.client(t, apitest.ConfigKeys{StateSettleMs: settleMax, IdleScreenTimeoutSeconds: 60})
 			before := e.row(t)
 			mark := trailMark(t)
 			tc.write(t, e)
-			if after := e.row(t); after.StuckObservation != "" || after.StuckVersion <= before.StuckVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
+			if after := e.row(t); after.DisplayObservation != "" || after.ObservationVersion <= before.ObservationVersion || after.PermissionEpoch != before.PermissionEpoch+1 {
 				t.Fatalf("the write left the episode: before=%+v after=%+v", before, after)
 			}
-			assertStuckState(t, c, e.id, tc.state)
-			assertStuckState(t, c, e.id, tc.state)
+			assertDisplayState(t, c, e.id, tc.state)
+			assertDisplayState(t, c, e.id, tc.state)
 			_, stamp, err := apitest.ReadSettle(e.dbPath, e.id)
 			if err != nil {
 				t.Fatal(err)
 			}
-			events := stuckEvents(t, mark, e.id)
-			if len(events) != 1 || events[0]["prior_state"] != "stuck" || events[0]["new_state"] != tc.state ||
-				events[0]["stuck_reason"] != api.StuckNoScreenChange || events[0]["ts"] != time.UnixMilli(stamp).UTC().Format("2006-01-02T15:04:05.000Z") {
+			events := displayEvents(t, mark, e.id)
+			if len(events) != 1 {
 				t.Fatalf("exit=%v; want one at the write's commit %d", events, stamp)
 			}
+			assertDisplayEvent(t, events[0], api.StateIdleScreen, tc.state, time.UnixMilli(stamp))
 		})
 	}
 }
 
-// TestPaneStuckLeavesCommandGuards: a displayed no_screen_change grants and
+// TestIdleScreenLeavesCommandGuards: a displayed idle_screen grants and
 // refuses no command: pause still refuses the raw working row, typing
 // nothing, send-keys still types into it, and the observation itself only
 // looked up, listed and captured the pane. Neither touches the episode.
-func TestPaneStuckLeavesCommandGuards(t *testing.T) {
+func TestIdleScreenLeavesCommandGuards(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
-	c := e.client(t, apitest.ConfigKeys{NoScreenChangeTimeoutSeconds: 60})
-	entered := enterPane(t, e, c, 0)
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	entered := enterIdleScreen(t, e, c, 0)
 	for _, call := range e.rec.SocketCalls() {
 		if call.Call != tmux.CallLookup && call.Call != tmux.CallListPanes && call.Call != tmux.CallCapture {
 			t.Errorf("observation made a %s call", call.Call)
@@ -268,24 +279,24 @@ func TestPaneStuckLeavesCommandGuards(t *testing.T) {
 	if calls := e.rec.SocketCalls(); len(calls) != 0 {
 		t.Errorf("pause made tmux calls %+v; want none", calls)
 	}
-	if got := observeStatus(t, c, e.id, api.StuckNoScreenChange, nil); got.Since != entered.Since || e.row(t).State != store.StateWorking {
+	if got := observeStatus(t, c, e.id, api.StateIdleScreen, nil); got.Since != entered.Since || e.row(t).State != store.StateWorking {
 		t.Errorf("after the refusal: %+v, raw %s; want the same episode on a raw working row", got, e.row(t).State)
 	}
 	e.rec.Reset()
 	if _, err := c.SendKeys(api.SendKeysParams{InstanceID: e.id, Text: "go on"}); err != nil {
-		t.Fatalf("send-keys on a displayed stuck row: %v; want delivered", err)
+		t.Fatalf("send-keys on a row displayed idle_screen: %v; want delivered", err)
 	}
 	assertTextSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID, "go on")
 	assertEnterSent(t, e.rec, apitest.TestSocket, apitest.TestPaneID)
-	if got := observeStatus(t, c, e.id, api.StuckNoScreenChange, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {
+	if got := observeStatus(t, c, e.id, api.StateIdleScreen, nil); got.Since != entered.Since || minutes(t, got) != minutes(t, entered) || e.row(t).State != store.StateWorking {
 		t.Errorf("after send-keys: %+v, raw %s; want the episode %+v on a raw working row", got, e.row(t).State, entered)
 	}
 }
 
-// TestPaneStuckFamilyIsBinaryAndDetailChildLocal: a child displayed
-// no_screen_change contributes working to the family, which stays binary, and
-// its stuck detail stays on the child.
-func TestPaneStuckFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
+// TestIdleScreenFamilyIsBinaryAndDetailChildLocal: a child displayed
+// idle_screen contributes working to the family, which stays binary, and its
+// detail stays on the child.
+func TestIdleScreenFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
 	parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false)
@@ -295,34 +306,34 @@ func TestPaneStuckFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
 	if err := apitest.SeedParentChild(e.dbPath, parent, e.id); err != nil {
 		t.Fatal(err)
 	}
-	c := e.client(t, apitest.ConfigKeys{NoScreenChangeTimeoutSeconds: 60})
-	child := enterPane(t, e, c, 0)
-	got := assertStuckState(t, c, parent, store.StateWaiting)
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	child := enterIdleScreen(t, e, c, 0)
+	got := assertDisplayState(t, c, parent, store.StateWaiting)
 	if child.FamilyState != store.StateWorking || got.FamilyState != store.StateWorking {
 		t.Errorf("family: child %+v, parent %+v; want working on both", child, got)
 	}
 }
 
-// TestPaneStuckRawMoveSettlesOut: the turn ending (a hook moving the raw
+// TestIdleScreenRawMoveSettlesOut: the turn ending (a hook moving the raw
 // state on) keeps the displayed episode until a read, which clears it with
 // one exit to the new state at that read.
-func TestPaneStuckRawMoveSettlesOut(t *testing.T) {
+func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-	c := e.client(t, apitest.ConfigKeys{NoScreenChangeTimeoutSeconds: 60})
-	enterPane(t, e, c, 0)
+	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+	enterIdleScreen(t, e, c, 0)
 	mark := trailMark(t)
 	if err := seedAgentState(e.s, e.dbPath, e.id, store.StateWaiting); err != nil {
 		t.Fatal(err)
 	}
-	if row := e.row(t); row.CommittedStuckDisplay().State != "stuck" {
+	if row := e.row(t); row.CommittedDisplay().State != api.StateIdleScreen {
 		t.Fatalf("the hook cleared the episode before any read: %+v", row)
 	}
 	e.now = e.now.Add(time.Second)
 	observeStatus(t, c, e.id, store.StateWaiting, apitest.VersionAdvanced)
-	events := stuckEvents(t, mark, e.id)
-	if len(events) != 1 || events[0]["prior_state"] != "stuck" || events[0]["new_state"] != store.StateWaiting ||
-		events[0]["stuck_reason"] != api.StuckNoScreenChange || events[0]["ts"] != e.now.Format("2006-01-02T15:04:05.000Z") {
+	events := displayEvents(t, mark, e.id)
+	if len(events) != 1 {
 		t.Fatalf("exit=%v; want one to waiting at the read", events)
 	}
+	assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)
 }

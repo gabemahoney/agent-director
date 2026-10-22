@@ -224,9 +224,9 @@ function buildSpawn(p: SpawnParams): string[] {
   if (p.reuse_finished === true) f.push("--reuse-finished");
   // null and 0 are no override, as omitted; the CLI refuses any other
   // non-integer or out-of-range value.
-  const timeout = p.no_screen_change_timeout_seconds;
+  const timeout = p.idle_screen_timeout_seconds;
   if (timeout !== undefined && timeout !== null && timeout !== 0)
-    f.push("--no-screen-change-timeout-seconds", String(timeout));
+    f.push("--idle-screen-timeout-seconds", String(timeout));
 
   // Repeatable --label k=v
   if (p.label) {

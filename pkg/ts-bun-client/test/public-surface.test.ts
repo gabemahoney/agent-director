@@ -354,10 +354,9 @@ test.each(["StatusResult"])(
 );
 
 test.each(["StatusResult", "GetResult", "ListRow"])(
-  "public-surface: %s has the optional stuck reason, required availability and the correct detail subset", (name) => {
+  "public-surface: %s has the required idle_screen_availability and the correct detail subset", (name) => {
     const body = interfaceBody(typesGolden(), name);
-    expect(body).toMatch(/\bstuck_reason\?\s*:\s*StuckReason\s*;/);
-    expect(body).toMatch(/\bno_screen_change_availability\s*:\s*NoScreenChangeAvailability\s*;/);
+    expect(body).toMatch(/\bidle_screen_availability\s*:\s*IdleScreenAvailability\s*;/);
     for (const [field, type] of [["since", "string"], ["request_token", "string"], ["tool_name", "string"], ["unchanged_minutes", "number"]]) {
       const declaration = new RegExp(`\\b${field}\\?\\s*:\\s*${type}\\s*;`);
       if (name === "ListRow") expect(body).not.toMatch(declaration);

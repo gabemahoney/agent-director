@@ -11,32 +11,32 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// getStuck is api.Get judged against the committed row of p.
-func (p *paEnv) getStuck(t *testing.T, want string, commit apitest.CommitCheck) {
+// getDisplay is api.Get judged against the committed row of p.
+func (p *paEnv) getDisplay(t *testing.T, want string, commit apitest.CommitCheck) {
 	t.Helper()
-	observeStuck(t, p.st, p.r.ID, want, commit, func() (string, api.StuckInfo, error) {
+	observeDisplay(t, p.st, p.r.ID, want, commit, func() (string, api.StateDetail, error) {
 		row, err := api.Get(p.st, p.view(), p.r.ID)
-		return row.State, row.StuckInfo, err
+		return row.State, row.StateDetail, err
 	})
 }
 
-// enterStuck reads once, committing the request's fallback clock, then again
-// at the timeout, committing the entry.
-func (p *paEnv) enterStuck(t *testing.T) {
+// enterNeedsIntelligence reads once, committing the request's fallback clock,
+// then again at the timeout, committing the entry.
+func (p *paEnv) enterNeedsIntelligence(t *testing.T) {
 	t.Helper()
-	p.getStuck(t, store.StateCheckPermission, func(store.Spawn, store.Spawn) bool {
+	p.getDisplay(t, store.StateCheckPermission, func(store.Spawn, store.Spawn) bool {
 		return !p.request(t, storefix.TestRequestTokenA).FallbackAt.IsZero()
 	})
 	p.now = p.now.Add(30 * time.Second)
-	p.getStuck(t, "stuck", apitest.VersionAdvanced)
+	p.getDisplay(t, api.StateNeedsIntelligence, apitest.VersionAdvanced)
 }
 
-func TestPermissionStuckPreservesLiveCommandGuards(t *testing.T) {
+func TestNeedsIntelligencePreservesLiveCommandGuards(t *testing.T) {
 	t.Parallel()
 	for _, agent := range paAgents {
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
-			p.enterStuck(t)
+			p.enterNeedsIntelligence(t)
 			assertOneSentinel(t, p.sendKeys(p.plain("1")), api.ErrRelayFallenBack)
 			// Under load max_wait_ms 0 may answer its documented ErrStoreBusy, having
 			// recorded nothing; repeat it then, for at most 10 s (t2.sp6.rk.1k).
@@ -59,17 +59,17 @@ func TestPermissionStuckPreservesLiveCommandGuards(t *testing.T) {
 	}
 }
 
-func TestPermissionStuckPaneAnswerClearsReportButKeepsDialogHold(t *testing.T) {
+func TestNeedsIntelligencePaneAnswerClearsReportButKeepsDialogHold(t *testing.T) {
 	t.Parallel()
 	for _, agent := range paAgents {
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
-			p.enterStuck(t)
+			p.enterNeedsIntelligence(t)
 			if _, err := p.recordPaneAnswer(p.outside(storefix.TestRequestTokenA, "unknown")); err != nil {
 				t.Fatal(err)
 			}
 			row, err := api.Get(p.st, p.view(), p.r.ID)
-			if err != nil || row.State != store.StateCheckPermission || row.StuckInfo != (api.StuckInfo{}) || len(row.UnprovenRequests) != 1 || len(row.PermissionRequests) != 0 {
+			if err != nil || row.State != store.StateCheckPermission || row.StateDetail != (api.StateDetail{}) || len(row.UnprovenRequests) != 1 || len(row.PermissionRequests) != 0 {
 				t.Fatalf("pane answer=%+v %v", row, err)
 			}
 			assertDialogMaybeOpen(t, p.sendKeys(p.plain("next")), storefix.TestRequestTokenA, store.StateCheckPermission)
@@ -77,13 +77,13 @@ func TestPermissionStuckPaneAnswerClearsReportButKeepsDialogHold(t *testing.T) {
 	}
 }
 
-func TestPermissionStuckCodexTurnEndPreservesIndependentChildHold(t *testing.T) {
+func TestNeedsIntelligenceCodexTurnEndPreservesIndependentChildHold(t *testing.T) {
 	t.Parallel()
 	for _, event := range []string{"Stop", "Interrupt"} {
 		t.Run(event, func(t *testing.T) {
 			p := newCodexPAEnv(t)
 			storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: storefix.TestRequestTokenB, ToolName: "Bash", ToolInput: "{}", AgentID: paSubagentID, MainTurnEndEligible: ptr(false), SettledAt: p.now.Add(time.Hour)})
-			p.enterStuck(t)
+			p.enterNeedsIntelligence(t)
 			// Codex PostToolUse does not supply proof or close a null-tool-use request.
 			p.prove(t, toolRan(paToolUseID))
 			if pr := p.request(t, storefix.TestRequestTokenA); pr.ProvenGone() || pr.ToolUseID != "" {
@@ -94,7 +94,7 @@ func TestPermissionStuckCodexTurnEndPreservesIndependentChildHold(t *testing.T) 
 				t.Fatal(applied)
 			}
 			row, err := api.Get(p.st, p.view(), p.r.ID)
-			if err != nil || row.State != store.StateWaiting || row.StuckInfo != (api.StuckInfo{}) {
+			if err != nil || row.State != store.StateWaiting || row.StateDetail != (api.StateDetail{}) {
 				t.Fatalf("turn end=%+v %v", row, err)
 			}
 			child := p.request(t, storefix.TestRequestTokenB)
