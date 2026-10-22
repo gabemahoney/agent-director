@@ -233,6 +233,10 @@ func TestGetReadsAndErrors(t *testing.T) {
 			if out := jsonOf(t, got); err != nil && out != emptyGetJSON {
 				t.Errorf("Get on failure = %s; want %s", out, emptyGetJSON)
 			}
+			// b.ob8 F2: an absent agent keeps availability even without an observer.
+			if err == nil {
+				assertIdleAvailability(t, got, got.IdleScreenAvailability, api.IdleScreenAvailable)
+			}
 			if f.permCalls != tc.permCalls || !slices.Equal(f.historyLives, tc.historyLives) {
 				t.Errorf("permission reads %d, history lives %v; want %d and %v", f.permCalls, f.historyLives, tc.permCalls, tc.historyLives)
 			}

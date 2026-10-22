@@ -11,8 +11,13 @@ import (
 // including terminal intermediates. Each working ancestor is visited once;
 // enumerating every ancestor/descendant pair would add quadratic work to
 // bounded lifecycle transactions.
-const familyAggregateSQL = `WITH RECURSIVE working(id) AS (
- SELECT instance_id FROM spawns WHERE state NOT IN ('ended', 'missing', 'waiting')
+var familyAggregateSQL = familyAggregateForSQL(familyMemberSQL)
+
+// familyAggregateForSQL also serves the migration before display columns exist.
+// member is a source-owned SQL expression, never caller input.
+func familyAggregateForSQL(member string) string {
+	return `WITH RECURSIVE working(id) AS (
+ SELECT instance_id FROM spawns WHERE ` + member + `
  UNION
  SELECT child.parent_id FROM working
  JOIN spawns AS child ON child.instance_id = working.id
@@ -22,12 +27,18 @@ const familyAggregateSQL = `WITH RECURSIVE working(id) AS (
  CASE WHEN instance_id IN (SELECT id FROM working) THEN 'working' ELSE 'waiting' END AS value
  FROM spawns
 ) `
+}
+
+// A retained Displayed State keeps a waiting member working until its exit
+// commits. The shared decoder excludes malformed and obsolete observations
+// and observations on terminal rows, exactly as CommittedDisplay does.
+const familyMemberSQL = `state NOT IN ('ended', 'missing', 'waiting') OR ` + committedDisplayStateSQL + ` IS NOT NULL`
 
 // refreshFamilies runs under the lifecycle writer's lock, before commit. The
 // previous aggregate, rather than any member's displayed state, supplies the
 // settle base. Unchanged aggregates keep their original clock and history.
-// Bounded writers call it only after a lifecycle mutation; permission delivery
-// and authority-only transactions must not spend their budget on family work.
+// Bounded writers call it only after a contribution or ancestry mutation;
+// permission delivery and authority-only transactions skip family work.
 // Join the materialized aggregate once: correlated SET subqueries otherwise
 // scan it again for each changed row in the supported SQLite version.
 func (s *Store) refreshFamilies(q querier) error {
@@ -48,12 +59,15 @@ func (s *Store) refreshFamilies(q querier) error {
 
 // refreshFamiliesAfterStateChange skips aggregate work when a state-only write
 // preserves the member's contribution. The caller reads prior under the same
-// write lock; parent links and all other members remain unchanged.
-func (s *Store) refreshFamiliesAfterStateChange(q querier, prior, next string) error {
+// write lock and supplies any committed display exits drained by this write;
+// those can remove a waiting member's retained working contribution. A hook
+// that retains a display needs no extra refresh when both raw states agree
+// on membership. Parent links and all other members remain unchanged.
+func (s *Store) refreshFamiliesAfterStateChange(q querier, prior, next string, exits ...displayTransition) error {
 	contributes := func(state string) bool {
 		return state != StateWaiting && state != StateEnded && state != StateMissing
 	}
-	if contributes(prior) == contributes(next) {
+	if (contributes(prior) || len(exits) > 0) == contributes(next) {
 		return nil
 	}
 	return s.refreshFamilies(q)

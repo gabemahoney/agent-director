@@ -1,11 +1,13 @@
 package store_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,161 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.ob8 F1: the observer's new family refresh, and its read of the families
+// that refresh changed, are part of the same transaction as its display and
+// baseline. A failure after the display UPDATE cannot publish half an exit,
+// remove an ancestor's contribution, or emit an event; a committed exit
+// returns the member's and ancestor's families as that commit left them.
+func TestDisplayFamilyRefreshFailureAtomic(t *testing.T) {
+	for _, observer := range []string{"permission", "pane"} {
+		for _, failure := range []string{"held lock", "observation update", "family refresh", "family read", "none"} {
+			t.Run(observer+"/"+failure, func(t *testing.T) {
+				s, path, id, samples, now := permissionObservation(t)
+				parent, err := apitest.SeedSpawn(path, "parent", store.StateWaiting, "", "off", "", false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := apitest.SeedParentChild(path, parent, id); err != nil {
+					t.Fatal(err)
+				}
+				row, err := s.GetSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var shown store.DisplayDetail
+				wantDisplay := store.StateNeedsIntelligence
+				if observer == "permission" {
+					shown = observeUnlessBusy(t, s, row, samples, now, 30*time.Second)
+				} else {
+					wantDisplay = store.StateIdleScreen
+					if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, apitest.PermissionProof(now)); err != nil {
+						t.Fatal(err)
+					}
+					if a := storefix.ApplyAgentHook(t, s, id, "UserPromptSubmit", ""); !a.Applied {
+						t.Fatalf("working hook=%+v", a)
+					}
+					for i := 0; i < 2; i++ {
+						row, err = s.GetSpawn(id)
+						if err != nil {
+							t.Fatal(err)
+						}
+						shown = commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+							d, families, err := s.ObserveIdleScreen(row, store.PaneSample{SHA256: "unchanged-pane"}, now, time.Minute, store.SettleRead{})
+							if families != nil {
+								t.Errorf("raw working sample changed no contribution, yet returned families %v", families)
+							}
+							return d, err
+						})
+						if i == 0 {
+							now = now.Add(time.Minute)
+						}
+					}
+				}
+				if shown.State != wantDisplay {
+					t.Fatalf("entry=%+v", shown)
+				}
+				if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, apitest.PermissionProof(now)); err != nil {
+					t.Fatal(err)
+				}
+				if hook := storefix.ApplyAgentHook(t, s, id, "Stop", ""); !hook.Applied {
+					t.Fatalf("Stop=%+v", hook)
+				}
+				row, err = s.GetSpawn(id)
+				if err != nil || row.State != store.StateWaiting || row.CommittedDisplay() != shown {
+					t.Fatalf("retained=%+v %v", row, err)
+				}
+				requests, err := s.PermissionRequestsForSpawn(id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				samples = nil
+				for _, pr := range requests {
+					samples = append(samples, store.PermissionSample{Request: pr})
+				}
+				before := map[string][3]any{}
+				for _, member := range []string{parent, id} {
+					a, b, stamp, err := apitest.ReadFamilyHistory(path, member)
+					if err != nil {
+						t.Fatal(err)
+					}
+					before[member] = [3]any{a, b, stamp}
+				}
+				blocked := errors.New("fixture: family refresh failed")
+				familyAttempted := false
+				switch failure {
+				case "held lock":
+					release := apitest.HoldWriteLock(t, path, time.Minute)
+					defer release()
+				case "observation update":
+					storefix.InjectWriteFailure(t, path, storefix.WriteFailDisplayObservation, id)
+				case "family refresh", "family read":
+					// The refresh updates histories; the read follows it in the
+					// same transaction, so its failure must undo that update too.
+					prefix := "WITH RECURSIVE working(id)"
+					if failure == "family read" {
+						prefix = "WITH RECURSIVE chain(id)"
+					}
+					store.ObserveDecisionBoundaryForTest(t, s, path, func(_ context.Context, q string) error {
+						if strings.HasPrefix(q, prefix) {
+							familyAttempted = true
+							return blocked
+						}
+						return nil
+					}, nil)
+				}
+				mark := store.TrailMark(t)
+				var got store.DisplayDetail
+				var families map[string]string
+				// Both store observer entry points may receive a row whose raw
+				// state no longer qualifies; each must atomically clear its display.
+				repeatBusy := failure == "family refresh" || failure == "family read" || failure == "none"
+				_, _, attempted := apitest.RepeatUntilCommitted(func() bool {
+					if observer == "permission" {
+						got, families, err = s.ObserveNeedsIntelligence(row, samples, now.Add(time.Hour), time.Second, store.SettleRead{})
+					} else {
+						got, families, err = s.ObserveIdleScreen(row, store.PaneSample{}, now.Add(time.Hour), time.Second, store.SettleRead{})
+					}
+					return !repeatBusy || !errors.Is(err, store.ErrStoreBusy)
+				})
+				if failure == "none" {
+					wantFamilies := map[string]string{parent: store.StateWaiting, id: store.StateWaiting}
+					if !attempted || err != nil || got != (store.DisplayDetail{State: store.StateWaiting}) || !reflect.DeepEqual(families, wantFamilies) {
+						t.Fatalf("committed exit=%+v families=%v %v; want waiting with families %v", got, families, err, wantFamilies)
+					}
+					for member := range before {
+						a, b, stamp, err := apitest.ReadFamilyHistory(path, member)
+						if err != nil || a != store.StateWaiting || b != store.StateWorking || stamp == 0 || stamp == before[member][2] {
+							t.Errorf("committed exit family %s: %s/%s/%d %v; want a new waiting/working change", member, a, b, stamp, err)
+						}
+					}
+					assertDisplayRecords(t, mark, id, displayRecord{wantDisplay, store.StateWaiting, now.Add(time.Hour)})
+					return
+				}
+				if !attempted || err == nil || got != shown || families != nil {
+					t.Fatalf("failed exit=%+v families=%v %v; want retained %+v and no families", got, families, err, shown)
+				}
+				if (failure == "family refresh" || failure == "family read") && (!familyAttempted || !errors.Is(err, blocked)) {
+					t.Fatalf("family failure was not reached: attempted=%v err=%v", familyAttempted, err)
+				}
+				if failure == "held lock" && !errors.Is(err, store.ErrStoreBusy) {
+					t.Fatalf("held writer error=%v", err)
+				}
+				after, readErr := s.GetSpawn(id)
+				if readErr != nil || !reflect.DeepEqual(after, row) {
+					t.Fatalf("failed exit changed row: before=%+v after=%+v err=%v", row, after, readErr)
+				}
+				for member, want := range before {
+					a, b, stamp, err := apitest.ReadFamilyHistory(path, member)
+					if err != nil || [3]any{a, b, stamp} != want {
+						t.Errorf("failed exit changed family %s: %s/%s/%d %v; want %v", member, a, b, stamp, err, want)
+					}
+				}
+				assertDisplayRecords(t, mark, id)
+			})
+		}
+	}
+}
 
 // permissionObservation seeds current ownership and samples exact persisted
 // records; opts follow the row's defaults.
@@ -45,7 +202,8 @@ func permissionObservation(t *testing.T, opts ...apitest.SpawnOption) (*store.St
 func observeUnlessBusy(t *testing.T, s *store.Store, row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration) store.DisplayDetail {
 	t.Helper()
 	return commitUnlessBusy(t, func() (store.DisplayDetail, error) {
-		return s.ObserveNeedsIntelligence(row, samples, now, timeout, store.SettleRead{})
+		d, _, err := s.ObserveNeedsIntelligence(row, samples, now, timeout, store.SettleRead{})
+		return d, err
 	})
 }
 
@@ -167,7 +325,7 @@ func TestNeedsIntelligenceStaleSampleCannotCommit(t *testing.T) {
 			}
 			mark := store.TrailMark(t)
 			tc.change(t, s, path, id, samples[0].Request, now)
-			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+			got, _, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
 			if err == nil || got != row.CommittedDisplay() {
 				t.Fatalf("stale observation=%+v %v; want the previous %+v", got, err, row.CommittedDisplay())
 			}
@@ -203,7 +361,7 @@ func TestNeedsIntelligenceRollbackAndNonwaitingLock(t *testing.T) {
 			// under suite load.
 			limit := store.DefaultBusyTimeoutMs * time.Millisecond / 2
 			start := time.Now()
-			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+			got, _, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
 			if elapsed := time.Since(start); elapsed >= limit {
 				t.Errorf("nonwaiting write took %s; a write that waits for the lock takes the %d ms busy timeout", elapsed, store.DefaultBusyTimeoutMs)
 			}
@@ -266,7 +424,7 @@ func TestNeedsIntelligenceReadWithoutChangeTakesNoWriteLock(t *testing.T) {
 				t.Fatal(err)
 			}
 			release := apitest.HoldWriteLock(t, path, time.Minute)
-			got, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+			got, _, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
 			if got != row.CommittedDisplay() || (err != nil) != tc.writes {
 				t.Fatalf("observation=%+v err=%v; want %+v, needs write lock %v", got, err, row.CommittedDisplay(), tc.writes)
 			}
@@ -297,7 +455,7 @@ func TestNeedsIntelligenceConcurrentSnapshotAndOlderClock(t *testing.T) {
 		t.Fatalf("entry=%+v", first)
 	}
 	for _, at := range []time.Time{now, now.Add(time.Hour)} {
-		if _, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{}); err == nil {
+		if _, _, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{}); err == nil {
 			t.Error("concurrent old version overwrote committed entry")
 		}
 	}
@@ -310,7 +468,7 @@ func TestNeedsIntelligenceConcurrentSnapshotAndOlderClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	samples[0].Request = pr
-	if got, err := s.ObserveNeedsIntelligence(fresh, samples, now.Add(-time.Millisecond), 30*time.Second, store.SettleRead{}); err == nil || !reflect.DeepEqual(got, first) {
+	if got, _, err := s.ObserveNeedsIntelligence(fresh, samples, now.Add(-time.Millisecond), 30*time.Second, store.SettleRead{}); err == nil || !reflect.DeepEqual(got, first) {
 		t.Errorf("older sample=%+v %v", got, err)
 	}
 	assertDisplayRecords(t, mark, id, displayRecord{store.StateCheckPermission, store.StateNeedsIntelligence, now})
@@ -350,7 +508,8 @@ func TestPaneBaselineDecodesTolerantly(t *testing.T) {
 				t.Fatalf("read failed on the stored baseline: %v", err)
 			}
 			got := commitUnlessBusy(t, func() (store.DisplayDetail, error) {
-				return s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+				d, _, err := s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
+				return d, err
 			})
 			if got.State != store.StateWorking {
 				t.Fatalf("observation=%+v; want working", got)
@@ -419,7 +578,7 @@ func TestRawHookDuringSettlingMoveKeepsDisplay(t *testing.T) {
 			if err != nil || settled.DisplayObservation != "" {
 				t.Fatalf("settled row=%+v %v; want no observation", settled, err)
 			}
-			if got, err := s.ObserveNeedsIntelligence(settled, nil, now.Add(time.Second), 30*time.Second, store.SettleRead{}); err != nil || got.State != store.StateWaiting {
+			if got, _, err := s.ObserveNeedsIntelligence(settled, nil, now.Add(time.Second), 30*time.Second, store.SettleRead{}); err != nil || got.State != store.StateWaiting {
 				t.Fatalf("next read=%+v %v", got, err)
 			}
 			assertDisplayRecords(t, mark, id, displayRecord{tc.displayed, store.StateWaiting, now})

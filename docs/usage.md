@@ -108,12 +108,12 @@ about it are in the
 A family includes the agent and every stored descendant linked through
 `parent_id`, at any depth. Only live members contribute: a member recorded
 as `ended` or `missing` is excluded, but its retained links still connect
-live descendants. Before [settling](configuration.md#settle-time-state),
-the family is `waiting` exactly when every live member's stored state is
-`waiting`; no live members also means `waiting`. Any other live state,
-including `pending`, `ask_user` or `check_permission`, makes it `working`.
-A member shown `needs_intelligence` or `idle_screen` is in `check_permission`
-or `working` underneath, so it counts as `working` too.
+live descendants. A live member contributes `working` while its raw state
+is not `waiting` or its committed display is `needs_intelligence` or
+`idle_screen`. A retained display keeps that contribution after the raw
+state becomes `waiting`, until its displayed exit commits. With no working
+contributors, including no live members, the aggregate is `waiting`.
+The family then [settles independently](configuration.md#settle-time-state).
 
 Each returned agent's family covers the full stored tree, including members
 hidden by list filters or limits. Resume, reuse and deletion follow the

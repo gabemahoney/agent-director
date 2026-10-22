@@ -153,7 +153,7 @@ console.log(result.state);
 
 `StatusResult`, `GetResult` and each `ListRow` expose
 `family_state: "working" | "waiting"`, separately from `state`.
-[Usage](../../docs/usage.md#family-state) defines membership and raw
+[Usage](../../docs/usage.md#family-state) defines membership and
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 

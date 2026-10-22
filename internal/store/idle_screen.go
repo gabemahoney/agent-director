@@ -67,8 +67,9 @@ func committedPaneBaseline(row Spawn) paneBaseline {
 
 // IdleScreenApplies reports whether idle_screen can ever apply to a row of
 // agent: Claude and Codex. Cursor, whose healthy quiet work can leave its pane
-// unchanged, never is. It is the one rule for both which rows are sampled and
-// the availability every read reports.
+// unchanged, never is. This is the sampling and eligibility rule; the API's
+// availability projection separately preserves compatibility for an absent
+// agent without allowing its pane to be sampled.
 func IdleScreenApplies(agent string) bool {
 	return agent == AgentClaude || agent == AgentCodex
 }

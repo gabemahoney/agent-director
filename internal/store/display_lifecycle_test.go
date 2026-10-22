@@ -283,7 +283,7 @@ func TestNeedsIntelligenceDisplayedEpisodeReadWritesNothing(t *testing.T) {
 	release := apitest.HoldWriteLock(t, path, time.Minute)
 	defer release()
 	for _, at := range []time.Time{now, now.Add(time.Millisecond), now.Add(time.Hour)} {
-		got, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{})
+		got, _, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{})
 		if err != nil || got != committed.CommittedDisplay() {
 			t.Fatalf("read at %s=%+v %v; want the committed display without a write", at, got, err)
 		}
@@ -304,21 +304,58 @@ func TestNeedsIntelligenceDisplayedEpisodeReadWritesNothing(t *testing.T) {
 
 // An unconfirmed COMMIT (errCommitUnconfirmed) is settled by one nonwaiting
 // re-read at either observer: when the write landed the caller gets the
-// committed display and the transition is emitted once; otherwise it gets the
-// previous view with the error, and nothing is stored or emitted.
+// committed display, and an exit's families, and the transition is emitted
+// once; otherwise it gets the previous view with the error and no families,
+// and nothing is stored or emitted.
 func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
-	type observation func(store.Spawn) (store.DisplayDetail, error)
+	type observation func(store.Spawn) (store.DisplayDetail, map[string]string, error)
 	for _, obs := range []struct {
 		name, prior, display string
-		setup                func(*testing.T) (*store.Store, string, string, time.Time, observation) // a row the observation moves to display
+		// a row the observation moves to display, and the families a landed write returns (b.ob8 B1)
+		setup func(*testing.T) (*store.Store, string, string, time.Time, observation, map[string]string)
 	}{
-		{"permission", store.StateCheckPermission, store.StateNeedsIntelligence, func(t *testing.T) (*store.Store, string, string, time.Time, observation) {
+		{"permission", store.StateCheckPermission, store.StateNeedsIntelligence, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
 			s, path, id, samples, now := permissionObservation(t)
-			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, error) {
+			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
 				return s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
-			}
+			}, nil
 		}},
-		{"pane", store.StateWorking, store.StateIdleScreen, func(t *testing.T) (*store.Store, string, string, time.Time, observation) {
+		{"exit", store.StateNeedsIntelligence, store.StateWaiting, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
+			s, path, id, samples, now := permissionObservation(t)
+			parent, err := apitest.SeedSpawn(path, "parent", store.StateWaiting, "", "off", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := apitest.SeedParentChild(path, parent, id); err != nil {
+				t.Fatal(err)
+			}
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if shown := observeUnlessBusy(t, s, row, samples, now, 30*time.Second); shown.State != store.StateNeedsIntelligence {
+				t.Fatalf("entry=%+v", shown)
+			}
+			if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, apitest.PermissionProof(now)); err != nil {
+				t.Fatal(err)
+			}
+			if hook := storefix.ApplyAgentHook(t, s, id, "Stop", ""); !hook.Applied {
+				t.Fatalf("Stop=%+v", hook)
+			}
+			requests, err := s.PermissionRequestsForSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			samples = nil
+			for _, pr := range requests {
+				samples = append(samples, store.PermissionSample{Request: pr})
+			}
+			at := now.Add(time.Hour)
+			return s, path, id, at, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
+				return s.ObserveNeedsIntelligence(row, samples, at, time.Second, store.SettleRead{})
+			}, map[string]string{parent: store.StateWaiting, id: store.StateWaiting}
+		}},
+		{"pane", store.StateWorking, store.StateIdleScreen, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
 			path := filepath.Join(t.TempDir(), "state.db")
 			now := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 			// The committed baseline has been unchanged for an hour.
@@ -332,9 +369,9 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
-			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, error) {
+			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
 				return s.ObserveIdleScreen(row, store.PaneSample{SHA256: "abc"}, now, time.Minute, store.SettleRead{})
-			}
+			}, nil
 		}},
 	} {
 		for _, tc := range []struct {
@@ -342,7 +379,7 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 			landed bool
 		}{{"landed", true}, {"not landed", false}} {
 			t.Run(obs.name+", "+tc.name, func(t *testing.T) {
-				s, path, id, now, observe := obs.setup(t)
+				s, path, id, now, observe, wantFamilies := obs.setup(t)
 				row, err := s.GetSpawnSettled(id, store.SettleRead{})
 				if err != nil {
 					t.Fatal(err)
@@ -374,7 +411,7 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 				}
 				store.ObserveDecisionBoundaryForTest(t, s, path, before, afterCommit)
 				mark := store.TrailMark(t)
-				got, err := observe(row)
+				got, families, err := observe(row)
 				reader, rerr := store.Open(path)
 				if rerr != nil {
 					t.Fatal(rerr)
@@ -389,7 +426,10 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 						t.Fatalf("landed observation=%+v %v; want the committed display and no error", got, err)
 					}
 					if want := after.CommittedDisplay(); got.State != obs.display || got != want {
-						t.Errorf("display=%+v; want the committed %s entry %+v", got, obs.display, want)
+						t.Errorf("display=%+v; want the committed %s %+v", got, obs.display, want)
+					}
+					if !reflect.DeepEqual(families, wantFamilies) {
+						t.Errorf("families=%v; want %v", families, wantFamilies)
 					}
 					if after.ObservationVersion != row.ObservationVersion+1 {
 						t.Errorf("version=%d; want %d", after.ObservationVersion, row.ObservationVersion+1)
@@ -400,8 +440,8 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 				if !errors.Is(err, store.ErrCommitUnconfirmedForTest) {
 					t.Fatalf("observation=%+v %v; want the unconfirmed-commit error", got, err)
 				}
-				if got != row.CommittedDisplay() {
-					t.Errorf("display=%+v; want the previous %+v", got, row.CommittedDisplay())
+				if got != row.CommittedDisplay() || families != nil {
+					t.Errorf("display=%+v families=%v; want the previous %+v and no families", got, families, row.CommittedDisplay())
 				}
 				if after.ObservationVersion != row.ObservationVersion || after.DisplayObservation != row.DisplayObservation {
 					t.Errorf("row changed though nothing landed: %+v", after)

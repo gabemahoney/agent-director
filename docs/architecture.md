@@ -3040,8 +3040,9 @@ still the one it read, so it knows the row has not changed since. As built:
 - Derived family-history updates through `refreshFamilies` are an exception:
   they change only `family_state`, `family_settled_state` and
   `family_changed_ms`, without advancing the row's or any ancestor's
-  `row_version`. Lifecycle mutations and their family refresh share a
-  transaction and commit or roll back together; see [Family reporting](#family-reporting).
+  `row_version`. Lifecycle mutations or observations and their family refresh
+  share a transaction and commit or roll back together; see
+  [Family reporting](#family-reporting).
 - `InsertPending` starts a row at 0 (the column default). A path that writes
   nothing advances nothing. Examples are the non-Cursor `working`-transition hold path
   (a permission request holding the row, `holdsRowSQL`, at the hold's read
@@ -3770,7 +3771,7 @@ the `store_meta` table (`migrateV4toV5`, b.fmk):
    of the new columns, and no `store_id`.
 4. **Install-only**: like every hop, it runs only when the install flow's
    `migrate-authorized` sentinel authorizes the transition from the store's
-   version to this binary's (`{"from": 4, "to": 13}` for a v4 store, which
+   version to this binary's (`{"from": 4, "to": 14}` for a v4 store, which
    chains through this hop); a v4 store opened without it is refused with
    `ErrSchemaMigrationRequired`. `install.sh` learns the target version from
    that refusal, so it needed no change.
@@ -3805,7 +3806,7 @@ columns (`migrateV5toV6`, b.kdf; see "v6 columns" above):
    a column) leaves `user_version = 5` and none of the three columns.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 5, "to": 12}` for a v5 store); a v5 store opened without it is
+   (`{"from": 5, "to": 14}` for a v5 store); a v5 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v5, use the v6 → v5
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the three
@@ -3864,7 +3865,7 @@ see "v7 columns" above):
    columns and no request proven.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 6, "to": 12}` for a v6 store); a v6 store opened without it is
+   (`{"from": 6, "to": 14}` for a v6 store); a v6 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v6, use the v7 → v6
    emergency downgrade recipe in docs/migration-guide.md §5 (drop the
@@ -3905,7 +3906,7 @@ columns (`migrateV7toV8`, b.3ie; see "v8 columns" above):
    column or the backfill) leaves `user_version = 7` and neither column.
 4. **Install-only**: it runs only when the install flow's
    `migrate-authorized` sentinel authorizes a chain through it
-   (`{"from": 7, "to": 12}` for a v7 store); a v7 store opened without it is
+   (`{"from": 7, "to": 14}` for a v7 store); a v7 store opened without it is
    refused with `ErrSchemaMigrationRequired`.
 5. **Downgrade**: to return a migrated store to v7, use the v8 → v7
    emergency downgrade recipe in docs/migration-guide.md §5 (drop
@@ -6408,7 +6409,7 @@ to the `state` that `status`, `get` and `list` report on every surface
   `settling` value or in-flight marker for own-state settling, and a settled
   value is always one the row's raw history held. The only displayed states
   the raw history never held are the Displayed States `needs_intelligence`
-  and `idle_screen`, reports layered over a raw `check_permission` or
+  and `idle_screen`, reports that qualify on a raw `check_permission` or
   `working` row (see [Displayed State reporting](#displayed-state-reporting)).
 - Every raw change of value restarts the clock, a change no poll would
   have seen included; a write of the same value (`working → working`, a
@@ -6464,9 +6465,10 @@ fires (its T judges whether the state its write replaces had settled) and
 a Client when it is built (its T judges what `status`, `get` and `list`
 report; the MCP server keeps its T until it restarts). The setting covers
 the whole host: every caller using that config, code callers that never
-asked for settling included, can read a state up to T late (`pending` for
-up to T after an agent reports in, for one), and nothing in the output
-marks a state as late.
+asked for settling included, can read an ordinary raw-state change up to T
+late (`pending` for up to T after an agent reports in, for one), and nothing
+in the output marks a state as late. Displayed States follow the
+[observation-driven rule](#displayed-state-reporting).
 
 **A change of T.** Each earlier segment of the raw history is judged with
 the T of the write that ended it, the current one with the reader's T
@@ -6499,16 +6501,17 @@ A Displayed State changes none of this: it is never read by a guard.
   every request the agent's hooks have not proven gone, by the agent-specific
   proof rules of [The dialog hold](#the-dialog-hold-step-2c), including "Proofs by agent"
   (a `turn_end` proof covers only requests recorded before the second its
-  hook started, b.omt). For up to T a row can read any state, even `ended`
-  or `missing` (see **Hooks out of a terminal state settle** above), with
-  an open request in `permission_requests`, or `check_permission` with
+  hook started, b.omt). Under ordinary raw-state reporting, for up to T a row
+  can read `ended` or `missing` (see **Hooks out of a terminal state settle**
+  above), with an open request in `permission_requests`, or `check_permission` with
   `[]`, and a row its agent moved out of `ended` or `missing` can read
   `ended` or `missing` with requests in `unproven_requests`, also for up
   to T. And since a request proven gone no
   longer holds the row (b.omt), the raw state can leave `check_permission`
   while such a request still awaits an answer; the row can then read
   `check_permission` for up to T with that request in neither list
-  (`get-permission` still reads it).
+  (`get-permission` still reads it). Retained
+  [Displayed States](#displayed-state-reporting) follow their observation rule.
 - `launch_started_at` follows the raw state: a row whose agent has reported
   in can read `pending` without it for up to T.
 - A row with no recorded settled value (`settled_state` `''`, which only a
@@ -6546,12 +6549,16 @@ and MCP `status`, `get` and every returned `list` row. Go exposes
 TypeScript exposes `family_state` on `StatusResult`, `GetResult` and
 `ListRow`. The manifest and generated references describe the same field.
 
-**Membership and raw authority.** `familyAggregateSQL`
+**Membership and contribution.** `familyAggregateSQL`
 (`internal/store/family.go`) carries working membership upward through stored
 `parent_id` links at every depth, including retained `ended` and `missing`
 intermediates, excluding only their own contribution. Any live member with
-raw state other than `waiting` makes the family `working`; otherwise,
-including no live members, it is `waiting`. Refresh and migration join the
+raw state other than `waiting`, or a committed `needs_intelligence` or
+`idle_screen` display, makes the family `working`; otherwise, including no
+live members, it is `waiting`. A retained display contributes after raw
+`waiting` until its exit commits. `familyMemberSQL` uses
+`committedDisplayStateSQL`, matching `Spawn.CommittedDisplay` even for
+malformed or obsolete observations. Refresh and migration join the
 materialized aggregate with `UPDATE ... FROM`. Native subagent records do
 not participate. Filters and limits select returned rows, never their
 family members. Resume, reuse, restore,
@@ -6568,10 +6575,12 @@ raw aggregate. The authorized `migrateV11toV12` hop
 types, nullability, defaults and primary-key shape before adding missing
 columns. It validates binary-or-empty history values and an integer clock,
 initializes empty history from the full tree and preserves compatible
-established history. DDL, initialization and stamp share one transaction;
-failure rolls back the hop. Fresh DDL converges with it; store identity and
-own-state history are preserved. The family-only v12 → v11 recovery recipe
-applies to genuine v12 stores; it cannot operate on v13 or v14. Recovery is in
+established history. It uses `familyAggregateForSQL` with raw-state membership,
+because this hop precedes the display columns. DDL, initialization and stamp
+share one transaction; failure rolls back the hop. Fresh DDL converges with
+it; store identity and own-state history are preserved. The family-only
+v12 → v11 recovery recipe applies to genuine v12 stores; it cannot operate
+on v13 or v14. Recovery is in
 [migration-guide.md §5](migration-guide.md#v12--v11-reverses-migratev11tov12).
 
 **Writers must reuse** `refreshFamilies` in `family.go` for every mutation
@@ -6579,16 +6588,23 @@ that changes a member's binary contribution or parent membership.
 `execFamily` wraps a single lifecycle statement in `inImmediateTx`, which
 refreshes families before commit. The generic bounded `inWriteTx` and
 `inWriteTxContext` do not refresh automatically: relevant lifecycle callbacks
-use `refreshFamiliesAfterStateChange` to refresh only when the member's
-binary contribution changes. Permission-only and authority-only writes,
+use `refreshFamiliesAfterStateChange` to account for raw transitions and
+drained display exits. Display observers use `refreshFamiliesAfterObservation`
+to refresh the member's and ancestors' durable histories atomically with a
+contribution change, then read those families in the same transaction
+(`observedFamilies`); a failure of either rolls the observation back. A
+skipped or rolled-back observation advances neither the display nor family
+history. Permission-only and authority-only writes,
 and contribution-preserving state changes in those callbacks, skip refresh.
 Cursor runtime registration, session binding and retirement use guarded
-authority-only writes without family refresh. Aggregate changes and
-lifecycle changes commit or roll back together, retaining each write's
-guarded result. Refresh preserves the history and clock when the aggregate
-is unchanged. When it changes, the writer's `settle_ms` judges whether the
-preceding aggregate had settled, retaining the earlier settled value
-otherwise; SQLite stamps the actual aggregate change under the lock.
+authority-only writes without family refresh. Each refresh shares its
+mutation's transaction and guarded result. Refresh preserves the history
+and clock when the aggregate is unchanged. When it changes, the writer's
+`settle_ms` judges whether the preceding aggregate had settled, retaining
+the earlier settled value
+otherwise; SQLite stamps the actual aggregate change under the lock. If a
+retained display's exit changes the aggregate, its clock starts there,
+never at the earlier raw transition or first exit candidate.
 An uninitialized aggregate starts settled at its raw value.
 
 **Readers must reuse** `SettleRead.familyExpr`, alongside `stateExpr`, in
@@ -6596,28 +6612,51 @@ the existing status/get/list store reads. With settling off it reads the
 raw aggregate. Otherwise it uses the reader's clock and T once, returning
 the prior settled family value until the current raw aggregate has held
 for T. Both directions settle, including changes from command writes or
-terminal exclusions. Depth and member own-state settling add no delay;
+terminal exclusions. Depth and ordinary own-state settling add no delay;
 short reversals remain invisible. History survives client and process
 restarts, so the next read after T needs no intervening polling or timer.
 Clock and configuration-change semantics match own-state settling.
 Family projection adds no writer lock, write, settle wait or liveness probe.
 
+**Families from the observation's commit.** `ObserveNeedsIntelligence` and
+`ObserveIdleScreen` return, with the committed display, the family of the
+member and of each stored ancestor, read with the reader's original
+`SettleRead` clock and T; nil when no contribution changed or no commit
+was confirmed. API readers must use these values (`familyOf` in
+`pkg/api/display.go`), never a later read. `status` and `get` take the row's
+family from its commit, else from its snapshot. `list` merges each commit's
+families in observation order, a later commit winning; its final pass
+changes only `family_state`, so an ancestor emitted before a descendant's
+exit reports that exit. Every other field keeps the projection already
+computed in the pass: `state` from the row's own observation, request lists
+from their own reads, the rest from the snapshot. A row that no commit of
+the pass supplies keeps its snapshot family. State filtering and limits
+apply once, to the displayed state. A skipped, busy or rolled-back
+observation itself returns the previous display, detail and snapshot family
+together; in `list` another member's commit can still supply that row's
+final family. After an unconfirmed
+COMMIT, a re-read that confirms the write landed returns the values read
+before COMMIT; otherwise the read reports the previous view, and the write
+may still land without a record, as Trail in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows)
+allows.
+Ordinary own-state settling keeps the original read's view.
+
 Existing Cursor read checks, guarded terminal persistence and errors remain
 in place. A projected `missing` own state does not remove a member from its
 stored family until the terminal write commits. Ancestor own-state and
 permission fields remain local to the ancestor; descendant `ask_user` or
-`check_permission` affects only the binary family aggregate. Read failures
-remain errors. A stored live working row continues to contribute until
-existing detection or state changes say otherwise. Family waiting is no
-task-success or action-safety guarantee, including while settling briefly
-retains waiting after work begins.
+`check_permission` affects only the binary family aggregate. A stored live
+working row continues to contribute until existing detection or state
+changes say otherwise. Family waiting is no task-success or action-safety
+guarantee, including while settling briefly retains waiting after work begins.
 
 ### Displayed State reporting
 
 The two Displayed States are reports, never stored in `state`:
-`needs_intelligence` is layered over a raw `check_permission` row (Claude,
+`needs_intelligence` qualifies on a raw `check_permission` row (Claude,
 Codex or Cursor) whose agent fell back to its own permission prompt that
-nobody answered, and `idle_screen` over a raw `working` Claude or Codex row
+nobody answered, and `idle_screen` on a raw `working` Claude or Codex row
 whose sampled pane fingerprint stayed the same for its timeout. Both are
 report-only and computed on demand by `status`, `get` and `list`; AD runs no
 background process or timer for them, and reads no pane text or agent log.
@@ -6634,7 +6673,8 @@ components both states and every agent must go through.
 | `pkg/api/display.go` `observeDisplay` / `displayed` | The one dispatch `status`, `get` and `list` share. When a write of the same read found the store busy (`permissionRead.storeBusy`), it returns the committed display, sampling, reading and writing nothing. Otherwise a raw `working` row whose agent `store.IdleScreenApplies` is observed by its pane (`paneObservation`) when the reader samples panes; every other row by its permission requests (`permissionObservation`), which also settles out a display of either state an earlier interval left. A reader that samples no pane (the exported `Status`, `Get` and `List`) keeps such a row's current pane finding (`Spawn.IdleScreenCurrent`: a current-epoch observation whose candidate is `idle_screen`, so a displayed `idle_screen`, a pending entry or a pending move to it) as committed, writing nothing; any other observation goes to `permissionObservation`, which settles out an earlier interval's display and a settling exit. It also reports whether its write found the store busy. |
 | `permissionObservation` | The one all-agent permission evaluation (Claude, Codex, Cursor); it judges every request of a row with the relay's own check-before-read verdicts, builds one `store.PermissionSample` each and asks the store to commit. It takes the requests the reader already read (`permissionRead.requests`); without them it reads its own, without waiting. See [Readers never wait](#readers-never-wait-problem-4). |
 | `Client.paneSampler` / `samplePane` | The one pane sample, one sampler per read (`relayView`): the agent's pane of the row's current launch, found as `read-pane` finds it (`paneRun.ours`; a leftover session never counts) and captured as `read-pane`'s default read, so the stored fingerprint is that read's `pane_sha256`. Any failure is an empty sample. Once a socket's lookup or pane-listing result `StopsSocket()` (the [sweep's stop rule](#sweep-sweepgo)), the read's later rows on that socket get an empty sample with no tmux call; a failed capture stops nothing. |
-| `store.IdleScreenApplies` | The one rule for the agents `idle_screen` can apply to (Claude, Codex): which rows are sampled (`Spawn.PaneObservable`) and the `idle_screen_availability` every read reports (`api.IdleScreenAvailable`, `api.IdleScreenUnavailable`). A row of any other agent, an unknown one included, is never sampled, whatever its override, and reads `unavailable`. |
+| `store.IdleScreenApplies` | The eligibility rule used by `Spawn.PaneObservable`: only Claude and Codex may be sampled, whatever a row's timeout override. |
+| `pkg/api/display.go` `idleScreenAvailability` | The shared status/get/list availability projection: Claude and Codex read `available`; Cursor and other nonempty unknown agents read `unavailable`. An empty agent reads `available` for Go custom-store compatibility, without sampling eligibility. |
 | `StateDetail`, `stateDetail` | The one wire shape of the Displayed State shown: `since` (RFC3339 UTC, exactly milliseconds) and that state's detail (`request_token` and `tool_name` for `needs_intelligence`, `unchanged_minutes` for `idle_screen`), embedded in `StatusResult` and `SpawnRow`, never in `ListRow` (call `get` for it); `StatusResult` adds `tmux_session_name` only while either state is shown. A field that does not apply is omitted, never null, empty or zero. `api.StateNeedsIntelligence` and `api.StateIdleScreen` are the only state constants pkg/api exports. |
 | `store.ObserveNeedsIntelligence`, `store.ObserveIdleScreen` | The only writers of the observation, one per state. Neither waits for the write lock (`inWriteTx(0, ...)`); both re-check the row with `lockedObservationRow`. |
 | `planPermission` (`permissionCandidate`), `planPane`, `planObservation` | Each state's target (the eligible requests and their representative; the pane baseline to store) and the one pure plan of everything a read would commit (observation, display, trail events, and whether to write at all), applied by both the unlocked pre-check and the locked commit so they cannot drift. |
@@ -6778,9 +6818,9 @@ may also set a request's fallback clock alongside `hook_gone_at` through
   direct move, carrying `instance_id`, `prior_state`, `new_state` and `ts`;
   emitted after the commit and fail-open. A Displayed State change never
   writes `ad.spawn.state_transition`.
-- *Family.* Reporting is unchanged: family reads raw member states, so a
-  member in either state is `check_permission` or `working` and counts as
-  `working`.
+- *Family.* A live member's retained display contributes `working` until its
+  exit commits. Contribution changes update durable family histories and
+  settle independently, as defined in [Family reporting](#family-reporting).
 - *Raw guards.* `send-keys`, `decide`, `pause`, the dialog hold and every other
   verb keep reading the raw `state`; a Displayed State changes no refusal or
   hold.
@@ -11636,7 +11676,7 @@ line from stdin. Each reply, and what a caller sees:
 
 `ErrSchemaMismatch` fires when the store's `user_version` is not recognized by
 this binary — typically meaning the store was written by a newer binary
-(`user_version > 13`). An unauthorized older store (v1 through v12)
+(`user_version > 14`). An unauthorized older store (v1 through v13)
 surfaces `ErrSchemaMigrationRequired`. An authorized migration can instead
 return `ErrSchemaMismatch` when it refuses incompatible metadata. The store does not silently upgrade an
 older DB on `Open`: the open is refused with `ErrSchemaMigrationRequired`
@@ -17058,10 +17098,11 @@ adds it here.
   liveness from tmux: their only tmux calls sample a working Claude or Codex
   row's own pane for `idle_screen` (see [Displayed State reporting](#displayed-state-reporting)),
   and a failed sample only resets that observation, never the row's state.
-- With `[state] settle_ms` set, `status`, `get` and `list` report the
-  settled state, which can be up to the settle time behind the live state
-  every verb acts on; nothing marks it as late. `ended` and `missing`, and
-  a state a command wrote, report at once; a hook's move out of `missing`
+- With `[state] settle_ms` set, `status`, `get` and `list` report ordinary
+  raw-state changes up to the settle time late; nothing marks them as late.
+  [Displayed States](#displayed-state-reporting) instead settle through
+  successful observations. Verbs act on the live state. `ended` and `missing`,
+  and a state a command wrote, report at once; a hook's move out of `missing`
   or `ended` settles (see [Settle time (b.3ie)](#settle-time-b3ie)).
 - `read-pane` changes nothing: no keys, no session created, killed or
   renamed, no store write (`row_version` and the snapshot are unchanged)
@@ -17723,16 +17764,18 @@ the section that describes it in detail.
     the settle time reads `waiting` throughout, so no polling caller sees
     that turn; keep the setting at 1 to 2 s;
   - it covers every caller on the host, code callers that never asked for
-    it included, each of which can read a state up to the settle time late
-    (`pending` after an agent reported in, for one), and nothing marks a
-    state as late;
+    it included. Ordinary raw-state changes can appear up to the settle time
+    late (`pending` after an agent reported in, for one), with no lateness
+    marker. [Displayed States](#displayed-state-reporting) instead settle
+    through successful observations;
   - verbs act on the live state, so a verb can refuse, with a named error,
     on a state `status` does not show yet;
   - permission requests, the relay's delivery states and
-    `launch_started_at` follow the live state: a row can read any state
-    (even `ended` or `missing`) with an open request, `check_permission`
+    `launch_started_at` follow the live state. Ordinary raw-state reporting
+    can show `ended` or `missing` with an open request, `check_permission`
     with `[]`, or `pending` without `launch_started_at`, for up to the
-    settle time;
+    settle time. Retained [Displayed States](#displayed-state-reporting)
+    follow their observation rule;
   - a hook that moves a row out of `missing` or `ended` settles, so the row
     reads `missing` or `ended` for the settle time first;
   - right after a change of the setting, a value can be reported that held

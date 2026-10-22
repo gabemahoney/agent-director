@@ -271,15 +271,20 @@ export interface ListRow {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
-   * Nothing marks a state as late. The row's other fields, and the verbs that act on it, follow
-   * its live state, which can be newer: a refusal can name a state this field does not show yet.
+   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
+   * times settle_ms from the read that commits its candidate; a later read commits the change.
+   * Nothing marks a state as late. `family_state` settles independently. Fields such as
+   * `state_changed_at` and `permission_requests`, and the verbs that act on the row, follow its
+   * live state, which can be newer: a refusal can name a state this field does not show yet.
    */
   state: string;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. Waiting means every live member is waiting, or no live members remain.
-   * Uses raw member states and settles once in either direction with `[state] settle_ms`,
-   * independently of `state`. This report does not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or its
+   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
+   * commits. Waiting means no member counts as working, or no live members remain. Settles once
+   * in either direction with `[state] settle_ms`, independently of `state`. This report does
+   * not establish readiness or task success.
    */
   family_state: "working" | "waiting";
   /** Canonicalized working directory. */
@@ -346,8 +351,10 @@ export interface ListRow {
    * delivery facts; populated only when the row's live state is check_permission, `[]`
    * otherwise. A row can read waiting, working or ask_user while a request is still open:
    * follow a tracked request with `getPermission`. Requests are never delayed by
-   * `[state] settle_ms`, so with it set a row can also read any state (even ended or missing)
-   * with open requests listed, or check_permission with `[]`, for up to settle_ms.
+   * `[state] settle_ms`, so with it set ordinary raw-state settling can also show any state
+   * (even ended or missing) with open requests listed, or check_permission with `[]`, for up
+   * to settle_ms; entering or leaving `needs_intelligence` or `idle_screen` has no such bound
+   * (see `state`).
    */
   permission_requests: PermissionRequestInfo[];
 }
@@ -534,15 +541,19 @@ export interface StatusResult {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
+   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
+   * times settle_ms from the read that commits its candidate; a later read commits the change.
    * Nothing marks a state as late. The verbs that act on the Spawn follow its live state, which
    * can be newer: a refusal can name a state status does not show yet.
    */
   state: string;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. Waiting means every live member is waiting, or no live members remain.
-   * Uses raw member states and settles once in either direction with `[state] settle_ms`,
-   * independently of `state`. This report does not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or its
+   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
+   * commits. Waiting means no member counts as working, or no live members remain. Settles once
+   * in either direction with `[state] settle_ms`, independently of `state`. This report does
+   * not establish readiness or task success.
    */
   family_state: "working" | "waiting";
   /**
@@ -615,15 +626,22 @@ export interface GetResult {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
-   * Nothing marks a state as late. The row's other fields, and the verbs that act on it, follow
-   * its live state, which can be newer: a refusal can name a state this field does not show yet.
+   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
+   * times settle_ms from the read that commits its candidate; a later read commits the change.
+   * Nothing marks a state as late. While an exit or direct move settles, `since` and that
+   * state's detail keep the previous display's committed values, and `family_state` settles
+   * independently. Fields such as `state_changed_at` and `permission_requests`, and the verbs
+   * that act on the row, follow its live state, which can be newer: a refusal can name a state
+   * this field does not show yet.
    */
   state: string;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. Waiting means every live member is waiting, or no live members remain.
-   * Uses raw member states and settles once in either direction with `[state] settle_ms`,
-   * independently of `state`. This report does not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or its
+   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
+   * commits. Waiting means no member counts as working, or no live members remain. Settles once
+   * in either direction with `[state] settle_ms`, independently of `state`. This report does
+   * not establish readiness or task success.
    */
   family_state: "working" | "waiting";
   cwd: string;
@@ -699,9 +717,10 @@ export interface GetResult {
    * only when the row's live state is check_permission, `[]` otherwise. A row can read waiting,
    * working or ask_user while a request is still open: follow a tracked request with
    * `getPermission`.
-   * Requests are never delayed by `[state] settle_ms`, so with it set a row can also read any
-   * state (even ended or missing) with open requests listed, or check_permission with `[]`, for
-   * up to settle_ms.
+   * Requests are never delayed by `[state] settle_ms`, so with it set ordinary raw-state
+   * settling can also show any state (even ended or missing) with open requests listed, or
+   * check_permission with `[]`, for up to settle_ms; entering or leaving `needs_intelligence`
+   * or `idle_screen` has no such bound (see `state`).
    */
   permission_requests: PermissionRequestInfo[];
   /**
@@ -712,7 +731,8 @@ export interface GetResult {
    * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`,
    * and a `pause`, reject (`ErrDialogMaybeOpen`, or an earlier relay refusal). It follows the
    * row's live state and is never delayed by `[state] settle_ms`, so with it set it can disagree
-   * with `state` for up to settle_ms.
+   * with `state` for up to settle_ms under ordinary raw-state settling, and without that bound
+   * while entering or leaving `needs_intelligence` or `idle_screen` (see `state`).
    */
   unproven_requests: PermissionRequestInfo[];
 }

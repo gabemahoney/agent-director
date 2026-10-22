@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -279,6 +280,60 @@ type observationPlan struct {
 	write  bool
 }
 
+// refreshFamiliesAfterObservation keeps display and contribution changes in
+// one transaction. Ordinary working members already contribute, so their
+// entries, detail updates and pane samples do no aggregate work. Decode both
+// snapshots through CommittedDisplay rather than interpreting report-only JSON.
+// A contribution change also returns the families it can change, as
+// observedFamilies reads them; nil otherwise.
+func (s *Store) refreshFamiliesAfterObservation(ctx context.Context, conn *sql.Conn, row Spawn, plan observationPlan, settle SettleRead) (map[string]string, error) {
+	if row.State != StateWaiting {
+		return nil, nil
+	}
+	prior := row.CommittedDisplay()
+	row.DisplayObservation = plan.text
+	if isDisplayedState(prior.State) == isDisplayedState(row.CommittedDisplay().State) {
+		return nil, nil
+	}
+	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
+		return nil, err
+	}
+	return observedFamilies(ctx, conn, row.InstanceID, settle)
+}
+
+// observedFamilies reads, inside the observer's transaction, the family of
+// instanceID and of each stored ancestor: every family one member's changed
+// contribution can change. settle is the reader's own SettleRead, so the
+// values are what that reader would see in the committed snapshot. Failure
+// rolls the observation back rather than leaving a committed change the read
+// cannot report.
+func observedFamilies(ctx context.Context, conn *sql.Conn, instanceID string, settle SettleRead) (map[string]string, error) {
+	family, familyArgs := settle.familyExpr()
+	rows, err := conn.QueryContext(ctx, `WITH RECURSIVE chain(id) AS (
+ SELECT ?
+ UNION
+ SELECT spawns.parent_id FROM chain
+ JOIN spawns ON spawns.instance_id = chain.id
+ WHERE spawns.parent_id IS NOT NULL
+) SELECT instance_id, `+family+` FROM spawns WHERE instance_id IN (SELECT id FROM chain)`, append([]any{instanceID}, familyArgs...)...)
+	if err != nil {
+		return nil, fmt.Errorf("store: observed families: %w", err)
+	}
+	defer rows.Close()
+	families := map[string]string{}
+	for rows.Next() {
+		var id, value string
+		if err := rows.Scan(&id, &value); err != nil {
+			return nil, fmt.Errorf("store: observed families: %w", err)
+		}
+		families[id] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: observed families: %w", err)
+	}
+	return families, nil
+}
+
 // planObservation decides, from the row as examined and target, the
 // Displayed State and detail the read found eligible (the zero DisplayDetail
 // for none), everything an observer would commit to display_observation.
@@ -376,17 +431,21 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 
 // ObserveNeedsIntelligence commits one nonwaiting observation. The write lock
 // protects request facts as well as row ownership; row_version alone does not
-// detect a concurrent pane answer, ack or proof.
-func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, error) {
+// detect a concurrent pane answer, ack or proof. With the committed display it
+// returns the families its commit refreshed, by instance id under settle (nil
+// when the commit changed no contribution, or nothing committed), so a reader
+// reports the display and its families from the same commit.
+func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, error) {
 	previous := examined.CommittedDisplay()
 	clocks, target := planPermission(examined, samples, now, timeout)
 	plan, err := planObservation(examined, target, len(clocks) > 0, now, settle)
 	if err != nil {
-		return previous, err
+		return previous, nil, err
 	}
 	if !plan.write {
-		return previous, nil
+		return previous, nil, nil
 	}
+	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		row, err := lockedObservationRow(ctx, conn, examined)
 		if err != nil {
@@ -416,15 +475,19 @@ func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSam
 			}
 		}
 		_, err = conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1 WHERE instance_id=?`, plan.raw, row.InstanceID)
+		if err != nil {
+			return err
+		}
+		families, err = s.refreshFamiliesAfterObservation(ctx, conn, row, plan, settle)
 		return err
 	})
 	if err != nil {
 		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, nil) {
-			return previous, err
+			return previous, nil, err
 		}
 	}
 	emitDisplayTransitions(plan.events)
-	return plan.result, nil
+	return plan.result, families, nil
 }
 
 // ObserveIdleScreen commits one nonwaiting pane observation of examined: the
@@ -435,17 +498,19 @@ func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSam
 // included, changes nothing and returns the previously committed display, so
 // a later sample may continue the committed baseline. A row changed since
 // examined (its launch, turn, pane ownership or stored observations) refuses
-// the sample, so an older sample never overwrites a newer one.
-func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, error) {
+// the sample, so an older sample never overwrites a newer one. Its families
+// are as ObserveNeedsIntelligence returns them.
+func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, error) {
 	previous := examined.CommittedDisplay()
 	baseline, target := planPane(examined, sample, now, timeout)
 	plan, err := planObservation(examined, target, baseline != committedPaneBaseline(examined), now, settle)
 	if err != nil {
-		return previous, err
+		return previous, nil, err
 	}
 	if !plan.write {
-		return previous, nil
+		return previous, nil, nil
 	}
+	var families map[string]string
 	err = s.inWriteTx(0, func(ctx context.Context, conn *sql.Conn) error {
 		if _, err := lockedObservationRow(ctx, conn, examined); err != nil {
 			return err
@@ -453,15 +518,19 @@ func (s *Store) ObserveIdleScreen(examined Spawn, sample PaneSample, now time.Ti
 		args := append([]any{plan.raw}, paneBaselineArgs(baseline, examined.PermissionEpoch)...)
 		_, err := conn.ExecContext(ctx, `UPDATE spawns SET display_observation=?,observation_version=observation_version+1,
  pane_sha256=?,pane_since_ms=?,pane_epoch=? WHERE instance_id=?`, append(args, examined.InstanceID)...)
+		if err != nil {
+			return err
+		}
+		families, err = s.refreshFamiliesAfterObservation(ctx, conn, examined, plan, settle)
 		return err
 	})
 	if err != nil {
 		if !errors.Is(err, errCommitUnconfirmed) || !s.observationLanded(examined, plan, &baseline) {
-			return previous, err
+			return previous, nil, err
 		}
 	}
 	emitDisplayTransitions(plan.events)
-	return plan.result, nil
+	return plan.result, families, nil
 }
 
 // lockedObservationRow re-reads examined's row inside an observer's write

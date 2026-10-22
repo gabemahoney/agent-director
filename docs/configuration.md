@@ -135,11 +135,14 @@ on CLI, MCP and the Go and TypeScript clients:
   same state does not. Nothing marks a state as late. `list --state` filters
   on the agent's own state that `list` shows.
 - **What `family_state` shows.** Apply T once to the
-  [raw family aggregate](usage.md#family-state), independently of each
-  member's displayed `state`. Both `working` and `waiting` must hold for T;
-  until then the previous settled family value remains. A shorter reversal
-  never appears. A member's change that leaves the raw aggregate unchanged
-  does not restart its clock, and descendant depth adds no delay. Changes
+  [raw family aggregate](usage.md#family-state), independently of ordinary
+  own-state settling. A retained `needs_intelligence` or `idle_screen`
+  display contributes `working` until its exit commits; any resulting
+  aggregate change starts the family interval then. Both `working` and
+  `waiting` must hold for T; until then the previous settled family value
+  remains. A shorter reversal never appears. A member's change that leaves
+  the raw aggregate unchanged does not restart its clock, and descendant
+  depth adds no delay. Changes
   caused by commands or members becoming `ended` or `missing` follow this
   same family rule.
 - **Family initialization and restarts.** New or upgraded families start
@@ -159,16 +162,21 @@ on CLI, MCP and the Go and TypeScript clients:
   1 to 2 s (1000 to 2000), shorter than a real turn; most flips come back
   within 1 s.
 - **Every caller on the host.** The setting covers every caller on the
-  host, programs that never asked for it included, and each can see a
-  state up to T late: for example, a new agent reads `pending`, without
-  `launch_started_at`, for up to T after it reports in.
+  host, programs that never asked for it included. Ordinary raw-state
+  changes can appear up to T late: for example, a new agent reads `pending`,
+  without `launch_started_at`, for up to T after it reports in.
+  [Special displays](caller-contract.md#needs-intelligence-and-idle-screen-rows)
+  instead settle through successful observations; T does not bound their
+  delay from a raw-state change.
 - **Verbs act on the live state.** `send-keys`, `decide`, `pause`,
   `resume`, `kill`, `find-missing`, `expire` and `spawn` judge a row's
   latest state, which can be newer than what `status` shows, so a verb can
   refuse on a state `status` does not show yet; the refusal is a named
-  error. Permission requests are never delayed: a row can read any state,
-  even `ended` or `missing`, while `get` lists an open request, or
-  `check_permission` with none, for up to T.
+  error. Permission requests are never delayed. Ordinary raw-state reporting
+  can show `ended` or `missing` while `get` lists an open request, or
+  `check_permission` with none, for up to T. Retained
+  [special displays](caller-contract.md#needs-intelligence-and-idle-screen-rows)
+  follow their observation rule.
 - **Reads never wait** for a state to settle. A change of the key takes
   effect as [any other](#when-a-change-takes-effect). For both fields, an
   earlier raw value is judged with the setting loaded by the writer that

@@ -70,13 +70,38 @@ func TestListFilters(t *testing.T) {
 	}
 }
 
-// failingListStore is a ListStore whose every read fails with errSentinel.
-type failingListStore struct{}
+// failingListStore fails with errSentinel unless supplied a successful row set.
+// It deliberately has no observation methods.
+type failingListStore struct{ rows []api.Spawn }
 
-func (failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) { return nil, errSentinel }
-
-func (failingListStore) OpenPermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
+func (s failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) {
+	if s.rows != nil {
+		return s.rows, nil
+	}
 	return nil, errSentinel
+}
+
+func (s failingListStore) OpenPermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
+	if s.rows != nil {
+		return nil, nil
+	}
+	return nil, errSentinel
+}
+
+// b.ob8 F2: successful custom rows with no agent retain availability and state.
+func TestListEmptyAgentAvailability(t *testing.T) {
+	t.Parallel()
+	s := failingListStore{rows: []api.Spawn{{InstanceID: "empty-agent", State: store.StateWorking, FamilyState: store.StateWorking}}}
+	got, err := api.List(s, api.RelayView{}, api.ListParams{})
+	if err != nil || len(got.Spawns) != 1 {
+		t.Fatalf("List=%+v %v", got, err)
+	}
+	row := got.Spawns[0]
+	if row.State != store.StateWorking || row.FamilyState != store.StateWorking || len(row.PermissionRequests) != 0 {
+		t.Fatalf("custom list changed row: %+v", row)
+	}
+	assertIdleAvailability(t, row, row.IdleScreenAvailability, api.IdleScreenAvailable)
+	apitest.CheckOrdinaryWire(t, []byte(jsonOf(t, row)), "")
 }
 
 // TestListFailures: a negative limit (b.c4n) and a label not in key=value form

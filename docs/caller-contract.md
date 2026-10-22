@@ -270,14 +270,15 @@ created after the row entered `check_permission` never makes the row
   real state (`--state check_permission` or `--state working`), so a polling
   loop that tests for those states stops seeing it.
 - **Detection happens on reads.** Nothing runs between your calls and
-  nothing changes state on a timer: a row enters either state on the first
-  `status`, `get` or `list` after the timeout, so your usual polling of
-  `status` is enough and you need not read panes yourself. A row nobody reads
-  never shows either state.
-  With a [settle time](configuration.md#settle-time-state), entering,
-  leaving and moving between the states must hold that long, so each shows
-  up to that much later; until an entry has held, the row shows its ordinary
-  settled state.
+  nothing changes state on a timer. With settling off, a row enters either
+  state on the first `status`, `get` or `list` after the timeout that commits
+  the observation. Your usual `status` polling is enough; you need not read
+  panes yourself. A row nobody reads never shows either state.
+  With a positive [settle time](configuration.md#settle-time-state), entry,
+  exit or move starts its interval at the read that commits its candidate,
+  not at the raw-state change. A later read must commit the change once that
+  candidate has held for the interval. Until entry commits, the row shows
+  its ordinary settled state.
 - **`since`.** The time of the read that committed the entry, not the moment
   the timeout ran out. It is kept while the row clears under settling, when a
   different request becomes the one reported and when `unchanged_minutes`
@@ -297,10 +298,11 @@ created after the row entered `check_permission` never makes the row
   write never waits for the store's lock: a read that cannot commit returns
   the state and detail committed before, together, and a later read tries
   again.
-- **Clearing.** The row returns to its real state when no request qualifies,
-  its pane changes or cannot be sampled, or the agent moves on, after the
-  settle time. `ended`, `missing` and a state a command sets (including
-  `find-missing`'s repair of a stale `check_permission` row) show at once.
+- **Clearing.** When no request qualifies, its pane changes or cannot be
+  sampled, or the agent moves on, the row keeps its displayed state until
+  the exit candidate settles and a read commits the exit. `ended`, `missing`
+  and a state a command sets (including `find-missing`'s repair of a stale
+  `check_permission` row) show at once.
 - **Trail.** Each entry, exit and move appends one
   `ad.spawn.displayed_state_transition` trail record with `instance_id`,
   `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
@@ -1049,9 +1051,10 @@ supplies neither ACP approval authority nor proof.
   `confirm_by`.
 - `get`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
-  `get` and `list` show the settled state, up to the settle time behind, and
-  nothing marks it as late; verbs act on the live state, so a verb can
-  refuse, with a named error, on a state `status` does not show yet.
+  `get` and `list` show the settled state with no lateness marker;
+  [special-display settling](#needs-intelligence-and-idle-screen-rows)
+  depends on successful observations. Verbs act on the live state, so a verb
+  can refuse, with a named error, on a state `status` does not show yet.
 - Some errors carry their facts in an `err_details` object beside
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):

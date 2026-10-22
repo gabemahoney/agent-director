@@ -18,21 +18,23 @@ const (
 	StateIdleScreen        = store.StateIdleScreen
 )
 
-// The idle_screen_availability values: whether idle_screen can ever apply to
-// a row's agent. Unavailable is a capability outcome, never a state.
+// The idle_screen_availability values report agent capability, with available
+// retained for compatibility when a custom store supplies no agent.
+// Unavailable is a capability outcome, never a state.
 const (
 	// IdleScreenAvailable: idle_screen can apply to the row's agent (Claude,
-	// Codex).
+	// Codex), or the store supplies no agent. Only known supported agents
+	// may be sampled.
 	IdleScreenAvailable = "available"
 	// IdleScreenUnavailable: idle_screen never applies to the row's agent
 	// (Cursor), which is never sampled.
 	IdleScreenUnavailable = "unavailable"
 )
 
-// idleScreenAvailability is the capability outcome of a row's agent, by the
-// same rule that decides which rows are sampled (store.IdleScreenApplies).
+// idleScreenAvailability preserves empty-agent compatibility independently of
+// pane eligibility: store.IdleScreenApplies still admits only Claude and Codex.
 func idleScreenAvailability(agent string) string {
-	if store.IdleScreenApplies(agent) {
+	if agent == "" || store.IdleScreenApplies(agent) {
 		return IdleScreenAvailable
 	}
 	return IdleScreenUnavailable
@@ -54,14 +56,17 @@ type StateDetail struct {
 	UnchangedMinutes *int64 `json:"unchanged_minutes,omitempty"`
 }
 
+// The observers also return the families their commit refreshed, by instance
+// id under the reader's SettleRead, so a committed exit reports its display,
+// detail and families from that one commit, with no later read to fail.
 type needsIntelligenceStore interface {
 	PermissionRequestsForSpawn(string) ([]PermissionRow, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]PermissionRow, error)
-	ObserveNeedsIntelligence(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, error)
+	ObserveNeedsIntelligence(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 }
 
 type idleScreenStore interface {
-	ObserveIdleScreen(Spawn, store.PaneSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, error)
+	ObserveIdleScreen(Spawn, store.PaneSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 }
 
 var (
@@ -72,16 +77,26 @@ var (
 )
 
 // displayed is status's evaluation through the one all-agent dispatch status,
-// get and list share (observeDisplay). Sampling and persistence are best
-// effort; an uncommitted observation returns the coherent display from the
-// original row snapshot, including its detail.
-func displayed(s any, v RelayView, settle store.SettleRead, row Spawn) store.DisplayDetail {
-	display, _, _ := observeDisplay(s, v, settle, row, permissionRead{})
-	return display
+// get and list share (observeDisplay), with the row's family. Sampling and
+// persistence are best effort; an uncommitted observation returns the
+// display and family of the original row snapshot, detail included.
+func displayed(s any, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, string) {
+	display, families, _, _ := observeDisplay(s, v, settle, row, permissionRead{})
+	return display, familyOf(row, families)
 }
 
-// observeDisplay is displayed, also returning the permission requests it
-// observed (nil when none) and whether its write found the store busy. A read
+// familyOf is row's family as an observation's commit refreshed it, else as
+// row's own snapshot read it.
+func familyOf(row Spawn, families map[string]string) string {
+	if family, ok := families[row.InstanceID]; ok {
+		return family
+	}
+	return row.FamilyState
+}
+
+// observeDisplay returns the display, the families its commit refreshed (nil
+// when none), the permission requests it observed (nil when none) and
+// whether its write found the store busy. A read
 // whose earlier write found the store busy (read.storeBusy) samples, reads and
 // writes nothing more and answers the committed display, pane rows included.
 // Otherwise a working Claude or Codex row is observed by its pane. A reader
@@ -91,17 +106,17 @@ func displayed(s any, v RelayView, settle store.SettleRead, row Spawn) store.Dis
 // such a row with no current finding included, is observed by its permission
 // requests (those in read when the reader gives them), which also settles out
 // a display of either state left by an earlier interval.
-func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, *judgedRequestSet, bool) {
+func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	if read.storeBusy {
-		return row.CommittedDisplay(), read.requests, true
+		return row.CommittedDisplay(), nil, read.requests, true
 	}
 	if row.PaneObservable() {
 		if r, ok := s.(idleScreenStore); ok && v.samplePane != nil {
-			display, busy := paneObservation(r, v, settle, row)
-			return display, nil, busy
+			display, families, busy := paneObservation(r, v, settle, row)
+			return display, families, nil, busy
 		}
 		if row.IdleScreenCurrent() {
-			return row.CommittedDisplay(), nil, false
+			return row.CommittedDisplay(), nil, nil, false
 		}
 	}
 	return permissionObservation(s, v, settle, row, read)
@@ -132,14 +147,14 @@ type permissionRead struct {
 }
 
 // permissionObservation observes row by its permission requests, also
-// returning the requests it observed (nil when none) and whether its write
-// found the store busy.
-func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, *judgedRequestSet, bool) {
+// returning the families its commit refreshed, the requests it observed (nil
+// when none) and whether its write found the store busy.
+func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	previous := row.CommittedDisplay()
 	r, ok := s.(needsIntelligenceStore)
 	if !ok || finishedState(row.State) || row.State == store.StatePending ||
 		(row.State != store.StateCheckPermission && row.DisplayObservation == "") {
-		return previous, read.requests, false
+		return previous, nil, read.requests, false
 	}
 	j := newRelayJudge(v)
 	judged := read.requests
@@ -149,7 +164,7 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 			return r.PermissionRequestsForSpawnWithin(id, readerLockWait)
 		}, j, row.InstanceID)
 		if err != nil {
-			return previous, nil, false
+			return previous, nil, nil, false
 		}
 	}
 	now := j.now()
@@ -167,19 +182,19 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 	if timeout <= 0 {
 		timeout = config.DefaultNeedsIntelligenceTimeoutSeconds * time.Second
 	}
-	display, err := r.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
+	display, families, err := r.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
 	if err != nil {
-		return previous, judged, errors.Is(err, store.ErrStoreBusy)
+		return previous, nil, judged, errors.Is(err, store.ErrStoreBusy)
 	}
-	return display, judged, false
+	return display, families, judged, false
 }
 
 // paneObservation observes a working Claude or Codex row by one sample of its
 // own pane, against the row's own timeout override or else the reader's
 // configured timeout. A failed capture is a sample that resets the baseline;
-// an uncommitted sample returns the committed display, and whether its write
-// found the store busy.
-func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, bool) {
+// an uncommitted sample returns the committed display. It also returns the
+// families its commit refreshed and whether its write found the store busy.
+func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, row Spawn) (store.DisplayDetail, map[string]string, bool) {
 	sample := v.samplePane(row)
 	timeout := v.idleScreenTimeout
 	if row.IdleScreenTimeoutSeconds > 0 {
@@ -187,11 +202,11 @@ func paneObservation(r idleScreenStore, v RelayView, settle store.SettleRead, ro
 	} else if timeout <= 0 {
 		timeout = config.DefaultIdleScreenTimeoutSeconds * time.Second
 	}
-	display, err := r.ObserveIdleScreen(row, sample, relayJudge{view: v}.now(), timeout, settle)
+	display, families, err := r.ObserveIdleScreen(row, sample, relayJudge{view: v}.now(), timeout, settle)
 	if err != nil {
-		return row.CommittedDisplay(), errors.Is(err, store.ErrStoreBusy)
+		return row.CommittedDisplay(), nil, errors.Is(err, store.ErrStoreBusy)
 	}
-	return display, false
+	return display, families, false
 }
 
 // paneSampler is the samplePane of one read's RelayView. Once a socket's tmux

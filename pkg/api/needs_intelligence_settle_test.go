@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -67,6 +68,15 @@ func TestNeedsIntelligenceRepresentativeContinuity(t *testing.T) {
 	// Serial: it reads the shared trail using fixture row ids reused by other tests.
 	e := newRelayEnv(t, store.ProcessIdentity{})
 	e.now = displayAt
+	// b.ob8 F1: changing only the representative must not restart family history.
+	if _, err := apitest.SeedSpawn(e.dbPath, "representative-parent", store.StateWaiting, "", "off", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := apitest.SeedParentChild(e.dbPath, "representative-parent", e.id); err != nil {
+		t.Fatal(err)
+	}
+	familyIDs := []string{"representative-parent", e.id}
+	familyBefore := readFamilyHistories(t, e.dbPath, familyIDs)
 	facts := apitest.PermissionTimes(displayAt.Add(-time.Hour), time.Time{}, displayAt.Add(-time.Minute), time.Time{}, time.Time{}, "")
 	requestFacts(t, e, facts, apitest.PermissionToken(storefix.TestRequestTokenC))
 	// Insert lexical B before A; insertion order must not decide the tie.
@@ -105,6 +115,9 @@ func TestNeedsIntelligenceRepresentativeContinuity(t *testing.T) {
 	}
 	if events := displayEvents(t, mark, e.id); len(events) != 1 {
 		t.Errorf("events=%v; want only the entry, none for the representative change", events)
+	}
+	if after := readFamilyHistories(t, e.dbPath, familyIDs); !reflect.DeepEqual(after, familyBefore) {
+		t.Errorf("representative restarted family history: %+v -> %+v", familyBefore, after)
 	}
 }
 

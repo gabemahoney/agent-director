@@ -72,7 +72,7 @@ type ListRow struct {
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
-	// Codex and unavailable for Cursor. Present on every row.
+	// Codex or an absent agent and unavailable for Cursor. Present on every row.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
@@ -238,6 +238,9 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 	j := newRelayJudge(v)
 	out := make([]ListRow, 0, len(rows))
 	storeBusy := false
+	// Each committed observation's families supersede earlier values, so an
+	// ancestor already listed reports a later descendant's exit too.
+	families := map[string]string{}
 	for _, r := range rows {
 		reported := r.State
 		if filters.Settle.SettleMs > 0 {
@@ -258,8 +261,12 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 				}
 			}
 			var busy bool
-			display, judged, busy = observeDisplay(s, v, filters.Settle, r, read)
+			var committed map[string]string
+			display, committed, judged, busy = observeDisplay(s, v, filters.Settle, r, read)
 			storeBusy = storeBusy || busy
+			for id, family := range committed {
+				families[id] = family
+			}
 		}
 		if observes && len(filters.State) > 0 {
 			matched := false
@@ -304,6 +311,11 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			break
 		}
 	}
+	for i := range out {
+		if family, ok := families[out[i].InstanceID]; ok {
+			out[i].FamilyState = family
+		}
+	}
 	// Every row is built, so the slots below point at their final elements.
 	// Once an observation write of this read found the store busy, hook_gone_at
 	// is left unwritten without another attempt, as a busy write leaves it.
@@ -325,11 +337,15 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // launch began. A row in check_permission carries its open permission
 // requests with their delivery facts, as Get does. With [state] settle_ms
 // set, each row's state is its settled state, and State filters on it: a
-// hook-written change shows only once it has held that long, the last
-// settled state until then; terminal states and command-driven changes show
-// at once. The permission requests and launch_started_at follow the live
-// state. Before applying State and Limit, List projects lost Cursor gateways
-// as missing in the requested label/parent/cwd/tmux scope, guarded by the
+// hook-written change between ordinary states shows only once it has held
+// that long, the last settled state until then. Entering, leaving or moving
+// between needs_intelligence and idle_screen instead times settle_ms from the
+// read that commits its candidate and shows from a later successful read that
+// commits it. Terminal states and command-driven changes show at once.
+// family_state settles independently. The permission requests and
+// launch_started_at follow the live state. Before applying State and Limit,
+// List projects lost Cursor gateways as missing in the requested
+// label/parent/cwd/tmux scope, guarded by the
 // examined launch and binding. It then attempts the atomic terminal write.
 // Unavailable best-effort persistence leaves the read projection valid; other
 // write errors fail the read. List never waits for a state to settle or for

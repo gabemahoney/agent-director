@@ -235,9 +235,13 @@ that does not apply is empty (nil), and absent from the JSON. `StatusResult`,
 [caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
 defines the states, fields, omissions and detection.
 
+For Go custom stores, successful status/get/list rows with no agent report
+`api.IdleScreenAvailable` for compatibility; this does not permit pane
+sampling. Only Claude and Codex are eligible for sampling.
+
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
 `FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
-[Usage](../../docs/usage.md#family-state) defines membership and raw
+[Usage](../../docs/usage.md#family-state) defines membership and
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
@@ -249,8 +253,11 @@ defines it and how it differs from `LastSeenAt`, the settled `State` and
 
 `Client.Status`, `Client.Get` and `Client.List` use the config loaded when
 the client was built for [independent state and family
-settling](../../docs/configuration.md#settle-time-state). Other result fields
-and verbs that act on a row follow its live state. The package-level
+settling](../../docs/configuration.md#settle-time-state). While an exit or
+direct move from `needs_intelligence` or `idle_screen` settles, `Status` and
+`Get` retain the previous display's committed `Since` and state-specific
+detail. `StateChangedAt` and permission-request lists follow the live state;
+commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
 sample no pane, so only a `Client` detects `idle_screen`.
 

@@ -35,7 +35,7 @@ type StatusResult struct {
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
 	// IdleScreenAvailability is whether idle_screen can apply to the row's
-	// agent: available for Claude and Codex, unavailable for Cursor
+	// agent: available for Claude, Codex or an absent agent, unavailable for Cursor
 	// (IdleScreenAvailable, IdleScreenUnavailable). Present on every result;
 	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
@@ -98,8 +98,8 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		display := displayed(s, v, settle, row)
-		out := StatusResult{State: display.State, StateDetail: stateDetail(display), FamilyState: row.FamilyState,
+		display, family := displayed(s, v, settle, row)
+		out := StatusResult{State: display.State, StateDetail: stateDetail(display), FamilyState: family,
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
 		if display.State == StateNeedsIntelligence || display.State == StateIdleScreen {
@@ -109,8 +109,8 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 	}
 
 	// The narrower reads below, which only stores without SpawnStatusRow
-	// reach, carry no agent but the context read's; the others report
-	// idle_screen available, as for a Claude row.
+	// reach, carry no agent but the context read's; the others use the shared
+	// empty-agent compatibility projection without authorizing pane sampling.
 	if sr, ok := s.(contextStatusReader); ok {
 		reported, raw, launchMillis, evidence, err := sr.SpawnStatusContext(instanceID, settle)
 		if err != nil {
@@ -125,7 +125,7 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 			return StatusResult{}, err
 		}
 		return StatusResult{State: reported, FamilyState: family, LaunchStartedAt: launchStartedAt(raw, launchMillis),
-			IdleScreenAvailability: IdleScreenAvailable}, nil
+			IdleScreenAvailability: idleScreenAvailability("")}, nil
 	}
 
 	if sr, ok := s.(settledStatusReader); ok && settle.SettleMs > 0 {
@@ -133,20 +133,20 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: IdleScreenAvailable}, nil
+		return StatusResult{State: reported, LaunchStartedAt: launchStartedAt(raw, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
 	}
 	if r, ok := s.(statusReader); ok {
 		state, launchMillis, err := r.SpawnStatus(instanceID)
 		if err != nil {
 			return StatusResult{}, err
 		}
-		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: IdleScreenAvailable}, nil
+		return StatusResult{State: state, LaunchStartedAt: launchStartedAt(state, launchMillis), IdleScreenAvailability: idleScreenAvailability("")}, nil
 	}
 	state, err := s.GetSpawnState(instanceID)
 	if err != nil {
 		return StatusResult{}, err
 	}
-	return StatusResult{State: state, IdleScreenAvailability: IdleScreenAvailable}, nil
+	return StatusResult{State: state, IdleScreenAvailability: idleScreenAvailability("")}, nil
 }
 
 // Status returns the current state (pending/waiting/working/ask_user/
@@ -154,9 +154,13 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 // idle_screen) for the identified Spawn. On a pending row the result also
 // carries launch_started_at, when the agent's launch began.
 // With [state] settle_ms set, the state is the settled state: a hook-written
-// change shows only once it has held that long, the last settled state until
-// then; terminal states and command-driven changes show at once. The read
-// never waits.
+// change between ordinary states shows only once it has held that long, the
+// last settled state until then. Entering, leaving or moving between
+// needs_intelligence and idle_screen instead times settle_ms from the read
+// that commits its candidate and shows from a later successful read that
+// commits it; until then since and detail stay the previous display's.
+// Terminal states and command-driven changes show at once. family_state
+// settles independently. The read never waits.
 //
 // A working Claude or Codex row's own pane is captured on each read and its
 // fingerprint compared with the previous read's: once identical samples have

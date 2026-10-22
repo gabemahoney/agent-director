@@ -21,19 +21,22 @@ type observationReader interface {
 	api.ListStore
 	SpawnStatusRow(string, store.SettleRead) (store.Spawn, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]store.PermissionRow, error)
-	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, error)
+	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 	RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
 }
 
 // Lease only after the mandatory row read (status's row, list's rows) or
 // between the two judged reads. reads counts the request reads that returned;
-// writes names each display or fallback write called, in order.
+// writes names each display or fallback write called, in order; settles is
+// the SettleRead each display write received.
 type readLeaseStore struct {
 	observationReader
-	afterRow   func() error
-	afterFirst func() error
-	reads      int
-	writes     []string
+	afterRow         func() error
+	afterFirst       func() error
+	afterObservation func(store.Spawn, store.DisplayDetail)
+	reads            int
+	writes           []string
+	settles          []store.SettleRead
 }
 
 func (s *readLeaseStore) SpawnStatusRow(id string, settle store.SettleRead) (store.Spawn, error) {
@@ -52,9 +55,14 @@ func (s *readLeaseStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
 	return rows, err
 }
 
-func (s *readLeaseStore) ObserveNeedsIntelligence(row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration, settle store.SettleRead) (store.DisplayDetail, error) {
+func (s *readLeaseStore) ObserveNeedsIntelligence(row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration, settle store.SettleRead) (store.DisplayDetail, map[string]string, error) {
 	s.writes = append(s.writes, "ObserveNeedsIntelligence")
-	return s.observationReader.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
+	s.settles = append(s.settles, settle)
+	display, families, err := s.observationReader.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
+	if err == nil && s.afterObservation != nil {
+		s.afterObservation(row, display)
+	}
+	return display, families, err
 }
 
 func (s *readLeaseStore) RecordPermissionFallbacks(at time.Time, wait time.Duration, observations []store.FallbackObservation) (map[int64]time.Time, error) {

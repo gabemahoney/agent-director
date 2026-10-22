@@ -61,6 +61,9 @@ func SetPaneSelfForTest(c *Client, self func() ProcessIdentity) { c.paneSelf = s
 // (c *Client).Decide instead.
 var DecideWithSleep = decide
 
+// StatusSettledForTest exercises optional custom-store dispatch with settling enabled.
+var StatusSettledForTest = statusSettledWithRelay
+
 // DecideWithinForTest exercises policy with an explicit controlled context;
 // physical deadline tests continue to use DecideWithSleep or the public API.
 var DecideWithinForTest = decideWithin

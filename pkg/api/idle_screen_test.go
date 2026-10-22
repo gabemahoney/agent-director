@@ -289,17 +289,18 @@ func TestIdleScreenObservesOnlyOwnedWorkingPanes(t *testing.T) {
 			raw := e.row(t).State
 			for _, after := range []time.Duration{0, 21 * time.Minute, 42 * time.Minute} {
 				e.now = displayAt.Add(after)
-				got, err := c.Status(e.id)
-				if err != nil || got.State != raw || got.StateDetail != (api.StateDetail{}) {
-					t.Fatalf("read at +%s = %+v, %v; want ordinary %s", after, got, err, raw)
+				// b.ob8 F2: exercise sampling-enabled clients on every surface.
+				got, row, listed := clientReported(t, c, e.id)
+				if got.State != raw || got.StateDetail != (api.StateDetail{}) || row.StateDetail != (api.StateDetail{}) {
+					t.Fatalf("read at +%s = %+v, %+v; want ordinary %s", after, got, row, raw)
 				}
 				wantAvailability := api.IdleScreenUnavailable
-				if tc.spec.agent == store.AgentClaude || tc.spec.agent == store.AgentCodex {
+				if tc.spec.agent == "" || tc.spec.agent == store.AgentClaude || tc.spec.agent == store.AgentCodex {
 					wantAvailability = api.IdleScreenAvailable
 				}
-				if got.IdleScreenAvailability != wantAvailability {
-					t.Fatalf("availability = %q; want %q", got.IdleScreenAvailability, wantAvailability)
-				}
+				assertIdleAvailability(t, got, got.IdleScreenAvailability, wantAvailability)
+				assertIdleAvailability(t, row, row.IdleScreenAvailability, wantAvailability)
+				assertIdleAvailability(t, listed, listed.IdleScreenAvailability, wantAvailability)
 			}
 			if n := len(e.rec.SocketCallsOf(tmux.CallCapture)); n != 0 {
 				t.Errorf("captures = %d; want none", n)

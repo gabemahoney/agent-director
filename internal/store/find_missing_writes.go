@@ -267,10 +267,11 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
 		if err == nil && res == CondApplied {
-			if err := s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing); err != nil {
+			exits, err = takeDisplayExits(ctx, conn, instanceID)
+			if err != nil {
 				return err
 			}
-			exits, err = takeDisplayExits(ctx, conn, instanceID)
+			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing, exits...)
 		}
 		return err
 	})

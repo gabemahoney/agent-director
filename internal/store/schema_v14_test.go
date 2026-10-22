@@ -416,7 +416,7 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						display, err := s.ObserveNeedsIntelligence(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
+						display, _, err := s.ObserveNeedsIntelligence(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
 						want := StateCheckPermission
 						if tc.owned && offset >= 30*time.Second {
 							want = StateNeedsIntelligence
@@ -509,7 +509,7 @@ func TestV14MigrationNewAdmissionsQualifyBesideAmbiguousHistory(t *testing.T) {
 			}
 			now := start.Add(30 * time.Second)
 			samples := []PermissionSample{{Request: old, FallbackAt: old.HookGoneAt, Basis: FallbackProcess}, {Request: current, FallbackAt: start, Basis: basis}}
-			display, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
+			display, _, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
 			if err != nil || display.State != StateNeedsIntelligence || display.RequestToken != tokenC {
 				t.Fatalf("new request did not qualify independently of ambiguous history: %+v %v", display, err)
 			}

@@ -72,8 +72,8 @@ type SpawnRow struct {
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
 	// IdleScreenAvailability is, as StatusResult's, available for Claude and
-	// Codex and unavailable for Cursor. Present on every row; omitted only from
-	// the empty result of a failed call.
+	// Codex or an absent agent and unavailable for Cursor. Present on every row;
+	// omitted only from the empty result of a failed call.
 	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
@@ -406,12 +406,14 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 	return row, row.State, err
 }
 
-// getSettled is Get with the reader's settle time and clock settle (b.3ie):
-// the row's state field is the settled state. Everything else keys on the
-// raw state, as before: launch_started_at, and whether the permission
-// requests are read and shown (permission requests are never debounced). With
-// no settle time it is Get exactly as before b.3ie. It never waits for a state
-// to settle.
+// getSettled is Get with the reader's settle time and clock settle (b.3ie).
+// state starts as the row's settled raw state; a store that observes displays
+// replaces it, with since and state-specific detail, by the committed display,
+// which keeps the previous display's since and detail while its exit or move
+// settles. family_state is the stored family history, which settles
+// independently. launch_started_at, and whether the permission requests are
+// read and shown, key on the raw state (permission requests are never
+// debounced). It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
@@ -503,8 +505,8 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	if !attempted {
 		read.requests = judged
 	}
-	display, _, _ := observeDisplay(s, v, settle, row, read)
-	out.State, out.StateDetail = display.State, stateDetail(display)
+	display, families, _, _ := observeDisplay(s, v, settle, row, read)
+	out.State, out.StateDetail, out.FamilyState = display.State, stateDetail(display), familyOf(row, families)
 
 	return out, nil
 }
@@ -526,9 +528,14 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // or switch back starts a new life and hides earlier lives. Older sessions
 // are listed for inspection only; resume continues only the current session.
 // With [state] settle_ms set, state is the settled state: a hook-written
-// change shows only once it has held that long, the last settled state until
-// then; terminal states and command-driven changes show at once. The
-// permission requests and launch_started_at follow the live state.
+// change between ordinary states shows only once it has held that long, the
+// last settled state until then. Entering, leaving or moving between
+// needs_intelligence and idle_screen instead times settle_ms from the read
+// that commits its candidate and shows from a later successful read that
+// commits it; until then since and detail stay the previous display's.
+// Terminal states and command-driven changes show at once. family_state
+// settles independently. The permission requests and launch_started_at
+// follow the live state.
 // Get never waits for the store's write lock, nor for a state to settle. Like
 // [Client.Status] it samples a working Claude or Codex row's own pane for
 // idle_screen and carries idle_screen_availability.

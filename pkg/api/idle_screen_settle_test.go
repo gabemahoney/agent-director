@@ -8,6 +8,7 @@ package api_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -123,6 +124,16 @@ func TestDisplayDirectMove(t *testing.T) {
 				from, to = to, from
 			}
 			e := newPaneEnv(t, spec)
+			// b.ob8 F1: a direct displayed-state move preserves contribution and its clock.
+			parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := apitest.SeedParentChild(e.dbPath, parent, e.id); err != nil {
+				t.Fatal(err)
+			}
+			familyIDs := []string{parent, e.id}
+			familyBefore := readFamilyHistories(t, e.dbPath, familyIDs)
 			c := e.client(t, apitest.ConfigKeys{StateSettleMs: tc.delay.Milliseconds(), IdleScreenTimeoutSeconds: timeout})
 			var entered api.StatusResult
 			var req apitest.PermissionRequestSeed
@@ -209,6 +220,9 @@ func TestDisplayDirectMove(t *testing.T) {
 				t.Fatalf("events=%v; want the move once", events)
 			}
 			assertDisplayEvent(t, events[0], from, to, e.now)
+			if after := readFamilyHistories(t, e.dbPath, familyIDs); !reflect.DeepEqual(after, familyBefore) {
+				t.Errorf("direct move restarted family history: %+v -> %+v", familyBefore, after)
+			}
 		})
 	}
 }
