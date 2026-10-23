@@ -22,6 +22,20 @@ type HookGate struct {
 	SessionID    string      // recorded, not a gate: SessionStart's new id; an ordinary hook's when the row has none
 	SessionStart bool        // true for SessionStart: Examined must still match (SR-5.3)
 	Examined     RowSnapshot // SessionStart only
+
+	// The Codex turn (b.x72; codex_turn.go). CodexTurn is the turn_id of a
+	// Codex hook from the row's main thread ("" when it carried none).
+	// CodexTurn, CodexTurnStart and CodexTurnEnd are recorded only, never a
+	// gate: CodexTurnStart (UserPromptSubmit) records the turn as the row's
+	// current turn, applied or held, and CodexTurnEnd (Stop, Interrupt) as
+	// its ended turn, and its current turn unless a newer one is current
+	// (codexTurnSet). CodexToolTurn (PreToolUse, PostToolUse) adds a
+	// condition to the move to working: the turn must be the row's current,
+	// not-ended turn (codexToolTurnCurrentSQL), or the hook is a soft refresh.
+	CodexTurn      string
+	CodexTurnStart bool
+	CodexTurnEnd   bool
+	CodexToolTurn  bool
 }
 
 // HookApplied says whether a gated hook write applied (SR-22.9; Appendix

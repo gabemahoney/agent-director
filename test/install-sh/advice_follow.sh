@@ -1035,6 +1035,11 @@ j6_break_hop() {
                 ALTER TABLE permission_requests DROP COLUMN fallback_at;
                 ALTER TABLE permission_requests DROP COLUMN fallback_basis;" || return 1
             ;;
+        15)
+            J6_FIRST_COLUMN=codex_turn J6_CONFLICT_COLUMN=codex_turn_ended
+            "$SQLITE" "$1" "ALTER TABLE spawns DROP COLUMN codex_turn;
+                ALTER TABLE spawns DROP COLUMN codex_turn_ended;" || return 1
+            ;;
         *) bad "j6_break_hop has no failure injection for v$SCHEMA"; return 1 ;;
     esac
     "$SQLITE" "$1" "ALTER TABLE spawns ADD COLUMN $J6_CONFLICT_COLUMN TEXT GENERATED ALWAYS AS (NULL) VIRTUAL;
@@ -1096,6 +1101,12 @@ test_J6_MigrationFailedRerunRetries() {
             || bad "corrected retry fabricated permission observations, a pane baseline or a timeout override for the historical spawn"
         [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT owner_launch_token IS NULL AND owner_permission_epoch IS NULL AND admitted_at IS NULL AND fallback_at IS NULL AND fallback_basis IS NULL FROM permission_requests WHERE instance_id='j6';")" == 1 ]] \
             || bad "corrected retry fabricated historical ownership or fallback facts"
+    fi
+    if [[ "$SCHEMA" == 15 ]]; then
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('codex_turn','codex_turn_ended') AND type='TEXT' AND \"notnull\"=0 AND dflt_value IS NULL;")" == 2 ]] \
+            || bad "corrected retry did not add both nullable Codex turn columns"
+        [[ "$("$SQLITE" "$J6H/.config/agent-director/state.db" "SELECT codex_turn IS NULL AND codex_turn_ended IS NULL FROM spawns WHERE instance_id='j6';")" == 1 ]] \
+            || bad "corrected retry fabricated a Codex turn for the historical spawn"
     fi
     local ran="  schema  : migration v$((SCHEMA - 1))→v$SCHEMA ran at the probe (agent-director list), authorized by a sentinel written before this install (sentinel $(sentinel "$J6H"))"
     grep -qxF "$ran" "$OUT" || bad "no \"$ran\" line: $(grep -F "  schema  : " "$OUT")"

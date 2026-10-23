@@ -191,6 +191,26 @@ remain errors; never treat a failed read as `waiting` or invent a third
 family value. Reading a family value adds no wait for settling or writer
 lock acquisition.
 
+## A Codex turn that ends in an error
+
+Codex sends no hook when a turn ends in an error, such as a model at
+capacity. The row reads `working` until a read finds the turn's end in
+Codex's rollout: the next `list`, or `status` or `get` of the row or of an
+ancestor, moves it to `waiting` (shown after any
+[settle time](configuration.md#settle-time-state)), and its ancestors'
+`family_state` then counts it as `waiting`. Keep polling `status` as for
+any turn. `waiting` does not mean the turn succeeded: read the pane for the
+error before sending more work. The row's `state_changed_at` is the time of
+that read, not of the turn's end.
+
+That move proves none of the turn's permission requests gone. On a relay-on
+row that had a request in that turn, a plain `send-keys` and `pause` can
+then be refused with `ErrDialogMaybeOpen`: have a person or an LLM read the
+pane and send with that read's `pane_sha256` as `--expect-pane-sha256` (to
+stop the agent, send `/exit` that way), as in
+[Permission relay](#permission-relay). The rule and its limits are in
+[The Codex turn](hooks.md#the-codex-turn).
+
 ## State change time
 
 `get` and each `list` row carry `state_changed_at`, on the Go, CLI, MCP and

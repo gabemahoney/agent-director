@@ -90,9 +90,12 @@ func Status(s StatusStore, v RelayView, instanceID string) (StatusResult, error)
 // statusSettledWithRelay is Status with the reader's settle time and clock
 // settle (b.3ie). With a settle time, and a store that provides the settled
 // read, the state is the settled state (store.SettleRead's derivation, in the
-// read's own statement); launch_started_at still keys on the raw state. It
-// never waits.
+// read's own statement); launch_started_at still keys on the raw state. The
+// row, and each Codex descendant its family_state counts, whose rollout
+// records its turn's end is first moved to waiting (endCodexTurns). It never
+// waits.
 func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead, instanceID string) (StatusResult, error) {
+	endCodexTurns(s, instanceID)
 	if r, ok := s.(permissionStatusReader); ok {
 		row, err := r.SpawnStatusRow(instanceID, settle)
 		if err != nil {

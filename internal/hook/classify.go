@@ -78,6 +78,9 @@ type payload struct {
 	// one a Codex hook's session is recorded by. Claude's table does not read
 	// it; Claude's session id is the transcript path's basename.
 	SessionID string `json:"session_id"`
+	// TurnID is the payload's turn_id: the Codex turn the hook belongs to
+	// (b.x72). Only Codex's table reads it.
+	TurnID string `json:"turn_id"`
 }
 
 // sessionEndCause picks the best-available exit-cause field from a
@@ -218,6 +221,16 @@ type ClassifyResult struct {
 	// fallen-back permission request with the same tool_use_id (ToolRan;
 	// b.146 rule 13) and proves every request with it gone (b.146 step 2c).
 	ToolUseID string
+
+	// MainThread is true for a Codex hook from the row's main thread (b.x72):
+	// one with no agent_id whose transcript file name carries its session id
+	// (a /review thread's hook has its own rollout and is not one). Only such
+	// a hook records the row's turn. Never true for a Claude or Cursor result.
+	MainThread bool
+	// TurnID is a main-thread Codex hook's turn: the payload's turn_id, empty
+	// when it carried none or one longer than store.MaxCodexTurnBytes. Handle
+	// records it (codexTurnGate).
+	TurnID string
 }
 
 // ToolRan reports whether the result is a PostToolUse or PostToolUseFailure
@@ -410,9 +423,11 @@ const EventNameInterrupt = "Interrupt"
 //
 // The session id is the payload's session_id, none for a hook with an
 // agent_id (it records no session id or path). The transcript path is the
-// rollout's, verbatim. No Codex result is a SubagentCapture or a ToolRan: a
-// Codex PostToolUse or PostToolUseFailure reaches neither the tool-ran proof
-// nor the PostToolUse close, whatever tool_use_id it carries (ToolRan).
+// rollout's, verbatim. The turn is the payload's turn_id, for a main-thread
+// hook only (ClassifyResult.MainThread, TurnID). No Codex result is a
+// SubagentCapture or a ToolRan: a Codex PostToolUse or PostToolUseFailure
+// reaches neither the tool-ran proof nor the PostToolUse close, whatever
+// tool_use_id it carries (ToolRan).
 func classifyCodex(p payload) ClassifyResult {
 	res := ClassifyResult{
 		Agent:           store.AgentCodex,
@@ -427,6 +442,10 @@ func classifyCodex(p payload) ClassifyResult {
 	}
 	if p.AgentID != "" {
 		res.SessionID = ""
+	}
+	res.MainThread = res.SessionID != "" && strings.Contains(filepath.Base(p.TranscriptPath), res.SessionID)
+	if res.MainThread && len(p.TurnID) <= store.MaxCodexTurnBytes {
+		res.TurnID = p.TurnID
 	}
 
 	switch res.EventName {

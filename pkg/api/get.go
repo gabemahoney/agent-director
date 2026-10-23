@@ -413,8 +413,11 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 // settles. family_state is the stored family history, which settles
 // independently. launch_started_at, and whether the permission requests are
 // read and shown, key on the raw state (permission requests are never
-// debounced). It never waits for a state to settle.
+// debounced). The row, and each Codex descendant its family_state counts,
+// whose rollout records its turn's end is first moved to waiting
+// (endCodexTurns). It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
+	endCodexTurns(s, instanceID)
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
 		return emptySpawnRow(), err

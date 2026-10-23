@@ -270,14 +270,17 @@ func (hc HandleConfig) self() store.ProcessIdentity {
 // a hook with an agent_id); a Codex SessionEnd without an agent_id is one
 // gated ApplyHookEndReport (the end report: the state is kept and
 // end_reported_at set; SR-6.5), and a marked one is ignored as subagent_event
-// like any subagent's; and after any applied write of a Codex hook without an
-// agent_id, a NULL jsonl_path is healed from the payload's path when that
-// exists and its file name carries the hook's session id (healCodexTranscript,
-// SR-6.3). A relayed PermissionRequest is the exception: runRelay owns its
-// write and reports no applied flag, and a heal there would add a store write,
-// with its lock wait, to the relay hook's window before its poll for nothing
-// the next applied hook does not do (RN-10: the rollout exists at
-// SessionStart), so that hook heals nothing.
+// like any subagent's; a main-thread Codex hook's write records the row's turn
+// from its turn_id, and its PreToolUse or PostToolUse of a turn other than
+// the row's current, not-ended one is a soft refresh (codexTurnGate; b.x72);
+// and after any applied write of a Codex hook without an agent_id, a NULL
+// jsonl_path is healed from the payload's path when that exists and its file
+// name carries the hook's session id (healCodexTranscript, SR-6.3). A relayed
+// PermissionRequest is the exception: runRelay owns its write and reports no
+// applied flag, and a heal there would add a store write, with its lock wait,
+// to the relay hook's window before its poll for nothing the next applied
+// hook does not do (RN-10: the rollout exists at SessionStart), so that hook
+// heals nothing.
 //
 // Subagent capture (b.xjn; subagent.go; Claude hooks only, ClassifyResult.
 // SubagentCapture, which Claude's table alone sets): SubagentStart and SubagentStop are one
@@ -447,6 +450,7 @@ func Handle(ctx context.Context, stdin io.Reader, stdout io.Writer, st HookStore
 		SessionID:    sessionID,
 		CodexStartup: res.CodexStartup,
 	}
+	codexTurnGate(&gate, res)
 	if res.Agent == store.AgentCursor {
 		reader, ok := st.(interface {
 			ReadCursorRuntime(string) (store.CursorRuntime, error)
@@ -653,6 +657,30 @@ func healCodexTranscript(st HookStore, instanceID string, res ClassifyResult, tr
 	}
 	if _, err := h.HealJsonlPath(instanceID, res.SessionID, transcriptPath); err != nil {
 		logf(logger, "hook: heal transcript path (instance=%s, event=%s): %v", instanceID, res.EventName, err)
+	}
+}
+
+// codexTurnGate sets the Codex turn fields of gate from res (b.x72), for a
+// Codex hook from the row's main thread (ClassifyResult.MainThread):
+// UserPromptSubmit records res.TurnID as the row's current turn (none when it
+// is empty), held or not, Stop and Interrupt record it as the row's ended
+// turn, and as its current turn unless a newer one is current, and a
+// PreToolUse or PostToolUse of a turn other than the row's current, not-ended
+// one is a soft refresh (store.HookGate).
+// Every other hook, a /review thread's or a subagent's included, records no
+// turn.
+func codexTurnGate(gate *store.HookGate, res ClassifyResult) {
+	if res.Agent != store.AgentCodex || !res.MainThread {
+		return
+	}
+	gate.CodexTurn = res.TurnID
+	switch res.EventName {
+	case "UserPromptSubmit":
+		gate.CodexTurnStart = true
+	case EventNameStop, EventNameInterrupt:
+		gate.CodexTurnEnd = true
+	case EventNamePreToolUse, EventNamePostToolUse:
+		gate.CodexToolTurn = true
 	}
 }
 

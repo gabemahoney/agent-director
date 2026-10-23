@@ -41,7 +41,18 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // Claude session id also records gate.SessionID, with jsonlPath under the
 // presence rule (hookSessionRecordSet); a row with a session id keeps it. The
 // session id is never a gate. gate.SessionStart and gate.Examined are not
-// used here.
+// used here. An applied write also records the Codex turn (codexTurnSet:
+// a UserPromptSubmit's current turn, a Stop's or Interrupt's ended turn, and
+// its current turn unless a newer one is current), and so does a held
+// UserPromptSubmit (reportWorkingHeld).
+//
+// A late Codex tool hook (b.x72; codexToolTurn): a PreToolUse or PostToolUse
+// whose turn is not the row's current, not-ended turn
+// (codexToolTurnCurrentSQL) is a soft refresh, so a background command of a
+// turn that ended never moves the row back to working. A read picks the soft
+// refresh; the move to working of one that read found current carries the
+// same condition in its WHERE, so a turn end landing between the two makes
+// the move match nothing, and the hook falls back to the soft refresh.
 //
 // Multi-row retention (SR-5.1/SR-5.2): when newState is `working` and a
 // permission request of this Spawn holds the row (holdsRowSQL: it still
@@ -93,6 +104,15 @@ func (s *Store) ApplyHookTransition(instanceID string, gate HookGate, newState s
 // does not fail the store call (SR-A-3.2).
 func (s *Store) ApplyHookTransitionResult(instanceID string, gate HookGate, newState string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool) (UpsertOutcome, HookApplied, error) {
 	working := !softRefresh && newState == StateWorking
+	if working && codexToolTurn(gate) {
+		late, err := s.codexToolTurnLate(instanceID, gate.CodexTurn)
+		if err != nil {
+			return UpsertError, HookApplied{}, err
+		}
+		if late {
+			working, softRefresh, newState = false, true, ""
+		}
+	}
 	// Verified Cursor lifecycle reports cannot supersede a genuine dialog hold.
 	// Other agents retain their deliberate Stop/Interrupt move to waiting.
 	guarded := working || (!softRefresh && newState == StateWaiting && gate.Cursor != nil)
@@ -217,13 +237,15 @@ const idleSet = `idle_since = CURRENT_TIMESTAMP`
 // row_version advance — guarded by the gate (hookGateSQL).
 func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any, jsonlPath string, jsonlPresent bool) (string, []any) {
 	recordSet, recordArgs := hookSessionRecordSet(gate, jsonlPath, jsonlPresent)
+	turnSet, turnArgs := codexTurnSet(gate)
 	q := `UPDATE spawns
 	         SET ` + set + `,
 	             liveness_unverified_since = NULL, liveness_note = NULL,
-	             ` + recordSet + hookPaneStartSet + `,
+	             ` + recordSet + turnSet + hookPaneStartSet + `,
 	             ` + rowVersionAdvance + `
 	       WHERE instance_id = ? AND ` + hookGateSQL
 	args := append(append([]any{}, setArgs...), recordArgs...)
+	args = append(args, turnArgs...)
 	args = append(args, gate.ParentStart, instanceID)
 	args = append(args, hookGateArgs(gate)...)
 	return q, args
@@ -269,9 +291,12 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 // set, with noRequestHoldsRowSQL joined to its WHERE, so a request recorded
 // after that read (InsertRelayRequest's transaction, which moves the row to
 // check_permission) still holds the row and is never overwritten with working
-// (b.36h). Applied: UpsertUpdated and one ad.spawn.state_transition from
-// priorState to newState. Matched no row: a gated soft refresh on Cursor;
-// otherwise reportWorkingHeld, whose gate read
+// (b.36h). A Codex tool hook's move also carries codexToolTurnCurrentSQL.
+// Applied: UpsertUpdated and one ad.spawn.state_transition from priorState to
+// newState. Matched no row: a gated soft refresh on Cursor, and for a Codex
+// tool hook whose turn a read after the UPDATE finds late (a turn end won the
+// race, as ApplyHookTransitionResult's read would have found it); otherwise
+// reportWorkingHeld, whose gate read
 // tells a write that did not apply (no row, or a gate that does not hold:
 // notAppliedReason, nothing emitted) from one reported held (the gate holds:
 // usually a request held the row at the UPDATE, rarely the gate came to hold
@@ -279,15 +304,28 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 // with an error wrapped by errPrefix.
 func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, newState, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	moved, err := s.execGuarded(instanceID, q+` AND `+noRequestHoldsRowSQL, args, errPrefix)
+	q += ` AND ` + noRequestHoldsRowSQL
+	turnGuarded := newState == StateWorking && codexToolTurn(gate)
+	if turnGuarded {
+		q, args = q+` AND `+codexToolTurnCurrentSQL, append(args, gate.CodexTurn, gate.CodexTurn)
+	}
+	moved, err := s.execGuarded(instanceID, q, args, errPrefix)
 	if err != nil {
 		return UpsertError, HookApplied{}, err
 	}
 	if !moved {
-		if gate.Cursor != nil {
-			// A held report still records verified activity and advances the
-			// version, so the gateway can distinguish acceptance from an
-			// ignored hook. State and settle columns remain unchanged.
+		soft := gate.Cursor != nil
+		if !soft && turnGuarded {
+			if soft, err = s.codexToolTurnLate(instanceID, gate.CodexTurn); err != nil {
+				return UpsertError, HookApplied{}, err
+			}
+		}
+		if soft {
+			// A held Cursor report still records verified activity and
+			// advances the version, so the gateway can distinguish acceptance
+			// from an ignored hook; a late Codex tool hook is the soft refresh
+			// it would have been without the race. State and settle columns
+			// remain unchanged.
 			prior, found, err := s.selectPriorState(instanceID)
 			if err != nil {
 				return UpsertError, HookApplied{}, err
@@ -557,7 +595,9 @@ func (s *Store) holdWorkingTransition(instanceID string, gate HookGate, triggeri
 // statements). The state is not written: the gate is read first
 // (readHookGateRow), and only a hook whose gate holds gets its one write,
 // idle_since cleared when it is set (clearIdleSinceSQL; any later hook clears
-// it, b.146 problem 3), the no-op ad.spawn.state_transition (prior == new ==
+// it, b.146 problem 3), with a main-thread Codex UserPromptSubmit's turn
+// recorded in the same statement (codexHeldTurnSQL; b.x72), so a read never
+// ends the turn before it; the no-op ad.spawn.state_transition (prior == new ==
 // the state the gate read saw, soft_refresh false, SR-A-2.2) and
 // UpsertNoChange with an applied result; a missing row or a gate that does
 // not hold reports notAppliedReason and emits nothing.
@@ -569,8 +609,12 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 	if !r.found || !r.gateMatches {
 		return UpsertNoChange, notAppliedReason(r), nil
 	}
-	if _, err := s.execGuarded(instanceID, clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...),
-		"store: working transition hold idle clear"); err != nil {
+	q, args := clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...)
+	if gate.CodexTurnStart {
+		turn := nullableStringArg(gate.CodexTurn)
+		q, args = codexHeldTurnSQL, append([]any{turn, instanceID, turn}, hookGateArgs(gate)...)
+	}
+	if _, err := s.execGuarded(instanceID, q, args, "store: working transition hold idle clear"); err != nil {
 		return UpsertError, HookApplied{}, err
 	}
 	_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{

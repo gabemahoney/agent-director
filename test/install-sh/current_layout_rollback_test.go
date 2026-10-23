@@ -45,7 +45,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14, the old-layout steps below do not apply",
+		"including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15, the old-layout steps below do not apply",
 		"stop agents, servers and callers and keep a copy of the actual",
 		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
 		"restore that pre-upgrade copy and install the previous release with its own",
@@ -55,9 +55,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"This loses all writes made since the backup",
 		"The installer does not make this backup",
 		"A copy made after migration cannot replace the pre-upgrade backup",
-		"make a v14 store readable by a v9, v10, v11, v12 or v13 binary",
-		"There is no supported in-place downgrade from v14",
-		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13 or v14",
+		"make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary",
+		"There is no supported in-place downgrade from v15",
+		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13, v14 or v15",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -118,6 +118,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			}
 			if got := h.Sqlite(db, "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('permission_epoch','observation_version','display_observation','display_exit','idle_screen_timeout_seconds','pane_sha256','pane_since_ms','pane_epoch'); SELECT count(*) FROM pragma_table_info('permission_requests') WHERE name IN ('owner_launch_token','owner_permission_epoch','admitted_at','fallback_at','fallback_basis');"); got != "8\n5\n" {
 				t.Fatalf("v14 upgrade lacks permission observation/ownership or pane columns: %q", got)
+			}
+			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_turn','codex_turn_ended') ORDER BY name;"); got != "codex_turn\ncodex_turn_ended\n" {
+				t.Fatalf("v15 upgrade lacks both Codex turn columns: %q", got)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("binary swap alone accepted the current schema: %+v", got)

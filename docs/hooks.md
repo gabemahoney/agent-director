@@ -237,8 +237,8 @@ reason](operator-actions.md#a-codex-row-stays-pending-or-goes-missing-for-anothe
 | --- | --- |
 | `SessionStart` | `waiting` (also writes `session_id`) |
 | `UserPromptSubmit` | `working` |
-| `PreToolUse` | `working`, for any tool |
-| `PostToolUse` | `working`, for any tool |
+| `PreToolUse` | `working`, for any tool; a main-thread hook of a turn other than the row's current, running turn is a soft refresh (see "The Codex turn" below) |
+| `PostToolUse` | as `PreToolUse` |
 | `Interrupt`, no `agent_id` | `waiting` |
 | `Interrupt` with `agent_id` | soft refresh: bumps `last_seen_at`, state unchanged (Codex does not send it) |
 | `Stop` | `waiting` |
@@ -249,16 +249,82 @@ reason](operator-actions.md#a-codex-row-stays-pending-or-goes-missing-for-anothe
 
 No Codex tool moves a row to `ask_user`: Codex's question tools
 (`request_user_input` and `request_user_input_async`) read `working` like
-every other tool. Codex has no idle-prompt Notification either, so nothing
-returns a `working` row to `waiting` except `Stop` and `Interrupt`. A Codex
-row left `working` (the hook that would end the turn was lost) is therefore
-never repaired: `find-missing` repairs only a row stuck at `check_permission`
-(see "A relay row left in `check_permission`" below). For action on a stale row see the [caller contract](caller-contract.md#caller-contract).
+every other tool. Codex has no idle-prompt Notification either. A turn
+returns the row to `waiting` by its `Stop` or `Interrupt`, or, for a turn
+that sends neither (one that ends in an error), by a read that finds the
+turn's end in the rollout (see "The Codex turn" below). A Codex row left
+`working` with no such evidence is never repaired: `find-missing` repairs
+only a row stuck at `check_permission` (see "A relay row left in
+`check_permission`" below). For action on a stale row see the [caller contract](caller-contract.md#caller-contract).
 
 `Interrupt` is Codex's Esc: it ends the turn the agent was working on. As
 for Claude, a non-empty `agent_id` marks a subagent's hook. Apart from the
 two session events above, such a hook applies its state transition from
 the table, and records no session id.
+
+### The Codex turn
+
+Codex's prompt, tool, permission, `Stop` and `Interrupt` hooks name the
+turn they belong to. A Codex row records its current turn and the latest
+turn that ended, from its main thread's hooks only: those with no
+`agent_id` whose rollout file name carries the session id. A subagent's or
+a `/review` thread's hooks record no turn.
+
+- `UserPromptSubmit` makes its turn the current turn, also when a
+  permission request holds the row and its move to `working` waits.
+- `Stop` and `Interrupt` record their turn as ended. They also make it the
+  current turn when the row records none, or its current turn has ended or
+  is the same turn, so a late `Stop` or `Interrupt` of an earlier turn never
+  replaces a newer running one; the row still reads `waiting` until the
+  running turn's next tool hook moves it back to `working`.
+
+**A turn that ends in an error.** Codex sends no `Stop` for a turn that
+ends in an error (a model at capacity, for one), but its rollout, the row's
+transcript, records the end of every turn as a `task_complete` naming the
+turn. Before it reports, `status`, `get` or `list` moves a Codex row to
+`waiting` when all of these hold:
+
+- the row's raw state is `working`, and its current turn has not ended;
+- the last turn record in the rollout (`task_started` or `task_complete`)
+  is that turn's `task_complete`, errored or not.
+
+`status` and `get` check the row and every live descendant its
+`family_state` counts; `list` checks every row, so its `--state` filter sees
+the move (after any settle time). The trail records one
+`ad.spawn.state_transition` from `working` to `waiting` with
+`triggering_event_name` `task_complete`, `cause` `codex_rollout_task_complete`
+and `soft_refresh` false.
+
+Unlike a `Stop`, this move proves none of the turn's permission requests
+gone (see "One end signal per turn" in
+[How the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows))
+and bumps no `last_seen_at`. What a caller does then is in the
+[caller contract](caller-contract.md#a-codex-turn-that-ends-in-an-error).
+
+- Only the last 1 MiB of the rollout is read. The file must be the row's
+  recorded transcript: an absolute path to a regular file, never a symlink,
+  whose name carries the row's session id.
+- The check fails open and waits for no lock: a busy store, an unreadable
+  rollout or any other failure leaves the row `working` for that read,
+  which goes ahead, and a later read checks again.
+- Nothing checks between reads: a row nobody reads stays `working`.
+
+**Late tool hooks.** A command a turn started can finish after the turn
+ended, so its `PreToolUse` or `PostToolUse` arrives late. A main-thread tool
+hook moves the row to `working` only when its turn is the row's current
+turn and has not ended; any other is a soft refresh, so it never moves a
+`waiting` row back to `working`. On a row that records no current turn (it
+was upgraded while a turn ran, or its prompt named no turn), only the
+ended turn's tool hooks are late.
+
+**Limits.**
+
+- A turn Codex starts with no `UserPromptSubmit` leaves the previous turn
+  current until the new turn's `Stop` or `Interrupt`. Until then its tool
+  hooks leave the row's state as it is (`waiting`, if the previous turn
+  ended), and no read ends it.
+- A row upgraded while a turn ran records no current turn until the
+  agent's next prompt, so that turn ends only by its `Stop` or `Interrupt`.
 
 ### The session
 
@@ -991,8 +1057,10 @@ Limits:
   `Stop`. Codex sends an Interrupt, which ends the turn for these proofs
   and moves the row to `waiting`, and no idle-prompt Notification: a Codex
   turn has one end signal, its `Stop` or Interrupt. When that hook is lost,
-  the row stays held until the next turn's `Stop` or Interrupt, or until
-  `record-pane-answer`, after which `find-missing` repairs it to `working`.
+  or the turn ends in an error, which sends neither, the row stays held
+  until the next turn's `Stop` or Interrupt, or until `record-pane-answer`,
+  after which `find-missing` repairs it to `working`. A read does not move
+  a row in `check_permission` (see [The Codex turn](#the-codex-turn)).
 - A request recorded in the same second a `Stop`, idle prompt or Codex
   Interrupt started is not proven by it, and holds until a later turn end.
 

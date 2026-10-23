@@ -222,7 +222,11 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 	}, nil
 }
 
+// listFiltered is listSettled past validation. Every Codex row whose rollout
+// records its turn's end is first moved to waiting (endCodexTurns), so the
+// State filter and the families see it.
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
+	endCodexTurns(s, "")
 	fetch := filters
 	observer, observes := s.(needsIntelligenceStore)
 	if observes && len(filters.State) > 0 {

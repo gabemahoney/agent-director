@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -290,6 +293,54 @@ func TestClassifyEventToolRan(t *testing.T) {
 			res := classifyAgentMap(t, tc.agent, p)
 			if res.ToolRan() != tc.want || res.ToolUseID != tc.toolUseID {
 				t.Errorf("ToolRan/ToolUseID = %v/%q; want %v/%q", res.ToolRan(), res.ToolUseID, tc.want, tc.toolUseID)
+			}
+		})
+	}
+}
+
+// TestClassifyCodexMainThreadTurn (b.x72): a Codex hook is from the row's main
+// thread only with no agent_id and a transcript file name carrying its
+// session id; only then does it carry its turn_id, and only one of at most
+// 256 bytes. A /review thread's hook (the main session id, its own rollout), a
+// subagent's and a Claude hook are not main-thread and carry no turn.
+func TestClassifyCodexMainThreadTurn(t *testing.T) {
+	cases := []struct {
+		name, agent, fixture string
+		extra                map[string]any
+		wantMain             bool
+		wantTurn             string
+	}{
+		{"main-thread PreToolUse", "codex", "pre-tool-use-bash.json", nil, true, "019f0000-0000-7000-8000-000000000006"},
+		{"main-thread UserPromptSubmit", "codex", "user-prompt-submit.json", nil, true, "019f0000-0000-7000-8000-000000000006"},
+		{"main-thread Stop with no turn_id", "codex", "stop.json", map[string]any{"turn_id": nil}, true, ""},
+		{"agent_id on a main-thread payload", "codex", "pre-tool-use-bash.json", map[string]any{"agent_id": "a1"}, false, ""},
+		{"subagent PreToolUse", "codex", "pre-tool-use-subagent.json", nil, false, ""},
+		{"review thread PreToolUse", "codex", "pre-tool-use-review-thread.json", nil, false, ""},
+		{"no session_id", "codex", "pre-tool-use-bash.json", map[string]any{"session_id": nil}, false, ""},
+		{"256-byte turn_id kept", "codex", "pre-tool-use-bash.json", map[string]any{"turn_id": strings.Repeat("t", 256)}, true, strings.Repeat("t", 256)},
+		{"257-byte turn_id dropped", "codex", "pre-tool-use-bash.json", map[string]any{"turn_id": strings.Repeat("t", 257)}, true, ""},
+		{"Claude hook", "claude", "pre-tool-use-bash.json", nil, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join("testdata", "codex-hook-payloads", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var p map[string]any
+			if err := json.Unmarshal(raw, &p); err != nil {
+				t.Fatalf("fixture %s: %v", tc.fixture, err)
+			}
+			for k, v := range tc.extra {
+				if v == nil {
+					delete(p, k)
+					continue
+				}
+				p[k] = v
+			}
+			res := classifyAgentMap(t, tc.agent, p)
+			if res.MainThread != tc.wantMain || res.TurnID != tc.wantTurn {
+				t.Errorf("MainThread/TurnID = %v/%q; want %v/%q", res.MainThread, res.TurnID, tc.wantMain, tc.wantTurn)
 			}
 		})
 	}

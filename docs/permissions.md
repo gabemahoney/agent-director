@@ -609,7 +609,10 @@ differences:
 - **One end signal per turn.** Codex has no idle-prompt Notification, so
   the turn's `Stop` or Interrupt is the only proof by turn end. If that hook
   is lost, a plain `send-keys` without a pane hash stays held until someone
-  looks and sends with the pane's hash, or the agent ends.
+  looks and sends with the pane's hash, or the agent ends. A turn that ends
+  in an error sends neither: a read moves the row to `waiting` (see [The
+  Codex turn](hooks.md#the-codex-turn)) but proves nothing, so a plain
+  `send-keys` and `pause` stay held as for a lost hook.
 - **Escape while a relay hook polls.** When the request of a main agent is
   undecided and the agent's relay hook is polling, `Escape` makes Codex end
   the hook at once: the command does not run and Codex draws no dialog for
