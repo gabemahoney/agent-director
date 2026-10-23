@@ -66,12 +66,12 @@ type LiveSpawnIdentity struct {
 // live in the store; each row's state and launch start let the sweep leave
 // a `pending` row inside its pending grace period untouched (SR-11.2).
 //
-// The snapshot and launch identity are read through lifeColumns, and the
-// launch owner through launchOwnerColumns, the fragments every read returning
-// a Spawn selects, so Snapshot.StartedAt is the stored text the
-// snapshot-match condition compares. launch_started_at is decoded by
-// decodeLaunchStartedAt and launch_token by decodeLaunchToken, and the
-// nullable columns read NULL as their zero value through COALESCE, so no
+// The snapshot and launch identity are read through lifeColumns, which
+// selects started_at through CAST, so Snapshot.StartedAt is the stored text
+// the snapshot-match condition compares; the launch owner is read through
+// launchOwnerColumns, as the full-row Spawn reads do. launch_started_at is
+// decoded by decodeLaunchStartedAt and launch_token by decodeLaunchToken, and
+// the nullable columns read NULL as their zero value through COALESCE, so no
 // stored launch start, token, identity or owner value fails the read; the
 // structured columns (labels, agent_args, extra_env) are never read
 // (SR-5.5).

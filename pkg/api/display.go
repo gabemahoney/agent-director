@@ -14,8 +14,12 @@ import (
 // whose sampled pane fingerprints stayed identical for its idle_screen
 // timeout. Both are report-only; command guards act on the raw state.
 const (
+	// StateNeedsIntelligence is needs_intelligence: a permission fallback is
+	// still unanswered.
 	StateNeedsIntelligence = store.StateNeedsIntelligence
-	StateIdleScreen        = store.StateIdleScreen
+	// StateIdleScreen is idle_screen: a working row's pane stopped changing
+	// for its idle_screen timeout.
+	StateIdleScreen = store.StateIdleScreen
 )
 
 // The idle_screen_availability values report agent capability, with available

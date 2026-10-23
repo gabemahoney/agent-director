@@ -1994,15 +1994,22 @@ the public fields, version limits and freshness semantics.
 `store.SpawnContext` carries the current row's agent, session, transcript,
 launch token, process/pane identity, lifecycle, `CodexStartup` provenance and
 `ClaudeCapacity` metadata.
-`Spawn.ContextEvidence` projects the same facts for `get`.
-`Store.SpawnStatusContext` reads these with lifecycle and
-settling facts in one statement; `CursorMissingReads.SpawnStatusContext`
-preserves the existing Cursor missing-proof behavior. `statusSettledWithRelay`
-uses this optional capability, with unknown context for store doubles lacking it.
-`get` takes the evidence from its own row snapshot. **Must use:** status
-consumers needing context identity use `SpawnStatusContext`, never an
-independent row lookup or archived-session fallback. Malformed context
-identity does not turn a successful status read into an error.
+Production `status` reads `SpawnStatusRow` (through `CursorMissingReads`,
+which delegates to it) and projects context from that snapshot through
+`Spawn.ContextEvidence`; `get` uses the same projection on its own row.
+**Must use:** status consumers reuse this evidence path, never an independent
+row lookup or archived-session fallback. `ContextEvidence` never fails, and
+malformed launch token, end report, `CodexStartup` or `ClaudeCapacity` values
+read as absent, but a wrong storage class in a selected identity column (such
+as `pid` or `pane_pid`) fails the read (see "SR-5.5 narrow reads").
+
+**Status reader selection.** `statusSettledWithRelay` in `pkg/api/status.go`
+chooses the first supported capability: `SpawnStatusRow`, `SpawnStatusContext`,
+`SpawnStatusWithFamily`, `SpawnStatusSettled` (only when `settle_ms > 0`),
+`SpawnStatus`, then `GetSpawnState`. These are capability fallbacks, not retries
+after read errors. Every eligible reader before `GetSpawnState` can supply
+launch time. `SpawnStatusContext` remains the context fallback for
+stores lacking `SpawnStatusRow`; stores lacking both return unknown context.
 
 `internal/store/codex_startup.go` owns `CodexStartup`, its strict bounded JSON
 validation and `FreshCodexWriter`. Schema v13 adds nullable
@@ -2612,10 +2619,10 @@ reports them.
   write, and `ReleaseLaunchOwner`, for a launch that ends without it.
   `RestoreAfterFailedReuse` writes the three back as part of `RawLife`. No
   other write touches them.
-- **Readers.** Every read that returns a `Spawn` fills `Spawn.LaunchOwner`
+- **Readers.** Every full-row `Spawn` read fills `Spawn.LaunchOwner`
   through `launchOwnerColumns` after `lifeColumns` (`spawnColumns`), and
   the live-row read fills `LiveSpawnIdentity.LaunchOwner` through the same
-  fragment, so the two agree for a row.
+  fragment, so the two agree for a row. `SpawnStatusRow` omits it.
 - **Must use:** a read of the launch owner selects `launchOwnerColumns` and
   scans with `launchOwnerDest`; a write of it binds `launchOwnerArgs`; a
   write that ends a launch's hold uses `launchOwnerClear`
@@ -2707,7 +2714,7 @@ policy is in [migration-guide.md](migration-guide.md#historical-worked-example-v
   `permissionColumns` and scans with `scanPermissionRow`
   (`internal/store/permission.go`), so all fill the v7 fields and v11 eligibility alike; the
   seven instants go through `millisArg` / `millisTime`
-  (`internal/store/lockwait.go`). Every read returning a `Spawn` fills
+  (`internal/store/lockwait.go`). Every full-row `Spawn` read fills
   `Spawn.IdleSince` (`spawnColumns`, last).
 - **Must use:** `awaitingAnswerSQL` (`internal/store/permission.go`) is the
   one statement of "a request still awaits an answer" (b.146 rules 9 and
@@ -2828,16 +2835,17 @@ guard reads. The writes and the derivation live in
   COALESCE(NULLIF(settled_state, ''), state) END`, so a negative age (a
   clock behind the stamp) is not settled; with none, the bare `state`
   column and no argument, so the read statement is exactly the one before
-  v8. Its readers are `SpawnStatusSettled` (`status`), `GetSpawnSettled`
-  (`get`) and `ListSpawns` with `ListFilters.Settle` (`list`, whose state
-  filter is the same expression, in the statement, ahead of its `LIMIT`).
-  They fill `Spawn.ReportedState`, which every other read sets equal to
-  `State`; `SpawnStatus`, `GetSpawn` and a `ListSpawns` with a zero
-  `Settle` are unchanged. This state projection is one SELECT and never waits
-  for a state to settle. Public Client reads first apply the
-  [Cursor gateway checks](#cursor-gateway-and-current-launch-binding).
+  v8. Its readers include `SpawnStatusRow` (production `status`),
+  `GetSpawnSettled` (`get`) and `ListSpawns` with `ListFilters.Settle`
+  (`list`, whose state filter is the same expression, in the statement,
+  ahead of its `LIMIT`). They fill `Spawn.ReportedState`; without settling
+  it equals `State`. Status capability fallbacks follow [Status reader
+  selection](#experimental-context-readers). This state projection is one
+  SELECT and never waits for a state to settle. Public Client reads first
+  apply the [Cursor gateway
+  checks](#cursor-gateway-and-current-launch-binding).
 - **Where callers see the raw change time (b.k6i).** `spawnColumns` selects
-  `state_changed_ms`, so every read that returns a `Spawn` fills
+  `state_changed_ms`, so every full-row `Spawn` read fills
   `Spawn.StateChangedMillis` from the same SELECT. `get` and `list` report it
   on every row as `state_changed_at`, converted by `millisToUTC` (0 gives the
   Unix epoch); `status` does not. It is the raw stamp: neither the settle
@@ -2882,9 +2890,9 @@ names](#store-upgrade-to-agent-generic-names)).
   reset changes no row, archives no session and deletes no request. No other
   write takes an agent, so no other write can change a row's.
 - **Raw-life rules for the two columns.** `Spawn.Agent` and
-  `Spawn.EndReportedAtMillis` (0 = NULL) come back on every read that returns
-  a `Spawn` (`spawnColumns`). `RawLife` holds both as stored, so reuse
-  saves them (`ReadForReuse`) and a failed reuse puts them back
+  `Spawn.EndReportedAtMillis` (0 = NULL) come back on full-row reads
+  (`spawnColumns`) and `SpawnStatusRow`. `RawLife` holds both as stored, so
+  reuse saves them (`ReadForReuse`) and a failed reuse puts them back
   (`RestoreAfterFailedReuse`, through `rawLifeColumns`). `ResetForReuse`
   writes the new call's agent and sets `end_reported_at` to NULL, so a reused
   row starts a launch with no end report. Resume's `MoveToPending` sets
@@ -2892,7 +2900,7 @@ names](#store-upgrade-to-agent-generic-names)).
   value back (`ResumePrior.EndReportedAtMillis`). Resume keeps `agent`: it
   neither writes nor restores it.
 - **The tracking flag's rules.** `Spawn.SubagentTracking` (bool, `spawnColumns`)
-  comes back on every read that returns a `Spawn`: true only for the
+  comes back on every full-row `Spawn` read: true only for the
   stored integer 1, false for 0 and any other stored value, so no stored value
   fails a read (`decodeSubagentTracking` in `internal/store/rowsnapshot.go`). It
   is on no `SpawnRow` or `ListRow`. The three launch writes write one rule: 1 for a `claude`
@@ -2918,9 +2926,9 @@ names](#store-upgrade-to-agent-generic-names)).
   `internal/store/rowsnapshot.go` decides.
 
 **v5 row types and narrow reads (b.fmk).** `store.Spawn` (and its alias
-`api.Spawn`) carries the v5 columns on every read that returns a row
-(`GetSpawn` and `ListSpawns` share one column list, `spawnColumns`, and one
-scanner, `scanSpawn`, so both fill them identically): `RowVersion`,
+`api.Spawn`) carries the following fields on full-row reads
+(`GetSpawn`, `GetSpawnSettled` and `ListSpawns` share `spawnColumns` and
+`scanSpawnRow`, which `scanSpawn` wraps for unsettled reads): `RowVersion`,
 `LaunchStartedAtMillis` (0 = absent), `LifeNumber`, `NoPreTrust` (the
 recorded pre-trust choice), `EndedAtText` (`ended_at` exactly as stored, ""
 for NULL), `Snapshot` and `Identity`, the v6 `LaunchOwner`, the v7
@@ -2939,7 +2947,7 @@ Reuse reads a finished row through its own narrow read, `ReadForReuse`
 fields the move clears. No verb reports these fields, with two exceptions.
 The launch start: `get` and `list` report `LaunchStartedAtMillis` as
 `launch_started_at` on a `pending` row, and `status` reports it through
-`SpawnStatus` (see "Where callers see the launch start"). The socket: `get`
+`SpawnStatusRow` (see "Where callers see the launch start"). The socket: `get`
 reports `Identity.Socket` as `tmux_socket` on a row in any state (see "Where
 the socket is shown").
 
@@ -2963,22 +2971,25 @@ the socket is shown").
   `list` result. A `launch_token` that is not exactly 16 lowercase hex
   characters reads as absent (""). Any `no_pre_trust` other than the integer
   0 reads as the opt-out. None of these fails a read. Every other column keeps
-  its existing failure behaviour; for example, malformed `labels` or a text
-  `pid` still fail the read with the same error text. A wrong storage class in
-  any other v5 column (for example, a text `tmux_server_pid`) also fails the
-  read, as a text `pid` does. These are new columns, so there is no earlier
-  error text to keep.
+  its existing failure behaviour when selected; for example, malformed
+  `labels` fail a full-row read, and a nonnumeric text `pid` fails both a
+  full-row read and `SpawnStatusRow`. A wrong storage class in any other v5
+  column (for example, a text `tmux_server_pid`) fails the read the same way.
+  These are new columns, so there is no earlier error text to keep.
 - **Must use:** every read of `launch_started_at`, `launch_token` or
   `no_pre_trust` goes through the shared decoders in
   `internal/store/rowsnapshot.go` (`decodeLaunchStartedAt`,
   `decodeLaunchToken`, `decodeNoPreTrust`; each takes the column scanned into
   an `any` and never fails). The year 0 to 9999 range rule lives only in
-  `decodeLaunchStartedAt`, so every consumer inherits it: `SpawnStatus`,
-  `GetSpawn`/`ListSpawns` (through `scanSpawn`), `ListLiveSpawnIdentities`
-  (`find-missing`'s live-row read, in `internal/store/recovery.go`) and
-  `resume`'s refusal, which reads the row with `GetSpawn`. A new read
-  returning a `Spawn` selects `spawnColumns` and scans with `scanSpawn`. Never
-  re-derive the rules in a new read.
+  `decodeLaunchStartedAt`, so every consumer inherits it. Its callers are
+  `scanSpawnRow` (`GetSpawn`, `GetSpawnSettled`, `ListSpawns`, and `resume`'s
+  refusal through `GetSpawn`), `scanSpawnStatus` (`SpawnStatusRow` and display
+  revalidation), `SpawnStatusContext` (which `SpawnStatus` and
+  `SpawnStatusSettled` read through), `SpawnStatusWithFamily` and
+  `ListLiveSpawnIdentities` (`find-missing`'s live-row read, in
+  `internal/store/recovery.go`). A new read returning a full `Spawn` selects
+  `spawnColumns` and scans with `scanSpawn`, or `scanSpawnRow` for settled
+  reads. Never re-derive the rules in a new read.
 - **Must use:** `store.InsidePendingGrace` (in
   `internal/store/rowsnapshot.go`) is the only statement of the SR-11.2 rule:
   a `pending` row is inside its grace period while its age, measured from the
@@ -3002,11 +3013,42 @@ the socket is shown").
   launch identity, token through `decodeLaunchToken`) and `LaunchOwner`
   (the v6 launch owner, zero for none). Snapshot and identity are selected
   through `lifeColumns`, and the owner through `launchOwnerColumns`, as
-  every read returning a `Spawn` selects them, so all three equal
-  `GetSpawn`'s for the same row. No
+  full-row `Spawn` reads select them, so all three equal
+  `GetSpawn`'s for the same row. `SpawnStatusRow` shares `lifeColumns` for
+  snapshot/identity but omits `LaunchOwner`. No
   stored launch start, token or identity value fails the read, and the
   structured columns (`labels`, `agent_args`, `extra_env`) are never read.
   The struct grows additively.
+
+**Partial Spawn reader.** `SpawnStatusRow` reads status, context and display
+evidence in one snapshot through `statusRowColumns` and `scanSpawnStatus`:
+
+- `InstanceID`, raw `State`, `ReportedState`, `FamilyState`,
+  `LaunchStartedAtMillis`, `RelayMode` and `LifeNumber`;
+- `Agent`, `JSONLPath`, `EndReportedAtMillis`, `CodexStartup` and
+  `ClaudeCapacity`;
+- `Snapshot` and `Identity` through `lifeColumns`/`lifeScan`, with
+  `RowVersion`, `SessionID`, `PID`, `ProcStarttime` and `TmuxSessionName`
+  copied from the snapshot;
+- `PermissionEpoch`, `ObservationVersion` and `DisplayObservation`;
+- the idle-screen timeout override and committed pane baseline through
+  `paneColumns`/`paneScan`.
+
+All other fields remain unpopulated: notably `LaunchOwner`, `IdleSince`,
+`StateChangedMillis`, `SubagentTracking`, `NoPreTrust`, `EndedAtText`, parsed
+`StartedAt`/`LastSeenAt`/`EndedAt`, `Labels`, `AgentArgs`, `ExtraEnv` and other
+unselected metadata. Their zero values do not establish stored absence.
+`Snapshot.StartedAt` retains exact stored text despite the omitted parsed
+`StartedAt`. Unrelated labels, arguments, environment and parsed timestamps
+cannot fail this read because it never reads or parses them; selected columns
+retain their own scan/decoder rules.
+
+API status consumes this evidence; `CursorMissingReads.SpawnStatusRow`
+delegates to the same path. Display revalidation (`lockedObservationRow` and
+`observationLanded`) reuses its projection and scanner. **Must use:** reuse
+this reader for this evidence set; use `GetSpawn`, `GetSpawnSettled` or
+`ListSpawns` when omitted fields are needed. Status capability fallbacks are
+defined in [Status reader selection](#experimental-context-readers).
 
 **Versioned writes (b.fmk, SR-5.2).** The row version exists so that a later
 compare-and-set write can guard on it: the write checks that the version is
@@ -3628,8 +3670,9 @@ still the one it read, so it knows the row has not changed since. As built:
   finished row uses it too, never an inline `state IN (...)`.
 - **Must use:** every write guarded on a full `RowSnapshot` uses
   `snapshotMatchSQL` with `snapshotMatchArgs` (`rowsnapshot.go`), and any read
-  that fills a `RowSnapshot` selects its columns with the `spawnColumns`
-  expressions. The guard compares through those same expressions (`CAST` for
+  that fills a `RowSnapshot` uses the shared `lifeColumns` expressions,
+  without requiring the full `spawnColumns` projection. The guard compares
+  through those same expressions (`CAST` for
   `started_at`, `COALESCE` to the zero value for nullable columns); a snapshot
   read any other way never matches.
 - **Must use:** any new or changed store statement that updates a `spawns`
@@ -8289,12 +8332,11 @@ omitted, never `null` (SR-22.2). An out-of-range stored value omits the key
 and the call still succeeds (SR-5.5). One helper, `launchStartedAt` (`pkg/api/get.go`), makes that
 projection for all three. Any verb that reports the launch start must use
 `launchStartedAt`, not its own state check or timestamp format. `status`
-reads the launch start through an optional narrow read: if its
-`StatusStore` also implements the unexported `statusReader`
-(`SpawnStatus`, one read by primary key of `state` and
-`launch_started_at`), `Status` uses it. `*store.Store` implements it, so
-the launch start adds no method to `StatusStore`, and an injected store
-without it gives no launch start (SR-16.1).
+reads launch time with the raw state through `SpawnStatusRow` in production;
+settling and display projections do not change that raw-state check.
+Injected stores follow [Status reader selection](#experimental-context-readers):
+only the final `GetSpawnState` fallback lacks launch time. These optional
+capabilities add no method to `StatusStore` (SR-16.1).
 
 **Where the socket is shown.** `get` alone shows the row's recorded socket,
 as `tmux_socket` on `SpawnRow` (`SpawnRow.TmuxSocket`, filled from

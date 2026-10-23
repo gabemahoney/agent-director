@@ -45,16 +45,16 @@ type StatusResult struct {
 	LaunchStartedAt *time.Time `json:"launch_started_at,omitempty"`
 }
 
-// statusReader is the optional narrow read Status uses when the store it is
-// given provides it: the state and the launch start in one read (SR-16.1).
-// *store.Store satisfies it; a StatusStore without it yields no launch start.
+// statusReader reads the state and the launch start in one read (SR-16.1).
+// It is a fallback for stores lacking the richer status readers (see
+// statusSettledWithRelay).
 type statusReader interface {
 	SpawnStatus(instanceID string) (state string, launchStartedAtMillis int64, err error)
 }
 
-// settledStatusReader is the optional read status uses with a settle time
-// (b.3ie): the reported state, the raw state and the launch start in one
-// read. *store.Store satisfies it; a store without it reports the raw state.
+// settledStatusReader reads the reported state, the raw state and the launch
+// start in one read (b.3ie). It is used only with a settle time, by a store
+// lacking the richer status readers (see statusSettledWithRelay).
 type settledStatusReader interface {
 	SpawnStatusSettled(instanceID string, r store.SettleRead) (reported, raw string, launchStartedAtMillis int64, err error)
 }
@@ -64,7 +64,7 @@ type contextStatusReader interface {
 }
 
 // permissionStatusReader retains only the evidence needed for the shared
-// permission report, including its exact row and launch ownership snapshot.
+// permission report, including the row's exact snapshot and launch identity.
 type permissionStatusReader interface {
 	SpawnStatusRow(instanceID string, r store.SettleRead) (Spawn, error)
 }
@@ -75,7 +75,7 @@ type familyStatusReader interface {
 }
 
 // Status returns the current state column for the given instance_id,
-// with launch_started_at on a pending row when s provides the narrow read.
+// with launch_started_at on a pending row unless s offers only GetSpawnState.
 // Missing rows surface store.ErrSpawnNotFound; the CLI translates that to
 // the canonical err_name envelope. v judges each permission request's relay
 // hook for the row's display observation, as for [Get] and [List] (see
@@ -197,9 +197,9 @@ func (c *Client) Status(instanceID string) (StatusResult, error) {
 	return out, nil
 }
 
-// Compile-time assertion that *store.Store provides the optional narrow read
-// Status uses, so the production wiring keeps showing the launch start, and
-// the settled read the Client's status uses with a settle time.
+// Compile-time assertion that *store.Store provides every optional status
+// reader, and *store.CursorMissingReads the context and row reads; production
+// uses SpawnStatusRow (through permissionStatusReader).
 var (
 	_ familyStatusReader     = (*store.Store)(nil)
 	_ statusReader           = (*store.Store)(nil)

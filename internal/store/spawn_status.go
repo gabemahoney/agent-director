@@ -7,17 +7,37 @@ import (
 	"strings"
 )
 
-// statusRowColumns excludes unrelated structured columns and parsed timestamps.
-// lifeColumns retains the exact snapshot used by observation revalidation.
+// statusRowColumns is SpawnStatusRow's partial projection, in scanSpawnStatus's
+// order. It excludes unrelated structured columns and parsed timestamps, and
+// shares lifeColumns (the exact snapshot observation revalidation compares)
+// and paneColumns with the full-row spawnColumns.
 const statusRowColumns = `instance_id, state, launch_started_at, family_state,
  relay_mode, COALESCE(life_number, 0), agent, jsonl_path, end_reported_at,
  codex_startup, claude_capacity, permission_epoch, observation_version,
  COALESCE(display_observation, ''), ` + lifeColumns + `, ` + paneColumns
 
-// SpawnStatusRow reads only status, context and display-observation evidence
-// in one snapshot: the stored observation, the idle_screen timeout override
-// and the committed pane baseline. Malformed labels, arguments or environment
-// cannot fail it.
+// SpawnStatusRow is the partial Spawn reader: it reads only status, context
+// and display-observation evidence in one snapshot. It fills InstanceID,
+// State, ReportedState and FamilyState, LaunchStartedAtMillis, RelayMode,
+// LifeNumber, Agent, JSONLPath, EndReportedAtMillis, CodexStartup and
+// ClaudeCapacity; Snapshot and Identity exactly as lifeColumns reads them
+// (Snapshot.StartedAt as stored text), with RowVersion, SessionID, PID,
+// ProcStarttime and TmuxSessionName taken from Snapshot; PermissionEpoch,
+// ObservationVersion and DisplayObservation; and the idle_screen timeout
+// override and committed pane baseline (paneColumns).
+//
+// All other fields stay unpopulated; their zero values do not establish stored
+// absence. These include LaunchOwner, IdleSince, StateChangedMillis,
+// SubagentTracking, NoPreTrust, EndedAtText, the parsed StartedAt, LastSeenAt
+// and EndedAt, Labels, AgentArgs, ExtraEnv and the other unselected metadata.
+// Because labels, arguments and environment are never read, malformed values
+// there cannot fail it.
+//
+// API status consumes its status/context/display evidence through
+// permissionStatusReader; CursorMissingReads delegates to this path. Display
+// revalidation (lockedObservationRow, observationLanded) reuses its projection
+// and scanner. Reuse this reader for this evidence; use GetSpawn,
+// GetSpawnSettled or ListSpawns when omitted fields are needed.
 func (s *Store) SpawnStatusRow(instanceID string, r SettleRead) (Spawn, error) {
 	return s.spawnStatusRow(instanceID, r, nil)
 }
@@ -50,6 +70,9 @@ func (s *Store) spawnStatusRow(instanceID string, r SettleRead, proofs []CursorM
 	return row, nil
 }
 
+// scanSpawnStatus scans one row selected with statusRowColumns into the
+// partial Spawn described above. When reported is set, two appended settled
+// columns supply ReportedState and FamilyState; otherwise ReportedState is State.
 func scanSpawnStatus(sc rowScanner, reported bool) (Spawn, error) {
 	var row Spawn
 	var life lifeScan
