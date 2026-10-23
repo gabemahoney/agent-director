@@ -133,7 +133,7 @@ func (s *Store) DeleteFinishedIfSameLife(instanceID string, examined RowSnapshot
 	const errPrefix = "store: delete finished if same life"
 	args := append([]any{instanceID}, finishedStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(deleteFinishedIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, deleteFinishedIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}

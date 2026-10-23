@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
@@ -49,6 +50,8 @@ type PermissionRequestInfo struct {
 // match the SRD §4.2 column names so callers reading the verb output can
 // cross-reference against the schema doc without translation.
 type SpawnRow struct {
+	StateDetail
+
 	// Context is an experimental on-demand reading for the current session.
 	Context ContextReading `json:"context"`
 	// InstanceID is the stable id of the Spawn (UUID4 or caller-supplied).
@@ -58,7 +61,8 @@ type SpawnRow struct {
 	// launched from a plain shell.
 	ParentID string `json:"parent_id"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing. pending means a launch
+	// ask_user, check_permission, ended, missing, or a report-only Displayed
+	// State, needs_intelligence or idle_screen. pending means a launch
 	// (spawn, reuse or resume) is in progress and the agent has not reported
 	// in yet (its SessionStart hook); it may be loading or waiting at a
 	// startup prompt. A resumed pending row keeps its session id and history;
@@ -67,6 +71,10 @@ type SpawnRow struct {
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// IdleScreenAvailability is, as StatusResult's, available for Claude and
+	// Codex or an absent agent and unavailable for Cursor. Present on every row;
+	// omitted only from the empty result of a failed call.
+	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn's agent was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -106,6 +114,14 @@ type SpawnRow struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastSeenAt is the time of the most recent hook UPSERT for this Spawn.
 	LastSeenAt time.Time `json:"last_seen_at"`
+	// StateChangedAt is when the raw state last changed, RFC3339 UTC with
+	// millisecond precision (b.k6i). Soft refreshes and same-value writes
+	// leave it; State may still show the earlier settled value. The Unix
+	// epoch for a row whose raw state has not changed since the stamp was
+	// added. Present on every row. A Cursor row the read finds lost shows
+	// missing at once; this moves when that mark is stored, which can be after
+	// the read that first shows missing.
+	StateChangedAt time.Time `json:"state_changed_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON (omitempty)
 	// while the Spawn is live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
@@ -263,9 +279,9 @@ func launchStartedAt(state string, millis int64) *time.Time {
 
 // millisToUTC maps integer milliseconds since the epoch, as the store holds a
 // time, to the instant in UTC. It is the one conversion behind
-// launch_started_at and every time field of a subagent record, so they encode
-// alike: RFC3339Nano with the millisecond fraction, trailing zeros dropped, no
-// fraction on a whole second, ending Z.
+// launch_started_at, state_changed_at and every time field of a subagent
+// record, so they encode alike: RFC3339Nano with the millisecond fraction,
+// trailing zeros dropped, no fraction on a whole second, ending Z.
 func millisToUTC(millis int64) time.Time {
 	return time.UnixMilli(millis).UTC()
 }
@@ -362,8 +378,9 @@ func emptySpawnRow() SpawnRow {
 // the row it read, then drops the entry for the row's current session id
 // (a row with no current session id drops nothing).
 //
-// Get reads with no settle time; the Client applies its [state] settle_ms
-// (getSettled).
+// Get reads with no settle time and samples no pane, so a working Claude or
+// Codex row keeps its pane's current idle_screen finding as committed; the
+// Client applies its [state] settle_ms and samples panes (getSettled).
 func Get(s GetStore, v RelayView, instanceID string) (SpawnRow, error) {
 	return getSettled(s, v, store.SettleRead{}, instanceID)
 }
@@ -389,12 +406,14 @@ func readSpawnSettled(s GetStore, settle store.SettleRead, instanceID string) (S
 	return row, row.State, err
 }
 
-// getSettled is Get with the reader's settle time and clock settle (b.3ie):
-// the row's state field is the settled state. Everything else keys on the
-// raw state, as before: launch_started_at, and whether the permission
-// requests are read and shown (permission requests are never debounced). With
-// no settle time it is Get exactly as before b.3ie. It never waits for a state
-// to settle.
+// getSettled is Get with the reader's settle time and clock settle (b.3ie).
+// state starts as the row's settled raw state; a store that observes displays
+// replaces it, with since and state-specific detail, by the committed display,
+// which keeps the previous display's since and detail while its exit or move
+// settles. family_state is the stored family history, which settles
+// independently. launch_started_at, and whether the permission requests are
+// read and shown, key on the raw state (permission requests are never
+// debounced). It never waits for a state to settle.
 func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID string) (SpawnRow, error) {
 	row, reported, err := readSpawnSettled(s, settle, instanceID)
 	if err != nil {
@@ -406,6 +425,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		ParentID:                row.ParentID,
 		State:                   reported,
 		FamilyState:             row.FamilyState,
+		IdleScreenAvailability:  idleScreenAvailability(row.Agent),
 		CWD:                     row.CWD,
 		Agent:                   row.Agent,
 		TmuxSessionName:         row.TmuxSessionName,
@@ -417,6 +437,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		Labels:                  row.Labels,
 		StartedAt:               row.StartedAt,
 		LastSeenAt:              row.LastSeenAt,
+		StateChangedAt:          millisToUTC(row.StateChangedMillis),
 		EndedAt:                 row.EndedAt,
 		LaunchStartedAt:         launchStartedAt(row.State, row.LaunchStartedAtMillis),
 		LivenessUnverifiedSince: nullableTimestamp(row.LivenessUnverifiedSince),
@@ -457,18 +478,35 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 	// debounced (b.3ie), so the settled state can be any state, even ended or
 	// missing, while the raw check_permission shows its open requests.
 	j := newRelayJudge(v)
+	var judged *judgedRequestSet
 	if !finishedState(row.State) {
-		open, unproven, err := spawnRequestInfos(s.PermissionRequestsForSpawn, j, instanceID)
+		judged, err = readJudgedRequests(s.PermissionRequestsForSpawn, j, instanceID)
 		if err != nil {
 			return emptySpawnRow(), err
 		}
+		open, unproven := judgedSpawnInfos(judged, j)
 		if row.State == store.StateCheckPermission {
 			out.PermissionRequests = open
 		}
 		out.UnprovenRequests = unproven
 	}
-	slots := goneSlotsOf(nil, out.PermissionRequests)
-	recordGone(s, j.now(), readerLockWait, goneSlotsOf(slots, out.UnprovenRequests))
+	now := j.now()
+	slots := goneSlotsOf(nil, out.PermissionRequests, row.Agent, row.RelayMode, now)
+	attempted, err := recordGone(s, now, readerLockWait, goneSlotsOf(slots, out.UnprovenRequests, row.Agent, row.RelayMode, now))
+
+	// A store that does not observe permissions keeps the state computed
+	// above, with no state detail, as list does.
+	if _, observes := s.(needsIntelligenceStore); !observes {
+		return out, nil
+	}
+	// The observation reuses the requests read above while no write has been
+	// attempted over them; after a busy write it attempts none of its own.
+	read := permissionRead{storeBusy: errors.Is(err, store.ErrStoreBusy)}
+	if !attempted {
+		read.requests = judged
+	}
+	display, families, _, _ := observeDisplay(s, v, settle, row, read)
+	out.State, out.StateDetail, out.FamilyState = display.State, stateDetail(display), familyOf(row, families)
 
 	return out, nil
 }
@@ -490,10 +528,17 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // or switch back starts a new life and hides earlier lives. Older sessions
 // are listed for inspection only; resume continues only the current session.
 // With [state] settle_ms set, state is the settled state: a hook-written
-// change shows only once it has held that long, the last settled state until
-// then; terminal states and command-driven changes show at once. The
-// permission requests and launch_started_at follow the live state.
-// Get never waits for the store's write lock, nor for a state to settle.
+// change between ordinary states shows only once it has held that long, the
+// last settled state until then. Entering, leaving or moving between
+// needs_intelligence and idle_screen instead times settle_ms from the read
+// that commits its candidate and shows from a later successful read that
+// commits it; until then since and detail stay the previous display's.
+// Terminal states and command-driven changes show at once. family_state
+// settles independently. The permission requests and launch_started_at
+// follow the live state.
+// Get never waits for the store's write lock, nor for a state to settle. Like
+// [Client.Status] it samples a working Claude or Codex row's own pane for
+// idle_screen and carries idle_screen_availability.
 //
 // CLI: agent-director get
 //

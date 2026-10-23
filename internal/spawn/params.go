@@ -119,6 +119,17 @@ type SpawnParams struct {
 	// callers detect it by the binary's version (the manifest's
 	// reuse_finished text gives each surface's source).
 	ReuseFinished bool
+
+	// IdleScreenTimeoutSeconds overrides [state] idle_screen_timeout_seconds
+	// for this row, in whole seconds from 1 to
+	// config.MaxIdleScreenTimeoutSeconds; 0 (omitted) gives no override, so
+	// readers use their own configuration. A negative or larger value is
+	// refused with ErrInvalidFlags before anything is written or launched. The
+	// choice is recorded on the row: resume keeps it, and the next spawn or
+	// reuse replaces it, clearing it when that call gives none. Cursor rows
+	// keep it too, though idle_screen is unavailable for them. Templates never
+	// carry it.
+	IdleScreenTimeoutSeconds int
 }
 
 // Permissions captures the three SRD §6.1 arrays. Nil entries are omitted

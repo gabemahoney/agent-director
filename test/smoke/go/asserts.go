@@ -64,6 +64,11 @@ func AssertResultMatchesManifest(t testing.TB, verbDef manifest.VerbDef, result 
 			if (k == reflect.Ptr || k == reflect.Interface) && fv.IsNil() {
 				continue
 			}
+			// A zero value tagged omitempty is absent on the wire, as
+			// since is on a row showing neither Displayed State.
+			if fv.IsZero() && slices.Contains(strings.Split(sf.Tag.Get("json"), ",")[1:], "omitempty") {
+				continue
+			}
 			// Non-nil nullable field: fall through to AllowedValues / type checks.
 		}
 

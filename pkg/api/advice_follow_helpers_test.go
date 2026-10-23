@@ -90,8 +90,9 @@ func adviceAssertGoDoc(t *testing.T, file, name, advice string) {
 }
 
 // adviceAssertManifest fails unless verb's manifest text (its Description
-// when param is "", else that parameter's), which help and MCP tools/list
-// show, carries every phrase word for word.
+// when param is "", else that parameter's or, with no such parameter, that
+// result field's), which help and MCP tools/list show, carries every phrase
+// word for word.
 func adviceAssertManifest(t *testing.T, verb, param string, phrases ...string) {
 	t.Helper()
 	v, ok := manifest.Lookup(verb)
@@ -99,13 +100,18 @@ func adviceAssertManifest(t *testing.T, verb, param string, phrases ...string) {
 		t.Fatalf("no %s verb in the manifest", verb)
 	}
 	text, found := v.Description, param == ""
+	for _, f := range v.ResultFields {
+		if param != "" && f.Name == param {
+			text, found = f.Description, true
+		}
+	}
 	for _, p := range v.Params {
 		if param != "" && p.Name == param {
 			text, found = p.Description, true
 		}
 	}
 	if !found {
-		t.Fatalf("manifest has no %s parameter %q", verb, param)
+		t.Fatalf("manifest has no %s parameter or result field %q", verb, param)
 	}
 	for _, p := range phrases {
 		if !strings.Contains(text, p) {

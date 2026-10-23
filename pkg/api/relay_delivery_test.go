@@ -424,6 +424,98 @@ func hookGoneFailureDiagnostics(t *testing.T, path string, trace *hookGoneTrace)
 	}
 }
 
+// t2.sp6.2z.ej F3 (SR-4.3): a reader attempts the fallback write only when it
+// stores something. Over a fallen-back request store.FallbackClock gives no
+// clock, the first read records hook_gone_at at its instant in one write; over
+// one with hook_gone_at stored and a clock, it records that clock in one write.
+// Once stored, later reads attempt none, and get's observation reuses its one
+// judged read. list shows only requests awaiting an answer, so never a
+// pane-answered one.
+func TestReadersSkipFallbackWritesThatStoreNothing(t *testing.T) {
+	t.Parallel()
+	get := func(e *relayEnv, s *readLeaseStore) error {
+		_, err := api.Get(s, e.view(), e.id)
+		return err
+	}
+	list := func(e *relayEnv, s *readLeaseStore) error {
+		_, err := api.List(s, e.view(), api.ListParams{})
+		return err
+	}
+	answered := []apitest.PermissionOption{apitest.PermissionAnswer(store.PaneAnswerOutside)}
+	preV7 := []apitest.PermissionOption{apitest.PermissionTimes(time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}, ""),
+		apitest.PermissionCreation("0001-01-01 00:00:00")}
+	goneAt := displayAt.Add(-time.Second)
+	goneStored := []apitest.PermissionOption{apitest.PermissionTimes(displayAt.Add(-time.Hour), time.Time{}, displayAt.Add(time.Hour), goneAt, time.Time{}, "")}
+	for _, tc := range []struct {
+		name                   string
+		hook                   store.ProcessIdentity
+		dead                   bool // the hook's process is gone
+		facts                  []apitest.PermissionOption
+		read                   func(*relayEnv, *readLeaseStore) error
+		wantGone, wantFallback time.Time // stored once read; a fallback_at has basis process
+	}{
+		{"get, alive hook answered at the pane", relayEnvHook, false, answered, get, displayAt, time.Time{}},
+		{"get, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, get, displayAt, time.Time{}},
+		{"list, pre-v7 with zero created_at", store.ProcessIdentity{}, false, preV7, list, displayAt, time.Time{}},
+		{"get, gone hook with hook_gone_at stored", relayEnvHook, true, goneStored, get, goneAt, goneAt},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newRelayEnv(t, tc.hook)
+			if tc.dead {
+				e.pc.Set(relayEnvHook.PID, procfix.Gone())
+			}
+			e.now = displayAt
+			requestFacts(t, e, tc.facts...)
+			basis := ""
+			if !tc.wantFallback.IsZero() {
+				basis = store.FallbackProcess
+			}
+			for i, want := range []int{1, 0} {
+				var (
+					s        *readLeaseStore
+					attempts int
+					pr       store.PermissionRow
+				)
+				stored := func() bool {
+					return pr.HookGoneAt.Equal(tc.wantGone) && pr.FallbackAt.Equal(tc.wantFallback) && pr.FallbackBasis == basis
+				}
+				// Read 1's write is zero-wait best effort and may lose the lock
+				// race under load, so it repeats at the same injected time until
+				// its write is stored (t2.sp6.2z.rd PM-E2); read 2 runs once.
+				tries, elapsed, ok := apitest.RepeatUntilCommitted(func() bool {
+					s = &readLeaseStore{observationReader: e.s}
+					if err := tc.read(e, s); err != nil {
+						t.Fatalf("read %d: %v", i+1, err)
+					}
+					attempts = 0
+					for _, w := range s.writes {
+						if w == "RecordPermissionFallbacks" {
+							attempts++
+						}
+					}
+					pr = e.request(t)
+					return want == 0 || stored()
+				})
+				if !ok {
+					t.Fatalf("read 1: fallback write never stored hook_gone_at %v, fallback_at %v %q in %d attempts over %v; "+
+						"last attempt made %d fallback writes (writes %v), stored %v, %v %q",
+						tc.wantGone, tc.wantFallback, basis, tries, elapsed, attempts, s.writes, pr.HookGoneAt, pr.FallbackAt, pr.FallbackBasis)
+				}
+				if tries > 1 {
+					t.Logf("read 1: fallback write stored on attempt %d after %v", tries, elapsed)
+				}
+				if attempts != want || (want == 0 && s.reads != 2) || !stored() {
+					t.Errorf("read %d: %d fallback writes, %d request reads, stored hook_gone_at %v, fallback_at %v %q; "+
+						"want %d writes (2 reads, one judged read, when none), hook_gone_at %v, fallback_at %v %q",
+						i+1, attempts, s.reads, pr.HookGoneAt, pr.FallbackAt, pr.FallbackBasis, want, tc.wantGone, tc.wantFallback, basis)
+				}
+				e.now = e.now.Add(time.Minute)
+			}
+		})
+	}
+}
+
 // TestPreV7RequestsFallBackByTime (b.146 rule 5's compatibility clause): a
 // request recorded before schema v7 (no hook identity, no settle instant, as
 // the v6→v7 migration leaves one: internal/store's

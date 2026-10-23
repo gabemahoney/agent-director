@@ -24,6 +24,13 @@ import (
 // the verdict commits.
 var ErrStoreBusy = errors.New("ErrStoreBusy")
 
+// errCommitUnconfirmed marks a write whose COMMIT was sent but whose outcome
+// is unknown: the transaction may or may not have landed, so the caller reads
+// the durable state before retrying rather than assume either. It never wraps
+// ErrStoreBusy. Every site that produces this outcome wraps it, with its
+// branch and cause; callers match it with errors.Is, never by its text.
+var errCommitUnconfirmed = errors.New("store: commit outcome unconfirmed; read the request before retrying")
+
 // DefaultLockWait asks a bounded-wait store call for the store's own waits,
 // as every other store call waits: for the store's one connection without a
 // bound, and for a lock another connection holds up to the store's busy
@@ -334,6 +341,8 @@ func (s *Store) inWriteTx(maxWait time.Duration, fn func(ctx context.Context, co
 }
 
 // inWriteTxContext allows post-commit work to share the transaction's deadline.
+// A lifecycle callback collects its own display exit; authority and request
+// transactions must not inspect unrelated rows' report-only history.
 func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn func(context.Context, *sql.Conn) error) error {
 	return s.withConnContext(ctx, maxWait, func(ctx context.Context, conn *sql.Conn, busyMs int, cleanup *connectionCleanup) error {
 		if err := beginWithin(ctx, conn, busyMs); err != nil {
@@ -368,7 +377,7 @@ func (s *Store) inWriteTxContext(ctx context.Context, maxWait time.Duration, fn 
 			return fmt.Errorf("%w: before commit: %w", ErrStoreBusy, err)
 		}
 		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
-			return fmt.Errorf("store: commit outcome unconfirmed; read the request before retrying (branch=commit_exec): %w", err)
+			return fmt.Errorf("%w (branch=commit_exec): %w", errCommitUnconfirmed, err)
 		}
 		cleanup.rollback = false
 		return nil
@@ -420,7 +429,8 @@ func retryBusy(ctx context.Context, busyMs int, fn func() error) error {
 // move to pending, a hook's ended transition). When fn returns an error, or
 // the commit fails, the transaction is rolled back and nothing is written;
 // fn's error is returned as it is. fn must use conn alone (see withConn).
-func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error) error {
+// fn writes only instanceID's row, so only that row's display exit is drained.
+func (s *Store) inImmediateTx(instanceID string, fn func(ctx context.Context, conn *sql.Conn) error) error {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -442,10 +452,15 @@ func (s *Store) inImmediateTx(fn func(ctx context.Context, conn *sql.Conn) error
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return err
 	}
+	exits, err := takeDisplayExits(ctx, conn, instanceID)
+	if err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	emitDisplayTransitions(exits)
 	return nil
 }
 

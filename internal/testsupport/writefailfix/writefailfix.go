@@ -103,6 +103,8 @@ const (
 	// of a missing row, and SeedSpawn of a missing row. Install it only where
 	// none of these runs, after seeding.
 	MissingDeadlineOverrun Kind = 8
+	// DisplayObservation fails the final report write after request clocks are written.
+	DisplayObservation Kind = 9
 )
 
 // String names the kind, for test failure messages.
@@ -124,6 +126,8 @@ func (k Kind) String() string {
 		return "subagent record"
 	case MissingDeadlineOverrun:
 		return "missing deadline overrun"
+	case DisplayObservation:
+		return "display observation"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -131,7 +135,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -157,6 +161,11 @@ type trigger struct {
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
 // The kind number in each WHEN clause is the Kind constant's fixed value.
 var triggersByKind = map[Kind][]trigger{
+	DisplayObservation: {{name: "ad_test_fail_display_observation", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_display_observation
+ BEFORE UPDATE OF display_observation ON spawns
+ WHEN NEW.row_version IS OLD.row_version AND NEW.permission_epoch IS OLD.permission_epoch
+ AND EXISTS (SELECT 1 FROM ad_test_write_failure WHERE kind=9 AND instance_id=OLD.instance_id)
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: display observation'); END`}},
 	ReuseArchive: {
 		{
 			name: "ad_test_fail_reuse_archive_insert",

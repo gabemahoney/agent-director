@@ -10,6 +10,7 @@ package api_test
 import (
 	"errors"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -192,14 +193,146 @@ func TestLaunchStartedAtByVerbAndRow(t *testing.T) {
 }
 
 // stateOnlyStore is a StatusStore with GetSpawnState only (no narrow read).
-type stateOnlyStore struct{ state string }
+type stateOnlyStore struct {
+	state string
+	read  func(string) (string, error)
+}
 
-func (s stateOnlyStore) GetSpawnState(string) (string, error) { return s.state, nil }
+func (s stateOnlyStore) GetSpawnState(id string) (string, error) {
+	if s.read != nil {
+		return s.read(id)
+	}
+	return s.state, nil
+}
 
-// The exported StatusStore and Status keep their signatures.
+// These adapters expose exactly one optional status reader, never a rich store.
+type rowStatusStore struct {
+	stateOnlyStore
+	readRow func(string, store.SettleRead) (api.Spawn, error)
+}
+
+func (s rowStatusStore) SpawnStatusRow(id string, r store.SettleRead) (api.Spawn, error) {
+	return s.readRow(id, r)
+}
+
+type contextStatusStore struct {
+	stateOnlyStore
+	readContext func(string, store.SettleRead) (string, string, int64, store.SpawnContext, error)
+}
+
+func (s contextStatusStore) SpawnStatusContext(id string, r store.SettleRead) (string, string, int64, store.SpawnContext, error) {
+	return s.readContext(id, r)
+}
+
+type familyStatusStore struct {
+	stateOnlyStore
+	readFamily func(string, store.SettleRead) (string, string, string, int64, error)
+}
+
+func (s familyStatusStore) SpawnStatusWithFamily(id string, r store.SettleRead) (string, string, string, int64, error) {
+	return s.readFamily(id, r)
+}
+
+type settledStatusStore struct {
+	stateOnlyStore
+	readSettled func(string, store.SettleRead) (string, string, int64, error)
+}
+
+func (s settledStatusStore) SpawnStatusSettled(id string, r store.SettleRead) (string, string, int64, error) {
+	return s.readSettled(id, r)
+}
+
+type narrowStatusStore struct {
+	stateOnlyStore
+	readStatus func(string) (string, int64, error)
+}
+
+func (s narrowStatusStore) SpawnStatus(id string) (string, int64, error) {
+	return s.readStatus(id)
+}
+
+func assertIdleAvailability(t *testing.T, out any, got, want string) {
+	t.Helper()
+	wire, present := jsonField(t, out, "idle_screen_availability")
+	if got != want || !present || string(wire) != `"`+want+`"` {
+		t.Errorf("idle_screen_availability typed=%q wire=%s present=%v; want %q", got, wire, present, want)
+	}
+}
+
+// b.ob8 F2: every dispatch path agrees for an absent agent, with no observer.
+func TestStatusEmptyAgentAvailabilityDispatch(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{"SpawnStatusRow", "SpawnStatusContext", "SpawnStatusWithFamily", "SpawnStatusSettled", "SpawnStatus", "GetSpawnState"} {
+		for _, outcome := range []string{"success", "read error", "missing row"} {
+			t.Run(method+"/"+outcome, func(t *testing.T) {
+				var wantErr error
+				if outcome == "read error" {
+					wantErr = errSentinel
+				} else if outcome == "missing row" {
+					wantErr = store.ErrSpawnNotFound
+				}
+				settle := store.SettleRead{SettleMs: 5000, NowMs: displayAt.UnixMilli()}
+				var calls []string
+				selected := func(name, id string, r store.SettleRead) error {
+					calls = append(calls, name)
+					if id != "empty-agent" || r != settle {
+						t.Errorf("dispatch id=%s settle=%+v; want empty-agent/%+v", id, r, settle)
+					}
+					return wantErr
+				}
+				base := stateOnlyStore{read: func(id string) (string, error) {
+					return store.StateWaiting, selected("GetSpawnState", id, settle)
+				}}
+				var s api.StatusStore = base
+				family := ""
+				switch method {
+				case "SpawnStatusRow":
+					family = store.StateWorking
+					s = rowStatusStore{base, func(id string, r store.SettleRead) (api.Spawn, error) {
+						return api.Spawn{InstanceID: id, State: store.StateWaiting, ReportedState: store.StateWaiting, FamilyState: family}, selected(method, id, r)
+					}}
+				case "SpawnStatusContext":
+					family = store.StateWorking
+					s = contextStatusStore{base, func(id string, r store.SettleRead) (string, string, int64, store.SpawnContext, error) {
+						return store.StateWaiting, store.StateWaiting, 0, store.SpawnContext{FamilyState: family}, selected(method, id, r)
+					}}
+				case "SpawnStatusWithFamily":
+					family = store.StateWorking
+					s = familyStatusStore{base, func(id string, r store.SettleRead) (string, string, string, int64, error) {
+						return store.StateWaiting, store.StateWaiting, family, 0, selected(method, id, r)
+					}}
+				case "SpawnStatusSettled":
+					s = settledStatusStore{base, func(id string, r store.SettleRead) (string, string, int64, error) {
+						return store.StateWaiting, store.StateWaiting, 0, selected(method, id, r)
+					}}
+				case "SpawnStatus":
+					s = narrowStatusStore{base, func(id string) (string, int64, error) {
+						return store.StateWaiting, 0, selected(method, id, settle)
+					}}
+				}
+				got, err := api.StatusSettledForTest(s, api.RelayView{}, settle, "empty-agent")
+				if !errors.Is(err, wantErr) || !slices.Equal(calls, []string{method}) {
+					t.Fatalf("dispatch calls=%v result=%+v err=%v; want %s/%v", calls, got, err, method, wantErr)
+				}
+				if err != nil {
+					if jsonOf(t, got) != jsonOf(t, api.StatusResult{}) {
+						t.Errorf("failure returned nonempty result: %+v", got)
+					}
+					return
+				}
+				if got.State != store.StateWaiting || got.StateDetail != (api.StateDetail{}) || got.FamilyState != family {
+					t.Errorf("no-observer result changed state/detail/family: %+v", got)
+				}
+				assertIdleAvailability(t, got, got.IdleScreenAvailability, api.IdleScreenAvailable)
+			})
+		}
+	}
+}
+
+// The exported StatusStore and Status pin their signatures.
 var (
-	_ api.StatusStore                                         = stateOnlyStore{}
-	_ func(api.StatusStore, string) (api.StatusResult, error) = api.Status
+	_ api.StatusStore                                                        = stateOnlyStore{}
+	_ func(api.StatusStore, api.RelayView, string) (api.StatusResult, error) = api.Status
 )
 
 // TestLaunchStartedAtStatusNarrowRead: api.Status shows the launch start with
@@ -229,7 +362,7 @@ func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 		{"GetSpawnState only", stateOnlyStore{state: store.StatePending}, "narrow-pending", 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := api.Status(tc.st, tc.id)
+			res, err := api.Status(tc.st, api.RelayView{}, tc.id)
 			if err != nil || res.State != store.StatePending {
 				t.Fatalf("Status = %+v, %v; want pending, nil", res, err)
 			}
@@ -237,7 +370,7 @@ func TestLaunchStartedAtStatusNarrowRead(t *testing.T) {
 			assertLaunchJSON(t, res, tc.wantJSON)
 		})
 	}
-	if _, err := api.Status(s, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
+	if _, err := api.Status(s, api.RelayView{}, "narrow-absent"); !errors.Is(err, store.ErrSpawnNotFound) {
 		t.Errorf("Status of an unknown id: %v; want ErrSpawnNotFound", err)
 	}
 }

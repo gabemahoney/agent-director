@@ -303,23 +303,14 @@ func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
 	}
 }
 
-// pinnedStateEnum is the byte-identical, order-sensitive spawn state enum
-// (SRD §6). SR-8.3's guardrail forbids ANY change to the state enum while
-// surfacing the liveness fields — including reorderings and additions.
-// TestStateEnumByteIdentity below pins these seven values across all three
-// surfaces (manifest source of truth, committed surface.json, and — on the
-// TS side, in public-surface.test.ts — that state stays a plain string).
+// pinnedStateEnum retains the original state order and appends the approved
+// report-only Displayed States. Ordinary-state fixtures continue covering all
+// seven authoritative lifecycle values; TypeScript state remains a plain string.
 var pinnedStateEnum = []string{
-	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing",
+	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing", "needs_intelligence", "idle_screen",
 }
 
-// TestStateEnumByteIdentity is the NAMED negative guard SR-8.3 requires: the
-// spawn state enum must be byte-identical (same values, same order) to the
-// pinned list on BOTH the manifest source of truth (status + get result
-// fields) and the committed surface.json bytes. This is asserted explicitly
-// rather than left implied by a golden diff, so a reorder or an added state
-// (e.g. slipping the liveness work into a new enum value) trips a red test at
-// the source level, not just a golden churn.
+// TestStateEnumByteIdentity pins the public manifest and generated JSON together.
 func TestStateEnumByteIdentity(t *testing.T) {
 	// Manifest source of truth: every result field named "state" that carries
 	// an enum must equal the pinned list exactly. status and get both do.
@@ -335,7 +326,7 @@ func TestStateEnumByteIdentity(t *testing.T) {
 			}
 			found = true
 			if !reflect.DeepEqual(f.AllowedValues, pinnedStateEnum) {
-				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (SR-8.3: state enum UNTOUCHED)",
+				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (approved Displayed State contract)",
 					verbName, f.AllowedValues, pinnedStateEnum)
 			}
 		}

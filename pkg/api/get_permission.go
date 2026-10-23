@@ -112,7 +112,10 @@ func GetPermission(s GetPermissionStore, v RelayView, params GetPermissionParams
 		DecidedAt:       nullableTime(row.DecidedAt),
 		RequestDelivery: j.delivery(row, verdict, now),
 	}
-	recordGone(s, now, readerLockWait, addGone(nil, row.RequestID, &out.RequestDelivery))
+	// No Spawn row is read, so the pick-up judges the clock by FallbackClock's
+	// Claude/Codex rule; the store write recomputes it with the real agent and
+	// relay mode, so this decides only whether a write is attempted.
+	recordGone(s, now, readerLockWait, addGone(nil, row.RequestID, &out.RequestDelivery, "", "", now))
 	return out, nil
 }
 

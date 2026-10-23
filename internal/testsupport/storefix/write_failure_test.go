@@ -171,6 +171,35 @@ func observeSpawn(t *testing.T, s *store.Store, _, id string) any {
 
 var proxyWrites = []proxyWrite{
 	{
+		name: "commit permission observation", kind: storefix.WriteFailDisplayObservation,
+		// A retained candidate is what this read must clear; a row with no
+		// observation and no eligible request reads without writing.
+		seed: func(t *testing.T, _ *store.Store, dbPath, id string) {
+			t.Helper()
+			candidate := `{"state":"working","candidate":"needs_intelligence","candidate_since_ms":1,"observed_at_ms":1}`
+			if _, err := apitest.SeedSpawn(dbPath, id, store.StateWaiting, "", "", "", false, apitest.WithDisplayObservation(candidate)); err != nil {
+				t.Fatalf("SeedSpawn(%q): %v", id, err)
+			}
+		},
+		write: func(s *store.Store, id string) error {
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				return err
+			}
+			_, _, err = s.ObserveNeedsIntelligence(row, nil, time.Now(), 30*time.Second, store.SettleRead{})
+			return err
+		},
+		observe: func(t *testing.T, s *store.Store, _, id string) any {
+			t.Helper()
+			row, err := s.GetSpawn(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return row.ObservationVersion
+		},
+	},
+
+	{
 		name:     "SessionStart rotation archive",
 		kind:     storefix.WriteFailReuseArchive,
 		failOpen: true,

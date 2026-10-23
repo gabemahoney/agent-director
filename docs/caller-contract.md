@@ -191,6 +191,165 @@ remain errors; never treat a failed read as `waiting` or invent a third
 family value. Reading a family value adds no wait for settling or writer
 lock acquisition.
 
+## State change time
+
+`get` and each `list` row carry `state_changed_at`, on the Go, CLI, MCP and
+TypeScript surfaces: when the row's raw state last changed, as an RFC3339 UTC
+string with millisecond precision (`2026-10-20T14:03:07.123Z`). The fraction
+drops trailing zeros, so it has 0 to 3 digits and none on a whole second:
+parse the value as a time before comparing, and never compare the strings.
+Every row of every agent has it, `pending` rows included; it is never `null`.
+`status` does not carry it.
+
+- **Changed since T.** To learn whether a row's state changed since a time of
+  your own, compare `state_changed_at` with it. A hook or command that changes
+  the raw state moves it; a write of the same state and a hook that only
+  refreshes `last_seen_at` leave it. Never use `last_seen_at` for this: it has
+  whole-second precision and moves on every applied hook.
+- **Raw, not settled.** With a [settle time](configuration.md#settle-time-state)
+  set, `state` may still show the earlier settled value, and a change that
+  does not hold for the settle time can move `state_changed_at` without ever
+  showing in `state`.
+- **Not `since`.** A [`needs_intelligence` or `idle_screen`](#needs-intelligence-and-idle-screen-rows)
+  row's `since` dates the display, not a state change: the display never moves
+  `state_changed_at`, but a raw change that ends it (the agent moving on, or
+  `find-missing`'s repair) does.
+- **Epoch.** `1970-01-01T00:00:00Z` means the raw state has not changed since
+  agent-director began recording this time. It is not the time of a change,
+  and reads as "no change since" any time you compare it with.
+- **Cursor.** A Cursor row a read finds lost can show `missing` before
+  `state_changed_at` moves; see
+  [Cursor operation boundaries](#cursor-operation-boundaries).
+
+## Needs-intelligence and idle-screen rows
+
+A row can read one of two states in place of its real state:
+
+- `needs_intelligence`: the agent's own permission prompt has stayed
+  unanswered past [its timeout](configuration.md#needs-intelligence-timeout-state).
+  A human or orchestrating agent must answer that prompt. Which requests
+  count is in
+  [permissions](permissions.md#needs-intelligence-on-an-unanswered-permission).
+- `idle_screen`: a `working` agent's pane has looked the same on every read
+  for [its timeout](configuration.md#idle-screen-timeout-state). The agent may
+  be hung or working quietly: look at its pane before acting. See
+  [Unchanged panes](#unchanged-panes).
+
+| Agent | `needs_intelligence` | `idle_screen` | `idle_screen_availability` |
+|---|---|---|---|
+| Claude | yes | yes | `available` |
+| Codex | yes | yes | `available` |
+| Cursor | yes | never | `unavailable` |
+
+Every `status`, `get` and `list` row carries `idle_screen_availability`. It
+is a capability outcome, not a state: a Cursor row can still read
+`needs_intelligence`. Why Cursor never reads `idle_screen` is in
+[architecture](architecture.md#cursor-and-idle_screen).
+
+Both states are reports only: they change no refusal, hold or guard, and
+`send-keys`, `decide` and `pause` judge the row's real state. A live member
+in either state counts as `working` in [`family_state`](usage.md#family-state).
+
+A request recorded before the upgrade to schema v14 that was not provably
+created after the row entered `check_permission` never makes the row
+`needs_intelligence`; its record, hold and clock are kept.
+
+- **Fields.** `status` and `get` carry `state`, `since` (RFC3339 UTC with
+  exactly millisecond precision) and the state's detail: `request_token` and
+  `tool_name`, naming the request the row reports, only on
+  `needs_intelligence`; `unchanged_minutes`, the whole minutes (rounded down)
+  the pane had stayed the same at the last committed read, only on
+  `idle_screen`. `status` adds `tmux_session_name` only while either state is
+  shown (`get` carries it always). A `list` row carries neither `since` nor
+  the detail; call `get` for them.
+- **Omissions.** A field that does not apply is absent: never `null`, empty
+  or zero. Test for presence, not for a value.
+- **Filtering.** `list --state needs_intelligence` and `--state idle_screen`
+  match the state `list` shows, before `--limit` is applied, so a limit never
+  hides such a row behind others. A row in either state does not match its
+  real state (`--state check_permission` or `--state working`), so a polling
+  loop that tests for those states stops seeing it.
+- **Detection happens on reads.** Nothing runs between your calls and
+  nothing changes state on a timer. With settling off, a row enters either
+  state on the first `status`, `get` or `list` after the timeout that commits
+  the observation. Your usual `status` polling is enough; you need not read
+  panes yourself. A row nobody reads never shows either state.
+  With a positive [settle time](configuration.md#settle-time-state), entry,
+  exit or move starts its interval at the read that commits its candidate,
+  not at the raw-state change. A later read must commit the change once that
+  candidate has held for the interval. Until entry commits, the row shows
+  its ordinary settled state.
+- **`since`.** The time of the read that committed the entry, not the moment
+  the timeout ran out. It is kept while the row clears under settling, when a
+  different request becomes the one reported and when `unchanged_minutes`
+  grows. A new stay after the agent's state changed (a new unbroken stay in
+  `check_permission`, or a new working turn) never inherits the earlier
+  `since` or detail: if it qualifies for the state already shown, that
+  display ends at once and the new stay starts fresh.
+- **Moving between the states.** When the other state qualifies while one is
+  shown, the move is an ordinary settled change of state: the first state
+  shows with its last detail until the move has held for the settle time,
+  then the second shows with a new `since` and only its own detail.
+- **Skipped writes.** A read writes only to commit something new: a request's
+  fallback clock newly established, a pane fingerprint period started,
+  restarted or reset, a change of the displayed state or its settling
+  candidate, or a change of the detail reported (another request, or a new
+  whole minute of `unchanged_minutes`). Otherwise it writes nothing. Its
+  write never waits for the store's lock: a read that cannot commit returns
+  the state and detail committed before, together, and a later read tries
+  again.
+- **Clearing.** When no request qualifies, its pane changes or cannot be
+  sampled, or the agent moves on, the row keeps its displayed state until
+  the exit candidate settles and a read commits the exit. `ended`, `missing`
+  and a state a command sets (including `find-missing`'s repair of a stale
+  `check_permission` row) show at once.
+- **Trail.** Each entry, exit and move appends one
+  `ad.spawn.displayed_state_transition` trail record with `instance_id`,
+  `prior_state`, `new_state`, `event` and `ts`; the trail is audit only and a
+  failed append changes nothing. Rarely, under heavy store load, a read whose
+  write is slow to commit may still show the previous state and detail and
+  append no record for that change; a later read shows the committed state,
+  with `since` from the earlier read.
+- **Attaching.** Neither state adds a verb or an automatic answer. For
+  `needs_intelligence`, read the request with `get-permission` and its
+  `request_token` and follow [Permission relay](#permission-relay), or
+  [attach to its pane](usage.md#attach-to-a-spawns-pane) and answer there;
+  for `idle_screen`, attach to its pane.
+
+### Unchanged panes
+
+`status`, `get` and `list` sample the pane of every `working` Claude or Codex
+row they read: the agent's own pane of the row's current launch, fingerprinted
+as the `pane_sha256` a default `read-pane` returns. Only the fingerprint is
+kept; nothing reads what the pane says.
+
+- **The unchanged period.** The first successful sample starts it. An
+  identical fingerprint keeps its start; a different one restarts it at that
+  read and clears an `idle_screen` row. A read at or after the period's
+  start plus the timeout qualifies. `check_permission`, `ask_user` and every
+  other state never do, and a change of the agent's state (a new turn, a new
+  launch) starts over with no earlier evidence.
+- **Only while you read.** Nothing samples between reads. The period starts
+  at the first read that saw the current pane, so infrequent reads delay
+  detection, and identical samples do not show that the pane never changed
+  between them.
+- **A hint, not proof.** Healthy quiet work, such as a long tool with no
+  output, can qualify. Look before acting, and give such work a longer
+  [timeout](configuration.md#idle-screen-timeout-state), configured or per
+  spawn.
+- **Failed samples.** A sample that fails or cannot be trusted (the session
+  gone or not this launch's, the pane not found, tmux not answering) resets
+  the period: an entry not yet shown is dropped, and a shown row clears after
+  the settle time. It never fails the read or other rows. The next
+  successful sample starts a fresh period. A read that
+  cannot commit skips its sample, a reset included, so a later read may
+  continue the committed period.
+- **Time.** A sample makes up to three tmux calls (a lookup, a pane listing
+  and a capture), each bounded by
+  [`query_timeout_ms` or `action_timeout_ms`](configuration.md#timing-settings-tmux).
+  Within one `list`, a tmux server that does not answer a lookup or pane
+  listing is not asked again: its later rows count as failed samples.
+
 ## Ordinary text submission
 
 A nonempty `text` with Enter, without `key`, `request_token` or
@@ -633,10 +792,11 @@ including failed request closure, read errors and caller cancellation or deadlin
 exhaustion return an error with empty results. There is no automatic retry.
 A successful read does not confirm whether terminal closure committed.
 
-Only state is projected: `ended_at` and other timestamps remain the stored
-facts read, so the first missing result may omit `ended_at` even if closure
-subsequently commits. Terminal permission lists are empty; they prove no request
-gone, decision, receipt or delivery. Terminal closure leaves Cursor request proof
+Only state is projected: `ended_at`, `state_changed_at` and other timestamps
+remain the stored facts read, so the first missing result may omit `ended_at`
+and show the earlier `state_changed_at` even if closure subsequently commits.
+Terminal permission lists are empty; they prove no request gone, decision,
+receipt or delivery. Terminal closure leaves Cursor request proof
 unchanged, including after `delivered`; see
 [Cursor permission lifetimes](permissions.md#cursor-spawns).
 Finished rows are not checked again. These reads do not sweep outside their
@@ -891,9 +1051,10 @@ supplies neither ACP approval authority nor proof.
   `confirm_by`.
 - `get`, `list` and `get-permission` never wait for the store's write lock.
 - With a [settle time](configuration.md#settle-time-state) set, `status`,
-  `get` and `list` show the settled state, up to the settle time behind, and
-  nothing marks it as late; verbs act on the live state, so a verb can
-  refuse, with a named error, on a state `status` does not show yet.
+  `get` and `list` show the settled state with no lateness marker;
+  [special-display settling](#needs-intelligence-and-idle-screen-rows)
+  depends on successful observations. Verbs act on the live state, so a verb
+  can refuse, with a named error, on a state `status` does not show yet.
 - Some errors carry their facts in an `err_details` object beside
   `err_name` and `err_description` (in the CLI's error JSON, the MCP
   error's `data`, and the TypeScript client's `errDetails`):

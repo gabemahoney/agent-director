@@ -7,7 +7,8 @@ package store_test
 // last settled state until it has held T, and as the new state from then on;
 // a flap back to the settled state never shows; terminal states and
 // command-driven changes read at once; a negative age is not settled; with no
-// settle time every read is the raw state.
+// settle time every read is the raw state. get and list also carry the stored
+// raw stamp whatever state they report (b.k6i).
 
 import (
 	"slices"
@@ -19,10 +20,12 @@ import (
 )
 
 // reportedAt returns id's state as status, get and list report it with
-// settle time settleMs at nowMs, failing t unless the three reads agree and
-// list's state filter selects the row by that state.
+// settle time settleMs at nowMs, failing t unless the three reads agree,
+// list's state filter selects the row by that state, and get and list carry
+// the stored state_changed_ms (b.k6i).
 func reportedAt(t *testing.T, f *v5Store, id string, settleMs, nowMs int64) string {
 	t.Helper()
+	_, stamp := settleOf(t, f, id)
 	r := store.SettleRead{SettleMs: settleMs, NowMs: nowMs}
 	status, raw, _, err := f.s.SpawnStatusSettled(id, r)
 	if err != nil {
@@ -38,21 +41,24 @@ func reportedAt(t *testing.T, f *v5Store, id string, settleMs, nowMs int64) stri
 	if sp.State != raw {
 		t.Errorf("GetSpawnSettled State = %q; want the raw state %q (guards read it)", sp.State, raw)
 	}
-	listed := func(states ...string) (string, bool) {
+	listed := func(states ...string) (store.Spawn, bool) {
 		rows, err := f.s.ListSpawns(store.ListFilters{State: states, Settle: r})
 		if err != nil {
 			t.Fatalf("ListSpawns: %v", err)
 		}
 		for _, row := range rows {
 			if row.InstanceID == id {
-				return row.ReportedState, true
+				return row, true
 			}
 		}
-		return "", false
+		return store.Spawn{}, false
 	}
 	list, _ := listed()
-	if sp.ReportedState != status || list != status {
-		t.Errorf("reported at %d: status %q, get %q, list %q; want all three the same", nowMs, status, sp.ReportedState, list)
+	if sp.ReportedState != status || list.ReportedState != status {
+		t.Errorf("reported at %d: status %q, get %q, list %q; want all three the same", nowMs, status, sp.ReportedState, list.ReportedState)
+	}
+	if sp.StateChangedMillis != stamp || list.StateChangedMillis != stamp {
+		t.Errorf("StateChangedMillis: get %d, list %d; want the stored %d", sp.StateChangedMillis, list.StateChangedMillis, stamp)
 	}
 	if _, ok := listed(status); !ok {
 		t.Errorf("list --state %s does not select the row reported %s", status, status)

@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// Both branches retain the inspection advice even when SQLite committed durably.
+// Both branches wrap errCommitUnconfirmed and their cause, and retain the
+// inspection advice even when SQLite committed durably.
 func TestDecisionUnconfirmedCommitBranch(t *testing.T) {
 	for _, branch := range []string{"commit_exec", "operation_guard"} {
 		t.Run(branch, func(t *testing.T) {
@@ -85,8 +86,8 @@ func TestDecisionUnconfirmedCommitBranch(t *testing.T) {
 			if branch == "commit_exec" && ctx.Err() != nil {
 				t.Fatalf("outer context expired before worker published COMMIT error: %v", ctx.Err())
 			}
-			if got.written || got.err == nil || !errors.Is(got.err, cause) || errors.Is(got.err, ErrStoreBusy) {
-				t.Fatalf("decision=%v, %v; want unconfirmed commit wrapping %v, never busy", got.written, got.err, cause)
+			if got.written || !errors.Is(got.err, errCommitUnconfirmed) || !errors.Is(got.err, cause) || errors.Is(got.err, ErrStoreBusy) {
+				t.Fatalf("decision=%v, %v; want errCommitUnconfirmed wrapping %v, never busy", got.written, got.err, cause)
 			}
 			advice := "store: commit outcome unconfirmed; read the request before retrying"
 			if !strings.HasPrefix(got.err.Error(), advice) {

@@ -178,6 +178,7 @@ type reuseRequest struct {
 	Labels     map[string]string // agent-director labels
 	NoPreTrust bool              // the call's pre-trust opt-out
 	Parent     string            // the caller's AGENT_DIRECTOR_INSTANCE_ID ("" = none)
+	Timeout    int               // the call's idle_screen timeout override (0 = none)
 }
 
 // reuseParams is q's SpawnParams for r with the opt-in; it sets the test's
@@ -186,7 +187,8 @@ type reuseRequest struct {
 func reuseParams(t *testing.T, r reuseRow, q reuseRequest) api.SpawnParams {
 	setenvIfChanged(t, "AGENT_DIRECTOR_INSTANCE_ID", q.Parent)
 	p := api.SpawnParams{Agent: "claude", InstanceID: r.ID, ReuseFinished: true, TmuxSessionName: q.Name, CWD: q.CWD,
-		AgentArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv()}
+		AgentArgs: q.Args, AgentDirectorLabels: q.Labels, NoPreTrust: q.NoPreTrust, ExtraEnv: r.Trust.extraEnv(),
+		IdleScreenTimeoutSeconds: q.Timeout}
 	if p.TmuxSessionName == "" {
 		p.TmuxSessionName = r.Name
 	}

@@ -63,7 +63,7 @@ func TestContextRequiresCurrentFreshWriter(t *testing.T) {
 				s = openDB(t, db)
 			} else {
 				s, id, path = seedContext(t, sample, opts...)
-				baseline, err := api.Status(s, id)
+				baseline, err := api.Status(s, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -100,7 +100,7 @@ func TestContextRequiresCurrentFreshWriter(t *testing.T) {
 				api.StatusStore
 				api.GetStore
 			}{s, s.WithCursorMissingReads(nil)} {
-				status, err := api.Status(view, id)
+				status, err := api.Status(view, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -151,7 +151,7 @@ func TestContextReaders(t *testing.T) {
 		t.Run(sample.Name, func(t *testing.T) {
 			t.Parallel()
 			s, id, _ := seedContext(t, sample)
-			got, err := api.Status(s, id)
+			got, err := api.Status(s, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -207,7 +207,7 @@ func TestContextUnreadableEvidenceKeepsReadSuccessful(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := api.Status(s, id)
+			got, err := api.Status(s, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,7 +223,7 @@ func TestContextTranscriptSizeBoundaries(t *testing.T) {
 			t.Run(fmt.Sprintf("%s%+d", boundary, offset), func(t *testing.T) {
 				sample := contextfix.Padded(t, "writer", boundary, offset)
 				s, id, _ := seedContext(t, sample)
-				got, err := api.Status(s, id)
+				got, err := api.Status(s, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -250,7 +250,7 @@ func TestContextAPIConsistencyAndRefresh(t *testing.T) {
 				api.StatusStore
 				api.GetStore
 			}{s, wrapped} {
-				got, err := api.Status(view, id)
+				got, err := api.Status(view, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -281,7 +281,7 @@ func TestContextAPIConsistencyAndRefresh(t *testing.T) {
 				if err := os.WriteFile(path, gap.Transcript, 0600); err != nil {
 					t.Fatal(err)
 				}
-				got, err := api.Status(s, id)
+				got, err := api.Status(s, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -294,7 +294,7 @@ func TestContextAPIConsistencyAndRefresh(t *testing.T) {
 				if err := os.WriteFile(path, sample.Transcript, 0600); err != nil {
 					t.Fatal(err)
 				}
-				got, err = api.Status(s, id)
+				got, err = api.Status(s, api.RelayView{}, id)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -317,7 +317,7 @@ func TestContextDoesNotBorrowArchivedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContext(t, row.Context, json.RawMessage(contextfix.UnknownJSON))
-	status, err := api.Status(s, id)
+	status, err := api.Status(s, api.RelayView{}, id)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -70,13 +70,38 @@ func TestListFilters(t *testing.T) {
 	}
 }
 
-// failingListStore is a ListStore whose every read fails with errSentinel.
-type failingListStore struct{}
+// failingListStore fails with errSentinel unless supplied a successful row set.
+// It deliberately has no observation methods.
+type failingListStore struct{ rows []api.Spawn }
 
-func (failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) { return nil, errSentinel }
-
-func (failingListStore) OpenPermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
+func (s failingListStore) ListSpawns(api.ListFilters) ([]api.Spawn, error) {
+	if s.rows != nil {
+		return s.rows, nil
+	}
 	return nil, errSentinel
+}
+
+func (s failingListStore) OpenPermissionRequestsForSpawn(string) ([]api.PermissionRow, error) {
+	if s.rows != nil {
+		return nil, nil
+	}
+	return nil, errSentinel
+}
+
+// b.ob8 F2: successful custom rows with no agent retain availability and state.
+func TestListEmptyAgentAvailability(t *testing.T) {
+	t.Parallel()
+	s := failingListStore{rows: []api.Spawn{{InstanceID: "empty-agent", State: store.StateWorking, FamilyState: store.StateWorking}}}
+	got, err := api.List(s, api.RelayView{}, api.ListParams{})
+	if err != nil || len(got.Spawns) != 1 {
+		t.Fatalf("List=%+v %v", got, err)
+	}
+	row := got.Spawns[0]
+	if row.State != store.StateWorking || row.FamilyState != store.StateWorking || len(row.PermissionRequests) != 0 {
+		t.Fatalf("custom list changed row: %+v", row)
+	}
+	assertIdleAvailability(t, row, row.IdleScreenAvailability, api.IdleScreenAvailable)
+	apitest.CheckOrdinaryWire(t, []byte(jsonOf(t, row)), "")
 }
 
 // TestListFailures: a negative limit (b.c4n) and a label not in key=value form
@@ -183,10 +208,13 @@ func TestListRowKeySet(t *testing.T) {
 		got = append(got, k)
 	}
 	sort.Strings(got)
-	want := []string{"agent", "cwd", "ended_at", "family_state", "instance_id", "labels", "last_seen_at", "liveness_note",
-		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "tmux_session_name"}
+	want := []string{"agent", "cwd", "ended_at", "family_state", "idle_screen_availability", "instance_id", "labels", "last_seen_at", "liveness_note",
+		"liveness_unverified_since", "parent_id", "permission_requests", "relay_mode", "started_at", "state", "state_changed_at", "tmux_session_name"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListRow keys = %v; want exactly %v", got, want)
+	}
+	if m["idle_screen_availability"] != "available" {
+		t.Errorf("idle_screen_availability = %v; want available on a Claude row", m["idle_screen_availability"])
 	}
 	if reqs, ok := m["permission_requests"].([]any); !ok || len(reqs) != 0 {
 		t.Errorf("permission_requests = %v; want [] on a row not in check_permission", m["permission_requests"])

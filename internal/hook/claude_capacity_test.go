@@ -177,7 +177,7 @@ func TestClaudeCapacityInvalidationCannotReplayResponse(t *testing.T) {
 			for i := 0; i < 2; i++ {
 				ssgHandleWith(t, st, hc, string(s.Callback), nil)
 			}
-			got, err := api.Status(st, id)
+			got, err := api.Status(st, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -189,7 +189,7 @@ func TestClaudeCapacityInvalidationCannotReplayResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			ssgHandleWith(t, st, hc, string(next.Callback), nil)
-			got, err = api.Status(st, id)
+			got, err = api.Status(st, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}

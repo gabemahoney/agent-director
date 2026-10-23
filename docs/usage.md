@@ -84,6 +84,21 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
+A row can read one of two states in place of its own:
+`needs_intelligence` while its agent's own permission prompt stays
+unanswered past the
+[configured time](configuration.md#needs-intelligence-timeout-state), or
+`idle_screen` while a `working` Claude or Codex agent's pane looks the same
+on every read for the
+[configured time](configuration.md#idle-screen-timeout-state). Both are
+computed when you call `status`, `get` or `list`; nothing runs in the
+background, so an agent nobody reads never shows either. Which requests
+count is in
+[permissions](permissions.md#needs-intelligence-on-an-unanswered-permission);
+which agents each state applies to, the fields, filtering and what to do
+about it are in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+
 ## Family state
 
 `status`, `get` and each row returned by `list`, on CLI and MCP, include
@@ -93,10 +108,12 @@ reported `pre_trust` outcome means, is in
 A family includes the agent and every stored descendant linked through
 `parent_id`, at any depth. Only live members contribute: a member recorded
 as `ended` or `missing` is excluded, but its retained links still connect
-live descendants. Before [settling](configuration.md#settle-time-state),
-the family is `waiting` exactly when every live member's stored state is
-`waiting`; no live members also means `waiting`. Any other live state,
-including `pending`, `ask_user` or `check_permission`, makes it `working`.
+live descendants. A live member contributes `working` while its raw state
+is not `waiting` or its committed display is `needs_intelligence` or
+`idle_screen`. A retained display keeps that contribution after the raw
+state becomes `waiting`, until its displayed exit commits. With no working
+contributors, including no live members, the aggregate is `waiting`.
+The family then [settles independently](configuration.md#settle-time-state).
 
 Each returned agent's family covers the full stored tree, including members
 hidden by list filters or limits. Resume, reuse and deletion follow the
@@ -138,16 +155,9 @@ Caller setup is in [Drive a Spawn from another agent](#drive-a-spawn-from-anothe
 shell access and restart limits are in the
 [caller contract](caller-contract.md#cursor-operation-boundaries).
 
-To take over, read the row's `tmux_socket` and `tmux_session_name` with `get`,
-then attach on that socket:
-
-```sh
-agent-director get --instance-id "$id"
-tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
-```
-
-The pane accepts editable Unicode text and bracketed multiline paste. Enter
-submits one complete prompt, preserving its Unicode text and newlines.
+To take over, [attach to its pane](#attach-to-a-spawns-pane). The pane
+accepts editable Unicode text and bracketed multiline paste. Enter submits
+one complete prompt, preserving its Unicode text and newlines.
 After confirmed startup, follow-ups wait in the order their submissions are
 observed at the terminal. The queue holds at most 32 waiting submissions and
 8 MiB of waiting text, in addition to one active prompt; each prompt is at
@@ -254,6 +264,16 @@ The filter is exact-match, combines with `--state`, `--label`, `--parent`,
 `--cwd` and `--limit`, and returns live and ended rows, so one name can match
 several rows.
 
+## Attach to a Spawn's pane
+
+Read the row's `tmux_socket` and `tmux_session_name` with `get`, then attach
+on that socket:
+
+```sh
+agent-director get --instance-id "$id"
+tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'
+```
+
 ## Drive a Spawn from another agent
 
 An agent that supervises other agents calls agent-director over MCP:
@@ -327,15 +347,24 @@ change it sees, with no count of identical polls:
 ```sh
 last=""
 while sleep 1; do
-  state=$(agent-director status --instance-id "$id" | jq -r .state)
+  row=$(agent-director status --instance-id "$id")
+  state=$(printf '%s\n' "$row" | jq -r .state)
   if [ "$state" != "$last" ]; then
     last=$state
-    case "$state" in waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;; esac
+    case "$state" in
+      waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;;
+      needs_intelligence|idle_screen) echo "$id: $state, session $(printf '%s\n' "$row" | jq -r .tmux_session_name)" ;;
+    esac
   fi
 done
 ```
 
-It never sees a turn shorter than the settle time.
+It never sees a turn shorter than the settle time. What to do for a
+`needs_intelligence` or `idle_screen` row is in the
+[caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
+To learn whether the state changed since a time of your own, compare that
+time with `state_changed_at` from `get` or `list` (see
+[State change time](caller-contract.md#state-change-time)).
 
 ## Read an agent's subagent records
 

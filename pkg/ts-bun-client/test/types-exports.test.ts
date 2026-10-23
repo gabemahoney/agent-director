@@ -7,7 +7,7 @@
 import { test, expect } from "bun:test";
 import * as ad from "../src/index.js";
 import type { VersionResult, SpawnParams, MakeTemplateParams, StatusResult, GetResult, ListRow, DecideResult, PermissionRequestInfo, Delivery } from "../src/types.js";
-import type { DialogMaybeOpenDetails, ProvenGoneHow } from "../src/index.js";
+import type { DialogMaybeOpenDetails, ProvenGoneHow, IdleScreenAvailability } from "../src/index.js";
 import { TS_ONLY_ERROR_NAMES } from "../src/errors.js";
 import { loadErrNameCatalog } from "./internal/loadCatalog.js";
 
@@ -125,3 +125,18 @@ function _assertFamilyTypes(status: StatusResult, get: GetResult, row: ListRow):
   void [values, waiting, working, listed, badStatus, badGet, badList];
 }
 void _assertFamilyTypes;
+
+// Typecheck (b.ob8): the availability values are a closed union on every read result,
+// unchanged_minutes is a status/get detail only, and spawn's override takes a number or null.
+// state stays a plain string (public-surface.test.ts), so its values are no union to pin here.
+function _assertDisplayTypes(status: StatusResult, get: GetResult, row: ListRow): void {
+  const availability: IdleScreenAvailability[] = [status.idle_screen_availability, get.idle_screen_availability, row.idle_screen_availability];
+  const minutes: (number | undefined)[] = [status.unchanged_minutes, get.unchanged_minutes];
+  const override: SpawnParams = { cwd: "/ws", idle_screen_timeout_seconds: null };
+  // @ts-expect-error — availability is a capability outcome, never a state
+  const badAvailability: IdleScreenAvailability = "idle_screen";
+  // @ts-expect-error — list rows carry only the state
+  const listMinutes = row.unchanged_minutes;
+  void [availability, minutes, override, badAvailability, listMinutes];
+}
+void _assertDisplayTypes;

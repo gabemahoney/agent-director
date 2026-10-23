@@ -135,10 +135,12 @@ const launchOwnerClear = `launch_owner_pid       = NULL,
 // columns, each through the expression snapshotMatchSQL compares, then the
 // eight launch-identity columns. launch_token is selected bare and decoded by
 // decodeLaunchToken; the other nullable columns read NULL as their zero value
-// through COALESCE. The reads returning a Spawn (spawnColumns) and
-// ListLiveSpawnIdentities select it, so a snapshot and identity read by one
-// equal those read by another for the same row, and every snapshot holds the
-// stored text the snapshot-match condition compares (SR-5.3, SR-5.5).
+// through COALESCE. Every read of a row's snapshot or launch identity selects
+// it (among them the full-row Spawn reads through spawnColumns, SpawnStatusRow
+// through statusRowColumns, ListLiveSpawnIdentities, readForReuseSQL and
+// listExpireCandidatesSQL), so they all read the same snapshot and identity
+// for the same row, each holding the stored text the snapshot-match condition
+// compares (SR-5.3, SR-5.5).
 const lifeColumns = `
         COALESCE(row_version, 0), CAST(started_at AS TEXT),
         COALESCE(session_id, ''), COALESCE(pid, 0),

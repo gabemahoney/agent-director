@@ -5,7 +5,8 @@ package api_test
 // reports the settled state, the three agree and list --state filters on it;
 // no read sleeps or waits, at the largest settle time either; the permission
 // requests and launch_started_at follow the raw state; with no settle time
-// the settle columns are ignored.
+// the settle columns are ignored. get's and list's state_changed_at is the
+// stored raw stamp whatever state they report (b.k6i).
 
 import (
 	"path/filepath"
@@ -86,11 +87,21 @@ func clientReported(t *testing.T, c *api.Client, id string) (api.StatusResult, a
 	return status, row, listed
 }
 
+// assertStateChangedAt fails unless get's and list's state_changed_at are
+// stampMs, the stored raw stamp, as a UTC instant (b.k6i).
+func assertStateChangedAt(t *testing.T, row api.SpawnRow, listed api.ListRow, stampMs int64) {
+	t.Helper()
+	if want := time.UnixMilli(stampMs).UTC(); row.StateChangedAt != want || listed.StateChangedAt != want {
+		t.Errorf("%s: state_changed_at get %v, list %v; want the raw stamp %v", row.InstanceID, row.StateChangedAt, listed.StateChangedAt, want)
+	}
+}
+
 // TestClientSettledReads: with the largest settle time, a row raw working
 // whose change from waiting is younger than it (by 1 ms, or with a stamp
 // ahead of the clock) reads waiting, and from exactly the settle time
 // working; a row with no settled state reads raw. With no settle time every
-// row reads raw.
+// row reads raw. Either way state_changed_at is the raw stamp, the zero one
+// (never changed since the v8 migration) the Unix epoch.
 func TestClientSettledReads(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
@@ -108,6 +119,7 @@ func TestClientSettledReads(t *testing.T) {
 		{"held longer", store.StateWaiting, nowMs - 10*settleMax, store.StateWorking},
 		{"stamped ahead of the reader's clock", store.StateWaiting, nowMs + 1000, store.StateWaiting},
 		{"no settled state", "", nowMs, store.StateWorking},
+		{"never stamped", store.StateWorking, 0, store.StateWorking},
 	}
 	ids := make([]string, len(cases))
 	for i, tc := range cases {
@@ -120,12 +132,16 @@ func TestClientSettledReads(t *testing.T) {
 	on := settleClientFor(t, dbPath, settleMax, tmuxfix.NewRecorder(), func() time.Time { return now })
 	off := settleClientFor(t, dbPath, 0, tmuxfix.NewRecorder(), func() time.Time { return now })
 	for i, tc := range cases {
-		if got, _, _ := clientReported(t, on, ids[i]); got.State != tc.want {
+		got, row, listed := clientReported(t, on, ids[i])
+		if got.State != tc.want {
 			t.Errorf("%s: reported %q; want %q", tc.name, got.State, tc.want)
 		}
-		if got, _, _ := clientReported(t, off, ids[i]); got.State != store.StateWorking {
+		assertStateChangedAt(t, row, listed, tc.stampMs)
+		got, row, listed = clientReported(t, off, ids[i])
+		if got.State != store.StateWorking {
 			t.Errorf("%s, no settle time: reported %q; want the raw working", tc.name, got.State)
 		}
+		assertStateChangedAt(t, row, listed, tc.stampMs)
 	}
 }
 

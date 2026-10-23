@@ -93,7 +93,9 @@ Exported factories (in pkg/api/apitest/seeds.go):
   `WithLaunchStartedAt`, `WithNoLaunchToken`, `WithAgent`) set further spawn columns;
   a seeded row is a Claude row unless `WithAgent` says otherwise.
 - `SeedParentChild(dbPath, parentID, childID string) error`
-- `SeedPermissionRequest(dbPath, spawnID, toolName string) (PermissionRequestSeed, error)`
+- `SeedPermissionRequest(dbPath, spawnID, toolName string, opts ...PermissionOption) (PermissionRequestSeed, error)`
+  — the `Permission…` options (registered in
+  [Displayed State reporting](architecture.md#displayed-state-reporting)) set exact request facts.
 - `AgePermissionRequest(dbPath string, requestID int64, createdAgo, hookGoneAgo time.Duration) error`
   — backdates a seeded request's `created_at` (past the relay window it has
   fallen back) and records its `hook_gone_at` in the past (old enough for
@@ -116,6 +118,58 @@ Why this matters (SR-19.2): re-implementing seeding inline tends to drift
 from the store schema and fixture conventions, masking regressions. The
 shared factories are exercised by every consumer, so any schema break is
 caught early.
+
+## Displayed State fixtures
+
+Tests of the `needs_intelligence` and `idle_screen` display, the request
+ownership and fallback clocks, the pane baseline and timeout override, and
+the schema v14 migration seed and assert only through the shared fixtures
+registered in
+[Displayed State reporting](architecture.md#displayed-state-reporting). Do
+not seed those columns with raw SQL or keep a second copy of the expected
+wire detail.
+
+- `SeedNeedsIntelligenceSurface` and `SeedIdleScreenSurface` rows have no
+  pane, so read them under `apitest.SettleOnConfig`, within its settle time,
+  to keep the committed detail.
+- A read that must commit is nonwaiting and best effort. Confirm it with
+  `ObserveDisplayRead`, `commitUnlessBusy` in `internal/store`, or
+  `apitest.RepeatUntilCommitted` directly when the commit is checked on
+  request columns (`TestReadersSkipFallbackWritesThatStoreNothing`), never with a
+  sleep or a retry loop of your own. The first two repeat at the same injected
+  instant under one bound, `apitest.RepeatUntilCommitted`, giving up only
+  after at least 3 attempts and 10 s: `ObserveDisplayRead` until its
+  `CommitCheck` (usually `VersionAdvanced` on `observation_version`) confirms the
+  commit (failing with "observation never committed" once the bound runs
+  out) and checks the display against the committed row; `commitUnlessBusy` while the store
+  answers `ErrStoreBusy`, failing at once on any other error.
+- Pane tests use `paneEnv`. Interleave a write between a sample and its
+  commit with `Recorder.AfterCall` on the capture, and skip a write with
+  `apitest.HoldWriteLock` or `storefix.WriteFailDisplayObservation`, never with
+  a sleep. Fail a sample with `failOnce`, and pass the `CommitCheck` it
+  returns to the committing read, not `apitest.VersionAdvanced`.
+- The `needs-intelligence` and `idle-screen` Docker Epics run, like every
+  Epic, only through the scheduler workflow. **Reviewed exceptions to the
+  raw-SQL rule,** each through `/opt/driver/sql.sh` and each because the
+  columns have no public writer; the shipped binary still creates the schema
+  and makes every observation:
+  - `needs-intelligence` seeds the v14 ownership and clock columns
+    (`owner_launch_token`, `owner_permission_epoch`, `admitted_at`,
+    `fallback_at`, `fallback_basis`) and `spawns.permission_epoch`.
+  - `idle-screen` moves a committed baseline's start (`spawns.pane_since_ms`)
+    back instead of waiting out a timeout (a read is the baseline's only
+    writer), and its Cursor case seeds its rows (an
+    `idle_screen_timeout_seconds` override and an old baseline included) and
+    a request, as `needs-intelligence` does.
+
+  The exceptions cover those two plans only.
+- Lifecycle and read-write coverage lives in
+  `internal/store/display_lifecycle_test.go` (find-missing's repair, unreadable
+  display metadata, reads that write nothing, an unconfirmed commit, the fallback
+  clock rule) and `pkg/api/needs_intelligence_epoch_test.go` (a new interval never
+  inherits an old episode);
+  pane sampling, settling and the direct move in
+  `pkg/api/idle_screen_test.go` and `idle_screen_settle_test.go`.
 
 ## Context fullness captures and fixtures
 

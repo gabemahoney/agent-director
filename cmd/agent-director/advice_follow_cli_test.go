@@ -496,3 +496,75 @@ func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
 		t.Errorf("get = %v; want pending with agent %s", row, agent)
 	}
 }
+
+// advWatchBlock is docs/usage.md's "Watch a Spawn's state" example (F12).
+const advWatchBlock = "```sh\n" + `last=""
+while sleep 1; do
+  row=$(agent-director status --instance-id "$id")
+  state=$(printf '%s\n' "$row" | jq -r .state)
+  if [ "$state" != "$last" ]; then
+    last=$state
+    case "$state" in
+      waiting|ask_user|check_permission|ended|missing) echo "$id: $state" ;;
+      needs_intelligence|idle_screen) echo "$id: $state, session $(printf '%s\n' "$row" | jq -r .tmux_session_name)" ;;
+    esac
+  fi
+done
+` + "```"
+
+// TestAdviceFollow_F12_WatchReportsDisplay follows docs/usage.md's "Watch a Spawn's state" for a row of each Displayed State (b.ob8).
+func TestAdviceFollow_F12_WatchReportsDisplay(t *testing.T) {
+	usage, err := os.ReadFile("../../docs/usage.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, _ := strings.Cut(string(usage), "\n## Watch a Spawn's state\n")
+	section, _, _ = strings.Cut(section, "\n## ")
+	if !strings.Contains(section, advWatchBlock) {
+		t.Fatalf("docs/usage.md \"Watch a Spawn's state\" lacks %q; recheck its literal follow", advWatchBlock)
+	}
+	script := strings.TrimSuffix(strings.TrimPrefix(advWatchBlock, "```sh\n"), "```")
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Fatalf("the block needs jq: %v", err)
+	}
+
+	home := t.TempDir()
+	if err := apitest.SeedNeedsIntelligenceSurface(stateDB(home)); err != nil {
+		t.Fatal(err)
+	}
+	if err := apitest.SeedIdleScreenSurface(stateDB(home)); err != nil {
+		t.Fatal(err)
+	}
+	apitest.SettleVariant{Config: &apitest.SettleOnConfig}.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
+
+	for _, surface := range apitest.DisplayWireSurfaces {
+		id, state := surface.Prefix+surface.Agents[0], surface.State
+		t.Run(id, func(t *testing.T) {
+			raw, stderr, code := runCLIWithHome(t, home, "status", "--instance-id", id)
+			var row struct {
+				State   string `json:"state"`
+				Session string `json:"tmux_session_name"`
+			}
+			if code != 0 || json.Unmarshal([]byte(raw), &row) != nil || row.State != state || row.Session == "" {
+				t.Fatalf("status: %d %s %s; want a %s row with its session", code, raw, stderr, state)
+			}
+
+			// The stand-in sleep succeeds once, then fails, so the loop makes one pass and ends.
+			bin := t.TempDir()
+			if err := os.Symlink(binaryPath, filepath.Join(bin, "agent-director")); err != nil {
+				t.Fatal(err)
+			}
+			marker := filepath.Join(bin, "slept")
+			stand := "#!/bin/sh\n[ -e '" + marker + "' ] && exit 1\n: > '" + marker + "'\n"
+			if err := os.WriteFile(filepath.Join(bin, "sleep"), []byte(stand), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + home, "id=" + id}
+			out, errOut, code, timedOut := execCLI(t, cliOpts{bin: "sh", dir: home, env: env, deadline: surfaceDeadline}, "-c", script)
+			want := id + ": " + state + ", session " + row.Session + "\n"
+			if timedOut || code != 0 || out != want {
+				t.Errorf("watch loop = %q (exit %d, timedOut %v, stderr %q); want %q, exit 0", out, code, timedOut, errOut, want)
+			}
+		})
+	}
+}

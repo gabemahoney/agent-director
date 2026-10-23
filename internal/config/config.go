@@ -359,8 +359,34 @@ func (s Store) refusals() []string {
 	return nil
 }
 
-// State holds the settings of the state status, get and list report (b.3ie).
+// DefaultNeedsIntelligenceTimeoutSeconds is measured from established fallback.
+const DefaultNeedsIntelligenceTimeoutSeconds = 30
+
+// MaxNeedsIntelligenceTimeoutSeconds is the whole-second duration ceiling.
+const MaxNeedsIntelligenceTimeoutSeconds = MaxPauseTimeoutSeconds
+
+// DefaultIdleScreenTimeoutSeconds is the unchanged-pane period (20 minutes)
+// before a working Claude or Codex row becomes an idle_screen candidate.
+const DefaultIdleScreenTimeoutSeconds = 1200
+
+// MaxIdleScreenTimeoutSeconds is the whole-second duration ceiling, for the
+// configuration and the per-spawn override alike.
+const MaxIdleScreenTimeoutSeconds = MaxPauseTimeoutSeconds
+
+// State holds configuration for the displayed row state and the eligibility
+// of the Displayed States needs_intelligence and idle_screen.
 type State struct {
+	// NeedsIntelligenceTimeoutSeconds is the age of an unanswered fallback
+	// before it becomes a report-only needs_intelligence candidate. Zero uses
+	// the default.
+	NeedsIntelligenceTimeoutSeconds int `toml:"needs_intelligence_timeout_seconds"`
+
+	// IdleScreenTimeoutSeconds is how long sampled pane fingerprints must stay
+	// identical before a working row becomes a report-only idle_screen
+	// candidate, for rows spawned without their own override. Zero uses the
+	// default.
+	IdleScreenTimeoutSeconds int `toml:"idle_screen_timeout_seconds"`
+
 	// SettleMs is the settle time, in whole milliseconds: with a positive
 	// value, the state status, get and list report (and list --state filters
 	// on) moves to a new value only once a hook-written raw state has held
@@ -400,16 +426,38 @@ func (s State) EffectiveSettleMs() int {
 	return DefaultStateSettleMs
 }
 
-// refusals returns the description of each refused [state] value, in table
-// order, or nil when every value loads. Only settle_ms is checked: a negative
-// value and one above MaxStateSettleMs are refused, never replaced by the
-// default or capped; 0 turns the settle time off (b.3ie).
-func (s State) refusals() []string {
-	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
-		return []string{fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
-			v, MaxStateSettleMs)}
+// EffectiveNeedsIntelligenceTimeoutSeconds returns the configured positive
+// timeout, or thirty seconds for an omitted/zero value. Load owns validation.
+func (s State) EffectiveNeedsIntelligenceTimeoutSeconds() int {
+	if s.NeedsIntelligenceTimeoutSeconds > 0 {
+		return s.NeedsIntelligenceTimeoutSeconds
 	}
-	return nil
+	return DefaultNeedsIntelligenceTimeoutSeconds
+}
+
+// EffectiveIdleScreenTimeoutSeconds returns the configured positive timeout,
+// or twenty minutes for an omitted/zero value. Load owns validation.
+func (s State) EffectiveIdleScreenTimeoutSeconds() int {
+	if s.IdleScreenTimeoutSeconds > 0 {
+		return s.IdleScreenTimeoutSeconds
+	}
+	return DefaultIdleScreenTimeoutSeconds
+}
+
+// refusals reports out-of-range state controls without clamping.
+func (s State) refusals() []string {
+	var out []string
+	if v := s.NeedsIntelligenceTimeoutSeconds; v < 0 || int64(v) > MaxNeedsIntelligenceTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] needs_intelligence_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxNeedsIntelligenceTimeoutSeconds))
+	}
+	if v := s.IdleScreenTimeoutSeconds; v < 0 || int64(v) > MaxIdleScreenTimeoutSeconds {
+		out = append(out, fmt.Sprintf("[state] idle_screen_timeout_seconds = %d, outside its range 1 to %d seconds", v, MaxIdleScreenTimeoutSeconds))
+	}
+	if v := s.SettleMs; v < 0 || v > MaxStateSettleMs {
+		out = append(out, fmt.Sprintf("[state] settle_ms = %d, outside its range 0 to %d milliseconds",
+			v, MaxStateSettleMs))
+	}
+	return out
 }
 
 // DefaultDbPath is the default of [store] db_path. It is the value Default()
@@ -531,7 +579,9 @@ func Default() Config {
 			BusyTimeoutMs: DefaultStoreBusyTimeoutMs,
 		},
 		State: State{
-			SettleMs: DefaultStateSettleMs,
+			NeedsIntelligenceTimeoutSeconds: DefaultNeedsIntelligenceTimeoutSeconds,
+			IdleScreenTimeoutSeconds:        DefaultIdleScreenTimeoutSeconds,
+			SettleMs:                        DefaultStateSettleMs,
 		},
 		Log: Log{
 			ErrorLogPath: layout.DisplayErrorLogPath,

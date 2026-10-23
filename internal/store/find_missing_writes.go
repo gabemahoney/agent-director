@@ -239,10 +239,15 @@ func (s *Store) terminalMarkIfSameLife(errPrefix, stmt string, args []any, insta
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
+	exits, err := takeDisplayExits(ctx, conn, instanceID)
+	if err != nil {
+		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return "", 0, fmt.Errorf("%s: commit: %w", errPrefix, err)
 	}
 	committed = true
+	emitDisplayTransitions(exits)
 
 	emitTerminalCloseout(ctx, closed, instanceID, reason)
 	return prior, CondApplied, nil
@@ -257,11 +262,16 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 	var prior string
 	var res CondResult
 	var closed []closedRequest
+	var exits []displayTransition
 	err := s.inWriteTxContext(ctx, 0, func(ctx context.Context, conn *sql.Conn) error {
 		var err error
 		prior, res, closed, err = terminalMarkOnConn(ctx, conn, errPrefix, stmt, args, instanceID, reason)
 		if err == nil && res == CondApplied {
-			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing)
+			exits, err = takeDisplayExits(ctx, conn, instanceID)
+			if err != nil {
+				return err
+			}
+			return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, prior, StateMissing, exits...)
 		}
 		return err
 	})
@@ -269,6 +279,7 @@ func (s *Store) terminalMarkWithoutWait(errPrefix, stmt string, args []any, inst
 		return "", 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}
 	if res == CondApplied {
+		emitDisplayTransitionsContext(ctx, exits)
 		emitTerminalCloseout(ctx, closed, instanceID, reason)
 	}
 	return prior, res, nil
@@ -392,7 +403,7 @@ func (s *Store) NoteUnreportedIfSameLife(instanceID string, examined RowSnapshot
 		LivenessNoteUnreported,
 		instanceID, StatePending, LivenessNoteProvenanceConflict,
 	}, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(noteUnreportedIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, noteUnreportedIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -424,7 +435,7 @@ func (s *Store) SetLivenessNoteIfSameLife(instanceID string, examined RowSnapsho
 	const errPrefix = "store: set liveness note if same life"
 	args := append([]any{note, instanceID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(setLivenessNoteIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, setLivenessNoteIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -454,7 +465,7 @@ func (s *Store) ClearLivenessIfSameLife(instanceID string, examined RowSnapshot)
 	const errPrefix = "store: clear liveness if same life"
 	args := append([]any{instanceID}, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(clearLivenessIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, clearLivenessIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -507,7 +518,7 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 	args := append(adoptIdentityArgs(id), instanceID)
 	args = append(args, liveStateGuardArgs()...)
 	args = append(args, snapshotMatchArgs(examined)...)
-	applied, err := s.execGuarded(adoptIdentityIfSameLifeSQL, args, errPrefix)
+	applied, err := s.execGuarded(instanceID, adoptIdentityIfSameLifeSQL, args, errPrefix)
 	if err != nil {
 		return 0, RowSnapshot{}, err
 	}
@@ -530,10 +541,20 @@ func (s *Store) AdoptIdentityIfSameLife(instanceID string, examined RowSnapshot,
 // answer, b.146 rule 9, and not proven gone, b.omt).
 // The move is an immediate write (b.3ie): settled_state takes the same value
 // as state, and state_changed_ms the statement's clock (the WHERE pins
-// check_permission, so the value always changes).
+// check_permission, so the value always changes). Like every immediate write
+// it advances permission_epoch, advances observation_version, clears the
+// display observation and, when the row showed either Displayed State as
+// committed, records the display exit that the transaction drains and emits
+// after commit.
 var repairCheckPermissionSQL = `UPDATE spawns
-    SET state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
-        settled_state = CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END,
+    SET state = ` + repairNewStateSQL + `,
+        permission_epoch = permission_epoch + 1,
+        display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
+          THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ` + repairNewStateSQL + `, 'at_ms', ` + nowMsSQL + `)
+          ELSE display_exit END,
+        display_observation = NULL,
+        observation_version = observation_version + 1,
+        settled_state = ` + repairNewStateSQL + `,
         state_changed_ms = ` + nowMsSQL + `,
         ` + launchStartClear + `,
         ` + rowVersionAdvance + `
@@ -541,6 +562,12 @@ var repairCheckPermissionSQL = `UPDATE spawns
     AND NOT EXISTS (SELECT 1 FROM permission_requests pr
                      WHERE pr.instance_id = spawns.instance_id AND ` + holdsRowSQL + `)
   RETURNING state`
+
+// repairNewStateSQL is the state the repair writes: waiting when idle_since
+// is set on a non-Codex row, working otherwise. Its two placeholders are
+// waiting and working; the statement uses it three times (state, the display
+// exit and the settled value), so the caller repeats the pair.
+const repairNewStateSQL = `CASE WHEN idle_since IS NOT NULL AND agent <> '` + AgentCodex + `' THEN ? ELSE ? END`
 
 // RepairCheckPermissionIfSameLife is find-missing's repair of a stale
 // check_permission row (b.146 rule 9, problem 3): one conditional statement
@@ -580,9 +607,13 @@ var repairCheckPermissionSQL = `UPDATE spawns
 // trail event: the tick is the caller's.
 func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowSnapshot) (newState string, res CondResult, err error) {
 	const errPrefix = "store: repair check_permission if same life"
-	args := append([]any{StateWaiting, StateWorking, StateWaiting, StateWorking, instanceID, StateCheckPermission},
-		snapshotMatchArgs(examined)...)
-	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	var args []any
+	for range 3 {
+		args = append(args, StateWaiting, StateWorking)
+	}
+	args = append(args, instanceID, StateCheckPermission)
+	args = append(args, snapshotMatchArgs(examined)...)
+	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		return conn.QueryRowContext(ctx, repairCheckPermissionSQL, args...).Scan(&newState)
 	})
 	switch {
@@ -598,8 +629,8 @@ func (s *Store) RepairCheckPermissionIfSameLife(instanceID string, examined RowS
 // execGuarded runs one guarded UPDATE or DELETE and reports whether it
 // matched a row.
 // errPrefix names the write in a driver error.
-func (s *Store) execGuarded(q string, args []any, errPrefix string) (bool, error) {
-	r, err := s.execFamily(q, args...)
+func (s *Store) execGuarded(instanceID, q string, args []any, errPrefix string) (bool, error) {
+	r, err := s.execFamily(instanceID, q, args...)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", errPrefix, err)
 	}

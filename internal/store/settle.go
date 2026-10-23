@@ -24,11 +24,29 @@ package store
 // v1.34.0 bundles 3.46.0.
 const nowMsSQL = `CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)`
 
+// committedDisplayStateSQL is the Displayed State the row shows as committed
+// (Spawn.CommittedDisplay, through committedDisplayState), NULL when it shows
+// none: malformed, shapeless or earlier-encoded report-only data shows none,
+// and the function never fails, so such data cannot fail a lifecycle write.
+// A lifecycle write that keeps a displayed observation or records
+// display_exit must use this, never a json_extract of the observation state.
+// Both columns go in as BLOB so the function decodes the bytes a read scans,
+// a NUL included (functionText). SET sees the row as it was before the
+// statement, so this is the display as it stood before this write. The
+// function exists only on this binary's connections, so never use this in a
+// trigger, view, index, CHECK or generated column (committedDisplayStateFunc).
+const committedDisplayStateSQL = committedDisplayStateFunc + `(CAST(state AS BLOB), CAST(display_observation AS BLOB))`
+
 // hookStateSet is the SET fragment of a hook's write of a non-terminal value
 // V, written by the hook process whose settle time is Tw (Store.settleMs). Its
-// placeholders are V, Tw, Tw, V, V (hookStateArgs). SET sees the row as it was
-// before the statement, so the same-value test and the base are decided in
-// this one statement:
+// placeholders are V, V, V, V, Tw, Tw, V, V (hookWriteStateSet): the epoch, the
+// observation, the version, the settled value, the two settle tests, the clock
+// and the state. SET sees the row as it was before the statement, so the
+// same-value test and the base are decided in this one statement. A raw
+// change also advances permission_epoch and observation_version; it keeps an
+// observation the row shows as a committed display of either Displayed State
+// (clearing its candidate, so the display settles out like any other state)
+// and drops any other observation, a malformed one included:
 //   - V equal to the raw state: no column changes, so a same-value write
 //     never restarts the clock;
 //   - otherwise the old raw value becomes the base when it had settled (Tw
@@ -37,7 +55,18 @@ const nowMsSQL = `CAST(ROUND(unixepoch('subsec') * 1000) AS INTEGER)`
 //     there is none (the empty string, as a hand-inserted row has), the same
 //     fallback as SettleRead.stateExpr, so the stored base is never empty;
 //     state becomes V and state_changed_ms now.
-const hookStateSet = `settled_state = CASE WHEN state = ? THEN settled_state
+//
+// json_set can parse every observation the write keeps, because the Go
+// decoder accepts only flat RFC 8259 objects; json_valid guards it as well,
+// so json_set cannot fail the write even where SQLite's JSON functions read
+// a value differently from that decoder (a BLOB, say).
+const hookStateSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       display_observation = CASE WHEN state = ? THEN display_observation
+         WHEN json_valid(display_observation) AND ` + committedDisplayStateSQL + ` IS NOT NULL
+         THEN json_set(display_observation, '$.candidate', '', '$.candidate_since_ms', 0)
+         ELSE NULL END,
+       observation_version = observation_version + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       settled_state = CASE WHEN state = ? THEN settled_state
                             WHEN ? = 0 OR ` + nowMsSQL + ` - state_changed_ms >= ? THEN state
                             ELSE COALESCE(NULLIF(settled_state, ''), state) END,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END,
@@ -47,20 +76,26 @@ const hookStateSet = `settled_state = CASE WHEN state = ? THEN settled_state
 // of V, for a statement whose own SET writes state = V elsewhere (the reuse
 // restore's generated list): settled_state V, so V reports at once, and
 // state_changed_ms now when V is not the raw state already (kept when it is).
-// Its placeholders are V, V.
-const immediateSettleSet = `settled_state = ?,
+// Its placeholders are V four times: epoch, exit, settled value and clock.
+const immediateSettleSet = `permission_epoch = permission_epoch + CASE WHEN state = ? THEN 0 ELSE 1 END,
+       display_exit = CASE WHEN ` + committedDisplayStateSQL + ` IS NOT NULL
+         THEN json_object('prior_state', ` + committedDisplayStateSQL + `, 'new_state', ?, 'at_ms', ` + nowMsSQL + `)
+         ELSE display_exit END,
+       display_observation = NULL,
+       observation_version = observation_version + 1,
+       settled_state = ?,
        state_changed_ms = CASE WHEN state = ? THEN state_changed_ms ELSE ` + nowMsSQL + ` END`
 
 // immediateStateSet is the SET fragment of an immediate write of V: any
 // terminal value (ended, missing), a hook's included, and every write that is
 // not a hook's (find-missing's mark, EndHeldLaunch, MoveToPending,
 // ResetForReuse, resume's and reuse's restores). V reports at once and becomes
-// the last settled value. Its placeholders are V, V, V (immediateStateArgs).
+// the last settled value. Its placeholders are V five times (immediateStateArgs).
 const immediateStateSet = `state = ?, ` + immediateSettleSet
 
 // immediateStateArgs returns immediateStateSet's arguments for the value v.
 func immediateStateArgs(v string) []any {
-	return []any{v, v, v}
+	return []any{v, v, v, v, v}
 }
 
 // isTerminalState reports whether v is a terminal state (ended, missing),
@@ -77,7 +112,7 @@ func (s *Store) hookWriteStateSet(v string) (string, []any) {
 	if isTerminalState(v) {
 		return immediateStateSet, immediateStateArgs(v)
 	}
-	return hookStateSet, []any{v, s.settleMs, s.settleMs, v, v}
+	return hookStateSet, []any{v, v, v, v, s.settleMs, s.settleMs, v, v}
 }
 
 // SetSettleMs sets the settle time, in whole milliseconds, with which this

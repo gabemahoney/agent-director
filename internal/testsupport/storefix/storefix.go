@@ -365,6 +365,9 @@ const (
 	// missing-row save to be deferred by its own deadline must use this kind,
 	// never a slow trigger of its own (docs/architecture.md).
 	WriteFailMissingDeadlineOverrun = writefailfix.MissingDeadlineOverrun
+	// WriteFailDisplayObservation fails the final report write after request
+	// clocks are written.
+	WriteFailDisplayObservation = writefailfix.DisplayObservation
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a

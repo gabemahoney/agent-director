@@ -49,6 +49,16 @@ test.each([
     ["spawn", "--cwd", "/ws", "--agent", "claude"]],
   ["spawn: false booleans omitted (SR-10.1)", "spawn", { cwd: "/ws", no_pre_trust: false, reuse_finished: false },
     ["spawn", "--cwd", "/ws"]],
+  // b.ob8: a 0 or null idle_screen override is none and omitted; any other
+  // value goes through whole, the range's top included, for the CLI to refuse or keep.
+  ["spawn: idle_screen override 0 omitted", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: 0 }, ["spawn", "--cwd", "/ws"]],
+  ["spawn: idle_screen override null omitted", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: null }, ["spawn", "--cwd", "/ws"]],
+  ["spawn: idle_screen override, top of the range", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: 9223372036 },
+    ["spawn", "--cwd", "/ws", "--idle-screen-timeout-seconds", "9223372036"]],
+  ["spawn: fractional idle_screen override passed through", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: 1.5 },
+    ["spawn", "--cwd", "/ws", "--idle-screen-timeout-seconds", "1.5"]],
+  ["spawn: negative idle_screen override passed through", "spawn", { cwd: "/ws", idle_screen_timeout_seconds: -1 },
+    ["spawn", "--cwd", "/ws", "--idle-screen-timeout-seconds", "-1"]],
   // b.vpb: only an empty key or one holding "=" or NUL is refused; a value may hold "=".
   ["spawn: odd but valid extra_env names pass unchanged", "spawn", { cwd: "/ws", extra_env: { "my-var": "a=b", "1ST": "" } },
     ["spawn", "--cwd", "/ws", "--extra-env", "my-var=a=b", "--extra-env", "1ST="]],

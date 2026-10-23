@@ -37,7 +37,7 @@ func TestClaudeContextOnDemandHistoryAndCapacity(t *testing.T) {
 			api.StatusStore
 			api.GetStore
 		}{s, s.WithCursorMissingReads(nil)} {
-			status, err := api.Status(view, id)
+			status, err := api.Status(view, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -93,7 +93,7 @@ func TestClaudeVisibleChildUsesOwnTranscriptAndCapacity(t *testing.T) {
 				want = child.Expected
 			}
 			assertContext(t, result.Subagents[0].Context, want)
-			status, err := api.Status(s, id)
+			status, err := api.Status(s, api.RelayView{}, id)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -155,12 +155,20 @@ func TestFreshStoreSchema(t *testing.T) {
 		{"spawns", "family_changed_ms", "INTEGER", true, "0"},
 	})
 	assertColumnSpecs(t, db, []columnSpec{{"spawns", "codex_startup", "TEXT", false, ""}, {"spawns", "claude_capacity", "TEXT", false, ""}})
-	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"})
+	assertColumnSpecs(t, db, v14ColumnSpecs)
+	// The v14 columns' earlier names are gone; an upgrade's schema is this one.
+	for _, old := range []string{"stuck_version", "stuck_observation", "stuck_exit", "no_screen_change_timeout_seconds"} {
+		if slices.Contains(tableColumnNames(t, db, "spawns"), old) {
+			t.Errorf("spawns keeps the earlier column %s", old)
+		}
+	}
+	wantSpawnsTail := slices.Concat(v6ColumnNames(), v7ColumnNames("spawns"), v8ColumnNames(), v9ColumnNames(), []string{"family_state", "family_settled_state", "family_changed_ms", "codex_startup", "claude_capacity"}, v14ColumnNames("spawns"))
 	if cols := tableColumnNames(t, db, "spawns"); len(cols) < len(wantSpawnsTail) || !slices.Equal(cols[len(cols)-len(wantSpawnsTail):], wantSpawnsTail) {
 		t.Errorf("spawns columns = %v; want the v6, v7, v8 then v9 columns last, in order %v", cols, wantSpawnsTail)
 	}
 	wantRequestsTail := append([]string{"created_at"}, v7ColumnNames("permission_requests")...)
 	wantRequestsTail = append(wantRequestsTail, "main_turn_end_eligible")
+	wantRequestsTail = append(wantRequestsTail, v14ColumnNames("permission_requests")...)
 	if cols := tableColumnNames(t, db, "permission_requests"); len(cols) < len(wantRequestsTail) ||
 		!slices.Equal(cols[len(cols)-len(wantRequestsTail):], wantRequestsTail) {
 		t.Errorf("permission_requests columns = %v; want created_at then the v7 and v11 columns last, in order %v", cols, wantRequestsTail)
@@ -197,7 +205,8 @@ func TestNoAgentSuppliedIdentifierIsAKey(t *testing.T) {
 // schema (the two-places rule, foreign keys included), consumes the sentinel
 // with one ad.schema.migrated line, keeps a pre-existing row with the new
 // columns' defaults (agent claude, no end report, subagent_tracking 0, no
-// subagent entry or claimable launch) and one store id, and does
+// subagent entry or claimable launch, no timeout override or pane baseline)
+// and one store id, and does
 // not backfill v1's permission rows. A reopen is a clean no-op, and a stale
 // sentinel beside the current store is left alone (SR-1, SR-2, SR-5.4).
 func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
@@ -228,8 +237,9 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			sp, err := s.GetSpawn("pre")
 			if err != nil || sp.ExtraEnv == nil || len(sp.ExtraEnv) != 0 || sp.PID != 0 || sp.ProcStarttime != "" ||
 				sp.LivenessUnverifiedSince != "" || sp.LivenessNote != "" || sp.LifeNumber != 0 || sp.NoPreTrust ||
-				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking {
-				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report and untracked", sp, err)
+				sp.LaunchOwner != (LaunchOwner{}) || sp.Agent != AgentClaude || sp.EndReportedAtMillis != 0 || sp.SubagentTracking ||
+				sp.IdleScreenTimeoutSeconds != 0 || sp.PaneSHA256 != "" || sp.PaneSinceMillis != 0 {
+				t.Errorf("pre-migration row = %+v, %v; want it read with the defaults, agent claude, no end report, untracked, no timeout override and no pane baseline", sp, err)
 			}
 			id := s.StoreID()
 			if err := s.Close(); err != nil {

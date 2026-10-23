@@ -138,13 +138,20 @@ func WithEndedAt[T time.Time | string](at T) SpawnOption {
 	return func(o *spawnOpts) { o.set("ended_at", v) }
 }
 
+// WithLastSeenAt seeds last_seen_at in the store's timestamp layout (UTC,
+// whole seconds), in the past so a test sees a hook move it.
+func WithLastSeenAt(at time.Time) SpawnOption {
+	v := storedTimestamp(at)
+	return func(o *spawnOpts) { o.set("last_seen_at", v) }
+}
+
 // WithNoEndedAt stores NULL in ended_at: a finished row whose end time is
 // unknown (SR-4.2).
 func WithNoEndedAt() SpawnOption {
 	return func(o *spawnOpts) { o.set("ended_at", nil) }
 }
 
-// storedTimestamp is the text WithStartedAt and WithEndedAt store.
+// storedTimestamp is the text WithStartedAt, WithEndedAt and WithLastSeenAt store.
 func storedTimestamp[T time.Time | string](at T) string {
 	switch v := any(at).(type) {
 	case time.Time:
@@ -541,4 +548,36 @@ func WithClaimableType(t string) SubagentLaunchOption {
 // milliseconds: what the claimable-launch cap orders by.
 func WithClaimableOpenedAt(ms int64) SubagentLaunchOption {
 	return func(o *subagentLaunchOpts) { o.openedAt = ms }
+}
+
+// WithPermissionEpoch seeds the current continuous permission interval.
+func WithPermissionEpoch(epoch int64) SpawnOption {
+	return func(o *spawnOpts) { o.set("permission_epoch", epoch) }
+}
+
+// WithDisplayObservation seeds committed report detail or a pending candidate.
+func WithDisplayObservation(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("display_observation", nullIfZero(raw)) }
+}
+
+// WithDisplayExit seeds a pending Displayed State exit record (valid or malformed).
+func WithDisplayExit(raw string) SpawnOption {
+	return func(o *spawnOpts) { o.set("display_exit", nullIfZero(raw)) }
+}
+
+// WithIdleScreenTimeout seeds the row's per-spawn timeout override as
+// stored: any value, a malformed one included; nil stores NULL (no override).
+func WithIdleScreenTimeout(raw any) SpawnOption {
+	return func(o *spawnOpts) { o.set("idle_screen_timeout_seconds", raw) }
+}
+
+// WithPaneBaseline seeds the committed pane baseline as stored: the
+// fingerprint, the start of its unchanged period (Unix ms) and the permission
+// epoch it belongs to, any value a malformed one included; nil stores NULL.
+func WithPaneBaseline(sha, sinceMs, epoch any) SpawnOption {
+	return func(o *spawnOpts) {
+		o.set("pane_sha256", sha)
+		o.set("pane_since_ms", sinceMs)
+		o.set("pane_epoch", epoch)
+	}
 }

@@ -97,8 +97,9 @@ var readSurfaceSettledAt = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
 // hook_gone_at), and no read of the store writes, so each read gives the same
 // bytes on every run. Last, every row's settle columns are scrambled
 // (ReadSurfaceSettled, ReadSurfaceStampMs), which status, get and list with
-// no settle time must ignore. It returns the row ids in seeding order and
-// fails when a row does not end in its intended raw state.
+// no settle time must ignore but for get's and list's state_changed_at, the
+// stamp. It returns the row ids in seeding order and fails when a row does
+// not end in its intended raw state.
 func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 	rows := readSurfaceRows()
 	ids := make([]string, 0, len(rows))
@@ -166,8 +167,9 @@ func SeedReadSurfaceStore(dbPath string) ([]string, error) {
 }
 
 // ReadSurfaceStampMs is the state_changed_ms SeedReadSurfaceStore gives every
-// row: 2099-01-01, ahead of any clock a test runs on.
-var ReadSurfaceStampMs = readSurfaceSettledAt.UnixMilli()
+// row: 2099-01-01, ahead of any clock a test runs on, with a millisecond
+// fraction get's and list's state_changed_at must keep (b.k6i).
+var ReadSurfaceStampMs = readSurfaceSettledAt.Add(123 * time.Millisecond).UnixMilli()
 
 // ReadSurfaceSettledFamily is the independent binary family scramble.
 func ReadSurfaceSettledFamily(raw string) string {
@@ -262,6 +264,11 @@ func pinReadSurfaceTimes(dbPath string, rows []readSurfaceRow) error {
 		}
 	}
 	for _, req := range readSurfaceRequests {
+		if !req.relay {
+			if _, err := tx.Exec(`UPDATE permission_requests SET owner_launch_token=NULL, owner_permission_epoch=NULL WHERE instance_id=? AND request_token=?`, req.spawnID, req.token); err != nil {
+				return err
+			}
+		}
 		var gone any
 		if !req.hookGone.IsZero() {
 			gone = req.hookGone.UnixMilli()

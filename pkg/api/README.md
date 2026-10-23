@@ -172,6 +172,10 @@ transcript exists. See [Transcript recovery](../../docs/caller-contract.md#trans
 for classification and recovery, and [Usage](../../docs/usage.md#naming-the-agent)
 for restoration and children.
 
+`SpawnParams.IdleScreenTimeoutSeconds` gives the row its own `idle_screen`
+timeout in whole seconds (0 for none); its range and lifecycle are in
+[Configuration](../../docs/configuration.md#idle-screen-timeout-state).
+
 Returns `SpawnResult` (`.InstanceID`, `.PreTrust`, `.DroppedArgs`).
 `.DroppedArgs` lists removed original argument tokens in argv order on a
 switching reuse, which starts fresh and resumes nothing. JSON omits
@@ -197,7 +201,7 @@ See `(*Client).Spawn` godoc for the full enumeration.
 
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
-`missing`.
+`missing`, `needs_intelligence`, `idle_screen`.
 `pending` means a launch (spawn, reuse or resume) is in progress and the
 agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
@@ -217,22 +221,51 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
+While `State` is `api.StateNeedsIntelligence` or `api.StateIdleScreen`,
+`StatusResult` and `Get`'s `SpawnRow` carry the embedded `StateDetail`:
+`.Since`, a string, and that state's detail, `.RequestToken` and `.ToolName`
+for `needs_intelligence` or `.UnchangedMinutes`, an `*int64`, for
+`idle_screen` (JSON `since`, `request_token`, `tool_name`,
+`unchanged_minutes`); `StatusResult.TmuxSessionName` (JSON
+`tmux_session_name`) is set. `ListRow` carries the state, no detail. A field
+that does not apply is empty (nil), and absent from the JSON. `StatusResult`,
+`SpawnRow` and `ListRow` also carry `IdleScreenAvailability` (JSON
+`idle_screen_availability`): `api.IdleScreenAvailable` for Claude and Codex,
+`api.IdleScreenUnavailable` for Cursor. The
+[caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
+defines the states, fields, omissions and detection.
+
+For Go custom stores, successful status/get/list rows with no agent report
+`api.IdleScreenAvailable` for compatibility; this does not permit pane
+sampling. Only Claude and Codex are eligible for sampling.
+
 `StatusResult`, `Get`'s `SpawnRow` and each `ListRow` expose
 `FamilyState string` (JSON `family_state`), either `"working"` or `"waiting"`.
-[Usage](../../docs/usage.md#family-state) defines membership and raw
+[Usage](../../docs/usage.md#family-state) defines membership and
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
+`Get`'s `SpawnRow` and each `ListRow` expose `StateChangedAt time.Time` (JSON
+`state_changed_at`), when the raw state last changed; `StatusResult` does
+not. The [caller contract](../../docs/caller-contract.md#state-change-time)
+defines it and how it differs from `LastSeenAt`, the settled `State` and
+`Since`.
+
 `Client.Status`, `Client.Get` and `Client.List` use the config loaded when
 the client was built for [independent state and family
-settling](../../docs/configuration.md#settle-time-state). Other result fields
-and verbs that act on a row follow its live state. The package-level
-`api.Status`, `api.Get` and `api.List` functions use no settle time.
+settling](../../docs/configuration.md#settle-time-state). While an exit or
+direct move from `needs_intelligence` or `idle_screen` settles, `Status` and
+`Get` retain the previous display's committed `Since` and state-specific
+detail. `StateChangedAt` and permission-request lists follow the live state;
+commands keep their raw-state guards. The package-level
+`api.Status`, `api.Get` and `api.List` functions use no settle time and
+sample no pane, so only a `Client` detects `idle_screen`.
 
 For Cursor, `Client.Status`, `Client.Get` and `Client.List` can report a
 launch-guarded `missing` read result even when the separate terminal write is
 busy or reaches its deadline. This does not confirm durable closure;
-`ended_at` remains the stored timestamp read and may be absent. The
+`ended_at` and `state_changed_at` remain the stored values read, and
+`ended_at` may be absent. The
 [caller contract](../../docs/caller-contract.md#cursor-operation-boundaries)
 defines caller-budget errors, request proof and recovery. Package-level
 `api.Status`, `api.Get` and `api.List` do not check gateway liveness.
@@ -260,9 +293,10 @@ for _, row := range res.Spawns {
 
 Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 `"codex"` or `"cursor"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
-encodes as `[]` when empty. With `[state] settle_ms` set, `State` filters
-on the settled state each row reports (see Status). `Limit` caps the rows
-returned; 0 means no cap. Sentinel errors, each returned before the store is
+encodes as `[]` when empty. The `State` filter matches the displayed state
+(see Status), including `"needs_intelligence"` and `"idle_screen"`, and is
+applied before `Limit`.
+`Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.
 
@@ -609,7 +643,7 @@ pane answer's `ErrInternal` after its key was sent (`PaneKeySentDetails`).
 naming its `PaneAnswer`, as `SendKeys` and `RecordPaneAnswer` do, and
 records nothing.
 
-The exported functions `api.Decide`, `api.Get`, `api.List` and
+The exported functions `api.Decide`, `api.Status`, `api.Get`, `api.List` and
 `api.GetPermission` take a `RelayView`, and `api.SendKeys`,
 `api.RecordPaneAnswer` and `api.Pause` (`PauseEnv`) an env holding one (the
 `Client` methods pass their own); `DecideResult` embeds `RequestDelivery`.

@@ -1748,3 +1748,65 @@ func seedV11StartupFixture(t *testing.T, path, definition string, marker any) {
 		}
 	})
 }
+
+var v14ColumnSpecs = []columnSpec{
+	{"spawns", "permission_epoch", "INTEGER", true, "0"},
+	{"spawns", "observation_version", "INTEGER", true, "0"},
+	{"spawns", "display_observation", "TEXT", false, ""},
+	{"spawns", "display_exit", "TEXT", false, ""},
+	{"spawns", "idle_screen_timeout_seconds", "INTEGER", false, ""},
+	{"spawns", "pane_sha256", "TEXT", false, ""},
+	{"spawns", "pane_since_ms", "INTEGER", false, ""},
+	{"spawns", "pane_epoch", "INTEGER", false, ""},
+	{"permission_requests", "owner_launch_token", "TEXT", false, ""},
+	{"permission_requests", "owner_permission_epoch", "INTEGER", false, ""},
+	{"permission_requests", "admitted_at", "INTEGER", false, ""},
+	{"permission_requests", "fallback_at", "INTEGER", false, ""},
+	{"permission_requests", "fallback_basis", "TEXT", false, ""},
+}
+
+func v14ColumnNames(table string) []string {
+	var names []string
+	for _, c := range v14ColumnSpecs {
+		if c.table == table {
+			names = append(names, c.name)
+		}
+	}
+	return names
+}
+
+func preAddV14Columns(t *testing.T, path string, specs []columnSpec) {
+	t.Helper()
+	withRaw(t, path, func(db *sql.DB) {
+		for _, c := range specs {
+			mustExec(t, db, c.addColumnDDL())
+		}
+	})
+}
+
+// seedV13PermissionFixture retains lifecycle/runtime history and independent
+// unanswered, answered and proven requests, with distinct trustworthy clocks.
+func seedV13PermissionFixture(t *testing.T, path string) {
+	t.Helper()
+	seedV11StartupFixture(t, path, "", nil)
+	withRaw(t, path, func(db *sql.DB) {
+		mustExec(t, db, `UPDATE spawns SET state='check_permission',settled_state='check_permission',
+			launch_token=?,life_number=3,row_version=7,state_changed_ms=1792411200125,
+			family_state='working',family_settled_state='waiting',family_changed_ms=123,
+			pid=4242,proc_starttime='kept-process',pane_id='%5',pane_pid=4242,pane_starttime='kept-pane'`, testLaunchToken)
+		mustExec(t, db, `UPDATE permission_requests SET created_at='2026-10-19 12:00:01',settled_at=1792411205000,
+			hook_gone_at=1792411206000,decision_reason='pane_outside',decided_at='2026-10-19 12:00:07'`)
+		for _, r := range []struct{ token, answer, proof string }{
+			{tokenB, "none", ""}, {tokenC, "outside", ""}, {tokenD, "none", "turn_end"},
+		} {
+			var proofAt any
+			if r.proof != "" {
+				proofAt = int64(1792411207000)
+			}
+			insertRow(t, db, "permission_requests", map[string]any{"instance_id": "pre", "request_token": r.token,
+				"tool_name": "Read", "tool_input": `{}`, "created_at": "2026-10-19 12:00:01",
+				"settled_at": int64(1792411205000), "hook_gone_at": int64(1792411206000), "pane_answer": r.answer,
+				"proven_gone_how": nullableStringArg(r.proof), "proven_gone_at": proofAt})
+		}
+	})
+}

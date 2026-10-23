@@ -202,6 +202,7 @@ func TestSettleGuardPause(t *testing.T) {
 	r := e.seedRow(t, killRowSpec{State: store.StateWorking})
 	c := e.settleClient(t)
 	unsettle(t, c, e.dbPath, r.ID, store.StateWaiting, e.clock.Now())
+	e.rec.Reset() // unsettle's status read sampled the raw working row's own pane
 
 	_, err := c.Pause(context.Background(), api.PauseParams{InstanceID: r.ID})
 
@@ -284,7 +285,7 @@ var settledReadNames = map[string]bool{"ReportedState": true, "GetSpawnSettled":
 
 // settledReadFiles are the only production files that may name them: the
 // derivation and the store reads, and status, get and list.
-var settledReadFiles = []string{"internal/store/settle.go", "internal/store/family.go", "internal/store/spawns.go", "internal/store/list.go", "internal/store/cursor_missing_read.go",
+var settledReadFiles = []string{"internal/store/settle.go", "internal/store/family.go", "internal/store/spawns.go", "internal/store/spawn_status.go", "internal/store/list.go", "internal/store/cursor_missing_read.go", "internal/store/display.go", "pkg/api/display.go",
 	"pkg/api/client.go", "pkg/api/status.go", "pkg/api/get.go", "pkg/api/list.go"}
 
 // TestOnlyTheReadSurfacesReadTheSettledState: no production file outside

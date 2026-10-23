@@ -365,7 +365,7 @@ func readOne(t *testing.T, dbPath, id string) apitest.SpawnColumns {
 // assertReadsEnded fails unless status, get and list all give id's state as ended.
 func assertReadsEnded(t *testing.T, s *store.Store, id string) {
 	t.Helper()
-	if st, err := api.Status(s, id); err != nil || st.State != store.StateEnded {
+	if st, err := api.Status(s, api.RelayView{}, id); err != nil || st.State != store.StateEnded {
 		t.Errorf("status = %+v, %v; want ended", st, err)
 	}
 	if row, err := api.Get(s, api.RelayView{}, id); err != nil || row.State != store.StateEnded {

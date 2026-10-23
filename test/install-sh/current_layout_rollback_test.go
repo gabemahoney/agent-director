@@ -45,7 +45,7 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, v10→v11, v11→v12 and v12→v13, the old-layout steps below do not apply",
+		"including schema v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14, the old-layout steps below do not apply",
 		"stop agents, servers and callers and keep a copy of the actual",
 		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
 		"restore that pre-upgrade copy and install the previous release with its own",
@@ -55,9 +55,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 		"This loses all writes made since the backup",
 		"The installer does not make this backup",
 		"A copy made after migration cannot replace the pre-upgrade backup",
-		"make a v13 store readable by a v9, v10, v11 or v12 binary",
-		"There is no supported in-place downgrade from v13",
-		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13",
+		"make a v14 store readable by a v9, v10, v11, v12 or v13 binary",
+		"There is no supported in-place downgrade from v14",
+		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13 or v14",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -93,6 +93,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 				t.Fatalf("released baseline created schema %s; want 9", v)
 			}
 			seed := "INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent,agent_args,labels,session_id) VALUES ('before','ended','/before','ad-before','off','codex','[\"-m\",\"original\"]','{\"owner\":\"before\"}','original-session');"
+			seed += "UPDATE spawns SET launch_token='0123456789abcdef',life_number=2,row_version=7,pid=4242,proc_starttime='original-process',pane_id='%4',pane_pid=4242,pane_starttime='original-pane' WHERE instance_id='before';"
+			seed += "INSERT INTO session_history(instance_id,session_id,jsonl_path,life_number) VALUES('before','previous-session','/before.jsonl',1);"
+			seed += "INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,created_at,settled_at,hook_gone_at,pane_answer,pane_as,decision,decision_reason,proven_gone_at,proven_gone_how) VALUES('before','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}','2026-10-19 12:00:01',1792411205000,1792411206000,'outside','deny','deny','pane_outside',1792411207000,'agent_gone');"
 			if tc.companions {
 				// Stop and wait for the only writer before copying committed WAL pages.
 				h.HoldSQLite(db, "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"+seed).Kill()
@@ -103,6 +106,8 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			if tc.companions && (len(backup["-wal"]) == 0 || len(backup["-shm"]) == 0) {
 				t.Fatal("the stopped writer must leave committed WAL and SHM to restore")
 			}
+			preservedQuery := "SELECT launch_token,life_number,row_version,pid,proc_starttime,pane_id,pane_pid,pane_starttime FROM spawns; SELECT * FROM permission_requests; SELECT * FROM session_history; SELECT * FROM store_meta;"
+			preserved := h.Sqlite(db, preservedQuery)
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
 			moveMustInstall(t, h)
 			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
@@ -110,6 +115,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			}
 			if got := h.Sqlite(db, "SELECT name FROM pragma_table_info('spawns') WHERE name IN ('codex_startup','claude_capacity') ORDER BY name;"); got != "claude_capacity\ncodex_startup\n" {
 				t.Fatalf("v13 upgrade lacks both provenance columns: %q", got)
+			}
+			if got := h.Sqlite(db, "SELECT count(*) FROM pragma_table_info('spawns') WHERE name IN ('permission_epoch','observation_version','display_observation','display_exit','idle_screen_timeout_seconds','pane_sha256','pane_since_ms','pane_epoch'); SELECT count(*) FROM pragma_table_info('permission_requests') WHERE name IN ('owner_launch_token','owner_permission_epoch','admitted_at','fallback_at','fallback_basis');"); got != "8\n5\n" {
+				t.Fatalf("v14 upgrade lacks permission observation/ownership or pane columns: %q", got)
 			}
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("binary swap alone accepted the current schema: %+v", got)
@@ -133,6 +141,9 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			want := "before|/before|codex|[\"-m\",\"original\"]|{\"owner\":\"before\"}|original-session\n"
 			if rows := h.Sqlite(db, "SELECT instance_id,cwd,agent,agent_args,labels,session_id FROM spawns ORDER BY instance_id;"); rows != want {
 				t.Fatalf("restored rows = %q; want %q (post-upgrade writes lost)", rows, want)
+			}
+			if got := h.Sqlite(db, preservedQuery); got != preserved {
+				t.Fatalf("restore changed identity, life/history, permission answers/proof/timing or store identity: got %q; want %q", got, preserved)
 			}
 			if got := h.migRead(filepath.Join(h.New, "config.toml")); got != cfg {
 				t.Fatalf("original settings changed: %q", got)

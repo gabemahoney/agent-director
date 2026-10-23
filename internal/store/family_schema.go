@@ -44,7 +44,9 @@ func migrateV11toV12(db *sql.DB) error {
 	if invalid {
 		return fmt.Errorf("%w: store: v11→v12 invalid family history", ErrSchemaMismatch)
 	}
-	if _, err := tx.Exec(familyAggregateSQL + `UPDATE spawns SET
+	// This hop predates display_observation. Initialize from raw membership;
+	// current-schema refreshes also count committed retained displays.
+	if _, err := tx.Exec(familyAggregateForSQL(`state NOT IN ('ended', 'missing', 'waiting')`) + `UPDATE spawns SET
  family_state = aggregate.value,
  family_settled_state = aggregate.value,
  family_changed_ms = 0 FROM aggregate

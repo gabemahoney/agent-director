@@ -41,3 +41,6 @@ cursor-groups
 cursor-callers-help
 family-state
 context-fullness
+needs-intelligence
+state-changed-at
+idle-screen

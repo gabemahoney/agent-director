@@ -69,6 +69,9 @@ func SetCursorMissingDeferredForTest(c *Client, observe func(instanceID string, 
 // (c *Client).Decide instead.
 var DecideWithSleep = decide
 
+// StatusSettledForTest exercises optional custom-store dispatch with settling enabled.
+var StatusSettledForTest = statusSettledWithRelay
+
 // DecideWithinForTest exercises policy with an explicit controlled context;
 // physical deadline tests continue to use DecideWithSleep or the public API.
 var DecideWithinForTest = decideWithin

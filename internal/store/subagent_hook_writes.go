@@ -93,7 +93,7 @@ func (s *Store) ApplySubagentLifecycle(instanceID string, gate HookGate, ev Suba
 	}
 	q, args := gatedHookUpdate(instanceID, gate, `last_seen_at = CURRENT_TIMESTAMP`, nil, jsonlPath, jsonlPresent)
 	var prior string
-	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errSubagentNotApplied
@@ -181,7 +181,7 @@ func (s *Store) ApplySubagentAfterWrite(instanceID string, gate HookGate, w Suba
 	if set != 1 {
 		return fmt.Errorf("%s: exactly one write is required, got %d", errPrefix, set)
 	}
-	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		tx, err := newSubagentTx(ctx, conn, instanceID, gate)
 		if err != nil {
 			return err

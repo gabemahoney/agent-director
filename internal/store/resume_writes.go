@@ -139,7 +139,7 @@ func (s *Store) MoveToPending(instanceID string, examined RowSnapshot, launchSta
 		moved  bool
 		closed []closedRequest
 	)
-	err = s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err = s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		r, err := conn.ExecContext(ctx, moveToPendingSQL, args...)
 		if err != nil {
 			return err
@@ -257,7 +257,7 @@ func (s *Store) RestoreAfterFailedResume(instanceID string, movedVersion int64, 
 		boolInt(prior.SubagentTracking),
 		instanceID, StatePending, movedVersion,
 	)
-	r, err := s.execFamily(restoreAfterFailedResumeSQL, args...)
+	r, err := s.execFamily(instanceID, restoreAfterFailedResumeSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("%s: %w", errPrefix, err)
 	}

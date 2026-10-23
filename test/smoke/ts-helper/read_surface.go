@@ -112,3 +112,28 @@ func cmdSetSettle(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// cmdSeedSurface seeds the shared precommitted display wire surface seed adds
+// (apitest.SeedNeedsIntelligenceSurface, apitest.SeedIdleScreenSurface) into
+// --store, for the subcommand name.
+func cmdSeedSurface(name string, seed func(string) error, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("store", "", "store path")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if *path == "" {
+		printError(stderr, errors.New("--store is required"))
+		return 1
+	}
+	if err := seed(*path); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	if err := printResult(stdout, map[string]any{"seeded": true}); err != nil {
+		printError(stderr, err)
+		return 1
+	}
+	return 0
+}

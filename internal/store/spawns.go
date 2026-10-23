@@ -72,8 +72,12 @@ const (
 	StateWorking         = "working"
 	StateAskUser         = "ask_user"
 	StateCheckPermission = "check_permission"
-	StateEnded           = "ended"
-	StateMissing         = "missing"
+	// StateNeedsIntelligence and StateIdleScreen are the Displayed States,
+	// derived by reads only; neither must ever be written to state.
+	StateNeedsIntelligence = "needs_intelligence"
+	StateIdleScreen        = "idle_screen"
+	StateEnded             = "ended"
+	StateMissing           = "missing"
 )
 
 // liveStates is the set of live state values (anything except the terminal
@@ -108,6 +112,13 @@ func IsLiveState(state string) bool {
 // Spawn mirrors a row of the `spawns` table for callers outside this
 // package. AgentArgs and Labels are presented as their materialized Go
 // shapes; the JSON encoding stays inside the package.
+//
+// Which fields a Spawn holds depends on the reader. The full-row readers
+// (GetSpawn, GetSpawnSettled, ListSpawns and the other spawnColumns/scanSpawn
+// reads) fill every field, and the field comments below describe those
+// reads. SpawnStatusRow is a partial reader: it fills only the fields its
+// comment lists, and every other field keeps its zero value, which says
+// nothing about what the row stores.
 type Spawn struct {
 	// CodexStartup is admitted fresh-history provenance; it contains no usage.
 	// It is never taken from a caller's Spawn by insert/reuse writes.
@@ -128,16 +139,18 @@ type Spawn struct {
 	EndedAt         *time.Time
 
 	// ExtraEnv holds the spawn's captured extra environment (schema v3,
-	// extra_env column). Decoded like Labels: empty-string / '{}' / a
-	// migrated pre-v3 NULL/default all decode to an empty NON-NIL map,
-	// never nil. Store-internal only — never surfaced in any API row shape.
+	// extra_env column). Decoded like Labels by a full-row read:
+	// empty-string / '{}' / a migrated pre-v3 NULL/default all decode to an
+	// empty NON-NIL map, never nil (SpawnStatusRow leaves Labels and
+	// ExtraEnv nil).
+	// Store-internal only — never surfaced in any API row shape.
 	ExtraEnv map[string]string
 
 	// PID, ProcStarttime, LivenessUnverifiedSince, and LivenessNote are the
 	// schema-v3 identity/liveness columns, scanned via COALESCE per the
 	// jsonl_path/session_id precedent.
 	//
-	// NULL semantics: a zero value ("" for the string fields, 0 for PID)
+	// When selected, a zero value ("" for the string fields, 0 for PID)
 	// means the underlying SQL column is NULL. Writers MUST store NULL for
 	// the cleared/unset state, never an empty string or 0 — this keeps
 	// SR-8.2's "cleared = set NULL" semantics unambiguous under COALESCE
@@ -147,10 +160,11 @@ type Spawn struct {
 	LivenessUnverifiedSince string
 	LivenessNote            string
 
-	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every read that
-	// returns a Spawn. InsertPending and ResetForReuse take
-	// LaunchStartedAtMillis, NoPreTrust, Identity.Token and Identity.Socket
-	// from a Spawn; no write takes the others from one. The SR-5.5 columns never fail a read.
+	// The schema-v5 fields (SR-5.1, Appendix F.4), filled by every full-row
+	// read (SpawnStatusRow fills all but NoPreTrust and EndedAtText).
+	// InsertPending and ResetForReuse take LaunchStartedAtMillis, NoPreTrust,
+	// Identity.Token and Identity.Socket from a Spawn; no write takes the
+	// others from one. The SR-5.5 columns never fail a read.
 
 	// RowVersion is row_version: advanced by one by every write (SR-5.2).
 	RowVersion int64
@@ -182,27 +196,28 @@ type Spawn struct {
 
 	// LaunchOwner is the schema-v6 launch owner (b.kdf): the process that
 	// began the row's current launch, while that launch holds the row.
-	// InsertPending and ResetForReuse take it from a Spawn; every read that
-	// returns a Spawn fills it, the zero value for NULL (a row from before
-	// schema v6 included).
+	// InsertPending and ResetForReuse take it from a Spawn; every full-row
+	// read fills it, the zero value for NULL (a row from before schema v6
+	// included). SpawnStatusRow does not select it.
 	LaunchOwner LaunchOwner
 
 	// IdleSince is the schema-v7 idle_since column (b.146 problem 3), as
 	// stored ("" = NULL): set by the main agent's idle-prompt Notification
 	// (ApplyHookWaitingIfWorking), NULLed by any later hook. find-missing's
 	// repair of a stale check_permission row picks waiting when it is set.
+	// Full-row reads fill it; SpawnStatusRow does not select it.
 	IdleSince string
 
-	// Agent is the schema-v9 agent column (SR-3.1): claude, codex or cursor. Every read
-	// that returns a Spawn fills it; InsertPending and ResetForReuse write it
-	// from a Spawn, refusing any other value (ErrRowAgentInvalid). Rows that
-	// existed at the v9 migration read claude.
+	// Agent is the schema-v9 agent column (SR-3.1): claude, codex or cursor.
+	// Full-row reads and SpawnStatusRow fill it; InsertPending and
+	// ResetForReuse write it from a Spawn, refusing any other value
+	// (ErrRowAgentInvalid). Rows that existed at the v9 migration read claude.
 	Agent string
 
 	// EndReportedAtMillis is the schema-v9 end_reported_at column (SR-3.1):
 	// when a Codex row's verified agent process sent a SessionEnd, in
 	// milliseconds since the epoch; 0 = absent (NULL, or a stored value that is
-	// not a positive integer). Every read that returns a Spawn fills it. No
+	// not a positive integer). Full-row reads and SpawnStatusRow fill it. No
 	// write takes it from a Spawn: it is NULL on insert and after reuse's
 	// reset, set by ApplyHookEndReport (a Codex SessionEnd), cleared by the
 	// SessionStart identity write and by resume's move to pending, and saved
@@ -211,9 +226,9 @@ type Spawn struct {
 
 	// SubagentTracking is the schema-v9 subagent_tracking column (b.xjn, SR-9):
 	// true when the settings the row's current launch was given register the
-	// agent's subagent start and stop events. Every read that returns a Spawn
-	// fills it; true only for the integer 1 (1 means tracked), and false for 0
-	// and any other stored value (any other value reads as untracked), so no stored value
+	// agent's subagent start and stop events. Every full-row read fills it
+	// (SpawnStatusRow does not select it); true only for the integer 1,
+	// and false for any other stored value (untracked), so no stored value
 	// fails a read (see decodeSubagentTracking). InsertPending, ResetForReuse
 	// and MoveToPending each write it for the launch they begin, from the
 	// launch's agent and taking nothing else from a Spawn: 1 for a claude
@@ -224,10 +239,51 @@ type Spawn struct {
 	// ListRow or any verb output.
 	SubagentTracking bool
 
+	// StateChangedMillis is state_changed_ms (b.3ie): when the raw state last
+	// changed, in milliseconds since the epoch; 0 for a row whose raw state has
+	// not changed since the v8 migration. Every full-row read fills it (b.k6i);
+	// SpawnStatusRow does not select it. No write takes it from a Spawn: the
+	// writers stamp it in SQL.
+	StateChangedMillis int64
+
+	// PermissionEpoch is permission_epoch, the raw-state interval counter: each
+	// write that changes the raw state advances it (hookStateSet,
+	// immediateSettleSet, find-missing's check_permission repair). A permission
+	// request is owned by the check_permission interval it was recorded in
+	// (owner_permission_epoch), and a display observation and a pane baseline
+	// by the interval they were made in, so neither counts in a later interval.
+	PermissionEpoch int64
+	// ObservationVersion is observation_version, advanced by every write of
+	// the stored display observation or pane baseline: the observers' commits
+	// (ObserveNeedsIntelligence, ObserveIdleScreen) and the lifecycle writes
+	// that keep or clear the observation (hookStateSet on a raw-state change,
+	// immediateSettleSet, find-missing's check_permission repair).
+	// lockedObservationRow refuses a plan made from another version, and
+	// observationLanded recognises its own commit as the next one.
+	ObservationVersion int64
+	// DisplayObservation is the stored display_observation JSON, "" for NULL,
+	// decoded by decodeDisplayObservation: the committed display with its
+	// settling candidate (CommittedDisplay).
+	DisplayObservation string
+
+	// IdleScreenTimeoutSeconds is the row's per-spawn idle_screen timeout
+	// override in whole seconds; 0 = none (NULL), so readers use their
+	// configured timeout. The insert and reuse's reset write it from a Spawn,
+	// an applied reuse restore writes the old life's value back, and every
+	// other write, resume's included, leaves it.
+	IdleScreenTimeoutSeconds int
+	// PaneSHA256, PaneSinceMillis and PaneEpoch are the committed pane
+	// baseline (ObserveIdleScreen): the last committed sample's fingerprint,
+	// the start of its unchanged period and the permission epoch it was
+	// sampled in; "", 0 and -1 when none is stored.
+	PaneSHA256      string
+	PaneSinceMillis int64
+	PaneEpoch       int64
+
 	// ReportedState is the state status, get and list report (b.3ie): the
 	// settled state a read with a SettleRead that settles derives
-	// (SettleRead.stateExpr; GetSpawnSettled, ListSpawns with
-	// ListFilters.Settle), and State itself for every other read. Every read
+	// (SettleRead.stateExpr; SpawnStatusRow, GetSpawnSettled, ListSpawns with
+	// ListFilters.Settle), and State itself otherwise. Every read
 	// fills it, so it is never "" on a row a read returned. Guards never read
 	// it: they act on State, the raw state.
 	ReportedState string
@@ -289,7 +345,8 @@ func boolInt(b bool) int {
 // the statement's own clock, so the new row reports pending at once whatever
 // the settle time. It also writes subagent_tracking (SR-9), the flag of the
 // launch it begins, from sp.Agent: 1 for claude, 0 for codex or cursor
-// (subagentTrackedParamSQL).
+// (subagentTrackedParamSQL), and the timeout override from
+// sp.IdleScreenTimeoutSeconds (0 as NULL).
 func (s *Store) InsertPending(sp Spawn) error {
 	if err := validateRowAgent(sp.Agent); err != nil {
 		return fmt.Errorf("store: insert pending: %w", err)
@@ -315,8 +372,9 @@ func (s *Store) InsertPending(sp Spawn) error {
             agent_args, relay_mode, labels, extra_env,
             launch_started_at, launch_token, tmux_socket, no_pre_trust,
             launch_owner_pid, launch_owner_starttime, launch_owner_pidns,
-            settled_state, state_changed_ms, agent, subagent_tracking
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `)
+            settled_state, state_changed_ms, agent, subagent_tracking,
+            idle_screen_timeout_seconds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ` + nowMsSQL + `, ?, ` + subagentTrackedParamSQL + `, ?)
     `
 	var parent any
 	if sp.ParentID != "" {
@@ -337,8 +395,8 @@ func (s *Store) InsertPending(sp Spawn) error {
 		noPreTrust,
 	}
 	args = append(args, launchOwnerArgs(sp.LaunchOwner)...)
-	args = append(args, StatePending, sp.Agent, sp.Agent)
-	_, err = s.execFamily(stmt, args...)
+	args = append(args, StatePending, sp.Agent, sp.Agent, positiveIntArg(sp.IdleScreenTimeoutSeconds))
+	_, err = s.execFamily(sp.InstanceID, stmt, args...)
 	if err != nil {
 		var serr *sqlite.Error
 		if errors.As(err, &serr) {
@@ -434,19 +492,22 @@ func (s *Store) getSpawnSettled(instanceID string, r SettleRead, proofs []Cursor
 	return sp, nil
 }
 
-// spawnColumns is the one column list every read returning a Spawn selects,
-// in scanSpawn's order. The v5 and v6 columns come last so the pre-v5 columns
-// keep their indices (and their scan-error texts). ended_at is selected a
-// second time through CAST so the driver hands back the stored text instead of
-// parsing the TIMESTAMP column (SR-5.3). The v5 part ends with lifeColumns, the
-// snapshot and launch-identity fragment the live-row read shares; its
-// started_at, session_id, pid, proc_starttime and tmux_session_name
-// are the same row's values the Spawn's own fields read. The SR-5.5 columns are selected bare and decoded in
-// Go; the other v5 columns follow the v3 identity columns' rule (NULL is the
-// zero value; any other stored value scans normally). The v6 launch-owner
-// columns (launchOwnerColumns) come after lifeColumns, by the same rule, and
-// the v7 idle_since, then the v9 agent, end_reported_at and subagent_tracking,
-// last.
+// spawnColumns is the one column list every full-row read of a Spawn
+// selects, in scanSpawn's order; SpawnStatusRow's partial read selects
+// statusRowColumns instead. The v5 and v6 columns come last so the pre-v5
+// columns keep their indices (and their scan-error texts). ended_at is
+// selected a second time through CAST so the driver hands back the stored
+// text instead of parsing the TIMESTAMP column (SR-5.3). The v5 part ends
+// with lifeColumns, the snapshot and launch-identity fragment the live-row
+// read shares; its started_at, session_id, pid, proc_starttime and
+// tmux_session_name are the same row's values the Spawn's own fields read.
+// The SR-5.5 columns are selected bare and decoded in Go; the other v5
+// columns follow the v3 identity columns' rule (NULL is the zero value; any
+// other stored value scans normally). The v6 launch-owner columns
+// (launchOwnerColumns) come after lifeColumns, by the same rule, and the v7
+// idle_since, then the v9 agent, end_reported_at and subagent_tracking, and
+// the later columns after them, state_changed_ms and then the pane
+// observation columns (paneColumns) last.
 const spawnColumns = `
         instance_id, COALESCE(parent_id, ''), state, cwd,
         tmux_session_name, agent_args, relay_mode,
@@ -458,7 +519,7 @@ const spawnColumns = `
         CAST(ended_at AS TEXT), launch_started_at,
         COALESCE(life_number, 0), no_pre_trust,` + lifeColumns + `,
         ` + launchOwnerColumns + `,
-        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity`
+        COALESCE(idle_since, ''), agent, end_reported_at, subagent_tracking, family_state, codex_startup, claude_capacity, permission_epoch, observation_version, COALESCE(display_observation, ''), state_changed_ms, ` + paneColumns
 
 // rowScanner is the Scan method shared by *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -477,10 +538,11 @@ var (
 	listSpawnsErrs = spawnReadErrs{scan: "store: list spawns scan", decode: "store: list spawns decode"}
 )
 
-// scanSpawn scans one row selected with spawnColumns into a Spawn. The
-// pre-v5 fields and failures are exactly as before (an unparseable
-// started_at/ended_at or malformed labels, agent_args or extra_env fails the
-// read); the SR-5.5 columns never fail it. The Scan error is wrapped with %w,
+// scanSpawn scans one row selected with spawnColumns into a full Spawn
+// (scanSpawnStatus is the partial reader's scanner). The pre-v5 fields and
+// failures are exactly as before (an unparseable started_at/ended_at or
+// malformed labels, agent_args or extra_env fails the read); the SR-5.5
+// columns never fail it. The Scan error is wrapped with %w,
 // so callers can still detect sql.ErrNoRows. ReportedState is State.
 func scanSpawn(sc rowScanner, errs spawnReadErrs) (Spawn, error) {
 	return scanSpawnRow(sc, errs, false)
@@ -505,6 +567,7 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		codexStartup    any
 		claudeCapacity  any
 		life            lifeScan
+		pane            paneScan
 	)
 	dest := append([]any{
 		&sp.InstanceID, &sp.ParentID, &sp.State, &sp.CWD,
@@ -517,7 +580,8 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 		&sp.LifeNumber, &noPreTrust,
 	}, life.dest()...)
 	dest = append(dest, launchOwnerDest(&sp.LaunchOwner)...)
-	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity)
+	dest = append(dest, &sp.IdleSince, &sp.Agent, &endReportedAt, &subagentTrack, &sp.FamilyState, &codexStartup, &claudeCapacity, &sp.PermissionEpoch, &sp.ObservationVersion, &sp.DisplayObservation, &sp.StateChangedMillis)
+	dest = append(dest, pane.dest()...)
 	if reported {
 		dest = append(dest, &sp.ReportedState, &sp.FamilyState)
 	}
@@ -550,12 +614,13 @@ func scanSpawnRow(sc rowScanner, errs spawnReadErrs, reported bool) (Spawn, erro
 	sp.EndedAtText = endedAtText.String
 	sp.Snapshot, sp.Identity = life.result()
 	sp.RowVersion = sp.Snapshot.RowVersion
+	pane.apply(&sp)
 	return sp, nil
 }
 
 // GetSpawnState is a narrow lookup returning only the state column. It
-// serves pause's wait loop and api.Status's fallback for a store without
-// SpawnStatus; production Status reads through SpawnStatus instead.
+// serves pause's wait loop and is api.Status's last fallback; production
+// Status reads SpawnStatusRow.
 func (s *Store) GetSpawnState(instanceID string) (string, error) {
 	const q = `SELECT state FROM spawns WHERE instance_id = ?`
 	var state string
@@ -857,7 +922,7 @@ const releaseLaunchOwnerSQL = `UPDATE spawns
 // like RecordLaunchIdentity.
 func (s *Store) ReleaseLaunchOwner(instanceID, token string) (CondResult, error) {
 	const errPrefix = "store: release launch owner"
-	applied, err := s.execGuarded(releaseLaunchOwnerSQL, []any{instanceID, StatePending, token}, errPrefix)
+	applied, err := s.execGuarded(instanceID, releaseLaunchOwnerSQL, []any{instanceID, StatePending, token}, errPrefix)
 	if err != nil {
 		return 0, err
 	}
@@ -932,7 +997,7 @@ const endHeldLaunchSQL = `UPDATE spawns
 func (s *Store) EndHeldLaunch(instanceID string, insertLaunchStartedAtMillis int64, endedAt time.Time) (CondResult, error) {
 	args := append(immediateStateArgs(StateEnded), storeTimestamp(endedAt),
 		instanceID, StatePending, insertLaunchStartedAtMillis)
-	res, err := s.execFamily(endHeldLaunchSQL, args...)
+	res, err := s.execFamily(instanceID, endHeldLaunchSQL, args...)
 	if err != nil {
 		return 0, fmt.Errorf("store: end held launch: %w", err)
 	}
@@ -1056,7 +1121,7 @@ func (s *Store) SetParentID(instanceID, parentID string) error {
 	} else {
 		parent = nil
 	}
-	res, err := s.execFamily(q, parent, instanceID)
+	res, err := s.execFamily(instanceID, q, parent, instanceID)
 	if err != nil {
 		return fmt.Errorf("store: set parent id: %w", err)
 	}

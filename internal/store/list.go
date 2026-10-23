@@ -21,14 +21,28 @@ import (
 // each row's ReportedState is its settled state and State filters on it; the
 // zero value is no settle time, and ListSpawns runs exactly the query it ran
 // before b.3ie, State filtering on the raw state.
+//
+// DisplayCandidates widens a State filter to every row whose displayed state
+// may differ from its reported state: one with a retained display
+// observation, and, when State names a Displayed State, one whose raw state
+// can display it. The caller filters those rows on their displayed state and
+// applies Limit.
 type ListFilters struct {
-	State           []string
-	Labels          map[string]string
-	Parent          string
-	Cwd             string
-	TmuxSessionName string
-	Limit           int
-	Settle          SettleRead
+	State             []string
+	Labels            map[string]string
+	Parent            string
+	Cwd               string
+	TmuxSessionName   string
+	Limit             int
+	Settle            SettleRead
+	DisplayCandidates bool
+}
+
+// displayRawStates are the raw states a read can display as each Displayed
+// State: an unanswered permission request's and an unchanged working pane's.
+var displayRawStates = map[string]string{
+	StateNeedsIntelligence: StateCheckPermission,
+	StateIdleScreen:        StateWorking,
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified
@@ -81,7 +95,22 @@ func (s *Store) listSpawns(f ListFilters, proofs []CursorMissingProof) ([]Spawn,
 			placeholders[i] = "?"
 			args = append(args, st)
 		}
-		where = append(where, stateExpr+" IN ("+strings.Join(placeholders, ",")+")")
+		clause := stateExpr + " IN (" + strings.Join(placeholders, ",") + ")"
+		if f.DisplayCandidates {
+			clause = "(" + clause + " OR display_observation IS NOT NULL"
+			var raws []any
+			for _, st := range f.State {
+				if raw, ok := displayRawStates[st]; ok {
+					raws = append(raws, raw)
+				}
+			}
+			if len(raws) > 0 {
+				clause += " OR state IN (" + strings.TrimSuffix(strings.Repeat("?,", len(raws)), ",") + ")"
+				args = append(args, raws...)
+			}
+			clause += ")"
+		}
+		where = append(where, clause)
 	}
 
 	// Label filters are sorted by key so the generated SQL is

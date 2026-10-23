@@ -260,6 +260,16 @@ func (r Result) Token() string {
 	return ""
 }
 
+// StopsSocket reports whether r stops its socket for the rest of a run that
+// reads several rows (the Sweep's stop rule, SR-3.15): Can't tell of the
+// unreadable variant (a timeout, an unrecognised or malformed reply) or tmux
+// unavailable. A different server, a provenance_conflict and a no-server or
+// no-socket reply stop nothing. Code that stops a socket on a result must call
+// this; never test the verdict itself.
+func (r Result) StopsSocket() bool {
+	return r.Verdict == CantTell && (r.CantTell == CantTellUnreadable || r.CantTell == CantTellUnavailable)
+}
+
 // Lookup makes the one lookup call on row.Socket and classifies it for the
 // row (single-row verbs, follow-ups, re-lookups; Appendix F.2). holderName,
 // when not empty, is the name whose holder to report (SR-3.10). It makes

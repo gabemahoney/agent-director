@@ -72,13 +72,17 @@ func tmuxConfigFile(t *testing.T, settings ...tmuxSetting) string {
 // [tmux] with a range: [defaults] expire_retention_days (b.sgw), [relay]
 // timeout_seconds and [pause] timeout_seconds (b.8q2), [pre_trust]
 // lock_wait_seconds (b.kr4), [store] busy_timeout_ms (b.c7f) and [state]
-// settle_ms (b.3ie). "" leaves the table out.
-type rangeKeys struct{ days, relay, pause, preTrust, busyTimeout, settle string }
+// settle_ms (b.3ie), needs_intelligence_timeout_seconds and
+// idle_screen_timeout_seconds (b.sp6). "" leaves the key out.
+type rangeKeys struct {
+	days, relay, pause, preTrust, busyTimeout, settle, needsIntelligence, idleScreen string
+}
 
 // keysFile writes a config file setting k's keys, then a [tmux] table holding settings.
 func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 	t.Helper()
 	var b strings.Builder
+	var table string
 	for _, kv := range []struct{ table, key, value string }{
 		{"defaults", "expire_retention_days", k.days},
 		{"relay", "timeout_seconds", k.relay},
@@ -86,9 +90,15 @@ func keysFile(t *testing.T, k rangeKeys, settings ...tmuxSetting) string {
 		{"pre_trust", "lock_wait_seconds", k.preTrust},
 		{"store", "busy_timeout_ms", k.busyTimeout},
 		{"state", "settle_ms", k.settle},
+		{"state", "needs_intelligence_timeout_seconds", k.needsIntelligence},
+		{"state", "idle_screen_timeout_seconds", k.idleScreen},
 	} {
 		if kv.value != "" {
-			fmt.Fprintf(&b, "[%s]\n%s = %s\n", kv.table, kv.key, kv.value)
+			if table != kv.table {
+				fmt.Fprintf(&b, "[%s]\n", kv.table)
+				table = kv.table
+			}
+			fmt.Fprintf(&b, "%s = %s\n", kv.key, kv.value)
 		}
 	}
 	b.WriteString("[tmux]\n")

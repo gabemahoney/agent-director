@@ -86,7 +86,7 @@ const raisedTail = ". A missing key, or 0, gives the default, or for [tmux] pend
 // splits on it into one part per refused key, and desc ends with raisedTail
 // exactly when a refused [tmux] key states a safe minimum above its default,
 // otherwise with refusalTail, that a missing key, or 0, gives the default.
-// The refused keys outside [tmux] are b.sgw's, b.8q2's, b.kr4's, b.c7f's and b.3ie's.
+// The refused keys outside [tmux] are b.sgw's, b.8q2's, b.kr4's, b.c7f's, b.3ie's and b.sp6's.
 func checkAdvice(t *testing.T, desc string) {
 	t.Helper()
 	_, list, ok := strings.Cut(desc, " values: ")
@@ -97,7 +97,8 @@ func checkAdvice(t *testing.T, desc string) {
 	list = strings.TrimSuffix(strings.TrimSuffix(list, raisedTail), refusalTail)
 	refused := 0
 	for _, k := range []string{"[defaults] expire_retention_days ", "[relay] timeout_seconds ", "[pause] timeout_seconds ",
-		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms "} {
+		"[pre_trust] lock_wait_seconds ", "[store] busy_timeout_ms ", "[state] settle_ms ",
+		"[state] needs_intelligence_timeout_seconds ", "[state] idle_screen_timeout_seconds "} {
 		refused += strings.Count(list, k)
 	}
 	above := false
@@ -264,6 +265,8 @@ func TestLoadRefusesCaseVariantKeys(t *testing.T) {
 			caseVariantText("[store] BUSY_TIMEOUT_MS and [store] busy_timeout_ms")},
 		{"settle_refused_value_under_one_name", "[State]\nsettle_ms = -1\n\n[state]\nsettle_ms = 1000\n",
 			caseVariantText("[State] settle_ms and [state] settle_ms")},
+		{"needs_intelligence_refused_value_under_one_name", "[state]\nneeds_intelligence_timeout_seconds = -1\nNEEDS_INTELLIGENCE_TIMEOUT_SECONDS = 30\n",
+			caseVariantText("[state] needs_intelligence_timeout_seconds and [state] NEEDS_INTELLIGENCE_TIMEOUT_SECONDS")},
 		{"beside_refused_value", "[pause]\ntimeout_seconds = -1\n\n" + dbPathTwice,
 			caseVariantText("[Store] db_path and [store] db_path")},
 		{"two_keys_interleaved", "[Store]\ndb_path = \"/upper.db\"\n\n[relay]\ntimeout_seconds = 60\n\n" +
@@ -352,6 +355,37 @@ func TestTmuxRefusesNonInteger(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+// TestStateTimeoutRefusesNonInteger rejects malformed [state] timeouts without defaulting or clamping.
+func TestStateTimeoutRefusesNonInteger(t *testing.T) {
+	keys := []struct {
+		name string
+		set  func(v string) rangeKeys
+	}{
+		{"needs_intelligence_timeout_seconds", func(v string) rangeKeys { return rangeKeys{needsIntelligence: v, settle: "1500"} }},
+		{"idle_screen_timeout_seconds", func(v string) rangeKeys { return rangeKeys{idleScreen: v, needsIntelligence: "47"} }},
+	}
+	for _, tc := range []struct{ name, value string }{
+		{"fractional", "30.5"},
+		{"whole_float", "30.0"},
+		{"string", `"30"`},
+		{"boolean", "true"},
+		{"array", "[30]"},
+		{"table", "{ seconds = 30 }"},
+		{"not_a_number", "nan"},
+		{"infinity", "inf"},
+		{"integer_overflow", "9223372036854775808"},
+	} {
+		for _, k := range keys {
+			t.Run(k.name+"/"+tc.name, func(t *testing.T) {
+				ce := loadConfigError(t, keysFile(t, k.set(tc.value)))
+				if desc := ce.Err.Error(); !strings.Contains(desc, k.name) {
+					t.Errorf("error does not name the key: %q", desc)
+				}
+			})
+		}
 	}
 }
 

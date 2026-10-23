@@ -180,10 +180,10 @@ func (s *Sweep) timed(call func()) bool {
 	return s.spent < s.budget
 }
 
-// stopOn applies the stop rule to r, a result for a row of st's socket, and
-// returns r: Can't tell unreadable or tmux unavailable stops the socket.
+// stopOn applies the stop rule (Result.StopsSocket) to r, a result for a row
+// of st's socket, and returns r.
 func (st *sweepSocket) stopOn(r Result) Result {
-	if r.Verdict == CantTell && (r.CantTell == CantTellUnreadable || r.CantTell == CantTellUnavailable) {
+	if r.StopsSocket() {
 		st.stopped = true
 	}
 	return r

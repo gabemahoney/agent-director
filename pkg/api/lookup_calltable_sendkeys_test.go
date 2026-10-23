@@ -32,7 +32,7 @@ func sendKeysCallTableInvoke(allowPending bool) func(*testing.T, *killEnv, killR
 		typed := len(e.rec.SocketCallsOf(tmux.CallSendText)) > 0
 		if typed {
 			pane := labelledPane(t, r.Session, r.Session.Label.Token)
-			e.assertTextSent(t, r.Socket, pane, callTableKeys)
+			assertTextSent(t, e.rec, r.Socket, pane, callTableKeys)
 			for _, c := range e.rec.SocketCallsOf(tmux.CallSendEnter) {
 				if c.Socket != r.Socket || c.Target != pane {
 					t.Errorf("Enter to %q on %s; want %q on %s", c.Target, c.Socket, pane, r.Socket)

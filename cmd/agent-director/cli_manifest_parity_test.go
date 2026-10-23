@@ -43,6 +43,7 @@ import (
 	"testing"
 
 	"github.com/gabemahoney/agent-director/internal/mcp"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 	"github.com/gabemahoney/agent-director/pkg/api/manifest"
 )
 
@@ -143,10 +144,13 @@ func TestCLIFlagsAreManifestParams(t *testing.T) {
 	}
 }
 
-// TestCLIFlagUsageNamesFolderVariables: spawn's and make-template's --extra-env
-// usage names both agents' folder variables, while spawn's --no-pre-trust,
-// which only Claude Code's trust file has, names Claude's alone (SR-14.4).
-func TestCLIFlagUsageNamesFolderVariables(t *testing.T) {
+// TestCLIFlagUsageText: spawn's and make-template's --extra-env usage names
+// both agents' folder variables, while spawn's --no-pre-trust, which only
+// Claude Code's trust file has, names Claude's alone (SR-14.4). And no flag's
+// name or usage, which `<verb> -h` prints, names a Displayed State name the
+// split into needs_intelligence and idle_screen removed, in any case or
+// dash/underscore spelling (b.ob8 SR-1.3).
+func TestCLIFlagUsageText(t *testing.T) {
 	s := scanCLISources(t)
 	for _, tc := range []struct{ verb, flag, want, banned string }{
 		{"spawn", "extra-env", "CLAUDE_CONFIG_DIR (Claude Code) or CODEX_HOME (Codex)", ""},
@@ -163,6 +167,17 @@ func TestCLIFlagUsageNamesFolderVariables(t *testing.T) {
 				t.Errorf("usage = %q; want it to name %q and not %q", usage, tc.want, tc.banned)
 			}
 		})
+	}
+
+	if !slices.ContainsFunc(s.flags["spawn"], func(f cliFlag) bool { return f.name == "idle-screen-timeout-seconds" }) {
+		t.Fatalf("the scan found no spawn --idle-screen-timeout-seconds (found %v); the removed-name check would pass vacuously", s.flags["spawn"])
+	}
+	for _, verb := range sortedKeys(s.flags) {
+		for _, f := range s.flags[verb] {
+			if old := apitest.RemovedDisplayNames.FindString(f.name + " " + f.usage); old != "" {
+				t.Errorf("%s: %s flag --%s names the removed %q: %q", f.at, verb, f.name, old, f.usage)
+			}
+		}
 	}
 }
 

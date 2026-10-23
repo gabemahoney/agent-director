@@ -237,7 +237,7 @@ func gatedHookUpdate(instanceID string, gate HookGate, set string, setArgs []any
 // failure.
 func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, trailNew string, softRefresh bool, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	res, err := s.execFamily(q, args...)
+	res, err := s.execFamily(instanceID, q, args...)
 	if err != nil {
 		return UpsertError, HookApplied{}, fmt.Errorf("%s: %w", errPrefix, err)
 	}
@@ -279,7 +279,7 @@ func (s *Store) applyGatedHookWrite(instanceID string, gate HookGate, set string
 // with an error wrapped by errPrefix.
 func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, setArgs []any, priorState, newState, triggeringEventName, jsonlPath string, jsonlPresent bool, errPrefix string) (UpsertOutcome, HookApplied, error) {
 	q, args := gatedHookUpdate(instanceID, gate, set, setArgs, jsonlPath, jsonlPresent)
-	moved, err := s.execGuarded(q+` AND `+noRequestHoldsRowSQL, args, errPrefix)
+	moved, err := s.execGuarded(instanceID, q+` AND `+noRequestHoldsRowSQL, args, errPrefix)
 	if err != nil {
 		return UpsertError, HookApplied{}, err
 	}
@@ -383,7 +383,7 @@ func (s *Store) applyEndedTransition(instanceID string, gate HookGate, triggerin
 		prior  string
 		closed []closedRequest
 	)
-	err := s.inImmediateTx(func(ctx context.Context, conn *sql.Conn) error {
+	err := s.inImmediateTx(instanceID, func(ctx context.Context, conn *sql.Conn) error {
 		err := conn.QueryRowContext(ctx, `SELECT state FROM spawns WHERE instance_id = ?`, instanceID).Scan(&prior)
 		if errors.Is(err, sql.ErrNoRows) {
 			return errEndedNotApplied
@@ -493,7 +493,7 @@ func (s *Store) ApplyHookWaitingIfWorking(instanceID string, gate HookGate, trig
 		{StateCheckPermission, `state = '` + StateCheckPermission + `' AND relay_mode = 'on' AND ` + noRequestHoldsRowSQL},
 	} {
 		q, args := gatedHookUpdate(instanceID, gate, set, stateArgs, jsonlPath, jsonlPresent)
-		moved, err := s.execGuarded(q+` AND `+from.cond, args, errPrefix)
+		moved, err := s.execGuarded(instanceID, q+` AND `+from.cond, args, errPrefix)
 		if err != nil {
 			return UpsertError, HookApplied{}, err
 		}
@@ -569,7 +569,7 @@ func (s *Store) reportWorkingHeld(instanceID string, gate HookGate, triggeringEv
 	if !r.found || !r.gateMatches {
 		return UpsertNoChange, notAppliedReason(r), nil
 	}
-	if _, err := s.execGuarded(clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...),
+	if _, err := s.execGuarded(instanceID, clearIdleSinceSQL, append([]any{instanceID}, hookGateArgs(gate)...),
 		"store: working transition hold idle clear"); err != nil {
 		return UpsertError, HookApplied{}, err
 	}

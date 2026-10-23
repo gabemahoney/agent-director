@@ -74,22 +74,25 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		// independent allow/deny/ask arrays, not a nested object.
 		// tmux_session_name is a pointer so a present key is supplied,
 		// even when empty (ErrTmuxSessionNameEmpty), while an absent or
-		// null one is not, as with the CLI's --tmux-session-name.
+		// null one is not, as with the CLI's --tmux-session-name. An
+		// absent or null idle_screen_timeout_seconds is no override, as 0
+		// is; Spawn refuses an out-of-range one.
 		var raw struct {
-			CWD             string            `json:"cwd"`
-			Template        string            `json:"template"`
-			Agent           string            `json:"agent"`
-			InstanceID      string            `json:"instance_id"`
-			Label           []string          `json:"label"`
-			Allow           []string          `json:"allow"`
-			Deny            []string          `json:"deny"`
-			Ask             []string          `json:"ask"`
-			RelayMode       string            `json:"relay_mode"`
-			ExtraEnv        map[string]string `json:"extra_env"`
-			AgentArgs       []string          `json:"agent_args"`
-			NoPreTrust      bool              `json:"no_pre_trust"`
-			TmuxSessionName *string           `json:"tmux_session_name"`
-			ReuseFinished   bool              `json:"reuse_finished"`
+			CWD                      string            `json:"cwd"`
+			Template                 string            `json:"template"`
+			Agent                    string            `json:"agent"`
+			InstanceID               string            `json:"instance_id"`
+			Label                    []string          `json:"label"`
+			Allow                    []string          `json:"allow"`
+			Deny                     []string          `json:"deny"`
+			Ask                      []string          `json:"ask"`
+			RelayMode                string            `json:"relay_mode"`
+			ExtraEnv                 map[string]string `json:"extra_env"`
+			AgentArgs                []string          `json:"agent_args"`
+			NoPreTrust               bool              `json:"no_pre_trust"`
+			TmuxSessionName          *string           `json:"tmux_session_name"`
+			ReuseFinished            bool              `json:"reuse_finished"`
+			IdleScreenTimeoutSeconds int               `json:"idle_screen_timeout_seconds"`
 		}
 		if err := decodeParams(v, args, &raw); err != nil {
 			return nil, err
@@ -109,6 +112,8 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 			RelayMode:           raw.RelayMode,
 			NoPreTrust:          raw.NoPreTrust,
 			ReuseFinished:       raw.ReuseFinished,
+
+			IdleScreenTimeoutSeconds: raw.IdleScreenTimeoutSeconds,
 		}
 		if raw.TmuxSessionName != nil {
 			p.TmuxSessionName = *raw.TmuxSessionName

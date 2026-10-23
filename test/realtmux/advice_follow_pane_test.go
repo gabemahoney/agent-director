@@ -5,9 +5,11 @@ package realtmux_test
 // followed literally on real tmux. A wrapper around tmux breaks one keys
 // call; the agent's pane runs cat -, so its capture shows what the agent was
 // given: the line typed (the tty's echo), then cat's copy once submitted.
+// E15 (b.ob8) follows docs/usage.md's attach command block.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +22,10 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// advAttachBlock is docs/usage.md's "Attach to a Spawn's pane" command block (E15).
+const advAttachBlock = "```sh\nagent-director get --instance-id \"$id\"\n" +
+	"tmux -u -S '<tmux_socket>' attach-session -t '<tmux_session_name>'\n```"
 
 // advPaneActionTimeout is the action timeout of the wrapped client: the
 // production default, so a broken call times out quickly.
@@ -222,4 +228,55 @@ func TestAdviceFollow_E5_PauseKeysFailedRetryLaterRealTmux(t *testing.T) {
 			advPaneWaitShows(t, f, r, "/exit\n/exit", "/exit submitted once (typed, then copied by cat), never /exit/exit")
 		})
 	}
+}
+
+// TestAdviceFollow_E15_AttachToPaneRealTmux: E15 (b.ob8), docs/usage.md's
+// "Attach to a Spawn's pane", given for every agent: get's tmux_socket and
+// tmux_session_name, put into the block's attach command, attach a terminal
+// to the row's own session, and the client exits 0 once detached. The
+// terminal is a pane of a second server, with TMUX unset as in a plain one.
+func TestAdviceFollow_E15_AttachToPaneRealTmux(t *testing.T) {
+	usage, err := os.ReadFile("../../docs/usage.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, section, _ := strings.Cut(string(usage), "\n## Attach to a Spawn's pane\n")
+	section, _, _ = strings.Cut(section, "\n## ")
+	if !strings.Contains(section, advAttachBlock) {
+		t.Fatalf("docs/usage.md \"Attach to a Spawn's pane\" lacks %q; recheck its literal follow", advAttachBlock)
+	}
+	f := newKillFix(t)
+	r := f.liveRow(t, killRowSpec{})
+	c := f.open(t, 0, "")
+	t.Cleanup(func() { _ = c.Close() })
+	row, err := c.Get(r.InstanceID)
+	if err != nil {
+		t.Fatalf("get: %s", describe(err))
+	}
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Socket string `json:"tmux_socket"`
+		Name   string `json:"tmux_session_name"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil || got.Socket == "" || got.Name == "" {
+		t.Fatalf("get carries tmux_socket %q and tmux_session_name %q (%v); want both", got.Socket, got.Name, err)
+	}
+	_, attach, _ := strings.Cut(strings.TrimSuffix(advAttachBlock, "\n```"), "\"$id\"\n")
+	attach = strings.NewReplacer("<tmux_socket>", got.Socket, "<tmux_session_name>", got.Name).Replace(attach)
+	status := filepath.Join(t.TempDir(), "status")
+	exit := func() string { b, _ := os.ReadFile(status); return string(b) }
+
+	f.fresh(t).must(t, "new-session", "-d", "-x", "80", "-y", "24", "--", "env", "-u", "TMUX", "sh", "-c", attach+"; echo $? >'"+status+"'")
+
+	var clients string
+	waitFor(t, "one client attached to the row's session", func() bool {
+		clients = r.RT.run(t, "list-clients", "-F", "#{session_id}").Stdout
+		return clients == r.Reply.SessionID+"\n"
+	}, func() string { return fmt.Sprintf("clients %q, attach exit %q", clients, exit()) })
+	r.RT.must(t, "detach-client", "-s", r.Reply.SessionID)
+	waitFor(t, "the attach to exit 0 once detached", func() bool { return exit() == "0\n" },
+		func() string { return fmt.Sprintf("attach exit %q", exit()) })
 }

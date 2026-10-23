@@ -42,7 +42,7 @@ func openDB(t *testing.T, dbPath string) *store.Store {
 // every other field zero (b.4nt).
 const emptyGetJSON = `{"context":` + contextfix.UnknownJSON + `,"instance_id":"","parent_id":"","state":"","family_state":"","cwd":"","agent":"","tmux_session_name":"",` +
 	`"agent_args":[],"relay_mode":"","jsonl_path":"","session_id":"","labels":{},` +
-	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z",` +
+	`"started_at":"0001-01-01T00:00:00Z","last_seen_at":"0001-01-01T00:00:00Z","state_changed_at":"0001-01-01T00:00:00Z",` +
 	`"permission_requests":[],"unproven_requests":[],"transcript_status":"","prior_sessions":[]}`
 
 // jsonOf returns v's JSON encoding.
@@ -199,7 +199,9 @@ func (r *recordingGetStore) ListSessionHistory(_ string, life int64) ([]store.Se
 // step 2c: one read gives both permission_requests and unproven_requests),
 // history once for the row's own life, and either read's error propagates
 // (b.v2c AC6/AC8). Every failure, an unknown id's included, encodes
-// emptyGetJSON (b.4nt).
+// emptyGetJSON (b.4nt). A success keeps the row's computed state with no state
+// detail, though the double observes no permissions and its rows' reported
+// state is empty (t2.sp6.2z.ej F5).
 func TestGetReadsAndErrors(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
@@ -224,11 +226,16 @@ func TestGetReadsAndErrors(t *testing.T) {
 			f := &recordingGetStore{spawn: store.Spawn{InstanceID: "id-g", State: tc.state, LifeNumber: 3},
 				permErr: tc.permErr, historyErr: tc.historyErr}
 			got, err := api.Get(f, api.RelayView{}, tc.id)
-			if !errors.Is(err, tc.want) || (err == nil && len(got.PermissionRequests) != 0) {
-				t.Errorf("Get = %+v, %v; want error %v", got.PermissionRequests, err, tc.want)
+			if !errors.Is(err, tc.want) || (err == nil && (len(got.PermissionRequests) != 0 || got.State != tc.state || got.StateDetail != (api.StateDetail{}))) {
+				t.Errorf("Get = state %q, detail %+v, requests %+v, %v; want error %v, on success state %q and no state detail",
+					got.State, got.StateDetail, got.PermissionRequests, err, tc.want, tc.state)
 			}
 			if out := jsonOf(t, got); err != nil && out != emptyGetJSON {
 				t.Errorf("Get on failure = %s; want %s", out, emptyGetJSON)
+			}
+			// b.ob8 F2: an absent agent keeps availability even without an observer.
+			if err == nil {
+				assertIdleAvailability(t, got, got.IdleScreenAvailability, api.IdleScreenAvailable)
 			}
 			if f.permCalls != tc.permCalls || !slices.Equal(f.historyLives, tc.historyLives) {
 				t.Errorf("permission reads %d, history lives %v; want %d and %v", f.permCalls, f.historyLives, tc.permCalls, tc.historyLives)

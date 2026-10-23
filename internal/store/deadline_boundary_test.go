@@ -111,6 +111,9 @@ func ObserveDecisionBoundaryForTest(t *testing.T, s *Store, path string, before 
 	b.before, b.afterCommit = before, afterCommit
 }
 
+// ErrCommitUnconfirmedForTest is errCommitUnconfirmed for those external recovery tests.
+var ErrCommitUnconfirmedForTest = errCommitUnconfirmed
+
 // ObserveReturningRowsForTest shares actual native rows with this package's external tests.
 func ObserveReturningRowsForTest(t *testing.T, s *Store, path string, afterNext func(context.Context, string, error)) func() {
 	t.Helper()
@@ -506,7 +509,8 @@ func (c lateDeadline) Err() error {
 
 // TestZeroWaitAdmissionAfterStall (b.q5r): a zero-wait call that reaches the
 // free connection or operation slot only after its connGrab has elapsed still
-// takes it, and a returned operation call has freed its slot. A connection
+// takes it, and a returned operation call has freed its slot, also when its
+// operation failed, so a zero-wait call made at once is admitted. A connection
 // another lease holds is refused after the call has queued for it exactly once:
 // ErrStoreBusy, also when the caller's deadline has passed by then, or the
 // caller's own error if it was canceled. That is boundedConnContext's own
@@ -544,6 +548,18 @@ func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 			return errors.New("a returned operation call still held the slot")
 		}
 	}
+	failedOperation := func(s *Store, ctx context.Context) error {
+		// Hold the failed call's worker in its last step: a zero-wait call made
+		// as soon as it returns must be admitted, not refused ErrStoreBusy.
+		hold := make(chan struct{})
+		defer close(hold)
+		s.cleanup.hookAfterOperationForTest = func() { <-hold }
+		failure := errors.New("operation failed")
+		if err := s.runConnectionOperation(ctx, 0, func(*connectionOperation) error { return failure }); !errors.Is(err, failure) {
+			return fmt.Errorf("the failed operation returned %v; want %v", err, failure)
+		}
+		return s.runConnectionOperation(ctx, 0, func(*connectionOperation) error { return nil })
+	}
 	for _, tc := range []struct {
 		name    string
 		held    bool   // another lease holds the store's one connection
@@ -558,6 +574,7 @@ func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 		{"caller canceled once refused a held connection", true, "store: connection: context canceled", 1, callerEnds(context.Canceled)},
 		{"caller's deadline passed once refused a held connection", true, refused, 1, callerEnds(context.DeadlineExceeded)},
 		{"free operation slot", false, "", 20, runOperation},
+		{"free operation slot after a failed operation", false, "", 1, failedOperation},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := openTempStore(t)

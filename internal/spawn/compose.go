@@ -37,7 +37,7 @@ func ParentIDFromEnv() string {
 // to fill with the launch's socket, token and this store's id.
 //
 // Row carries the request fields the row records (instance id, cwd, session
-// name, agent args, relay mode, labels, extra env), the request's
+// name, agent args, relay mode, labels, extra env, timeout override), the request's
 // NoPreTrust (the choice the caller passes to RunPreTrust, so the row records
 // what the launch did, SR-22.6) and the parent id from the caller's
 // AGENT_DIRECTOR_INSTANCE_ID ("" is stored as NULL). Its launch start, start
@@ -135,7 +135,8 @@ func ComposeLaunch(r Resolved, cfg config.Config) (ComposedLaunch, error) {
 			NoPreTrust:      r.NoPreTrust,
 			// The one place the row's agent is set, for spawn's insert
 			// (insertPending) and reuse's reset (ResetForReuse) alike.
-			Agent: r.Agent,
+			Agent:                    r.Agent,
+			IdleScreenTimeoutSeconds: r.IdleScreenTimeoutSeconds,
 		},
 	}, nil
 }

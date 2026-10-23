@@ -44,9 +44,9 @@ var pendingSites = []pendingSite{
 	{name: "status description", verb: "status", require: []string{
 		"pending/waiting/working/ask_user/check_permission/ended/missing",
 		"pending: launch (spawn/reuse/resume) underway",
-		"no sessionstart hook report yet",
+		"no sessionstart hook yet",
 		"may be loading or at a startup prompt",
-		"resumed pending keeps session id/history",
+		"resumed keeps session id/history",
 	}},
 	{name: "status state", verb: "status", result: "state", require: launchInProgress},
 	{name: "get state", verb: "get", result: "state", require: launchInProgress},

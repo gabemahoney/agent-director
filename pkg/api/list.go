@@ -61,14 +61,19 @@ type ListRow struct {
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing. pending means a launch
-	// (spawn, reuse or resume) is in progress and the agent has not reported
-	// in yet (its SessionStart hook); it may be loading or waiting at a
-	// startup prompt. A resumed pending row keeps its session id and history.
+	// ask_user, check_permission, ended, missing, or a report-only Displayed
+	// State, needs_intelligence or idle_screen, whose detail only get and
+	// status carry. pending means a launch (spawn, reuse or resume) is in
+	// progress and the agent has not reported in yet (its SessionStart hook);
+	// it may be loading or waiting at a startup prompt. A resumed pending row
+	// keeps its session id and history.
 	State string `json:"state"`
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
+	// IdleScreenAvailability is, as StatusResult's, available for Claude and
+	// Codex or an absent agent and unavailable for Cursor. Present on every row.
+	IdleScreenAvailability string `json:"idle_screen_availability,omitempty"`
 	// CWD is the canonicalized working directory the Spawn was started in.
 	CWD string `json:"cwd"`
 	// Agent is the agent the row runs, "claude", "codex" or "cursor": set by the spawn
@@ -85,6 +90,12 @@ type ListRow struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastSeenAt is the most recent hook UPSERT time.
 	LastSeenAt time.Time `json:"last_seen_at"`
+	// StateChangedAt is, as SpawnRow.StateChangedAt, when the raw state last
+	// changed, RFC3339 UTC with millisecond precision (b.k6i); the Unix epoch
+	// when it has not changed since the stamp was added. Present on every row.
+	// A Cursor row the list finds lost shows missing at once; this moves when
+	// that mark is stored, which can be after the read that first shows missing.
+	StateChangedAt time.Time `json:"state_changed_at"`
 	// EndedAt is set when state moves to ended. Omitted from JSON while live.
 	EndedAt *time.Time `json:"ended_at,omitempty"`
 	// LaunchStartedAt is the start of the launch in progress, RFC3339 UTC
@@ -156,18 +167,24 @@ type ListResult struct {
 // check-before-read rule, b.146 rule 5). List is a reading verb and never
 // waits for the store's write lock (b.146 problem 4): it writes hook_gone_at
 // on every request it found fallen back, in one write, only if the lock is
-// free at that moment.
+// free at that moment, and attempts no such write once a display observation
+// write of the same read has found the store busy.
 //
-// List reads with no settle time; the Client applies its [state] settle_ms
-// (listSettled).
+// List reads with no settle time and samples no pane, so a working Claude or
+// Codex row keeps its pane's current idle_screen finding as committed; the
+// Client applies its [state] settle_ms and samples panes (listSettled).
 func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 	return listSettled(s, v, store.SettleRead{}, params)
 }
 
 // listSettled is List with the reader's settle time and clock settle (b.3ie),
 // passed to the store as ListFilters.Settle: each row's state field is its
-// settled state, and the State filter matches the settled state in the
-// store's statement, ahead of its LIMIT. launch_started_at and whether a
+// settled state. The State filter and LIMIT apply to the displayed state:
+// in the store's statement for a store with no permission observation; for
+// one that observes, the statement keeps every row that may display a
+// filtered state (ListFilters.DisplayCandidates) and listFiltered matches each
+// row's displayed state before the limit, so a row showing either Displayed
+// State never matches its raw state. launch_started_at and whether a
 // row's permission requests are read and shown key on the raw state, as
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
@@ -206,23 +223,66 @@ func parseListFilters(params ListParams, settle store.SettleRead) (ListFilters, 
 }
 
 func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, error) {
-	rows, err := s.ListSpawns(filters)
+	fetch := filters
+	observer, observes := s.(needsIntelligenceStore)
+	if observes && len(filters.State) > 0 {
+		// The statement keeps every row that may display a filtered state;
+		// the displayed state is matched, and the limit applied, below.
+		fetch.DisplayCandidates, fetch.Limit = true, 0
+	}
+	rows, err := s.ListSpawns(fetch)
 	if err != nil {
 		return ListResult{Spawns: []ListRow{}}, err
 	}
 
 	j := newRelayJudge(v)
 	out := make([]ListRow, 0, len(rows))
+	storeBusy := false
+	// Each committed observation's families supersede earlier values, so an
+	// ancestor already listed reports a later descendant's exit too.
+	families := map[string]string{}
 	for _, r := range rows {
 		reported := r.State
 		if filters.Settle.SettleMs > 0 {
 			reported = r.ReportedState
 		}
+		display := store.DisplayDetail{State: reported}
+		var judged *judgedRequestSet
+		if observes {
+			var read permissionRead
+			if r.State == store.StateCheckPermission && len(filters.State) == 0 {
+				// With no state filter the row is listed, so its open requests
+				// must be read: the observation reuses that one read instead of
+				// reading again. With a filter the row may yet be dropped, so
+				// the observation reads without waiting, and only a listed row
+				// whose observation read nothing waits for them, below.
+				if read.requests, err = readJudgedRequests(observer.PermissionRequestsForSpawn, j, r.InstanceID); err != nil {
+					return ListResult{Spawns: []ListRow{}}, err
+				}
+			}
+			var busy bool
+			var committed map[string]string
+			display, committed, judged, busy = observeDisplay(s, v, filters.Settle, r, read)
+			storeBusy = storeBusy || busy
+			for id, family := range committed {
+				families[id] = family
+			}
+		}
+		if observes && len(filters.State) > 0 {
+			matched := false
+			for _, state := range filters.State {
+				matched = matched || state == display.State
+			}
+			if !matched {
+				continue
+			}
+		}
 		row := ListRow{
 			InstanceID:              r.InstanceID,
 			ParentID:                r.ParentID,
-			State:                   reported,
+			State:                   display.State,
 			FamilyState:             r.FamilyState,
+			IdleScreenAvailability:  idleScreenAvailability(r.Agent),
 			CWD:                     r.CWD,
 			Agent:                   r.Agent,
 			TmuxSessionName:         r.TmuxSessionName,
@@ -230,13 +290,16 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			Labels:                  r.Labels,
 			StartedAt:               r.StartedAt,
 			LastSeenAt:              r.LastSeenAt,
+			StateChangedAt:          millisToUTC(r.StateChangedMillis),
 			EndedAt:                 r.EndedAt,
 			LaunchStartedAt:         launchStartedAt(r.State, r.LaunchStartedAtMillis),
 			LivenessUnverifiedSince: nullableTimestamp(r.LivenessUnverifiedSince),
 			LivenessNote:            nullableString(r.LivenessNote),
 			PermissionRequests:      []PermissionRequestInfo{},
 		}
-		if r.State == store.StateCheckPermission {
+		if r.State == store.StateCheckPermission && judged != nil {
+			row.PermissionRequests = judgedOpenInfos(judged, j)
+		} else if r.State == store.StateCheckPermission {
 			infos, err := openRequestInfos(s.OpenPermissionRequestsForSpawn, j, r.InstanceID)
 			if err != nil {
 				return ListResult{Spawns: []ListRow{}}, err
@@ -244,13 +307,26 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			row.PermissionRequests = infos
 		}
 		out = append(out, row)
+		if observes && filters.Limit > 0 && len(out) >= filters.Limit {
+			break
+		}
+	}
+	for i := range out {
+		if family, ok := families[out[i].InstanceID]; ok {
+			out[i].FamilyState = family
+		}
 	}
 	// Every row is built, so the slots below point at their final elements.
-	var slots []goneSlot
-	for i := range out {
-		slots = goneSlotsOf(slots, out[i].PermissionRequests)
+	// Once an observation write of this read found the store busy, hook_gone_at
+	// is left unwritten without another attempt, as a busy write leaves it.
+	if !storeBusy {
+		now := j.now()
+		var slots []goneSlot
+		for i := range out {
+			slots = goneSlotsOf(slots, out[i].PermissionRequests, out[i].Agent, out[i].RelayMode, now)
+		}
+		recordGone(s, now, readerLockWait, slots)
 	}
-	recordGone(s, j.now(), readerLockWait, slots)
 	return ListResult{Spawns: out}, nil
 }
 
@@ -261,15 +337,22 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // launch began. A row in check_permission carries its open permission
 // requests with their delivery facts, as Get does. With [state] settle_ms
 // set, each row's state is its settled state, and State filters on it: a
-// hook-written change shows only once it has held that long, the last
-// settled state until then; terminal states and command-driven changes show
-// at once. The permission requests and launch_started_at follow the live
-// state. Before applying State and Limit, List projects lost Cursor gateways
-// as missing in the requested label/parent/cwd/tmux scope, guarded by the
+// hook-written change between ordinary states shows only once it has held
+// that long, the last settled state until then. Entering, leaving or moving
+// between needs_intelligence and idle_screen instead times settle_ms from the
+// read that commits its candidate and shows from a later successful read that
+// commits it. Terminal states and command-driven changes show at once.
+// family_state settles independently. The permission requests and
+// launch_started_at follow the live state. Before applying State and Limit,
+// List projects lost Cursor gateways as missing in the requested
+// label/parent/cwd/tmux scope, guarded by the
 // examined launch and binding. It then attempts the atomic terminal write.
 // Unavailable best-effort persistence leaves the read projection valid; other
 // write errors fail the read. List never waits for a state to settle or for
-// the store's write lock. Relay-delivery writes remain best effort.
+// the store's write lock. Relay-delivery writes remain best effort. Like
+// [Client.Status] it samples the own pane of each working Claude or Codex row
+// it reads for idle_screen, a failure affecting only that row, and every row
+// carries idle_screen_availability.
 //
 // CLI: agent-director list
 //

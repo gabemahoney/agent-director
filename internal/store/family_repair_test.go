@@ -10,8 +10,122 @@ import (
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/store"
+	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
+
+// b.ob8 F1: the bounded terminal writer must drain a waiting row's retained
+// display before comparing contributions. Plain waiting still skips the scan.
+func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		display, reject bool
+	}{
+		{"retained display commits", true, false},
+		{"retained display rolls back failed refresh", true, true},
+		{"plain waiting skips refresh", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newCursorTrailEnv(t)
+			parent := e.f.seed(store.StateWaiting, "")
+			if err := apitest.SeedParentChild(e.f.path, parent, e.b.InstanceID); err != nil {
+				t.Fatal(err)
+			}
+			if tc.display {
+				e.insert(t, storefix.TestRequestTokenA)
+				row := rvExamine(t, e.f, e.b.InstanceID)
+				pr := e.read(t, storefix.TestRequestTokenA)
+				shown := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, e.until.Add(time.Minute), time.Second)
+				if shown.State != store.StateNeedsIntelligence {
+					t.Fatalf("entry=%+v", shown)
+				}
+				if err := apitest.SetPermissionFacts(e.f.path, pr.RequestID, apitest.PermissionProof(e.until)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gate := store.HookGate{Event: "Stop", ParentPID: e.b.GatewayPID, ParentStart: e.b.GatewayStart, SessionID: e.b.SessionID, Cursor: &e.b}
+			if a, err := e.f.s.ApplyHookTransition(e.b.InstanceID, gate, store.StateWaiting, false, "Stop", "", false); err != nil || !a.Applied {
+				t.Fatalf("Stop=%+v %v", a, err)
+			}
+			row := rvExamine(t, e.f, e.b.InstanceID)
+			if row.State != store.StateWaiting {
+				t.Fatalf("raw state=%s", row.State)
+			}
+			if tc.display && row.CommittedDisplay().State != store.StateNeedsIntelligence {
+				t.Fatalf("Stop lost display: %+v", row)
+			}
+			before := map[string][3]any{}
+			for _, id := range []string{parent, row.InstanceID} {
+				a, b, at := familyHistory(t, e.f, id)
+				before[id] = [3]any{a, b, at}
+				if tc.display && a != store.StateWorking {
+					t.Errorf("Stop removed retained family %s: %v", id, before[id])
+				}
+			}
+			blocked := errors.New("fixture: terminal family refresh failed")
+			var refreshes int
+			store.ObserveDecisionBoundaryForTest(t, e.f.s, e.f.path, func(_ context.Context, q string) error {
+				if strings.HasPrefix(q, "WITH RECURSIVE working(id)") {
+					refreshes++
+					if tc.reject {
+						return blocked
+					}
+				}
+				return nil
+			}, nil)
+			mark := store.TrailMark(t)
+			var prior string
+			var result store.CondResult
+			var err error
+			_, _, attempted := apitest.RepeatUntilCommitted(func() bool {
+				prior, result, err = e.f.s.MarkCursorMissingIfSameLaunch(row, e.b)
+				return !errors.Is(err, store.ErrStoreBusy)
+			})
+			if !attempted {
+				t.Fatalf("terminal write never attempted: %v", err)
+			}
+			after := rvExamine(t, e.f, row.InstanceID)
+			if tc.display && tc.reject {
+				if !errors.Is(err, blocked) || result == store.CondApplied || !reflect.DeepEqual(after, row) {
+					t.Fatalf("failed refresh did not roll back: %s/%v %v before=%+v after=%+v", prior, result, err, row, after)
+				}
+				for id, want := range before {
+					a, b, at := familyHistory(t, e.f, id)
+					if [3]any{a, b, at} != want {
+						t.Errorf("rollback changed family %s", id)
+					}
+				}
+				assertDisplayRecords(t, mark, row.InstanceID)
+				return
+			}
+			if err != nil || result != store.CondApplied || prior != store.StateWaiting || after.State != store.StateMissing || after.DisplayObservation != "" {
+				t.Fatalf("terminal write=%s/%v %v row=%+v", prior, result, err, after)
+			}
+			_, _, stamp := familyHistory(t, e.f, row.InstanceID)
+			for _, id := range []string{parent, row.InstanceID} {
+				a, b, at := familyHistory(t, e.f, id)
+				if a != store.StateWaiting || tc.display && (b != store.StateWorking || at != stamp || stamp == 0) {
+					t.Errorf("terminal family %s=%s/%s/%d", id, a, b, at)
+				}
+			}
+			if tc.display {
+				if refreshes == 0 {
+					t.Error("retained contribution bypassed refresh")
+				}
+				_, at, err := apitest.ReadSettle(e.f.path, row.InstanceID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertDisplayRecords(t, mark, row.InstanceID, displayRecord{store.StateNeedsIntelligence, store.StateMissing, time.UnixMilli(at)})
+			} else {
+				if refreshes != 0 {
+					t.Errorf("plain waiting refreshed families %d times", refreshes)
+				}
+				assertDisplayRecords(t, mark, row.InstanceID)
+			}
+		})
+	}
+}
 
 // repairFamily seeds a stale Claude permission row without a holding request, below two waiting ancestors.
 func repairFamily(t *testing.T) (*v5Store, []string) {

@@ -222,6 +222,11 @@ function buildSpawn(p: SpawnParams): string[] {
     f.push("--relay-mode", p.relay_mode);
   if (p.no_pre_trust === true) f.push("--no-pre-trust");
   if (p.reuse_finished === true) f.push("--reuse-finished");
+  // null and 0 are no override, as omitted; the CLI refuses any other
+  // non-integer or out-of-range value.
+  const timeout = p.idle_screen_timeout_seconds;
+  if (timeout !== undefined && timeout !== null && timeout !== 0)
+    f.push("--idle-screen-timeout-seconds", String(timeout));
 
   // Repeatable --label k=v
   if (p.label) {
