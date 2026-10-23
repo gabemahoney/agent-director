@@ -98,16 +98,18 @@ type OpenRequestFacts struct {
 
 // DialogMaybeOpenDetails is ErrDialogMaybeOpen's err_details (b.146 step 2c,
 // in decision 8's shape), from send-keys and pause: the oldest request of the
-// Spawn that no hook of Claude Code has proven gone, with the same fields
-// get's unproven_requests give it (its delivery facts at the refusal: how
-// agent-director's records say it closed, delivery and pane_answer, and since
-// when, unproven_since), the Spawn's state, and every other request of the
-// Spawn not proven gone.
+// Spawn that holds the dialog (no hook of the agent has proven it gone, less a
+// Cursor request of an earlier launch; PermissionRow.HoldsDialog), with the
+// same fields get's unproven_requests give it (its delivery facts at the
+// refusal: how agent-director's records say it closed, delivery and
+// pane_answer, and since when, unproven_since), the Spawn's state, and every
+// other request of the Spawn that holds the dialog.
 type DialogMaybeOpenDetails struct {
 	PermissionRequestInfo
 	// State is the Spawn's state when the refusal was made.
 	State string `json:"state"`
-	// UnprovenRequests is every other request of the Spawn not proven gone,
+	// UnprovenRequests is every other request of the Spawn that holds the
+	// dialog (not proven gone, less a Cursor request of an earlier launch),
 	// oldest first, with the same fields; [] when none.
 	UnprovenRequests []PermissionRequestInfo `json:"unproven_requests"`
 }

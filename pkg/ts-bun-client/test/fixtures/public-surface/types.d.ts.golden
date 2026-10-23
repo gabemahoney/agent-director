@@ -182,7 +182,8 @@ export interface RequestDelivery {
      * When agent evidence proved the request's permission dialog gone; null until
      * then. agent-director's own records (`delivered`, a pane answer, `recordPaneAnswer`) are not
      * proof. While it is null, a plain `sendKeys` to the live Spawn without `expect_pane_sha256`,
-     * and a `pause`, reject with `ErrDialogMaybeOpen`.
+     * and a `pause`, reject with `ErrDialogMaybeOpen`, unless it is a Cursor request of an earlier
+     * launch of the row.
      */
     proven_gone_at: string | null;
     /** How it was proven gone; see {@link ProvenGoneHow}. Null until proven. */
@@ -205,15 +206,15 @@ export interface RequestDelivery {
  *   before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor
  *   unknown-origin and child requests remain ineligible even without a child id. Decisions,
  *   delivery acknowledgements and pane-answer claims do not grant eligibility.
- * - `"agent_gone"`: its Spawn was marked missing, ended or resumed.
+ * - `"agent_gone"`: its non-Cursor Spawn was marked missing, ended or resumed.
  */
 export type ProvenGoneHow = "tool_ran" | "turn_end" | "agent_gone";
 /**
  * One permission request with its delivery facts:
  * an open one (still awaiting an answer) in the `permission_requests` of a `get` or `list` row in
- * state check_permission; one not proven gone, open or read closed, in `get`'s
- * `unproven_requests`; and the request an `errDetails` names (the base of
- * `RelayFallenBackDetails` and `DialogMaybeOpenDetails`).
+ * state check_permission; one that holds the dialog (not proven gone, less a Cursor request of an
+ * earlier launch), open or read closed, in `get`'s `unproven_requests`; and the request an
+ * `errDetails` names (the base of `RelayFallenBackDetails` and `DialogMaybeOpenDetails`).
  */
 export interface PermissionRequestInfo extends RequestDelivery {
     /** Autoincrement primary key of the permission_requests row. */
@@ -689,15 +690,16 @@ export interface GetResult {
      */
     permission_requests: PermissionRequestInfo[];
     /**
-     * Every permission request of the row that the agent's hooks have not proven gone (`proven_gone_at`
-     * null), oldest first, in any live state but ended and missing (`[]` on those). Unlike
-     * `permission_requests` it also lists requests agent-director's records read closed
-     * (delivered, answered at the pane, or recorded answered outside it), each with
-     * `unproven_since`. While it is not empty, a plain `sendKeys` without `expect_pane_sha256`,
-     * and a `pause`, reject (`ErrDialogMaybeOpen`, or an earlier relay refusal). It follows the
-     * row's live state and is never delayed by `[state] settle_ms`, so with it set it can disagree
-     * with `state` for up to settle_ms under ordinary raw-state settling, and without that bound
-     * while entering or leaving `needs_intelligence` or `idle_screen` (see `state`).
+     * Every permission request of the row that the agent's hooks have not proven gone
+     * (`proven_gone_at` null), less Cursor requests of an earlier launch of the row, oldest first,
+     * in any live state but ended and missing (`[]` on those). Unlike `permission_requests` it
+     * also lists requests agent-director's records read closed (delivered, answered at the pane,
+     * or recorded answered outside it), each with `unproven_since`. While it is not empty, a plain
+     * `sendKeys` without `expect_pane_sha256`, and a `pause`, reject (`ErrDialogMaybeOpen`, or an
+     * earlier relay refusal). It follows the row's live state and is never delayed by
+     * `[state] settle_ms`, so with it set it can disagree with `state` for up to settle_ms under
+     * ordinary raw-state settling, and without that bound while entering or leaving
+     * `needs_intelligence` or `idle_screen` (see `state`).
      */
     unproven_requests: PermissionRequestInfo[];
 }
@@ -931,11 +933,12 @@ export interface RelayFallenBackDetails extends PermissionRequestInfo {
     open_requests: OpenRequestFacts[] | null;
 }
 /**
- * ErrDialogMaybeOpen's errDetails (from a plain
- * sendKeys without `expect_pane_sha256`, and from pause): the oldest request of the Spawn that
- * the agent's hooks have not proven gone (its fields and delivery facts: how agent-director's records
- * say it closed, `delivery` and `pane_answer`, and since when, `unproven_since`), the Spawn's
- * state, and the Spawn's other requests not proven gone, oldest first.
+ * ErrDialogMaybeOpen's errDetails (from a plain sendKeys without `expect_pane_sha256`, and
+ * from pause): the oldest request of the Spawn that holds the dialog (not proven gone, less a
+ * Cursor request of an earlier launch), with its fields and delivery facts (how
+ * agent-director's records say it closed, `delivery` and `pane_answer`, and since when,
+ * `unproven_since`), the Spawn's state, and the Spawn's other such requests (as
+ * `unproven_requests` lists them), oldest first.
  */
 export interface DialogMaybeOpenDetails extends PermissionRequestInfo {
     state: string;

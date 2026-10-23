@@ -586,8 +586,10 @@ damaged transcript is reconstructed from replay or replaced with an empty file.
 Load can leave the row `pending` until a real first prompt. Explicit
 `allow_pending` (`--allow-pending` on the CLI) permits that first prompt only
 after current binding verification and every durable dialog hold; it bypasses
-neither. Replayed updates cannot establish readiness, new requests, decisions,
-choices or execution proof, and no transient input is recovered.
+neither. Requests of an earlier launch hold nothing (see
+[Cursor spawns](permissions.md#cursor-spawns)). Replayed updates cannot
+establish readiness, new requests, decisions, choices or execution proof, and
+no transient input is recovered.
 
 Cursor supports same-agent finished-id reuse and switches through the
 [life and history rules](usage.md#naming-the-agent). Reuse starts fresh and

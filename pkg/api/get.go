@@ -10,7 +10,8 @@ import (
 // PermissionRequestInfo is the projection of one permission request with its
 // delivery facts: an open one (still awaiting an answer, b.146 rule 9) in the
 // permission_requests of a `get` or `list` row in state `check_permission`;
-// one the agent has not proven gone (b.146 step 2c), open or closed in
+// one that holds the dialog (not proven gone, b.146 step 2c, less a Cursor
+// request of an earlier launch; PermissionRow.HoldsDialog), open or closed in
 // agent-director's own records, in `get`'s unproven_requests (a row in any
 // state but ended and missing); and the request an err_details names (the
 // base of RelayFallenBackDetails and DialogMaybeOpenDetails). ToolInput is
@@ -175,6 +176,8 @@ type SpawnRow struct {
 	// recorded answered outside it; such a request carries unproven_since.
 	// While it is not empty, plain send-keys without a pane hash, and pause
 	// (b.zdz), are refused (ErrDialogMaybeOpen or an earlier relay refusal).
+	// A Cursor request of an earlier launch of the row is not listed: the
+	// row has since started a newer launch (PermissionRow.HoldsDialog).
 	// Always a non-nil slice (encodes as [] when empty).
 	UnprovenRequests []PermissionRequestInfo `json:"unproven_requests"`
 	// TranscriptStatus is a derived, operator-facing summary of the current
@@ -295,7 +298,9 @@ type GetStore interface {
 	GetSpawn(instanceID string) (Spawn, error)
 	// PermissionRequestsForSpawn reads every permission request of the
 	// Spawn: Get reports, from that one read, those that still await an
-	// answer (b.146 rule 9) and those not proven gone (b.146 step 2c).
+	// answer (b.146 rule 9) and those that hold the dialog (not proven gone,
+	// b.146 step 2c, less a Cursor request of an earlier launch;
+	// PermissionRow.HoldsDialog).
 	PermissionRequestsForSpawn(instanceID string) ([]PermissionRow, error)
 	// ListSessionHistory returns the instance's archived sessions of one
 	// life only — life is the LifeNumber of the row Get read — newest
@@ -365,7 +370,8 @@ func emptySpawnRow() SpawnRow {
 //     are never visible in it. In other states it is an empty non-nil slice
 //     (encodes as []).
 //   - UnprovenRequests: every request Claude Code has not proven gone (b.146
-//     step 2c), closed in agent-director's records or not.
+//     step 2c), closed in agent-director's records or not, less a Cursor
+//     request of an earlier launch.
 //
 // On an ended or missing row nothing is read and both are empty. Get is a
 // reading verb and never waits for the store's write lock (b.146 problem 4):
@@ -484,7 +490,7 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 		if err != nil {
 			return emptySpawnRow(), err
 		}
-		open, unproven := judgedSpawnInfos(judged, j)
+		open, unproven := judgedSpawnInfos(judged, j, row)
 		if row.State == store.StateCheckPermission {
 			out.PermissionRequests = open
 		}
@@ -518,15 +524,16 @@ func getSettled(s GetStore, v RelayView, settle store.SettleRead, instanceID str
 // attempted_at, tool_use_id, pane_answer, pane_as, proven_gone_at,
 // proven_gone_how, unproven_since). On a row that is not ended or missing it
 // carries unproven_requests: every permission request Claude Code has not
-// proven gone, closed in agent-director's records or not, each with the same
-// facts; while one is listed, a plain send-keys without a pane hash, and
-// pause, are refused. On a pending row it also carries launch_started_at, when the
-// agent's launch began. When the row records
-// one, it carries tmux_socket, the tmux socket the row's latest launch
-// uses, in any state. prior_sessions and transcript_status come from the
-// current life's history only. Same-agent reuse retains it; an agent switch
-// or switch back starts a new life and hides earlier lives. Older sessions
-// are listed for inspection only; resume continues only the current session.
+// proven gone, closed in agent-director's records or not (a Cursor request of
+// an earlier launch excepted), each with the same facts; while one is listed,
+// a plain send-keys without a pane hash, and pause, are refused. On a
+// pending row it also carries launch_started_at, when the agent's launch
+// began. When the row records one, it carries tmux_socket, the tmux socket
+// the row's latest launch uses, in any state. prior_sessions and
+// transcript_status come from the current life's history only. Same-agent
+// reuse retains it; an agent switch or switch back starts a new life and
+// hides earlier lives. Older sessions are listed for inspection only; resume
+// continues only the current session.
 // With [state] settle_ms set, state is the settled state: a hook-written
 // change between ordinary states shows only once it has held that long, the
 // last settled state until then. Entering, leaving or moving between

@@ -166,27 +166,31 @@ var ErrPaneChanged = errors.New("ErrPaneChanged")
 
 // ErrDialogMaybeOpen is returned by a plain send-keys (no request token)
 // without expect_pane_sha256, and by pause, which types `/exit` and Enter as
-// such a send-keys would (b.zdz), while a permission request of the Spawn is
-// not proven gone (b.146 step 2c): no hook of the agent has shown its
-// dialog gone, so the dialog may still be on the pane, and typed keys, an
-// Enter above all, would land on it. A request is proven gone by its tool's
-// PostToolUse or PostToolUseFailure (the same tool_use_id; Claude rows only),
-// by the main agent's Stop or idle-prompt Notification, or a Codex main
-// agent's Interrupt, written after it (a request with
-// no agent_id, including a main-agent request), or by
-// its Spawn's end (marked missing, ended, or resumed). agent-director's own
-// records prove nothing: a request whose relay hook acked its verdict
-// (delivery delivered), one answered at the pane through send-keys, and one
-// closed with record-pane-answer all stay unproven until then. The refusals
-// for a relay hook that may still answer (ErrSendKeysWhileRelayed) and a
-// fallen-back request (ErrRelayFallenBack) come first. A plain send-keys
-// whose expect_pane_sha256 matches the pane as captured now is not refused
-// with it (a mismatch is ErrPaneChanged). Pause takes no pane hash: a caller
-// that has read the pane and answered any dialog on it types `/exit` with
-// such a send-keys, or kills the Spawn. Nothing was sent. Its err_details
-// (DialogMaybeOpenDetails) give the oldest such request with its delivery
-// facts, pane_answer and unproven_since, the Spawn's state and the Spawn's
-// other requests not proven gone.
+// such a send-keys would (b.zdz), while a permission request of the Spawn
+// holds the dialog (PermissionRow.HoldsDialog): it is not proven gone (b.146
+// step 2c), so no hook of the agent has shown its dialog gone, the dialog may
+// still be on the pane, and typed keys, an Enter above all, would land on it;
+// and it is not a Cursor request of an earlier launch. A request is proven
+// gone by its tool's PostToolUse or PostToolUseFailure (the same tool_use_id;
+// Claude rows only), on a Cursor row by the gateway's validated completed or
+// failed update of its exact tool_use_id under the launch that admitted it,
+// by a turn end under the turn_end rule (store.ProvenGoneTurnEnd; the
+// proven_gone_how field of get-permission gives which hooks prove it and
+// which requests they cover), or, on a non-Cursor row, by its Spawn's end
+// (marked missing, ended, or resumed). agent-director's own records prove nothing: a
+// request whose relay hook acked its verdict (delivery delivered), one
+// answered at the pane through send-keys, and one closed with
+// record-pane-answer all keep holding until then. A Cursor request stops
+// holding, without being proven gone, once a resume replaces the launch that
+// admitted it. The refusals for a relay hook that may still answer
+// (ErrSendKeysWhileRelayed) and a fallen-back request (ErrRelayFallenBack)
+// come first. A plain send-keys whose expect_pane_sha256 matches the pane as
+// captured now is not refused with it (a mismatch is ErrPaneChanged). Pause
+// takes no pane hash: a caller that has read the pane and answered any dialog
+// on it types `/exit` with such a send-keys, or kills the Spawn. Nothing was
+// sent. Its err_details (DialogMaybeOpenDetails) give the oldest such request
+// with its delivery facts, pane_answer and unproven_since, the Spawn's state
+// and the Spawn's other requests that hold the dialog.
 var ErrDialogMaybeOpen = errors.New("ErrDialogMaybeOpen")
 
 // ErrPaneAnswerInProgress is returned by send-keys with a request token, and

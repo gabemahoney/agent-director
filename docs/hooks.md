@@ -1058,8 +1058,8 @@ left open on the finished row (`decision_reason` `ended`,
 Codex row ends" above), made by `find-missing` or by `pause`, closes them
 too, as the `ended` close does: `decision_reason` `ended` and
 `writer_process` `find_missing`, so `decide` on such a request returns
-`ErrNoOpenPermissionRequest`. Each of these also proves every request of
-the row gone together, closed now or before
+`ErrNoOpenPermissionRequest`. On a non-Cursor row, each of these also
+proves every request of the row gone together, closed now or before
 (`proven_gone_how` `agent_gone`; see "Hooks that prove a request's dialog
 gone" below).
 
@@ -1113,7 +1113,7 @@ requests carry no `tool_use_id`), and not a `PostToolUse` with another
   nothing else; the requests stay unproven until a later proof.
 - **The agent's end.** The terminal `SessionEnd`, `find-missing`'s mark,
   the move of a Codex row to `ended` and `resume`'s move prove every request
-  of the row gone (`agent_gone`),
+  of a non-Cursor row gone (`agent_gone`),
   with their close (see "The agent's end closes its
   requests" above). A retained request of a finished row is proven by the same rule.
 - **What a proof releases.** A request proven gone holds no move of the

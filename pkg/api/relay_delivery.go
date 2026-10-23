@@ -136,8 +136,8 @@ type RequestDelivery struct {
 	// Notification, Codex Interrupt or verified Cursor Stop/Interrupt proves
 	// only durably main-turn-eligible requests with no child identity recorded
 	// before the hook began; Cursor unknown-origin and child requests remain
-	// ineligible) or agent_gone (its Spawn was marked missing, ended or resumed);
-	// null until then.
+	// ineligible) or agent_gone (its non-Cursor Spawn was marked missing, ended
+	// or resumed); null until then.
 	ProvenGoneHow *string `json:"proven_gone_how"`
 	// UnprovenSince is, for a request not proven gone that no longer awaits
 	// an answer in agent-director's own records, when its record stopped
@@ -576,11 +576,13 @@ func readJudgedRequests(read func(string) ([]PermissionRow, error), j relayJudge
 // (readJudgedRequests), oldest first (created_at, then request id), with
 // their delivery facts at j's now: open, the requests that still await an
 // answer (PermissionRow.AwaitsAnswer, as OpenPermissionRequestsForSpawn
-// selects them), and unproven, those Claude Code has not proven gone (b.146
-// step 2c). A request in both lists is judged once and carries the same facts
-// in each. Both are non-nil. The caller collects those the fallback write
-// would store something for (goneSlotsOf) for its one recordGone.
-func judgedSpawnInfos(r *judgedRequestSet, j relayJudge) (open, unproven []PermissionRequestInfo) {
+// selects them), and unproven, those that hold sp's dialog guards
+// (PermissionRow.HoldsDialog: not proven gone, b.146 step 2c, and not of an
+// earlier Cursor launch). A request in both lists is judged once and carries
+// the same facts in each. Both are non-nil. The caller collects those the
+// fallback write would store something for (goneSlotsOf) for its one
+// recordGone.
+func judgedSpawnInfos(r *judgedRequestSet, j relayJudge, sp Spawn) (open, unproven []PermissionRequestInfo) {
 	prs := slices.Clone(r.rows)
 	slices.SortStableFunc(prs, func(a, b PermissionRow) int {
 		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
@@ -595,7 +597,7 @@ func judgedSpawnInfos(r *judgedRequestSet, j relayJudge) (open, unproven []Permi
 		if pr.AwaitsAnswer() {
 			open = append(open, info)
 		}
-		if !pr.ProvenGone() {
+		if pr.HoldsDialog(sp.Agent, sp.Identity.Token) {
 			unproven = append(unproven, info)
 		}
 	}

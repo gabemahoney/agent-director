@@ -3,33 +3,35 @@ package apitest
 // descriptions_dialog.go holds the shared description helper's cases of the
 // proof texts of b.146 step 2c as they read on a Codex row (b.ssz Epic 4):
 // ErrDialogMaybeOpen's description names what would prove the request gone,
-// and that is the agent's own signal. A Claude row's text is the one that
-// shipped (DescDialogMaybeOpenClaude pins it unchanged); a Codex row's request
-// carries no tool_use_id and no PostToolUse proves it, so its text names the
-// main agent's Stop or Interrupt instead (DescDialogMaybeOpenCodex). The
+// and that is the agent's own signal. A Claude row's text names Claude Code's
+// proofs (DescDialogMaybeOpenClaude); a Codex row's request carries no
+// tool_use_id and no PostToolUse proves it, so its text names the main
+// agent's Stop or Interrupt instead (DescDialogMaybeOpenCodex). The
 // manifest's proven_gone_how text says the same of the field
 // (DescProvenGoneHow).
 
 // DescDialogMaybeOpenClaude is ErrDialogMaybeOpen's description on a Claude
-// row, byte for byte as it shipped: the tool_use_id PostToolUse, the end of
-// the main agent's turn and the end of the agent are the proofs, and it says
-// nothing was sent. It never names an Interrupt. Check it with
-// AssertDescription.
+// row: the tool_use_id PostToolUse, the end of the main agent's turn and the
+// end of the agent are the proofs, the other requests it counts are those
+// that still hold the dialog, and it says nothing was sent. It never names an
+// Interrupt. Check it with AssertDescription.
 func DescDialogMaybeOpenClaude() DescCase {
 	return DescCase{
 		Name: "ErrDialogMaybeOpen on a Claude row",
 		Require: []string{
 			"is not proven gone (no PostToolUse with its tool_use_id, no end of the main agent's turn after it for a request with no agent_id, and no end of its agent is recorded)",
 			"so its permission dialog may still be on the pane",
+			"other request(s) of the spawn still hold the dialog (err_details)",
 			"nothing was sent",
 		},
-		MustNot: []string{"Interrupt"},
+		MustNot: []string{"Interrupt", "are not proven gone"},
 	}
 }
 
 // DescDialogMaybeOpenCodex is ErrDialogMaybeOpen's description on a Codex row:
 // the proofs are the main agent's Stop or Interrupt after the request (for a
-// request with no agent_id) and the end of the agent, and it never names a
+// request with no agent_id) and the end of the agent, the other requests it
+// counts are those that still hold the dialog, and it never names a
 // PostToolUse or a tool_use_id, which prove nothing on Codex. Check it with
 // AssertDescription.
 func DescDialogMaybeOpenCodex() DescCase {
@@ -38,9 +40,10 @@ func DescDialogMaybeOpenCodex() DescCase {
 		Require: []string{
 			"is not proven gone (no Stop or Interrupt of the main agent after it for a request with no agent_id, and no end of its agent is recorded)",
 			"so its permission dialog may still be on the pane",
+			"other request(s) of the spawn still hold the dialog (err_details)",
 			"nothing was sent",
 		},
-		MustNot: []string{"PostToolUse", "tool_use_id"},
+		MustNot: []string{"PostToolUse", "tool_use_id", "are not proven gone"},
 	}
 }
 
@@ -61,7 +64,7 @@ func DescProvenGoneHow() DescCase {
 			"Legacy non-Cursor main requests retain eligibility",
 			"Cursor unknown-origin and child requests are ineligible even without a child id",
 			"Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility",
-			"agent_gone: its spawn was marked missing, ended or resumed",
+			"agent_gone: its non-Cursor spawn was marked missing, ended or resumed",
 		},
 	}
 }

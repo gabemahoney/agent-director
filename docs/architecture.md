@@ -540,7 +540,10 @@ rotation/admission paths MUST reuse these components and the captured status.
 Dispatch requires the previous turn to finish and every retained durable dialog
 hold to resolve. Future dispatch paths MUST reuse `reporter.promptEligible`
 and `Store.CheckCursorPrompt`, which bound authority acquisition and verify
-runtime/pane/current binding and all unproven durable requests. An empty local
+runtime/pane/current binding and every durable request that holds the dialog
+(`cursorHoldsDialogSQL`, the SQL form of `PermissionRow.HoldsDialog` for a
+verified Cursor row; see "The hold" under
+[The dialog hold](#the-dialog-hold-step-2c)). An empty local
 request map, acknowledgement or local cancellation supplies no dialog proof.
 Late exact tool execution can discharge only its matching hold after completion.
 The guarded protocol request allocates its ACP identity before synchronizing
@@ -2666,7 +2669,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`ProveCursorToolRan` / `ProveCursorToolFailed`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`) and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`ProveCursorToolRan` / `ProveCursorToolFailed`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 ### v11 columns: durable main-turn proof eligibility
@@ -2677,7 +2680,8 @@ the persisted bool; nullable `agent_id` separately carries known child identity.
 Main-turn proof requires BOTH `main_turn_end_eligible = 1` AND `agent_id IS NULL`;
 NULL child identity alone supplies no origin evidence. Even an already-current
 current row corrupted to child=true remains excluded from main-turn proof.
-Only matching owning tool-use proof or owning-spawn end can release such a hold.
+Only matching owning tool-use proof or the owning launch ending (the spawn's
+close, or a `resume` replacing the launch) can release such a hold.
 
 `RelayRequest.MainTurnEndEligible` is an internal optional `*bool`: nil resolves
 once inside `InsertRelayRequest`'s immediate transaction from the actual nullable
@@ -3181,9 +3185,12 @@ still the one it read, so it knows the row has not changed since. As built:
   when the move applied, it closes every request of the row that still
   awaits an answer (`closeOrphanedRequests`, reason `ended`; b.146 rule
   12), a backstop for a request left open on a row that finished before
-  the ended close existed, and proves every request of the row gone
-  (`agent_gone`, b.146 step 2c), so none of the earlier launch's holds
-  plain `send-keys` in the new one. Last in the same transaction it closes
+  the ended close existed, and, on a non-Cursor row, proves every request
+  of the row gone (`agent_gone`, b.146 step 2c), so none of the earlier
+  launch's holds plain `send-keys` in the new one. A Cursor request gets no
+  proof; one of the earlier launch stops holding
+  (`PermissionRow.HoldsDialog`) once the move writes the new launch token.
+  Last in the same transaction it closes
   the row's running subagent entries and deletes its claimable launches
   (`closeSubagentsAgentGone`, the instant the move's own `launch_started_at`;
   see [The liveness close of subagent entries](#the-liveness-close-of-subagent-entries)). The move, both closes and the proof are all or nothing.
@@ -3533,7 +3540,8 @@ still the one it read, so it knows the row has not changed since. As built:
     decided, unacked request without a prior close or completed pane
     answer, including pre-v7; it keeps its `decision`, `decision_reason` and
     `decided_at`; a third statement, `proveAgentGoneSQL`, proves every
-    request of the row not yet proven gone (`agent_gone`, b.146 step 2c).
+    request of a non-Cursor row not yet proven gone (`agent_gone`, b.146
+    step 2c).
     Last, when the mark applied, the subagent close
     (`closeSubagentsAgentGone`): every running entry of the row turns `lost`,
     `agent_gone`, and every claimable launch is deleted, at the one
@@ -6545,15 +6553,17 @@ A Displayed State changes none of this: it is never read by a guard.
   relay's delivery states never read the settled state, so a caller learns
   of a permission request at once. The settle time changes neither when
   the lists are shown nor which requests they hold: `unproven_requests` is
-  every request the agent's hooks have not proven gone, by the agent-specific
-  proof rules of [The dialog hold](#the-dialog-hold-step-2c), including "Proofs by agent"
+  every request that holds the dialog (`PermissionRow.HoldsDialog`): not
+  proven gone by the agent-specific proof rules of
+  [The dialog hold](#the-dialog-hold-step-2c), including "Proofs by agent"
   (a `turn_end` proof covers only requests recorded before the second its
-  hook started, b.omt). Under ordinary raw-state reporting, for up to T a row
-  can read `ended` or `missing` (see **Hooks out of a terminal state settle**
-  above), with an open request in `permission_requests`, or `check_permission` with
-  `[]`, and a row its agent moved out of `ended` or `missing` can read
-  `ended` or `missing` with requests in `unproven_requests`, also for up
-  to T. And since a request proven gone no
+  hook started, b.omt), and not a Cursor request of an earlier launch.
+  Under ordinary raw-state reporting, for up to T a row can read `ended` or
+  `missing` (see **Hooks out of a terminal state settle** above), with an
+  open request in `permission_requests`, or `check_permission` with `[]`,
+  and a row its agent moved out of `ended` or `missing` can read `ended` or
+  `missing` with requests in `unproven_requests`, also for up to T. And
+  since a request proven gone no
   longer holds the row (b.omt), the raw state can leave `check_permission`
   while such a request still awaits an answer; the row can then read
   `check_permission` for up to T with that request in neither list
@@ -6746,8 +6756,12 @@ turn): every true raw transition
 (`hookStateSet`, `immediateSettleSet`) bumps it and a write of the same value
 does not. A request qualifies only while both ownership fields equal the row's
 current launch token and epoch, still awaits an answer and is not proven
-gone. AD has no explicit-supersession action: a request leaves the report only
-by being answered, proven gone or closed, or by its interval ending. Ownership
+gone. Beyond the report, `owner_launch_token` also ends a Cursor request's
+dialog hold once a new launch replaces its own
+(`PermissionRow.OfEarlierCursorLaunch`; see "The hold" under
+[The dialog hold](#the-dialog-hold-step-2c)). AD has no explicit-supersession
+action: a request leaves the report only by being answered, proven gone or
+closed, or by its interval ending. Ownership
 is independent of `row_version` and per request: admitting, answering or
 closing another request neither retires nor restarts the rest of the
 interval. A displayed episode belongs to one continuous interval: one
@@ -12920,8 +12934,8 @@ request judged once:
 `permission_requests`, the requests that still await an answer
 (`PermissionRow.AwaitsAnswer`, the Go form of `awaitingAnswerSQL`), only
 while the row is in `check_permission`; and `unproven_requests`, those
-not proven gone (`ProvenGone()` false). Its requests from either list join
-the same one `recordGone` by the rule above. With no wait left, the
+holding the dialog (`PermissionRow.HoldsDialog`). Its requests from either
+list join the same one `recordGone` by the rule above. With no wait left, the
 zero-wait write still takes a free connection.
 
 After a write the store refused as busy (`ErrStoreBusy`, a refused
@@ -13124,8 +13138,8 @@ close of a Spawn's requests" under [`internal/store`](#internalstore)):
 
 An undecided request is denied by the close, so a relay hook still polling
 for it reads a fail-closed deny; a decided one whose hook has not acked
-keeps its verdict. The same close proves every request of the row gone
-(`agent_gone`, step 2c), closed now or before. `decide` on a request the
+keeps its verdict. On a non-Cursor row the same close proves every request
+of the row gone (`agent_gone`, step 2c), closed now or before. `decide` on a request the
 ended close denied is
 `ErrNoOpenPermissionRequest` (`recordedRefusal`), not `ErrAlreadyDecided`
 as for the mark's deny. The Codex move's deny reads the same way, since its
@@ -13371,10 +13385,20 @@ docs/engineering-guide.md).
 - **The hold.** `spawnRequests.sendKeysRefusal`'s rule 3
   (`pkg/api/sendkeys_relay.go`): a plain call (no `request_token`) without
   `expect_pane_sha256`, after rules 1 and 2, is refused while
-  `spawnRequests.unproven()` (every request of the row with
-  `ProvenGone()` false, oldest first) is not empty, with
-  `dialogMaybeOpenError`. A plain call with the hash is not held by it:
-  its hash check (`paneMatches`, before any key) decides, `ErrPaneChanged`
+  `spawnRequests.unproven()` (every request of the row for which
+  `PermissionRow.HoldsDialog` is true, oldest first) is not empty, with
+  `dialogMaybeOpenError`. `HoldsDialog` is `ProvenGone()` false and not
+  `OfEarlierCursorLaunch`: on a Cursor row, a request whose
+  `owner_launch_token` and the row's launch token are both known and differ
+  belongs to a launch that `resume` replaced. That launch has no pane,
+  gateway binding or ACP connection in the row's current launch, so it
+  cannot show a dialog there: the request holds nothing, without being
+  proven gone, and keeps its proof fields as recorded. A failed resume that
+  restores the old launch token makes it hold again. Finished-id reuse
+  deletes the id's requests (`resetForReuseDeleteRequestsSQL`), so leaves
+  none to judge. A NULL owner (before v14) keeps holding. A plain call with
+  the hash is not held by it: its hash check (`paneMatches`, before any key)
+  decides, `ErrPaneChanged`
   on a mismatch. The guard applies only to a row with `relay_mode=on`
   (`evaluateRelayGuard`), in any live state, so a row with no request, or
   whose requests are all proven, has no rule 3 dialog hold
@@ -13387,11 +13411,11 @@ docs/engineering-guide.md).
   writes no `ad.send_keys.called`.
 - **The error.** `ErrDialogMaybeOpen` is a `DetailedError` whose
   `DialogMaybeOpenDetails` (`dialogMaybeOpenDetails`) embed the oldest
-  unproven request's `PermissionRequestInfo`, with its delivery facts at
+  request holding the dialog's `PermissionRequestInfo`, with its delivery facts at
   the refusal, beside `state` and `unproven_requests` (the others, oldest
   first, `[]` when none). Its description states facts only: the request,
   its `delivery` and `pane_answer`, since when its record reads closed (or
-  that it still awaits an answer), how many others are unproven, and that
+  that it still awaits an answer), how many others hold the dialog, and that
   nothing was sent; it never says a dialog is on screen.
 - **The report.** `get`'s `unproven_requests` (see "Readers never wait"
   above) and `proven_gone_at`, `proven_gone_how` and `unproven_since` on
@@ -13399,9 +13423,11 @@ docs/engineering-guide.md).
   the pane but stays unproven tells a caller to look at the pane.
 **Must use:** every `ErrDialogMaybeOpen` is built by
 `dialogMaybeOpenError`; whether a request holds the dialog hold is
-`PermissionRow.ProvenGone()` (through `spawnRequests.unproven`), never a
-test of `delivered_at`, `pane_answer` or `closed_at`; whether it holds
-the row is `holdsRowSQL` (see "The row after the last answer" above); and a proof is
+`PermissionRow.HoldsDialog` (through `spawnRequests.unproven` and
+`judgedSpawnInfos`) or, in SQL on a verified Cursor row,
+`cursorHoldsDialogSQL` (`CheckCursorPrompt`), never a test of
+`delivered_at`, `pane_answer`, `closed_at` or `ProvenGone()` alone; whether it
+holds the row is `holdsRowSQL` (see "The row after the last answer" above); and a proof is
 written only through `ProveRequestsGone`, authenticated exact-request
 `ProveCursorToolRan` after validated execution or `ProveCursorToolFailed` after
 validated failed invocation, `proveAgentGoneSQL`, the
@@ -17630,7 +17656,8 @@ the section that describes it in detail.
   - a `/review` can leave the row `working` until the next prompt ends.
 - **Unknown origin.** A false-eligibility request remains protected even with
   a NULL child id and after restart. Main/child lifecycle completion does not
-  release it; correlated tool invocation proof or owning-spawn end does. Cursor
+  release it; correlated tool invocation proof or the owning launch ending
+  (the spawn's close, or a `resume` replacing the launch) does. Cursor
   Stop/Interrupt/working retain genuine unanswered holds, whereas historical
   Claude/Codex Stop waiting is unchanged. See [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility).
 - **The row hold (b.omt).** A request that still awaits an answer and is
@@ -21686,8 +21713,8 @@ the older-serve sentence ending each spawn and list param text that was
 renamed or that MCP did not decode before 0.11.0;
 `descriptions_pane.go` holds the pane verbs'
 (`read-pane`, `send-keys`, `pause`) cases; `descriptions_dialog.go` holds
-`ErrDialogMaybeOpen`'s proof text per agent, `DescDialogMaybeOpenClaude` (the
-shipped text, which never names an Interrupt) and `DescDialogMaybeOpenCodex`
+`ErrDialogMaybeOpen`'s proof text per agent, `DescDialogMaybeOpenClaude`
+(Claude Code's proofs, and never an Interrupt) and `DescDialogMaybeOpenCodex`
 (the main agent's `Stop` or `Interrupt`, and no `PostToolUse` or
 `tool_use_id`), and `DescProvenGoneHow` for the manifest's field text; `descriptions_kill_optin.go`
 holds the cases of `kill`'s finished-row opt-in;

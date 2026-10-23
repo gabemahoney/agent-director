@@ -604,7 +604,7 @@
         {
           "name": "unproven_requests",
           "type": "[]object",
-          "description": "Every permission request of the row that the agent has not proven gone (proven_gone_at null), oldest first, in any state but ended and missing ([] on those). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array. It follows the row's live state: with [state] settle_ms set, a row can read ended or missing with requests here for up to settle_ms.",
+          "description": "Every permission request of the row that the agent has not proven gone (proven_gone_at null), less Cursor requests of an earlier launch of the row, oldest first, in any state but ended and missing ([] on those). Unlike permission_requests it also lists requests agent-director's records read closed (delivered, answered at the pane, or recorded answered outside it), each with unproven_since: a request that stays unproven a while after it is a reason to read the pane, since its dialog may still be on it. Elements have the same fields as permission_requests'. While it is not empty, plain send-keys without expect_pane_sha256, and pause, are refused. Always a non-null array. It follows the row's live state: with [state] settle_ms set, a row can read ended or missing with requests here for up to settle_ms.",
           "nullable": false,
           "allow_empty": true,
           "allowed_values": null
@@ -716,7 +716,7 @@
         {
           "name": "request_token",
           "type": "string",
-          "description": "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). pane_answer intent means sending started but whether the key was sent is unknown; sent records the key was sent, with decision as and decision_reason pane, not ACP delivery, agent receipt or proof. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by the agent (get's unproven_requests), whatever agent-director's records say of it.",
+          "description": "Makes the call a pane answer to this permission request of the Spawn (as get, get-permission or ErrRelayFallenBack's err_details name it): with as, key and expect_pane_sha256, and no text, it sends exactly one key and never Enter. Accepted only once the request has fallen back (its relay hook gone, no verdict acked, no pane answer completed), while no relay hook of the Spawn may still answer (else ErrSendKeysWhileRelayed) and no other pane answer on it is still being sent (else ErrPaneAnswerInProgress). pane_answer intent means sending started but whether the key was sent is unknown; sent records the key was sent, with decision as and decision_reason pane, not ACP delivery, agent receipt or proof. Not open: ErrNoOpenPermissionRequest or ErrAlreadyDecided. A retry after a sender that died is accepted with a fresh hash. Without it the call is plain: refused with ErrRelayFallenBack (with err_details) while any request of the Spawn has fallen back with no pane answer recorded, then, without expect_pane_sha256, with ErrDialogMaybeOpen (with err_details) while any request of the Spawn is not proven gone by the agent (get's unproven_requests, which leaves out Cursor requests of an earlier launch), whatever agent-director's records say of it.",
           "required": false,
           "nullable": false,
           "allow_empty": true,
@@ -1048,7 +1048,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
+          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen), unless it is a Cursor request of an earlier launch of the row.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1056,7 +1056,7 @@
         {
           "name": "proven_gone_how",
           "type": "string?",
-          "description": "How it was proven gone. tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id, or validated correlated Cursor execution output established that exact tool ran (never on a Codex row). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. agent_gone: its spawn was marked missing, ended or resumed. Null until proven.",
+          "description": "How it was proven gone. tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id, or validated correlated Cursor execution output established that exact tool ran (never on a Codex row). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. agent_gone: its non-Cursor spawn was marked missing, ended or resumed. Null until proven.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [
@@ -1271,7 +1271,7 @@
         {
           "name": "proven_gone_at",
           "type": "timestamp?",
-          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen).",
+          "description": "When the agent proved the request's permission dialog gone; null until then. agent-director's own records (delivered, a pane answer, record-pane-answer) are not proof. While it is null, plain send-keys to the live spawn without expect_pane_sha256, and pause, are refused (ErrDialogMaybeOpen), unless it is a Cursor request of an earlier launch of the row.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": null
@@ -1279,7 +1279,7 @@
         {
           "name": "proven_gone_how",
           "type": "string?",
-          "description": "How it was proven gone. tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id, or validated correlated Cursor execution output established that exact tool ran (never on a Codex row). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. agent_gone: its spawn was marked missing, ended or resumed. Null until proven.",
+          "description": "How it was proven gone. tool_ran: a Claude PostToolUse or PostToolUseFailure carried its tool_use_id, or validated correlated Cursor execution output established that exact tool ran (never on a Codex row). turn_end: the turn of the agent that asked ended after it was written; the main agent's Stop or idle-prompt Notification, a Codex main agent's Interrupt (Esc), or a verified Cursor main Stop/Interrupt proves only a durably main-turn-eligible request recorded before the hook began. Legacy non-Cursor main requests retain eligibility; Cursor unknown-origin and child requests are ineligible even without a child id. Decisions, delivery acknowledgements and pane-answer claims do not grant eligibility. agent_gone: its non-Cursor spawn was marked missing, ended or resumed. Null until proven.",
           "nullable": true,
           "allow_empty": false,
           "allowed_values": [

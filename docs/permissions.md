@@ -105,10 +105,15 @@ using `proven_gone_how` `tool_ran`; it does not establish that the underlying
 server action ran or succeeded. It preserves decision, reason, decision time,
 delivery and pane-answer fields, without inferring an allow or pane answer.
 Status alone and other failed or ambiguous MCP output supply no proof.
-Only this validated invocation proof, or the owning spawn ending, releases their hold.
-Other execution evidence remains conservative. A terminal spawn close ends the
-hold without establishing per-request proof: gateway or runtime death leaves `proven_gone_at` and
+Only this validated invocation proof, or the owning launch ending (see
+below), releases their hold.
+Other execution evidence remains conservative. Ending a launch establishes no
+per-request proof: gateway or runtime death leaves `proven_gone_at` and
 `proven_gone_how` unchanged, including on requests already reading `delivered`.
+Once `resume` starts a new launch, a request of an earlier launch holds
+nothing (plain `send-keys`, `pause`, prompt admission, queued input) and is
+not listed in `get`'s `unproven_requests`. A request recorded by an older
+binary, with no launch on record, still holds.
 Existing validated execution proof is preserved. The shared [dialog hold](#the-dialog-hold) defines the
 proof fields and relay-on prompt/pause guards; relay-off requests still block
 ordinary prompt admission while awaiting their native answer. Accepted
@@ -323,7 +328,7 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
      `relay.permission_request_cap` (default 1000; `0` disables
      eviction), but only once the agent's own hooks have proven the request's dialog
      gone (`proven_gone_at` set) or its spawn is `ended` or `missing`: a
-     closed request not yet proven gone on a live spawn still holds plain
+     closed request not yet proven gone on a live spawn may still hold plain
      `send-keys` (see "The dialog hold" below), so it is kept, and the
      table can stay above the cap by the number of such requests. A
      spawn's newest request is kept as well while that spawn has a
@@ -758,7 +763,7 @@ with a settle instant. Requests recorded by an older binary retain the
 | `tool_use_id` | The `tool_use_id` of the agent's hook input, or Cursor's supplied `toolCallId`; `null` when it gave none (always, on a Codex row). |
 | `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent or a Cursor native choice was recorded; neither establishes ACP delivery, receipt or proof. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported its tool ran, or the Cursor gateway validated matching execution; see [Cursor spawns](#cursor-spawns). `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. Public pane operations store the caller's claim without screen interpretation or verdict verification. Cursor additionally requires a sent claim to match the actual selected option before answering ACP; native choices derive the verdict from that option. An outside claim never supplies ACP approval authority or proof. |
-| `proven_gone_at` | When the agent's own hooks or validated Cursor invocation proof established the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`. |
+| `proven_gone_at` | When the agent's own hooks or validated Cursor invocation proof established the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`, except for a Cursor request of an earlier launch. |
 | `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching invocation proof (never on a Codex row); the exact failed MCP invocation proves dialog closure only, as defined in [Cursor spawns](#cursor-spawns). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
 | `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded by an older binary, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
@@ -853,9 +858,9 @@ agent), and not closed with the spawn. A row can read `waiting`, `working`
 or `ask_user` while one of its requests still awaits an answer, so a caller
 follows each request it tracks with `get-permission`, not only rows in
 `check_permission`. `get` (not `list`) also carries `unproven_requests`:
-every request of the row not proven gone, in any state but `ended` and
-`missing`, with the same fields, including those agent-director's records
-read closed (see "The dialog hold" below).
+every request of the row that holds the dialog (see "The dialog hold"
+below), in any state but `ended` and `missing`, with the same fields,
+including those agent-director's records read closed.
 
 **The row after the last answer.** While any of its requests still awaits
 an answer and is not proven gone (see "The dialog hold" below), the
@@ -1000,7 +1005,7 @@ refuses in this order, sending nothing:
 |---|---|---|
 | any | a relay hook of the spawn may still answer its request: its process runs, or it cannot be checked and the request is open before its `confirm_by` | `ErrSendKeysWhileRelayed` |
 | plain (no `request_token`) | an open request of the spawn is fallen back with `pane_answer` `none` or `intent` | `ErrRelayFallenBack`, with `err_details`, naming the oldest such request |
-| plain, without `expect_pane_sha256` | a request of the spawn is not proven gone (`proven_gone_at` `null`), however agent-director's records say it closed | `ErrDialogMaybeOpen`, with `err_details`, naming the oldest such request (see "The dialog hold" below) |
+| plain, without `expect_pane_sha256` | a request of the spawn holds the dialog: not proven gone (`proven_gone_at` `null`), however agent-director's records say it closed, and not a Cursor request of an earlier launch | `ErrDialogMaybeOpen`, with `err_details`, naming the oldest such request (see "The dialog hold" below) |
 | pane answer (`request_token` T) | the spawn has no request T | `ErrNoOpenPermissionRequest` |
 | pane answer | T is not fallen back: confirmed by its relay hook, closed with its spawn, or already closed at the pane | `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest` |
 | pane answer | another pane answer to T is still being sent | `ErrPaneAnswerInProgress`, with `err_details` |
@@ -1088,7 +1093,7 @@ same `err_details`, typing nothing (no `C-u` either) and starting no wait:
   as for `send-keys`. Close the request (see "Answering at the pane"
   below); `pause` then stays held by the next rule until the agent's hooks
   prove the request gone.
-- `ErrDialogMaybeOpen`: a request of the spawn is not proven gone (see
+- `ErrDialogMaybeOpen`: a request of the spawn holds the dialog (see
   "The dialog hold" below).
 
 A spawn with the relay off or no permission request pauses as before.
@@ -1189,8 +1194,9 @@ requests and new unknown-origin requests remain ineligible, including
 those with a null child id. An explicit ineligible value remains ineligible.
 A known child cannot gain main-turn proof even with contradictory stored
 metadata. Child or unknown-origin completion, interruption or session end
-is not proof; only matching tool-invocation evidence or the owning spawn
-ending can release an ineligible request. A decision, delivery acknowledgement,
+is not proof; only matching tool-invocation evidence or the owning launch
+ending (the spawn closing, or `resume` replacing the launch) can release an
+ineligible request. A decision, delivery acknowledgement,
 pane answer or recorded outside answer never grants eligibility.
 
 The ack (`delivered`), a pane answer recorded `sent` and
@@ -1201,7 +1207,9 @@ something only when it comes from the row's own agent (see
 `relay_mode=on`. The proof is stored on the request as `proven_gone_at`
 and `proven_gone_how`.
 
-**The hold.** While any request of the spawn is not proven gone, a plain
+**The hold.** While any request of the spawn is not proven gone (on a
+Cursor spawn, one of an earlier launch excepted; see
+[Cursor spawns](#cursor-spawns)), a plain
 `send-keys` without `expect_pane_sha256` is refused with
 `ErrDialogMaybeOpen` and nothing is sent, in every live state of the
 spawn. `ErrSendKeysWhileRelayed` and `ErrRelayFallenBack` are checked
@@ -1221,12 +1229,12 @@ relay or fallback checks.
 
 `ErrDialogMaybeOpen` carries `err_details`, an object with:
 
-- the oldest request not proven gone, with its fields as `get-permission`
+- the oldest request holding the dialog, with its fields as `get-permission`
   gives them, how agent-director's records say it closed (`delivery`,
   `pane_answer`) and since when (`unproven_since`, `null` while it still
   awaits an answer);
 - `state`: the spawn's state;
-- `unproven_requests`: every other request of the spawn not proven gone,
+- `unproven_requests`: every other request of the spawn holding the dialog,
   oldest first, with the same fields (`[]` when there is none).
 
 Its description states those facts and that nothing was sent; it never
@@ -1242,8 +1250,8 @@ pane and passes its hash without judging it lets through exactly the
 Enter the hold exists to stop.
 
 **The unproven report.** `get` lists, in `unproven_requests`, every
-request of the row not proven gone (in any state but `ended` and
-`missing`), each with `unproven_since`; `get-permission`, `decide` and the
+request of the row that holds the dialog as above (in any state but `ended`
+and `missing`), each with `unproven_since`; `get-permission`, `decide` and the
 `permission_requests` of `get` and `list` carry `proven_gone_at`,
 `proven_gone_how` and `unproven_since` on each request. A request that
 reads `delivered`, or closed at the pane, but stays unproven for a while
