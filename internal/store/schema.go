@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// schemaDDL is the canonical schema v14 DDL (v-current: fresh DBs are stamped
+// schemaDDL is the canonical schema v15 DDL (v-current: fresh DBs are stamped
 // directly at schemaVersion and never run a migration step). IF NOT EXISTS is
 // defensive — ensureSchema only runs this inside a fresh-DB branch, but
 // belt-and-suspenders avoids races on a re-open against a torn-down test.
@@ -98,7 +98,10 @@ import (
 //
 // v12 adds independent family history; v13 adds nullable codex_startup and
 // claude_capacity provenance without backfilling existing sessions or usage.
-// The column order matches the two corresponding migration steps.
+// v14 adds the display observation and ownership columns; v15 (b.x72) adds
+// nullable codex_turn and codex_turn_ended, the Codex turns the row's hooks
+// and reads recorded (codex_turn.go), with no backfill.
+// The column order matches the corresponding migration steps.
 //
 // subagents holds one row per entry, a record (confirmed) or an observation
 // (unconfirmed): created_seq grows with each insert and is never reused, so it
@@ -172,7 +175,9 @@ CREATE TABLE IF NOT EXISTS spawns (
     idle_screen_timeout_seconds INTEGER,
     pane_sha256                TEXT,
     pane_since_ms              INTEGER,
-    pane_epoch                 INTEGER
+    pane_epoch                 INTEGER,
+    codex_turn                 TEXT,
+    codex_turn_ended           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_spawns_state     ON spawns(state);
 CREATE INDEX IF NOT EXISTS idx_spawns_last_seen ON spawns(last_seen_at);
@@ -308,6 +313,7 @@ var migrationSteps = []migrationStep{
 	{from: 11, apply: migrateV11toV12},
 	{from: 12, apply: migrateV12toV13},
 	{from: 13, apply: migrateV13toV14},
+	{from: 14, apply: migrateV14toV15},
 }
 
 // ensureSchema enforces the schema-version contract on an opened *sql.DB.

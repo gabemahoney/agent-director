@@ -2320,6 +2320,19 @@ from the migrated store. Do not edit the column or values or reset the
 version to bypass validation. After the incompatible state is resolved, rerun
 the supported installer to refresh authorization for the resulting version.
 
+**Authorized migration refuses Codex turn columns** (the error names
+"v14→v15 incompatible spawns.<column>" or "v14→v15 invalid
+spawns.<column>"): a `spawns.codex_turn` or `spawns.codex_turn_ended` column
+the v15 hop adds already exists with a different shape (name case, type,
+primary key, nullability or default), or holds a value that is not text of
+1 to 256 bytes. The failed hop rolls back; earlier committed hops remain.
+Stop all writers and follow "Going back to the previous release" with the
+actual DB path and matching pre-upgrade WAL/SHM set, or obtain human help. A
+backup cannot be created retroactively from the migrated store. Do not edit
+the column or values or reset the version to bypass validation. After the
+incompatible state is resolved, rerun the supported installer to refresh
+authorization for the resulting version.
+
 The JSONL transcripts under `~/.claude/projects/` persist
 independently of state.db in every case.
 
@@ -2368,8 +2381,8 @@ checked. Delete the kept directory once the upgrade is confirmed.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, v10→v11, v11→v12, v12→v13 and v13→v14, the
-old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
+including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15,
+the old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
 and keep a copy of the actual store (`[store] db_path` when set), including its `-wal` and
 `-shm` files.
 To roll back, stop them again, restore that pre-upgrade copy and install the
@@ -2377,10 +2390,10 @@ previous release with its own `install.sh` and the original install flags.
 Restore the store with its companion files, removing a `-wal` or `-shm`
 that the copy lacks, as in step 4 below. This loses all writes made since
 the backup. The installer does not make this backup; a binary swap cannot
-make a v14 store readable by a v9, v10, v11, v12 or v13 binary. There is no
-supported in-place downgrade from v14. The tested v12→v11 family-history
+make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary. There is
+no supported in-place downgrade from v15. The tested v12→v11 family-history
 recipe applies only to a genuine family-only v12 store and cannot operate
-on v13 or v14; see the migration guide's emergency downgrade recipe. No supported
+on v13, v14 or v15; see the migration guide's emergency downgrade recipe. No supported
 in-place reverse path crosses v11→v10 or v10→v9. A copy made after migration
 cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
 and obtain human help.

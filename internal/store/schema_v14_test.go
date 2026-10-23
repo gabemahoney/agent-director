@@ -41,6 +41,9 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 			requests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)
 			preAddV14Columns(t, path, v14ColumnSpecs[:prefix])
 			if prefix == full {
+				// Later hops' columns too, so the whole-store comparison below
+				// sees only what the v14 hop kept.
+				preAddV14Columns(t, path, v15ColumnSpecs)
 				withRaw(t, path, func(db *sql.DB) {
 					mustExec(t, db, `UPDATE spawns SET permission_epoch=8,observation_version=4,display_observation=?,display_exit=?,
 						idle_screen_timeout_seconds=90,pane_sha256=?,pane_since_ms=1792411208000,pane_epoch=8`,
@@ -97,6 +100,9 @@ func TestV14MigrationPreservationAndReentry(t *testing.T) {
 				if !reflect.DeepEqual(after, dbDump(t, path)) {
 					t.Fatal("reentry changed retained data")
 				}
+			}
+			if err := runMigrationChain(s.db, 14); err != nil {
+				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)

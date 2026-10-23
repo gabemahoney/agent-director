@@ -65,13 +65,14 @@ report, `pause` ends the row instead; see the
 arguments, or read the pane with `read-pane` and then type with
 `allow_pending` (see
 [Ordinary text submission](caller-contract.md#ordinary-text-submission)).
-After the first prompt the row moves
-with Codex's own events: a turn's prompt and tools read `working`, its end
-(`Stop`, or Esc) reads `waiting`, and a permission request reads
-`check_permission`. No Codex tool reads `ask_user`. A session change in the
-agent (`/clear`, `/new`, `/fork`, `/resume`) shows from the next prompt, and
-the `SessionEnd` that `/exit` sends leaves the row's state as it is, until
-`find-missing` or `pause` sees the agent gone (see
+After the first prompt the row moves with Codex's own events: a turn's
+prompt and tools read `working`, its end (`Stop`, or Esc) reads `waiting`,
+and a permission request reads `check_permission`. A turn that ends in an
+error sends no event; a later read moves the row to `waiting` (see
+[The Codex turn](hooks.md#the-codex-turn)). No Codex tool reads `ask_user`.
+A session change in the agent (`/clear`, `/new`, `/fork`, `/resume`) shows
+from the next prompt, and the `SessionEnd` that `/exit` sends leaves the
+row's state as it is, until `find-missing` or `pause` sees the agent gone (see
 [How a Codex row ends](hooks.md#how-a-codex-row-ends)). After Codex's `/review` the row can
 read `working` until the next prompt. The events and the limits are in
 [Hooks](hooks.md#hooks-from-a-codex-agent).

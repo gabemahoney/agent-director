@@ -1775,6 +1775,8 @@ func v14ColumnNames(table string) []string {
 	return names
 }
 
+// preAddV14Columns adds specs (v14's, or a later hop's) to the closed store at
+// path, as a partial run of their hop would have left them.
 func preAddV14Columns(t *testing.T, path string, specs []columnSpec) {
 	t.Helper()
 	withRaw(t, path, func(db *sql.DB) {
@@ -1782,6 +1784,37 @@ func preAddV14Columns(t *testing.T, path string, specs []columnSpec) {
 			mustExec(t, db, c.addColumnDDL())
 		}
 	})
+}
+
+// v15ColumnSpecs are the two spawns columns the v14→v15 hop adds (b.x72).
+// Must use: a migration test of the v15 columns seeds them through these
+// specs (preAddV14Columns for columns already present), never new raw SQL.
+var v15ColumnSpecs = []columnSpec{
+	{"spawns", "codex_turn", "TEXT", false, ""},
+	{"spawns", "codex_turn_ended", "TEXT", false, ""},
+}
+
+// v15ColumnNames are v15ColumnSpecs' column names, in order. Must use: a
+// migration test that names or reads the v15 columns takes them from here,
+// never a new list.
+func v15ColumnNames() []string {
+	var names []string
+	for _, c := range v15ColumnSpecs {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// assertV15Defaults fails unless id's row records no Codex turn: an upgraded
+// row's turn columns are NULL, never backfilled. Must use: a migration test
+// asserts an upgraded row's v15 columns through it, never new raw SQL.
+func assertV15Defaults(t *testing.T, path, id string) {
+	t.Helper()
+	for c, v := range readRawSpawn(t, path, id, v15ColumnNames()) {
+		if v != "NULL" {
+			t.Errorf("%s: %s = %s; want NULL", id, c, v)
+		}
+	}
 }
 
 // seedV13PermissionFixture retains lifecycle/runtime history and independent
