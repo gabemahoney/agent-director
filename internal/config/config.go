@@ -315,8 +315,15 @@ type Store struct {
 	// 40 s) but not from about 15 s, when Claude Code can kill the hook. And
 	// the TS client ends a call after its callTimeoutMs (30 s by default), so
 	// a verb whose statements wait that long in total, one at 30 s or more
-	// or several shorter ones, is cut off before SQLite gives up. Nothing
-	// caps this key against either limit.
+	// or several shorter ones, is cut off before SQLite gives up. The
+	// Cursor gateway retries a busy tool-proof write for this long, but an
+	// interrupt, rotation, /exit or pause waits a fixed 3 s for it
+	// (internal/cursorhost's cancelWait): above 3 s, the default included,
+	// contention that outlasts it fails the gateway on an interrupt or
+	// rotation (refusing the rotation) and ends the row missing on /exit or
+	// pause. The exit flush itself is not cut off, so above [pause]
+	// timeout_seconds (30 s by default) it can outlast pause's wait.
+	// Nothing caps this key against any of these limits.
 	BusyTimeoutMs int `toml:"busy_timeout_ms"`
 }
 
