@@ -17,6 +17,7 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // holdClosure is one way agent-director's records close request A: what its
@@ -148,7 +149,7 @@ func TestDialogMaybeOpenNamesTheOldest(t *testing.T) {
 	p.prove(t, toolRan("toolu_01C"))
 
 	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokA, store.StateCheckPermission, tokB)
-	adviceAssertPhrase(t, p.sendKeys(p.plain("hi")), "1 other request(s) of the spawn are not proven gone")
+	adviceAssertPhrase(t, p.sendKeys(p.plain("hi")), "1 other request(s) of the spawn still hold the dialog")
 
 	p.prove(t, toolRan(paToolUseID))
 	assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), tokB, store.StateCheckPermission)
@@ -159,9 +160,16 @@ func TestDialogMaybeOpenNamesTheOldest(t *testing.T) {
 // unproven request (it types; the request stays unproven); a stale hash is
 // ErrPaneChanged with nothing sent; the hash passes no other refusal: a relay
 // hook that may still answer is ErrSendKeysWhileRelayed and a fallen-back
-// request ErrRelayFallenBack, before any tmux call.
+// request ErrRelayFallenBack, before any tmux call. With no hash, a non-Cursor
+// request owned by another launch token still holds (b.m8h): only a Cursor
+// request of an earlier launch stops holding.
 func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 	t.Parallel()
+	var earlierLaunch r7Step = func(t *testing.T, p *paEnv) {
+		if err := apitest.SetPermissionFacts(p.dbPath, p.request(t, storefix.TestRequestTokenA).RequestID, apitest.PermissionOwner("0000000000000000", 0)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cases := []struct {
 		name  string
 		steps []r7Step
@@ -170,6 +178,7 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 		calls []tmux.Call
 	}{
 		{"A acked, unproven, no hash", []r7Step{r7Acked}, "", api.ErrDialogMaybeOpen, nil},
+		{"A acked, unproven, of an earlier launch, no hash", []r7Step{r7Acked, earlierLaunch}, "", api.ErrDialogMaybeOpen, nil},
 		{"A acked, unproven, the pane's hash", []r7Step{r7Acked}, "pane", nil,
 			[]tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}},
 		{"A acked, unproven, a stale hash", []r7Step{r7Acked}, "stale", api.ErrPaneChanged, paneReadCalls},

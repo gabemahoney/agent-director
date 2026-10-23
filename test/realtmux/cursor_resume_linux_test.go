@@ -123,6 +123,93 @@ func TestCursorResumePublicLaunchPendingParity(t *testing.T) {
 	}
 }
 
+// b.m8h: once a relayed launch is verified gone, its delivered request no longer
+// holds the confirmed replacement's prompt, and keeps its proof as recorded.
+func TestCursorResumeAfterOldLaunchRequestAcceptsPrompt(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real tmux synthetic ACP resume after old-launch request")
+	}
+	const session = "resume-hold-session"
+	scenario := cursorfix.Scenario{SessionID: session, Requests: []json.RawMessage{relayFrame("old-request", "session/request_permission", cursorfix.Permission(session, "old-tool", "execute"))}}
+	f, peer, launch := newCursorPaneScenario(t, false, "", cursorPaneOptions{Script: &scenario, Relay: "on", Timeout: 30})
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "old launch work"}); err != nil {
+		t.Fatal(err)
+	}
+	request := relayRequests(t, f, launch.ID, 1)[0]
+	if _, err := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: request.RequestToken, Decision: "allow"}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "old turn finishes", func() bool { return readRow(t, f.DBPath, launch.ID).State == store.StateWaiting }, nil)
+	s, err := store.Open(f.DBPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	old, err := s.ReadCursorRuntime(launch.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.API.Kill(api.KillParams{InstanceID: launch.ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "old gateway and runtime gone", func() bool { return pidGone(old.GatewayPID) && pidGone(old.RuntimePID) }, nil)
+	if _, err := f.API.FindMissing(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if row, err := f.API.Get(launch.ID); err != nil || row.State != store.StateMissing {
+		t.Fatalf("not missing: %+v %v", row, err)
+	}
+	before, err := s.GetPermissionRequest(launch.ID, request.RequestToken)
+	if err != nil || before.DeliveredAt.IsZero() || before.ProvenGone() {
+		t.Fatalf("old request before resume: %+v %v", before, err)
+	}
+	if n := len(relayReplies(t, peer)); n != 1 {
+		t.Fatalf("replies before resume = %d; want the one allow", n)
+	}
+	peer.Configure(t, cursorfix.Scenario{LoadSupport: true})
+	if _, err := f.API.Resume(api.ResumeParams{InstanceID: launch.ID}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "load confirmed in pane", func() bool {
+		pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: launch.ID, NLines: 100})
+		return err == nil && strings.Contains(pane.Pane, "Cursor conversation loaded; awaiting a prompt")
+	}, nil)
+	if current, err := s.ReadCursorRuntime(launch.ID); err != nil || current.GatewayPID == old.GatewayPID || current.SessionID != old.SessionID {
+		t.Fatalf("resume binding: %+v %v", current, err)
+	}
+	if row, err := f.API.Get(launch.ID); err != nil || row.State != store.StatePending || len(row.UnprovenRequests) != 0 {
+		t.Fatalf("resumed get lists the old launch's request: %+v %v", row, err)
+	}
+	const text = "resumed work after old launch"
+	prompted := func() bool {
+		for _, frame := range peer.Frames(t) {
+			if string(frame["method"]) == `"session/prompt"` && strings.Contains(string(frame["params"]), text) {
+				return true
+			}
+		}
+		return false
+	}
+	if _, err := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: text, AllowPending: true}); err != nil {
+		t.Fatalf("resumed prompt refused: %v", err)
+	}
+	waitFor(t, "resumed prompt reaches ACP and completes", func() bool {
+		return prompted() && readRow(t, f.DBPath, launch.ID).State == store.StateWaiting
+	}, func() string {
+		pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: launch.ID, NLines: 100})
+		return fmt.Sprintf("row=%+v pane=%q err=%v", readRow(t, f.DBPath, launch.ID), pane.Pane, err)
+	})
+	if n := len(relayReplies(t, peer)); n != 1 {
+		t.Fatalf("replies after the resumed prompt = %d; resume replayed an old approval", n)
+	}
+	after, err := s.GetPermissionRequest(launch.ID, request.RequestToken)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		t.Fatalf("old request changed: before=%+v after=%+v %v", before, after, err)
+	}
+	if _, err := f.API.Pause(context.Background(), api.PauseParams{InstanceID: launch.ID}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Synthetic rejection composes actual saved selection with public asynchronous lifecycle.
 func TestCursorRejectedLaunchSelectionAndSavedLifecycle(t *testing.T) {
 	// Serial: real-pane fixtures own HOME/PATH and the private tmux environment.

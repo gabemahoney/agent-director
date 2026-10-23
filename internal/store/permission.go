@@ -230,7 +230,9 @@ type PermissionRow struct {
 	ProvenGoneAt  time.Time
 	ProvenGoneHow string
 
-	// Report-only ownership and stable fallback clock; never command authority.
+	// Report ownership and stable fallback clock; never command authority.
+	// OwnerLaunchToken also ends a Cursor request's dialog hold once its launch
+	// is replaced (HoldsDialog).
 	OwnerLaunchToken     string
 	OwnerPermissionEpoch int64
 	AdmittedAt           time.Time
@@ -243,6 +245,35 @@ type PermissionRow struct {
 // and pause (b.zdz) to its live Spawn, whatever agent-director's own records
 // say of it.
 func (r PermissionRow) ProvenGone() bool { return !r.ProvenGoneAt.IsZero() }
+
+// HoldsDialog reports whether r holds its Spawn's dialog guards (plain
+// send-keys, pause, Cursor prompt admission and queued-input dispatch) while
+// agent and launchToken are the row's agent and current launch token: r is
+// not proven gone and is not a request of an earlier Cursor launch
+// (OfEarlierCursorLaunch). Every dialog guard must use it, or
+// cursorHoldsDialogSQL, the same rule in SQL for a verified Cursor row, so
+// that no guard holds on a request another one passes.
+func (r PermissionRow) HoldsDialog(agent, launchToken string) bool {
+	return !r.ProvenGone() && !r.OfEarlierCursorLaunch(agent, launchToken)
+}
+
+// OfEarlierCursorLaunch reports whether r was admitted by a Cursor launch the
+// row has since replaced: both launch tokens are known and differ. A
+// replaced launch has no pane, gateway binding or ACP connection in the
+// row's current launch, so it cannot show a dialog there: its hold ends
+// without proving the request gone, and its proof fields stay as recorded.
+// A failed resume that restores the old launch token makes the request hold
+// again. An unknown owner (NULL, from before schema v14) keeps holding.
+func (r PermissionRow) OfEarlierCursorLaunch(agent, launchToken string) bool {
+	return agent == AgentCursor && launchToken != "" && r.OwnerLaunchToken != "" && r.OwnerLaunchToken != launchToken
+}
+
+// cursorHoldsDialogSQL is PermissionRow.HoldsDialog's WHERE fragment, on a
+// permission_requests row named pr, with two placeholders, both the row's
+// current launch token. It applies only to a row verified as Cursor's: it
+// does not check the agent.
+const cursorHoldsDialogSQL = `pr.proven_gone_at IS NULL
+    AND NOT (? <> '' AND COALESCE(pr.owner_launch_token, '') NOT IN ('', ?))`
 
 // PreV7 reports whether r was recorded before schema v7, by a relay hook that
 // records no settle instant: its relay hook's identity and delivery are not

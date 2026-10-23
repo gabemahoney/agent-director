@@ -98,11 +98,13 @@ const moveToPendingSQL = `UPDATE spawns
 // already close a finished row's requests, so this finds one only on a row
 // that finished before they did (an earlier release, or any path that missed
 // them): no request of the row's earlier launch awaits an answer in the life
-// the resume begins. Every request of the row not yet proven gone is proven
-// gone, agent_gone (b.146 step 2c), so none of the earlier launch's holds
-// plain send-keys in the new one. After the commit it emits one ad.row_mutation.committed
-// (writer resume, decision_reason ended) per request it denied, in
-// request-id order, fail-open; nothing else.
+// the resume begins. On a non-Cursor row every request not yet proven gone
+// is proven gone, agent_gone (b.146 step 2c), so none of the earlier
+// launch's holds plain send-keys in the new one. A Cursor request gets no
+// proof; one of the earlier launch stops holding (PermissionRow.HoldsDialog)
+// once the move writes the new launch token. After the commit it emits one
+// ad.row_mutation.committed (writer resume, decision_reason ended) per
+// request it denied, in request-id order, fail-open; nothing else.
 //
 // The subagent close (closeSubagentsAgentGone, SR-8.1), only when the move
 // applied: every running subagent entry of the row, of any launch, turns lost

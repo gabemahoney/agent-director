@@ -83,20 +83,33 @@ func TestCursorLoadedBindingConditionalAndDurable(t *testing.T) {
 	}
 }
 
-func TestCursorLoadedPendingPromptRetainsAllHolds(t *testing.T) {
-	for _, hold := range []string{"none", "unanswered", "decided unproven"} {
+// TestCursorLoadedPendingPromptHolds: a loaded pending Cursor prompt is
+// admitted only when no request holds it. The b.m8h regression cells: in
+// "earlier launch" the request's owner is an earlier launch token, so it stops
+// holding and the prompt is admitted; in "unknown owner" the owner is unknown
+// (a pre-v14 row), so it keeps holding. Each cell with a request checks
+// HoldsDialog against the SQL admission.
+func TestCursorLoadedPendingPromptHolds(t *testing.T) {
+	owners := map[string][]apitest.PermissionOption{
+		"earlier launch": {apitest.PermissionOwner("0000000000000000", 0)},
+		"unknown owner":  {apitest.PermissionOwner("", 0)},
+	}
+	for _, hold := range []string{"none", "unanswered", "decided unproven", "earlier launch", "unknown owner"} {
 		t.Run(hold, func(t *testing.T) {
+			held := hold != "none" && hold != "earlier launch"
 			f, old, b := cursorRowBinding(t)
 			db, err := sql.Open("sqlite", f.path)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer db.Close()
+			var token string
 			if hold != "none" {
-				p, err := apitest.SeedPermissionRequest(f.path, old.InstanceID, "Bash")
+				p, err := apitest.SeedPermissionRequest(f.path, old.InstanceID, "Bash", owners[hold]...)
 				if err != nil {
 					t.Fatal(err)
 				}
+				token = p.RequestToken
 				if hold == "decided unproven" {
 					if _, err := db.Exec(`UPDATE permission_requests SET decision='deny' WHERE request_token=?`, p.RequestToken); err != nil {
 						t.Fatal(err)
@@ -125,8 +138,14 @@ func TestCursorLoadedPendingPromptRetainsAllHolds(t *testing.T) {
 			if ok, err := f.s.CheckLoadedCursorPrompt(b, "different", until, cursorTrailCheck); err == nil || ok {
 				t.Fatal("wrong transcript admitted pending")
 			}
-			if ok, err := f.s.CheckLoadedCursorPrompt(b, row.JSONLPath, until, cursorTrailCheck); err != nil || ok != (hold == "none") {
+			if ok, err := f.s.CheckLoadedCursorPrompt(b, row.JSONLPath, until, cursorTrailCheck); err != nil || ok == held {
 				t.Fatalf("loaded pending hold=%s: %v %v", hold, ok, err)
+			}
+			if token != "" {
+				pr, err := f.s.GetPermissionRequest(old.InstanceID, token)
+				if err != nil || pr.HoldsDialog(store.AgentCursor, row.Identity.Token) != held {
+					t.Fatalf("HoldsDialog disagrees with prompt admission: %+v %v", pr, err)
+				}
 			}
 		})
 	}

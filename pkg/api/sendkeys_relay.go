@@ -146,11 +146,12 @@ func (r spawnRequests) oldestFallenBack() (PermissionRow, bool) {
 }
 
 // unproven returns every request that the agent has not proven gone (b.146
-// step 2c), oldest first.
+// step 2c), oldest first, less those of an earlier Cursor launch
+// (PermissionRow.HoldsDialog).
 func (r spawnRequests) unproven() []PermissionRow {
 	var out []PermissionRow
 	for _, pr := range r.rows {
-		if !pr.ProvenGone() {
+		if pr.HoldsDialog(r.sp.Agent, r.sp.Identity.Token) {
 			out = append(out, pr)
 		}
 	}
@@ -180,10 +181,11 @@ func (r spawnRequests) find(token string) (PermissionRow, bool) {
 //  2. Plain (no token), any open request has fallen back with pane_answer
 //     none or intent: ErrRelayFallenBack with err_details, naming the oldest.
 //  3. Plain with no expect_pane_sha256, any request of the Spawn is not
-//     proven gone (b.146 step 2c): ErrDialogMaybeOpen with err_details,
-//     naming the oldest. With expect_pane_sha256 the call is not held here:
-//     its hash check, against the pane captured before the keys are sent,
-//     decides it (ErrPaneChanged on a mismatch).
+//     proven gone (b.146 step 2c) and not of an earlier Cursor launch
+//     (unproven): ErrDialogMaybeOpen with err_details, naming the oldest.
+//     With expect_pane_sha256 the call is not held here: its hash check,
+//     against the pane captured before the keys are sent, decides it
+//     (ErrPaneChanged on a mismatch).
 //  4. With a token T: no such request of the Spawn is
 //     ErrNoOpenPermissionRequest; T not fallen back (acked, closed, answered
 //     at the pane) is notFallenBackRefusal's; T's pane answer still being
@@ -328,9 +330,10 @@ func (r spawnRequests) fallenBackDetails(pr PermissionRow) RelayFallenBackDetail
 }
 
 // dialogMaybeOpenDetails is ErrDialogMaybeOpen's err_details (b.146 step 2c)
-// for unproven, the Spawn's requests not proven gone, oldest first (at least
-// one): the oldest with its fields and delivery facts, the Spawn's state, and
-// the others, oldest first.
+// for unproven, the Spawn's requests that hold the dialog (not proven gone,
+// less a Cursor request of an earlier launch; PermissionRow.HoldsDialog),
+// oldest first (at least one): the oldest with its fields and delivery facts,
+// the Spawn's state, and the others, oldest first.
 func (r spawnRequests) dialogMaybeOpenDetails(unproven []PermissionRow) DialogMaybeOpenDetails {
 	d := DialogMaybeOpenDetails{
 		PermissionRequestInfo: permissionRequestInfo(unproven[0], r.delivery(unproven[0])),
@@ -351,8 +354,8 @@ func (r spawnRequests) dialogMaybeOpenDetails(unproven []PermissionRow) DialogMa
 // since when, and that nothing was sent. What would prove it gone is the
 // agent's: for Claude a PostToolUse with its tool_use_id or the end of the
 // main agent's turn (Stop or idle prompt); for Codex, whose requests carry no
-// tool_use_id, the end of the main agent's turn (a Stop or an Interrupt). The
-// Claude text is unchanged.
+// tool_use_id, the end of the main agent's turn (a Stop or an Interrupt). It
+// counts the Spawn's other requests that still hold the dialog.
 func dialogMaybeOpenError(instanceID, agent string, d DialogMaybeOpenDetails) error {
 	since := "it still awaits an answer"
 	if d.UnprovenSince != nil {
@@ -363,7 +366,7 @@ func dialogMaybeOpenError(instanceID, agent string, d DialogMaybeOpenDetails) er
 		proofs = "no Stop or Interrupt of the main agent after it for a request with no agent_id, and no end of its agent is recorded"
 	}
 	return &DetailedError{
-		Err: fmt.Errorf("%w: %s request %s is not proven gone (%s), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn are not proven gone (err_details); nothing was sent",
+		Err: fmt.Errorf("%w: %s request %s is not proven gone (%s), so its permission dialog may still be on the pane; agent-director's records give delivery %s and pane_answer %s, and %s; %d other request(s) of the spawn still hold the dialog (err_details); nothing was sent",
 			ErrDialogMaybeOpen, instanceID, d.RequestToken, proofs, d.Delivery, d.PaneAnswer, since, len(d.UnprovenRequests)),
 		Details: d,
 	}

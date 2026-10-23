@@ -713,11 +713,11 @@ validated matching Cursor invocation proof, including an exact failed MCP
 invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
 was written before the main turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
-`agent_gone` (the agent ended). A Codex agent's request carries
+`agent_gone` (a non-Cursor agent ended). A Codex agent's request carries
 no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
 [how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are
-agent-director's own records, not proof. `get` lists every request not yet
-proven gone in `unproven_requests`, with `unproven_since`. A request that
+agent-director's own records, not proof. `get` lists every request still
+holding the dialog in `unproven_requests`, with `unproven_since`. A request that
 reads `delivered` or closed at the pane but stays unproven for a while is a
 reason to look at the pane: its dialog may still be there.
 
@@ -825,8 +825,9 @@ session and protected transcript, using the current configured `cursor_path`.
 Retaining those values does not establish account or group isolation. Loading
 the latest conversation can leave the row `pending` until its first real
 prompt. After inspecting the pane, submit that prompt with the existing
-`--allow-pending`; confirmation of the current conversation and all permission
-holds still apply. Loading and replay do not manufacture `waiting`.
+`--allow-pending`; confirmation of the current conversation and
+[permission holds](permissions.md#cursor-spawns) still apply. Loading and
+replay do not manufacture `waiting`.
 The saved initial prompt in `agent_args` is submitted once per launch after
 successful load and hold checks. Transient queued, provisionally held and
 editable draft text are not restored. Session-selector filtering is defined in

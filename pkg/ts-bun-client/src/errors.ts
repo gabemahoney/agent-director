@@ -528,8 +528,9 @@ export class ErrClaimTooSoon extends AgentDirectorError {}
 /**
  * Mirrors ErrDialogMaybeOpen (package: api): a plain `sendKeys` without `expect_pane_sha256`, or
  * a `pause`, while a permission request of the Spawn is not proven gone by the agent's hooks
- * (its tool's PostToolUse, the main agent's end of turn after it, or the agent's end), whatever
- * agent-director's records say of it; its dialog may still be on the pane. Nothing was sent.
+ * (its tool's PostToolUse, the main agent's end of turn after it, or, on a non-Cursor Spawn, the
+ * agent's end), whatever agent-director's records say of it; its dialog may still be on the pane.
+ * A Cursor request of an earlier launch of the Spawn does not count. Nothing was sent.
  * `errDetails` is a `DialogMaybeOpenDetails`. A plain `sendKeys` whose `expect_pane_sha256`
  * matches the pane is not rejected with it; pass that hash only from a pane a person or LLM
  * judged, never from an automatic flow.

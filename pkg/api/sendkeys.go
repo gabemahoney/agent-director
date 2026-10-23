@@ -277,8 +277,10 @@ type sendKeysGuard struct {
 //     main-agent Stop, idle-prompt Notification or (Codex) Interrupt after it
 //     for a request with no agent_id, and no end of the row's agent recorded), however
 //     agent-director's own records say it closed: ErrDialogMaybeOpen with
-//     err_details (DialogMaybeOpenDetails), naming the oldest. A plain call
-//     with expect_pane_sha256 is not held by this rule: its hash check below
+//     err_details (DialogMaybeOpenDetails), naming the oldest. A Cursor
+//     request of an earlier launch of the row does not hold
+//     (store.PermissionRow.HoldsDialog). A plain call with
+//     expect_pane_sha256 is not held by this rule: its hash check below
 //     decides it (it means a person or LLM judged that exact screen). A row
 //     with no permission request is never held.
 //  4. A pane answer whose request is no request of the row:
@@ -786,8 +788,9 @@ func isInteractiveState(state string) bool {
 // it first checks that the pane still has the hash the caller read. Without
 // it, a plain call on a relayed Spawn is refused while any of its permission
 // requests is not proven gone by Claude Code's own hooks (ErrDialogMaybeOpen;
-// b.146 step 2c); ExpectPaneSHA256 means a person or LLM judged that exact
-// screen, so never pass it from an automatic flow.
+// b.146 step 2c), less a Cursor request of an earlier launch of the row
+// (store.PermissionRow.HoldsDialog); ExpectPaneSHA256 means a person or LLM
+// judged that exact screen, so never pass it from an automatic flow.
 //
 // A pane answer (RequestToken, As, Key and ExpectPaneSHA256; b.146 rule 8)
 // answers that permission request at the pane once it has fallen back: under
@@ -838,8 +841,9 @@ func isInteractiveState(state string) bool {
 //     agent's end), whatever agent-director's records say of it; nothing was
 //     sent. Its err_details ([DialogMaybeOpenDetails]) name the request,
 //     how agent-director's records say it closed, since when, and the
-//     Spawn's other such requests. A plain call whose ExpectPaneSHA256
-//     matches the pane is not refused with it.
+//     Spawn's other such requests. A Cursor request of an earlier launch of
+//     the row does not hold (store.PermissionRow.HoldsDialog). A plain call
+//     whose ExpectPaneSHA256 matches the pane is not refused with it.
 //   - [ErrNoOpenPermissionRequest]: a pane answer whose request is not one
 //     of the Spawn's, or is closed with its row or by find-missing; nothing
 //     was sent.

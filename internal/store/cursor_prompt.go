@@ -10,7 +10,9 @@ import (
 // CheckCursorPrompt verifies the current owned conversation and every durable
 // dialog hold under the same bounded authority transaction as Cursor answers.
 // Acknowledgement, a native claim and local request retirement do not prove a
-// dialog gone. This grants no authority to replay an earlier submission.
+// dialog gone. A request stops holding once proven gone, and a request of an
+// earlier launch also stops holding (PermissionRow.HoldsDialog). This grants
+// no authority to replay an earlier submission.
 func (s *Store) CheckCursorPrompt(b CursorRuntime, until time.Time, check CursorCheck) (bool, error) {
 	return s.checkCursorPrompt(b, until, check, "")
 }
@@ -28,11 +30,13 @@ func (s *Store) CheckLoadedCursorPrompt(b CursorRuntime, path string, until time
 func (s *Store) checkCursorPrompt(b CursorRuntime, until time.Time, check CursorCheck, pendingPath string) (bool, error) {
 	eligible := false
 	err := s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
-		if _, err := s.cursorAuthorityForPrompt(ctx, conn, b, until, check, pendingPath); err != nil {
+		row, err := s.cursorAuthorityForPrompt(ctx, conn, b, until, check, pendingPath)
+		if err != nil {
 			return err
 		}
 		var held int
-		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM permission_requests WHERE instance_id=? AND proven_gone_at IS NULL`, b.InstanceID).Scan(&held); err != nil {
+		token := row.Identity.Token
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM permission_requests AS pr WHERE pr.instance_id=? AND `+cursorHoldsDialogSQL, b.InstanceID, token, token).Scan(&held); err != nil {
 			return err
 		}
 		if !time.Now().Before(until) {
