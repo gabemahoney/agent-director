@@ -2137,8 +2137,9 @@ not bind those details to a compaction generation. Captured token details lack
 a usage measurement time or generation/compaction sequence. Conversation start
 and assistant timestamps, external hook generation IDs and collector chronology
 cannot establish checkpoint-local, restart-safe ordering. Missing initial
-summary markers likewise do not prove freshness. The captures are under
-`internal/testsupport/contextfix/testdata/cursor/`; see the
+summary markers likewise do not prove freshness. Only each version's
+`managed-attempt.json` stays under
+`internal/testsupport/contextfix/testdata/cursor/`; for the captures, see the
 [fixture evidence](https://github.com/gabemahoney/agent-director/blob/53d0dcf248d60af143444ef56487c2601ebff273/docs/test-writing-guide.md#context-fullness-captures-and-fixtures)
 as written before the test guide dropped it.
 Future Cursor numeric support requires qualified managed
@@ -3371,7 +3372,22 @@ still the one it read, so it knows the row has not changed since. As built:
     `DefaultLockWait` (negative) retains the store's configured waits unless
     an enclosing context cuts them shorter.
     Setup context cancellation before BEGIN and precommit exhaustion wrap
-    `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. Setup's
+    `ErrStoreBusy`; no COMMIT is attempted after precommit expiry. A caller
+    context that ends an operation before its first statement (a
+    cancellation, or a deadline under `DefaultLockWait`), in the slot wait,
+    the connection wait or just after taking the connection, gives an error
+    wrapping both `ErrStoreBusy` and the context's error. **Must use:**
+    `operationBusy` (`connection_cleanup.go`) for that error and for
+    `runConnectionOperation`'s abandon branch, so such an operation's caller
+    and worker report one error whichever returns first.
+    `withConnOperation` applies it where `boundedConnContext` leaves the
+    caller's context error unnamed, and just after taking the connection.
+    Two cases can still differ: a bounded call (`maxWait >= 0`) whose
+    deadline ends the connection wait (the worker's "not free within N ms"
+    refusal wraps `ErrStoreBusy` but not `context.DeadlineExceeded`), and a
+    caller that abandons once its first statement has started, whose worker
+    reports its own step's error (setup PRAGMA, BEGIN, callback, precommit),
+    wrapping `ErrStoreBusy` only when the context ended that step. Setup's
     ordinary I/O errors returned within the original bound retain their
     classification despite earlier cancellation. A COMMIT error is an
     unconfirmed internal outcome, not busy or proof of rollback; the durable
@@ -3419,10 +3435,6 @@ still the one it read, so it knows the row has not changed since. As built:
     [missing read adapter](#cursor-gateway-and-current-launch-binding) before
     their separate bounded terminal write. Its projection is not a durable
     closeout or a change to confirmed/unconfirmed COMMIT classification.
-
-    Diagnostic observation of these boundaries must use the frozen, revision-pinned
-    [Decide/COMMIT timing components](#decidecommit-timing-diagnostic-toolsmeasure-decide),
-    including their separate acquisition/admission and operation-context facts.
 
     Its users: the relay hook's first write
     (`InsertRelayRequest`), ack (`AckRelayDecision`) and timeout deny
@@ -4529,11 +4541,10 @@ version. `AGENT_DIRECTOR_BUILD_VERSION` overrides both, and then no jq runs.
 Only `release-binaries` runs jq to read the version, and make never runs
 jq while reading the Makefile (b.x7z; the Makefile comment on the
 `release-binaries:` assignments says why they must stay recursive).
-`test-image-smoke` and `release-binaries-smoke` run `jq -e` in their
-recipes to check `help` output, not to read the version. The CLI
-and the operator tool are statically linked everywhere (pure-Go SQLite via
-`modernc.org/sqlite`). Linux binaries pass an `ldd → "not a dynamic
-executable"` check in `make release-binaries-smoke`.
+The CLI and the operator tool are statically linked everywhere (pure-Go
+SQLite via `modernc.org/sqlite`). Linux binaries pass an `ldd → "not a
+dynamic executable"` check in the release's
+`gates/smoke/per-binary-smoke.sh`.
 
 ### TS Client → CLI subprocess
 
@@ -4856,7 +4867,7 @@ that referenced it.
 ### npm packaging and version scripts
 
 **One package, no binary.** `pkg/ts-bun-client/` publishes one npm
-package, `agent-director`. Its `package.json` `files` list ships the
+package, `agent-director` (unscoped). Its `package.json` `files` list ships the
 bundle (`dist/**/*.js`, `dist/**/*.d.ts`), `dist/version-floor.json` and
 `README.md`, and no CLI binary. It has no `optionalDependencies` and no
 per-platform sub-packages.
@@ -4903,13 +4914,6 @@ see [The release skill](#the-release-skill)). The bun suite runs both
 scripts on a staged copy of the package: `test/version-bump.test.ts`,
 `test/check-version-coherence.test.ts` and
 `test/release-version-coherence.test.ts`.
-
-### Release blockers
-
-The package publishes as `agent-director` (unscoped). It is the only npm package (see
-[npm packaging and version scripts](#npm-packaging-and-version-scripts)). The H3 entry in
-[docs/release-blockers.md](release-blockers.md) records the resolution and is
-kept as the template for any future release blockers.
 
 ### Package layout
 
@@ -12876,10 +12880,6 @@ durability. The CLI's `--max-wait-ms` (`optionalInt64Value`, so an absent flag i
 "no bound") and MCP's and the TS client's `max_wait_ms` reach
 `DecideParams.MaxWaitMs`; the CLI refuses a negative value itself.
 
-The frozen [diagnostic baseline](#decidecommit-timing-diagnostic-toolsmeasure-decide)
-describes the helper and Client timing boundaries and its revision/execution
-limits. Whole-test elapsed time does not identify a Decide or COMMIT duration.
-
 ### Readers never wait (problem 4)
 
 `get`, `list` and `get-permission` judge every request they return
@@ -12984,8 +12984,8 @@ hold or concurrent request insertion can bypass the UPDATE guard. A successful
 refresh does not mean readiness; the reporter independently verifies a genuine
 hold as described in [Cursor gateway](#cursor-gateway-and-current-launch-binding).
 
-Bee b.36h's historical model in `spec/tla/hold36h/` checks the original
-working-write design. The E2 Task1 overlay
+Bee b.36h's historical model checked the original working-write design;
+`spec/tla/codex/src/Hold36hCx.tla` carries it. The E2 Task1 overlay
 has an [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
 for source `4e12100cc590c0c53e70c2e0ada336e116e713b5`, recorded in receipt
 commit `f97b3fcb`. Its scope does not prove the Task2 request controller or
@@ -14924,11 +14924,6 @@ MCP hosts retain process-lifetime ownership of the singleton rather than
 closing it for each Client. The Bun subprocess client scans stderr lines for
 the error JSON envelope among notices; an audit diagnostic after that
 envelope does not replace its structured error or verdict exit code.
-
-The frozen [Decide/COMMIT diagnostic](#decidecommit-timing-diagnostic-toolsmeasure-decide)
-baseline records row-mutation and deferred Client audit jobs separately through
-this writer, subject to its revision/execution limits; queue acceptance,
-write/Sync, result publication and caller return are distinct observations.
 
 ## Resume
 
@@ -18323,8 +18318,8 @@ built and shipped, but `install.sh`, the only installer, exits 2 on
 
 Linux binaries are statically linked via `CGO_ENABLED=0` plus
 `modernc.org/sqlite` (pure-Go SQLite driver, no libsqlite3
-dependency). The `release-binaries-smoke` target verifies static
-linkage of both binaries on every release via `ldd` ("not a dynamic
+dependency). The release's `gates/smoke/per-binary-smoke.sh` verifies
+static linkage of both binaries on every release via `ldd` ("not a dynamic
 executable"), and that the host-arch `agent-director-admin`'s `help`
 opens with the human-approval statement. The npm tarball ships neither
 binary.
@@ -18567,9 +18562,7 @@ than `go test ./...`.
   accident-prevention gate, not a security boundary.
 - Default command is `/opt/driver/run-testplan.sh`.
 
-The image is built via `make test-image`. `make test-image-smoke` exercises
-it standalone: confirms `claude --version` reports the pinned version,
-`agent-director help` exits 0, and the driver rejects an unknown EPIC.
+The image is built via `make test-image`.
 
 ### Driver
 
@@ -18978,496 +18971,6 @@ before the identity write, which uses the delayed-create `tmux` and the
 early-hook stand-in above; never add another way to hold the create
 back.
 
-### Decide/COMMIT timing diagnostic (`tools/measure-decide/`)
-
-`tools/measure-decide/` is a frozen, revision-pinned diagnostic baseline for
-the earlier source revision, not a runnable observer of the current repaired
-source. Current source changes do not match its pins; do not silently repin it
-or reinterpret its retained traces as observations of the repair. **Must use:**
-any separately authorized diagnostic extension must reuse its overlay, recorder
-and driver rather than introduce competing observers, with fresh provenance and
-review. The component descriptions below apply to that frozen baseline.
-`source-overlay.mjs` verifies exact source hashes/anchors and emits
-nine source mappings plus a virtual `internal/decideobserve` package.
-`diagnostic-overlay.mjs` and `calibration-overlay.mjs` add disposable test
-instrumentation using the existing fixtures and boundary oracles. Preserve all
-source mappings and stamp the final formatted compiler inputs. Source drift
-refuses generation. The overlay itself does not modify canonical product/tests;
-ordinary builds do not import or initialize the recorder. The current
-read reconciliation repair is described in the lifecycle owner above.
-
-Actual helper/Client Decide and Client List entries create source roots;
-returns occur after existing cancellation/audit defers and retain the actual
-returned error. List binds a per-call view through `Store.WithContext`, retaining
-the original context, pool, cleanup lane, driver and path without shared Client
-mutation or a new deadline. Its terminal write retains `operationContext(0)`.
-The immutable diagnostic-only params value carries `Invocation` process, test,
-fixture-lifecycle and call IDs (`json:"-"`). External call/export/readback owners
-must join that complete tuple one-to-one to the actual source root within its
-recorder process, then verify the exact complete `operation.store_identity`
-from the opened `Store.Path()`. Repeated calls need distinct call IDs; parallel
-duplicate-token fixtures need distinct lifecycles. Missing, invalid, truncated,
-conflicting or ambiguous metadata/path/source entry/return rejects attribution;
-time or instance/token alone cannot supply it. Path aliases/reuse need external
-lifecycle validation; the source does not attest supplied IDs' uniqueness.
-
-The recorder separates admission, acquisition/setup, SQL callback, BEGIN and
-guarded UPDATE from COMMIT. Acquisition/admission events sample their actual
-short contexts alongside the original operation context at the same instant.
-`commit.started_locked` is the existing flag assignment, `commit.exec` brackets
-the actual native-driver-backed `database/sql` call, synchronized SQL publication
-precedes cleanup, and final worker publication/completion follows cleanup.
-Operation caller return and guard state/error sampled under the existing mutex
-are separate facts; timestamp adjacency does not establish a guard branch.
-COMMIT call timing includes scheduling/driver work, not isolated fsync service.
-Rollback/restoration/disposal/lease release and the two trail-job routes retain
-their original ownership. Trail acceptance/result-send markers can race dequeue
-or caller return and bound events rather than prove their ordering.
-
-Monotonic timestamps and actual absolute context deadlines measure execution;
-injected relay-clock deadlines/sleeps describe relay policy only. Cancellation
-after return defers is not the returned error. No observer renews a deadline or
-changes assertions, the semantic setup allowance, fixed one-second zero-wait
-budget, retry policy or `commit_exec`/`operation_guard` error semantics.
-
-`recorder.go.in` owns 65,536 process-lifetime atomic-reserved slots with immutable
-ready publication, no reuse/reset, recorder mutex or timed-path I/O. Export is
-outside measured calls, streams bounded metadata/error chains and never waits
-for unpublished slots. Explicit process/snapshot inventories retain caller and
-separately bounded eventual-worker cutoffs. Snapshots are reservation prefixes,
-not quiescence; merge by process/slot. Overflow, missing/partial exports, unfinished
-calls and unmatched phases remain incomplete/censored, never zero-duration
-success. `check-traces.mjs` inventories missing expected processes and missing or
-nonarray call exports, marks per-process and aggregate counts unknown where
-needed, and retains independently known call prefixes and joins. It validates
-export coverage, started/completed/unfinished counts and authoritative joins.
-Independent bounded read-only transactions capture coherent cross-table durable
-state before fixture cleanup/subsequent calls; unavailable readback remains
-unknown. A late worker result does not replace the caller error or authorize retry.
-
-`supervise.mjs` has no live recorder `Counts` consumer: exported snapshot headers
-cannot detect slot overflow during an unfinished call. Live slot coverage is
-**INCOMPLETE**, so all target execution routes, including observer-off, refuse
-admission. Only the exact driver compile-only command shapes are allowlisted;
-a build label alone cannot bypass refusal. The reusable runner is not currently
-available for target execution. Earlier pass-03 live-overflow claims are qualified
-by the [current tooling report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-04/test-writer-report.json):
-trace-byte-cap checks do not validate recorder slot-overflow coverage; original
-receipts remain retained.
-
-The supervisor preserves its first trigger and provides bounded process-group
-termination and a later-natural-admission stop. Its resource checks cover
-wall/aggregate, PID/memory, output, retained artifacts and per-process trace bytes
-across snapshots; unavailable accounting refuses admission. Fixture storage
-requires an 8 GiB tmpfs hard bound, which differs from canonical temporary
-storage. Full-route writes outside that namespace, including `/work`, also lack
-provable quota coverage. These bounds do not supply missing live slot coverage.
-A stopped process is not a successful completed call.
-
-The [measurement disposition](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/measurement-disposition.json)
-and [reviewed diagnostic report](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/diagnostic/pass-03/test-writer-report.json)
-own experimental results, provenance and resource/revision qualifications, subject
-to the current tooling report's coverage corrections. Historical cause remains
-**UNKNOWN**. The preserved
-[earlier canonical receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/final-unit/test-writer-report.json)
-for List `gone_working` (`operation_guard`) contains no phase timings that can
-attribute SQL versus COMMIT, cleanup or scheduling. Its flag establishes
-commit-start bookkeeping, not native COMMIT duration; whole-test duration is
-not operation duration. Fault-boundary regressions do not identify that historical
-cause. The corrected source/tests passed the
-[canonical sandbox gate](../tickets/handoff/b.ftd/Plans/b.jf1/e4-task1/gate-repair/tests/test-writer-report.json).
-Earlier failed receipts remain immutable. This does not complete diagnostic
-measurement, make the frozen runner executable, or establish later Epic 4
-resume work; Tasks 2 and 3 have not started.
-
-### Exit-time measurement harness (`tools/measure-exit/`)
-
-An operator tool, not a test plan. It is not in `test/docker-epics.txt`
-and no CI job runs it. It measures real Claude Code exits for SRD Open
-Questions RN-6 (pane kill to process gone; sets `kill_exit_wait_ms`) and
-RN-2 (stored `ended_at` to the session no longer listing; informs
-`stopping_window_seconds` and the stopping window's minimum). It also runs
-RN-9: an in-session `/resume`, agent teams in the in-process and split-pane
-modes, the per-hook parent-pid outcome, and the exec-form version probe.
-RN-7's payload keys are recorded inside RN-9's run, for the record only.
-Operating it, including approval, credentials, `decide` and reading the
-results, is in [`tools/measure-exit/README.md`](../tools/measure-exit/README.md).
-This section does not repeat it.
-
-**Parts.**
-
-- **`run.sh`**, the host runner. It is shell only and never runs tmux,
-  agent-director or a Go artifact on the host. It is print-only unless
-  `--run`. It stages copies of the settings layers, starts one container per
-  run (one per probed version for the probe), and wraps it in the guard.
-  - For `measure` and `rn9` it always passes `-cases`: the mode's ids by
-    default, and it refuses (exit 2) a `--cases` id from another mode.
-  - It refuses (exit 2) a staged layer that is or links to `.claude.json`
-    or `.credentials.json`, is not JSON, or holds a credential-like key or
-    a credential-producing setting (`LAYER_CREDENTIAL_SETTINGS`), whose
-    `env` objects break the layer env rule (`LAYER_REFUSED_ENV`), or whose
-    `headers` objects set a header to a value that looks like a URL or an
-    authorization header (see the isolation contract below). The refusal
-    applies in print-only too, and names the key, never a value.
-  - The probe takes its candidate versions from `npm view` in a
-    credential-free base-image container on the host network, or from
-    `--versions` / `--versions-file`. A failed or empty listing stops the
-    bisection.
-  - A deployed-version STOP ends the probe right after the guard verify,
-    with no bisection and no further build (exit 3).
-- **The measurement image** (`tools/measure-exit/Dockerfile`), built FROM
-  the test image. Claude Code is reinstalled at `CLAUDE_CODE_VERSION` under
-  its own tag (`agent-director-measure:cc-<version>`), on Node 22. The test
-  image's own pin is unchanged. The driver compiles in the image's build
-  stage, and the image holds no stub. The `REQUIRE_NATIVE_CLAUDE` build
-  argument checks that `claude` resolves to the package's native ELF binary,
-  not a JS launcher, which would make every hook a `pid_mismatch`. The image
-  records the result in `/opt/measure-exit/claude-launcher.txt`.
-  `make measure-image` requires the native binary. The probe's per-version
-  builds only record the result.
-- **The driver** (`measure-exit`, Go `package main`). Its subcommands are
-  `run -mode real|dry|probe`, `decide` and `record`.
-  - `run` spawns agents through the v-next binary on a private tmux server
-    and takes one measured action per sample: a pane kill, `pause`'s
-    `/exit`, or a natural-exit keystroke. It polls every 100 ms. RN-6 uses
-    the same start-time reader as `kill`'s wait, and RN-2 polls the
-    session's presence.
-  - Cases register through `registerCase` (`cases.go`). The ids are
-    `rn6.{idle,midturn,mcp}`, each also with `.raised-hook` and
-    `.raised-env`; `rn2.{natural,pause,mcp}`; `rn9.{drive,resume,team-inprocess,team-splitpane}`;
-    and `probe.exec-form`. Real mode refuses to run without `-cases`
-    (`selectCases`). Dry and probe modes default to every case.
-  - Generated layers (the raised SessionEnd budget, the RN-9 recorder) are
-    `.claude/settings.local.json` in a harness-owned working directory per
-    agent, because `--settings` is a denied caller arg. MCP servers come
-    through `--mcp-config`.
-  - `record` is the RN-9 recorder hook, in exec form on 11 events. It keeps
-    key names and id-shaped values only. `rn9eval.go` joins each recorded
-    hook to the container trail's `ad.hook.fired` / `ad.hook.ignored`
-    records and gives the verdicts and STOP flags.
-  - The RN-9 drive answers permission requests through `decide`, scoped per
-    scenario (`rn9ExpectedTools`). It reads only the tool name from `get`,
-    allows the scenario's expected tools and denies everything else.
-  - **Team-scenario evidence** (`capture.go`, used by `runTeam` in
-    `rn9.go`). Harness-only aids, with no production change:
-    - `waitInputReady` polls the lead's visible screen every 500 ms until
-      `inputReady` sees a prompt line or the `? for shortcuts` footer and
-      no selection dialog. It then waits `inputReadyGrace` (2 s) and sends
-      the team prompt. The bound is `-input-ready-timeout`. Past it, the
-      prompt is never sent and the error is `errInputNeverReady`, quoting
-      a scrubbed excerpt of the pane (`paneExcerpt`).
-    - After the send, `runTeam` waits up to `-prompt-accept-wait` for the
-      lead's own `UserPromptSubmit`.
-    - When a team step fails, `capturePanes` writes every pane of the
-      lead's session, and of any `claude-swarm-*` server under the private
-      socket directory, to `<case>-pane-<label>.txt`, before `pause`. It
-      captures again with `-after-pause` if `pause` fails.
-    - Each lead runs with `--debug-file` under the run's HOME.
-      `keepDebugLogs` copies it, and every file new or changed in
-      `$HOME/.claude/debug/` during the scenario, to
-      `<case>-claude-debug-*` (`copyScrubbed`; over `maxDebugCopyBytes`,
-      32 MiB, the tail from a whole line).
-    - The file names go to the scenario's `Artifacts` (`artifacts` in
-      `results.json`).
-  - **Scrubbing** (`env.go`, `scrubber`). `newScrubber` builds its parts,
-    lower-cased, from every set `credentialEnv` value (6 characters or
-    more, `minScrubLen`). The parts are the exact values; for
-    `ANTHROPIC_BASE_URL`, the URL, its host with and without the port, and
-    its path or query parts of 12 or more characters (`urlParts`); for
-    every other value, each 12-character piece (`minPartLen`).
-    - `scrub` replaces the exact values only. The input-ready check reads
-      text scrubbed this way, so a prompt line is still seen.
-    - `scrubParts` also replaces every part, without regard to case,
-      merging overlapping matches into one `<redacted>`. It covers all of
-      `results.json` (`writeJSON`), the table (`writeTable`) and run-log
-      argv (`runLog.record`). It replaces substrings only, so the JSON
-      stays valid.
-    - `scrubEvidence` is `scrubParts` plus line withholding: a line matching
-      `credentialWordRE` (auth, token, bearer, api key, cookie, secret,
-      passw) becomes `[line withheld: it names a credential]`. It covers
-      Claude's own text only: pane captures, debug-log copies and the pane
-      excerpt in an error, reason or note. It is never applied to
-      `results.json` or the table.
-    - Scrubbing removes what the driver knows to look for. It cannot prove
-      that nothing else secret is left, so a live run's command file also
-      runs a leak gate over every result file.
-  - `decide` is pure. It reads results directories and prints the RN-6,
-    RN-2 and RN-9 decision record. It exits 0 when decided, 2 on invalid
-    input, and 3 for a STOP. It reads the current timing values from
-    `internal/config`, and the stated Claude Code minimum from the tool's
-    own `minClaudeCodeVersion` (2.1.280, in `tools/measure-exit/config.go`).
-    - Each sampled case's rules read every usable sample, in any position,
-      once at least 20 are usable (`useSamples`). The largest time is the
-      largest over all completed samples. The record shows the recorded,
-      used and dropped counts.
-    - A default-budget "did not exit" is invalid in any position. Under a
-      raised budget, a "did not exit" counts as a measured sample.
-    - A `no_ended_at` sample makes its case invalid under any budget.
-    - A case whose stored counts disagree with its samples is invalid.
-    - `killCeilingAt` derives kill's SR-13.2 ceiling from the
-      `internal/config` constants, never from a literal. The record shows
-      both paths and their max.
-    - `-supersede ID` (repeatable, RN-9 scenario ids only; `decideOptions`,
-      `decideWith`, `mergeScenarios`) lets a later run's result of one
-      scenario replace earlier inconclusive ones, ordered by `finished_at`.
-      An earlier pass or fail is refused, and equal or missing finish times
-      cannot be ordered; both stay invalid. The record gains a
-      `## Superseded` section. Without the flag, a scenario in two inputs
-      is invalid.
-- **The dry-run stubs** (`stub/claude`; the probe's `probe-args-kept` and
-  `probe-args-dropped`; the team leads `stub/lead-dialog`, whose dialog
-  never yields its input, and `stub/lead-late`, whose prompt shows late)
-  and `dryrun.sh`, the sandbox dry run.
-- **`guard.sh`**, the host-state guard (below).
-- **Makefile targets:**
-  - `make measure-exit-dryrun`: the dry run, inside the sandbox. It needs
-    no credentials, no network and no operator.
-  - `make measure-exit-print`: prints the runner's container command lines
-    and session counts. It builds and runs nothing.
-  - `make measure-image`: builds the measurement image.
-  - `make measure-exit`: the gated live run (`MEASURE_MODE` `probe`,
-    `measure` or `rn9`). It needs approval and credentials.
-
-  `measure-image` and `measure-exit` chain through `test-image` to the host
-  `make build`, the same as `make test-image`. Who launches the live runs
-  L0, L1 and L2, the approval they need, their order and their launch
-  gates are in the tool's README
-  ([Before any live run](../tools/measure-exit/README.md#before-any-live-run)
-  and [Live runs](../tools/measure-exit/README.md#live-runs)). The gates
-  live in the operator command files, not in the repo; `run.sh` and the
-  Makefile do not enforce them.
-
-**Isolation contract.**
-
-- The container has its own HOME with neither `.config/agent-director` nor the old directory, its own store,
-  and a private tmux server (a private `TMUX_TMPDIR` at mode 0700, with
-  `TMUX` unset). Every spawned row's socket must lie under that directory,
-  or the run aborts.
-- The driver's preflight refuses to start without the container marker
-  (`AGENT_DIRECTOR_MEASURE_CONTAINER`, or the sandbox marker in dry mode).
-  It also refuses with `TMUX` set, with a store under `$HOME` or the
-  passwd-entry home, below the sample floor, or below the version floor.
-- Child processes get an allowlisted environment. `TMUX`, the host's Claude
-  Code session variables and `AGENT_DIRECTOR_*` never reach a child.
-- Credentials travel by environment only, forwarded by name. The runner's
-  list holds exactly the gateway pair and the two pinned models. The probe
-  forwards none and runs with `--network none`.
-- Real mode is gateway-only. `checkRealModeEnv` refuses with rule
-  `real-gateway-only` when any variable in `realModeRefusedEnv` (an API
-  key, an OAuth token, the Bedrock and AWS variables) is set, even empty.
-  `realModeEnv` also drops them from every child.
-- The same rule covers the layer files the agents load, in real mode only
-  and before anything is written. `checkLayerFiles` (`layerenv.go`), called
-  from `checkEnvironment` right after `checkRealModeEnv`, runs
-  `checkLayerFile` on each file `realModeLayerFiles` lists (the managed and
-  user layers, plus the project, local and MCP layers when given). The
-  first refusal stops the run. The refusal names the layer kind, path and
-  key, never the value. A file is refused with `real-gateway-only` when,
-  checked in this order:
-  - its path as given is named after a `layerRefusedFileNames` file
-    (`.claude.json`, `.credentials.json`). This is checked even when
-    nothing is there yet, because the driver writes its own `.claude.json`
-    after the preflight (`seedClaudeState`). After this check, a path with
-    nothing at it (`os.Lstat` finds nothing) is no layer, and the checks
-    below are skipped;
-  - something is at its path but does not resolve: a dangling symlink, or
-    a chain ending in one. It is refused whatever its target is named,
-    because the target cannot be checked and may be created later in the
-    run. `run.sh`'s `report_layers` reports a dangling source as `MISSING`
-    and never stages it, so this refuses nothing a run started by `run.sh`
-    would load;
-  - it does not resolve for any other reason (a symlink loop, a directory
-    it cannot search);
-  - the path it resolves to through every symlink is named after a
-    `layerRefusedFileNames` file;
-  - it cannot be read, or is not one JSON document. An empty file and
-    concatenated documents are refused too, which is stricter than
-    `run.sh`'s `jq`;
-  - a key at any depth (arrays included) is credential-like or a
-    credential-producing setting. The first such key of either kind in
-    sorted order is named (`findCredentialKey`), and the refusal says which
-    kind it is:
-    - credential-like: its upper-cased name contains a
-      `layerCredentialKeyParts` part (`KEY`, `TOKEN`, `SECRET`,
-      `PASSWORD`, `PASSWD`, `CREDENTIAL`, `OAUTH`, `AUTHORIZATION`,
-      `COOKIE`). That catches `apiKeyHelper`, `awsCredentialExport`, an env
-      name such as `MY_API_TOKEN` and an `Authorization` header in an MCP
-      server's `headers`;
-    - credential-producing setting: its whole name, case ignored, is a
-      `layerCredentialSettings` name (`credentialSetting`):
-      `awsAuthRefresh`, `gcpAuthRefresh`, `otelHeadersHelper`,
-      `policyHelper`, and `headersHelper` in an MCP server's entry. Each
-      one's value is a command whose output Claude Code uses as a
-      credential, request headers or settings, which no check can see, and
-      none of the names holds a key part. A name that only contains one of
-      them (`otelHeadersHelperX`) passes. The list comes from Claude Code's
-      settings and MCP references; a new setting there that runs a command
-      producing a credential joins this list and `run.sh`'s
-      `LAYER_CREDENTIAL_SETTINGS`;
-  - an `env` object at any depth sets a name `layerEnvNameRefused`
-    refuses (any `CLAUDE_CODE_USE_*`, a `realModeRefusedEnv` or
-    `credentialEnv` name, `ANTHROPIC_CUSTOM_HEADERS`; case ignored) or a
-    value `layerEnvValueRE` matches (a URL, a bearer token, an
-    authorization header) (`findLayerEnv`);
-  - a `headers` object at any depth (an MCP server's static request
-    headers, an HTTP hook's headers) sets any header to a value
-    `layerEnvValueRE` matches (`findLayerHeader`). Only values are tested.
-    The key check above has already refused a credential-like header name,
-    but a name with no `layerCredentialKeyParts` part (`X-Auth`,
-    `Proxy-Auth`) passes it while its value still reaches the server past
-    the gateway. Values are tested, rather than every non-empty `headers`
-    map refused, by choice: a deployment's plain headers (`Accept`, a
-    tenant id) still stage. Like the env value test, it cannot see a bare
-    token with no `Bearer ` before it under such a name. Other strings,
-    such as an MCP server's `url`, are never value-checked.
-
-  `findLayerEnv` and `findLayerHeader` share `findLayerEntry`, which walks
-  a decoded document (objects at any depth, arrays included, keys in
-  sorted order) and returns the first entry of an object held under a
-  given key that a predicate refuses. `layerValueRefused` is the shared
-  value test (`layerEnvValueRE` over `layerEnvValueText`, a non-string as
-  its JSON). A new check over another object's entries uses these rather
-  than a new walk.
-- `run.sh`'s `refuse_credential_layer` makes the same layer refusals, in
-  the same order, bar the dangling-link one above, when it stages a layer,
-  in print-only too (its key and value tests run inside `jq`). Its value
-  tests come from `layer_value_entries OBJ FILE`, which prints, for each
-  entry of every `OBJ` object at any depth, `url` or `-` (whether the
-  value matches the same pattern as `layerEnvValueRE`), a tab and the
-  entry's name, so no value reaches the shell. It prints in the order
-  `findLayerEntry` walks (an object's own `OBJ` entries before its keys'
-  values, keys and entries in sorted order, arrays by index), so when a
-  layer has several refused entries `run.sh` and the driver name the same
-  one. `refuse_credential_layer` runs it for `env`, then for `headers`; a
-  new per-object value check uses it too. The driver repeats every refusal
-  so a container started by hand is held to the same rule.
-  Two tests keep the runner and the driver in step:
-  `TestRunnerLayerRefusedEnvInStep` (`LAYER_REFUSED_ENV`, the driver's
-  refused names and `realModeRefusedEnv`) and
-  `TestRunnerCredentialLayerInStep` (`refuse_credential_layer`'s file-name
-  and key-pattern case arms against `layerRefusedFileNames` and
-  `layerCredentialKeyParts`, and `LAYER_CREDENTIAL_SETTINGS` against
-  `layerCredentialSettings`, all both ways). The shared
-  `credentialLayerCases` table runs the same refused layers through both
-  `run.sh` and the driver; its "the sorted first refused" header, nested
-  header and env entry cases pin that both name the same entry.
-  `TestRunnerLayerEnvAndHeaders` checks `run.sh`'s
-  env and headers refusals in print-only, and what they pass (plain headers
-  beside an MCP server's `url`, a non-object `headers`).
-  `TestRunnerLayerReport` checks that `run.sh` reports a dangling layer
-  link as `MISSING` and does not stage it.
-- Real mode also refuses three paths outright, where Claude Code reads
-  them, and never opens or lists them. `checkRefusedFiles` (`layerenv.go`),
-  called from `checkEnvironment` right after `checkLayerFiles`, refuses
-  with `real-gateway-only` when `os.Lstat` finds anything (a file, a
-  directory, a link, dangling or not) at a `realModeRefusedFiles` path:
-  - `$HOME/.claude/.credentials.json`, Claude Code's login store on Linux.
-    Its whole content is a credential that would carry the agents past the
-    gateway, so no check could pass it. The agents read it under `$HOME`,
-    because no child gets `CLAUDE_CONFIG_DIR`;
-  - `/etc/claude-code/managed-mcp.json`, the managed MCP file. It is
-    refused rather than checked as a layer, by choice. Nothing legitimate
-    puts it there: `run.sh` has no flag to stage it and never mounts it,
-    and a deployment's MCP servers reach a run through `-mcp-config`, the
-    MCP layer checked above. And while the file is present Claude Code
-    gives it exclusive control of MCP servers and refuses servers passed
-    with `--mcp-config`, so the MCP cases could not run as measured;
-  - `/etc/claude-code/managed-settings.d`, the managed settings drop-in
-    directory. Claude Code merges every `*.json` file in it, in
-    alphabetical order after `managed-settings.json`, into the managed
-    settings, which override every other settings level. A drop-in's `env`
-    (`ANTHROPIC_BASE_URL`, a credential) or helper command (`apiKeyHelper`)
-    would therefore take the agents off the gateway. It is refused
-    whatever it holds, even when empty or unreadable, for the managed MCP
-    file's reason: nothing legitimate puts it there. `run.sh` never mounts
-    it, the image's `Dockerfile` creates only `/etc/claude-code` itself,
-    and a deployment's managed settings reach a run as the managed layer
-    (`managed-settings.json`, checked above). Claude Code also counts a
-    drop-in directory it cannot read as a present managed source, so no
-    content check could clear one.
-
-  Each `refusedFile` carries a kind, a path, a reason and a `dir` flag;
-  its `what()` names it in the refusal as a "file", or as a "directory"
-  when `dir` is set (the drop-in). A present path is refused with
-  `Claude Code's <kind> file|directory <path> is present (...)` and the
-  reason. Any other `Lstat` error (a parent it cannot search, a parent
-  that is not a directory) is refused too, as
-  `cannot check for Claude Code's <kind> file|directory <path>`, with the
-  OS error, since a credential there cannot be ruled out. The first
-  refused path stops the run, and the refusal never holds content.
-  `run.sh` has no counterpart, because it never mounts any of the three;
-  this check is for a container started by hand. Dry and probe mode do not
-  run it.
-- Mounts are staged settings copies (read-only) and one results directory.
-  The host home, `~/.config/agent-director`, the old directory, `~/.claude*`, a tmux socket
-  directory, `/tmp` and the engine socket are never mounted.
-- The driver never opens the store. Besides spawning its own agents, it
-  makes only the measured exits and pane kills, the RN-9 drive's sends to
-  its own agents, and read-only calls (`get`, tmux `list-*` and
-  `capture-pane`). Every call goes to `run-log.jsonl`, as argv only with
-  credentials scrubbed.
-
-**A second isolation boundary.** The real run's measurement container is a
-second isolation boundary beside the sandbox. It holds the same invariant:
-its HOME has neither `.config/agent-director` nor the old directory, its tmux server is private, and nothing
-built runs on the host. The host-state guard backs it. It is not a
-substitute for the sandbox for tests: tests still run only through
-`make sandbox*`.
-
-**The guard.** `guard.sh` reads only `state.db` and `ad-trail.jsonl` under
-the passwd-entry home, not `$HOME`. The real host store lives under the home
-the operator's `HOME` normally points to, which is the passwd-entry home, and
-reading the passwd entry means a redirected `HOME` in the guard's own
-environment cannot point it at another directory (b.8dr). It takes a
-snapshot before the run and verifies after it, even when the container
-fails. Quiet-host mode compares SHA-256 sums and fails on
-any change. Busy-host mode, the runner's default, scans only the trail bytes
-appended since the snapshot for the run's identifiers (from
-`harness-ids.txt` and `--id`). It reports `state.db` as not checked, and it
-never opens a live database.
-
-**Reuse and scope.**
-
-- **Must use:** any future tool that runs agents on a host to measure them
-  wraps the run in `tools/measure-exit/guard.sh` (snapshot, then verify).
-  Never write another checksum or trail guard.
-- **Scoped to this harness:** the dry-run stubs. The driver's dry mode
-  refuses any `claude` whose `--version` lacks "measure-exit dry-run
-  stub". They follow the stand-in pattern above: the stub is the pane
-  process and fires each hook as its direct child. Docker cases keep using
-  `test/driver/stand-in-claude` and `early-hook-claude`.
-- **Test helpers (must use within the package):** the package follows the
-  shared rule: timing tests use `tmuxfix.Clock`
-  ([tmux test doubles](#tmux-test-doubles-replay-catalogue-recorder-and-clock-reusable-test-fixtures))
-  and code that takes a `ProcChecker` gets a `procfix.Checker`
-  ([procfix](#procfix-the-process-checker-fake-reusable-test-fixture)).
-  `tools/measure-exit/helpers_test.go` holds the package's helpers:
-  - `sleepClock` (`newSleepClock()`, at `clockStart`), the harness clock
-    over the shared clock. It embeds a `*tmuxfix.Clock` and adds `Sleep`,
-    which calls the clock's `Advance` unless a test wraps it, so every
-    wait and poll runs on virtual time and never sleeps;
-  - `agentStart` and `otherStart`, the agent's start time and a reused
-    pid's, from `procstarttimefix`;
-  - `fakeEnv`, the `environment` seam, and `fakeExec`, which records
-    agent-director and tmux argv. No shared fixture covers these seams;
-  - `newRig`, a harness on a temp tree with a `fakeExec`, a `sleepClock`
-    and an empty `procfix.Checker` (`r.pc`, every pid gone). A test scripts
-    the agent process with `r.pc.Set`; `setAfterSleep(d, pid, p)` sets
-    `pid` to `p` once `d` of virtual sleep has passed, as the kill fixture's
-    `setAfterWaiting` does
-    ([kill fixture](#pkgapi-kill-fixture-and-shared-verb-tables-reusable-test-fixtures));
-  - `credentialSentinels` with `assertAbsent`, for no-leak checks.
-
-  New tests in `tools/measure-exit` must use these. Do not add another
-  environment, clock, exec or process double there.
-- **The dry-run E2E:** `tools/measure-exit/dryrun` runs `dryrun.sh` with a
-  private `TMUX_TMPDIR`. Run it with `-count=1`, because it builds in a
-  subprocess. It is the one end-to-end proof of the harness; extend it
-  rather than adding a second one.
-- **Sandbox guard:** both `tools/measure-exit` and
-  `tools/measure-exit/dryrun` call `sandboxguard.Require()` from `TestMain`
-  (see "Sandbox guard and the CI bypass").
-
 ### Model check (`make tla`)
 
 An on-demand design check, taken before engineering when the design
@@ -19521,41 +19024,23 @@ holding the verdicts, the job ids and the rerun commands.
 
 [`spec/tla/settle/`](../spec/tla/settle/README.md) holds bee b.3ie's model
 of the settle time (`B3ieSettle.tla`; see
-[Settle time (b.3ie)](#settle-time-b3ie)): its cfgs, job generator and
-checker, and the run logs and verdicts of its 32 scheduler jobs (green,
-red per invariant, a control, a limit and probes; `verdicts.txt`), every
-one as expected, plus the vendored rerun of `pass_tchange_before`. It is
+[Settle time (b.3ie)](#settle-time-b3ie)): its cfgs and job generator. The
+32 scheduler jobs (green, red per invariant, a control, a limit and probes)
+all ended as expected; `settle/PROVENANCE.txt` lists their verdicts. It is
 copied from the bee's folder under its own pin list,
 `settle/PROVENANCE.txt`, not the main one. It is not wired into `make tla`
 or `ci/suite.tsv`; its jobs run on the scheduler by its own scripts.
-
-[`spec/tla/hold36h/`](../spec/tla/hold36h/PROVENANCE.txt) holds bee
-b.36h's model of the store's working hold as a read followed by a
-separate write, with the store's write lock (`tla/Hold36h.tla`, built on
-b.omt's `OmtHold`). `Write = "split"` is the write before b.36h's fix and
-fails `WorkingTrue` (the row never reads `working` while a dialog may be
-up or a relay hook may answer); `Write = "cond"` is the fix (see "The
-lifecycle writes carry the hold's condition" under
-[Permission relay](#permission-relay)). Every `cond_*` run passes; the
-red runs, the probes and b.omt's accepted residual
-(`lim_cond_sub_noclaim`) fail on their target, as expected. The directory
-is the record of the model checking done before b.36h's code, vendored
-under its own pin list (`hold36h/PROVENANCE.txt`, which records the
-contents, the verdicts and how to run a job again), and is not wired into
-`make tla`: `ci/run_ci.sh` never reads it.
 
 [`spec/tla/codex/`](../spec/tla/codex/README.md) holds bee b.ssz's check of
 the Codex design before the code of the find-missing and pause task and the
 permission relay task. It carries three models with Codex knobs, each a copy
 of an earlier model: `Phase5HookCx.tla` (the hook gate and the row's life;
 from the `Phase5Hook.tla` before b.xjn's change), `Hold36hCx.tla` (the
-working hold and the relay's proofs; from `hold36h/`) and `B146R5Cx.tla` (the
+working hold and the relay's proofs; from b.36h's `Hold36h.tla`) and `B146R5Cx.tla` (the
 integrated relay model; from b.146's round 5). Every knob defaults to off,
 and the historical equivalence run per model reproduced its source's distinct-state
 count exactly (11,387,737, 109,518 and 833,740). The historical suite carries
-41 cfgs and their 41 scheduler job directories as submitted (without
-`tla2tools.jar`, which the repo keeps once at `spec/tla/tla2tools.jar`),
-`suite.tsv`, `verdicts.txt`, `job-ids.txt` and its own `PROVENANCE.txt` pin
+41 cfgs, `suite.tsv` and its own `PROVENANCE.txt` pin
 list. No run was made on the dev host: every verdict is a scheduler result
 and every one matches the expectation (the PASS runs complete, the controls,
 limits and probes failing on their target). It is not wired into `make tla`
@@ -19569,29 +19054,8 @@ historical authoring state, not a new execution claim. Historical receipts do
 not validate later model text. Task1 acceptance does not prove the Task2
 request controller, its formal assessment or current authenticated behavior.
 
-The b.w21 extension in [`codex/b.w21/`](../spec/tla/codex/b.w21/README.md)
-preserves nine frozen current-rule contexts at `8c6998d4` with all expected
-scheduler outcomes observed. The evolving `src/B146R5Cx.tla` adds default-off
-legacy seeds and repair knobs; the old equivalence results do not validate
-that modified source. The fourteen frozen [`fixed/`](../spec/tla/codex/b.w21/fixed/README.md)
-results include ten PASS, three expected failures and an unexpected `NoRace`
-failure in the seeded modern ACK branch. That branch incorrectly dropped an
-ACKed live hook's hold; production already holds a live hook independently of
-ACK and before any hash bypass. The evolving model restores `JudgedAlive`
-for modern requests. Its historical time abstraction conservatively holds
-recorded modern hooks until phase 2, including ACK, without separately modeling
-runtime ACKed/cannot-check release. `NoRace` and original actions remain
-unchanged. Six separate [`fixed-r2/`](../spec/tla/codex/b.w21/fixed-r2/README.md)
-cases now match all predictions: four PASS plus the required reachability
-and ACK-shortcut mutant failures. The full seeded case completed with
-6,289,976 distinct states, depth 43, and all 22 safety/temporal checks. Its
-initial time-budget attempt remains incomplete evidence; a separate resource
-overlay raises memory, time and disk budgets while retaining identical
-model/cfg/jar/runner bytes. Archived allowlisted scheduler metadata and current
-context hashes are verified without an independent image-time identity claim.
-`TestCodexJobArtifacts` restricts jar copies to safe,
-unique manifest-declared b.w21 contexts with exact canonical bytes and hashes;
-it also keeps every job runner equal to `jobs/lib/tlcjob.sh`.
+The evolving `src/B146R5Cx.tla` adds default-off legacy seeds and repair
+knobs; the old equivalence results do not validate that modified source.
 
 The historical b.ssz runs back the Codex rules of this file. Six findings
 came out of them, and the README states each:
@@ -19939,20 +19403,15 @@ scheduler. The suite's files:
   `subagent/cfg/`, the subagent groups' budgets (2740, 1940 and 8400 s), the
   props ok rule, and the preflight refusals for bad props or an ambiguous or
   missing cfg.
-- **`provenance_test.go`** has eight tests:
+- **`provenance_test.go`** has six tests:
   - every pin matches its file, and only `.gitattributes`,
-    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`,
-    `hold36h/` and `codex/` (each of the last three has its own pin list)
+    `PROVENANCE.txt`, `ci/run_ci.sh`, `launch/`, `subagent/`, `settle/`
+    and `codex/` (each of the last two has its own pin list)
     are unpinned by `spec/tla/PROVENANCE.txt`;
   - `settle/PROVENANCE.txt` pins every other file under `settle/` with its
     SHA-256, and each of its pins names one of them (`TestSettleProvenance`);
-  - `hold36h/PROVENANCE.txt` does the same for `hold36h/`
-    (`TestHold36hProvenance`);
   - `codex/PROVENANCE.txt` does the same for `codex/`
     (`TestCodexProvenance`);
-  - `codex/` holds no `.jar`, and each of its job directories' `tlcjob.sh`
-    is byte-identical to `spec/tla/jobs/lib/tlcjob.sh`
-    (`TestCodexHasNoJar`);
   - for each of `launch/` and `subagent/` (`TestRunSets`), `cfg/` holds
     exactly the cfgs `suite.tsv` names, each row has eight columns with
     the props column `-` on exactly the pass rows, every cfg turns the
@@ -20133,7 +19592,13 @@ MUST reuse these fixtures for their respective responsibilities. Cursor
 mutation-trail checks reuse `cursorTrailEnv`, `TrailMark`/`TrailEventsSince`,
 `BeforeCursorTrailExecForTest` (the existing transaction observer) and
 `storefix.InjectWriteFailure` for committed-row observation and failure cuts;
-do not create a second trail observer or runtime-proof fixture.
+do not create a second trail observer or runtime-proof fixture. A test that
+must tell a deferred Cursor missing-row save of `get`, `status` or `list` from
+a save that never ran observes each deferral through the observer that
+`api.SetCursorMissingDeferredForTest` sets (nil in production; available to
+`pkg/api`'s own tests through `export_test.go`); do not add another
+deferral observer. To force that deferral, see
+`WriteFailMissingDeadlineOverrun` under `InjectWriteFailure` below.
 
 **Agent of a seeded row (current schema v14).** The store refuses to insert a
 row whose `Agent` is not `claude`, `codex` or `cursor` (`store.ErrRowAgentInvalid`, see
@@ -20235,7 +19700,7 @@ cutoff. Tests of the time boundary itself supply their own cutoff.
 
 **`InjectWriteFailure(t, dbPath, kind, instanceID)`** makes one kind of
 write to one id's rows fail on the concrete `*store.Store` (SR-20.3). The
-seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
+eight kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
 
 - `WriteFailReuseArchive`: an insert or update of the id's
   `session_history` entry (`ResetForReuse`'s archive, whose failure holds
@@ -20290,17 +19755,34 @@ seven kinds (`WriteFailureKind`, an alias of `writefailfix.Kind`) are:
   row itself or to another id's subagent rows. **Must use:** a test that a
   write of a subagent record fails, or that a delete of a row fails when its
   subagent records cannot be removed, installs this kind.
+- `WriteFailMissingDeadlineOverrun` (`writefailfix.MissingDeadlineOverrun`,
+  kind 8, named "missing deadline overrun", b.6uf): an update of the id's
+  `spawns` row to `missing`. A matched write with a deadline returns its
+  deadline's error (wrapping `context.DeadlineExceeded`), not the injected
+  failure: the Cursor terminal marks `MarkCursorMissingIfSameLaunch` (the
+  save `get`, `status` and `list` then defer) and
+  `MarkFailedCursorRuntimeMissing`, each with an allowance of up to 1 s. A
+  write the overrun cut short may still hold the store for a moment, so a
+  test whose next zero-wait write or read must run waits for the store first
+  (for example with `GetSpawnWithin`, as storefix's `observeSpawn` does).
+  Matched writes with no deadline spin far longer before they fail:
+  `find-missing`'s mark (`MarkMissingIfSameLife`), resume's and reuse's
+  restore of a `missing` row, and `SeedSpawn` of a `missing` row. Install
+  it after seeding, and only where none of those runs. **Must use:** a test
+  that forces a Cursor missing-row save to be deferred by its own deadline
+  installs this kind.
 
 How it works:
 
 - It installs BEFORE triggers through a second raw connection to the temp
   store file. Each trigger runs `RAISE(ABORT, 'injected write failure: <kind>')`,
   so the store method returns an error; the write never silently does
-  nothing.
+  nothing. The overrun kind's trigger first runs long CPU-bound SQL.
 - The trigger SQL is fixed text. The id is recorded, with bound parameters,
   in a bookkeeping table (`ad_test_write_failure`) that each trigger's WHEN
   clause checks. Other ids and other rows are unaffected.
-- The test's cleanup removes the triggers and the bookkeeping table.
+- The test's cleanup removes the triggers, the bookkeeping table and the
+  overrun kind's pad table (`ad_test_overrun_pad`).
 - Several kinds also match other existing writes, including seeding writes
   (for example, `SeedSpawn` of a finished row matches `WriteFailReuseRestore`).
   So install after seeding. Each `writefailfix.Kind` constant's doc comment
@@ -22157,7 +21639,7 @@ A text hit is an exact name, with no letter, digit or underscore beside it.
 
 Not scanned: `internal/oldnames`, the refusal code of the config and template
 loaders, the store's column-rename hop and its fixtures, trail lines written
-earlier, `pkg/ts-bun-client/CHANGELOG.md` and the guides.
+earlier and the guides.
 
 Two exceptions keep an old name where it describes or refuses itself: the
 section of this document headed exactly "Store upgrade to agent-generic
@@ -24432,10 +23914,10 @@ A goal that cannot run in the sandbox never goes in a
 sandbox image has no container engine). Each goal in the Makefile's
 `_REQUIRE_SANDBOX_HOST_GOALS` runs there as itself. Those goals start a
 container, themselves or through `_sandbox-build` or `test-image`
-(`sandbox`, `test-sandbox`, `test-image`, `test-docker`, `measure-exit`,
+(`sandbox`, `test-sandbox`, `test-image`, `test-docker`,
 `verify-prerelease-linux`, …), run a host tool the image lacks
 (`release-shellcheck`, `tla`), or check or print the host's own setup
-(`tla-print`, `measure-exit-print`, `_measure-exit-credentials`). Every
+(`tla-print`). Every
 other goal runs in one `make sandbox CMD="make <those goals>"`, so the
 sandbox starts once. The host goals before the first sandbox goal run in
 one `make <goals>` ahead of it, the rest in one `make <goals>` after it,
@@ -24526,9 +24008,7 @@ from.
 still holds the old directory (see [Upgrade](install.md#upgrade)), so a test run
 can damage either, and every host-state guard covers both: `sandboxguard`'s refusal text, the Makefile's
 sandbox messages, the sandbox image's Dockerfile comments, the workflow comments
-that justify the bypass, the release gates' scripts, the exit-time harness's
-snapshot and preflight (see
-[Exit-time measurement harness](#exit-time-measurement-harness-toolsmeasure-exit))
+that justify the bypass, the release gates' scripts
 and the Go smoke canary, which snapshots both under the passwd home and fails if
 either appears or changes. **Must use:** a guard, canary or fixture that protects
 agent-director's state names both directories, never one; a new one is added to
@@ -24572,8 +24052,8 @@ one. `TestOldPathMatcher` pins the rule.
 
 **Exceptions** (`oldPathRules`), each with its reason: the presence rules in
 `internal/layout/old.go`; the guards that name both directories
-(`sandboxguard.go`, the `Makefile`, the two release-gate coverage scripts and
-everything under `tools/measure-exit/`); the installer's and uninstaller's
+(`sandboxguard.go`, the `Makefile` and the two release-gate coverage scripts);
+the installer's and uninstaller's
 scripts; and six sections of the user docs, [Upgrade](install.md#upgrade) in
 `docs/install.md` and, in `docs/operator-actions.md`, "A verb refuses with
 `ErrOldLayout`", "`install.sh` refuses with `ErrMoveConflict`",

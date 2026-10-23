@@ -16,9 +16,12 @@ import (
 // waits for within its wait (b.146 problem 1, decision 9 B): the store's
 // write lock, which another process (or another connection) held for longer,
 // or the store's one connection, which another call of this process held for
-// longer. Nothing was written. Callers detect it with errors.Is. pkg/api
-// re-exports it as the catalogued error decide returns when its max_wait_ms
-// bound is reached before the verdict commits.
+// longer. It also marks such a call that its own context ended before its
+// first statement (a cancellation, or a deadline under DefaultLockWait); the
+// error then wraps the context's error too (operationBusy). Nothing was
+// written. Callers detect it with errors.Is. pkg/api re-exports it as the
+// catalogued error decide returns when its max_wait_ms bound is reached before
+// the verdict commits.
 var ErrStoreBusy = errors.New("ErrStoreBusy")
 
 // errCommitUnconfirmed marks a write whose COMMIT was sent but whose outcome
@@ -95,7 +98,9 @@ func isBusy(err error) bool {
 // free connection however late it reaches the pool, waits connGrab for one
 // another call holds (connGrabContext, with its limits), and returns a busy
 // timeout of 0. A connection not taken in time is an error wrapping
-// ErrStoreBusy; the caller's own cancellation is not.
+// ErrStoreBusy. When the caller's own context ends the wait in any other way
+// (its cancellation, or its deadline under DefaultLockWait), the error this
+// returns does not wrap ErrStoreBusy; withConnOperation names it busy.
 func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (*sql.Conn, int, error) {
 	// Explicit acquisition carries its own provenance; database/sql's pool
 	// replacement opener must never borrow another operation's context.
@@ -116,8 +121,9 @@ func (s *Store) boundedConnContext(ctx context.Context, maxWait time.Duration) (
 	conn, err := s.db.Conn(acquireCtx)
 	if errors.Is(err, context.Canceled) && errors.Is(context.Cause(acquireCtx), errConnGrabElapsed) {
 		// connGrab ran out, a refusal as busy. If the caller's context has
-		// ended since, its own error decides, as if it had ended first: a
-		// passed deadline is busy, a cancellation is not.
+		// ended since, its own error decides, as if it had ended first. This
+		// helper returns a passed deadline as busy and leaves a cancellation
+		// unnamed; withConnOperation then names that cancellation busy.
 		err = ctx.Err()
 		if err == nil {
 			err = errConnGrabElapsed
@@ -214,8 +220,9 @@ func (c *connGrabContext) release() {
 // withConn runs fn on the store's one connection, its waits bounded by
 // maxWait (boundedConnContext): the wait for the connection, and, through
 // that context-aware retries, the wait for a lock another connection holds.
-// All SQL and cleanup retain the same context. A connection not taken in time returns an error
-// wrapping ErrStoreBusy, having run nothing. The store's own busy timeout is
+// All SQL and cleanup retain the same context. A connection not taken in time,
+// or not taken because the caller's context ended, returns an error wrapping
+// ErrStoreBusy, having run nothing. The store's own busy timeout is
 // put back before the connection returns to the pool; if that fails the
 // connection is discarded, so no later statement inherits the shorter wait.
 // Expired cleanup quarantines the leased connection until disposal finishes.
@@ -238,9 +245,17 @@ func (s *Store) withConnContext(ctx context.Context, maxWait time.Duration, fn f
 	return s.withConnOperation(ctx, maxWait, nil, fn)
 }
 
+// withConnOperation takes the connection and runs fn on it. When the caller's
+// context ends the operation in the wait for the connection or just after
+// taking it, it returns operationBusy's error, as operationBusy's rule
+// requires, except that a bounded call whose deadline ends the connection
+// wait keeps boundedConnContext's refusal (a case that rule names).
 func (s *Store) withConnOperation(ctx context.Context, maxWait time.Duration, op *connectionOperation, fn func(context.Context, *sql.Conn, int, *connectionCleanup) error) (result error) {
 	conn, busyMs, err := s.boundedConnContext(ctx, maxWait)
 	if err != nil {
+		if cause := ctx.Err(); cause != nil && errors.Is(err, cause) {
+			return operationBusy(cause)
+		}
 		return err
 	}
 	cleanup := &connectionCleanup{conn: conn, busyTimeoutMs: s.busyTimeoutMs, operation: op}
@@ -259,7 +274,7 @@ func (s *Store) withConnOperation(ctx context.Context, maxWait time.Duration, op
 	}
 	if err := ctx.Err(); err != nil {
 		cleanup.discard = true
-		return fmt.Errorf("%w: connection acquired after deadline: %w", ErrStoreBusy, err)
+		return operationBusy(err)
 	}
 	sqliteBusyMs := busyMs
 	if _, bounded := ctx.Deadline(); bounded {

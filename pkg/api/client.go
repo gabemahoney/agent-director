@@ -107,8 +107,15 @@ type Client struct {
 	// namespace reader in production. Tests replace it per Client. nil
 	// records no sender, and the intent is then judged by its time.
 	paneSelf func() ProcessIdentity
-	mu       sync.Mutex
-	closed   bool
+	// cursorMissingDeferred observes each lost Cursor launch's missing-row
+	// save that a status, get or list defers (persistCursorMissing), with the
+	// launch's instance id and the deferred error: nil in production. Tests
+	// set it per Client, so a test can tell a documented deferral from a save
+	// that never ran (b.6uf). It changes nothing: the read still returns its
+	// guarded result and nothing retries the save.
+	cursorMissingDeferred func(instanceID string, err error)
+	mu                    sync.Mutex
+	closed                bool
 }
 
 // relayView is the RelayView of the Client's reads and decide: its

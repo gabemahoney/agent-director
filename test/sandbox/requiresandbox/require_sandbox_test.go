@@ -310,7 +310,7 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 	}
 	engine := engineTargets(t, filepath.Join(root, "Makefile"))
 	for _, want := range []string{"test", "test-install-sh", "_sandbox-build", "sandbox", "test-sandbox",
-		"test-image", "test-docker", "measure-exit", "verify-prerelease-linux"} {
+		"test-image", "test-docker", "verify-prerelease-linux"} {
 		if !slices.Contains(engine, want) {
 			t.Fatalf("engineTargets = %q, missing %q: the recipe scan no longer finds the known container targets", engine, want)
 		}
@@ -320,8 +320,7 @@ func TestRequireSandbox_RefusesOutsideSandbox(t *testing.T) {
 	// sandbox image lacks, or check or print the host's own setup. Listed by
 	// hand, so that dropping one from the Makefile's _REQUIRE_SANDBOX_HOST_GOALS
 	// fails its cell.
-	hostOnly := []string{"_sandbox-preflight", "measure-exit-print", "_measure-exit-credentials",
-		"release-shellcheck", "tla", "tla-print"}
+	hostOnly := []string{"_sandbox-preflight", "release-shellcheck", "tla", "tla-print"}
 	makeTargets := targetsOf(rules(t, filepath.Join(root, "Makefile")), func(rule, string) bool { return true })
 	hostGoals := slices.Clone(engine)
 	for _, tg := range hostOnly {
@@ -460,7 +459,7 @@ func TestRequireSandbox_NothingRunsBeforeGuard(t *testing.T) {
 	rs := rules(t, filepath.Join(root, "Makefile"))
 	recipes := targetsOf(rs, func(r rule, tg string) bool { return len(r.recipe) > 0 && tg != "_require-sandbox" })
 	guarded := guardedTargets(rs)
-	for _, want := range []string{"build", "bin/ts-helper", "test-docker", "check-sandbox-bypass", "tla", "release-bats"} {
+	for _, want := range []string{"build", "bin/ts-helper", "test-docker", "check-sandbox-bypass", "tla"} {
 		if !slices.Contains(recipes, want) {
 			t.Fatalf("recipe targets = %q, missing %q: the rule scan no longer finds the known recipes", recipes, want)
 		}

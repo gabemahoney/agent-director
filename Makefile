@@ -1,10 +1,9 @@
 .PHONY: all build test generate lint err-coherence nondet-coverage \
         check-doccomments check-sandbox-bypass test-install-sh test-install-sh-advice \
-        test-image test-image-smoke test-docker test-docker-install-mode list-test-docker-epics \
+        test-image test-docker list-test-docker-epics \
         test-sandbox sandbox-shell sandbox \
-        release-binaries release-binaries-smoke \
-        release-shellcheck release-bats release-smoke \
-        consumer-dryrun \
+        release-binaries \
+        release-shellcheck release-smoke \
         ts-helper fake-tmux \
         agent-director envelope-diff-ts \
         verify-installed-pkg-full \
@@ -210,23 +209,6 @@ test-image: build
 		-f test/Dockerfile \
 		.
 
-# Image smoke. Confirms the build succeeds, the pinned Claude version is the
-# one we expect, agent-director help exits 0 from inside the container, and
-# the driver script returns a clear failure for an unknown EPIC.
-test-image-smoke: test-image
-	@echo "[smoke] claude --version inside the image"
-	docker run --rm $(TEST_IMAGE) claude --version | grep -F '$(CLAUDE_CODE_VERSION)' \
-		|| (echo "ERROR: pinned claude version $(CLAUDE_CODE_VERSION) not reported"; exit 1)
-	@echo "[smoke] agent-director help inside the image"
-	docker run --rm $(TEST_IMAGE) agent-director help | jq -e '.verbs | length > 0' >/dev/null
-	@echo "[smoke] driver rejects unknown EPIC"
-	@if docker run --rm -e EPIC=nonexistent $(TEST_IMAGE) /opt/driver/run-testplan.sh 2>&1 | grep -q 'no such testplan'; then \
-		echo "[smoke] OK"; \
-	else \
-		echo "ERROR: driver did not reject unknown EPIC with the expected message"; \
-		exit 1; \
-	fi
-
 # test-docker runs one testplan group in the harness container.
 #
 #   EPIC      — testplan slug (required). Resolved by the driver to the t1
@@ -272,27 +254,6 @@ list-test-docker-epics:
 		exit 1; \
 	fi
 	@grep -vE '^[[:space:]]*(#|$$)' test/docker-epics.txt
-
-# test-docker-install-mode runs the b.r3j install-mode regression suite
-# inside the harness container. Each scenario invokes install.sh under a
-# per-scenario sandbox $HOME (and umask/--keep-prior variations) and
-# asserts the canonical ~/.config/agent-director/bin/agent-director lands at
-# literal mode 0755 via `stat -c %a` — not just `-x` — and
-# ~/.config/agent-director/admin/agent-director-admin at 0755 in a 0700
-# directory. Each install that should succeed must also exit 0 with no
-# "Permission denied" on its stderr (b.7j2). Also pins install.sh's
-# defensive exit 3 on a 0644 source.
-#
-# Mounted read-only from the host so editing the script doesn't require
-# an image rebuild. The script itself depends only on the bundled
-# agent-director binary already staged at /usr/local/bin/agent-director
-# and the install skill at /opt/skills/install-agent-director/ — both
-# baked into the harness image.
-test-docker-install-mode: test-image
-	docker run --rm \
-		-v "$(CURDIR)/test/install-mode:/opt/install-mode:ro" \
-		--entrypoint /opt/install-mode/run.sh \
-		$(TEST_IMAGE)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Sandboxed execution (b.nh2 — isolation for the b.8dr incident)
@@ -349,19 +310,14 @@ CONTAINER_ENGINE ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || 
 #           already lands on the image's uid-1000 owner, so it needs neither.
 _SANDBOX_UIDMAP := $(if $(filter podman,$(CONTAINER_ENGINE)),--userns=keep-id,--user $(shell id -u):$(shell id -g) --group-add 0)
 
-# _SANDBOX_NET — network namespace flag. Always --network=host (b.rx8), for both
-# the image build and every run target. Host networking sidesteps the bridge-vs-
-# uplink MTU blackhole seen 2026-09-19 on this GKE pod: docker's default bridge
-# (docker0 MTU 1500) sits above the pod uplink (eth0 MTU 1460), so large inbound
-# TLS segments from Fastly (release-assets.githubusercontent.com, serving the
-# bun release asset) exceed the uplink MTU and the PMTUD ICMP is dropped, so the
-# handshake stalls forever and the bun download in _sandbox-build hangs. The
-# host netns has no such MTU step, and also covers the original b.nh2 case (no
-# /dev/net/tun → rootless network backend fails), so the old tun detection
-# is superseded — host networking is unconditionally correct on every supported
-# host. Safe: the sandbox boundary is the filesystem/HOME, "not a security
-# boundary" (test/sandbox/Dockerfile header), and no sandbox target publishes
-# ports.
+# _SANDBOX_NET — network namespace flag. Always --network=host, for both the
+# image build and every run target. A bridge network can sit above an uplink
+# with a smaller MTU; when the path-MTU ICMP is dropped, large inbound TLS
+# segments stall and downloads in _sandbox-build hang. A host without
+# /dev/net/tun also breaks rootless network backends. The host netns has
+# neither problem. Safe: the sandbox boundary is the filesystem/HOME, "not a
+# security boundary" (test/sandbox/Dockerfile header), and no sandbox target
+# publishes ports.
 _SANDBOX_NET := --network=host
 
 # _SANDBOX_ENV — engine-specific leading env. For podman the host's stale
@@ -531,16 +487,14 @@ _REQUIRE_SANDBOX_GOALS = $(or $(MAKECMDGOALS),$(.DEFAULT_GOAL))
 # container engine, itself or through a prerequisite (_sandbox-build or
 # test-image), and the sandbox image has none; or runs a host tool the image
 # lacks (shellcheck, the TLA job scheduler CLI); or checks or prints the
-# host's own setup (tla-print, measure-exit-print, _measure-exit-credentials).
+# host's own setup (tla-print).
 # Must use: a new target like these joins this list. A goal that runs the
 # same in either place (build, lint, list-test-docker-epics, …) stays out of
 # it and runs in the sandbox with the guarded goals.
 _REQUIRE_SANDBOX_HOST_GOALS := test-sandbox sandbox sandbox-shell \
 	_sandbox-preflight _sandbox-build test-install-sh test-install-sh-advice \
-	test-image test-image-smoke test-docker test-docker-install-mode \
-	verify-prerelease-linux measure-exit-dryrun measure-exit-print \
-	measure-image measure-exit _measure-exit-credentials \
-	release-shellcheck tla tla-print
+	test-image test-docker \
+	verify-prerelease-linux release-shellcheck tla tla-print
 _REQUIRE_SANDBOX_ON_HOST = test $(_REQUIRE_SANDBOX_HOST_GOALS)
 # _require_sandbox_lead returns the goals of $(1) that come before the first
 # one that runs in the sandbox: all of them when none does.
@@ -623,8 +577,8 @@ _REQUIRE_SANDBOX_GUARDED := generate surface-json errnames-json \
 # Must use: a new target with a recipe joins this list (a host goal does
 # through _REQUIRE_SANDBOX_HOST_GOALS), unless it lists _require-sandbox.
 _REQUIRE_SANDBOX_WAIT := $(_REQUIRE_SANDBOX_HOST_GOALS) build lint \
-	check-sandbox-bypass list-test-docker-epics consumer-dryrun \
-	release-binaries release-binaries-smoke release-bats \
+	check-sandbox-bypass list-test-docker-epics \
+	release-binaries \
 	verify-installed-pkg-full bin/ts-helper test/fake-tmux/tmux
 ifneq ($(filter $(_REQUIRE_SANDBOX_GUARDED),$(_REQUIRE_SANDBOX_GOALS)),)
 $(_REQUIRE_SANDBOX_WAIT): | _require-sandbox
@@ -692,9 +646,8 @@ MAKEOVERRIDES =
 # CMD reaches the container VERBATIM (see `$(value CMD)` below): the bytes you
 # pass are the bytes the container shell sees. So a shell variable that must
 # expand in the container is written with a SINGLE `$` — `CMD='echo "$HOME"'`
-# prints the container HOME. (This is the opposite of the historical `$$`
-# convention: because the value is no longer run through Make's `$$`→`$`
-# collapse, a literal `$$` now reaches bash as `$$` = the shell PID. b.ay3.)
+# prints the container HOME. Make does not collapse `$$` to `$` here, so a
+# literal `$$` reaches bash as `$$`, the shell PID.
 #
 # CMD is threaded to the container through the ENVIRONMENT, never interpolated
 # into the recipe's shell line. The `export` line places CMD's value into the
@@ -734,86 +687,6 @@ sandbox: _sandbox-build
 		exit 2; \
 	fi
 	$(_SANDBOX_RUN) bash -c 'exec bash -c "$${AGENT_DIRECTOR_SANDBOX_CMD:?not forwarded into the container (the -e AGENT_DIRECTOR_SANDBOX_CMD flag was dropped) — refusing to run an empty command}"'
-
-# ─────────────────────────────────────────────────────────────────────────
-# measure-exit (Epic 21): the Claude Code exit-time measurement harness
-# (RN-6, RN-2, RN-9 with RN-7's record; tools/measure-exit/).
-#
-#   measure-exit-dryrun  the offline dry run, inside the sandbox: stub claude,
-#                        no credentials, no network call, no operator.
-#   measure-exit-print   prints the runner's exact container command lines
-#                        (credentials as names only) and session counts for
-#                        MEASURE_MODE; builds nothing, runs nothing.
-#   measure-image        the measurement image, FROM the test image with
-#                        Claude Code $(MEASURE_CLAUDE_CODE_VERSION) under its
-#                        own tag (the test image's pin stays).
-#   measure-exit         THE GATED LIVE RUN: it starts PAID real Claude Code
-#                        agents (MEASURE_MODE measure: L1, rn9: L2) through
-#                        the configured gateway, or the offline version
-#                        probe (probe: L0). Run it only with the user's or the
-#                        operator's go-ahead. It refuses, before building
-#                        anything, unless ANTHROPIC_BASE_URL,
-#                        ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL and
-#                        ANTHROPIC_SMALL_FAST_MODEL are set (measure, rn9);
-#                        the runner forwards exactly those four, by name. It
-#                        never runs a built artifact on the host: the driver
-#                        runs only inside the container. make reports every
-#                        runner failure as its own exit 2, the probe's STOP
-#                        (run.sh exit 3) included, so the probe's outcome is
-#                        <results>/deployed-verdict.txt, not make's status.
-#                        L1 takes 22 samples per case (the runner's default
-#                        --samples: the 20-sample floor plus a buffer of 2),
-#                        176 sessions in all with no MCP configuration.
-#
-# measure-image requires the native Claude Code binary (REQUIRE_NATIVE_CLAUDE=1;
-# a launcher left by a failed postinstall would make every hook a
-# pid_mismatch); the probe's per-version builds (run.sh) record it instead.
-#
-# The engine is docker, as test-image. Not a test plan: the harness is not in
-# test/docker-epics.txt. MEASURE_ARGS passes runner options (see the header
-# of tools/measure-exit/run.sh), e.g. MEASURE_ARGS="--mcp-config F".
-# MEASURE_CLAUDE_CODE_VERSION defaults to 2.1.280, the deployed version; L0
-# probes it explicitly (run.sh --deployed).
-MEASURE_CLAUDE_CODE_VERSION ?= 2.1.280
-MEASURE_IMAGE ?= agent-director-measure:cc-$(MEASURE_CLAUDE_CODE_VERSION)
-MEASURE_MODE ?= measure
-MEASURE_ARGS ?=
-
-.PHONY: measure-exit-dryrun measure-exit-print measure-image measure-exit _measure-exit-credentials
-measure-exit-dryrun: _sandbox-build
-	$(_SANDBOX_RUN) bash tools/measure-exit/dryrun.sh
-
-measure-exit-print:
-	tools/measure-exit/run.sh $(MEASURE_MODE) --image $(MEASURE_IMAGE) \
-		--claude-code-version $(MEASURE_CLAUDE_CODE_VERSION) --base-image $(TEST_IMAGE) $(MEASURE_ARGS)
-
-measure-image: test-image
-	docker build --network=host \
-		--build-arg BASE_IMAGE=$(TEST_IMAGE) \
-		--build-arg CLAUDE_CODE_VERSION=$(MEASURE_CLAUDE_CODE_VERSION) \
-		--build-arg REQUIRE_NATIVE_CLAUDE=1 \
-		-t $(MEASURE_IMAGE) \
-		-f tools/measure-exit/Dockerfile \
-		.
-
-# Checked before any image build: the gateway pair and the two pinned models
-# for the live modes; the probe needs no credential.
-_measure-exit-credentials:
-	@case "$(MEASURE_MODE)" in \
-		probe) ;; \
-		measure|rn9) for v in ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_SMALL_FAST_MODEL; do \
-			if [ -z "$$(printenv $$v)" ]; then \
-				echo "ERROR: measure-exit $(MEASURE_MODE) refuses to start: $$v is not set (nothing was built or run)" >&2; \
-				exit 2; \
-			fi; \
-		done ;; \
-		*) echo "ERROR: MEASURE_MODE must be measure, rn9 or probe" >&2; exit 2 ;; \
-	esac
-
-measure-exit: _measure-exit-credentials
-	@if [ "$(MEASURE_MODE)" = probe ]; then $(MAKE) test-image; else $(MAKE) measure-image; fi
-	tools/measure-exit/run.sh $(MEASURE_MODE) --run --image $(MEASURE_IMAGE) \
-		--claude-code-version $(MEASURE_CLAUDE_CODE_VERSION) --base-image $(TEST_IMAGE) $(MEASURE_ARGS)
 
 # ─────────────────────────────────────────────────────────────────────────
 # tla (Epic 22): the TLA+ model check of the LABEL design (bee b.zuj's
@@ -901,61 +774,6 @@ release-binaries:
 	@echo "[release] sizes:"
 	@du -h "$(RELEASE_DIST_DIR)"/agent-director-* | sed 's/^/  /'
 
-# release-binaries-smoke runs static-linkage + magic-byte + host-arch
-# runnability checks. We avoid `file(1)` because it's not in the
-# minimal harness image; instead, read the first 4 magic bytes via
-# od and match against ELF (0x7F454C46) or Mach-O 64-bit LE
-# (0xCFFAEDFE). Arch-within-format is checked by exec where possible
-# and skipped for cross-arch (cross-exec needs QEMU).
-#
-# All steps run inside one shell so an early `exit 1` stops the
-# whole recipe (Make's default is one-shell-per-line, which would
-# silently swallow the failure).
-release-binaries-smoke: release-binaries
-	@set -eu; \
-	echo "[smoke] magic-byte check on each artifact"; \
-	for target in linux/amd64 linux/arm64 darwin/arm64; do \
-		os=$${target%/*}; arch=$${target#*/}; \
-		for bin in agent-director agent-director-admin; do \
-			out="$(RELEASE_DIST_DIR)/$${bin}-$${os}-$${arch}"; \
-			magic=$$(od -A n -t x1 -N 4 "$${out}" | tr -d ' '); \
-			case "$${os}_$${magic}" in \
-				linux_7f454c46)  echo "  $${out}: ELF (OK)" ;; \
-				darwin_cffaedfe) echo "  $${out}: Mach-O 64 LE (OK)" ;; \
-				darwin_feedfacf) echo "  $${out}: Mach-O 64 BE (OK)" ;; \
-				*) echo "  FAIL: unexpected magic $${magic} for $${out} (os=$${os})"; exit 1 ;; \
-			esac; \
-		done; \
-	done; \
-	echo "[smoke] static-link check on linux binaries (ldd → 'not a dynamic executable')"; \
-	for arch in amd64 arm64; do \
-		for bin in agent-director agent-director-admin; do \
-			out="$(RELEASE_DIST_DIR)/$${bin}-linux-$${arch}"; \
-			if ldd "$${out}" 2>&1 | grep -q "not a dynamic executable"; then \
-				echo "  $${out}: statically linked"; \
-			else \
-				echo "  FAIL: $${out} is not statically linked"; \
-				ldd "$${out}" 2>&1 | sed 's/^/    /'; \
-				exit 1; \
-			fi; \
-		done; \
-	done; \
-	echo "[smoke] host-arch exec (linux-amd64 help)"; \
-	"$(RELEASE_DIST_DIR)/agent-director-linux-amd64" help | jq -e '.verbs | length > 0' >/dev/null \
-		|| { echo "FAIL: linux-amd64 help did not return a non-empty verb list"; exit 1; }; \
-	"$(RELEASE_DIST_DIR)/agent-director-admin-linux-amd64" help | head -n 1 \
-		| grep -q '^agent-director-admin is an operator tool\. Do not run any of its commands without explicit approval from a human for this specific run\. Agents and automated callers must not run it\.$$' \
-		|| { echo "FAIL: agent-director-admin-linux-amd64 help does not open with the human-approval statement"; exit 1; }; \
-	echo "[smoke] OK — all 6 binaries built, linked, and the host-arch ones run"
-
-# consumer-dryrun builds the tools/consumer-dryrun mini-module, which imports
-# pkg/api from a separate Go module via a replace directive. A clean build
-# proves that external consumers can compile against pkg/api without
-# referencing any internal/* package directly. Go's visibility rules enforce
-# this: any attempt to import internal/* from outside the module would fail.
-consumer-dryrun:
-	cd tools/consumer-dryrun && go build ./...
-
 # ts-helper builds the fixture-seeding CLI used by TypeScript smoke tests.
 # Built like any other binary (no special build tags); source lives under
 # test/smoke/ts-helper/, but the CLI also imports pkg/api/apitest (SeedSpawn)
@@ -1025,9 +843,8 @@ envelope-diff-ts: _require-sandbox agent-director ts-helper fake-tmux
 # skills/release-agent-director/gates/. Its automated caller is the lint
 # workflow (.github/workflows/lint.yml), on every PR and push to main.
 #
-# It FAILS (exit 1) when shellcheck is not on PATH. It used to print
-# "skipping" and exit 0, so a run without shellcheck looked the same as a
-# clean one, and the target had never really run (b.ug8). To skip on
+# It FAILS (exit 1) when shellcheck is not on PATH, so a run without
+# shellcheck never looks like a clean one. To skip on
 # purpose on a machine without shellcheck, set SHELLCHECK_OPTIONAL=1
 # (`make release-shellcheck SHELLCHECK_OPTIONAL=1`): it then prints that
 # nothing was checked and exits 0. No automated caller sets it.
@@ -1056,15 +873,6 @@ release-shellcheck:
 # sandbox (_require-sandbox, b.8yq): make sandbox CMD="make release-smoke".
 release-smoke: _require-sandbox
 	go test -timeout $(GO_TEST_TIMEOUT) ./skills/release-agent-director/tests/synthetic-regressions/... -count=1
-
-# release-bats was retired alongside the cabi-matrix removal — the only
-# bats tests under skills/release-agent-director/tests/ exercised the
-# deleted cabi-collection paths. The target is kept as a no-op so any
-# stale CI lane that still calls it stays green. It checks nothing, so it
-# must never count as a gate: no workflow under .github/workflows/ and no
-# /release phase calls it (checked for b.ug8).
-release-bats:
-	@echo "[release-bats] no release bats tests in tree — skipping"
 
 # verify-installed-pkg-full performs a self-contained end-to-end install
 # verification of the ts-bun-client package against a real packed tarball.

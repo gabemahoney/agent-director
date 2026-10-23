@@ -64,9 +64,6 @@ export class AgentDirectorError extends Error {
 //   "ErrSystemInstallUnreachable"  — discovered binary failed probe (b.ue3 / SR-3.3)
 //   "ErrCallerCwdUnreachable"      — caller's process.cwd() is gone at construction (b.cot)
 //   "ErrSystemInstallDisappeared"  — binary was valid at construction but is gone at verb-dispatch (b.xht)
-//
-// Removed in b.ue3 (vendored-binary surface dropped):
-//   ErrUnsupportedPlatform, ErrPlatformPackageMissing, ErrCliNotExecutable
 // ---------------------------------------------------------------------------
 
 /**

@@ -355,7 +355,18 @@ const (
 	// the caps' evictions and a cascaded delete from the spawns row included, and
 	// apitest.SeedSubagent and apitest.SeedSubagentLaunch: install it after
 	// seeding. Used only through InjectWriteFailure.
-	WriteFailSubagentRecord     = writefailfix.SubagentRecord
+	WriteFailSubagentRecord = writefailfix.SubagentRecord
+	// WriteFailMissingDeadlineOverrun (b.6uf) makes the id's update to missing
+	// run far past a second, so a write with a deadline (the Cursor
+	// reconciliation's 1 s mark, which get, status and list then defer)
+	// returns its deadline's error. Writes to missing with no deadline
+	// (find-missing's mark, the restores, SeedSpawn) spin far longer: install
+	// it only where none runs, after seeding. A test that forces a Cursor
+	// missing-row save to be deferred by its own deadline must use this kind,
+	// never a slow trigger of its own (docs/architecture.md).
+	WriteFailMissingDeadlineOverrun = writefailfix.MissingDeadlineOverrun
+	// WriteFailDisplayObservation fails the final report write after request
+	// clocks are written.
 	WriteFailDisplayObservation = writefailfix.DisplayObservation
 )
 

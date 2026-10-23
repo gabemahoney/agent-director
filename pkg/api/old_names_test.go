@@ -29,8 +29,7 @@ var oldNames = []string{
 // the text scan reaches. The
 // refusal tables outside them (internal/oldnames, the config and template
 // loaders' refusals) and the store's column-rename hop are on no scanned
-// surface; trail lines written before the upgrade and the CHANGELOG are not
-// scanned either.
+// surface; trail lines written before the upgrade are not scanned either.
 func oldNameTextRules() *scanRules {
 	return newScanRules(
 		scanException{file: "docs/architecture.md", heading: "Store upgrade to agent-generic names",

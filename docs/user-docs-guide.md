@@ -49,7 +49,7 @@ User docs are for the people who install and run agent-director, and for the pro
 - **User docs:** `README.md`, `docs/install.md`, `docs/usage.md`, `docs/configuration.md`, `docs/maintenance.md`, `docs/caller-contract.md`, `docs/operator-actions.md`, `docs/hooks.md`, `docs/permissions.md`, `docs/settings.md`, `docs/multi-account.md`, `pkg/api/README.md` and `pkg/ts-bun-client/README.md`.
 - **Generated references:** `docs/cli-reference.md`, `docs/mcp-reference.md` and `docs/admin-reference.md` (see "The files").
 - **Architecture:** `docs/architecture.md`, under the rules in `docs/architecture-docs-guide.md`.
-- **Developer and operational guides:** `docs/migration-guide.md`, `docs/test-writing-guide.md`, `docs/release-skill.md` and `docs/release-blockers.md`.
+- **Developer and operational guides:** `docs/migration-guide.md`, `docs/test-writing-guide.md` and `docs/release-skill.md`.
 
 The `docs/*-guide.md` files are rules for agents. Idea and Bug work never changes those rules; suggest a rule change to the maintainers as separate work. Do record facts a guide asks for, such as a new schema version's downgrade recipe in `docs/migration-guide.md` §5.
 

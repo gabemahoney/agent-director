@@ -6,10 +6,8 @@ Method and job layout follow b.146 round 6 (`../b.146/job-r6-README.md`).
 
 Files:
 - `B3ieSettle.tla`: the model (master copy).
-- `cfg/*.cfg`: one cfg per run; `gen-jobs.sh` writes them and the job directories; `verify-jobs.sh`
-  checks the job directories without running TLC.
-- `job-*/`: one self-contained scheduler job per run; `job-README.md` is the job table.
-- `tla-logs/`: the one local sanity run (`sanity.cfg`, `runsanity.sh`, `sanity.log`).
+- `cfg/*.cfg`: one cfg per run. A scheduler job for a run holds a Dockerfile, `tlcjob.sh`,
+  `tla2tools.jar`, the model, the cfg and `runs`.
 
 ## The design modelled
 
@@ -115,7 +113,54 @@ writer's T). The kind is `imm` for terminal values and command writes, and `hook
 
 ## Runs
 
-The job table with expected verdicts is in `job-README.md`.
+Bounds unless the row says otherwise: 2 hook processes, T in 0..2, initial T = 2, MaxTime 4,
+MaxWrites 3, migrated rows starting `waiting` or `working`, hooks write
+`waiting`/`working`/`check_permission`/`ended`, commands on, guards on, reader clock inline,
+hooks may move a terminal row (as the source allows). The job Dockerfile gives TLC `-Xmx8g`, 1 GB
+direct memory, a 3000 s budget (green runs cap themselves at 2900 s, the rest at 900 s) and an 8 GB
+disk cap; `pass_tchange_before` needs more (`-Xmx24g`, 4 GB direct memory, a 20000 s budget, a
+60 GB disk cap and a 5.5 h run cap). The last output line is the
+verdict: `JOB-VERDICT <cfg>=<result>/<distinct states>`.
+
+| Run | What | Expected |
+|---|---|---|
+| `pass_const` | the design, T = 2 constant, MaxWrites 4, fresh inserts too; every invariant | PASS |
+| `pass_const_t1` | the same at T = 1 | PASS |
+| `pass_t0` | the same at T = 0 (off) | PASS |
+| `pass_before` | the design, reader takes its clock before the row read (negative ages reachable) | PASS |
+| `pass_noterm` | the design with the guard it assumed (no hook moves a terminal row) | PASS |
+| `pass_immnostamp` | robustness: immediate writes leave `state_changed_ms` alone (a verbatim reuse restore) | PASS |
+| `pass_tchange` | the design, T starts at 1 and changes twice; invariants 1, 3, 4, 5 (2 holds until the first change) | PASS |
+| `pass_tchange_before` | the same with the reader clock before the row read | PASS |
+| `red_strictgt` | inv 1: `age > T` with no T = 0 short-cut, at T = 0 | FAIL `ZeroIsRaw` |
+| `red_prevraw` | inv 2: the base is the previous raw value (A→B→C reads B) | FAIL `SettledIsSpec` |
+| `red_samerestart` | inv 2: a same-value hook write restarts the clock | FAIL `SettledIsSpec` |
+| `red_stalebase` | inv 2: base and same-value test from a Go-side read before the UPDATE (duplicate hooks) | FAIL `SettledIsSpec` |
+| `red_nowoutside` | inv 2: the writer's `now` is taken before the write lock | FAIL `SettledIsSpec` |
+| `red_negage` | inv 2 (reads): a negative age counts as settled | FAIL `ReadsLinearizable` |
+| `red_readafter` | inv 2 (reads): the reader reads the row, then takes its clock | FAIL `ReadsLinearizable` |
+| `red_termsettles` | inv 3: a hook's `ended` goes through the settle rule | FAIL `ImmediateAtOnce` |
+| `red_cmdsettles` | inv 3: command writes go through the settle rule | FAIL `ImmediateAtOnce` |
+| `red_guardreported` | inv 4: a guard acts on the reported state | FAIL `GuardsReadRaw` |
+| `red_insertnobase` | inv 5 (T changing): InsertPending leaves `settled_state` at its default `''` | FAIL `NeverUnsupported` |
+| `ctl_today` | control: today (reported = raw) at T = 2, in the bee's form | FAIL `HeldOrLastSettled` |
+| `lim_tchange_bee` | limit: after a T change, a base judged under the old T is reported | FAIL `BeeFormReaderT` |
+| `probe_flap` | probe: A→B→A within T is reached and a read returns A | FAIL `ProbeFlap` |
+| `probe_shortturn` | probe: waiting→working→waiting within T reads waiting | FAIL `ProbeShortTurn` |
+| `probe_holdsold` | probe: a read during an unsettled hook change returns the old settled value | FAIL `ProbeHoldsOld` |
+| `probe_chaina` | probe: A→B→C within T reads A | FAIL `ProbeChainHoldsA` |
+| `probe_chainc` | probe: A→B→C reads C once C held T from the B→C change | FAIL `ProbeChainReachesC` |
+| `probe_dup` | probe: a duplicate hook write (same value, other hook, ≤ 1 ms) lands | FAIL `ProbeDup` |
+| `probe_twohooks` | probe: two hook processes in flight with the same value | FAIL `ProbeTwoHooks` |
+| `probe_tchange` | probe: T changes between a hook write and a read | FAIL `ProbeTChangeRead` |
+| `probe_guarddiff` | probe: a guard acts on raw while the reported state differs | FAIL `ProbeGuardDiffers` |
+| `probe_hookleavesterm` | probe: a hook moves a terminal row to a live state | FAIL `ProbeHookLeavesTerminal` |
+| `probe_cmdcuts` | probe: a command write lands while a hook change is unsettled | FAIL `ProbeCmdCutsSettle` |
+
+A FAIL verdict reads `FAIL(Invariant_<Name>_is_violated)`. Each red cfg lists, besides its target,
+the invariants the mutation must not break; a verdict naming any other invariant is a finding.
+`red_insertnobase` fails in the initial state (a freshly inserted row read within T).
+
 - **Green (8):**
   - the design at T = 2, T = 1 and T = 0;
   - with the reader clock before the row read;
@@ -137,7 +182,7 @@ The job table with expected verdicts is in `job-README.md`.
   - a hook leaving a terminal state;
   - a command cutting an unsettled change.
 
-**Local sanity run** (`tla-logs/sanity.log`): the design, T = 2, MaxTime 3, MaxWrites 3, every
+**Local sanity run**: the design, T = 2, MaxTime 3, MaxWrites 3, every
 invariant. Result: **PASS, 158,868 distinct states, depth 12, 6 s**. Every other run is a
 scheduler job.
 

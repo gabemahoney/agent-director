@@ -240,8 +240,7 @@ built binary. Currently: `internal/trail`, `internal/store`, `internal/hook`,
 `internal/testsupport/storefix`, `internal/testsupport/tmuxfix`,
 `test/smoke/go`, `test/smoke/ts-helper`, `test/envelope-diff`,
 `test/grounding-replay`, `test/realtmux`, `test/reboot-recovery`,
-`test/tla`, `test/driver-scripts`,
-`tools/measure-exit` and `tools/measure-exit/dryrun`. Pure-logic packages with no
+`test/tla` and `test/driver-scripts`. Pure-logic packages with no
 state or exec surface (e.g. `pkg/api/manifest`, `pkg/api/errnames`) may skip
 it, as do the `test/sandbox/` Makefile tests (`gitmount`, `cmdinject`,
 `prebuild`, `cigates`), which run only `make` and shell fakes. When you add a package that

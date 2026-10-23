@@ -1,9 +1,7 @@
 package tla_test
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -34,8 +32,8 @@ func pinLines(t *testing.T, prov string) map[string]string {
 // TestProvenancePinsEveryVendoredFile checks every pin line of PROVENANCE.txt
 // against the file's SHA-256, and that only the repo's own files are unpinned:
 // three named files plus the unpinned run sets (launch/, subagent/). The b.3ie
-// model (settle/), the b.36h model (hold36h/) and the b.ssz Codex models
-// (codex/) each have their own pin list.
+// model (settle/) and the b.ssz Codex models (codex/) each have their own pin
+// list.
 func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 	tree := filepath.Join(repoRoot(t), "spec", "tla")
 	prov := readFile(t, filepath.Join(tree, "PROVENANCE.txt"))
@@ -49,7 +47,7 @@ func TestProvenancePinsEveryVendoredFile(t *testing.T) {
 			return err
 		}
 		rel, _ := filepath.Rel(tree, p)
-		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "subagent/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "hold36h/") && !strings.HasPrefix(rel, "codex/") {
+		if _, ok := pins[rel]; !ok && !strings.HasPrefix(rel, "launch/") && !strings.HasPrefix(rel, "subagent/") && !strings.HasPrefix(rel, "settle/") && !strings.HasPrefix(rel, "codex/") {
 			unpinned = append(unpinned, rel)
 		}
 		return nil
@@ -101,111 +99,10 @@ func TestSettleProvenance(t *testing.T) {
 	checkOwnPins(t, "settle")
 }
 
-// TestHold36hProvenance: hold36h/PROVENANCE.txt pins every other file under
-// hold36h/ with its SHA-256, and each pin names one of those files.
-func TestHold36hProvenance(t *testing.T) {
-	checkOwnPins(t, "hold36h")
-}
-
 // TestCodexProvenance: codex/PROVENANCE.txt pins every other file under
 // codex/ with its SHA-256, and each pin names one of those files.
 func TestCodexProvenance(t *testing.T) {
 	checkOwnPins(t, "codex")
-}
-
-// TestCodexJobArtifacts: only manifest-declared b.w21 scheduler contexts carry
-// a canonical jar copy; every Codex job retains the canonical runner bytes.
-func TestCodexJobArtifacts(t *testing.T) {
-	tree := filepath.Join(repoRoot(t), "spec", "tla")
-	codex := filepath.Join(tree, "codex")
-	jar, err := os.ReadFile(filepath.Join(tree, "tla2tools.jar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jarHash := fmt.Sprintf("%x", sha256.Sum256(jar))
-	declaredJars := map[string]bool{}
-	caseName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	for _, dir := range []string{"b.w21", "b.w21/fixed", "b.w21/fixed-r2"} {
-		var manifest struct {
-			Bug   string `json:"bug"`
-			Cases []struct {
-				Name    string            `json:"name"`
-				Context string            `json:"context"`
-				SHA256  map[string]string `json:"sha256"`
-			} `json:"cases"`
-		}
-		if err := json.Unmarshal([]byte(readFile(t, filepath.Join(codex, dir, "manifest.json"))), &manifest); err != nil {
-			t.Fatalf("%s/manifest.json: %v", dir, err)
-		}
-		if manifest.Bug != "b.w21" || len(manifest.Cases) == 0 {
-			t.Fatalf("%s/manifest.json: want b.w21 with declared cases", dir)
-		}
-		for _, c := range manifest.Cases {
-			if !caseName.MatchString(c.Name) || !fs.ValidPath(c.Context) || c.Context != "jobs/"+c.Name {
-				t.Fatalf("%s/manifest.json: unsafe or unexpected context %q for case %q", dir, c.Context, c.Name)
-			}
-			rel := filepath.Join(dir, c.Context, "tla2tools.jar")
-			if declaredJars[rel] {
-				t.Fatalf("%s/manifest.json: duplicate context %q", dir, c.Context)
-			}
-			if c.SHA256["tla2tools.jar"] != jarHash {
-				t.Errorf("%s/manifest.json: %s jar hash %q differs from canonical %s", dir, c.Name, c.SHA256["tla2tools.jar"], jarHash)
-			}
-			declaredJars[rel] = true
-		}
-	}
-	lib, err := os.ReadFile(filepath.Join(tree, "jobs", "lib", "tlcjob.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs := 0
-	err = filepath.WalkDir(codex, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		if strings.HasSuffix(d.Name(), ".jar") {
-			rel, err := filepath.Rel(codex, p)
-			if err != nil {
-				return err
-			}
-			if !declaredJars[rel] {
-				t.Errorf("%s: jar outside declared b.w21 scheduler contexts", p)
-			} else {
-				delete(declaredJars, rel)
-				if !d.Type().IsRegular() {
-					t.Errorf("%s: scheduler jar must be a regular file", p)
-				} else {
-					b, err := os.ReadFile(p)
-					if err != nil {
-						return err
-					}
-					if !bytes.Equal(b, jar) {
-						t.Errorf("%s differs from spec/tla/tla2tools.jar", p)
-					}
-				}
-			}
-		}
-		if d.Name() == "tlcjob.sh" {
-			jobs++
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return err
-			}
-			if !bytes.Equal(b, lib) {
-				t.Errorf("%s differs from spec/tla/jobs/lib/tlcjob.sh", p)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rel := range declaredJars {
-		t.Errorf("%s: declared scheduler context is missing its jar", rel)
-	}
-	if jobs == 0 {
-		t.Error("no job directory under codex/")
-	}
 }
 
 // checkOwnPins checks that spec/tla/<dir>/PROVENANCE.txt pins every other

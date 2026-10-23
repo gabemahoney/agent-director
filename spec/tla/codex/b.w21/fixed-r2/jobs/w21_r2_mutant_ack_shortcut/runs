@@ -1,2 +1,0 @@
-# b.w21 r2 expected=FAIL(Invariant_NoRace_is_violated); observed=NOT_RUN
-B146R5Cx w21_r2_mutant_ack_shortcut @700

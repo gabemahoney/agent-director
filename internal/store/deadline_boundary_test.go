@@ -16,18 +16,22 @@ import (
 // deadlineBoundary wraps the existing SQLite observation connector at the driver boundary.
 type deadlineBoundary struct {
 	execHookConnector
-	before      func(context.Context, string) error
-	afterNext   func(context.Context, string, error)
-	afterCommit func(context.Context) error
-	afterExec   func(context.Context, string, error)
-	closeFirst  func()
-	opens       atomic.Int32
+	before       func(context.Context, string) error
+	afterNext    func(context.Context, string, error)
+	afterCommit  func(context.Context) error
+	afterExec    func(context.Context, string, error)
+	afterConnect func()
+	closeFirst   func()
+	opens        atomic.Int32
 }
 
 func (b *deadlineBoundary) Connect(ctx context.Context) (driver.Conn, error) {
 	c, err := b.execHookConnector.Connect(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if b.afterConnect != nil {
+		b.afterConnect()
 	}
 	return &deadlineBoundaryConn{Conn: c, boundary: b, first: b.opens.Add(1) == 1}, nil
 }
@@ -490,13 +494,27 @@ func (c cancelOnErr) Err() error {
 	return context.Cause(c.Context)
 }
 
+// lateDeadline's deadline has passed, so runConnectionOperation's returnCtx
+// ends at once; its own Done and Err (DeadlineExceeded) follow its embedded one.
+type lateDeadline struct{ context.Context }
+
+func (lateDeadline) Deadline() (time.Time, bool) { return time.Time{}, true }
+
+func (c lateDeadline) Err() error {
+	if c.Context.Err() != nil {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
 // TestZeroWaitAdmissionAfterStall (b.q5r): a zero-wait call that reaches the
 // free connection or operation slot only after its connGrab has elapsed still
 // takes it, and a returned operation call has freed its slot, also when its
 // operation failed, so a zero-wait call made at once is admitted. A connection
 // another lease holds is refused after the call has queued for it exactly once:
 // ErrStoreBusy, also when the caller's deadline has passed by then, or the
-// caller's own error if it was canceled.
+// caller's own error if it was canceled. That is boundedConnContext's own
+// result; withConnOperation names the cancellation busy (b.wxy).
 func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 	const refused = "ErrStoreBusy: the store's connection was not free within 0 ms: another call of this process held it"
 	grabConn := func(s *Store, ctx context.Context) error {
@@ -582,6 +600,197 @@ func TestZeroWaitAdmissionAfterStall(t *testing.T) {
 				if queued := s.db.Stats().WaitCount - waits; tc.held && queued != 1 {
 					t.Fatalf("refused after queuing %d times; want once", queued)
 				}
+			}
+		})
+	}
+}
+
+// holdSlot takes s's operation slot, as an admitted operation holds it, until
+// release. Taking it first waits out an operation still holding it.
+func holdSlot(t *testing.T, s *Store) (release func()) {
+	t.Helper()
+	lane := s.cleanup
+	lane.operationOnce.Do(func() { lane.operationGate = make(chan struct{}, 1) })
+	select {
+	case lane.operationGate <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the operation slot stayed held for 5s")
+	}
+	var once sync.Once
+	return func() { once.Do(func() { <-lane.operationGate }) }
+}
+
+// cancelWhileWaiting cancels call's caller while it waits for s's held operation
+// slot (slot) or connection (!slot), and returns whether its callback ran, and
+// its error. deadline gives the caller a deadline already passed
+// (lateDeadline), so its context ends with DeadlineExceeded, not Canceled.
+func cancelWhileWaiting(t *testing.T, s *Store, slot, deadline bool, call func(*Store, func(context.Context, *sql.Conn) error) error) (bool, error) {
+	t.Helper()
+	var release func()
+	if slot {
+		release = holdSlot(t, s)
+	} else {
+		release = holdConnection(t, s)
+	}
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caller := ctx
+	if deadline {
+		// The call sees this deadline passed at once; its worker's connection
+		// wait sees it only at cancel().
+		caller = lateDeadline{ctx}
+	}
+	var ran atomic.Bool
+	waits := s.db.Stats().WaitCount
+	errc := make(chan error, 1)
+	go func() {
+		errc <- call(s.WithContext(caller), func(context.Context, *sql.Conn) error {
+			ran.Store(true)
+			return nil
+		})
+	}()
+	// The slot wait has no counter, but a cancellation before it takes the
+	// same admitOperation branch.
+	if !slot {
+		waitPoolQueue(t, s.db, waits+1)
+	}
+	cancel()
+	var err error
+	select {
+	case err = <-errc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call did not return within 5s of its caller's cancellation")
+	}
+	if slot {
+		release()
+	}
+	// A worker the call left behind has finished before the connection is
+	// freed: freed first, it could be handed to the worker after its caller
+	// ended, failing it past the wait instead.
+	holdSlot(t, s)()
+	return ran.Load(), err
+}
+
+// cancelAtConnect gives s a fresh pool and cancels call's caller once its
+// worker has opened the pool's first connection, which database/sql then
+// hands over without looking at the caller's context again. It holds the
+// worker there until the call has returned, before withConnOperation can
+// publish a result for the caller to return, and returns whether call's
+// callback ran, and its error.
+func cancelAtConnect(t *testing.T, s *Store, call func(*Store, func(context.Context, *sql.Conn) error) error) (bool, error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned := make(chan struct{})
+	installDeadlineBoundary(t, s, s.Path()).afterConnect = func() { cancel(); <-returned }
+	var ran atomic.Bool
+	errc := make(chan error, 1)
+	go func() {
+		defer close(returned)
+		errc <- call(s.WithContext(ctx), func(context.Context, *sql.Conn) error {
+			ran.Store(true)
+			return nil
+		})
+	}()
+	var err error
+	select {
+	case err = <-errc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call did not return within 5s of its caller's cancellation")
+	}
+	holdSlot(t, s)() // its worker has finished
+	return ran.Load(), err
+}
+
+// TestCallerCancelledWhileWaitingIsBusy (b.wxy): a caller cancelled before
+// BEGIN, while its call waits for the operation slot or the store's one
+// connection, gets an error wrapping both ErrStoreBusy and context.Canceled,
+// with nothing run, whichever wait it was in.
+func TestCallerCancelledWhileWaitingIsBusy(t *testing.T) {
+	write := func(maxWait time.Duration) func(*Store, func(context.Context, *sql.Conn) error) error {
+		return func(s *Store, fn func(context.Context, *sql.Conn) error) error { return s.inWriteTx(maxWait, fn) }
+	}
+	read := func(s *Store, fn func(context.Context, *sql.Conn) error) error {
+		return s.readWithin(5*time.Second, "", fn)
+	}
+	for _, tc := range []struct {
+		name string
+		slot bool // cancelled waiting for the operation slot, else for the connection
+		call func(*Store, func(context.Context, *sql.Conn) error) error
+	}{
+		{"bounded write, slot wait", true, write(5 * time.Second)},
+		{"bounded write, connection wait", false, write(5 * time.Second)},
+		{"bounded read, slot wait", true, read},
+		{"bounded read, connection wait", false, read},
+		// No deadline: the caller's abandon error or its worker's, whichever
+		// returns first. TestDefaultWaitCallerEndGivesOneError checks the
+		// worker's every time.
+		{"default-wait write, connection wait", false, write(DefaultLockWait)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTempStore(t)
+			ran, err := cancelWhileWaiting(t, s, tc.slot, false, tc.call)
+			if !errors.Is(err, ErrStoreBusy) || !errors.Is(err, context.Canceled) || ran {
+				t.Errorf("%v (callback ran=%v); want an error wrapping ErrStoreBusy and context.Canceled, nothing run", err, ran)
+			}
+		})
+	}
+}
+
+// TestDefaultWaitCallerEndGivesOneError (b.wxy): with DefaultLockWait, a
+// caller whose context ends before its worker's first statement, in the wait
+// for the store's one connection (cancelled or at its own deadline) or as the
+// worker takes a connection it has just opened, returns its own abandon error
+// or its worker's, whichever is ready first. Holding the worker until the
+// caller has returned makes the caller's the abandon error every time, so
+// both are seen: they must be one error, wrapping ErrStoreBusy and the
+// context's error, with nothing run.
+func TestDefaultWaitCallerEndGivesOneError(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deadline bool // ended at its deadline, else by its cancellation
+		connect  bool // ended as its worker takes a connection it opened, else waiting for the connection
+		cause    error
+	}{
+		{"cancelled", false, false, context.Canceled},
+		{"deadline", true, false, context.DeadlineExceeded},
+		{"cancelled as it takes the connection", false, true, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _ := openTempStore(t)
+			worker := make(chan error, 1)
+			call := func(s *Store, fn func(context.Context, *sql.Conn) error) error {
+				ctx, cancel := s.operationContext(DefaultLockWait)
+				defer cancel()
+				returned := make(chan struct{})
+				defer close(returned)
+				// Wired as withConnContext wires the call (keep the two in
+				// step), its worker held until the caller has returned.
+				return s.runConnectionOperation(ctx, DefaultLockWait, func(op *connectionOperation) error {
+					err := s.withConnOperation(ctx, DefaultLockWait, op, func(ctx context.Context, conn *sql.Conn, _ int, _ *connectionCleanup) error {
+						return fn(ctx, conn)
+					})
+					worker <- err
+					<-returned
+					return err
+				})
+			}
+			var ran bool
+			var err error
+			if tc.connect {
+				ran, err = cancelAtConnect(t, s, call)
+			} else {
+				ran, err = cancelWhileWaiting(t, s, false, tc.deadline, call)
+			}
+			var workerErr error
+			select {
+			case workerErr = <-worker:
+			default:
+				t.Fatal("the call returned without running its worker")
+			}
+			if !errors.Is(workerErr, ErrStoreBusy) || !errors.Is(workerErr, tc.cause) || fmt.Sprint(workerErr) != fmt.Sprint(err) || ran {
+				t.Errorf("worker: %v; caller: %v (callback ran=%v); want one error, wrapping ErrStoreBusy and %v, nothing run", workerErr, err, ran, tc.cause)
 			}
 		})
 	}

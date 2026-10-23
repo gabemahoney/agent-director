@@ -329,14 +329,12 @@ reentry/refusal and the tested family-only v12 → v11 recovery recipe (§5).
 
 ### Historical worked example: v10 → v11
 
-**CSCB upgrade caveat (2026-10-18):** The relay rewrite (b.q2i, b.3oc,
-b.8t7 and b.zdz) shipped in AD 0.12.0. CSCB pins AD 0.12.0, but its
-0.16.1 release has only completed b.u7d items 1, 3, 4, 5, 12 and 14;
-10 and 13 are partial; and 2, 6, 7, 8, 9 and 11 are missing. An AD
-upgrade does not fill those consumer delivery/dialog-hold/pause recovery
-gaps. Follow AD's documented recovery semantics and track CSCB catch-up
-in b.u7d. These disclosed gaps do not block AD releases; Gabe approved
-shipping 0.13.0 with this caveat. See docs/release-blockers.md.
+**CSCB upgrade caveat (2026-10-18):** The relay rewrite shipped in AD
+0.12.0. CSCB 0.16.1 pins AD 0.12.0 but has incomplete handling of
+delivery, dialog holds and pause recovery. An AD upgrade does not fill
+those consumer gaps. Follow AD's documented
+[delivery and recovery semantics](permissions.md#send-keys-interaction).
+These disclosed gaps do not block AD releases.
 
 Released 0.12.0 uses schema v9. The settled E1 v9→v10 hop creates the
 seventh table, `cursor_runtimes`, validating any pre-existing table before

@@ -1,2 +1,0 @@
-package store
-func diagnosticExport() error {return diagnosticFinish()}

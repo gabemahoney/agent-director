@@ -279,7 +279,7 @@ for isolation**.
 | Env var | Default | Effect | Honored by |
 |---|---|---|---|
 | `PACK_OUTPUT_DIR` | `dist` | output dir for the packed tarball | `pack-first.sh` |
-| `RELEASE_DIST_DIR` | `dist` | output dir for `make release-binaries` (cross-compiled binaries) | Makefile `release-binaries` / `release-binaries-smoke`, `cross-compile.sh` |
+| `RELEASE_DIST_DIR` | `dist` | output dir for `make release-binaries` (cross-compiled binaries) | Makefile `release-binaries`, `cross-compile.sh` |
 | `SMOKE_DIST_DIR` | `dist` | dir the smoke gate reads release binaries from | `per-binary-smoke.sh` |
 | `COHERENCE_DIST_DIR` | `dist` | dir the coherence gate reads binaries from | `binary-version.sh` |
 | `RELEASE_PKG_DIR` | `pkg/ts-bun-client` | dir holding the canonical `package.json` / packable package (drives `RELEASE_VERSION`) | Makefile, `pack-first.sh`, `binary-version.sh`, `cross-compile.sh` |

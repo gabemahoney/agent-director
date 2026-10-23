@@ -6,10 +6,8 @@
 // no internal/* packages — Go's visibility rules prevent external modules
 // from importing internal/* anyway, so any attempt would be a compile error.
 //
-// Usage:
+// Usage (the release's go-consumer-dryrun gate runs it):
 //
-//	make consumer-dryrun
-//	# or manually:
 //	cd tools/consumer-dryrun && go build ./...
 package main
 
