@@ -619,9 +619,12 @@ failure, never child-death evidence; child loss stops the gateway rather than
 leaving a renderer classified live. Non-Linux lifetime/terminal operations
 fail closed.
 
-On a fatal `Run` return after registration, terminate and join the exact owned
-runtime, then independently call `VerifyRuntime` for terminated evidence while
-the gateway's registered ownership descriptors remain open. Only that proof
+On a fatal `Run` return after registration, run the bounded deferred-proof
+flush (see
+[Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority)),
+then terminate and join the exact owned runtime, then independently call
+`VerifyRuntime` for terminated evidence while the gateway's registered
+ownership descriptors remain open. Only that terminated evidence
 permits failure cleanup to publish `missing`; preserve both the original failure
 and any cleanup error. Do not manufacture intentional SessionEnd,
 `prompt_input_exit` or turn success for this path. Keep SIGINT/SIGHUP/SIGTERM
@@ -936,6 +939,31 @@ remain unchanged, including NULLs; it never infers allow. Both methods reuse
 owner, preserve earlier proof, exclude closed rows and emit the final retained
 verdict/reason only after a committed mutation. A fully duplicate failed proof
 performs no matched UPDATE and emits no event.
+
+The proof write takes the store lock without waiting, so the controller never
+blocks on it. `requestController.prove` keeps a proof that meets another writer
+(`ErrStoreBusy`) on its request as a `deferredProof`, still bound to the runtime
+binding that observed the completion, and each later tick retries it until
+`[store] busy_timeout_ms` has passed since the first attempt. A busy attempt
+after that, or any other failure, stays fatal. Rotation and termination retire
+that binding. Nothing re-reports waiting once a later tick stores a proof. So
+a `proofFlush` first writes every deferred proof in place,
+waiting out its remaining busy window, at four points:
+
+- Before the Stop path's waiting report, bounded by the cancellation deadline
+  when one is running.
+- Before rotation publication, within the cancellation deadline. A proof not
+  stored refuses the rotation.
+- Before intentional-exit termination (`/exit`, pause, signals), outside
+  `await`, over the whole busy window. A proof not stored is fatal. A flush
+  running past the cancellation deadline gives up the intentional end for the
+  durable proof, and the row ends `missing`. A runtime already ended gets one
+  attempt.
+- On fatal cleanup, best effort, bounded by the cancellation deadline (three
+  seconds from the failure when none is running). A busy store can therefore
+  keep a live runtime up to that long before termination; the original failure
+  still decides cleanup.
+
 Generic status, other failed MCP output, plan acceptance, main/child Stop/Interrupt/completion and
 session identity alone provide no such evidence. Other execution evidence
 remains conservative. Generic `CloseToolRanRequests` and
@@ -983,6 +1011,8 @@ reuse `InsertCursorRequest`, `AckCursorDecision`, `ClaimCursorPaneAnswer`,
 `CursorCheck`. Proof changes MUST reuse their shared `proveCursorTool` and
 `cursorAuthority` transaction owner rather than introduce another proof framework,
 bypass transactional authority or fabricate hook evidence.
+The controller writes proofs only through `requestController.prove` and
+`proofFlush`, so a busy store defers a proof rather than ending the session.
 Outbound protocol changes use the bounded, serialized writer and independently
 closeable transport; preserve the registered ownership descriptor until end verification. Protocol, input and
 persistence changes extend the single `internal/cursorhost`
@@ -4071,6 +4101,15 @@ here.
   its `callTimeoutMs` (30 s by default) with `ErrCallTimeout`, so a verb
   whose statements wait that long in total, one at 30 s or more or several
   shorter ones, is cut off before SQLite gives up.
+- **The Cursor deferred-proof window.** A busy Cursor tool proof is retried
+  for `busy_timeout_ms` (see
+  [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority)),
+  but an interrupt, rotation, `/exit` or `pause` must finish within the
+  fixed 3 s `cancelWait`. Above 3 s, the default included, contention
+  outlasting that deadline fails the gateway after an interrupt, refuses the
+  rotation, or ends the row `missing` after `/exit` or `pause`. The exit flush
+  itself is not cut off, so above `[pause] timeout_seconds` (30 s by
+  default) it can outlast `pause`'s wait.
 
 **Deadlines that hold whatever `busy_timeout_ms` is (b.146).** The relay
 path bounds its own waits (see the bounded write above), so these keep

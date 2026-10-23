@@ -3,6 +3,7 @@ package cursorhost
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -33,7 +34,21 @@ type pendingAuthorization struct {
 	retired                      atomic.Bool
 	terminal                     atomic.Bool
 	choice                       *nativeChoice
+	proof                        *deferredProof
 }
+
+// A validated completion whose proof write met a competing writer. Its
+// authority stays the binding that observed the completion, so it must be
+// written before that binding is retired by rotation or runtime termination.
+type deferredProof struct {
+	binding store.CursorRuntime
+	ran     bool
+	since   time.Time
+}
+
+// proofRetry paces a proof flush's attempts while another writer holds the lock.
+const proofRetry = 10 * time.Millisecond
+
 type requestController struct {
 	rep        *reporter
 	protocol   *protocol
@@ -300,6 +315,12 @@ func (c *requestController) enqueue(r *pendingAuthorization, decision, option st
 }
 func (c *requestController) tick() error {
 	for _, r := range c.requests {
+		// Proof is independent of answer delivery and request retirement.
+		if r.proof != nil {
+			if e := c.prove(r); e != nil {
+				return e
+			}
+		}
 		if r.generation != c.generation.Load() {
 			r.terminal.Store(true)
 			r.retired.Store(true)
@@ -418,11 +439,10 @@ func (c *requestController) execution(params json.RawMessage) error {
 		if !ran && !r.auth.completedMCPError(p.Update.Status, p.Update.Output) {
 			return nil
 		}
-		prove := c.rep.store.ProveCursorToolRan
-		if !ran {
-			prove = c.rep.store.ProveCursorToolFailed
+		if r.proof == nil {
+			r.proof = &deferredProof{binding: c.rep.binding, ran: ran, since: time.Now()}
 		}
-		if e := prove(c.rep.binding, r.token, r.auth.toolID, c.checkFor(c.rep.binding)); e != nil {
+		if e := c.prove(r); e != nil {
 			return e
 		}
 		r.terminal.Store(true)
@@ -431,6 +451,104 @@ func (c *requestController) execution(params json.RawMessage) error {
 		return nil
 	}
 	return nil
+}
+
+// prove attempts a deferred proof once, without blocking the controller. A
+// busy store leaves it deferred, to be retried on later ticks until the busy
+// timeout has passed since its first attempt. A busy attempt after that, and
+// any other failure, is returned. The controller writes tool proofs only
+// through prove and proofFlush, never by calling writeProof directly.
+func (c *requestController) prove(r *pendingAuthorization) error {
+	e := c.writeProof(r.token, r.auth.toolID, *r.proof)
+	if errors.Is(e, store.ErrStoreBusy) && time.Now().Before(c.proofDeadline(*r.proof)) {
+		return nil
+	}
+	if e != nil {
+		return e
+	}
+	r.proof = nil
+	return nil
+}
+
+func (c *requestController) writeProof(token, tool string, p deferredProof) error {
+	prove := c.rep.store.ProveCursorToolRan
+	if !p.ran {
+		prove = c.rep.store.ProveCursorToolFailed
+	}
+	return prove(p.binding, token, tool, c.checkFor(p.binding))
+}
+
+func (c *requestController) proofDeadline(p deferredProof) time.Time {
+	return p.since.Add(time.Duration(c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond)
+}
+
+// proofFlush writes the proofs deferred when it was taken, waiting out each
+// one's remaining busy window in place instead of across later ticks. Take and
+// settle it on the controller goroutine. write touches only the flush's own
+// snapshot, never request state, so it may run in await's worker; a write
+// abandoned there races nothing, and a repeated proof write is a no-op.
+type proofFlush struct {
+	c      *requestController
+	proofs []flushedProof
+}
+
+type flushedProof struct {
+	r           *pendingAuthorization
+	token, tool string
+	proof       deferredProof
+	stored      bool
+}
+
+func (c *requestController) flushProofs() *proofFlush {
+	f := &proofFlush{c: c}
+	for _, r := range c.requests {
+		if r.proof != nil {
+			f.proofs = append(f.proofs, flushedProof{r: r, token: r.token, tool: r.auth.toolID, proof: *r.proof})
+		}
+	}
+	return f
+}
+
+// write attempts every unstored proof, retrying a busy one until its busy
+// window ends or until a nonzero until, whichever is sooner. A proof past
+// that bound still gets one attempt. The first failure is returned.
+func (f *proofFlush) write(until time.Time) error {
+	var first error
+	for i := range f.proofs {
+		p := &f.proofs[i]
+		if p.stored {
+			continue
+		}
+		end := f.c.proofDeadline(p.proof)
+		if !until.IsZero() && until.Before(end) {
+			end = until
+		}
+		for {
+			e := f.c.writeProof(p.token, p.tool, p.proof)
+			if e == nil {
+				p.stored = true
+				break
+			}
+			if !errors.Is(e, store.ErrStoreBusy) || !time.Now().Before(end) {
+				if first == nil {
+					first = e
+				}
+				break
+			}
+			time.Sleep(min(proofRetry, time.Until(end)))
+		}
+	}
+	return first
+}
+
+// settle clears the proofs write has stored. Call it only once write has
+// returned, so no tick retries a durable proof into a later busy failure.
+func (f *proofFlush) settle() {
+	for _, p := range f.proofs {
+		if p.stored {
+			p.r.proof = nil
+		}
+	}
 }
 
 func (a *authorization) executionOutput(status string, raw json.RawMessage) bool {

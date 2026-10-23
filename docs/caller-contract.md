@@ -734,6 +734,13 @@ evidence cannot produce a ready report; a launch may remain `pending` until
 failures emit `ad.cursor.failed` with a reason when the gateway has identified its row.
 Examples include an ACP operation timeout, unsupported ACP protocol,
 changed runtime/session binding, a refused report or transport failure.
+Storing a tool's execution proof waits for a locked store for up to
+`[store] busy_timeout_ms`; a store still locked after that fails the gateway
+without the proof. While a control (an interrupt, rotation, `/exit` or `pause`)
+runs, the three-second cancellation deadline also applies: an interrupt or
+rotation still waiting at it fails the gateway (the rotation is refused), and
+an `/exit` or `pause` still waiting at it keeps the proof but ends the row
+`missing`, not `ended`.
 These are asynchronous launch failures, not new typed spawn errors.
 
 Failure reasons identify the initiating operation (`initialize`, `session/new`,

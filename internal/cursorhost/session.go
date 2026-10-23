@@ -537,7 +537,23 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		return e
 	}
 	reportWaiting := func(event string, check func(func() bool)) error {
-		return await(func() error { return rep.reportWaiting(event, check) })
+		// A deferred tool_ran proof can be what releases the row's hold, and
+		// nothing re-reports waiting once a later tick stores it.
+		flush := requests.flushProofs()
+		until := time.Time{}
+		if !cancelAt.IsZero() {
+			until = cancelAt.Add(cancelWait)
+		}
+		e := await(func() error {
+			if e := flush.write(until); e != nil {
+				return e
+			}
+			return rep.reportWaiting(event, check)
+		})
+		if e == nil {
+			flush.settle()
+		}
+		return e
 	}
 	confirmGuidance := func(target string, epoch uint64, until time.Time) error {
 		if guidance == nil {
@@ -638,6 +654,15 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 			}
 		}
 		if err != nil {
+			// Best effort: a deferred proof loses its runtime authority at
+			// termination. The cancellation deadline bounds it, so failure
+			// cleanup isn't held for a busy window. The original failure still
+			// decides cleanup.
+			until := time.Now().Add(cancelWait)
+			if !cancelAt.IsZero() {
+				until = cancelAt.Add(cancelWait)
+			}
+			_ = requests.flushProofs().write(until)
 			protocol.close()
 			_ = p.terminate()
 		}
@@ -1320,6 +1345,12 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				if err = record("rotation_confirmed", map[string]any{"previous_session_id": rotationOld, "confirmed_session_id": created.ID}); err != nil {
 					return err
 				}
+				// Deferred proofs hold the outgoing binding, which publication retires.
+				flush := requests.flushProofs()
+				if err = await(func() error { return flush.write(cancelAt.Add(cancelWait)) }); err != nil {
+					return fmt.Errorf("Cursor rotation refused; a deferred tool proof was not stored: %w", err)
+				}
+				flush.settle()
 				if intentional {
 					continue
 				}
@@ -1594,6 +1625,22 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 		if busy {
 			_ = protocol.notify("session/cancel", map[string]any{"sessionId": session})
 		}
+		// Termination retires the deferred proofs' runtime authority. Not
+		// through await: its cancellation deadline would drop a proof that can
+		// still land within its busy window. A flush running past
+		// cancelAt+cancelWait gives up the intentional end for the durable
+		// proof: the later await-based steps time out and the row ends
+		// missing. A runtime already gone has no authority left to wait for,
+		// so it gets a single attempt.
+		until := time.Time{}
+		if runtimeEnded {
+			until = time.Now()
+		}
+		flush := requests.flushProofs()
+		if err = flush.write(until); err != nil {
+			return fmt.Errorf("Cursor exit: a deferred tool proof was not stored: %w", err)
+		}
+		flush.settle()
 		if err = p.terminate(); err != nil {
 			return err
 		}

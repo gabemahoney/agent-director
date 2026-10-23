@@ -106,6 +106,9 @@ server action ran or succeeded. It preserves decision, reason, decision time,
 delivery and pane-answer fields, without inferring an allow or pane answer.
 Status alone and other failed or ambiguous MCP output supply no proof.
 Only this validated invocation proof, or the owning spawn ending, releases their hold.
+A proof that finds the store locked by another writer is retried, and is
+stored before the row next reports waiting, publishes a rotated conversation
+or ends intentionally ([when it fails](caller-contract.md#cursor-operation-boundaries)).
 Other execution evidence remains conservative. A terminal spawn close ends the
 hold without establishing per-request proof: gateway or runtime death leaves `proven_gone_at` and
 `proven_gone_how` unchanged, including on requests already reading `delivered`.
