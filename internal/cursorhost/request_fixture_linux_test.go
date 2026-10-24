@@ -128,6 +128,31 @@ func (e *requestEnv) request(t *testing.T, token string) store.PermissionRow {
 	}
 	return row
 }
+
+// startTurn opens a turn with the gateway's UserPromptSubmit and returns its
+// gate, so a later Stop can reuse it.
+func (e *requestEnv) startTurn(t *testing.T) store.HookGate {
+	t.Helper()
+	gate := store.HookGate{Event: "UserPromptSubmit", ParentPID: e.binding.GatewayPID, ParentStart: e.binding.GatewayStart, SessionID: e.binding.SessionID, Cursor: &e.binding}
+	if _, res, err := e.s.ApplyHookTransitionResult(e.binding.InstanceID, gate, store.StateWorking, false, "UserPromptSubmit", e.tr.path, true); err != nil || !res.Applied {
+		t.Fatalf("turn start %+v %v", res, err)
+	}
+	return gate
+}
+func (e *requestEnv) state(t *testing.T) string {
+	t.Helper()
+	row, err := e.s.GetSpawn(e.binding.InstanceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row.State
+}
+func (e *requestEnv) wantState(t *testing.T, step, want string) {
+	t.Helper()
+	if got := e.state(t); got != want {
+		t.Fatalf("%s: state %s, want %s", step, got, want)
+	}
+}
 func (e *requestEnv) decide(t *testing.T, token, decision string) {
 	t.Helper()
 	zero := int64(0)

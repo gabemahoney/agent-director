@@ -284,7 +284,7 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 			before := e.read(t, "target")
 			mark := store.TrailMark(t)
 			seen := e.beforeCommit(t, mark)
-			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", cursorTrailCheck); err != nil {
+			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatal(err)
 			}
 			r := e.assertEvent(t, mark, "target", "update", decision, reason)
@@ -306,7 +306,7 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 			}
 			mark = store.TrailMark(t)
 			e.rejectCommitOnUpdate(t)
-			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", cursorTrailCheck); err != nil {
+			if err := e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatal(err)
 			}
 			if len(e.events(t, mark)) != 0 || !reflect.DeepEqual(r, e.read(t, "target")) {
@@ -330,5 +330,96 @@ func TestCursorTrailAcknowledgementAddsNoMutation(t *testing.T) {
 				t.Fatalf("pure ack: %s %v %v", d, ack, err)
 			}
 		})
+	}
+}
+
+// b.eoe: a committed proof is the Cursor row's PostToolUse (or
+// PostToolUseFailure); while a turn is open it moves a check_permission row no
+// request still holds to working, as that hook would, and otherwise leaves the
+// row alone. A delivered deny moves nothing: the row keeps check_permission
+// until the turn's Stop.
+func TestCursorTrailProofReleasesRowToWorking(t *testing.T) {
+	for _, ran := range []bool{true, false} {
+		event := "PostToolUse"
+		if !ran {
+			event = "PostToolUseFailure"
+		}
+		for _, tc := range []string{"released", "still held", "repeat proof", "waiting after Stop", "turn closed", "delivered deny"} {
+			if (!ran && tc != "released" && tc != "delivered deny") || (ran && tc == "delivered deny") {
+				continue
+			}
+			t.Run(event+"/"+tc, func(t *testing.T) {
+				e := newCursorTrailEnv(t)
+				e.insert(t, "target")
+				decision := "allow"
+				if tc == "delivered deny" {
+					decision = "deny"
+				}
+				if ok, err := e.f.s.DecidePermissionRequest(e.b.InstanceID, "target", decision, "", store.WriterProcessDecide); err != nil || !ok {
+					t.Fatalf("decide: %v %v", ok, err)
+				}
+				if d, ok, err := e.f.s.AckCursorDecision(e.b, "target", false, e.until, e.until, store.DefaultLockWait, cursorTrailCheck); err != nil || !ok || d != decision {
+					t.Fatalf("ack: %q %v %v", d, ok, err)
+				}
+				prove := func(turnOpen bool) {
+					t.Helper()
+					fn := e.f.s.ProveCursorToolRan
+					if !ran {
+						fn = e.f.s.ProveCursorToolFailed
+					}
+					if err := fn(e.b, "target", "tool-target", turnOpen, cursorTrailCheck); err != nil {
+						t.Fatal(err)
+					}
+				}
+				want := store.StateCheckPermission
+				switch tc {
+				case "released":
+					want = store.StateWorking
+				case "still held":
+					e.insert(t, "independent")
+				case "repeat proof":
+					e.insert(t, "independent")
+					prove(true)
+					e.exec(t, `UPDATE permission_requests SET proven_gone_at=1234,proven_gone_how='tool_ran' WHERE request_token='independent'`)
+				case "waiting after Stop":
+					g := store.HookGate{Event: "Stop", ParentPID: e.b.GatewayPID, ParentStart: e.b.GatewayStart, SessionID: e.b.SessionID, Cursor: &e.b}
+					if a, err := e.f.s.ApplyHookTransition(e.b.InstanceID, g, store.StateWaiting, false, "Stop", "synthetic-path", true); err != nil || !a.Applied {
+						t.Fatalf("stop: %+v %v", a, err)
+					}
+					want = store.StateWaiting
+				}
+				e.exec(t, `UPDATE spawns SET idle_since='2026-01-01 00:00:00',liveness_unverified_since='2026-01-01T00:00:00Z',liveness_note='note',state_changed_ms=1 WHERE instance_id=?`, e.b.InstanceID)
+				wantBefore := store.StateCheckPermission
+				if tc == "waiting after Stop" {
+					wantBefore = store.StateWaiting
+				}
+				before, err := e.f.s.GetSpawn(e.b.InstanceID)
+				if err != nil || before.State != wantBefore {
+					t.Fatalf("before proof: state %q, want %q (%v)", before.State, wantBefore, err)
+				}
+				mark := store.TrailMark(t)
+				prove(tc != "turn closed")
+				if got := e.read(t, "target"); got.ProvenGoneHow != store.ProvenGoneToolRan {
+					t.Fatalf("proof not written: %+v", got)
+				}
+				after, err := e.f.s.GetSpawn(e.b.InstanceID)
+				if err != nil || after.State != want {
+					t.Fatalf("after proof: state %q, want %q (%v)", after.State, want, err)
+				}
+				transitions := store.TrailEventsSince(t, mark, "ad.spawn.state_transition", e.b.InstanceID)
+				if want != store.StateWorking {
+					if len(transitions) != 0 || after.RowVersion != before.RowVersion || after.StateChangedMillis != before.StateChangedMillis || after.IdleSince != before.IdleSince || after.LivenessNote != before.LivenessNote || after.LivenessUnverifiedSince != before.LivenessUnverifiedSince {
+						t.Fatalf("proof without a move changed the row: transitions=%v before=%+v after=%+v", transitions, before, after)
+					}
+					return
+				}
+				if after.RowVersion <= before.RowVersion || after.StateChangedMillis <= before.StateChangedMillis || after.IdleSince != "" || after.LivenessNote != "" || after.LivenessUnverifiedSince != "" {
+					t.Fatalf("move to working skipped hook columns: before=%+v after=%+v", before, after)
+				}
+				if len(transitions) != 1 || transitions[0]["source"] != "ad_spawn_store" || transitions[0]["prior_state"] != store.StateCheckPermission || transitions[0]["new_state"] != store.StateWorking || transitions[0]["triggering_event_name"] != event || transitions[0]["soft_refresh"] != false {
+					t.Fatalf("proof transition: %v", transitions)
+				}
+			})
+		}
 	}
 }

@@ -290,7 +290,7 @@ func (p *paEnv) request(t *testing.T, token string) store.PermissionRow {
 func (p *paEnv) proveCursorTool(t *testing.T, token, tool string) {
 	t.Helper()
 	err := storefix.WithSeedPane(p.dbPath, p.r.ID, func(gate store.HookGate) error {
-		return p.st.ProveCursorToolRan(*gate.Cursor, token, tool, func(store.Spawn) error { return nil })
+		return p.st.ProveCursorToolRan(*gate.Cursor, token, tool, true, func(store.Spawn) error { return nil })
 	})
 	if err != nil {
 		t.Fatalf("authenticated Cursor store proof: %v", err)

@@ -157,6 +157,8 @@ process. Pane text is never classified to produce state.
 Cursor startup confirms a conversation before the row becomes `waiting`;
 accepted input yields `working`, a confirmed completion yields `waiting`,
 and intentional termination yields `ended` only after the runtime is gone.
+The gateway sends no lifecycle report between a prompt and its completion;
+for how the row leaves `check_permission` mid-turn, see "A relay row left in `check_permission`" below.
 Launch return and pre-trust `failed` or `skipped` do not confirm startup.
 Reporting is required independently of the help setting, saved pre-trust choice
 and native permission policy. Initialization, load, mode or prompt failures
@@ -1031,7 +1033,13 @@ is applied, writes no state, and clears `idle_since`). `AskUserQuestion`'s
 still awaits an answer and the agent has not proven its dialog gone (see
 "Hooks that prove a request's dialog gone" below). Once none does, the
 row stays there until the agent's next hook, which after a denied request
-is normally the turn's `Stop`.
+is normally the turn's `Stop`. On a Cursor row, while the prompt turn is
+still open and no rotation is under way, the gateway's proof that an allowed
+request's tool ran acts as that next hook: the trail records one
+`ad.spawn.state_transition` from `check_permission` to `working` with
+`triggering_event_name` `PostToolUse` (`PostToolUseFailure` for a failed MCP
+call), and no `ad.hook.fired` (see "The row after the last answer" in
+[permissions.md](permissions.md#delivery)).
 
 A request answered at the pane outside agent-director, by a person at
 tmux for example, still awaits an answer in agent-director's records,

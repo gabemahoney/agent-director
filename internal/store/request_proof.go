@@ -13,8 +13,7 @@ import (
 // not what the agent shows; only the agent's own hooks, or the end of its
 // agent, prove the dialog gone. Until then the request holds plain send-keys
 // to its Spawn, and, while it awaits an answer, its Spawn's row
-// (holdsRowSQL: the working hold, the idle-prompt Notification's move out of
-// check_permission and find-missing's repair; b.omt). The third proof,
+// (the writes and reads holdsRowSQL lists; b.omt). The third proof,
 // agent_gone, is written by the close of a Spawn's requests
 // (closeOrphanedRequests).
 

@@ -880,9 +880,21 @@ including a request recorded while the state update is in flight. A report
 can refresh activity without declaring readiness; ownership, current session
 and runtime checks still apply. Cursor admission and request lifetimes are
 described in [Cursor spawns](#cursor-spawns). Once no request holds the row,
-it moves on with the agent's next hook; when that hook is lost, the idle-prompt
-Notification (Claude rows only) or a scheduled `find-missing` moves it to
-`waiting` or `working` (see
+it moves on with the agent's next hook. The Cursor gateway sends no lifecycle
+report between a prompt and its completion, so there the gateway's stored
+invocation proof of an allowed request acts as Claude's `PostToolUse`: it
+moves a `check_permission` row no request still holds to `working`, but only
+while the prompt turn is still open and no conversation rotation is under way.
+A proof that lands after the turn has ended, or during a rotation, even one
+requested mid-turn, moves nothing: the rotation settles the row, and so does
+the turn's Stop when it is reported after the proof. A delivered deny gets no
+proof of its own; a row whose last answered request is a delivered deny
+waits, as on Claude, for the turn's Stop.
+A row whose Stop came while a request still held it, or whose next hook is
+lost, stays in `check_permission` until a later hook moves it (on a Cursor
+row, the next accepted prompt's `working` report once nothing holds it), or
+the idle-prompt Notification (Claude rows only) or a scheduled `find-missing`
+moves it to `waiting` or `working` (see
 [hooks.md](hooks.md#a-relay-row-left-in-check_permission)).
 The relay hook's timeout deny itself leaves the row's state as it is. A
 request answered at the pane outside agent-director still awaits an

@@ -345,7 +345,14 @@ func TestUnknownOriginHoldAfterReopen(t *testing.T) {
 				if pr := p.request(t, tok); pr.ProvenGoneHow != store.ProvenGoneToolRan || pr.MainTurnEndEligible {
 					t.Fatalf("matching proof changed origin: %+v", pr)
 				}
-				assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), other, store.StateCheckPermission)
+				// No request holds the row now (other is a delivered deny), so the
+				// Cursor proof moved it to working, as Claude PostToolUse would; the
+				// Claude branch applies no hook.
+				wantState := store.StateCheckPermission
+				if agent == store.AgentCursor {
+					wantState = store.StateWorking
+				}
+				assertDialogMaybeOpen(t, p.sendKeys(p.plain("hi")), other, wantState)
 				if agent == store.AgentCursor {
 					p.proveCursorTool(t, other, "independent-tool")
 				} else if n := p.prove(t, toolRan("independent-tool")); n != 1 {

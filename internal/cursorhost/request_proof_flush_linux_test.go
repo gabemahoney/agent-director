@@ -154,3 +154,55 @@ func TestCursorProofFlushAttemptsEveryProof(t *testing.T) {
 		t.Fatalf("stale proof stored or cleared: %+v", got)
 	}
 }
+
+// b.eoe: a flush writes its proofs with the turnOpen read when it was taken,
+// not when write runs, so a proof flushed with no turn open leaves its row in
+// check_permission even if a turn opens before the write.
+func TestCursorProofFlushCarriesTurnOpenFromWhenTaken(t *testing.T) {
+	// Serial: shared verified pane fixture sets HOME and PATH.
+	cases := []struct {
+		name      string
+		takenOpen bool
+		want      string
+	}{
+		{"turn closed when taken, reopened before write", false, store.StateCheckPermission},
+		{"turn open when taken, closed before write", true, store.StateWorking},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRequestEnv(t, "on", "synthetic-session")
+			e.startTurn(t)
+			c := e.controller(t, &observedWire{}, io.Discard)
+			turnOpen := tc.takenOpen
+			c.turnOpen = func() bool { return turnOpen }
+			r := e.admit(t, c, `1`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "shell", "execute"))
+			e.decide(t, r.token, "allow")
+			if err := c.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if err := completedWrite(t, c.protocol); err != nil {
+				t.Fatal(err)
+			}
+
+			release := apitest.HoldWriteLock(t, e.path, time.Minute)
+			if err := c.execution(executionUpdate(e.binding.SessionID, "shell", "completed", flushShellOutput)); err != nil {
+				t.Fatalf("contended proof ended the controller: %v", err)
+			}
+			release()
+			if r.proof == nil {
+				t.Fatal("proof written while another writer held the lock; the flush has nothing to carry")
+			}
+			e.wantState(t, "before flush", store.StateCheckPermission)
+			flush := c.flushProofs()
+			turnOpen = !tc.takenOpen
+			if err := flush.write(time.Time{}); err != nil {
+				t.Fatalf("flush: %v", err)
+			}
+			flush.settle()
+			if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneToolRan || r.proof != nil {
+				t.Fatalf("flushed proof: %+v", got)
+			}
+			e.wantState(t, "after flush", tc.want)
+		})
+	}
+}

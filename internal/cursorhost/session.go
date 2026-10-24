@@ -333,6 +333,9 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 	var queue []terminalInput
 	var held []terminalInput
 	rotating := false
+	// A rotation can be requested mid-turn; RotateCursorSession, not a proof,
+	// then settles the row's state.
+	requests.turnOpen = func() bool { return busy && !rotating }
 	rotationEpoch := uint64(0)
 	rotationOld := ""
 	confirmedSessions := map[string]bool{}

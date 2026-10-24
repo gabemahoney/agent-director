@@ -322,10 +322,12 @@ func (r PermissionRow) AwaitsAnswer() bool {
 // rule 9): one that no close of its Spawn's requests has closed (closed_at
 // NULL, rule 12), with no completed pane answer (pane_answer none or intent; b.146 step
 // 2b), and that, recorded from schema v7 on, is not acked, or, recorded before
-// v7 (no settled_at), is undecided. It has no placeholders. The three writes
-// a request holds off (the working hold, the idle-prompt Notification's move
-// out of check_permission and find-missing's repair) read holdsRowSQL
-// instead, which also leaves out a request proven gone (b.omt).
+// v7 (no settled_at), is undecided. It has no placeholders. The writes a
+// request holds off (the working hold, Cursor's Stop or Interrupt move to
+// waiting, the idle-prompt Notification's move
+// out of check_permission, a Cursor tool proof's move out of check_permission
+// and find-missing's repair) and Cursor rotation's choice of state read
+// holdsRowSQL instead, which also leaves out a request proven gone (b.omt).
 const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', 'intent')
     AND CASE WHEN pr.settled_at IS NULL THEN pr.decision IS NULL
              ELSE pr.delivered_at IS NULL END`
@@ -333,15 +335,20 @@ const awaitingAnswerSQL = `pr.closed_at IS NULL AND pr.pane_answer IN ('none', '
 // holdsRowSQL is the WHERE fragment, on a permission_requests row named pr,
 // that holds while the request holds its Spawn's row (b.omt): it still awaits
 // an answer (awaitingAnswerSQL) and Claude Code has not proven its dialog gone
-// (proven_gone_at NULL; b.146 step 2c). Exactly three writes read it: the
-// working hold (holdWorkingTransition, through its read holdingRequestSQL,
-// which picks the branch, and in a NOT EXISTS of the move to working's own
-// UPDATE, applyWorkingWrite, so a request recorded after the read still holds
-// the row; b.36h), and, in a NOT EXISTS of their own statement, the
+// (proven_gone_at NULL; b.146 step 2c). Its readers: the working hold
+// (holdWorkingTransition, through its read holdingRequestSQL, which picks the
+// branch for a non-Cursor hook, and in a NOT EXISTS of the move's own UPDATE,
+// applyWorkingWrite, so a request recorded after the read still holds the
+// row; b.36h), whose UPDATE also carries a verified Cursor Stop or
+// Interrupt's move to waiting; in a NOT EXISTS of their own statement, the
 // idle-prompt Notification's move from check_permission to waiting
-// (ApplyHookWaitingIfWorking) and find-missing's repair of a stale
-// check_permission row (repairCheckPermissionSQL). The two hook writes' NOT
-// EXISTS is noRequestHoldsRowSQL. A request proven gone holds none of them,
+// (ApplyHookWaitingIfWorking), a Cursor tool proof's move from
+// check_permission to working (proveCursorTool) and find-missing's repair of
+// a stale check_permission row (repairCheckPermissionSQL); and Cursor
+// rotation's read (RotateCursorSession), which picks check_permission or
+// waiting for the state its transaction writes. All but holdingRequestSQL and
+// the repair read it through noRequestHoldsRowSQL. A request proven gone
+// holds none of them,
 // whatever agent-director's own records say of it: a person's answer at the
 // pane, which nothing records, leaves it awaiting an answer, and the main
 // agent's Stop, idle-prompt Notification or (Codex) Interrupt after it then
