@@ -2,8 +2,9 @@ package api_test
 
 // idle_screen_test.go — idle_screen (b.ob8): a raw working Claude or Codex
 // row's own pane, sampled by status, get and list through the Recorder on an
-// injected clock. paneEnv is the shared fixture; needs_intelligence's tests
-// are needs_intelligence_test.go's.
+// injected clock. A row showing it reads state working with displayed_state
+// idle_screen (b.zpv). paneEnv is the shared fixture; the fallback clock's
+// tests are needs_intelligence_test.go's.
 
 import (
 	"fmt"
@@ -112,10 +113,11 @@ func (e *paneEnv) row(t *testing.T) store.Spawn {
 	return row
 }
 
-// minutes is the unchanged_minutes of a status displayed idle_screen.
+// minutes is the unchanged_minutes of a status showing idle_screen: state
+// working, displayed_state idle_screen.
 func minutes(t *testing.T, got api.StatusResult) int64 {
 	t.Helper()
-	if got.State != api.StateIdleScreen || got.UnchangedMinutes == nil {
+	if got.State != store.StateWorking || got.DisplayedState != api.StateIdleScreen || got.UnchangedMinutes == nil {
 		t.Fatalf("not displayed idle_screen: %+v", got)
 	}
 	return *got.UnchangedMinutes
@@ -528,7 +530,8 @@ func TestIdleScreenOlderSampleNeverOverwrites(t *testing.T) {
 
 // TestIdleScreenWriteFailureIsLocalToListRow: a pane row whose observation
 // cannot commit keeps its committed working view in list, which still filters
-// and returns another row's own committed needs_intelligence display.
+// and returns another row by its own state: a long fallen-back request's row,
+// check_permission with no displayed_state (b.zpv).
 func TestIdleScreenWriteFailureIsLocalToListRow(t *testing.T) {
 	t.Parallel()
 	e := newPaneEnv(t, paneSpec{agent: store.AgentCodex})
@@ -543,9 +546,9 @@ func TestIdleScreenWriteFailureIsLocalToListRow(t *testing.T) {
 	}
 	storefix.InjectWriteFailure(t, e.dbPath, storefix.WriteFailDisplayObservation, e.id)
 	e.now = e.now.Add(time.Minute)
-	listed, err := c.List(api.ListParams{State: []string{api.StateIdleScreen, api.StateNeedsIntelligence}})
-	if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].InstanceID != other || listed.Spawns[0].State != api.StateNeedsIntelligence {
-		t.Fatalf("list = %+v, %v; want only %s, needs_intelligence", listed, err, other)
+	listed, err := c.List(api.ListParams{State: []string{api.StateIdleScreen, store.StateCheckPermission}})
+	if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].InstanceID != other || listed.Spawns[0].State != store.StateCheckPermission || listed.Spawns[0].DisplayedState != "" {
+		t.Fatalf("list = %+v, %v; want only %s, check_permission", listed, err, other)
 	}
 	assertDisplayState(t, c, e.id, store.StateWorking)
 }
@@ -614,31 +617,32 @@ func TestIdleScreenListStopsAnUnansweringSocket(t *testing.T) {
 }
 
 // unsampledReaders are the exported status, get and list, which sample no
-// pane; each gives the row's displayed state.
+// pane; each gives the row's state and displayed_state.
 var unsampledReaders = []struct {
 	name string
-	read func(*store.Store, string) (string, error)
+	read func(*store.Store, string) (string, string, error)
 }{
-	{"status", func(s *store.Store, id string) (string, error) {
+	{"status", func(s *store.Store, id string) (string, string, error) {
 		got, err := api.Status(s, api.RelayView{}, id)
-		return got.State, err
+		return got.State, got.DisplayedState, err
 	}},
-	{"get", func(s *store.Store, id string) (string, error) {
+	{"get", func(s *store.Store, id string) (string, string, error) {
 		got, err := api.Get(s, api.RelayView{}, id)
-		return got.State, err
+		return got.State, got.DisplayedState, err
 	}},
-	{"list", func(s *store.Store, id string) (string, error) {
+	{"list", func(s *store.Store, id string) (string, string, error) {
 		listed, err := api.List(s, api.RelayView{}, api.ListParams{})
 		if err != nil || len(listed.Spawns) != 1 || listed.Spawns[0].InstanceID != id {
-			return "", fmt.Errorf("list = %+v, %v; want only %s", listed, err, id)
+			return "", "", fmt.Errorf("list = %+v, %v; want only %s", listed, err, id)
 		}
-		return listed.Spawns[0].State, nil
+		return listed.Spawns[0].State, listed.Spawns[0].DisplayedState, nil
 	}},
 }
 
 // TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding: the exported verbs (no
-// pane sampler) keep only an IdleScreenCurrent finding; others settle out, one
-// exit.
+// pane sampler) keep only an IdleScreenCurrent finding, unwritten; others
+// settle out, one exit. Every read is state working; only a kept idle_screen
+// shows displayed_state, and a stored needs_intelligence never shows (b.zpv).
 func TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding(t *testing.T) {
 	t.Parallel()
 	at := time.Now().Add(-time.Hour).UnixMilli() // these reads take the wall clock
@@ -669,18 +673,25 @@ func TestIdleScreenUnsampledReadKeepsOnlyCurrentFinding(t *testing.T) {
 				before := e.row(t)
 				committed := before.CommittedDisplay()
 				mark := trailMark(t)
-				state, err := r.read(e.s, e.id)
+				state, displayed, err := r.read(e.s, e.id)
 				if err != nil {
 					t.Fatal(err)
 				}
 				after, events := e.row(t), displayEvents(t, mark, e.id)
-				if tc.kept && (state != committed.State || after.ObservationVersion != before.ObservationVersion ||
-					after.DisplayObservation != before.DisplayObservation || len(events) != 0) {
-					t.Fatalf("read %s, events %v, row %+v; want the committed %+v kept unwritten", state, events, after, committed)
+				wantDisplayed := ""
+				if tc.kept && committed.State == api.StateIdleScreen {
+					wantDisplayed = api.StateIdleScreen
 				}
-				if !tc.kept && (state != store.StateWorking || after.ObservationVersion != before.ObservationVersion+1 || after.DisplayObservation != "" ||
+				if state != store.StateWorking || displayed != wantDisplayed {
+					t.Fatalf("read state %q displayed_state %q; want working, %q", state, displayed, wantDisplayed)
+				}
+				if tc.kept && (after.ObservationVersion != before.ObservationVersion ||
+					after.DisplayObservation != before.DisplayObservation || len(events) != 0) {
+					t.Fatalf("events %v, row %+v; want the committed %+v kept unwritten", events, after, committed)
+				}
+				if !tc.kept && (after.ObservationVersion != before.ObservationVersion+1 || after.DisplayObservation != "" ||
 					len(events) != 1 || events[0]["prior_state"] != committed.State || events[0]["new_state"] != store.StateWorking) {
-					t.Fatalf("read %s, events %v, row %+v; want %s settled out with one exit", state, events, after, committed.State)
+					t.Fatalf("events %v, row %+v; want %s settled out with one exit", events, after, committed.State)
 				}
 			})
 		}

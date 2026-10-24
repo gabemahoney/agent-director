@@ -114,10 +114,11 @@ func (s *Store) RecordPermissionFallbacks(at time.Time, maxWait time.Duration, o
 }
 
 // DisplayDetail is committed report-only detail. State is the displayed
-// state: needs_intelligence, idle_screen or an ordinary state. SinceMillis
-// denotes the read that actually entered the Displayed State, never the
-// eligibility boundary. RequestToken and ToolName belong to
-// needs_intelligence, UnchangedMinutes to idle_screen.
+// state: idle_screen, needs_intelligence (only as an earlier release
+// committed it; no read enters it) or an ordinary state. SinceMillis denotes
+// the read that actually entered the Displayed State, never the eligibility
+// boundary. RequestToken and ToolName belong to needs_intelligence,
+// UnchangedMinutes to idle_screen.
 type DisplayDetail struct {
 	State            string `json:"state"`
 	SinceMillis      int64  `json:"since_ms,omitempty"`
@@ -133,8 +134,7 @@ type displayObservation struct {
 	CandidateSince int64  `json:"candidate_since_ms"`
 	ObservedAt     int64  `json:"observed_at_ms"`
 	// PermissionEpoch is the raw-state epoch of the interval this observation
-	// belongs to. A display of another epoch is a finished episode, unless the
-	// other Displayed State moves in during this interval.
+	// belongs to. A display of another epoch is a finished episode.
 	PermissionEpoch int64 `json:"permission_epoch"`
 }
 
@@ -235,36 +235,17 @@ func permissionCandidate(row Spawn, pr PermissionRow, sample PermissionSample, n
 }
 
 // planPermission judges the samples of row at now: the fallback clocks to
-// establish and the needs_intelligence target, whose detail is the
-// qualifying request with the earliest fallback, then the lexically first
-// token; the zero target when none qualifies.
-func planPermission(row Spawn, samples []PermissionSample, now time.Time, timeout time.Duration) ([]PermissionSample, DisplayDetail) {
+// establish, those of current-interval requests whose clock no write has
+// stored yet. A known permission request never yields a Displayed State,
+// however long it waits: its row reports check_permission.
+func planPermission(row Spawn, samples []PermissionSample, now time.Time) []PermissionSample {
 	var clocks []PermissionSample
-	var representative *PermissionRow
-	var earliest time.Time
 	for _, sample := range samples {
-		pr := sample.Request
-		if !permissionCandidate(row, pr, sample, now) {
-			continue
-		}
-		start := sample.FallbackAt
-		// Clock and display are one sample: failed persistence publishes
-		// neither a newly observed process death nor its derived eligibility.
-		if pr.FallbackAt.IsZero() {
+		if permissionCandidate(row, sample.Request, sample, now) && sample.Request.FallbackAt.IsZero() {
 			clocks = append(clocks, sample)
 		}
-		if now.Sub(start) < timeout {
-			continue
-		}
-		if representative == nil || start.Before(earliest) || (start.Equal(earliest) && pr.RequestToken < representative.RequestToken) {
-			selected := pr
-			representative, earliest = &selected, start
-		}
 	}
-	if representative == nil {
-		return clocks, DisplayDetail{}
-	}
-	return clocks, DisplayDetail{State: StateNeedsIntelligence, RequestToken: representative.RequestToken, ToolName: representative.ToolName}
+	return clocks
 }
 
 // observationPlan is the outcome of observing a row: the observation to
@@ -284,15 +265,18 @@ type observationPlan struct {
 // one transaction. Ordinary working members already contribute, so their
 // entries, detail updates and pane samples do no aggregate work. Decode both
 // snapshots through CommittedDisplay rather than interpreting report-only JSON.
-// A contribution change also returns the families it can change, as
-// observedFamilies reads them; nil otherwise.
+// Only idle_screen keeps a waiting member working (familyMemberSQL). Ending a
+// needs_intelligence an earlier release stored refreshes too, because that
+// release's stored aggregate counted the member as working. A contribution
+// change also returns the families it can change, as observedFamilies reads
+// them; nil otherwise.
 func (s *Store) refreshFamiliesAfterObservation(ctx context.Context, conn *sql.Conn, row Spawn, plan observationPlan, settle SettleRead) (map[string]string, error) {
 	if row.State != StateWaiting {
 		return nil, nil
 	}
 	prior := row.CommittedDisplay()
 	row.DisplayObservation = plan.text
-	if isDisplayedState(prior.State) == isDisplayedState(row.CommittedDisplay().State) {
+	if prior.State != StateNeedsIntelligence && (prior.State == StateIdleScreen) == (row.CommittedDisplay().State == StateIdleScreen) {
 		return nil, nil
 	}
 	if err := s.refreshFamilies(connQuerier{ctx, conn}); err != nil {
@@ -356,24 +340,26 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 	if !valid {
 		old = displayObservation{}
 	}
+	if continuing && old.State == StateNeedsIntelligence {
+		// No read enters needs_intelligence, so one an earlier release
+		// committed is never shown again: it ends at once, with its exit,
+		// rather than settling out.
+		p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: old.State, Next: row.ReportedState,
+			AtMillis: now.UnixMilli()})
+		old, continuing = displayObservation{DisplayDetail: DisplayDetail{State: row.ReportedState}}, false
+	}
 	if !continuing {
 		// Not displayed: the display is the row's own settled state, never a
 		// stale copy of it, so readers agree and an entry's prior is current.
 		old.DisplayDetail = DisplayDetail{State: row.ReportedState}
 	}
-	if continuing && isDisplayedState(targetState) && old.PermissionEpoch != row.PermissionEpoch {
-		if targetState == old.State {
-			// A new interval never inherits the previous episode of its state:
-			// that one ends with its own exit and the new one starts as a fresh
-			// candidate.
-			p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: old.State, Next: row.ReportedState,
-				AtMillis: now.UnixMilli()})
-			old, continuing = displayObservation{DisplayDetail: DisplayDetail{State: row.ReportedState}}, false
-		} else {
-			// The other Displayed State settles in during this interval: the
-			// display stays until it does.
-			old.PermissionEpoch = row.PermissionEpoch
-		}
+	if continuing && targetState == old.State && old.PermissionEpoch != row.PermissionEpoch {
+		// A new interval never inherits the previous episode of its state:
+		// that one ends with its own exit and the new one starts as a fresh
+		// candidate.
+		p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: old.State, Next: row.ReportedState,
+			AtMillis: now.UnixMilli()})
+		old, continuing = displayObservation{DisplayDetail: DisplayDetail{State: row.ReportedState}}, false
 	}
 	if !isDisplayedState(old.State) && !isDisplayedState(targetState) {
 		// Ordinary state settling continues to be derived by settle.go.
@@ -399,7 +385,7 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 		p.events = append(p.events, displayTransition{InstanceID: row.InstanceID, Prior: prior, Next: targetState, AtMillis: now.UnixMilli()})
 	}
 	if isDisplayedState(old.State) && old.State == targetState {
-		// The representative request or the minutes change without settling.
+		// The minutes change without settling.
 		old.RequestToken, old.ToolName, old.UnchangedMinutes = target.RequestToken, target.ToolName, target.UnchangedMinutes
 	}
 	// A read that would change nothing writes nothing. The settle deadline
@@ -429,16 +415,20 @@ func planObservation(row Spawn, target DisplayDetail, extra bool, now time.Time,
 	return p, nil
 }
 
-// ObserveNeedsIntelligence commits one nonwaiting observation. The write lock
-// protects request facts as well as row ownership; row_version alone does not
-// detect a concurrent pane answer, ack or proof. With the committed display it
-// returns the families its commit refreshed, by instance id under settle (nil
-// when the commit changed no contribution, or nothing committed), so a reader
-// reports the display and its families from the same commit.
-func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, timeout time.Duration, settle SettleRead) (DisplayDetail, map[string]string, error) {
+// ObserveNeedsIntelligence commits one nonwaiting observation of examined by
+// its permission requests: the fallback clocks samples establish (planPermission)
+// and the settling out of any display the row keeps, a needs_intelligence an
+// earlier release committed ending at once. It never enters a Displayed State.
+// The write lock protects request facts as well as row ownership; row_version
+// alone does not detect a concurrent pane answer, ack or proof. With the
+// committed display it returns the families its commit refreshed, by instance
+// id under settle (nil when the commit changed no contribution, or nothing
+// committed), so a reader reports the display and its families from the same
+// commit.
+func (s *Store) ObserveNeedsIntelligence(examined Spawn, samples []PermissionSample, now time.Time, settle SettleRead) (DisplayDetail, map[string]string, error) {
 	previous := examined.CommittedDisplay()
-	clocks, target := planPermission(examined, samples, now, timeout)
-	plan, err := planObservation(examined, target, len(clocks) > 0, now, settle)
+	clocks := planPermission(examined, samples, now)
+	plan, err := planObservation(examined, DisplayDetail{}, len(clocks) > 0, now, settle)
 	if err != nil {
 		return previous, nil, err
 	}

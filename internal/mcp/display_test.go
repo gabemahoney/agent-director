@@ -9,10 +9,11 @@ import (
 )
 
 // TestDisplayMCPWire: the status, get and list tools over the shared
-// needs_intelligence and idle_screen surfaces return each state's exact detail
-// (list only the state, its `state` filter naming either one) and every row
-// its agent's idle_screen_availability, read under the largest settle time
-// (apitest.SeedIdleScreenSurface).
+// idle_screen surface return its exact wire, displayed_state beside state
+// working (list no detail, its `state` filter idle_screen selecting it), and
+// every row its agent's idle_screen_availability, read under the largest
+// settle time (apitest.SeedIdleScreenSurface). The stored needs_intelligence
+// rows are TestDisplayedStateContractMCP's (b.zpv).
 func TestDisplayMCPWire(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	if err := apitest.SeedNeedsIntelligenceSurface(path); err != nil {
@@ -38,9 +39,9 @@ func TestDisplayMCPWire(t *testing.T) {
 		}
 		for _, raw := range rows {
 			var got struct {
-				State string `json:"state"`
+				DisplayedState string `json:"displayed_state"`
 			}
-			if json.Unmarshal(raw, &got) != nil || got.State != surface.State {
+			if json.Unmarshal(raw, &got) != nil || got.DisplayedState != surface.State {
 				t.Errorf("list state %s listed %s", surface.State, raw)
 			}
 			apitest.CheckListedDisplayWire(t, raw)

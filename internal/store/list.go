@@ -22,11 +22,11 @@ import (
 // zero value is no settle time, and ListSpawns runs exactly the query it ran
 // before b.3ie, State filtering on the raw state.
 //
-// DisplayCandidates widens a State filter to every row whose displayed state
-// may differ from its reported state: one with a retained display
-// observation, and, when State names a Displayed State, one whose raw state
-// can display it. The caller filters those rows on their displayed state and
-// applies Limit.
+// DisplayCandidates widens a State filter that names a Displayed State to
+// every row that may show one as well as every row whose reported state is
+// a filter value: one with a retained display observation, and one whose raw
+// state a read can display a filtered Displayed State from. The caller
+// filters those rows on their reported or displayed state and applies Limit.
 type ListFilters struct {
 	State             []string
 	Labels            map[string]string
@@ -39,10 +39,10 @@ type ListFilters struct {
 }
 
 // displayRawStates are the raw states a read can display as each Displayed
-// State: an unanswered permission request's and an unchanged working pane's.
+// State a read enters: an unchanged working pane's. No read enters
+// needs_intelligence, so no raw state displays it.
 var displayRawStates = map[string]string{
-	StateNeedsIntelligence: StateCheckPermission,
-	StateIdleScreen:        StateWorking,
+	StateIdleScreen: StateWorking,
 }
 
 // ListSpawns runs the filtered query and returns rows in unspecified

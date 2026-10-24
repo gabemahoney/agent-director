@@ -20,7 +20,8 @@ import (
 // with the member's and ancestor's families from the same commit, even while
 // the confirmed COMMIT's connection cleanup still holds the store. The exit
 // record is written, so this is not b.c55's late COMMIT, which answers the
-// previous view with no record (TestDisplayObservationUnconfirmedCommit).
+// previous view with no record (TestDisplayObservationUnconfirmedCommit). The
+// display is the needs_intelligence an earlier release stored (b.zpv).
 func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 	type projection struct {
 		state, family string
@@ -28,7 +29,7 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 	}
 	for _, verb := range []string{"status", "get", "list"} {
 		t.Run(verb, func(t *testing.T) {
-			s, path, id, samples, now := permissionObservation(t)
+			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
 			parent, err := apitest.SeedSpawn(path, "parent", store.StateWaiting, "", "off", "", false)
 			if err != nil {
 				t.Fatal(err)
@@ -55,13 +56,6 @@ func TestDisplayCommittedExitReportedDuringCleanup(t *testing.T) {
 					}
 					return out, err
 				}
-			}
-			var entered api.StatusResult
-			if _, _, ok := apitest.RepeatUntilCommitted(func() bool {
-				entered, err = api.Status(s, view, id)
-				return err != nil || entered.State == store.StateNeedsIntelligence
-			}); !ok || err != nil || entered.State != store.StateNeedsIntelligence || entered.FamilyState != store.StateWorking || entered.Since == "" {
-				t.Fatalf("entry=%+v %v", entered, err)
 			}
 			if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, apitest.PermissionProof(now)); err != nil {
 				t.Fatal(err)

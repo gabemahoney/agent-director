@@ -412,7 +412,8 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 						start = pr.CreatedAt
 					}
 					mark := TrailMark(t)
-					for _, offset := range []time.Duration{30*time.Second - time.Millisecond, 30 * time.Second, time.Hour} {
+					// b.zpv: the request keeps the row check_permission however long it waits.
+					for _, offset := range []time.Duration{30 * time.Second, 24 * time.Hour} {
 						now := start.Add(offset)
 						row, err = s.GetSpawn("pre")
 						if err != nil {
@@ -422,13 +423,9 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						display, _, err := s.ObserveNeedsIntelligence(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
-						want := StateCheckPermission
-						if tc.owned && offset >= 30*time.Second {
-							want = StateNeedsIntelligence
-						}
-						if err != nil || display.State != want || (want == StateNeedsIntelligence && display.RequestToken != tokenB) {
-							t.Fatalf("historic %s at %s: display=%+v err=%v; want %s", basis, offset, display, err, want)
+						display, _, err := s.ObserveNeedsIntelligence(row, []PermissionSample{{Request: pr, FallbackAt: start, Basis: basis}}, now, SettleRead{NowMs: now.UnixMilli()})
+						if err != nil || display != (DisplayDetail{State: StateCheckPermission}) {
+							t.Fatalf("historic %s at %s: display=%+v err=%v; want check_permission", basis, offset, display, err)
 						}
 					}
 					if !reflect.DeepEqual(before, readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)) {
@@ -438,12 +435,12 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 					if err != nil || !retained.AwaitsAnswer() || retained.ProvenGone() {
 						t.Fatalf("historical hold lost: %+v %v", retained, err)
 					}
+					if events := TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", "pre"); len(events) != 0 {
+						t.Fatalf("historic request emitted display records: %v", events)
+					}
 					if !tc.owned {
 						if retained != initialRequest {
 							t.Fatalf("excluded history changed on observation: before=%+v after=%+v", initialRequest, retained)
-						}
-						if events := TrailEventsSince(t, mark, "ad.spawn.displayed_state_transition", "pre"); len(events) != 0 {
-							t.Fatalf("ambiguous history emitted display records: %v", events)
 						}
 					} else if !retained.FallbackAt.Equal(start) || retained.FallbackBasis != basis {
 						t.Fatalf("provable historical fallback clock drifted: %+v", retained)
@@ -454,7 +451,9 @@ func TestV14MigrationHistoricFallbackUsability(t *testing.T) {
 	}
 }
 
-func TestV14MigrationNewAdmissionsQualifyBesideAmbiguousHistory(t *testing.T) {
+// A new admission beside ambiguous history gets its own fallback clock, while
+// the history keeps none; b.zpv: neither makes the row needs_intelligence.
+func TestV14MigrationNewAdmissionsStartClockBesideAmbiguousHistory(t *testing.T) {
 	for _, agent := range []string{AgentClaude, AgentCodex, AgentCursor} {
 		t.Run(agent, func(t *testing.T) {
 			dir := t.TempDir()
@@ -515,9 +514,12 @@ func TestV14MigrationNewAdmissionsQualifyBesideAmbiguousHistory(t *testing.T) {
 			}
 			now := start.Add(30 * time.Second)
 			samples := []PermissionSample{{Request: old, FallbackAt: old.HookGoneAt, Basis: FallbackProcess}, {Request: current, FallbackAt: start, Basis: basis}}
-			display, _, err := s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, SettleRead{NowMs: now.UnixMilli()})
-			if err != nil || display.State != StateNeedsIntelligence || display.RequestToken != tokenC {
-				t.Fatalf("new request did not qualify independently of ambiguous history: %+v %v", display, err)
+			display, _, err := s.ObserveNeedsIntelligence(row, samples, now, SettleRead{NowMs: now.UnixMilli()})
+			if err != nil || display != (DisplayDetail{State: StateCheckPermission}) {
+				t.Fatalf("observation=%+v %v; want check_permission", display, err)
+			}
+			if clocked, err := s.GetPermissionRequest("pre", tokenC); err != nil || !clocked.FallbackAt.Equal(start) || clocked.FallbackBasis != basis {
+				t.Fatalf("new request did not start its clock independently of ambiguous history: %+v %v", clocked, err)
 			}
 			if retained, err := s.GetPermissionRequest("pre", tokenB); err != nil || retained != old {
 				t.Fatalf("new admission or observation changed excluded history: %+v %v", retained, err)

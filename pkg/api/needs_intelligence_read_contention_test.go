@@ -21,7 +21,7 @@ type observationReader interface {
 	api.ListStore
 	SpawnStatusRow(string, store.SettleRead) (store.Spawn, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]store.PermissionRow, error)
-	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, map[string]string, error)
+	ObserveNeedsIntelligence(store.Spawn, []store.PermissionSample, time.Time, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 	RecordPermissionFallbacks(time.Time, time.Duration, []store.FallbackObservation) (map[int64]time.Time, error)
 }
 
@@ -55,10 +55,10 @@ func (s *readLeaseStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
 	return rows, err
 }
 
-func (s *readLeaseStore) ObserveNeedsIntelligence(row store.Spawn, samples []store.PermissionSample, now time.Time, timeout time.Duration, settle store.SettleRead) (store.DisplayDetail, map[string]string, error) {
+func (s *readLeaseStore) ObserveNeedsIntelligence(row store.Spawn, samples []store.PermissionSample, now time.Time, settle store.SettleRead) (store.DisplayDetail, map[string]string, error) {
 	s.writes = append(s.writes, "ObserveNeedsIntelligence")
 	s.settles = append(s.settles, settle)
-	display, families, err := s.observationReader.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
+	display, families, err := s.observationReader.ObserveNeedsIntelligence(row, samples, now, settle)
 	if err == nil && s.afterObservation != nil {
 		s.afterObservation(row, display)
 	}
@@ -181,33 +181,46 @@ func readUnderLease(t *testing.T, leased <-chan struct{}, release func(), read f
 	}
 }
 
+// TestNeedsIntelligenceSamplingSkipsLeasedConnection: a read whose
+// observation would commit a fallback clock, or end a stored 0.16/0.17
+// needs_intelligence display (b.zpv), skips it when the connection is leased,
+// answers check_permission with no Displayed State, and persists and records
+// nothing.
 func TestNeedsIntelligenceSamplingSkipsLeasedConnection(t *testing.T) {
 	// Serial: the relay fixture reuses row ids in the shared trail.
 	for _, backend := range []string{"store", "cursor missing view"} {
 		for _, stage := range []string{"after row", "between permission reads"} {
-			for _, transition := range []string{"entry", "clear"} {
+			for _, transition := range []string{"clock", "exit"} {
 				t.Run(backend+"/"+stage+"/"+transition, func(t *testing.T) {
-					e := newRelayEnv(t, store.ProcessIdentity{})
+					var e *relayEnv
+					if transition == "exit" {
+						e = storedNeedsIntelligenceEnv(t)
+					} else {
+						e = newRelayEnv(t, store.ProcessIdentity{})
+					}
 					var reader observationReader = e.s
 					if backend == "cursor missing view" {
 						reader = e.s.WithCursorMissingReads(nil)
 					}
-					view := api.RelayView{Window: config.DefaultRelayTimeoutSeconds * time.Second}
-					want, err := api.Status(reader, view, e.id)
+					view := api.RelayView{Window: config.DefaultRelayTimeoutSeconds * time.Second, Now: func() time.Time { return e.now }}
+					var want api.StatusResult
+					var err error
+					if transition == "exit" {
+						// Under a held write lock the read cannot end the display.
+						release := apitest.HoldWriteLock(t, e.dbPath, time.Minute)
+						want, err = api.Status(reader, view, e.id)
+						release()
+					} else {
+						want, err = api.Status(reader, view, e.id)
+					}
 					if err != nil || want.State != store.StateCheckPermission || want.StateDetail != (api.StateDetail{}) {
 						t.Fatalf("ordinary setup: %+v %v", want, err)
 					}
-					requestFacts(t, e, apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{}, e.now.Add(-time.Minute), time.Time{}, time.Time{}, ""))
-					if transition == "clear" {
-						// Exercise the unwrapped production backend before introducing contention.
-						observeDisplay(t, e.s, e.id, api.StateNeedsIntelligence, apitest.VersionAdvanced, func() (string, api.StateDetail, error) {
-							want, err = api.Status(reader, view, e.id)
-							return want.State, want.StateDetail, err
-						})
-						if want.Since == "" || want.RequestToken != storefix.TestRequestTokenA || want.ToolName != "Bash" {
-							t.Fatalf("committed setup: %+v", want)
+					if transition == "clock" {
+						requestFacts(t, e, apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{}, e.now.Add(-time.Minute), time.Time{}, time.Time{}, ""))
+						if !e.request(t).FallbackAt.IsZero() {
+							t.Fatalf("setup stored a fallback clock: %+v", e.request(t))
 						}
-						requestFacts(t, e, apitest.PermissionAnswer(store.PaneAnswerOutside))
 					}
 					before, err := e.s.GetSpawn(e.id)
 					if err != nil {
@@ -243,7 +256,7 @@ func TestNeedsIntelligenceSamplingSkipsLeasedConnection(t *testing.T) {
 }
 
 // t2.sp6.rk.1k review b5a9c71c: list --state needs_intelligence never waits
-// for a dropped row's requests.
+// for a dropped row's requests, and matches no row (b.zpv).
 func TestListStateFilterSkipsLeasedConnection(t *testing.T) {
 	t.Parallel()
 	e := newRelayEnv(t, relayEnvHook)

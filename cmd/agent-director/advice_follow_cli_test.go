@@ -501,7 +501,7 @@ func TestAdviceFollow_H10_AgentMissingFlag(t *testing.T) {
 const advWatchBlock = "```sh\n" + `last=""
 while sleep 1; do
   row=$(agent-director status --instance-id "$id")
-  state=$(printf '%s\n' "$row" | jq -r .state)
+  state=$(printf '%s\n' "$row" | jq -r '.displayed_state // .state')
   if [ "$state" != "$last" ]; then
     last=$state
     case "$state" in
@@ -512,7 +512,8 @@ while sleep 1; do
 done
 ` + "```"
 
-// TestAdviceFollow_F12_WatchReportsDisplay follows docs/usage.md's "Watch a Spawn's state" for a row of each Displayed State (b.ob8).
+// TestAdviceFollow_F12_WatchReportsDisplay follows docs/usage.md's "Watch a Spawn's state" for a row showing idle_screen (b.ob8) and,
+// b.zpv, a row with an open permission request and a stored needs_intelligence display, which reports check_permission.
 func TestAdviceFollow_F12_WatchReportsDisplay(t *testing.T) {
 	usage, err := os.ReadFile("../../docs/usage.md")
 	if err != nil {
@@ -537,18 +538,11 @@ func TestAdviceFollow_F12_WatchReportsDisplay(t *testing.T) {
 	}
 	apitest.SettleVariant{Config: &apitest.SettleOnConfig}.WriteConfig(t, filepath.Join(directorDir(home), "config.toml"))
 
-	for _, surface := range apitest.DisplayWireSurfaces {
-		id, state := surface.Prefix+surface.Agents[0], surface.State
+	for id, want := range map[string]string{
+		"idle-screen-claude":        "idle-screen-claude: idle_screen, session ts-idle-screen-claude\n",
+		"needs-intelligence-claude": "needs-intelligence-claude: check_permission\n",
+	} {
 		t.Run(id, func(t *testing.T) {
-			raw, stderr, code := runCLIWithHome(t, home, "status", "--instance-id", id)
-			var row struct {
-				State   string `json:"state"`
-				Session string `json:"tmux_session_name"`
-			}
-			if code != 0 || json.Unmarshal([]byte(raw), &row) != nil || row.State != state || row.Session == "" {
-				t.Fatalf("status: %d %s %s; want a %s row with its session", code, raw, stderr, state)
-			}
-
 			// The stand-in sleep succeeds once, then fails, so the loop makes one pass and ends.
 			bin := t.TempDir()
 			if err := os.Symlink(binaryPath, filepath.Join(bin, "agent-director")); err != nil {
@@ -561,7 +555,6 @@ func TestAdviceFollow_F12_WatchReportsDisplay(t *testing.T) {
 			}
 			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "HOME=" + home, "id=" + id}
 			out, errOut, code, timedOut := execCLI(t, cliOpts{bin: "sh", dir: home, env: env, deadline: surfaceDeadline}, "-c", script)
-			want := id + ": " + state + ", session " + row.Session + "\n"
 			if timedOut || code != 0 || out != want {
 				t.Errorf("watch loop = %q (exit %d, timedOut %v, stderr %q); want %q, exit 0", out, code, timedOut, errOut, want)
 			}

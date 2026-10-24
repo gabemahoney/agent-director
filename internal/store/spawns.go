@@ -73,7 +73,8 @@ const (
 	StateAskUser         = "ask_user"
 	StateCheckPermission = "check_permission"
 	// StateNeedsIntelligence and StateIdleScreen are the Displayed States,
-	// derived by reads only; neither must ever be written to state.
+	// derived by reads only; neither must ever be written to state. No read
+	// derives needs_intelligence: the name stays defined, untriggered.
 	StateNeedsIntelligence = "needs_intelligence"
 	StateIdleScreen        = "idle_screen"
 	StateEnded             = "ended"

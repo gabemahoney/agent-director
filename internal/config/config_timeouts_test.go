@@ -5,7 +5,8 @@ package config_test
 // timeout_seconds (b.8q2), [pre_trust] lock_wait_seconds (b.kr4), [store]
 // busy_timeout_ms (b.c7f), [state] needs_intelligence_timeout_seconds and
 // idle_screen_timeout_seconds (b.sp6) and settle_ms (b.3ie). A missing key or 0
-// gives the default (31, 86400, 30, 12, 10000, 30, 1200; settle_ms 0, off); 1 to the
+// gives the default (31, 86400, 30, 12, 10000, 1200; settle_ms 0, off;
+// needs_intelligence_timeout_seconds has no effect since b.zpv); 1 to the
 // key's largest value (106751 days; 2147483, the largest per-hook timeout
 // Claude Code honours; 9223372036, the largest a Duration holds; 2147483647,
 // the largest busy timeout SQLite holds; 60000 ms, MaxStateSettleMs) loads as
@@ -78,30 +79,30 @@ func idleScreenRefusal(v string) string {
 func TestRangeKeysLoad(t *testing.T) {
 	idle, idleMax := int64(config.DefaultIdleScreenTimeoutSeconds), config.MaxIdleScreenTimeoutSeconds
 	cases := []struct {
-		name                                          string
-		keys                                          rangeKeys
-		days, daysEffective                           int
-		relay, relayEffective                         int
-		pause, pauseEffective                         int64
-		preTrust, preTrustEffective                   int64
-		busy, busyEffective                           int
-		settle, settleEffective                       int // 0 is off, its own value (b.3ie)
-		needsIntelligence, needsIntelligenceEffective int64
-		idleScreen, idleScreenEffective               int64
+		name                            string
+		keys                            rangeKeys
+		days, daysEffective             int
+		relay, relayEffective           int
+		pause, pauseEffective           int64
+		preTrust, preTrustEffective     int64
+		busy, busyEffective             int
+		settle, settleEffective         int // 0 is off, its own value (b.3ie)
+		needsIntelligence               int64
+		idleScreen, idleScreenEffective int64
 	}{
-		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, idle, idle},
+		{"missing", rangeKeys{}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle},
 		{"zero", rangeKeys{days: "0", relay: "0", pause: "0", preTrust: "0", busyTimeout: "0", settle: "0", needsIntelligence: "0",
-			idleScreen: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 30, 0, idle},
+			idleScreen: "0"}, 0, 31, 0, 86400, 0, 30, 0, 12, 0, 10000, 0, 0, 0, 0, idle},
 		{"one", rangeKeys{days: "1", relay: "1", pause: "1", preTrust: "1", busyTimeout: "1", settle: "1", needsIntelligence: "1",
-			idleScreen: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+			idleScreen: "1"}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
 		{"default_written", rangeKeys{relay: "86400", pause: "30", preTrust: "12", busyTimeout: "10000", needsIntelligence: "30"}, 31, 31,
-			86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, 30, idle, idle},
-		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, 30, idle, idle},
+			86400, 86400, 30, 30, 12, 12, 10000, 10000, 0, 0, 30, idle, idle},
+		{"recommended_settle", rangeKeys{settle: "1500"}, 31, 31, 86400, 86400, 30, 30, 12, 12, 10000, 10000, 1500, 1500, 30, idle, idle},
 		{"state_keys_together", rangeKeys{settle: "1500", needsIntelligence: "5", idleScreen: "60"}, 31, 31, 86400, 86400, 30, 30, 12, 12,
-			10000, 10000, 1500, 1500, 5, 5, 60, 60},
+			10000, 10000, 1500, 1500, 5, 60, 60},
 		{"largest", rangeKeys{days: "106751", relay: "2147483", pause: "9223372036", preTrust: "9223372036",
 			busyTimeout: "2147483647", settle: "60000", needsIntelligence: "9223372036", idleScreen: "9223372036"}, 106751, 106751, 2147483,
-			2147483, 9223372036, 9223372036, 9223372036, 9223372036, 2147483647, 2147483647, 60000, 60000, 9223372036, 9223372036, idleMax,
+			2147483, 9223372036, 9223372036, 9223372036, 9223372036, 2147483647, 2147483647, 60000, 60000, 9223372036, idleMax,
 			idleMax},
 	}
 	for _, tc := range cases {
@@ -127,8 +128,8 @@ func TestRangeKeysLoad(t *testing.T) {
 					int64(cfg.Store.EffectiveBusyTimeoutMs()), int64(tc.busyEffective)},
 				{"State.SettleMs", int64(cfg.State.SettleMs), int64(tc.settle),
 					int64(cfg.State.EffectiveSettleMs()), int64(tc.settleEffective)},
-				{"State.NeedsIntelligenceTimeoutSeconds", int64(cfg.State.NeedsIntelligenceTimeoutSeconds), tc.needsIntelligence,
-					int64(cfg.State.EffectiveNeedsIntelligenceTimeoutSeconds()), tc.needsIntelligenceEffective},
+				// The key has no effect, so it has no effective value (b.zpv).
+				{"State.NeedsIntelligenceTimeoutSeconds", int64(cfg.State.NeedsIntelligenceTimeoutSeconds), tc.needsIntelligence, 0, 0},
 				{"State.IdleScreenTimeoutSeconds", int64(cfg.State.IdleScreenTimeoutSeconds), tc.idleScreen,
 					int64(cfg.State.EffectiveIdleScreenTimeoutSeconds()), tc.idleScreenEffective},
 			} {

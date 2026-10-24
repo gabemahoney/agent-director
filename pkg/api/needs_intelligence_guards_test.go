@@ -20,23 +20,24 @@ func (p *paEnv) getDisplay(t *testing.T, want string, commit apitest.CommitCheck
 	})
 }
 
-// enterNeedsIntelligence reads once, committing the request's fallback clock,
-// then again at the timeout, committing the entry.
-func (p *paEnv) enterNeedsIntelligence(t *testing.T) {
+// fallBackLong reads once, committing the request's fallback clock, then
+// again a day later, when the row still reads check_permission with no
+// displayed_state (b.zpv).
+func (p *paEnv) fallBackLong(t *testing.T) {
 	t.Helper()
 	p.getDisplay(t, store.StateCheckPermission, func(store.Spawn, store.Spawn) bool {
 		return !p.request(t, storefix.TestRequestTokenA).FallbackAt.IsZero()
 	})
-	p.now = p.now.Add(30 * time.Second)
-	p.getDisplay(t, api.StateNeedsIntelligence, apitest.VersionAdvanced)
+	p.now = p.now.Add(24 * time.Hour)
+	p.getDisplay(t, store.StateCheckPermission, nil)
 }
 
-func TestNeedsIntelligencePreservesLiveCommandGuards(t *testing.T) {
+func TestLongFallenBackRequestKeepsCommandGuards(t *testing.T) {
 	t.Parallel()
 	for _, agent := range paAgents {
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
-			p.enterNeedsIntelligence(t)
+			p.fallBackLong(t)
 			assertOneSentinel(t, p.sendKeys(p.plain("1")), api.ErrRelayFallenBack)
 			// Under load max_wait_ms 0 may answer its documented ErrStoreBusy, having
 			// recorded nothing; repeat it then, for at most 10 s (t2.sp6.rk.1k).
@@ -59,12 +60,12 @@ func TestNeedsIntelligencePreservesLiveCommandGuards(t *testing.T) {
 	}
 }
 
-func TestNeedsIntelligencePaneAnswerClearsReportButKeepsDialogHold(t *testing.T) {
+func TestLongFallenBackPaneAnswerKeepsDialogHold(t *testing.T) {
 	t.Parallel()
 	for _, agent := range paAgents {
 		t.Run(agent.name, func(t *testing.T) {
 			p := agent.env(t)
-			p.enterNeedsIntelligence(t)
+			p.fallBackLong(t)
 			if _, err := p.recordPaneAnswer(p.outside(storefix.TestRequestTokenA, "unknown")); err != nil {
 				t.Fatal(err)
 			}
@@ -77,13 +78,13 @@ func TestNeedsIntelligencePaneAnswerClearsReportButKeepsDialogHold(t *testing.T)
 	}
 }
 
-func TestNeedsIntelligenceCodexTurnEndPreservesIndependentChildHold(t *testing.T) {
+func TestLongFallenBackCodexTurnEndPreservesIndependentChildHold(t *testing.T) {
 	t.Parallel()
 	for _, event := range []string{"Stop", "Interrupt"} {
 		t.Run(event, func(t *testing.T) {
 			p := newCodexPAEnv(t)
 			storefix.SeedRelayRequest(t, p.st, p.r.ID, store.RelayRequest{RequestToken: storefix.TestRequestTokenB, ToolName: "Bash", ToolInput: "{}", AgentID: paSubagentID, MainTurnEndEligible: ptr(false), SettledAt: p.now.Add(time.Hour)})
-			p.enterNeedsIntelligence(t)
+			p.fallBackLong(t)
 			// Codex PostToolUse does not supply proof or close a null-tool-use request.
 			p.prove(t, toolRan(paToolUseID))
 			if pr := p.request(t, storefix.TestRequestTokenA); pr.ProvenGone() || pr.ToolUseID != "" {

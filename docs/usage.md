@@ -85,19 +85,13 @@ agent may wait at the prompt. What the mark is for each agent, and what the
 reported `pre_trust` outcome means, is in
 [Settings](settings.md#pre-trust-for-codex).
 
-A row can read one of two states in place of its own:
-`needs_intelligence` while its agent's own permission prompt stays
-unanswered past the
-[configured time](configuration.md#needs-intelligence-timeout-state), or
+`state` is always the agent's own state. Beside it, `displayed_state` reads
 `idle_screen` while a `working` Claude or Codex agent's pane looks the same
 on every read for the
-[configured time](configuration.md#idle-screen-timeout-state). Both are
-computed when you call `status`, `get` or `list`; nothing runs in the
-background, so an agent nobody reads never shows either. Which requests
-count is in
-[permissions](permissions.md#needs-intelligence-on-an-unanswered-permission);
-which agents each state applies to, the fields, filtering and what to do
-about it are in the
+[configured time](configuration.md#idle-screen-timeout-state); `state` stays
+`working`. It is computed when you call `status`, `get` or `list`; nothing
+runs in the background, so an agent nobody reads never shows it. The
+fields, filtering and what to do are in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 
 ## Family state
@@ -110,8 +104,8 @@ A family includes the agent and every stored descendant linked through
 `parent_id`, at any depth. Only live members contribute: a member recorded
 as `ended` or `missing` is excluded, but its retained links still connect
 live descendants. A live member contributes `working` while its raw state
-is not `waiting` or its committed display is `needs_intelligence` or
-`idle_screen`. A retained display keeps that contribution after the raw
+is not `waiting` or it shows `idle_screen` (`displayed_state`). A retained
+display keeps that contribution after the raw
 state becomes `waiting`, until its displayed exit commits. With no working
 contributors, including no live members, the aggregate is `waiting`.
 The family then [settles independently](configuration.md#settle-time-state).
@@ -349,7 +343,7 @@ change it sees, with no count of identical polls:
 last=""
 while sleep 1; do
   row=$(agent-director status --instance-id "$id")
-  state=$(printf '%s\n' "$row" | jq -r .state)
+  state=$(printf '%s\n' "$row" | jq -r '.displayed_state // .state')
   if [ "$state" != "$last" ]; then
     last=$state
     case "$state" in
@@ -360,8 +354,9 @@ while sleep 1; do
 done
 ```
 
-It never sees a turn shorter than the settle time. What to do for a
-`needs_intelligence` or `idle_screen` row is in the
+It reports a row's `displayed_state` when it has one, else its `state`, and
+never sees a turn shorter than the settle time. What to do for a row that
+shows `idle_screen` is in the
 [caller contract](caller-contract.md#needs-intelligence-and-idle-screen-rows).
 To learn whether the state changed since a time of your own, compare that
 time with `state_changed_at` from `get` or `list` (see

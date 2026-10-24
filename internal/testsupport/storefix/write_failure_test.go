@@ -186,7 +186,7 @@ var proxyWrites = []proxyWrite{
 			if err != nil {
 				return err
 			}
-			_, _, err = s.ObserveNeedsIntelligence(row, nil, time.Now(), 30*time.Second, store.SettleRead{})
+			_, _, err = s.ObserveNeedsIntelligence(row, nil, time.Now(), store.SettleRead{})
 			return err
 		},
 		observe: func(t *testing.T, s *store.Store, _, id string) any {

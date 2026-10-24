@@ -169,6 +169,15 @@ func manifestTextCases() []textCase {
 	for _, s := range []struct{ verb, field string }{{"status", "state"}, {"get", "state"}, {"list", "spawns"}} {
 		cases = append(cases, textCase{verb: s.verb, field: s.field, c: apitest.DescMissingNotProof()})
 	}
+	// b.zpv: a permission request never shows needs_intelligence, and list's
+	// state filter matches state or displayed_state.
+	for _, s := range []struct{ verb, field string }{{"status", "state"}, {"get", "state"}, {"list", "spawns"}} {
+		cases = append(cases, textCase{verb: s.verb, field: s.field, c: tokens("no permission timer",
+			"A permission request never shows needs_intelligence, however long it waits: its row stays check_permission")})
+	}
+	cases = append(cases, textCase{verb: "list", param: "state", c: apitest.DescCase{Name: "state or displayed_state",
+		Require: []string{"A row matches when its state or its displayed_state is one of the values", "Applied before limit."},
+		Forbid:  []string{"does not match its raw state"}}})
 	for _, verb := range []string{"kill", "resume", "pause", "expire"} {
 		cases = append(cases, textCase{verb: verb, c: apitest.DescMissingNotProofShort()})
 	}

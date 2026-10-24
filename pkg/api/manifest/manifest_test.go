@@ -303,11 +303,12 @@ func TestAllowedValuesHaveAtLeastTwoEntries(t *testing.T) {
 	}
 }
 
-// pinnedStateEnum retains the original state order and appends the approved
-// report-only Displayed States. Ordinary-state fixtures continue covering all
-// seven authoritative lifecycle values; TypeScript state remains a plain string.
+// pinnedStateEnum is the seven lifecycle states in their original order:
+// state is the real settled lifecycle state, and the report-only Displayed
+// States are displayed_state's values, never state's (b.zpv). TypeScript state
+// remains a plain string.
 var pinnedStateEnum = []string{
-	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing", "needs_intelligence", "idle_screen",
+	"pending", "waiting", "working", "ask_user", "check_permission", "ended", "missing",
 }
 
 // TestStateEnumByteIdentity pins the public manifest and generated JSON together.
@@ -326,7 +327,7 @@ func TestStateEnumByteIdentity(t *testing.T) {
 			}
 			found = true
 			if !reflect.DeepEqual(f.AllowedValues, pinnedStateEnum) {
-				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (approved Displayed State contract)",
+				t.Errorf("%s.state.AllowedValues = %v; want byte-identical pin %v (lifecycle states only, b.zpv)",
 					verbName, f.AllowedValues, pinnedStateEnum)
 			}
 		}
@@ -475,6 +476,8 @@ func TestFieldShapes(t *testing.T) {
 		{"get", "", "liveness_note", shape{"string?", true, false, nil}},
 		{"get", "", "tmux_socket", shape{"string?", true, false, nil}},
 		{"status", "", "launch_started_at", shape{"timestamp?", true, false, nil}},
+		{"status", "", "displayed_state", shape{"string?", true, false, []string{"idle_screen", "needs_intelligence"}}},
+		{"get", "", "displayed_state", shape{"string?", true, false, []string{"idle_screen", "needs_intelligence"}}},
 		{"get", "", "launch_started_at", shape{"timestamp?", true, false, nil}},
 		{"spawn", "", "pre_trust", shape{"string", false, false, preTrust}},
 		{"resume", "", "pre_trust", shape{"string", false, false, preTrust}},

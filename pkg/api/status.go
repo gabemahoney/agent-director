@@ -17,14 +17,15 @@ type StatusStore interface {
 // CLI.
 type StatusResult struct {
 	StateDetail
-	// TmuxSessionName is present while either Displayed State is shown.
+	// TmuxSessionName is present while a Displayed State is shown
+	// (DisplayedState).
 	TmuxSessionName string `json:"tmux_session_name,omitempty"`
 
 	// Context is an experimental on-demand reading; unavailable values are null.
 	Context ContextReading `json:"context"`
 	// State is the current lifecycle state of the Spawn. One of:
-	// pending, waiting, working, ask_user, check_permission, ended, missing,
-	// or a report-only Displayed State, needs_intelligence or idle_screen.
+	// pending, waiting, working, ask_user, check_permission, ended, missing;
+	// never a Displayed State, which DisplayedState carries beside it.
 	// pending means a launch (spawn, reuse or resume) is in progress and the
 	// agent has not reported in yet (its SessionStart hook); it may be
 	// loading or waiting at a startup prompt. A resumed pending row keeps its
@@ -102,10 +103,10 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 			return StatusResult{}, err
 		}
 		display, family := displayed(s, v, settle, row)
-		out := StatusResult{State: display.State, StateDetail: stateDetail(display), FamilyState: family,
+		out := StatusResult{State: row.ReportedState, StateDetail: stateDetail(display), FamilyState: family,
 			IdleScreenAvailability: idleScreenAvailability(row.Agent),
 			LaunchStartedAt:        launchStartedAt(row.State, row.LaunchStartedAtMillis), Context: contextOf(row.ContextEvidence())}
-		if display.State == StateNeedsIntelligence || display.State == StateIdleScreen {
+		if out.DisplayedState != "" {
 			out.TmuxSessionName = row.TmuxSessionName
 		}
 		return out, nil
@@ -153,23 +154,25 @@ func statusSettledWithRelay(s StatusStore, v RelayView, settle store.SettleRead,
 }
 
 // Status returns the current state (pending/waiting/working/ask_user/
-// check_permission/ended/missing, or a Displayed State, needs_intelligence or
-// idle_screen) for the identified Spawn. On a pending row the result also
-// carries launch_started_at, when the agent's launch began.
+// check_permission/ended/missing) for the identified Spawn, and the
+// Displayed State it shows, if any, in displayed_state. On a pending row the
+// result also carries launch_started_at, when the agent's launch began.
 // With [state] settle_ms set, the state is the settled state: a hook-written
-// change between ordinary states shows only once it has held that long, the
-// last settled state until then. Entering, leaving or moving between
-// needs_intelligence and idle_screen instead times settle_ms from the read
-// that commits its candidate and shows from a later successful read that
-// commits it; until then since and detail stay the previous display's.
-// Terminal states and command-driven changes show at once. family_state
-// settles independently. The read never waits.
+// change shows only once it has held that long, the last settled state until
+// then. Entering, leaving or moving between Displayed States instead times
+// settle_ms from the read that commits its candidate and shows from a later
+// successful read that commits it; until then displayed_state, since and
+// detail stay the previous display's. Terminal states and command-driven
+// changes show at once. family_state settles independently. The read never
+// waits.
 //
 // A working Claude or Codex row's own pane is captured on each read and its
 // fingerprint compared with the previous read's: once identical samples have
-// spanned the row's idle_screen timeout, the row reads idle_screen. Nothing
-// observes panes between reads. idle_screen_availability says whether that
-// can apply to the row's agent (unavailable for Cursor).
+// spanned the row's idle_screen timeout, the row reads state working with
+// displayed_state idle_screen. Nothing observes panes between reads.
+// idle_screen_availability says whether that can apply to the row's agent
+// (unavailable for Cursor). A permission request never yields a Displayed
+// State: its row reads check_permission however long it waits.
 //
 // CLI: agent-director status
 //

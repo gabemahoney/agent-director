@@ -1,14 +1,14 @@
 package api_test
 
-// idle_screen_settle_test.go — how an idle_screen episode (b.ob8) enters,
-// leaves and moves to or from needs_intelligence: settling and exact
-// transition times, the direct move in each direction, immediate lifecycle
-// exits, command guards and family. It reuses idle_screen_test.go's paneEnv;
-// capture failures and races are there.
+// idle_screen_settle_test.go — how an idle_screen episode (b.ob8) enters and
+// leaves: settling and exact transition times, a raw move out (to waiting, or
+// to check_permission, which never shows needs_intelligence: b.zpv), a new
+// interval never inheriting the old episode, immediate lifecycle exits,
+// command guards and family. It reuses
+// idle_screen_test.go's paneEnv; capture failures and races are there.
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
@@ -85,146 +85,67 @@ func TestIdleScreenSettlementAndActualTransitionTime(t *testing.T) {
 	}
 }
 
-// TestDisplayDirectMove: while one Displayed State is shown and the other
-// qualifies (a permission request on an idle_screen pane, or an unchanged pane
-// after a needs_intelligence request is answered), the other settles in as an
-// ordinary candidate (SR-5.1): until the settle deadline the first stays with
-// its last committed detail, then the first read after it shows the second
-// with since at that read, only its own detail, and exactly one record from
-// the first to the second. The idle_screen to needs_intelligence move is a new
-// check_permission interval qualifying for the other state: the idle_screen
-// display stays while needs_intelligence settles in as its candidate.
-func TestDisplayDirectMove(t *testing.T) {
+// TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh: a new working
+// interval qualifying for idle_screen never inherits the previous interval's
+// episode. The turn ends and a new one starts with no read in between, so the
+// hooks keep the displayed episode across the new permission epoch. The new
+// interval's pane baseline starts at its first read, which therefore cannot
+// qualify yet and leaves the old episode settling out; the read that first
+// qualifies (the timeout, 1 s, inside the 5 s settle time) ends the old
+// episode with its own exit, without settling, and starts a fresh candidate,
+// which shows only after its settle time with its own since and minutes.
+// With no settle time the first read ends the old episode itself, so the rule
+// shows only with a settle time longer than the timeout.
+func TestIdleScreenNewIntervalEndsOldEpisodeAndStartsFresh(t *testing.T) {
 	t.Parallel()
-	request := func(t *testing.T, e *paneEnv) apitest.PermissionRequestSeed {
-		t.Helper()
-		seeded, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash", apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{},
-			e.now.Add(-time.Minute), time.Time{}, e.now.Add(-time.Minute), store.FallbackDeadline))
-		if err != nil {
+	const settle = 5 * time.Second
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+	// Entry precedes the hooks' real writer clock on any execution date.
+	e.now = time.Now().Add(-2 * time.Minute).UTC().Truncate(time.Millisecond)
+	c := e.client(t, apitest.ConfigKeys{StateSettleMs: settle.Milliseconds(), IdleScreenTimeoutSeconds: 1})
+	old := enterIdleScreen(t, e, c, settle)
+	before := e.row(t)
+	for _, state := range []string{store.StateWaiting, store.StateWorking} {
+		if err := seedAgentState(e.s, e.dbPath, e.id, state); err != nil {
 			t.Fatal(err)
 		}
-		return seeded
 	}
-	for _, tc := range []struct {
-		name   string
-		delay  time.Duration
-		toIdle bool
-	}{
-		{"idle_screen to needs_intelligence/settle 0", 0, false},
-		{"idle_screen to needs_intelligence/settle 5s", 5 * time.Second, false},
-		{"needs_intelligence to idle_screen/settle 5s", 5 * time.Second, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			spec := paneSpec{agent: store.AgentClaude}
-			var timeout int64 = 60
-			from, to := api.StateIdleScreen, api.StateNeedsIntelligence
-			if tc.toIdle {
-				spec.state, timeout = store.StateCheckPermission, 1
-				from, to = to, from
-			}
-			e := newPaneEnv(t, spec)
-			// b.ob8 F1: a direct displayed-state move preserves contribution and its clock.
-			parent, err := apitest.SeedSpawn(e.dbPath, "", store.StateWaiting, "", "off", "", false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := apitest.SeedParentChild(e.dbPath, parent, e.id); err != nil {
-				t.Fatal(err)
-			}
-			familyIDs := []string{parent, e.id}
-			familyBefore := readFamilyHistories(t, e.dbPath, familyIDs)
-			c := e.client(t, apitest.ConfigKeys{StateSettleMs: tc.delay.Milliseconds(), IdleScreenTimeoutSeconds: timeout})
-			var entered api.StatusResult
-			var req apitest.PermissionRequestSeed
-			if tc.toIdle {
-				req = request(t, e)
-				observeStatus(t, c, e.id, store.StateCheckPermission, apitest.VersionAdvanced)
-				e.now = e.now.Add(tc.delay)
-				entered = assertDisplayState(t, c, e.id, from)
-			} else {
-				entered = enterIdleScreen(t, e, c, tc.delay)
-			}
-			// holds fails unless got still shows the first state with its
-			// detail as entered.
-			holds := func(got api.StatusResult) {
-				t.Helper()
-				if got.Since != entered.Since || got.RequestToken != entered.RequestToken || got.ToolName != entered.ToolName ||
-					(entered.UnchangedMinutes != nil && minutes(t, got) != *entered.UnchangedMinutes) {
-					t.Fatalf("settling=%+v; want the displayed %+v", got.StateDetail, entered.StateDetail)
-				}
-			}
-			mark := trailMark(t)
-			if tc.toIdle {
-				// The open dialog holds the turn's next hook: the
-				// needs_intelligence episode stands. Once the request is proven
-				// gone, it applies.
-				if err := seedAgentState(e.s, e.dbPath, e.id, store.StateWorking); err != nil {
-					t.Fatal(err)
-				}
-				holds(observeStatus(t, c, e.id, from, nil))
-				if raw := e.row(t).State; raw != store.StateCheckPermission {
-					t.Fatalf("a held hook moved the row to %s", raw)
-				}
-				if err := apitest.SetPermissionFacts(e.dbPath, req.RequestID, apitest.PermissionProof(e.now)); err != nil {
-					t.Fatal(err)
-				}
-				if err := seedAgentState(e.s, e.dbPath, e.id, store.StateWorking); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				if err := seedAgentState(e.s, e.dbPath, e.id, store.StateCheckPermission); err != nil {
-					t.Fatal(err)
-				}
-				req = request(t, e)
-			}
-			wantRaw := store.StateCheckPermission
-			if tc.toIdle {
-				wantRaw = store.StateWorking
-			}
-			if raw := e.row(t).State; raw != wantRaw {
-				t.Fatalf("raw state %s after the hook; want %s", raw, wantRaw)
-			}
-			e.now = e.now.Add(time.Second)
-			if tc.toIdle {
-				// The answered row's first pane sample starts its baseline: a
-				// pending exit, which the pane's own timeout overtakes.
-				holds(observeStatus(t, c, e.id, from, apitest.VersionAdvanced))
-				e.now = e.now.Add(time.Second)
-			}
-			if tc.delay > 0 {
-				// The other state settles in as the candidate behind the
-				// displayed state and its detail.
-				holds(observeStatus(t, c, e.id, from, apitest.VersionAdvanced))
-				e.now = e.now.Add(tc.delay - time.Millisecond)
-				holds(observeStatus(t, c, e.id, from, nil))
-				if events := displayEvents(t, mark, e.id); len(events) != 0 {
-					t.Fatalf("records before the move's deadline: %v", events)
-				}
-				// The first read after the deadline, a second past it, moves.
-				e.now = e.now.Add(time.Millisecond + time.Second)
-			}
-			got := observeStatus(t, c, e.id, to, apitest.VersionAdvanced)
-			if got.Since != e.now.Format(displayTS) {
-				t.Fatalf("move=%+v; want since this read, %s", got.StateDetail, e.now.Format(displayTS))
-			}
-			if tc.toIdle {
-				if minutes(t, got) != 0 {
-					t.Fatalf("move=%+v; want idle_screen with 0 minutes", got)
-				}
-			} else if got.RequestToken != req.RequestToken || got.ToolName != "Bash" {
-				t.Fatalf("move=%+v; want needs_intelligence on %s", got, req.RequestToken)
-			}
-			events := displayEvents(t, mark, e.id)
-			if len(events) != 1 {
-				t.Fatalf("events=%v; want the move once", events)
-			}
-			assertDisplayEvent(t, events[0], from, to, e.now)
-			if after := readFamilyHistories(t, e.dbPath, familyIDs); !reflect.DeepEqual(after, familyBefore) {
-				t.Errorf("direct move restarted family history: %+v -> %+v", familyBefore, after)
-			}
-		})
+	if row := e.row(t); row.State != store.StateWorking || row.PermissionEpoch != before.PermissionEpoch+2 || row.CommittedDisplay().State != api.StateIdleScreen {
+		t.Fatalf("the hooks did not start a new interval keeping the episode: before=%+v after=%+v", before, row)
 	}
+	_, stamp, err := apitest.ReadSettle(e.dbPath, e.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := trailMark(t)
+	// The new interval's first read: its baseline starts now, so it does not
+	// qualify and the old episode starts settling out, still displayed.
+	start := time.UnixMilli(stamp).Add(time.Hour).UTC()
+	e.now = start
+	if got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced); got.Since != old.Since {
+		t.Fatalf("settling-out read=%+v; want the old episode %+v", got, old)
+	}
+	// The first qualifying read ends the old episode at once.
+	e.now = start.Add(time.Second)
+	observeStatus(t, c, e.id, store.StateWorking, apitest.VersionAdvanced)
+	events := displayEvents(t, mark, e.id)
+	if len(events) != 1 {
+		t.Fatalf("events=%v; want only the old episode's exit", events)
+	}
+	assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWorking, e.now)
+	candidate := e.now
+	e.now = candidate.Add(settle - time.Millisecond)
+	observeStatus(t, c, e.id, store.StateWorking, nil)
+	e.now = candidate.Add(settle)
+	got := observeStatus(t, c, e.id, api.StateIdleScreen, apitest.VersionAdvanced)
+	if got.Since != e.now.Format(displayTS) || minutes(t, got) != int64(e.now.Sub(start)/time.Minute) {
+		t.Fatalf("new episode inherited the old one: old=%+v new=%+v", old, got)
+	}
+	events = displayEvents(t, mark, e.id)
+	if len(events) != 2 {
+		t.Fatalf("events=%v; want one exit and one entry", events)
+	}
+	assertDisplayEvent(t, events[1], store.StateWorking, api.StateIdleScreen, e.now)
 }
 
 // TestIdleScreenTerminalExitIsImmediate: a terminal write ends a displayed
@@ -328,26 +249,45 @@ func TestIdleScreenFamilyIsBinaryAndDetailChildLocal(t *testing.T) {
 	}
 }
 
-// TestIdleScreenRawMoveSettlesOut: the turn ending (a hook moving the raw
-// state on) keeps the displayed episode until a read, which clears it with
-// one exit to the new state at that read.
+// TestIdleScreenRawMoveSettlesOut: the turn ending, or a permission request
+// (a hook moving the raw state on), keeps the displayed episode until a read,
+// which clears it with one exit to the new state at that read. A request that
+// has fallen back reads check_permission with no Displayed State (b.zpv).
 func TestIdleScreenRawMoveSettlesOut(t *testing.T) {
 	t.Parallel()
-	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
-	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
-	enterIdleScreen(t, e, c, 0)
-	mark := trailMark(t)
-	if err := seedAgentState(e.s, e.dbPath, e.id, store.StateWaiting); err != nil {
-		t.Fatal(err)
+	for _, raw := range []string{store.StateWaiting, store.StateCheckPermission} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
+			c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
+			enterIdleScreen(t, e, c, 0)
+			mark := trailMark(t)
+			if err := seedAgentState(e.s, e.dbPath, e.id, raw); err != nil {
+				t.Fatal(err)
+			}
+			if raw == store.StateCheckPermission {
+				if _, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash", apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{},
+					e.now.Add(-time.Minute), time.Time{}, e.now.Add(-time.Minute), store.FallbackDeadline)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if row := e.row(t); row.CommittedDisplay().State != api.StateIdleScreen {
+				t.Fatalf("the hook cleared the episode before any read: %+v", row)
+			}
+			e.now = e.now.Add(time.Second)
+			observeStatus(t, c, e.id, raw, apitest.VersionAdvanced)
+			exitAt := e.now
+			// A day later the row still reads its raw state, displaying nothing.
+			e.now = e.now.Add(24 * time.Hour)
+			if got, row, listed := clientReported(t, c, e.id); got.State != raw || got.StateDetail != (api.StateDetail{}) ||
+				row.StateDetail != (api.StateDetail{}) || listed.DisplayedState != "" {
+				t.Fatalf("status=%+v get=%+v list=%+v; want ordinary %s", got, row.StateDetail, listed, raw)
+			}
+			events := displayEvents(t, mark, e.id)
+			if len(events) != 1 {
+				t.Fatalf("exit=%v; want one to %s at the read", events, raw)
+			}
+			assertDisplayEvent(t, events[0], api.StateIdleScreen, raw, exitAt)
+		})
 	}
-	if row := e.row(t); row.CommittedDisplay().State != api.StateIdleScreen {
-		t.Fatalf("the hook cleared the episode before any read: %+v", row)
-	}
-	e.now = e.now.Add(time.Second)
-	observeStatus(t, c, e.id, store.StateWaiting, apitest.VersionAdvanced)
-	events := displayEvents(t, mark, e.id)
-	if len(events) != 1 {
-		t.Fatalf("exit=%v; want one to waiting at the read", events)
-	}
-	assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)
 }
