@@ -43,7 +43,7 @@ func TestCursorTrailFailedProofPreservesFinalValuesAndDuplicate(t *testing.T) {
 			before, other := e.read(t, "target"), e.read(t, "independent")
 			mark := store.TrailMark(t)
 			seen := e.beforeCommit(t, mark)
-			if err := e.f.s.ProveCursorToolFailed(e.b, "target", "tool-target", cursorTrailCheck); err != nil {
+			if err := e.f.s.ProveCursorToolFailed(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatal(err)
 			}
 			after := e.assertEvent(t, mark, "target", "update", before.Decision, before.DecisionReason)
@@ -69,7 +69,7 @@ func TestCursorTrailFailedProofPreservesFinalValuesAndDuplicate(t *testing.T) {
 			mark = store.TrailMark(t)
 			// The existing guard fails COMMIT if replay actually updates any row.
 			e.rejectCommitOnUpdate(t)
-			if err := e.f.s.ProveCursorToolFailed(e.b, "target", "tool-target", cursorTrailCheck); err != nil {
+			if err := e.f.s.ProveCursorToolFailed(e.b, "target", "tool-target", true, cursorTrailCheck); err != nil {
 				t.Fatalf("duplicate failed proof updated a row: %v", err)
 			}
 			if events := e.events(t, mark); len(events) != 0 || !reflect.DeepEqual(after, e.read(t, "target")) || !reflect.DeepEqual(other, e.read(t, "independent")) {

@@ -941,7 +941,15 @@ remain unchanged, including NULLs; it never infers allow. Both methods reuse
 `proveCursorTool`, the existing write transaction and current `cursorAuthority`
 owner, preserve earlier proof, exclude closed rows and emit the final retained
 verdict/reason only after a committed mutation. A fully duplicate failed proof
-performs no matched UPDATE and emits no event.
+performs no matched UPDATE and emits no event. Both take a `turnOpen` bool,
+which the gateway sets from its session loop as `busy && !rotating`
+(`requestController.turnOpen`, read through `isTurnOpen`; nil reads false), so
+it reads false while a rotation is under way, even one requested mid-turn. A
+committed proof with `turnOpen` set, of a request whose retained decision is
+not deny, may also move the row from `check_permission` to `working`, as
+[The row after the last answer (rule 9, problem 3)](#the-row-after-the-last-answer-rule-9-problem-3)
+describes; any other proof
+moves nothing.
 
 The proof write takes the store lock without waiting, so the controller never
 blocks on it. `requestController.prove` keeps a proof that meets another writer
@@ -951,12 +959,16 @@ binding that observed the completion, and each later tick retries it until
 after that, or any other failure, stays fatal. Rotation and termination retire
 that binding. Nothing re-reports waiting once a later tick stores a proof. So
 a `proofFlush` first writes every deferred proof in place,
-waiting out its remaining busy window, at four points:
+waiting out its remaining busy window, with the `turnOpen` the controller
+read when the flush was taken, at four points:
 
-- Before the Stop path's waiting report, bounded by the cancellation deadline
-  when one is running.
+- Before every waiting report (`reportWaiting`): SessionStart, the prompt
+  completion's Stop and the idle-control Stop, bounded by the cancellation
+  deadline when one is running. No turn is open at any of them, so these
+  proofs move no row; the report settles it.
 - Before rotation publication, within the cancellation deadline. A proof not
-  stored refuses the rotation.
+  stored refuses the rotation. `turnOpen` reads false while rotating, so these
+  proofs move no row; `RotateCursorSession` settles it.
 - Before intentional-exit termination (`/exit`, pause, signals), outside
   `await`, over the whole busy window. A proof not stored is fatal. A flush
   running past the cancellation deadline gives up the intentional end for the
@@ -2706,7 +2718,7 @@ columns to this same list. None has a CHECK constraint or an index.
 | `pane_sender_pid`, `pane_sender_starttime`, `pane_sender_pidns` | INTEGER, TEXT, TEXT | a pane answer's intent | The process that sends the pane answer's key (`SendKeysEnv.Self`), judged as a relay hook is (`relayJudge.sender`); NULL when it could not read itself, and NULLed when it releases its intent. |
 | `pane_intent_at` | INTEGER (epoch ms) | a pane answer's intent | When the intent was written, read inside `RecordPaneIntent`'s transaction after its `PaneCheck` (so it is the commit's instant, not the call's start): the key of the sender's own later writes (`paneIntentOwnerSQL`) and the start of `paneIntentHold` for a sender that cannot be checked. NULLed with the sender when the intent is released; never cleared by age. |
 | `closed_at` | INTEGER (epoch ms) | a close of the Spawn's requests (`closeOrphanedRequests`): `find-missing`'s mark, the terminal SessionEnd's move to `ended`, and resume's move to `pending` | When the close closed the request, which still awaited an answer when its Spawn was marked `missing` or ended, or when its finished Spawn was resumed (b.146 rule 12): an undecided one is also denied (`find_missing` for the mark, `ended` for the other two); a decided one whose hook had not acked keeps its verdict. A closed request no longer awaits an answer (`PermissionRow.Closed`). NULL on every request no close closed; a decided pre-v7 request without an ack or completed pane answer is closed too, preserving its verdict. |
-| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`ProveCursorToolRan` / `ProveCursorToolFailed`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (`holdsRowSQL`: the working hold, the idle-prompt Notification's move out of `check_permission` and `find-missing`'s repair; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
+| `proven_gone_at`, `proven_gone_how` | INTEGER (epoch ms), TEXT | a hook's proof (`ProveRequestsGone`, `internal/store/request_proof.go`), validated Cursor invocation proof (`ProveCursorToolRan` / `ProveCursorToolFailed`), the PostToolUse close, a close of the Spawn's requests (`closeOrphanedRequests`), and `migrateV6toV7`'s phase 3 (`v7ProveFinishedSQL`) | When the agent proved the request's permission dialog gone (b.146 step 2c; see "Proofs by agent" under [The dialog hold](#the-dialog-hold-step-2c)), and how: `tool_ran` (Claude `PostToolUse`/`PostToolUseFailure` with its `tool_use_id`, or authenticated exact-request Cursor invocation proof under [Cursor authorization dataflow and authority](#cursor-authorization-dataflow-and-authority), where a failed MCP invocation proves only dialog closure; Codex has no tool-run proof), `turn_end` (the turn of the agent that asked ended after it was written; Claude's main-agent `Stop` or idle-prompt Notification, or Codex's main-agent `Stop` or `Interrupt`, proves a durably eligible request with no `agent_id` whose `created_at` is before the second the hook started, b.omt), `agent_gone` (on a non-Cursor row only: a close of its Spawn's requests, including the Codex move to `ended` after its verified process is gone and its end report is recorded, or the v6 → v7 hop on a row already `ended` or `missing`). The values are the `ProvenGone*` constants of `internal/store/permission.go`; `PermissionRow.ProvenGone` reports a proven request. Each is written once: a write never replaces an earlier proof. NULL until proven, every request recorded before v7 on a live row included; while NULL on a live relay-on Spawn, the request holds plain `send-keys` without a pane hash and `pause` (`ErrDialogMaybeOpen`), unless it is a Cursor request of an earlier launch (`PermissionRow.HoldsDialog`), and is never evicted at the cap (see "Cap-based GC"), and, while it also awaits an answer, holds the row (the writes and reads the `holdsRowSQL` Must use entry under [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility) lists; b.omt). Once set, the request holds the row no longer, even while it still awaits an answer. |
 | `spawns.idle_since` | TEXT (`CURRENT_TIMESTAMP`) | the idle-prompt Notification | When the main agent's idle-prompt Notification last landed; NULLed by every other applied hook (`idleClear`). |
 
 ### v11 columns: durable main-turn proof eligibility
@@ -2784,18 +2796,23 @@ policy is in [migration-guide.md](migration-guide.md#historical-worked-example-v
   statement of "a request holds its Spawn's row" (b.omt):
   `awaitingAnswerSQL` and `proven_gone_at IS NULL`. The non-Cursor working hold, Cursor working/waiting transitions,
   the idle-prompt Notification's move from `check_permission` to `waiting`
-  (`ApplyHookWaitingIfWorking`) and `find-missing`'s repair
-  (`repairCheckPermissionSQL`) use it. Non-Cursor working transitions first
+  (`ApplyHookWaitingIfWorking`), a Cursor tool proof's move from
+  `check_permission` to `working` (`proveCursorTool`), `find-missing`'s repair
+  (`repairCheckPermissionSQL`) and Cursor rotation (`RotateCursorSession`, whose
+  read in its own transaction picks `check_permission` or `waiting` for the
+  state it writes) use it. Non-Cursor working transitions first
   read `holdingRequestSQL` (`holdWorkingTransition`), then guard the UPDATE
   (`applyWorkingWrite`) with `NOT EXISTS` so a concurrently inserted request
   still holds the row. Cursor skips that preliminary hold read and attempts
   the guarded UPDATE for working and waiting (Stop/Interrupt). If rejected,
   it performs a gated soft refresh, retaining state and settle columns while
   refreshing activity and advancing row version even when `idle_since` was NULL.
-  The Notification and repair carry the hold guard in their own statement. The move to
-  `working` and the idle-prompt Notification's move share that `NOT
+  The Notification, the Cursor proof's move and the repair carry the hold
+  guard in their own statement. The move to `working`, the idle-prompt
+  Notification's move and the Cursor proof's move share that `NOT
   EXISTS` as one fragment, `noRequestHoldsRowSQL`
-  (`internal/store/hook_writes.go`); `repairCheckPermissionSQL` spells out
+  (`internal/store/hook_writes.go`), which rotation's read also uses;
+  `repairCheckPermissionSQL` spells out
   its own. A request proven gone holds none of
   them, whatever agent-director's records say of it: one a person answered
   at the pane, which nothing records, still awaits an answer, and once the
@@ -13160,6 +13177,33 @@ hold or concurrent request insertion can bypass the UPDATE guard. A successful
 refresh does not mean readiness; the reporter independently verifies a genuine
 hold as described in [Cursor gateway](#cursor-gateway-and-current-launch-binding).
 
+Cursor sends no mid-turn hook, so its tool proof stands in for Claude's
+`PostToolUse` or `PostToolUseFailure` (b.eoe). When `proveCursorTool`
+(`ProveCursorToolRan`, or `ProveCursorToolFailed` for a failed MCP
+completion) writes a proof while a prompt turn is open (`turnOpen`, the
+gateway session loop's `busy && !rotating`) and the request's retained
+decision is not deny, the same transaction moves the row from
+`check_permission` to `working` under `noRequestHoldsRowSQL`, with the
+columns `hookWriteStateSet` gives an ordinary hook move to `working`, and
+emits one `ad.spawn.state_transition` naming `PostToolUse` or
+`PostToolUseFailure`. A repeated proof, a row in any other state, a row
+still held and a request whose retained decision is deny (a failed MCP
+completion of a denied request included) move nothing. So does a proof
+written with no turn open: a late `tool_call_update` after the prompt
+response, one flushed before a waiting report, or one written while a
+rotation is under way, even a rotation requested mid-turn. No later report
+would repair a `working` row whose turn has ended, so the row keeps its state
+and the following Stop, or `RotateCursorSession` (which picks
+`check_permission` or `waiting` in its own transaction), settles it; a row
+whose Stop was already held stays `check_permission` until the next accepted
+prompt's `working` report or `find-missing`'s repair. The intentional-exit
+and fatal-cleanup flushes can run while a turn is still open; their proof
+then moves the row to `working` just before termination, and SessionEnd
+(`ended`) or the failure's `missing` follows, as a Claude `PostToolUse`
+before its SessionEnd would. A delivered deny gets no proof of its own; a row
+whose last answered request is a delivered deny waits, as on Claude, for the
+turn's Stop.
+
 Bee b.36h's historical model checked the original working-write design;
 `spec/tla/codex/src/Hold36hCx.tla` carries it. The E2 Task1 overlay
 has an [accepted exact-revision receipt](../tickets/handoff/b.ftd/Plans/b.jf1/e2-task1/gate-passed/e2t1-summary.txt)
@@ -14963,7 +15007,7 @@ agent-aware hook classifier](#the-agent-aware-hook-classifier)) both call.
 | `ad.hook.fired` | `ad_hook` | One per `agent-director hook` invocation — records the hook payload and caller identity (SR-A-2.1, Epic 1) |
 | `ad.hook.ignored` | `ad_hook` | Exactly one per hook SR-22.9 did not apply (see [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), fail-open: a trail-write failure changes nothing and the hook still exits 0. Emitted by `emitIgnored` (`internal/hook/gate.go`) on the hook path and by `emitNoExecForm` (`internal/hook/noexec.go`, called from `cmd/agent-director`'s no-verb run through `hook.HandleNoExecForm`); both build the fields with `ignoredFields`. Carries `instance_id`, `hook_event`, `reason` (one of four: `pid_mismatch`: the hook's parent process, with its start time, is not the row's recorded pane process; `no_pane_recorded`: the row records no pane, for a SessionStart only after its bounded wait for the launch's identity write; `subagent_event`: a SessionStart or SessionEnd whose payload carries a non-empty `agent_id`, decided before any write; `no_exec_form`: a no-verb run given a hook payload on stdin, from a Claude Code that does not run exec-form hooks, written with no store access, so `row_session_id` and `row_pane_pid` are always null and `instance_id` is null when the environment has none or an invalid one), `parent_pid`, `parent_command` (the parent's command name from `probe.CommandNameReader`, read only for this record; null when unreadable), `hook_session_id` (null when the payload gives none), `row_session_id` and `row_pane_pid` (from one read of the row; null when the row records none or the read fails). On the hook path, not written for a hook whose id has no row (`subagent_event` included), or for a SessionStart that lost to a changed row twice; `no_exec_form` reads no row and is always written. No `ad.hook.fired` accompanies a `no_exec_form` record. Never another row's id or any session-environment content (SR-14, SR-15) |
 | `ad.hook.pane_is_grandparent` | `ad_hook` | One per SessionStart refused with `pid_mismatch` on a `pending` row whose pane process is the hook's grandparent (b.9n6, b.zde; see "Pane is the hook's grandparent" in [Hooks move a row only for its own agent](#hooks-move-a-row-only-for-its-own-agent)), written by `emitPaneIsGrandparent` (`internal/hook/gate.go`) right after that hook's `ad.hook.ignored`; not once-only. Carries `instance_id`, `pane_pid` (the row's pane process), `pane_command` (its command name; null when unreadable), `parent_pid` and `parent_command` (the `ad.hook.ignored` record's values), `advice` and `source`. The event name is the contract and claims only that structure; `advice` is supplementary English naming both causes (a launcher that does not exec, a hook run through a shell), chosen by the row's agent: a Claude row's also names `[launch] claude_path`, a Codex row's names the `codex` program, the launcher case and `[launch] codex_path`. Fail-open; it changes nothing else. Never another row's id or any session-environment content (SR-14, SR-15) |
-| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`), and per read-time Codex turn end after COMMIT (`EndCodexTurn`: `working` to `waiting`, `task_complete`, `soft_refresh=false`, plus `cause` `codex_rollout_task_complete`, the one record of this event that carries `cause`; see "The Codex turn" under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, find-missing, resume and reuse keep their own existing event contracts. |
+| `ad.spawn.state_transition` | `ad_spawn_store` | One per applied hook write, including same-state and soft-refresh writes, per authenticated `InsertCursorRequest` admission after COMMIT (prior state to `check_permission`, `PermissionRequest`, `soft_refresh=false`), per Cursor tool proof that moves its row after COMMIT (`proveCursorTool`, only while a prompt turn is open and no rotation is under way, and never for a request whose retained decision is deny: `check_permission` to `working`, `PostToolUse`, or `PostToolUseFailure` for `ProveCursorToolFailed`, `soft_refresh=false`; no `ad.hook.fired` accompanies it), and per read-time Codex turn end after COMMIT (`EndCodexTurn`: `working` to `waiting`, `task_complete`, `soft_refresh=false`, plus `cause` `codex_rollout_task_complete`, the one record of this event that carries `cause`; see "The Codex turn" under [The agent-aware hook classifier](#the-agent-aware-hook-classifier)). Ignored hooks and failed admissions emit none. Ack/timeout writes do not change state. Spawn insert, find-missing, resume and reuse keep their own existing event contracts. |
 | `ad.row_mutation.committed` | `ad_store` | After COMMIT, one per request insert and established decision mutation, with final persisted request id/token/tool/decision/reason. `writer_process` uses the closed `WriterProcess*` set: `hook`, `cursor_host`, `decide`, `find_missing`, `send_keys`, `record_pane_answer`, `resume`. Actual gateway admission, timeout, native claim and exact-tool proof use `cursor_host`; genuine hook paths retain `hook`. Cursor native/proof writes reuse `emitDecisionCommitted`; complete duplicate proof performs no UPDATE or event. Pure acknowledgement of an existing verdict, hook-gone/attempt/intent/release writes, nonmatch, errors and rollback emit no mutation event. Trail failure after COMMIT is fail-open and cannot undo the mutation. No raw ACP params or execution output is logged. |
 | `ad.decide.called` | `ad_decide` | One per `agent-director decide` invocation on every return path, carrying an `outcome` field set to the canonical err_name (or `ok`). Recognized failure outcomes include the no-op refusals `ErrAlreadyDecided` and `ErrRelayFallenBack` (a fallen-back refusal is a recognized outcome, not `ErrInternal`), `ErrStoreBusy` (a `max_wait_ms` bound reached before the verdict was recorded) and `ErrInvalidFlags` (a negative `max_wait_ms`); a successful call is `ok` whether its `delivery` is `delivered` or `not_confirmed` (SR-A-2.4, Epic 4) |
 | `ad.find_missing.tick` | `ad_find_missing` | Written by find-missing only for a guarded write that applied (see [Degraded-mode reconciliation + cron user](#degraded-mode-reconciliation--cron-user)); fail-open. Every tick carries `instance_id`, `prior_state`, `new_state`, `reconciliation_reason` and `source`. **Codex-move ticks** (`markEndedSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied move of a Codex row to `ended`, made by `find-missing` or by `pause`, `prior_state` the row's state before the move, `new_state` `ended`, `reconciliation_reason` `proc_absent`, source `ad_find_missing` and no extra field; the move's close-out ticks and denies are as a mark's. **Mark ticks** (`markMissingSameLife`, `pkg/api/find_missing_writes.go`): exactly one per applied mark, `prior_state` the row's state before the mark and `new_state` `missing`, with `reconciliation_reason` one of `proc_absent` (the agent process, from the SessionStart identity or the pane identity, recorded or adopted, is gone; no extra field), `tmux_absent` (the lookup found no session of the row's current launch and no session holds the recorded name, or an Ours row that records no pane has no pane carrying its launch token; plus `lookup_outcome`, the lookup's outcome token: `gone`, `leftover` or `ours`) or `tmux_name_held` (as `tmux_absent`, but a session holds the recorded name; plus `lookup_outcome` and `tmux_session_name`, the recorded name). **Close-out ticks** (`MarkMissingIfSameLife` and `MarkEndedIfSameLife`, `internal/store/find_missing_writes.go`, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`): one `permission_orphan_closeout` per permission request the mark's transaction closed (each request still awaiting an answer: denied when undecided, or only closed when decided but unacked), written once it commits, in request-id order, each after that request's `ad.row_mutation.committed` when the mark denied it, and all before the mark's own tick, carrying `request_token`, `prior_state` and `new_state` null. **Note ticks** (`writeLivenessNote`, and `writeUnreportedNote` for the `unreported` note of a live `pending` row, b.kdf; both through `emitNoteTick`): `prior_state` and `new_state` null, `reconciliation_reason` the note (`probe_eacces`, `process_not_seen_session_present`, `process_not_seen_tmux_unchecked`, `tmux_server_changed`, `provenance_conflict`, `unreported`, or one of the unusable-recorded-name notes `tmux_session_name_empty`, `tmux_session_name_control_char` and `tmux_session_name_rewritten`, which carry no extra field), at most one per applied note write, and only when the row goes from no note to a note or enters `provenance_conflict` from no note or another note. So the `unreported` note ticks once, reason `unreported`, when it is written onto a row with no note, and not when it replaces another note; it writes no state, so it never has a state tick, and a sweep that finds the row already noted `unreported` writes and ticks nothing. No tick for a clear, for a note equal to the one the sweep read, for any other change of note, or for a write that found the row changed or absent or failed in the store (SR-11.4, SR-11.6, SR-14). A mark is the sweep's judgement on the evidence available to it, not proof that the agent has exited (SR-18.2). **Repair ticks** (`RepairCheckPermission`, `pkg/api/find_missing_repair.go`; b.146 rule 9): exactly one per applied repair of a relayed row left in `check_permission`, `prior_state` `check_permission`, `new_state` the state written (`waiting` or `working`) and `reconciliation_reason` `stale_check_permission`, with no extra field. There is no global-refusal tick. (SR-A-2.5) |
@@ -14988,7 +15032,7 @@ The `source` field identifies which emitter wrote the line:
 | Value | Emitter |
 |-------|---------|
 | `ad_hook` | `internal/hook/handler.go` — the hook ingestion handler (`ad.hook.fired`); `internal/hook/gate.go` — `ad.hook.ignored` on the hook path (`emitIgnored`) and `ad.hook.pane_is_grandparent` (`emitPaneIsGrandparent`); `internal/hook/noexec.go` — `ad.hook.ignored` `no_exec_form` (`emitNoExecForm`), called from the no-verb run in `cmd/agent-director/noverb.go` |
-| `ad_spawn_store` | `internal/store/cursor_permission.go` — authenticated Cursor admission (`ad.spawn.state_transition`); `internal/store/codex_turn.go` — the read-time Codex turn end (`ad.spawn.state_transition`, `EndCodexTurn`); `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
+| `ad_spawn_store` | `internal/store/cursor_permission.go` — authenticated Cursor admission and a tool proof's move to `working` (`ad.spawn.state_transition`); `internal/store/codex_turn.go` — the read-time Codex turn end (`ad.spawn.state_transition`, `EndCodexTurn`); `internal/store/hook_writes.go` — the gated hook writes (`ad.spawn.state_transition`, and SessionStart's `ad.session.archived` / `ad.session.archive_failed`); `internal/store/session_history.go` — `ad.session.jsonl_healed` (also for the Codex hook heal) |
 | `ad_store` | `internal/store/permission.go` — shared permission mutation emitter and writer constants; `internal/store/cursor_permission.go` — gateway admission, timeout, native and proof mutations |
 | `ad_decide` | `pkg/api/decide.go` and `cmd/agent-director/spawn_cmd.go` — decide verb |
 | `ad_find_missing` | The find-missing sweep: `pkg/api/find_missing_writes.go` — the mark, Codex-move and note ticks (`markMissingSameLife`, `markEndedSameLife`, `writeLivenessNote`, `writeUnreportedNote`); `internal/store/find_missing_writes.go` — the `permission_orphan_closeout` ticks of the requests its mark or Codex move closed (`MarkMissingIfSameLife`, `MarkEndedIfSameLife`, after its commit, through `emitOrphanCloseoutTick` in `internal/store/recovery.go`); `pkg/api/find_missing_lookup.go` — the `ad.launch.name_held` record through `emitNameHeld` (`emitRowNameHeld`); `pkg/api/find_missing.go` — the `ad.provenance.disagree` records through `pkg/api/provenance_disagree.go` (`emitDisagree`) |
@@ -17826,10 +17870,10 @@ the section that describes it in detail.
   Stop/Interrupt/working retain genuine unanswered holds, whereas historical
   Claude/Codex Stop waiting is unchanged. See [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility).
 - **The row hold (b.omt).** A request that still awaits an answer and is
-  not proven gone holds the row's moves to `working`, the idle-prompt
-  Notification's move out of `check_permission` and `find-missing`'s
-  repair (see "The row after the last answer" under
-  [Permission relay](#permission-relay)), which costs:
+  not proven gone holds off the writes and reads `holdsRowSQL` lists (see its
+  Must use entry under
+  [v11 proof eligibility](#v11-columns-durable-main-turn-proof-eligibility)),
+  which costs:
   - after a deny of an eligible main request at the pane made outside agent-director, the row stays in
     `check_permission` while the agent works on, until the main agent's
     turn ends; when that deny interrupts the turn (Claude Code sends no
@@ -22965,7 +23009,11 @@ The files are package `api_test`; their doc comments carry the detail.
   uses by agent are a table: Claude's `tool_ran` and `turn_end` (`Stop`),
   Codex's `turn_end` (`Interrupt`) alone. `paEnv.proveCursorTool(t, token, tool)`
   uses the shared complete synthetic binding from `storefix.WithSeedPane`
-  and exact-token/tool `ProveCursorToolRan` for Cursor SQL-scope tests. Its
+  and exact-token/tool `ProveCursorToolRan` for Cursor SQL-scope tests. It
+  proves with a prompt turn open, so a proof of a request not denied that
+  releases the last hold also moves a `check_permission` row to `working`; a
+  case asserting the row's
+  state must expect that. Its
   no-op evidence callback is fixture authority, not real runtime or rawOutput
   proof; controller tests separately validate execution evidence.
 - `codexKinds` (`codex_reporting_test.go`) lists the five kinds of Codex

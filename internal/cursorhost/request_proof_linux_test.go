@@ -202,3 +202,82 @@ func TestCursorGenericToolProofCannotBypassControllerValidation(t *testing.T) {
 		})
 	}
 }
+
+// b.eoe: once a relay-on Cursor row's last request is delivered and, for an
+// allow, its exact invocation is proven, the row leaves check_permission while
+// the turn goes on; a delivered deny waits for the turn's Stop, as on Claude,
+// and a proof arriving after the turn's Stop moves nothing.
+func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
+	// Serial: shared verified pane fixture sets HOME and PATH.
+	cases := []struct {
+		name, decision, kind, output string
+		otherOpen                    bool
+		// stoppedFirst: the turn's Stop arrives while the request still
+		// awaits its answer, so the proof comes after it with no turn open.
+		stoppedFirst    bool
+		proven, stopped string
+	}{
+		{"allowed shell ran", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, false, false, store.StateWorking, store.StateWaiting},
+		{"allowed MCP failed", "allow", "mcp", `{"error":"Tool execution error"}`, false, false, store.StateWorking, store.StateWaiting},
+		// Through admission and the controller: the proof matches only its own
+		// tool call, and the admitted sibling still holds the row through the
+		// proof and the turn's Stop.
+		{"allowed shell ran beside an open request", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, true, false, store.StateCheckPermission, store.StateCheckPermission},
+		{"delivered deny", "deny", "shell", "", false, false, store.StateCheckPermission, store.StateWaiting},
+		{"late proof after a held Stop", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, false, true, store.StateCheckPermission, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newRequestEnv(t, "on", "synthetic-session")
+			gate := e.startTurn(t)
+			c := e.controller(t, &observedWire{}, io.Discard)
+			turnOpen := true
+			c.turnOpen = func() bool { return turnOpen }
+			params := cursorfix.Permission(e.binding.SessionID, "shell", "execute")
+			if tc.kind == "mcp" {
+				params = mcpPermission(e.binding.SessionID, "mcp")
+			}
+			r := e.admit(t, c, `1`, "session/request_permission", params)
+			if tc.otherOpen {
+				e.admit(t, c, `2`, "session/request_permission", cursorfix.Permission(e.binding.SessionID, "independent", "execute"))
+			}
+			e.wantState(t, "admitted", store.StateCheckPermission)
+			stop := func(step, want string) {
+				t.Helper()
+				g := gate
+				g.Event = "Stop"
+				if res, err := e.s.ApplyHookTransition(e.binding.InstanceID, g, store.StateWaiting, false, "Stop", e.tr.path, true); err != nil || !res.Applied {
+					t.Fatalf("%s %+v %v", step, res, err)
+				}
+				e.wantState(t, step, want)
+			}
+			if tc.stoppedFirst {
+				stop("held turn completion", store.StateCheckPermission)
+				turnOpen = false
+			}
+			e.decide(t, r.token, tc.decision)
+			if err := c.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if err := completedWrite(t, c.protocol); err != nil {
+				t.Fatal(err)
+			}
+			if got := e.request(t, r.token); got.DeliveredAt.IsZero() || got.AwaitsAnswer() || got.ProvenGone() {
+				t.Fatalf("delivery: %+v", got)
+			}
+			e.wantState(t, "delivered", store.StateCheckPermission)
+			if tc.output != "" {
+				if err := c.execution(executionUpdate(e.binding.SessionID, tc.kind, "completed", tc.output)); err != nil {
+					t.Fatal(err)
+				}
+				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneToolRan {
+					t.Fatalf("proof: %+v", got)
+				}
+				e.wantState(t, "after proof", tc.proven)
+			}
+			if tc.stopped != "" {
+				stop("turn completed", tc.stopped)
+			}
+		})
+	}
+}

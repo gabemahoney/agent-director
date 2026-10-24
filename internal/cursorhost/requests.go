@@ -61,6 +61,10 @@ type requestController struct {
 	menu       map[rune]nativeChoice
 	nextKey    int
 	generation atomic.Uint64
+	// turnOpen reports whether a prompt turn is open and no rotation is under
+	// way (the session loop's busy && !rotating). Read it only on the
+	// controller goroutine; nil reads false.
+	turnOpen func() bool
 }
 
 func newRequestController(rep *reporter, p *protocol, out io.Writer) *requestController {
@@ -459,7 +463,7 @@ func (c *requestController) execution(params json.RawMessage) error {
 // any other failure, is returned. The controller writes tool proofs only
 // through prove and proofFlush, never by calling writeProof directly.
 func (c *requestController) prove(r *pendingAuthorization) error {
-	e := c.writeProof(r.token, r.auth.toolID, *r.proof)
+	e := c.writeProof(r.token, r.auth.toolID, *r.proof, c.isTurnOpen())
 	if errors.Is(e, store.ErrStoreBusy) && time.Now().Before(c.proofDeadline(*r.proof)) {
 		return nil
 	}
@@ -470,12 +474,18 @@ func (c *requestController) prove(r *pendingAuthorization) error {
 	return nil
 }
 
-func (c *requestController) writeProof(token, tool string, p deferredProof) error {
+// writeProof's turnOpen lets the proof move its row to working; a proof
+// written while no turn is open moves nothing (proveCursorTool).
+func (c *requestController) writeProof(token, tool string, p deferredProof, turnOpen bool) error {
 	prove := c.rep.store.ProveCursorToolRan
 	if !p.ran {
 		prove = c.rep.store.ProveCursorToolFailed
 	}
-	return prove(p.binding, token, tool, c.checkFor(p.binding))
+	return prove(p.binding, token, tool, turnOpen, c.checkFor(p.binding))
+}
+
+func (c *requestController) isTurnOpen() bool {
+	return c.turnOpen != nil && c.turnOpen()
 }
 
 func (c *requestController) proofDeadline(p deferredProof) time.Time {
@@ -486,10 +496,12 @@ func (c *requestController) proofDeadline(p deferredProof) time.Time {
 // one's remaining busy window in place instead of across later ticks. Take and
 // settle it on the controller goroutine. write touches only the flush's own
 // snapshot, never request state, so it may run in await's worker; a write
-// abandoned there races nothing, and a repeated proof write is a no-op.
+// abandoned there races nothing, and a repeated proof write is a no-op. Its
+// turnOpen is the controller's when the flush was taken.
 type proofFlush struct {
-	c      *requestController
-	proofs []flushedProof
+	c        *requestController
+	proofs   []flushedProof
+	turnOpen bool
 }
 
 type flushedProof struct {
@@ -500,7 +512,7 @@ type flushedProof struct {
 }
 
 func (c *requestController) flushProofs() *proofFlush {
-	f := &proofFlush{c: c}
+	f := &proofFlush{c: c, turnOpen: c.isTurnOpen()}
 	for _, r := range c.requests {
 		if r.proof != nil {
 			f.proofs = append(f.proofs, flushedProof{r: r, token: r.token, tool: r.auth.toolID, proof: *r.proof})
@@ -524,7 +536,7 @@ func (f *proofFlush) write(until time.Time) error {
 			end = until
 		}
 		for {
-			e := f.c.writeProof(p.token, p.tool, p.proof)
+			e := f.c.writeProof(p.token, p.tool, p.proof, f.turnOpen)
 			if e == nil {
 				p.stored = true
 				break

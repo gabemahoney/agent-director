@@ -74,7 +74,7 @@ func TestCursorTrailNativeRefusalIsSilent(t *testing.T) {
 			case "closed":
 				e.exec(t, `UPDATE permission_requests SET closed_at=1 WHERE request_token='target'`)
 			case "proven":
-				if err := e.f.s.ProveCursorToolRan(b, token, "tool-target", cursorTrailCheck); err != nil {
+				if err := e.f.s.ProveCursorToolRan(b, token, "tool-target", true, cursorTrailCheck); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -108,7 +108,7 @@ func TestCursorTrailProofRefusalIsSilent(t *testing.T) {
 				b.Connection += "stale"
 			}
 			before, other, mark := e.read(t, "target"), e.read(t, "independent"), store.TrailMark(t)
-			err := e.f.s.ProveCursorToolRan(b, token, tool, cursorTrailCheck)
+			err := e.f.s.ProveCursorToolRan(b, token, tool, true, cursorTrailCheck)
 			if (err != nil) != (refusal == "stale binding") || len(e.events(t, mark)) != 0 || !reflect.DeepEqual(before, e.read(t, "target")) || !reflect.DeepEqual(other, e.read(t, "independent")) {
 				t.Fatalf("refused proof changed row/emitted: %v", err)
 			}
@@ -145,7 +145,7 @@ func TestCursorTrailRollbackIsSilent(t *testing.T) {
 						t.Fatal("rollback returned claimed")
 					}
 				} else {
-					err = e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", cursorTrailCheck)
+					err = e.f.s.ProveCursorToolRan(e.b, "target", "tool-target", true, cursorTrailCheck)
 				}
 				if err == nil || (failure == "commit" && (!*seen || !strings.Contains(err.Error(), "commit"))) || len(e.events(t, mark)) != 0 || !reflect.DeepEqual(before, e.read(t, "target")) {
 					t.Fatalf("failed %s changed row/emitted or missed commit failure: %v", failure, err)
@@ -186,7 +186,7 @@ func TestCursorTrailFailureDoesNotUndoCommit(t *testing.T) {
 	if r := e.read(t, "native"); r.Decision != "deny" || r.DecisionReason != "pane" || r.PaneAnswer != "sent" {
 		t.Fatalf("native commit lost: %+v", r)
 	}
-	if err := e.f.s.ProveCursorToolRan(e.b, "proof", "tool-proof", cursorTrailCheck); err != nil {
+	if err := e.f.s.ProveCursorToolRan(e.b, "proof", "tool-proof", true, cursorTrailCheck); err != nil {
 		t.Fatal(err)
 	}
 	if r := e.read(t, "proof"); !r.ProvenGone() || r.Decision != "allow" || r.DecisionReason != "tool_ran" {

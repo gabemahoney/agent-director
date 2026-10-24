@@ -1209,7 +1209,11 @@ applies), and a changed pane is `ErrPaneChanged`. Never pass
 `--expect-pane-sha256` from an automatic flow.
 
 Late matching Cursor execution proof resolves only that request's hold; it does
-not immediately write `waiting` or replay a prior turn-end report.
+not immediately write `waiting` or replay a prior turn-end report. A matching proof of an
+allowed request that arrives while the prompt turn is still open, with no
+rotation under way, also moves a row no other request holds from
+`check_permission` to `working`; a late one does not (see "The row after the last answer" in
+[permissions.md](permissions.md#delivery)).
 
 `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)

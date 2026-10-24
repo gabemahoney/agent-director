@@ -215,8 +215,12 @@ func (s *Store) CheckCursorAnswer(b CursorRuntime, token string, relay bool, unt
 // execution output; generic completion and plan acceptance are not evidence.
 // Emit only after a committed mutation; an already complete proof is a no-op.
 // The event preserves any earlier decision and reason retained by COALESCE.
-func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, true, check)
+// A committed proof also moves the row from check_permission to working, as
+// Claude's PostToolUse does, but only when no request still holds the row,
+// turnOpen says a prompt turn is open and the request's retained decision is
+// not deny (proveCursorTool).
+func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
+	return s.proveCursorTool(b, token, tool, true, turnOpen, check)
 }
 
 // ProveCursorToolFailed proves only the exact completed invocation's dialog
@@ -224,12 +228,30 @@ func (s *Store) ProveCursorToolRan(b CursorRuntime, token, tool string, check Cu
 // MCP error completion first. Like Claude's PostToolUseFailure, tool_ran here
 // records the invocation's end, not successful execution of the server action.
 // No decision, delivery or pane-answer inference follows from this evidence.
-func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, check CursorCheck) error {
-	return s.proveCursorTool(b, token, tool, false, check)
+// A committed proof moves the row from check_permission to working, as that
+// hook does, but only when no request still holds the row, turnOpen says a
+// prompt turn is open and the request's retained decision is not deny
+// (proveCursorTool).
+func (s *Store) ProveCursorToolFailed(b CursorRuntime, token, tool string, turnOpen bool, check CursorCheck) error {
+	return s.proveCursorTool(b, token, tool, false, turnOpen, check)
 }
 
-func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran bool, check CursorCheck) error {
-	var written bool
+// proveCursorTool writes the proof and, in the same transaction and only when
+// the proof wrote, turnOpen is set and the retained decision is not deny,
+// moves the row from check_permission to
+// working when no request still holds it (noRequestHoldsRowSQL), with the
+// columns an ordinary hook move to working writes. Cursor sends no mid-turn
+// hook, so this is the Claude PostToolUse (ran) or PostToolUseFailure move,
+// and the trail names that event. A proof written while no turn is open
+// (turnOpen false), such as a late one after the prompt response or one
+// flushed before the Stop report, moves nothing, since no later report would
+// repair a working row whose turn has ended; the row keeps its state for the
+// gateway's next report. A row in any other state keeps it. A request whose
+// retained decision is deny moves nothing either, whether a delivered deny
+// gets no proof or a failed one keeps its deny: the row keeps
+// check_permission until the turn's Stop.
+func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOpen bool, check CursorCheck) error {
+	var written, moved bool
 	var requestID int64
 	var toolName, decision, reason string
 	set, incomplete := "", ""
@@ -255,10 +277,32 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran bool, c
 			return e
 		}
 		written = true
-		return nil
+		if !turnOpen || decision == "deny" {
+			return nil
+		}
+		stateSet, stateArgs := s.hookWriteStateSet(StateWorking)
+		stateArgs = append(stateArgs, b.InstanceID)
+		result, e := conn.ExecContext(ctx, `UPDATE spawns SET `+stateSet+`, last_seen_at=CURRENT_TIMESTAMP, ended_at=NULL, `+launchStartClear+`, `+idleClear+`, liveness_unverified_since=NULL,liveness_note=NULL, `+rowVersionAdvance+`
+ WHERE instance_id=? AND state='`+StateCheckPermission+`' AND `+noRequestHoldsRowSQL, stateArgs...)
+		if e != nil {
+			return e
+		}
+		n, e := result.RowsAffected()
+		if e != nil || n == 0 {
+			return e
+		}
+		moved = true
+		return s.refreshFamiliesAfterStateChange(connQuerier{ctx, conn}, StateCheckPermission, StateWorking)
 	})
 	if err == nil && written {
 		emitDecisionCommitted(b.InstanceID, token, requestID, toolName, decision, reason, WriterProcessCursorHost)
+	}
+	if err == nil && moved {
+		event := "PostToolUse"
+		if !ran {
+			event = "PostToolUseFailure"
+		}
+		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{"instance_id": b.InstanceID, "prior_state": StateCheckPermission, "new_state": StateWorking, "triggering_event_name": event, "soft_refresh": false, "source": "ad_spawn_store"})
 	}
 	return err
 }

@@ -352,10 +352,13 @@ func (s *Store) applyWorkingWrite(instanceID string, gate HookGate, set string, 
 
 // noRequestHoldsRowSQL is the WHERE fragment, on a spawns row, that holds
 // while none of the row's permission requests holds it (holdsRowSQL). Two
-// hook writes join it to their own UPDATE's WHERE: the move to working
-// (applyWorkingWrite; b.36h) and the idle-prompt Notification's move from
-// check_permission to waiting (ApplyHookWaitingIfWorking). It has no
-// placeholders.
+// hook writes join it to their own UPDATE's WHERE: the move to working, and a
+// verified Cursor Stop or Interrupt's move to waiting (applyWorkingWrite;
+// b.36h), and the idle-prompt Notification's move from
+// check_permission to waiting (ApplyHookWaitingIfWorking). So does a Cursor
+// tool proof's move from check_permission to working (proveCursorTool), and
+// Cursor rotation reads it to pick check_permission or waiting
+// (RotateCursorSession). It has no placeholders.
 const noRequestHoldsRowSQL = `NOT EXISTS (SELECT 1 FROM permission_requests pr
      WHERE pr.instance_id = spawns.instance_id AND ` + holdsRowSQL + `)`
 

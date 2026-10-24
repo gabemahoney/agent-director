@@ -133,13 +133,13 @@ func TestRequestEligibilityWritersReadersAndProof(t *testing.T) {
 						t.Fatalf("generic Cursor proof %d %v", n, err)
 					}
 					check := func(Spawn) error { return nil }
-					if err = s.ProveCursorToolRan(*gate.Cursor, tokenA, "other-tool", check); err != nil || mustRequest(t, s, tokenA).ProvenGone() {
+					if err = s.ProveCursorToolRan(*gate.Cursor, tokenA, "other-tool", true, check); err != nil || mustRequest(t, s, tokenA).ProvenGone() {
 						t.Fatalf("unmatched Cursor tool proof %v", err)
 					}
-					if err = s.ProveCursorToolRan(*gate.Cursor, tokenB, tool, check); err != nil || mustRequest(t, s, tokenA).ProvenGone() || mustRequest(t, s, tokenB).ProvenGone() {
+					if err = s.ProveCursorToolRan(*gate.Cursor, tokenB, tool, true, check); err != nil || mustRequest(t, s, tokenA).ProvenGone() || mustRequest(t, s, tokenB).ProvenGone() {
 						t.Fatalf("mismatched Cursor token/tool pair %v", err)
 					}
-					err = s.ProveCursorToolRan(*gate.Cursor, tokenA, tool, check)
+					err = s.ProveCursorToolRan(*gate.Cursor, tokenA, tool, true, check)
 				} else {
 					n, err = s.ProveRequestsGone(relayID, gate, RequestProof{How: ProvenGoneToolRan, ToolUseID: tool, At: proofAt})
 					if n != 1 {
