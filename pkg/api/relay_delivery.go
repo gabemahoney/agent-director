@@ -48,9 +48,7 @@ type RelayView struct {
 	// a request recorded before schema v7, with no settle instant on record,
 	// falls back.
 	Window time.Duration
-	// NeedsIntelligenceTimeout is the needs_intelligence timeout, independent
-	// of relay delivery deadlines. Zero uses the configured default of thirty
-	// seconds.
+	// Deprecated: has no effect; a permission request never shows needs_intelligence.
 	NeedsIntelligenceTimeout time.Duration
 
 	// samplePane captures a working Claude or Codex row's own pane for its

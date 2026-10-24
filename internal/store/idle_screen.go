@@ -86,8 +86,10 @@ func (sp Spawn) PaneObservable() bool {
 // candidate. On an observed row only a pane observation commits one in that
 // epoch, so it is that observation's finding for this interval: an entry
 // settling in, a displayed episode, or a move in from a displayed
-// needs_intelligence. A display an earlier interval left (a hook-ended
-// needs_intelligence, an earlier turn's idle_screen) is not one.
+// needs_intelligence, which applies only to an observation an earlier release
+// stored, since no read enters needs_intelligence. A display an earlier
+// interval left (a hook-ended needs_intelligence, an earlier turn's
+// idle_screen) is not one.
 func (sp Spawn) IdleScreenCurrent() bool {
 	o, ok := decodeDisplayObservation(sp.DisplayObservation)
 	return ok && sp.PaneObservable() && o.PermissionEpoch == sp.PermissionEpoch && o.Candidate == StateIdleScreen

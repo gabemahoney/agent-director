@@ -46,8 +46,9 @@ func settleClientFor(t *testing.T, dbPath string, ms int64, tc api.TmuxClient, n
 }
 
 // clientReported returns id's state as c's Status, Get and List give it,
-// failing t unless the three agree, List's state filter selects the row by
-// that state, and each call returns within settleReadBudget.
+// failing t unless the three agree on state and displayed_state, List's state
+// filter selects the row by each, and each call returns within
+// settleReadBudget.
 func clientReported(t *testing.T, c *api.Client, id string) (api.StatusResult, api.SpawnRow, api.ListRow) {
 	t.Helper()
 	timed := func(what string, call func() error) {
@@ -81,8 +82,16 @@ func clientReported(t *testing.T, c *api.Client, id string) (api.StatusResult, a
 	if row.State != status.State || listed.State != status.State {
 		t.Errorf("%s: status %q, get %q, list %q; want the same state from all three", id, status.State, row.State, listed.State)
 	}
+	if row.DisplayedState != status.DisplayedState || listed.DisplayedState != status.DisplayedState {
+		t.Errorf("%s: displayed_state status %q, get %q, list %q; want the same from all three", id, status.DisplayedState, row.DisplayedState, listed.DisplayedState)
+	}
 	if _, ok := listRow(status.State); !ok {
 		t.Errorf("%s: list --state %s does not select the row", id, status.State)
+	}
+	if status.DisplayedState != "" {
+		if _, ok := listRow(status.DisplayedState); !ok {
+			t.Errorf("%s: list --state %s does not select the row by its displayed_state", id, status.DisplayedState)
+		}
 	}
 	return status, row, listed
 }

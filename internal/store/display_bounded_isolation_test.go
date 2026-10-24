@@ -95,18 +95,10 @@ func TestCursorBoundedMissingDisplayExitCommitIsolation(t *testing.T) {
 				e := newCursorTrailEnv(t)
 				token := storefix.TestRequestTokenA
 				e.insert(t, token)
-				row, err := e.f.s.GetSpawnSettled(e.b.InstanceID, store.SettleRead{})
-				if err != nil {
-					t.Fatal(err)
-				}
-				pr := e.read(t, token)
-				at := e.until.Add(time.Minute)
-				if display := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, at, 30*time.Second); display.State != store.StateNeedsIntelligence {
-					t.Fatalf("committed needs_intelligence setup: %+v", display)
-				}
-				row, err = e.f.s.GetSpawn(e.b.InstanceID)
-				if err != nil {
-					t.Fatal(err)
+				e.showStoredDisplay(t, storedNeedsIntelligence)
+				row, err := e.f.s.GetSpawn(e.b.InstanceID)
+				if err != nil || row.CommittedDisplay().State != store.StateNeedsIntelligence {
+					t.Fatalf("stored needs_intelligence setup: %+v %v", row, err)
 				}
 				before := e.read(t, token)
 				other := seedUnrelatedDisplayExit(t, e, marker.raw)

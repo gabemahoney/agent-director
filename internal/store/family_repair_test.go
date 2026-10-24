@@ -15,15 +15,24 @@ import (
 )
 
 // b.ob8 F1: the bounded terminal writer must drain a waiting row's retained
-// display before comparing contributions. Plain waiting still skips the scan.
+// display before comparing contributions. A retained idle_screen keeps the
+// member working, so draining it changes the families. b.zpv: the
+// needs_intelligence an earlier release stored keeps no member working, but
+// that release's stored aggregates counted it as working; draining it
+// refreshes them, in the same transaction, to waiting. Plain waiting still
+// skips the scan. Cursor is the only agent with this writer and never enters
+// idle_screen, but the family rule does not look at the agent.
 func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		display, reject bool
+		name    string
+		display string // stored display state; "" for none
+		reject  bool
 	}{
-		{"retained display commits", true, false},
-		{"retained display rolls back failed refresh", true, true},
-		{"plain waiting skips refresh", false, true},
+		{"retained display commits", store.StateIdleScreen, false},
+		{"retained display rolls back failed refresh", store.StateIdleScreen, true},
+		{"stored needs_intelligence commits", store.StateNeedsIntelligence, false},
+		{"stored needs_intelligence rolls back failed refresh", store.StateNeedsIntelligence, true},
+		{"plain waiting skips refresh", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newCursorTrailEnv(t)
@@ -31,14 +40,13 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 			if err := apitest.SeedParentChild(e.f.path, parent, e.b.InstanceID); err != nil {
 				t.Fatal(err)
 			}
-			if tc.display {
+			switch tc.display {
+			case store.StateIdleScreen:
+				e.showStoredDisplay(t, storedIdleScreen)
+			case store.StateNeedsIntelligence:
 				e.insert(t, storefix.TestRequestTokenA)
-				row := rvExamine(t, e.f, e.b.InstanceID)
+				e.showStoredDisplay(t, storedNeedsIntelligence)
 				pr := e.read(t, storefix.TestRequestTokenA)
-				shown := observeUnlessBusy(t, e.f.s, row, []store.PermissionSample{{Request: pr, FallbackAt: e.until, Basis: store.FallbackDeadline}}, e.until.Add(time.Minute), time.Second)
-				if shown.State != store.StateNeedsIntelligence {
-					t.Fatalf("entry=%+v", shown)
-				}
 				if err := apitest.SetPermissionFacts(e.f.path, pr.RequestID, apitest.PermissionProof(e.until)); err != nil {
 					t.Fatal(err)
 				}
@@ -47,19 +55,29 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 			if a, err := e.f.s.ApplyHookTransition(e.b.InstanceID, gate, store.StateWaiting, false, "Stop", "", false); err != nil || !a.Applied {
 				t.Fatalf("Stop=%+v %v", a, err)
 			}
+			if tc.display == store.StateNeedsIntelligence {
+				seedStaleNeedsIntelligenceFamilies(t, e.f.path, parent, e.b.InstanceID)
+			}
 			row := rvExamine(t, e.f, e.b.InstanceID)
 			if row.State != store.StateWaiting {
 				t.Fatalf("raw state=%s", row.State)
 			}
-			if tc.display && row.CommittedDisplay().State != store.StateNeedsIntelligence {
+			if tc.display != "" && row.CommittedDisplay().State != tc.display {
 				t.Fatalf("Stop lost display: %+v", row)
 			}
 			before := map[string][3]any{}
 			for _, id := range []string{parent, row.InstanceID} {
 				a, b, at := familyHistory(t, e.f, id)
 				before[id] = [3]any{a, b, at}
-				if tc.display && a != store.StateWorking {
-					t.Errorf("Stop removed retained family %s: %v", id, before[id])
+				switch tc.display {
+				case store.StateIdleScreen:
+					if a != store.StateWorking {
+						t.Errorf("Stop removed retained family %s: %v", id, before[id])
+					}
+				case store.StateNeedsIntelligence:
+					if a != store.StateWorking || b != store.StateWorking || at != staleFamilyStampMs {
+						t.Fatalf("seeded stale family %s: %v; want working/working/%d", id, before[id], staleFamilyStampMs)
+					}
 				}
 			}
 			blocked := errors.New("fixture: terminal family refresh failed")
@@ -85,7 +103,7 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 				t.Fatalf("terminal write never attempted: %v", err)
 			}
 			after := rvExamine(t, e.f, row.InstanceID)
-			if tc.display && tc.reject {
+			if tc.display != "" && tc.reject {
 				if !errors.Is(err, blocked) || result == store.CondApplied || !reflect.DeepEqual(after, row) {
 					t.Fatalf("failed refresh did not roll back: %s/%v %v before=%+v after=%+v", prior, result, err, row, after)
 				}
@@ -104,19 +122,26 @@ func TestFamilyRetainedDisplayBoundedTerminalExit(t *testing.T) {
 			_, _, stamp := familyHistory(t, e.f, row.InstanceID)
 			for _, id := range []string{parent, row.InstanceID} {
 				a, b, at := familyHistory(t, e.f, id)
-				if a != store.StateWaiting || tc.display && (b != store.StateWorking || at != stamp || stamp == 0) {
-					t.Errorf("terminal family %s=%s/%s/%d", id, a, b, at)
+				switch tc.display {
+				case store.StateIdleScreen, store.StateNeedsIntelligence:
+					if a != store.StateWaiting || b != store.StateWorking || at != stamp || stamp == 0 || stamp == before[id][2] {
+						t.Errorf("terminal family %s=%s/%s/%d; want a new waiting/working change from %v", id, a, b, at, before[id])
+					}
+				default:
+					if a != store.StateWaiting {
+						t.Errorf("terminal family %s=%s/%s/%d", id, a, b, at)
+					}
 				}
 			}
-			if tc.display {
+			if tc.display != "" {
 				if refreshes == 0 {
-					t.Error("retained contribution bypassed refresh")
+					t.Error("retained display exit bypassed refresh")
 				}
 				_, at, err := apitest.ReadSettle(e.f.path, row.InstanceID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertDisplayRecords(t, mark, row.InstanceID, displayRecord{store.StateNeedsIntelligence, store.StateMissing, time.UnixMilli(at)})
+				assertDisplayRecords(t, mark, row.InstanceID, displayRecord{tc.display, store.StateMissing, time.UnixMilli(at)})
 			} else {
 				if refreshes != 0 {
 					t.Errorf("plain waiting refreshed families %d times", refreshes)

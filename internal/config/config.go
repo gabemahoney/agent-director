@@ -366,7 +366,8 @@ func (s Store) refusals() []string {
 	return nil
 }
 
-// DefaultNeedsIntelligenceTimeoutSeconds is measured from established fallback.
+// DefaultNeedsIntelligenceTimeoutSeconds is the value Default() seeds into
+// State.NeedsIntelligenceTimeoutSeconds, a key with no effect.
 const DefaultNeedsIntelligenceTimeoutSeconds = 30
 
 // MaxNeedsIntelligenceTimeoutSeconds is the whole-second duration ceiling.
@@ -380,12 +381,12 @@ const DefaultIdleScreenTimeoutSeconds = 1200
 // configuration and the per-spawn override alike.
 const MaxIdleScreenTimeoutSeconds = MaxPauseTimeoutSeconds
 
-// State holds configuration for the displayed row state and the eligibility
-// of the Displayed States needs_intelligence and idle_screen.
+// State holds configuration for the reported row state and the eligibility
+// of the Displayed State idle_screen.
 type State struct {
-	// NeedsIntelligenceTimeoutSeconds is the age of an unanswered fallback
-	// before it becomes a report-only needs_intelligence candidate. Zero uses
-	// the default.
+	// NeedsIntelligenceTimeoutSeconds has no effect: a permission request
+	// never shows needs_intelligence, however long it waits. Load still
+	// accepts and range-checks it, so existing config files keep loading.
 	NeedsIntelligenceTimeoutSeconds int `toml:"needs_intelligence_timeout_seconds"`
 
 	// IdleScreenTimeoutSeconds is how long sampled pane fingerprints must stay
@@ -431,15 +432,6 @@ func (s State) EffectiveSettleMs() int {
 		return s.SettleMs
 	}
 	return DefaultStateSettleMs
-}
-
-// EffectiveNeedsIntelligenceTimeoutSeconds returns the configured positive
-// timeout, or thirty seconds for an omitted/zero value. Load owns validation.
-func (s State) EffectiveNeedsIntelligenceTimeoutSeconds() int {
-	if s.NeedsIntelligenceTimeoutSeconds > 0 {
-		return s.NeedsIntelligenceTimeoutSeconds
-	}
-	return DefaultNeedsIntelligenceTimeoutSeconds
 }
 
 // EffectiveIdleScreenTimeoutSeconds returns the configured positive timeout,

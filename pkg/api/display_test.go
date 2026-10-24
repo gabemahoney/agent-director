@@ -1,10 +1,12 @@
 package api_test
 
-// display_test.go — what the two Displayed States (b.ob8), needs_intelligence
-// and idle_screen, share: the clients' observation helpers, the
-// ad.spawn.displayed_state_transition record check, and the Go wire and list
-// filter over the shared surfaces. needs_intelligence_*_test.go and
-// idle_screen_*_test.go hold each state's own tests.
+// display_test.go — what the Displayed States (b.ob8) share: the clients'
+// observation helpers, the ad.spawn.displayed_state_transition record check,
+// and the Go wire over the shared surfaces. Since b.zpv a read reports a
+// Displayed State in displayed_state beside the row's real state, and no read
+// shows needs_intelligence. needs_intelligence_*_test.go hold the permission
+// fallback clocks and the needs_intelligence an earlier release stored;
+// idle_screen_*_test.go hold idle_screen's own tests.
 
 import (
 	"encoding/json"
@@ -41,7 +43,7 @@ func observeDisplay(t *testing.T, probe apitest.DisplayProbe, id, want string, c
 	t.Helper()
 	apitest.ObserveDisplayRead(t, probe, id, want, commit, func() (apitest.DisplayReading, error) {
 		state, detail, err := read()
-		reading := apitest.DisplayReading{State: state, Since: detail.Since, RequestToken: detail.RequestToken, ToolName: detail.ToolName}
+		reading := apitest.DisplayReading{State: state, DisplayedState: detail.DisplayedState, Since: detail.Since, RequestToken: detail.RequestToken, ToolName: detail.ToolName}
 		if detail.UnchangedMinutes != nil {
 			reading.UnchangedMinutes = *detail.UnchangedMinutes
 		}
@@ -49,14 +51,13 @@ func observeDisplay(t *testing.T, probe apitest.DisplayProbe, id, want string, c
 	})
 }
 
-// coherentDisplay fails unless detail carries exactly state's detail and the
-// attach target, as a status showing a Displayed State does.
+// coherentDisplay fails unless detail carries exactly state, the only
+// Displayed State a read shows, as displayed_state with its detail, and the
+// attach target, as a status showing it does.
 func coherentDisplay(t *testing.T, state string, detail api.StateDetail, session string) {
 	t.Helper()
-	ok := detail.Since != "" && session != ""
+	ok := detail.DisplayedState == state && detail.Since != "" && session != ""
 	switch state {
-	case api.StateNeedsIntelligence:
-		ok = ok && detail.RequestToken != "" && detail.UnchangedMinutes == nil
 	case api.StateIdleScreen:
 		ok = ok && detail.RequestToken == "" && detail.ToolName == "" && detail.UnchangedMinutes != nil && *detail.UnchangedMinutes >= 0
 	default:
@@ -68,9 +69,9 @@ func coherentDisplay(t *testing.T, state string, detail api.StateDetail, session
 }
 
 // observeStatus is c.Status judged against the committed row: see
-// apitest.ObserveDisplayRead. want is the displayed state, ordinary or
-// Displayed. commit names the commit the read must make (nil when it makes
-// none).
+// apitest.ObserveDisplayRead. want is what the row shows: its displayed_state
+// when one shows, else its state. commit names the commit the read must make
+// (nil when it makes none).
 func observeStatus(t *testing.T, c *api.Client, id, want string, commit apitest.CommitCheck) api.StatusResult {
 	t.Helper()
 	probe, ok := displayProbes.Load(c)
@@ -152,7 +153,8 @@ func assertDisplayEvent(t *testing.T, ev map[string]any, prior, next string, at 
 
 // displaySurfaceClient is a Client under apitest.SettleOnConfig over a store
 // holding plain, an ordinary check_permission row, then the shared
-// needs_intelligence and idle_screen surfaces, in that order.
+// needs_intelligence (stored, never shown) and idle_screen surfaces, in that
+// order.
 func displaySurfaceClient(t *testing.T) *api.Client {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -175,9 +177,11 @@ func displaySurfaceClient(t *testing.T) *api.Client {
 	return c
 }
 
-// TestDisplayGoWire: status, get and list of the shared needs_intelligence and
-// idle_screen surfaces give each state's exact detail (list only the state)
-// and every row its agent's idle_screen_availability.
+// TestDisplayGoWire: status, get and list of the shared idle_screen surface
+// give its exact detail (list only displayed_state) and every row its agent's
+// idle_screen_availability; list --state idle_screen takes its rows before the
+// limit, and the removed state value matches nothing. TestDisplayedStateContract
+// covers every other filter.
 func TestDisplayGoWire(t *testing.T) {
 	t.Parallel()
 	c := displaySurfaceClient(t)
@@ -197,9 +201,9 @@ func TestDisplayGoWire(t *testing.T) {
 			surface.Check(t, marshal(c.Get(surface.Prefix+agent)), agent, "get")
 		}
 	}
-	rows, err := c.List(api.ListParams{State: []string{api.StateNeedsIntelligence, api.StateIdleScreen}, Limit: 5})
-	if err != nil || len(rows.Spawns) != 5 {
-		t.Fatalf("list=%+v %v; want the 5 displayed rows", rows, err)
+	rows, err := c.List(api.ListParams{State: []string{api.StateIdleScreen}, Limit: 2})
+	if err != nil || len(rows.Spawns) != 2 {
+		t.Fatalf("list=%+v %v; want the 2 displayed rows", rows, err)
 	}
 	for _, row := range rows.Spawns {
 		apitest.CheckListedDisplayWire(t, marshal(row, nil))
@@ -207,39 +211,7 @@ func TestDisplayGoWire(t *testing.T) {
 	for id, agent := range apitest.DisplayWireOrdinary {
 		apitest.CheckOrdinaryWire(t, marshal(c.Status(id)), agent)
 	}
-}
-
-// TestDisplayListFilter: a list state filter matches the displayed state before
-// the limit, so each Displayed State selects its own rows, at most the limit,
-// whatever rows the store holds besides them; a row showing either does not
-// match its raw state, and the removed state value, which no row displays,
-// matches nothing (docs/caller-contract.md "Filtering").
-func TestDisplayListFilter(t *testing.T) {
-	t.Parallel()
-	c := displaySurfaceClient(t)
-	for _, tc := range []struct {
-		states []string
-		limit  int
-		want   []string // sorted
-	}{
-		{[]string{api.StateNeedsIntelligence}, 3, []string{"needs-intelligence-claude", "needs-intelligence-codex", "needs-intelligence-cursor"}},
-		{[]string{api.StateIdleScreen}, 2, []string{"idle-screen-claude", "idle-screen-codex"}},
-		{[]string{store.StateCheckPermission}, 0, []string{"plain"}},
-		{[]string{store.StateWorking}, 0, []string{"ordinary", "ordinary-cursor"}},
-		{[]string{api.StateNeedsIntelligence, store.StateCheckPermission}, 0, []string{"needs-intelligence-claude", "needs-intelligence-codex", "needs-intelligence-cursor", "plain"}},
-		{[]string{"stuck"}, 0, []string{}},
-	} {
-		listed, err := c.List(api.ListParams{State: tc.states, Limit: tc.limit})
-		if err != nil {
-			t.Fatalf("%v: %v", tc.states, err)
-		}
-		got := []string{}
-		for _, row := range listed.Spawns {
-			got = append(got, row.InstanceID)
-		}
-		sort.Strings(got)
-		if !equalStrings(got, tc.want) {
-			t.Errorf("filter %v limit %d matched %v; want %v", tc.states, tc.limit, got, tc.want)
-		}
+	if removed, err := c.List(api.ListParams{State: []string{"stuck"}}); err != nil || len(removed.Spawns) != 0 {
+		t.Errorf("list --state stuck=%+v %v; want no rows", removed, err)
 	}
 }

@@ -367,7 +367,7 @@ func docConfigKeys() []struct {
 		{"store.db_path", c.Store.DbPath, "", false},
 		{"store.busy_timeout_ms", itoa(int64(c.Store.BusyTimeoutMs)), rng(int64(config.MaxStoreBusyTimeoutMs)), false},
 		{"state.settle_ms", itoa(int64(c.State.SettleMs)), "", false},
-		{"state.needs_intelligence_timeout_seconds", itoa(int64(c.State.EffectiveNeedsIntelligenceTimeoutSeconds())), rng(int64(config.MaxNeedsIntelligenceTimeoutSeconds)), false},
+		{"state.needs_intelligence_timeout_seconds", itoa(int64(c.State.NeedsIntelligenceTimeoutSeconds)), rng(int64(config.MaxNeedsIntelligenceTimeoutSeconds)), false},
 		{"state.idle_screen_timeout_seconds", itoa(int64(c.State.EffectiveIdleScreenTimeoutSeconds())), rng(int64(config.MaxIdleScreenTimeoutSeconds)), false},
 		{"launch.claude_path", "unset", "", true},
 		{"launch.codex_path", "unset", "", true},

@@ -10,10 +10,11 @@ import (
 )
 
 // TestDisplayCLIWire: the CLI's status, get and list of the shared
-// needs_intelligence and idle_screen surfaces print each state's exact detail
-// (list only the state, `--state` naming either one) and every row its agent's
-// idle_screen_availability, read under the largest settle time
-// (apitest.SeedIdleScreenSurface).
+// idle_screen surface print its exact wire, displayed_state beside state
+// working (list no detail, `--state idle_screen` selecting it), and every row
+// its agent's idle_screen_availability, read under the largest settle time
+// (apitest.SeedIdleScreenSurface). The stored needs_intelligence rows are
+// TestDisplayedStateContractCLI's (b.zpv).
 func TestDisplayCLIWire(t *testing.T) {
 	home := t.TempDir()
 	if err := apitest.SeedNeedsIntelligenceSurface(stateDB(home)); err != nil {
@@ -46,9 +47,9 @@ func TestDisplayCLIWire(t *testing.T) {
 		}
 		for _, row := range listed.Spawns {
 			var got struct {
-				State string `json:"state"`
+				DisplayedState string `json:"displayed_state"`
 			}
-			if json.Unmarshal(row, &got) != nil || got.State != surface.State {
+			if json.Unmarshal(row, &got) != nil || got.DisplayedState != surface.State {
 				t.Errorf("list --state %s listed %s", surface.State, row)
 			}
 			apitest.CheckListedDisplayWire(t, row)

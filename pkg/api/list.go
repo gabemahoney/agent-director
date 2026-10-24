@@ -33,8 +33,9 @@ type ListStore interface {
 // "k=v" strings — List parses it into the store's typed filter map
 // so the JSON / CLI / MCP surfaces share one validation seam.
 type ListParams struct {
-	// State filters by lifecycle state. Multiple values OR together.
-	// Nil/empty means no state filter (all states returned).
+	// State filters by lifecycle state or Displayed State: a row matches when
+	// its state or its displayed_state is one of the values. Multiple values
+	// OR together. Nil/empty means no state filter (all states returned).
 	State []string
 	// Labels filters by label key=value pairs. Each entry must be "k=v"
 	// (returns [ErrListInvalidLabel] otherwise). Multiple entries AND together.
@@ -61,13 +62,15 @@ type ListRow struct {
 	// ParentID is the id of the spawning Spawn. Omitted from JSON when empty.
 	ParentID string `json:"parent_id,omitempty"`
 	// State is the current lifecycle state. One of: pending, waiting, working,
-	// ask_user, check_permission, ended, missing, or a report-only Displayed
-	// State, needs_intelligence or idle_screen, whose detail only get and
-	// status carry. pending means a launch (spawn, reuse or resume) is in
-	// progress and the agent has not reported in yet (its SessionStart hook);
-	// it may be loading or waiting at a startup prompt. A resumed pending row
-	// keeps its session id and history.
+	// ask_user, check_permission, ended, missing; never a Displayed State,
+	// which DisplayedState carries beside it. pending means a launch (spawn,
+	// reuse or resume) is in progress and the agent has not reported in yet
+	// (its SessionStart hook); it may be loading or waiting at a startup
+	// prompt. A resumed pending row keeps its session id and history.
 	State string `json:"state"`
+	// DisplayedState is, as StatusResult's, the Displayed State the row shows,
+	// present only while one shows; its detail only get and status carry.
+	DisplayedState string `json:"displayed_state,omitempty"`
 	// FamilyState reports working or waiting for the complete stored family.
 	// Both directions settle independently using [state] settle_ms.
 	FamilyState string `json:"family_state"`
@@ -179,13 +182,13 @@ func List(s ListStore, v RelayView, params ListParams) (ListResult, error) {
 
 // listSettled is List with the reader's settle time and clock settle (b.3ie),
 // passed to the store as ListFilters.Settle: each row's state field is its
-// settled state. The State filter and LIMIT apply to the displayed state:
-// in the store's statement for a store with no permission observation; for
-// one that observes, the statement keeps every row that may display a
-// filtered state (ListFilters.DisplayCandidates) and listFiltered matches each
-// row's displayed state before the limit, so a row showing either Displayed
-// State never matches its raw state. launch_started_at and whether a
-// row's permission requests are read and shown key on the raw state, as
+// settled state. The State filter and LIMIT apply in the store's statement
+// for a store with no permission observation or a filter naming no Displayed
+// State; otherwise the statement keeps every row that may show a filtered state
+// (ListFilters.DisplayCandidates) and listFiltered keeps each row whose
+// state or displayed_state is a filter value, before the limit, so a row
+// showing a Displayed State still matches its state. launch_started_at and
+// whether a row's permission requests are read and shown key on the raw state, as
 // before (permission requests are never debounced). With no settle time it
 // is List exactly as before b.3ie. It never waits for a state to settle.
 func listSettled(s ListStore, v RelayView, settle store.SettleRead, params ListParams) (ListResult, error) {
@@ -229,9 +232,12 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 	endCodexTurns(s, "")
 	fetch := filters
 	observer, observes := s.(needsIntelligenceStore)
-	if observes && len(filters.State) > 0 {
-		// The statement keeps every row that may display a filtered state;
-		// the displayed state is matched, and the limit applied, below.
+	// A filter of lifecycle states only stays in the statement with its
+	// LIMIT, as before b.ob8: such a row matches on its state alone.
+	widened := observes && namesDisplayedState(filters.State)
+	if widened {
+		// The statement keeps every row that may show a filtered state; its
+		// state or displayed state is matched, and the limit applied, below.
 		fetch.DisplayCandidates, fetch.Limit = true, 0
 	}
 	rows, err := s.ListSpawns(fetch)
@@ -254,12 +260,13 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		var judged *judgedRequestSet
 		if observes {
 			var read permissionRead
-			if r.State == store.StateCheckPermission && len(filters.State) == 0 {
-				// With no state filter the row is listed, so its open requests
-				// must be read: the observation reuses that one read instead of
-				// reading again. With a filter the row may yet be dropped, so
-				// the observation reads without waiting, and only a listed row
-				// whose observation read nothing waits for them, below.
+			if r.State == store.StateCheckPermission && !widened {
+				// Unless the filter is widened the row is listed, so its open
+				// requests must be read: the observation reuses that one read
+				// instead of reading again. With a widened filter the row may
+				// yet be dropped, so the observation reads without waiting, and
+				// only a listed row whose observation read nothing waits for
+				// them, below.
 				if read.requests, err = readJudgedRequests(observer.PermissionRequestsForSpawn, j, r.InstanceID); err != nil {
 					return ListResult{Spawns: []ListRow{}}, err
 				}
@@ -272,10 +279,11 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 				families[id] = family
 			}
 		}
-		if observes && len(filters.State) > 0 {
+		shown := displayedState(display)
+		if widened {
 			matched := false
 			for _, state := range filters.State {
-				matched = matched || state == display.State
+				matched = matched || state == reported || (shown != "" && state == shown)
 			}
 			if !matched {
 				continue
@@ -284,7 +292,8 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 		row := ListRow{
 			InstanceID:              r.InstanceID,
 			ParentID:                r.ParentID,
-			State:                   display.State,
+			State:                   reported,
+			DisplayedState:          shown,
 			FamilyState:             r.FamilyState,
 			IdleScreenAvailability:  idleScreenAvailability(r.Agent),
 			CWD:                     r.CWD,
@@ -311,7 +320,7 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 			row.PermissionRequests = infos
 		}
 		out = append(out, row)
-		if observes && filters.Limit > 0 && len(out) >= filters.Limit {
+		if widened && filters.Limit > 0 && len(out) >= filters.Limit {
 			break
 		}
 	}
@@ -340,12 +349,14 @@ func listFiltered(s ListStore, v RelayView, filters ListFilters) (ListResult, er
 // unspecified. A pending row also carries launch_started_at, when the agent's
 // launch began. A row in check_permission carries its open permission
 // requests with their delivery facts, as Get does. With [state] settle_ms
-// set, each row's state is its settled state, and State filters on it: a
-// hook-written change between ordinary states shows only once it has held
-// that long, the last settled state until then. Entering, leaving or moving
-// between needs_intelligence and idle_screen instead times settle_ms from the
-// read that commits its candidate and shows from a later successful read that
-// commits it. Terminal states and command-driven changes show at once.
+// set, each row's state is its settled state: a hook-written change shows
+// only once it has held that long, the last settled state until then. A row
+// that shows a Displayed State carries it in displayed_state beside its
+// state; entering, leaving or moving between Displayed States instead times
+// settle_ms from the read that commits its candidate and shows from a later
+// successful read that commits it. State keeps a row whose state or
+// displayed_state is one of its values, so --state working lists a working
+// row that shows idle_screen. Terminal states and command-driven changes show at once.
 // family_state settles independently. The permission requests and
 // launch_started_at follow the live state. Before applying State and Limit,
 // List projects lost Cursor gateways as missing in the requested

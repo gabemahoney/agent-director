@@ -241,8 +241,9 @@ restore-only (§5); no v15 reverse recipe is implemented.
 ### Previous worked example: v13 → v14
 
 `migrateV13toV14` (`display_schema.go`) adds the columns behind the report-only
-Displayed States: `needs_intelligence` for an unanswered permission request
-and `idle_screen` for an unchanged working pane. On `spawns`:
+Displayed States (`idle_screen` for an unchanged working pane, and
+`needs_intelligence`) and the permission requests' fallback clock.
+On `spawns`:
 `permission_epoch INTEGER NOT NULL DEFAULT 0`,
 `observation_version INTEGER NOT NULL DEFAULT 0`, and nullable
 `display_observation TEXT`, `display_exit TEXT`,

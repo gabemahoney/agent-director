@@ -100,7 +100,9 @@ func SetPermissionFacts(dbPath string, requestID int64, opts ...PermissionOption
 }
 
 // SeedNeedsIntelligenceSurface seeds needs-intelligence-claude, -codex and
-// -cursor, displayed since one precommitted instant, and the ordinary row ordinary.
+// -cursor, check_permission rows each with one open fallen-back request (token
+// A) and the needs_intelligence display 0.16/0.17 committed for it, which no
+// read reports (b.zpv), and the ordinary row ordinary.
 func SeedNeedsIntelligenceSurface(dbPath string) error {
 	since := time.Date(2026, 10, 19, 23, 59, 59, 123000000, time.UTC)
 	// The row's permission epoch and the observation's agree: an observation
@@ -144,8 +146,9 @@ func SeedIdleScreenSurface(dbPath string) error {
 	return err
 }
 
-// DisplayWireSurface is one shared surface's displayed rows: their Displayed
-// State, id prefix and agents, and the check of one read row's wire detail.
+// DisplayWireSurface is one shared surface's displayed rows: the Displayed
+// State they show (displayed_state), their id prefix and agents, and the check
+// of one read row's wire detail.
 type DisplayWireSurface struct {
 	State  string
 	Prefix string
@@ -153,17 +156,20 @@ type DisplayWireSurface struct {
 	Check  func(t testing.TB, raw []byte, agent, verb string)
 }
 
-// DisplayWireSurfaces are SeedNeedsIntelligenceSurface's and
-// SeedIdleScreenSurface's displayed rows; DisplayWireOrdinary maps their
-// ordinary rows to their agents. Every surface test (Go, CLI, MCP) reads them
-// all.
+// DisplayWireSurfaces are SeedIdleScreenSurface's displayed rows (no read
+// shows SeedNeedsIntelligenceSurface's stored display: CheckDisplayedStateContract
+// covers those rows); DisplayWireOrdinary maps the ordinary rows to their
+// agents. Every surface test (Go, CLI, MCP) reads them all.
 var (
 	DisplayWireSurfaces = []DisplayWireSurface{
-		{store.StateNeedsIntelligence, "needs-intelligence-", []string{store.AgentClaude, store.AgentCodex, store.AgentCursor}, CheckNeedsIntelligenceWire},
 		{store.StateIdleScreen, "idle-screen-", []string{store.AgentClaude, store.AgentCodex}, CheckIdleScreenWire},
 	}
 	DisplayWireOrdinary = map[string]string{"ordinary": store.AgentClaude, "ordinary-cursor": store.AgentCursor}
 )
+
+// displayDetailKeys are the wire keys only a row showing a Displayed State
+// carries.
+var displayDetailKeys = []string{"displayed_state", "since", "request_token", "tool_name", "unchanged_minutes"}
 
 // RemovedDisplayNames matches, in any case or dash/underscore spelling, the
 // naming b.ob8 SR-1.3 removed; the manifest, CLI flag-usage and pkg/api guards share it.
@@ -190,52 +196,50 @@ func CheckListedDisplayWire(t testing.TB, raw []byte) {
 	t.Errorf("list row %s is no shared displayed row", row.ID)
 }
 
-// CheckNeedsIntelligenceWire applies the shared independent needs_intelligence
-// wire expectations to one read row of SeedNeedsIntelligenceSurface's.
-func CheckNeedsIntelligenceWire(t testing.TB, raw []byte, agent, verb string) {
-	t.Helper()
-	checkDisplayWire(t, raw, agent, verb, "ts-needs-intelligence-"+agent, LoadNeedsIntelligenceWire(t), "unchanged_minutes")
-}
-
 // CheckIdleScreenWire applies the shared independent idle_screen wire
-// expectations to one read row of SeedIdleScreenSurface's.
+// expectations to one read row of SeedIdleScreenSurface's: state working,
+// displayed_state idle_screen (b.zpv).
 func CheckIdleScreenWire(t testing.TB, raw []byte, agent, verb string) {
 	t.Helper()
-	checkDisplayWire(t, raw, agent, verb, "ts-idle-screen-"+agent, LoadIdleScreenWire(t), "request_token", "tool_name")
+	checkDisplayWire(t, raw, agent, verb, "ts-idle-screen-"+agent, store.StateWorking, store.StateIdleScreen, LoadIdleScreenWire(t), "request_token", "tool_name")
 }
 
 // CheckOrdinaryWire fails unless raw, one read row of an ordinary row of
-// agent, carries no detail of either Displayed State and the agent's
-// idle_screen_availability.
+// agent, carries no displayed_state nor any Displayed State detail, and the
+// agent's idle_screen_availability.
 func CheckOrdinaryWire(t testing.TB, raw []byte, agent string) {
 	t.Helper()
 	var row map[string]any
 	if err := json.Unmarshal(raw, &row); err != nil {
 		t.Fatal(err)
 	}
-	for _, wire := range []map[string]any{LoadNeedsIntelligenceWire(t), LoadIdleScreenWire(t)} {
-		for k := range wire {
-			if _, ok := row[k]; ok && k != "state" {
-				t.Errorf("ordinary %s row emitted %s: %s", agent, k, raw)
-			}
+	for _, k := range displayDetailKeys {
+		if _, ok := row[k]; ok {
+			t.Errorf("ordinary %s row emitted %s: %s", agent, k, raw)
 		}
 	}
 	checkAvailability(t, row, agent)
 }
 
-// checkDisplayWire checks one read row: expected's detail (list: state only), no absent
-// key or removed reason member, its session, availability, raw stamp and request arrays.
-func checkDisplayWire(t testing.TB, raw []byte, agent, verb, session string, expected map[string]any, absent ...string) {
+// checkDisplayWire checks one read row: its real state and displayed_state,
+// expected's detail (list: none), no absent key or removed reason member, its
+// session, availability, raw stamp and request arrays. expected's own "state"
+// or "displayed_state" key, the fixture's name for the Displayed State, is
+// not detail.
+func checkDisplayWire(t testing.TB, raw []byte, agent, verb, session, state, displayed string, expected map[string]any, absent ...string) {
 	t.Helper()
 	var row map[string]any
 	if err := json.Unmarshal(raw, &row); err != nil {
 		t.Fatal(err)
 	}
-	if row["state"] != expected["state"] {
-		t.Fatalf("%s/%s state: %s", agent, verb, raw)
+	if row["state"] != state || row["displayed_state"] != displayed {
+		t.Fatalf("%s/%s state=%v displayed_state=%v; want %s, %s: %s", agent, verb, row["state"], row["displayed_state"], state, displayed, raw)
 	}
 	for k, v := range expected {
-		if verb == "list" && k != "state" {
+		if k == "state" || k == "displayed_state" {
+			continue
+		}
+		if verb == "list" {
 			absent = append(absent, k)
 			continue
 		}
@@ -277,13 +281,6 @@ func checkAvailability(t testing.TB, row map[string]any, agent string) {
 	if row["idle_screen_availability"] != want {
 		t.Errorf("%s idle_screen_availability=%v; want %s", agent, row["idle_screen_availability"], want)
 	}
-}
-
-// LoadNeedsIntelligenceWire reads the shared, hand-authored expected
-// needs_intelligence details.
-func LoadNeedsIntelligenceWire(t testing.TB) map[string]any {
-	t.Helper()
-	return loadDisplayWire(t, "needs_intelligence.json")
 }
 
 // LoadIdleScreenWire reads the shared, hand-authored expected idle_screen details.
@@ -338,11 +335,12 @@ type DisplayProbe interface {
 	GetSpawn(id string) (store.Spawn, error)
 }
 
-// DisplayReading is the display part of one reader result; UnchangedMinutes is
-// 0 when the result carries none.
+// DisplayReading is the display part of one reader result: State its state,
+// DisplayedState its displayed_state ("" when none shows); UnchangedMinutes
+// is 0 when the result carries none.
 type DisplayReading struct {
-	State, Since, RequestToken, ToolName string
-	UnchangedMinutes                     int64
+	State, DisplayedState, Since, RequestToken, ToolName string
+	UnchangedMinutes                                     int64
 }
 
 // observeAttempts and observeWindow bound the repeats of a read that had to
@@ -387,10 +385,15 @@ func VersionAdvanced(before, after store.Spawn) bool {
 // When commit is non-nil and reports no commit, the same read is repeated at
 // the same injected time, without sleeping, under RepeatUntilCommitted's
 // bound, and the test then fails with "observation never committed".
-// Once the commit landed (or none was expected) the display must be want and,
-// for either Displayed State, equal the committed detail of the row.
+// Once the commit landed (or none was expected) the read must show want: its
+// displayed_state when one shows, else its state, which is never a Displayed
+// State (b.zpv). A displayed_state must equal the committed display of the
+// row, with its detail. No read shows needs_intelligence, so want never is.
 func ObserveDisplayRead(t testing.TB, probe DisplayProbe, id, want string, commit CommitCheck, read func() (DisplayReading, error)) DisplayReading {
 	t.Helper()
+	if want == store.StateNeedsIntelligence {
+		t.Fatalf("no read shows %s (b.zpv): want the row's state", want)
+	}
 	var got DisplayReading
 	var before, after store.Spawn
 	attempts, elapsed, committed := RepeatUntilCommitted(func() bool {
@@ -412,12 +415,16 @@ func ObserveDisplayRead(t testing.TB, probe DisplayProbe, id, want string, commi
 	if attempts > 1 {
 		t.Logf("observation committed on attempt %d after %v", attempts, elapsed)
 	}
-	if got.State != want {
-		t.Fatalf("read=%+v; want state %s (observation_version %d -> %d)", got, want, before.ObservationVersion, after.ObservationVersion)
+	shown := got.DisplayedState
+	if shown == "" {
+		shown = got.State
 	}
-	if want == store.StateNeedsIntelligence || want == store.StateIdleScreen {
+	if got.State == store.StateNeedsIntelligence || got.State == store.StateIdleScreen || got.DisplayedState == store.StateNeedsIntelligence || shown != want {
+		t.Fatalf("read=%+v; want it to show %s, state never a Displayed State (observation_version %d -> %d)", got, want, before.ObservationVersion, after.ObservationVersion)
+	}
+	if got.DisplayedState != "" {
 		committed := after.CommittedDisplay()
-		if got != (DisplayReading{State: committed.State, Since: time.UnixMilli(committed.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
+		if got != (DisplayReading{State: got.State, DisplayedState: committed.State, Since: time.UnixMilli(committed.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z"),
 			RequestToken: committed.RequestToken, ToolName: committed.ToolName, UnchangedMinutes: committed.UnchangedMinutes}) {
 			t.Fatalf("%s read=%+v is not the committed display %+v (observation_version %d -> %d)", want, got, committed, before.ObservationVersion, after.ObservationVersion)
 		}

@@ -9,13 +9,14 @@ import (
 	"github.com/gabemahoney/agent-director/internal/tmux"
 )
 
-// The two Displayed States: a current unanswered permission fallback, which a
-// human or orchestrating agent must answer, and a working Claude or Codex row
+// The two Displayed States, reported in displayed_state beside the row's
+// lifecycle state, never in place of it: needs_intelligence, an unknown
+// prompt inferred on the agent's screen, and a working Claude or Codex row
 // whose sampled pane fingerprints stayed identical for its idle_screen
 // timeout. Both are report-only; command guards act on the raw state.
 const (
-	// StateNeedsIntelligence is needs_intelligence: a permission fallback is
-	// still unanswered.
+	// StateNeedsIntelligence is needs_intelligence. Nothing infers it yet, so
+	// no read reports it; a known permission request never yields it.
 	StateNeedsIntelligence = store.StateNeedsIntelligence
 	// StateIdleScreen is idle_screen: a working row's pane stopped changing
 	// for its idle_screen timeout.
@@ -44,17 +45,20 @@ func idleScreenAvailability(agent string) string {
 	return IdleScreenUnavailable
 }
 
-// StateDetail is shared by get and status: the detail of the Displayed State
-// shown, every field omitted while the committed display is ordinary. Since
+// StateDetail is shared by get and status: the Displayed State shown and its
+// detail, every field omitted while the committed display is ordinary. Since
 // uses exactly UTC ms.
 type StateDetail struct {
+	// DisplayedState is the Displayed State the row shows beside its
+	// lifecycle state: idle_screen, or needs_intelligence, which nothing
+	// triggers yet. Present only while one shows.
+	DisplayedState string `json:"displayed_state,omitempty"`
 	// Since is actual committed display entry in RFC3339 UTC milliseconds.
 	Since string `json:"since,omitempty"`
-	// RequestToken selects the earliest qualifying fallback, then lexical
-	// token; only while needs_intelligence.
+	// RequestToken and ToolName belong to needs_intelligence, which nothing
+	// shows yet; a permission request never sets them.
 	RequestToken string `json:"request_token,omitempty"`
-	// ToolName is the selected request tool; only while needs_intelligence.
-	ToolName string `json:"tool_name,omitempty"`
+	ToolName     string `json:"tool_name,omitempty"`
 	// UnchangedMinutes is the completed minutes, rounded down, of the
 	// committed unchanged observation period; only while idle_screen.
 	UnchangedMinutes *int64 `json:"unchanged_minutes,omitempty"`
@@ -66,7 +70,7 @@ type StateDetail struct {
 type needsIntelligenceStore interface {
 	PermissionRequestsForSpawn(string) ([]PermissionRow, error)
 	PermissionRequestsForSpawnWithin(string, time.Duration) ([]PermissionRow, error)
-	ObserveNeedsIntelligence(Spawn, []store.PermissionSample, time.Time, time.Duration, store.SettleRead) (store.DisplayDetail, map[string]string, error)
+	ObserveNeedsIntelligence(Spawn, []store.PermissionSample, time.Time, store.SettleRead) (store.DisplayDetail, map[string]string, error)
 }
 
 type idleScreenStore interface {
@@ -109,8 +113,19 @@ func familyOf(row Spawn, families map[string]string) string {
 // out an episode, entry or move a sampling reader still sees. Every other row,
 // such a row with no current finding included, is observed by its permission
 // requests (those in read when the reader gives them), which also settles out
-// a display of either state left by an earlier interval.
+// a display of either state left by an earlier interval. A needs_intelligence
+// display an earlier release committed is never returned: the row's reported
+// state is, and a committing observation clears it.
 func observeDisplay(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
+	display, families, judged, busy := observeRow(s, v, settle, row, read)
+	if display.State == StateNeedsIntelligence {
+		display = store.DisplayDetail{State: row.ReportedState}
+	}
+	return display, families, judged, busy
+}
+
+// observeRow is observeDisplay's dispatch, before it drops needs_intelligence.
+func observeRow(s any, v RelayView, settle store.SettleRead, row Spawn, read permissionRead) (store.DisplayDetail, map[string]string, *judgedRequestSet, bool) {
 	if read.storeBusy {
 		return row.CommittedDisplay(), nil, read.requests, true
 	}
@@ -182,11 +197,7 @@ func permissionObservation(s any, v RelayView, settle store.SettleRead, row Spaw
 		}
 		samples = append(samples, sample)
 	}
-	timeout := v.NeedsIntelligenceTimeout
-	if timeout <= 0 {
-		timeout = config.DefaultNeedsIntelligenceTimeoutSeconds * time.Second
-	}
-	display, families, err := r.ObserveNeedsIntelligence(row, samples, now, timeout, settle)
+	display, families, err := r.ObserveNeedsIntelligence(row, samples, now, settle)
 	if err != nil {
 		return previous, nil, judged, errors.Is(err, store.ErrStoreBusy)
 	}
@@ -261,12 +272,14 @@ func (c *Client) samplePane(row Spawn, stopped map[string]bool) store.PaneSample
 	return store.PaneSample{SHA256: paneSHA256(tmux.StripANSI(pane))}
 }
 
-// stateDetail is d's detail as status and get report it: only the fields of
-// the Displayed State shown, none for an ordinary state.
+// stateDetail is d's Displayed State and detail as status and get report
+// them: only the fields of the Displayed State shown, none for an ordinary
+// state.
 func stateDetail(d store.DisplayDetail) StateDetail {
 	var detail StateDetail
 	switch d.State {
 	case StateNeedsIntelligence:
+		// Kept in the vocabulary; nothing triggers it.
 		detail = StateDetail{RequestToken: d.RequestToken, ToolName: d.ToolName}
 	case StateIdleScreen:
 		minutes := d.UnchangedMinutes
@@ -274,6 +287,27 @@ func stateDetail(d store.DisplayDetail) StateDetail {
 	default:
 		return StateDetail{}
 	}
+	detail.DisplayedState = d.State
 	detail.Since = time.UnixMilli(d.SinceMillis).UTC().Format("2006-01-02T15:04:05.000Z")
 	return detail
+}
+
+// displayedState is the Displayed State d shows, "" for an ordinary state.
+// needs_intelligence is kept in the vocabulary; nothing triggers it.
+func displayedState(d store.DisplayDetail) string {
+	if d.State == StateNeedsIntelligence || d.State == StateIdleScreen {
+		return d.State
+	}
+	return ""
+}
+
+// namesDisplayedState reports whether states names a Displayed State, so a
+// list filter on it must match rows by what they show.
+func namesDisplayedState(states []string) bool {
+	for _, state := range states {
+		if displayedState(store.DisplayDetail{State: state}) != "" {
+			return true
+		}
+	}
+	return false
 }

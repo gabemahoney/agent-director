@@ -262,8 +262,8 @@ export interface ListRow {
   parent_id?: string;
   /**
    * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
-   * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
-   * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
+   * never a Displayed State: `displayed_state` carries that beside it. A permission request
+   * keeps its row check_permission however long it waits.
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history.
@@ -272,20 +272,26 @@ export interface ListRow {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
-   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
-   * times settle_ms from the read that commits its candidate; a later read commits the change.
    * Nothing marks a state as late. `family_state` settles independently. Fields such as
    * `state_changed_at` and `permission_requests`, and the verbs that act on the row, follow its
    * live state, which can be newer: a refusal can name a state this field does not show yet.
    */
   state: string;
   /**
+   * The report-only Displayed State the row shows beside `state`, present only while one
+   * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+   * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
+   * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
+   * candidate; a later read commits the change. Live command guards follow the raw state.
+   */
+  displayed_state?: "needs_intelligence" | "idle_screen";
+  /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. A live member counts as working while its raw state is not waiting or its
-   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
-   * commits. Waiting means no member counts as working, or no live members remain. Settles once
-   * in either direction with `[state] settle_ms`, independently of `state`. This report does
-   * not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or it
+   * shows `idle_screen`, until that display's exit commits. Waiting means no member
+   * counts as working, or no live members remain. Settles once in either direction with
+   * `[state] settle_ms`, independently of `state`. This report does not establish readiness or
+   * task success.
    */
   family_state: "working" | "waiting";
   /** Canonicalized working directory. */
@@ -354,8 +360,8 @@ export interface ListRow {
    * follow a tracked request with `getPermission`. Requests are never delayed by
    * `[state] settle_ms`, so with it set ordinary raw-state settling can also show any state
    * (even ended or missing) with open requests listed, or check_permission with `[]`, for up
-   * to settle_ms; entering or leaving `needs_intelligence` or `idle_screen` has no such bound
-   * (see `state`).
+   * to settle_ms; entering or leaving a `displayed_state` has no such bound (see
+   * `displayed_state`).
    */
   permission_requests: PermissionRequestInfo[];
 }
@@ -509,20 +515,25 @@ export interface StatusParams {
 /** The row's reported lifecycle state. */
 export interface StatusResult {
   /**
+   * The report-only Displayed State the row shows beside `state`, present only while one
+   * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+   * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
+   * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
+   * candidate; a later read commits the change. Live command guards follow the raw state.
+   */
+  displayed_state?: "needs_intelligence" | "idle_screen";
+  /**
    * When the row entered the Displayed State it shows (RFC3339 UTC, millisecond precision);
-   * only while `needs_intelligence` or `idle_screen` is displayed.
+   * only while `displayed_state` is present.
    */
   since?: string;
-  /**
-   * The representative unanswered request (earliest qualifying fallback, lexical
-   * request-token tie break); only while `needs_intelligence`.
-   */
+  /** Only while `displayed_state` is `needs_intelligence`; a permission request never sets it. */
   request_token?: string;
-  /** That request's tool; only while `needs_intelligence`. */
+  /** Only while `displayed_state` is `needs_intelligence`; a permission request never sets it. */
   tool_name?: string;
   /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
   unchanged_minutes?: number;
-  /** Attach target, present only while `needs_intelligence` or `idle_screen` is displayed. */
+  /** Attach target, present only while `displayed_state` is. */
   tmux_session_name?: string;
   /** Whether `idle_screen` can apply to the row's agent: `"unavailable"` for Cursor. */
   idle_screen_availability: IdleScreenAvailability;
@@ -531,8 +542,8 @@ export interface StatusResult {
   context: ContextReading;
   /**
    * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
-   * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
-   * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
+   * never a Displayed State: `displayed_state` carries that beside it. A permission request
+   * keeps its row check_permission however long it waits.
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a caller tells it
@@ -542,19 +553,17 @@ export interface StatusResult {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
-   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
-   * times settle_ms from the read that commits its candidate; a later read commits the change.
    * Nothing marks a state as late. The verbs that act on the Spawn follow its live state, which
    * can be newer: a refusal can name a state status does not show yet.
    */
   state: string;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. A live member counts as working while its raw state is not waiting or its
-   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
-   * commits. Waiting means no member counts as working, or no live members remain. Settles once
-   * in either direction with `[state] settle_ms`, independently of `state`. This report does
-   * not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or it
+   * shows `idle_screen`, until that display's exit commits. Waiting means no member
+   * counts as working, or no live members remain. Settles once in either direction with
+   * `[state] settle_ms`, independently of `state`. This report does not establish readiness or
+   * task success.
    */
   family_state: "working" | "waiting";
   /**
@@ -594,16 +603,21 @@ export interface GetParams {
 /** One tracked agent row, with its current session and request facts. */
 export interface GetResult {
   /**
+   * The report-only Displayed State the row shows beside `state`, present only while one
+   * shows: `idle_screen` (a working Claude or Codex row's pane unchanged across reads), or
+   * `needs_intelligence` (an unknown prompt inferred on the agent's screen), which nothing
+   * shows yet. Entering or leaving it times `[state] settle_ms` from the read that commits its
+   * candidate; a later read commits the change. Live command guards follow the raw state.
+   */
+  displayed_state?: "needs_intelligence" | "idle_screen";
+  /**
    * When the row entered the Displayed State it shows (RFC3339 UTC, millisecond precision);
-   * only while `needs_intelligence` or `idle_screen` is displayed.
+   * only while `displayed_state` is present.
    */
   since?: string;
-  /**
-   * The representative unanswered request (earliest qualifying fallback, lexical
-   * request-token tie break); only while `needs_intelligence`.
-   */
+  /** Only while `displayed_state` is `needs_intelligence`; a permission request never sets it. */
   request_token?: string;
-  /** That request's tool; only while `needs_intelligence`. */
+  /** Only while `displayed_state` is `needs_intelligence`; a permission request never sets it. */
   tool_name?: string;
   /** Completed minutes of the committed unchanged pane period; only while `idle_screen`. */
   unchanged_minutes?: number;
@@ -616,8 +630,8 @@ export interface GetResult {
   parent_id: string;
   /**
    * Current lifecycle state (pending/waiting/working/ask_user/check_permission/ended/missing),
-   * or a report-only Displayed State: `needs_intelligence` (an unanswered permission request)
-   * or `idle_screen` (an unchanged working pane); live command guards still follow the raw state.
+   * never a Displayed State: `displayed_state` carries that beside it. A permission request
+   * keeps its row check_permission however long it waits.
    * pending means a launch (spawn, reuse or resume) is in progress and the agent has not
    * reported in yet (its SessionStart hook); it may be loading or waiting at a startup
    * prompt. A resumed pending row keeps its session id and history; a non-empty
@@ -627,10 +641,8 @@ export interface GetResult {
    * off), this is the settled state: a state a hook wrote shows only once it has held for
    * settle_ms, and the last settled state shows meanwhile, so a change that reverts sooner never
    * shows; ended, missing and a state a command wrote (spawn, resume, find-missing) show at once.
-   * Entering or leaving `needs_intelligence` or `idle_screen`, or moving between them, instead
-   * times settle_ms from the read that commits its candidate; a later read commits the change.
-   * Nothing marks a state as late. While an exit or direct move settles, `since` and that
-   * state's detail keep the previous display's committed values, and `family_state` settles
+   * Nothing marks a state as late. While a `displayed_state` exit settles, it, `since` and its
+   * detail keep the previous display's committed values, and `family_state` settles
    * independently. Fields such as `state_changed_at` and `permission_requests`, and the verbs
    * that act on the row, follow its live state, which can be newer: a refusal can name a state
    * this field does not show yet.
@@ -638,11 +650,11 @@ export interface GetResult {
   state: string;
   /**
    * Complete stored family: self and live descendants, including through retained terminal
-   * intermediates. A live member counts as working while its raw state is not waiting or its
-   * committed display is `needs_intelligence` or `idle_screen`, until that display's exit
-   * commits. Waiting means no member counts as working, or no live members remain. Settles once
-   * in either direction with `[state] settle_ms`, independently of `state`. This report does
-   * not establish readiness or task success.
+   * intermediates. A live member counts as working while its raw state is not waiting or it
+   * shows `idle_screen`, until that display's exit commits. Waiting means no member
+   * counts as working, or no live members remain. Settles once in either direction with
+   * `[state] settle_ms`, independently of `state`. This report does not establish readiness or
+   * task success.
    */
   family_state: "working" | "waiting";
   cwd: string;
@@ -720,8 +732,8 @@ export interface GetResult {
    * `getPermission`.
    * Requests are never delayed by `[state] settle_ms`, so with it set ordinary raw-state
    * settling can also show any state (even ended or missing) with open requests listed, or
-   * check_permission with `[]`, for up to settle_ms; entering or leaving `needs_intelligence`
-   * or `idle_screen` has no such bound (see `state`).
+   * check_permission with `[]`, for up to settle_ms; entering or leaving a `displayed_state`
+   * has no such bound (see `displayed_state`).
    */
   permission_requests: PermissionRequestInfo[];
   /**
@@ -732,9 +744,7 @@ export interface GetResult {
    * or recorded answered outside it), each with `unproven_since`. While it is not empty, a plain
    * `sendKeys` without `expect_pane_sha256`, and a `pause`, reject (`ErrDialogMaybeOpen`, or an
    * earlier relay refusal). It follows the row's live state and is never delayed by
-   * `[state] settle_ms`, so with it set it can disagree with `state` for up to settle_ms under
-   * ordinary raw-state settling, and without that bound while entering or leaving
-   * `needs_intelligence` or `idle_screen` (see `state`).
+   * `[state] settle_ms`, so with it set it can disagree with `state` for up to settle_ms.
    */
   unproven_requests: PermissionRequestInfo[];
 }
@@ -1244,9 +1254,10 @@ export interface MakeTemplateResult {
 /** Filters for listing tracked agent rows. */
 export interface ListParams {
   /**
-   * Filter by state (multiple values OR together). The filter matches the displayed state,
-   * including `needs_intelligence` and `idle_screen` (a row showing either does not match its
-   * raw state), and is applied before `limit`.
+   * Filter by state (multiple values OR together). A row matches when its `state` or its
+   * `displayed_state` is one of the values, so `"working"` keeps a working row that shows
+   * `idle_screen`, and `"idle_screen"` keeps it too; `"needs_intelligence"` is accepted and
+   * matches only a row showing it. Applied before `limit`.
    */
   state?: string[];
   /** Filter by label k=v pairs (multiple entries AND together). */

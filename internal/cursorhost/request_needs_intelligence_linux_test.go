@@ -27,7 +27,12 @@ func observeGet(t *testing.T, s *store.Store, v api.RelayView, id, want string, 
 	return row
 }
 
-func TestNeedsIntelligenceCursorValidatedAdmissions(t *testing.T) {
+// b.zpv: a validated Cursor admission, relay on or off, is a known permission
+// request, so its row reads check_permission with no displayed state however
+// long it waits. A read from the clock's start (the deadline with the relay
+// on, the admission with it off) persists the fallback clock, and neither
+// ordinary hooks nor later reads restart it.
+func TestCursorValidatedAdmissionsStayCheckPermission(t *testing.T) {
 	for _, relay := range []string{"on", "off"} {
 		for _, sample := range cursorfix.Authorizations(t) {
 			t.Run(relay+"/"+sample.Name, func(t *testing.T) {
@@ -44,9 +49,9 @@ func TestNeedsIntelligenceCursorValidatedAdmissions(t *testing.T) {
 				c := e.controller(t, &observedWire{}, io.Discard)
 				r := e.admit(t, c, string(sample.ID), sample.Method, sample.Params)
 				pr := e.request(t, r.token)
-				start := pr.SettledAt
+				start, basis := pr.SettledAt, store.FallbackDeadline
 				if relay == "off" {
-					start = pr.AdmittedAt
+					start, basis = pr.AdmittedAt, store.FallbackAdmission
 				}
 				if start.IsZero() || pr.Hook != (store.ProcessIdentity{}) || pr.AdmittedAt.IsZero() {
 					t.Fatalf("missing native clock/null identity: %+v", pr)
@@ -59,21 +64,24 @@ func TestNeedsIntelligenceCursorValidatedAdmissions(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer reopened.Close()
-				var since string
-				for _, offset := range []time.Duration{-time.Millisecond, 0, 30*time.Second - time.Millisecond, 30 * time.Second} {
+				// A read can store the clock only once it has started, and a
+				// read is its one writer here, so repeat the first such read
+				// until the clock lands.
+				var clocked store.PermissionRow
+				if _, _, ok := apitest.RepeatUntilCommitted(func() bool {
+					if _, err := api.Get(reopened, api.RelayView{Now: func() time.Time { return start }}, e.binding.InstanceID); err != nil {
+						t.Fatal(err)
+					}
+					clocked = e.request(t, r.token)
+					return !clocked.FallbackAt.IsZero()
+				}); !ok || !clocked.FallbackAt.Equal(start) || clocked.FallbackBasis != basis {
+					t.Fatalf("fallback clock=%s %q; want %s %q stored", clocked.FallbackAt, clocked.FallbackBasis, start, basis)
+				}
+				for _, offset := range []time.Duration{-time.Millisecond, 0, 30 * time.Second, 24 * time.Hour} {
 					now := start.Add(offset)
 					v := api.RelayView{Now: func() time.Time { return now }}
-					want, commit := store.StateCheckPermission, apitest.CommitCheck(nil)
-					if offset == 30*time.Second {
-						// The entry is the one read that must commit.
-						want, commit = store.StateNeedsIntelligence, apitest.VersionAdvanced
-					}
-					row := observeGet(t, reopened, v, e.binding.InstanceID, want, commit)
-					if offset == 30*time.Second {
-						if row.RequestToken != r.token || row.UnchangedMinutes != nil {
-							t.Fatalf("entry detail=%+v; want request %s and no minutes", row.StateDetail, r.token)
-						}
-						since = row.Since
+					if row := observeGet(t, reopened, v, e.binding.InstanceID, store.StateCheckPermission, nil); row.StateDetail != (api.StateDetail{}) {
+						t.Fatalf("read at %s shows %+v; want no displayed state", offset, row.StateDetail)
 					}
 					delivery, err := api.GetPermission(reopened, v, api.GetPermissionParams{RequestToken: r.token})
 					if err != nil {
@@ -95,19 +103,19 @@ func TestNeedsIntelligenceCursorValidatedAdmissions(t *testing.T) {
 					}
 				}
 				now := start.Add(time.Minute)
-				row := observeGet(t, reopened, api.RelayView{Now: func() time.Time { return now }}, e.binding.InstanceID, store.StateNeedsIntelligence, nil)
-				if row.Since != since {
-					t.Fatalf("native hold restarted: %+v; want since %s", row, since)
+				row := observeGet(t, reopened, api.RelayView{Now: func() time.Time { return now }}, e.binding.InstanceID, store.StateCheckPermission, nil)
+				if row.StateDetail != (api.StateDetail{}) {
+					t.Fatalf("held row shows %+v; want no displayed state", row.StateDetail)
 				}
-				if pr := e.request(t, r.token); !pr.AwaitsAnswer() || pr.ProvenGone() {
-					t.Fatalf("native hold consumed: %+v", pr)
+				if pr := e.request(t, r.token); !pr.AwaitsAnswer() || pr.ProvenGone() || !pr.FallbackAt.Equal(start) || pr.FallbackBasis != basis {
+					t.Fatalf("native hold consumed or its clock restarted: %+v", pr)
 				}
 				check := func(store.Spawn, []store.PermissionRow) error { return nil }
 				if ok, err := e.s.RecordPaneOutside(e.binding.InstanceID, r.token, "unknown", 0, check); err != nil || !ok {
 					t.Fatalf("pane outside=%v %v", ok, err)
 				}
 				row, err = api.Get(reopened, api.RelayView{Now: func() time.Time { return now }}, e.binding.InstanceID)
-				if err != nil || row.State == store.StateNeedsIntelligence || row.StateDetail != (api.StateDetail{}) || len(row.UnprovenRequests) != 1 {
+				if err != nil || row.StateDetail != (api.StateDetail{}) || len(row.UnprovenRequests) != 1 {
 					t.Fatalf("answered report/hold=%+v %v", row, err)
 				}
 			})

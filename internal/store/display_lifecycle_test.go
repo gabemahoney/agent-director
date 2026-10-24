@@ -46,25 +46,17 @@ func execRaw(t *testing.T, path, query string, args ...any) {
 }
 
 // displayedRow returns permissionObservation's row displaying state as
-// committed: the needs_intelligence entry its observation commits, or the
-// idle_screen display a hook into check_permission left standing.
+// committed: the needs_intelligence an earlier release stored
+// (storedNeedsIntelligence), or the idle_screen display a hook into
+// check_permission left standing.
 func displayedRow(t *testing.T, state string) (*store.Store, string, string, []store.PermissionSample, time.Time, store.Spawn) {
 	t.Helper()
-	var opts []apitest.SpawnOption
+	observation := storedNeedsIntelligence
 	if state == store.StateIdleScreen {
-		opts = append(opts, apitest.WithDisplayObservation(`{"state":"idle_screen","since_ms":1792411205000,"unchanged_minutes":20,`+
-			`"candidate":"","candidate_since_ms":0,"observed_at_ms":1792411205000,"permission_epoch":6}`))
+		observation = `{"state":"idle_screen","since_ms":1792411205000,"unchanged_minutes":20,` +
+			`"candidate":"","candidate_since_ms":0,"observed_at_ms":1792411205000,"permission_epoch":6}`
 	}
-	s, path, id, samples, now := permissionObservation(t, opts...)
-	if state == store.StateNeedsIntelligence {
-		row, err := s.GetSpawnSettled(id, store.SettleRead{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if display := observeUnlessBusy(t, s, row, samples, now, 30*time.Second); display.State != state {
-			t.Fatalf("setup entry=%+v", display)
-		}
-	}
+	s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(observation))
 	committed, err := s.GetSpawn(id)
 	if err != nil {
 		t.Fatal(err)
@@ -265,41 +257,45 @@ func TestLifecycleWritesIgnoreUnreadableDisplayMetadata(t *testing.T) {
 	})
 }
 
-// A read that has nothing to change writes nothing even while an episode is
-// displayed: the version, the observation and the requests stay as committed,
-// and the answer needs no write lock.
-func TestNeedsIntelligenceDisplayedEpisodeReadWritesNothing(t *testing.T) {
-	s, path, id, samples, now, committed := displayedRow(t, store.StateNeedsIntelligence)
-	pr, err := s.GetPermissionRequest(id, samples[0].Request.RequestToken)
+// b.zpv: no read enters needs_intelligence, so one an earlier release stored
+// ends at the first read that observes the row, at once rather than over
+// settle_ms, with its exit record, in the commit that starts the open
+// request's clock. The request keeps the row check_permission, and later
+// reads, however late, have nothing to write.
+func TestStoredNeedsIntelligenceEndsAtFirstRead(t *testing.T) {
+	s, path, id, samples, now, _ := displayedRow(t, store.StateNeedsIntelligence)
+	settle := store.SettleRead{SettleMs: 60000, NowMs: now.UnixMilli()}
+	row, err := s.GetSpawnSettled(id, settle)
 	if err != nil {
 		t.Fatal(err)
 	}
-	samples[0].Request = pr
-	row, err := s.GetSpawnSettled(id, store.SettleRead{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ordinary := store.DisplayDetail{State: store.StateCheckPermission}
 	mark := store.TrailMark(t)
+	if got := commitUnlessBusy(t, func() (store.DisplayDetail, error) {
+		d, _, err := s.ObserveNeedsIntelligence(row, samples, now, settle)
+		return d, err
+	}); got != ordinary {
+		t.Fatalf("first read=%+v; want %+v at once", got, ordinary)
+	}
+	after, err := s.GetSpawnSettled(id, settle)
+	if err != nil || after.DisplayObservation != "" || after.CommittedDisplay() != ordinary {
+		t.Fatalf("row after the first read=%+v %v; want no observation", after, err)
+	}
+	pr, err := s.GetPermissionRequest(id, samples[0].Request.RequestToken)
+	if err != nil || !pr.FallbackAt.Equal(samples[0].FallbackAt) || pr.FallbackBasis != samples[0].Basis || !pr.AwaitsAnswer() {
+		t.Fatalf("request=%+v %v; want it open with clock %s %q", pr, err, samples[0].FallbackAt, samples[0].Basis)
+	}
+	exit := displayRecord{store.StateNeedsIntelligence, store.StateCheckPermission, now}
+	assertDisplayRecords(t, mark, id, exit)
+	samples[0].Request = pr
 	release := apitest.HoldWriteLock(t, path, time.Minute)
 	defer release()
-	for _, at := range []time.Time{now, now.Add(time.Millisecond), now.Add(time.Hour)} {
-		got, _, err := s.ObserveNeedsIntelligence(row, samples, at, 30*time.Second, store.SettleRead{})
-		if err != nil || got != committed.CommittedDisplay() {
-			t.Fatalf("read at %s=%+v %v; want the committed display without a write", at, got, err)
+	for _, at := range []time.Time{now.Add(time.Millisecond), now.Add(24 * time.Hour)} {
+		if got, _, err := s.ObserveNeedsIntelligence(after, samples, at, settle); err != nil || got != ordinary {
+			t.Fatalf("read at %s=%+v %v; want %+v without a write", at, got, err, ordinary)
 		}
 	}
-	release()
-	after, err := s.GetSpawn(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.ObservationVersion != committed.ObservationVersion || after.DisplayObservation != committed.DisplayObservation {
-		t.Errorf("read wrote: before=%+v after=%+v", committed, after)
-	}
-	if stored, err := s.GetPermissionRequest(id, pr.RequestToken); err != nil || stored != pr {
-		t.Errorf("read wrote request: before=%+v after=%+v %v", pr, stored, err)
-	}
-	assertDisplayRecords(t, mark, id)
+	assertDisplayRecords(t, mark, id, exit)
 }
 
 // An unconfirmed COMMIT (errCommitUnconfirmed) is settled by one nonwaiting
@@ -314,27 +310,22 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 		// a row the observation moves to display, and the families a landed write returns (b.ob8 B1)
 		setup func(*testing.T) (*store.Store, string, string, time.Time, observation, map[string]string)
 	}{
-		{"permission", store.StateCheckPermission, store.StateNeedsIntelligence, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
-			s, path, id, samples, now := permissionObservation(t)
+		// The stored needs_intelligence ends in the commit that starts the
+		// open request's clock (b.zpv).
+		{"permission", store.StateNeedsIntelligence, store.StateCheckPermission, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
+			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
 			return s, path, id, now, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
-				return s.ObserveNeedsIntelligence(row, samples, now, 30*time.Second, store.SettleRead{})
+				return s.ObserveNeedsIntelligence(row, samples, now, store.SettleRead{})
 			}, nil
 		}},
 		{"exit", store.StateNeedsIntelligence, store.StateWaiting, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {
-			s, path, id, samples, now := permissionObservation(t)
+			s, path, id, samples, now := permissionObservation(t, apitest.WithDisplayObservation(storedNeedsIntelligence))
 			parent, err := apitest.SeedSpawn(path, "parent", store.StateWaiting, "", "off", "", false)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if err := apitest.SeedParentChild(path, parent, id); err != nil {
 				t.Fatal(err)
-			}
-			row, err := s.GetSpawn(id)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if shown := observeUnlessBusy(t, s, row, samples, now, 30*time.Second); shown.State != store.StateNeedsIntelligence {
-				t.Fatalf("entry=%+v", shown)
 			}
 			if err := apitest.SetPermissionFacts(path, samples[0].Request.RequestID, apitest.PermissionProof(now)); err != nil {
 				t.Fatal(err)
@@ -352,7 +343,7 @@ func TestDisplayObservationUnconfirmedCommit(t *testing.T) {
 			}
 			at := now.Add(time.Hour)
 			return s, path, id, at, func(row store.Spawn) (store.DisplayDetail, map[string]string, error) {
-				return s.ObserveNeedsIntelligence(row, samples, at, time.Second, store.SettleRead{})
+				return s.ObserveNeedsIntelligence(row, samples, at, store.SettleRead{})
 			}, map[string]string{parent: store.StateWaiting, id: store.StateWaiting}
 		}},
 		{"pane", store.StateWorking, store.StateIdleScreen, func(t *testing.T) (*store.Store, string, string, time.Time, observation, map[string]string) {

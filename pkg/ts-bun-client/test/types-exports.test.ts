@@ -128,15 +128,19 @@ void _assertFamilyTypes;
 
 // Typecheck (b.ob8): the availability values are a closed union on every read result,
 // unchanged_minutes is a status/get detail only, and spawn's override takes a number or null.
-// state stays a plain string (public-surface.test.ts), so its values are no union to pin here.
+// state stays a plain string (public-surface.test.ts), so its values are no union to pin here;
+// b.zpv: displayed_state is an optional closed union of the Displayed States on every read result.
 function _assertDisplayTypes(status: StatusResult, get: GetResult, row: ListRow): void {
   const availability: IdleScreenAvailability[] = [status.idle_screen_availability, get.idle_screen_availability, row.idle_screen_availability];
+  const displayed: ("needs_intelligence" | "idle_screen" | undefined)[] = [status.displayed_state, get.displayed_state, row.displayed_state];
   const minutes: (number | undefined)[] = [status.unchanged_minutes, get.unchanged_minutes];
   const override: SpawnParams = { cwd: "/ws", idle_screen_timeout_seconds: null };
   // @ts-expect-error — availability is a capability outcome, never a state
   const badAvailability: IdleScreenAvailability = "idle_screen";
-  // @ts-expect-error — list rows carry only the state
+  // @ts-expect-error — displayed_state is a Displayed State, never a lifecycle state
+  const badDisplayed: ListRow["displayed_state"] = "working";
+  // @ts-expect-error — list rows carry displayed_state but no detail
   const listMinutes = row.unchanged_minutes;
-  void [availability, minutes, override, badAvailability, listMinutes];
+  void [availability, displayed, minutes, override, badAvailability, badDisplayed, listMinutes];
 }
 void _assertDisplayTypes;

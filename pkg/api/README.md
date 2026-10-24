@@ -201,7 +201,7 @@ See `(*Client).Spawn` godoc for the full enumeration.
 
 Return the current lifecycle state of a tracked Spawn. State values:
 `pending`, `waiting`, `working`, `ask_user`, `check_permission`, `ended`,
-`missing`, `needs_intelligence`, `idle_screen`.
+`missing`.
 `pending` means a launch (spawn, reuse or resume) is in progress and the
 agent has not reported in yet (its `SessionStart` hook); it may be
 loading or waiting at a startup prompt. A resumed `pending` row keeps its
@@ -221,14 +221,16 @@ the launch in progress, set only while the row is `pending`; JSON key
 `launch_started_at`, omitted otherwise). Most-likely sentinel error:
 `ErrSpawnNotFound`. See `(*Client).Status` godoc.
 
-While `State` is `api.StateNeedsIntelligence` or `api.StateIdleScreen`,
-`StatusResult` and `Get`'s `SpawnRow` carry the embedded `StateDetail`:
-`.Since`, a string, and that state's detail, `.RequestToken` and `.ToolName`
-for `needs_intelligence` or `.UnchangedMinutes`, an `*int64`, for
-`idle_screen` (JSON `since`, `request_token`, `tool_name`,
-`unchanged_minutes`); `StatusResult.TmuxSessionName` (JSON
-`tmux_session_name`) is set. `ListRow` carries the state, no detail. A field
-that does not apply is empty (nil), and absent from the JSON. `StatusResult`,
+`State` is never a Displayed State. While a row shows one, `StatusResult`
+and `Get`'s `SpawnRow` carry it in the embedded `StateDetail`:
+`.DisplayedState` (`api.StateIdleScreen`; `api.StateNeedsIntelligence` is
+defined, but nothing shows it yet), `.Since`, a string, and for
+`idle_screen` `.UnchangedMinutes`, an `*int64` (JSON `displayed_state`,
+`since`, `unchanged_minutes`); `StatusResult.TmuxSessionName` (JSON
+`tmux_session_name`) is set. `ListRow.DisplayedState` carries it with no
+detail. A field that does not apply is empty (nil), and absent from the
+JSON. Test `DisplayedState`, never `State`, for `api.StateIdleScreen` or
+`api.StateNeedsIntelligence`. `StatusResult`,
 `SpawnRow` and `ListRow` also carry `IdleScreenAvailability` (JSON
 `idle_screen_availability`): `api.IdleScreenAvailable` for Claude and Codex,
 `api.IdleScreenUnavailable` for Cursor. The
@@ -253,10 +255,10 @@ defines it and how it differs from `LastSeenAt`, the settled `State` and
 
 `Client.Status`, `Client.Get` and `Client.List` use the config loaded when
 the client was built for [independent state and family
-settling](../../docs/configuration.md#settle-time-state). While an exit or
-direct move from `needs_intelligence` or `idle_screen` settles, `Status` and
-`Get` retain the previous display's committed `Since` and state-specific
-detail. `StateChangedAt` and permission-request lists follow the live state;
+settling](../../docs/configuration.md#settle-time-state). While a
+Displayed State's exit settles, `Status`, `Get` and `List` retain its
+`DisplayedState`, and `Status` and `Get` its committed `Since` and detail.
+`StateChangedAt` and permission-request lists follow the live state;
 commands keep their raw-state guards. The package-level
 `api.Status`, `api.Get` and `api.List` functions use no settle time and
 sample no pane, so only a `Client` detects `idle_screen`.
@@ -293,9 +295,9 @@ for _, row := range res.Spawns {
 
 Returns `ListResult` (`.Spawns []ListRow`; each row's `Agent` is `"claude"`,
 `"codex"` or `"cursor"`, as is `Get`'s `SpawnRow.Agent`). `Spawns` is never nil —
-encodes as `[]` when empty. The `State` filter matches the displayed state
-(see Status), including `"needs_intelligence"` and `"idle_screen"`, and is
-applied before `Limit`.
+encodes as `[]` when empty. The `State` filter keeps a row whose `State` or
+`DisplayedState` (see Status) is one of its values, so `"working"` keeps a
+working row that shows `"idle_screen"`; it is applied before `Limit`.
 `Limit` caps the rows returned; 0 means no cap. Sentinel errors, each returned before the store is
 read: `ErrListInvalidLabel` (label not in `key=value` form) and
 `ErrInvalidFlags` (`Limit` is negative). See `(*Client).List` godoc.

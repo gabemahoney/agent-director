@@ -22,7 +22,10 @@ import (
 // last_seen_at as the fixture's ReadSurfaceStampMs, 2099-01-01T00:00:00.123Z;
 // no other byte changed. And idle_screen_availability (b.ob8), recaptured on
 // every row after family_state as "available" (every fixed row is Claude's);
-// no other byte changed.
+// no other byte changed. And b.zpv: a state filter naming no Displayed State
+// reads the 0.15 query again, so those two state-filtered list goldens,
+// recaptured, return to its row order (the order before the regeneration
+// above); no other byte changed.
 const settleOffCaptureEnv = "AGENT_DIRECTOR_CAPTURE_SETTLE_OFF_GOLDENS"
 
 // TestSettleOffCLI: with [state] settle_ms unset or 0, status, get and list

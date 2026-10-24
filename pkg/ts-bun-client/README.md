@@ -157,13 +157,15 @@ console.log(result.state);
 aggregation; the [caller contract](../../docs/caller-contract.md#family-reporting-limits)
 defines reporting limits.
 
-`state` is a `string` and can be `"needs_intelligence"` or `"idle_screen"`.
-Then `StatusResult` and `GetResult` carry `since` and that state's detail:
-`request_token` and `tool_name` for `"needs_intelligence"`, or
-`unchanged_minutes` for `"idle_screen"`; `StatusResult` also carries
-`tmux_session_name`, and each `ListRow` carries `state`, no detail. A key that
-does not apply is absent from the result, never `null`, so test for presence
-(`result.since !== undefined`). Every `StatusResult`, `GetResult` and
+`state` is always the lifecycle state. While a row shows a
+Displayed State, `StatusResult`, `GetResult` and each `ListRow` carry it in
+`displayed_state` (`"idle_screen"`; `"needs_intelligence"` is defined, but
+nothing shows it yet). `StatusResult` and `GetResult` then also carry
+`since` and, for `"idle_screen"`, `unchanged_minutes`; `StatusResult` also
+carries `tmux_session_name`. A `ListRow` carries no detail. A key that does
+not apply is absent from the result, never `null`, so test for presence
+(`result.displayed_state !== undefined`). Test `displayed_state`, never
+`state`, for `"idle_screen"` or `"needs_intelligence"`. Every `StatusResult`, `GetResult` and
 `ListRow` carries `idle_screen_availability` (`IdleScreenAvailability`:
 `"available"` for Claude and Codex, `"unavailable"` for Cursor).
 The [caller contract](../../docs/caller-contract.md#needs-intelligence-and-idle-screen-rows)
@@ -191,8 +193,9 @@ for (const spawn of result.spawns) {
 ```
 
 Each row, like `get`'s result, carries `agent` (`"claude"`, `"codex"` or `"cursor"`), the agent the row runs.
-A `state` filter of `"needs_intelligence"` or `"idle_screen"` is matched on
-the displayed state, before any `limit`.
+A `state` filter keeps a row whose `state` or `displayed_state` is one of its
+values, before any `limit`, so `["working"]` keeps a working row that shows
+`"idle_screen"`.
 
 ### listSubagents
 

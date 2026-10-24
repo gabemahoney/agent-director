@@ -16,15 +16,12 @@ import (
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
-// retainedDisplayFamily reuses the owned-pane fixture for both displays, as
-// TestDisplayDirectMove does. Link the family before any displayed episode.
-func retainedDisplayFamily(t *testing.T, display string) (*paneEnv, []string, api.StatusResult) {
+// retainedDisplayFamily links a waiting grandparent and parent above an
+// owned-pane member before it enters idle_screen, the only Displayed State a
+// read shows (b.zpv), and returns that entry's status.
+func retainedDisplayFamily(t *testing.T) (*paneEnv, []string, api.StatusResult) {
 	t.Helper()
-	spec := paneSpec{agent: store.AgentClaude}
-	if display == api.StateNeedsIntelligence {
-		spec.state = store.StateCheckPermission
-	}
-	e := newPaneEnv(t, spec)
+	e := newPaneEnv(t, paneSpec{agent: store.AgentClaude})
 	// Entry precedes the real writer clock on any execution date; subsequent
 	// observations use the hook's persisted timestamp, never a sleep.
 	e.now = time.Now().Add(-2 * time.Minute).UTC().Truncate(time.Millisecond)
@@ -39,30 +36,25 @@ func retainedDisplayFamily(t *testing.T, display string) (*paneEnv, []string, ap
 			t.Fatal(err)
 		}
 	}
-	return e, ids, enterFamilyDisplay(t, e, display)
+	return e, ids, enterFamilyDisplay(t, e)
 }
 
-// enterFamilyDisplay commits an episode through the owned-pane client, and
-// retires its permission request so a subsequent Stop is a genuine transition.
-func enterFamilyDisplay(t *testing.T, e *paneEnv, display string) api.StatusResult {
+// enterFamilyDisplay commits an idle_screen episode through the owned-pane
+// client, so a subsequent Stop retains it on raw waiting.
+func enterFamilyDisplay(t *testing.T, e *paneEnv) api.StatusResult {
 	t.Helper()
-	c := e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60})
-	var entered api.StatusResult
-	if display == api.StateIdleScreen {
-		entered = enterIdleScreen(t, e, c, 0)
-	} else {
-		req, err := apitest.SeedPermissionRequest(e.dbPath, e.id, "Bash", apitest.PermissionTimes(e.now.Add(-time.Hour), time.Time{},
-			e.now.Add(-time.Minute), time.Time{}, e.now.Add(-time.Minute), store.FallbackDeadline))
-		if err != nil {
-			t.Fatal(err)
-		}
-		entered = assertDisplayState(t, c, e.id, display)
-		// Retire the request so Stop is an accepted transition, not a held hook.
-		if err := apitest.SetPermissionFacts(e.dbPath, req.RequestID, apitest.PermissionProof(e.now)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return entered
+	return enterIdleScreen(t, e, e.client(t, apitest.ConfigKeys{IdleScreenTimeoutSeconds: 60}), 0)
+}
+
+// addDisplayedMember adds a working Claude row on its own pane of e's socket
+// and enters idle_screen on it with e's clock, returning its id.
+func addDisplayedMember(t *testing.T, e *paneEnv, paneID string, panePID int) string {
+	t.Helper()
+	id := e.addRow(t, store.AgentClaude, apitest.TestSocket, paneID, panePID)
+	other := *e
+	other.id = id
+	enterFamilyDisplay(t, &other)
+	return id
 }
 
 type familyHistoryValue struct {
@@ -102,205 +94,218 @@ func (s orderedFamilyStore) ListSpawns(f api.ListFilters) ([]api.Spawn, error) {
 
 // b.ob8 F1: raw waiting cannot remove a retained display's family contribution.
 // Each surface must return its own first committing response coherently; a
-// subsequent status read must not repair a stale get/list assertion.
+// subsequent status read must not repair a stale get/list assertion. The
+// retained display reads displayed_state idle_screen beside the member's
+// settled state: waiting, except under the original reader clock, the Stop's
+// own instant, where settle_ms has not passed and it is still working (b.zpv).
 func TestFamilyRetainedDisplayExitFirstRead(t *testing.T) {
 	t.Parallel()
-	for _, display := range []string{api.StateNeedsIntelligence, api.StateIdleScreen} {
-		for _, ms := range []int64{0, 5000} {
-			for _, first := range []string{"status", "get", "list", "list ancestors first", "list descendant first", "list filtered limit", "status original reader clock"} {
-				originalClock := first == "status original reader clock"
-				if ms == 0 && originalClock {
-					continue
+	display := api.StateIdleScreen
+	for _, ms := range []int64{0, 5000} {
+		for _, first := range []string{"status", "get", "list", "list ancestors first", "list descendant first", "list filtered limit", "status original reader clock"} {
+			originalClock := first == "status original reader clock"
+			if ms == 0 && originalClock {
+				continue
+			}
+			if ms > 0 && first != "status" && first != "get" && first != "list" && !originalClock {
+				continue // the ordered public List variants intentionally use zero settling
+			}
+			t.Run(fmt.Sprintf("settle=%d/%s", ms, first), func(t *testing.T) {
+				e, ids, entered := retainedDisplayFamily(t)
+				before := readFamilyHistories(t, e.dbPath, ids)
+				for _, h := range before {
+					if h != (familyHistoryValue{store.StateWorking, store.StateWorking, 0}) {
+						t.Fatalf("initial family history=%+v", before)
+					}
 				}
-				if ms > 0 && first != "status" && first != "get" && first != "list" && !originalClock {
-					continue // the ordered public List variants intentionally use zero settling
+				e.s.SetSettleMs(ms)
+				if hook := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !hook.Applied {
+					t.Fatalf("Stop held: %+v", hook)
 				}
-				t.Run(fmt.Sprintf("%s/settle=%d/%s", display, ms, first), func(t *testing.T) {
-					e, ids, entered := retainedDisplayFamily(t, display)
-					before := readFamilyHistories(t, e.dbPath, ids)
-					for _, h := range before {
-						if h != (familyHistoryValue{store.StateWorking, store.StateWorking, 0}) {
-							t.Fatalf("initial family history=%+v", before)
-						}
-					}
-					e.s.SetSettleMs(ms)
-					if hook := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !hook.Applied {
-						t.Fatalf("Stop held: %+v", hook)
-					}
-					if row := e.row(t); row.State != store.StateWaiting || row.CommittedDisplay().State != display {
-						t.Fatalf("Stop did not retain the display on raw waiting: %+v", row)
-					}
-					if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, before) {
-						t.Errorf("raw hook removed retained contribution: before=%+v after=%+v", before, after)
-					}
-					_, rawStamp, err := apitest.ReadSettle(e.dbPath, e.id)
-					if err != nil {
-						t.Fatal(err)
-					}
-					e.now = time.UnixMilli(rawStamp).Add(10 * time.Second)
-					c := e.client(t, apitest.ConfigKeys{StateSettleMs: ms, IdleScreenTimeoutSeconds: 60})
-					// The settled Status seam separates the original reader clock
-					// from later observation time, without changing stored history.
-					settle := store.SettleRead{SettleMs: ms, NowMs: rawStamp}
-					s := &readLeaseStore{observationReader: e.s}
-					mark := trailMark(t)
-					read := func(want string, mustCommit bool) map[string]familyProjection {
-						t.Helper()
-						var got map[string]familyProjection
-						_, _, committed := apitest.RepeatUntilCommitted(func() bool {
-							prior := e.row(t)
-							s.settles = nil
-							got = map[string]familyProjection{}
-							switch first {
-							case "status", "status original reader clock":
-								var r api.StatusResult
-								var err error
-								if originalClock {
-									r, err = api.StatusSettledForTest(s, api.RelayView{Now: func() time.Time { return e.now }}, settle, e.id)
-								} else {
-									r, err = c.Status(e.id)
+				if row := e.row(t); row.State != store.StateWaiting || row.CommittedDisplay().State != display {
+					t.Fatalf("Stop did not retain the display on raw waiting: %+v", row)
+				}
+				if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, before) {
+					t.Errorf("raw hook removed retained contribution: before=%+v after=%+v", before, after)
+				}
+				_, rawStamp, err := apitest.ReadSettle(e.dbPath, e.id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				e.now = time.UnixMilli(rawStamp).Add(10 * time.Second)
+				c := e.client(t, apitest.ConfigKeys{StateSettleMs: ms, IdleScreenTimeoutSeconds: 60})
+				// The settled Status seam separates the original reader clock
+				// from later observation time, without changing stored history.
+				settle := store.SettleRead{SettleMs: ms, NowMs: rawStamp}
+				s := &readLeaseStore{observationReader: e.s}
+				mark := trailMark(t)
+				// The original reader clock is the Stop's own instant, before
+				// settle_ms has passed: its settled state is still working.
+				wantState := store.StateWaiting
+				if originalClock {
+					wantState = store.StateWorking
+				}
+				// read wants the member in wantState, showing displayed ("" for none).
+				read := func(displayed string, mustCommit bool) map[string]familyProjection {
+					t.Helper()
+					var got map[string]familyProjection
+					_, _, committed := apitest.RepeatUntilCommitted(func() bool {
+						prior := e.row(t)
+						s.settles = nil
+						got = map[string]familyProjection{}
+						switch first {
+						case "status", "status original reader clock":
+							var r api.StatusResult
+							var err error
+							if originalClock {
+								r, err = api.StatusSettledForTest(s, api.RelayView{Now: func() time.Time { return e.now }}, settle, e.id)
+							} else {
+								r, err = c.Status(e.id)
+							}
+							if err != nil {
+								t.Fatal(err)
+							}
+							got[e.id] = familyProjection{r.State, r.FamilyState, r.DisplayedState, r.StateDetail}
+						case "get":
+							r, err := c.Get(e.id)
+							if err != nil {
+								t.Fatal(err)
+							}
+							got[e.id] = familyProjection{r.State, r.FamilyState, r.DisplayedState, r.StateDetail}
+						default:
+							var listed api.ListResult
+							var err error
+							if first == "list" {
+								listed, err = c.List(api.ListParams{})
+							} else {
+								order := ids
+								params := api.ListParams{}
+								if first == "list descendant first" || first == "list filtered limit" {
+									order = []string{e.id, ids[1], ids[0]}
 								}
-								if err != nil {
-									t.Fatal(err)
-								}
-								got[e.id] = familyProjection{r.State, r.FamilyState, r.StateDetail}
-							case "get":
-								r, err := c.Get(e.id)
-								if err != nil {
-									t.Fatal(err)
-								}
-								got[e.id] = familyProjection{r.State, r.FamilyState, r.StateDetail}
-							default:
-								var listed api.ListResult
-								var err error
-								if first == "list" {
-									listed, err = c.List(api.ListParams{})
-								} else {
-									order := ids
-									params := api.ListParams{}
-									if first == "list descendant first" || first == "list filtered limit" {
-										order = []string{e.id, ids[1], ids[0]}
-									}
-									if first == "list filtered limit" {
-										params = api.ListParams{State: []string{store.StateWaiting}, Limit: 1}
-									}
-									listed, err = api.List(orderedFamilyStore{e.s, order}, api.RelayView{Now: func() time.Time { return e.now }}, params)
-								}
-								if err != nil {
-									t.Fatal(err)
-								}
-								wantCount := len(ids)
 								if first == "list filtered limit" {
-									wantCount = 1
+									// Naming idle_screen applies order's member-first
+									// order before the limit; a lifecycle filter
+									// alone keeps the store's LIMIT, which picks any
+									// waiting row.
+									params = api.ListParams{State: []string{store.StateWaiting, api.StateIdleScreen}, Limit: 1}
 								}
-								if len(listed.Spawns) != wantCount {
-									t.Fatalf("list=%+v", listed)
-								}
-								for _, r := range listed.Spawns {
-									got[r.InstanceID] = familyProjection{state: r.State, family: r.FamilyState}
-								}
+								listed, err = api.List(orderedFamilyStore{e.s, order}, api.RelayView{Now: func() time.Time { return e.now }}, params)
 							}
-							return !mustCommit || apitest.VersionAdvanced(prior, e.row(t))
-						})
-						if !committed || got[e.id].state != want {
-							t.Fatalf("first committing %s=%+v committed=%v; want %s", first, got, committed, want)
-						}
-						if first == "status" || first == "get" || originalClock {
-							wantDetail := api.StateDetail{}
-							if want == display {
-								wantDetail = entered.StateDetail
+							if err != nil {
+								t.Fatal(err)
 							}
-							if !reflect.DeepEqual(got[e.id].detail, wantDetail) {
-								t.Errorf("retained detail=%+v; want %+v", got[e.id].detail, wantDetail)
+							wantCount := len(ids)
+							if first == "list filtered limit" {
+								wantCount = 1
+							}
+							if len(listed.Spawns) != wantCount {
+								t.Fatalf("list=%+v", listed)
+							}
+							for _, r := range listed.Spawns {
+								got[r.InstanceID] = familyProjection{state: r.State, family: r.FamilyState, displayed: r.DisplayedState}
 							}
 						}
-						for id, r := range got {
-							if id != e.id && r.state != store.StateWaiting {
-								t.Errorf("ancestor changed own state: %+v", r)
-							}
-						}
-						return got
+						return !mustCommit || apitest.VersionAdvanced(prior, e.row(t))
+					})
+					if !committed || got[e.id].state != wantState || got[e.id].displayed != displayed {
+						t.Fatalf("first committing %s=%+v committed=%v; want %s showing %q", first, got, committed, wantState, displayed)
 					}
-					if ms > 0 {
-						for _, p := range read(display, true) {
-							if p.family != store.StateWorking {
-								t.Errorf("pending exit lost family: %+v", p)
-							}
+					if first == "status" || first == "get" || originalClock {
+						wantDetail := api.StateDetail{}
+						if displayed != "" {
+							wantDetail = entered.StateDetail
 						}
-						if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, before) {
-							t.Errorf("first pending exit changed history: %+v", after)
+						if !reflect.DeepEqual(got[e.id].detail, wantDetail) {
+							t.Errorf("retained detail=%+v; want %+v", got[e.id].detail, wantDetail)
 						}
-						e.now = e.now.Add(time.Duration(ms-1) * time.Millisecond)
-						read(display, false)
-						if events := displayEvents(t, mark, e.id); len(events) != 0 {
-							t.Fatalf("early exit records=%v", events)
-						}
-						e.now = e.now.Add(time.Millisecond)
-					}
-					from := time.Now().UnixMilli()
-					got := read(store.StateWaiting, true)
-					to := time.Now().UnixMilli()
-					after := readFamilyHistories(t, e.dbPath, ids)
-					stamp := after[e.id].changed
-					for _, id := range ids {
-						if h := after[id]; h != (familyHistoryValue{store.StateWaiting, store.StateWorking, stamp}) || stamp < from || stamp > to {
-							t.Errorf("committed exit history %s=%+v; want waiting/working/%d in [%d,%d]", id, h, stamp, from, to)
-						}
-					}
-					wantFamily := store.StateWaiting
-					if ms > 0 && e.now.UnixMilli() < stamp+ms {
-						wantFamily = store.StateWorking
-					}
-					if originalClock {
-						// The committing observation itself reads its families under
-						// the reader's original SettleRead; no later read supplies them.
-						if !reflect.DeepEqual(s.settles, []store.SettleRead{settle}) || settle.NowMs >= stamp+ms {
-							t.Fatalf("observation settles=%+v reader=%d family deadline=%d; want one observation under %+v before the independent deadline", s.settles, settle.NowMs, stamp+ms, settle)
-						}
-						// This first committing response must retain working even if
-						// the later observation clock has passed the family deadline.
-						wantFamily = store.StateWorking
 					}
 					for id, r := range got {
-						if r.family != wantFamily {
-							t.Errorf("first committed %s row %s family=%s; want %s", first, id, r.family, wantFamily)
+						if id != e.id && (r.state != store.StateWaiting || r.displayed != "") {
+							t.Errorf("ancestor changed own state: %+v", r)
 						}
 					}
-					events := displayEvents(t, mark, e.id)
-					if len(events) != 1 {
-						t.Fatalf("exit events=%v", events)
-					}
-					assertDisplayEvent(t, events[0], display, store.StateWaiting, e.now)
-					// Independent readers may lag the observation clock. Read the durable
-					// writer timestamp's boundary, never seed or backdate that transition.
-					for _, offset := range []int64{ms - 1, ms, ms + 1} {
-						if ms == 0 && offset < 0 {
-							continue
-						}
-						e.now = time.UnixMilli(stamp + offset)
-						wantFamily := store.StateWaiting
-						if ms > 0 && offset < ms {
-							wantFamily = store.StateWorking
-						}
-						for _, id := range ids {
-							s, g, l := clientReported(t, c, id)
-							if s.FamilyState != wantFamily || g.FamilyState != wantFamily || l.FamilyState != wantFamily {
-								t.Errorf("family boundary %s/+%d: %s/%s/%s; want %s", id, offset, s.FamilyState, g.FamilyState, l.FamilyState, wantFamily)
-							}
+					return got
+				}
+				if ms > 0 {
+					for _, p := range read(display, true) {
+						if p.family != store.StateWorking {
+							t.Errorf("pending exit lost family: %+v", p)
 						}
 					}
-					if stable := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(stable, after) {
-						t.Errorf("repeated reads restarted history: before=%+v after=%+v", after, stable)
+					if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, before) {
+						t.Errorf("first pending exit changed history: %+v", after)
 					}
-				})
-			}
+					e.now = e.now.Add(time.Duration(ms-1) * time.Millisecond)
+					read(display, false)
+					if events := displayEvents(t, mark, e.id); len(events) != 0 {
+						t.Fatalf("early exit records=%v", events)
+					}
+					e.now = e.now.Add(time.Millisecond)
+				}
+				from := time.Now().UnixMilli()
+				got := read("", true)
+				to := time.Now().UnixMilli()
+				after := readFamilyHistories(t, e.dbPath, ids)
+				stamp := after[e.id].changed
+				for _, id := range ids {
+					if h := after[id]; h != (familyHistoryValue{store.StateWaiting, store.StateWorking, stamp}) || stamp < from || stamp > to {
+						t.Errorf("committed exit history %s=%+v; want waiting/working/%d in [%d,%d]", id, h, stamp, from, to)
+					}
+				}
+				wantFamily := store.StateWaiting
+				if ms > 0 && e.now.UnixMilli() < stamp+ms {
+					wantFamily = store.StateWorking
+				}
+				if originalClock {
+					// The committing observation itself reads its families under
+					// the reader's original SettleRead; no later read supplies them.
+					if !reflect.DeepEqual(s.settles, []store.SettleRead{settle}) || settle.NowMs >= stamp+ms {
+						t.Fatalf("observation settles=%+v reader=%d family deadline=%d; want one observation under %+v before the independent deadline", s.settles, settle.NowMs, stamp+ms, settle)
+					}
+					// This first committing response must retain working even if
+					// the later observation clock has passed the family deadline.
+					wantFamily = store.StateWorking
+				}
+				for id, r := range got {
+					if r.family != wantFamily {
+						t.Errorf("first committed %s row %s family=%s; want %s", first, id, r.family, wantFamily)
+					}
+				}
+				events := displayEvents(t, mark, e.id)
+				if len(events) != 1 {
+					t.Fatalf("exit events=%v", events)
+				}
+				assertDisplayEvent(t, events[0], display, store.StateWaiting, e.now)
+				// Independent readers may lag the observation clock. Read the durable
+				// writer timestamp's boundary, never seed or backdate that transition.
+				for _, offset := range []int64{ms - 1, ms, ms + 1} {
+					if ms == 0 && offset < 0 {
+						continue
+					}
+					e.now = time.UnixMilli(stamp + offset)
+					wantFamily := store.StateWaiting
+					if ms > 0 && offset < ms {
+						wantFamily = store.StateWorking
+					}
+					for _, id := range ids {
+						s, g, l := clientReported(t, c, id)
+						if s.FamilyState != wantFamily || g.FamilyState != wantFamily || l.FamilyState != wantFamily {
+							t.Errorf("family boundary %s/+%d: %s/%s/%s; want %s", id, offset, s.FamilyState, g.FamilyState, l.FamilyState, wantFamily)
+						}
+					}
+				}
+				if stable := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(stable, after) {
+					t.Errorf("repeated reads restarted history: before=%+v after=%+v", after, stable)
+				}
+			})
 		}
 	}
 }
 
 type familyProjection struct {
-	state, family string
-	detail        api.StateDetail
+	state, family, displayed string
+	detail                   api.StateDetail
 }
 
 // readFamilyProjection saves the response under test before any verifying read.
@@ -309,11 +314,11 @@ func readFamilyProjection(s observationReader, view api.RelayView, verb, id stri
 	switch verb {
 	case "status":
 		r, err := api.Status(s, view, id)
-		out[id] = familyProjection{r.State, r.FamilyState, r.StateDetail}
+		out[id] = familyProjection{r.State, r.FamilyState, r.DisplayedState, r.StateDetail}
 		return out, err
 	case "get":
 		r, err := api.Get(s, view, id)
-		out[id] = familyProjection{r.State, r.FamilyState, r.StateDetail}
+		out[id] = familyProjection{r.State, r.FamilyState, r.DisplayedState, r.StateDetail}
 		return out, err
 	default:
 		r, err := api.List(s, view, api.ListParams{})
@@ -321,19 +326,20 @@ func readFamilyProjection(s observationReader, view api.RelayView, verb, id stri
 			if _, duplicate := out[row.InstanceID]; duplicate {
 				return nil, fmt.Errorf("list repeated row %s", row.InstanceID)
 			}
-			out[row.InstanceID] = familyProjection{state: row.State, family: row.FamilyState}
+			out[row.InstanceID] = familyProjection{state: row.State, family: row.FamilyState, displayed: row.DisplayedState}
 		}
 		return out, err
 	}
 }
 
 // retainedFamilyProjection is the original committed view: waiting ancestors
-// and a displayed member, all contributing working. List carries no detail.
+// and a waiting member showing idle_screen, all contributing working. List
+// carries no detail.
 func retainedFamilyProjection(ids []string, entered api.StatusResult, verb string) map[string]familyProjection {
 	id := ids[len(ids)-1]
-	want := map[string]familyProjection{id: {entered.State, store.StateWorking, entered.StateDetail}}
+	want := map[string]familyProjection{id: {store.StateWaiting, store.StateWorking, api.StateIdleScreen, entered.StateDetail}}
 	if verb == "list" {
-		want[id] = familyProjection{state: entered.State, family: store.StateWorking}
+		want[id] = familyProjection{state: store.StateWaiting, family: store.StateWorking, displayed: api.StateIdleScreen}
 		for _, ancestor := range ids[:len(ids)-1] {
 			want[ancestor] = familyProjection{state: store.StateWaiting, family: store.StateWorking}
 		}
@@ -356,72 +362,66 @@ func committedFamilyProjection(ids []string, verb string) map[string]familyProje
 // b.ob8 B1: a genuine hook that changes ownership after the read's row snapshot
 // but before its exit observation commits refuses that observation. The read
 // returns the whole earlier display/detail/family snapshot, never a mix; the
-// refused observation writes, refreshes and records nothing. Both displays exit
-// through the same observation, so idle_screen runs only list.
+// refused observation writes, refreshes and records nothing.
 func TestFamilyExitOwnershipRaceKeepsEarlierSnapshot(t *testing.T) {
 	t.Parallel()
-	for _, display := range []string{api.StateNeedsIntelligence, api.StateIdleScreen} {
-		for _, verb := range []string{"status", "get", "list"} {
-			if display == api.StateIdleScreen && verb != "list" {
-				continue
-			}
-			for _, event := range []string{"Stop", "SessionEnd"} {
-				t.Run(display+"/"+verb+"/"+event, func(t *testing.T) {
-					e, ids, entered := retainedDisplayFamily(t, display)
-					if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
-						t.Fatalf("Stop=%+v", a)
-					}
-					e.now = time.Now().Add(time.Minute)
-					// Ancestors precede the member: a refused exit must leave
-					// already-listed ancestors with their original families.
-					s := &readLeaseStore{observationReader: orderedFamilyStore{e.s, ids}}
-					raced := false
-					var hooked store.Spawn
-					var hookedHistory map[string]familyHistoryValue
-					var mark int
-					// The first request read follows every reader's row snapshot
-					// and precedes the observation's write.
-					s.afterFirst = func() error {
-						if raced {
-							return nil
-						}
-						raced = true
-						before := e.row(t)
-						if a := storefix.ApplyAgentHook(t, e.s, e.id, event, ""); !a.Applied {
-							t.Fatalf("concurrent %s=%+v", event, a)
-						}
-						hooked = e.row(t)
-						if hooked.RowVersion <= before.RowVersion {
-							t.Fatalf("%s did not change ownership: before=%+v after=%+v", event, before, hooked)
-						}
-						hookedHistory, mark = readFamilyHistories(t, e.dbPath, ids), trailMark(t)
+	for _, verb := range []string{"status", "get", "list"} {
+		for _, event := range []string{"Stop", "SessionEnd"} {
+			t.Run(verb+"/"+event, func(t *testing.T) {
+				e, ids, entered := retainedDisplayFamily(t)
+				if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
+					t.Fatalf("Stop=%+v", a)
+				}
+				e.now = time.Now().Add(time.Minute)
+				// Ancestors precede the member: a refused exit must leave
+				// already-listed ancestors with their original families.
+				s := &readLeaseStore{observationReader: orderedFamilyStore{e.s, ids}}
+				raced := false
+				var hooked store.Spawn
+				var hookedHistory map[string]familyHistoryValue
+				var mark int
+				// The first request read follows every reader's row snapshot
+				// and precedes the observation's write.
+				s.afterFirst = func() error {
+					if raced {
 						return nil
 					}
-					var got map[string]familyProjection
-					var err error
-					apitest.RepeatUntilCommitted(func() bool {
-						s.reads, s.writes = 0, nil
-						got, err = readFamilyProjection(s, api.RelayView{Now: func() time.Time { return e.now }}, verb, e.id)
-						return raced || err != nil
-					})
-					want := retainedFamilyProjection(ids, entered, verb)
-					if !raced || err != nil || !reflect.DeepEqual(got, want) {
-						t.Fatalf("raced read=%+v err=%v raced=%v; want the earlier coherent %+v", got, err, raced, want)
+					raced = true
+					before := e.row(t)
+					if a := storefix.ApplyAgentHook(t, e.s, e.id, event, ""); !a.Applied {
+						t.Fatalf("concurrent %s=%+v", event, a)
 					}
-					if !reflect.DeepEqual(s.writes, []string{"ObserveNeedsIntelligence"}) {
-						t.Errorf("observations=%v; want one refused exit", s.writes)
+					hooked = e.row(t)
+					if hooked.RowVersion <= before.RowVersion {
+						t.Fatalf("%s did not change ownership: before=%+v after=%+v", event, before, hooked)
 					}
-					if after := e.row(t); !reflect.DeepEqual(after, hooked) {
-						t.Errorf("refused exit changed row: hooked=%+v after=%+v", hooked, after)
-					}
-					if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, hookedHistory) {
-						t.Errorf("refused exit changed histories: hooked=%+v after=%+v", hookedHistory, after)
-					}
-					if events := displayEvents(t, mark, e.id); len(events) != 0 {
-						t.Errorf("refused exit emitted %v", events)
-					}
+					hookedHistory, mark = readFamilyHistories(t, e.dbPath, ids), trailMark(t)
+					return nil
+				}
+				var got map[string]familyProjection
+				var err error
+				apitest.RepeatUntilCommitted(func() bool {
+					s.reads, s.writes = 0, nil
+					got, err = readFamilyProjection(s, api.RelayView{Now: func() time.Time { return e.now }}, verb, e.id)
+					return raced || err != nil
 				})
-			}
+				want := retainedFamilyProjection(ids, entered, verb)
+				if !raced || err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("raced read=%+v err=%v raced=%v; want the earlier coherent %+v", got, err, raced, want)
+				}
+				if !reflect.DeepEqual(s.writes, []string{"ObserveNeedsIntelligence"}) {
+					t.Errorf("observations=%v; want one refused exit", s.writes)
+				}
+				if after := e.row(t); !reflect.DeepEqual(after, hooked) {
+					t.Errorf("refused exit changed row: hooked=%+v after=%+v", hooked, after)
+				}
+				if after := readFamilyHistories(t, e.dbPath, ids); !reflect.DeepEqual(after, hookedHistory) {
+					t.Errorf("refused exit changed histories: hooked=%+v after=%+v", hookedHistory, after)
+				}
+				if events := displayEvents(t, mark, e.id); len(events) != 0 {
+					t.Errorf("refused exit emitted %v", events)
+				}
+			})
 		}
 	}
 }
@@ -440,26 +440,22 @@ func TestFamilyExitSkipsLeasedConnection(t *testing.T) {
 		{"list", "store", true},
 	} {
 		t.Run(fmt.Sprintf("%s/%s/later=%v", tc.verb, tc.backend, tc.laterMember), func(t *testing.T) {
-			e, ids, _ := retainedDisplayFamily(t, api.StateNeedsIntelligence)
+			e, ids, _ := retainedDisplayFamily(t)
 			want := committedFamilyProjection(ids, tc.verb)
 			order := []string{e.id, ids[1], ids[0]}
 			var later string
 			var laterBefore store.Spawn
 			if tc.laterMember {
-				var err error
-				later, err = apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "off", "", false)
-				if err != nil {
-					t.Fatal(err)
-				}
-				other := *e
-				other.id = later
-				enterFamilyDisplay(t, &other, api.StateNeedsIntelligence)
+				later = addDisplayedMember(t, e, "%7", 4343)
 				if a := storefix.ApplyAgentHook(t, e.s, later, "Stop", ""); !a.Applied {
 					t.Fatalf("later Stop=%+v", a)
 				}
-				laterBefore = other.row(t)
+				var err error
+				if laterBefore, err = e.s.GetSpawn(later); err != nil {
+					t.Fatal(err)
+				}
 				order = append(order, later)
-				want[later] = familyProjection{state: api.StateNeedsIntelligence, family: store.StateWorking}
+				want[later] = familyProjection{state: store.StateWaiting, family: store.StateWorking, displayed: api.StateIdleScreen}
 			}
 			if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
 				t.Fatalf("Stop=%+v", a)
@@ -507,7 +503,7 @@ func TestFamilyExitSkipsLeasedConnection(t *testing.T) {
 			if events := displayEvents(t, mark, e.id); len(events) != 1 {
 				t.Errorf("exit events=%v; want one", events)
 			} else {
-				assertDisplayEvent(t, events[0], api.StateNeedsIntelligence, store.StateWaiting, e.now)
+				assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)
 			}
 			if later != "" {
 				after, err := e.s.GetSpawn(later)
@@ -532,15 +528,14 @@ func TestFamilyExitSkipsLeasedConnection(t *testing.T) {
 func TestFamilyExitListReportsCommittedState(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name, display string
-		siblings      bool
+		name     string
+		siblings bool
 	}{
-		{"needs_intelligence filter", api.StateNeedsIntelligence, false},
-		{"idle_screen filter", api.StateIdleScreen, false},
-		{"siblings ancestors first", api.StateNeedsIntelligence, true},
+		{"idle_screen filter", false},
+		{"siblings ancestors first", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			params := api.ListParams{State: []string{tc.display}, Limit: 1}
+			params := api.ListParams{State: []string{api.StateIdleScreen}, Limit: 1}
 			if tc.siblings {
 				params = api.ListParams{}
 			}
@@ -554,20 +549,17 @@ func TestFamilyExitListReportsCommittedState(t *testing.T) {
 			// Stop, with the trail mark taken after their entry records.
 			exited := func() {
 				var ids []string
-				e, ids, _ = retainedDisplayFamily(t, tc.display)
+				e, ids, _ = retainedDisplayFamily(t)
 				members = []string{e.id}
 				order = []string{e.id, ids[1], ids[0]}
 				if tc.siblings {
-					sibling, err := apitest.SeedSpawn(e.dbPath, "", store.StateCheckPermission, "", "off", "", false)
-					if err != nil {
-						t.Fatal(err)
-					}
+					sibling := e.addRow(t, store.AgentClaude, apitest.TestSocket, "%7", 4343)
 					if err := apitest.SeedParentChild(e.dbPath, ids[1], sibling); err != nil {
 						t.Fatal(err)
 					}
 					other := *e
 					other.id = sibling
-					enterFamilyDisplay(t, &other, api.StateNeedsIntelligence)
+					enterFamilyDisplay(t, &other)
 					members = append(members, sibling)
 					order = []string{ids[0], ids[1], e.id, sibling}
 				}
@@ -643,7 +635,7 @@ func TestFamilyExitListReportsCommittedState(t *testing.T) {
 				if events := displayEvents(t, mark, id); len(events) != 1 {
 					t.Errorf("exit events %s=%v; want one", id, events)
 				} else {
-					assertDisplayEvent(t, events[0], tc.display, store.StateWaiting, e.now)
+					assertDisplayEvent(t, events[0], api.StateIdleScreen, store.StateWaiting, e.now)
 				}
 			}
 		})
@@ -664,7 +656,7 @@ func TestFamilyExitListIgnoresExcludedMalformedRows(t *testing.T) {
 		{"extra_env", apitest.WithRawExtraEnv("{bad")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e, ids, _ := retainedDisplayFamily(t, api.StateNeedsIntelligence)
+			e, ids, _ := retainedDisplayFamily(t)
 			if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
 				t.Fatalf("Stop=%+v", a)
 			}
@@ -696,43 +688,41 @@ func TestFamilyExitListIgnoresExcludedMalformedRows(t *testing.T) {
 // raw waiting and update its ancestors before any public read can repair them.
 func TestFamilyRetainedDisplayImmediateExit(t *testing.T) {
 	t.Parallel()
-	for _, display := range []string{api.StateNeedsIntelligence, api.StateIdleScreen} {
-		for _, terminal := range []string{store.StateEnded, store.StateMissing} {
-			t.Run(display+"/"+terminal, func(t *testing.T) {
-				e, ids, _ := retainedDisplayFamily(t, display)
-				if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
-					t.Fatalf("Stop=%+v", a)
+	for _, terminal := range []string{store.StateEnded, store.StateMissing} {
+		t.Run(terminal, func(t *testing.T) {
+			e, ids, _ := retainedDisplayFamily(t)
+			if a := storefix.ApplyAgentHook(t, e.s, e.id, "Stop", ""); !a.Applied {
+				t.Fatalf("Stop=%+v", a)
+			}
+			before := e.row(t)
+			mark := trailMark(t)
+			if terminal == store.StateEnded {
+				if a := storefix.ApplyAgentHook(t, e.s, e.id, "SessionEnd", ""); !a.Applied {
+					t.Fatalf("SessionEnd=%+v", a)
 				}
-				before := e.row(t)
-				mark := trailMark(t)
-				if terminal == store.StateEnded {
-					if a := storefix.ApplyAgentHook(t, e.s, e.id, "SessionEnd", ""); !a.Applied {
-						t.Fatalf("SessionEnd=%+v", a)
-					}
-				} else if _, res, err := e.s.MarkMissingIfSameLife(e.id, before.Snapshot); err != nil || res != store.CondApplied {
-					t.Fatalf("missing=%v %v", res, err)
+			} else if _, res, err := e.s.MarkMissingIfSameLife(e.id, before.Snapshot); err != nil || res != store.CondApplied {
+				t.Fatalf("missing=%v %v", res, err)
+			}
+			if row := e.row(t); row.State != terminal || row.DisplayObservation != "" {
+				t.Fatalf("terminal row=%+v", row)
+			}
+			histories := readFamilyHistories(t, e.dbPath, ids)
+			stamp := histories[e.id].changed
+			for id, h := range histories {
+				if h != (familyHistoryValue{store.StateWaiting, store.StateWorking, stamp}) || stamp == 0 {
+					t.Errorf("immediate family %s=%+v", id, h)
 				}
-				if row := e.row(t); row.State != terminal || row.DisplayObservation != "" {
-					t.Fatalf("terminal row=%+v", row)
-				}
-				histories := readFamilyHistories(t, e.dbPath, ids)
-				stamp := histories[e.id].changed
-				for id, h := range histories {
-					if h != (familyHistoryValue{store.StateWaiting, store.StateWorking, stamp}) || stamp == 0 {
-						t.Errorf("immediate family %s=%+v", id, h)
-					}
-				}
-				_, at, err := apitest.ReadSettle(e.dbPath, e.id)
-				if err != nil {
-					t.Fatal(err)
-				}
-				events := displayEvents(t, mark, e.id)
-				if len(events) != 1 {
-					t.Fatalf("terminal events=%v", events)
-				}
-				assertDisplayEvent(t, events[0], display, terminal, time.UnixMilli(at))
-			})
-		}
+			}
+			_, at, err := apitest.ReadSettle(e.dbPath, e.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := displayEvents(t, mark, e.id)
+			if len(events) != 1 {
+				t.Fatalf("terminal events=%v", events)
+			}
+			assertDisplayEvent(t, events[0], api.StateIdleScreen, terminal, time.UnixMilli(at))
+		})
 	}
 }
 

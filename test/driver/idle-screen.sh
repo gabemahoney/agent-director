@@ -2,14 +2,16 @@
 # idle_screen acceptance in the Docker harness (idle-screen Epic): the shipped
 # binary reads the configured [state] idle_screen_timeout_seconds, samples a
 # stand-in agent's real tmux pane on reads and shows the display to
-# independent processes; a per-spawn override persists across calls and wins
-# over the configuration; Cursor rows report idle_screen unavailable while
-# their permission requests still show needs_intelligence. Each displayed
-# entry writes exactly one ad.spawn.displayed_state_transition trail record.
+# independent processes, as displayed_state beside state working, which
+# --state working still matches (b.zpv); a per-spawn override persists across
+# calls and wins over the configuration; Cursor rows report idle_screen
+# unavailable, and a fallen-back Cursor permission request reads
+# check_permission (b.zpv). Each displayed entry writes exactly one
+# ad.spawn.displayed_state_transition trail record.
 #
-# Expected wire values come from the shared hand-authored fixtures
-# (cmd/agent-director/testdata/display/idle_screen.json and
-# needs_intelligence.json) the unit, CLI, MCP and TypeScript tests also use.
+# Expected wire values come from the shared hand-authored fixture
+# (cmd/agent-director/testdata/display/idle_screen.json) the unit, CLI, MCP and
+# TypeScript tests also use.
 # Every store access goes through /opt/driver/sql.sh. The committed pane
 # baseline has no public writer but a read, so a case backdates its start
 # (pane_since_ms) with sql.sh instead of waiting out a timeout; the Cursor case
@@ -40,13 +42,12 @@ launched=()
 work=()
 last=""
 
-# Exact key sets (docs/caller-contract.md): a status row in its ordinary state,
-# showing idle_screen and showing needs_intelligence; a list row's keys present
-# on every row and those present only on some.
+# Exact key sets (docs/caller-contract.md): a status row showing no Displayed
+# State and showing idle_screen; a list row's keys present on a row showing
+# idle_screen and those present only on some.
 status_plain='["context","family_state","idle_screen_availability","state"]'
-status_idle='["context","family_state","idle_screen_availability","since","state","tmux_session_name","unchanged_minutes"]'
-status_needs='["context","family_state","idle_screen_availability","request_token","since","state","tmux_session_name","tool_name"]'
-list_keys='["agent","cwd","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
+status_idle='["context","displayed_state","family_state","idle_screen_availability","since","state","tmux_session_name","unchanged_minutes"]'
+list_keys='["agent","cwd","displayed_state","family_state","idle_screen_availability","instance_id","labels","last_seen_at","permission_requests","relay_mode","started_at","state","state_changed_at","tmux_session_name"]'
 list_optional='["ended_at","launch_started_at","liveness_note","liveness_unverified_since","parent_id"]'
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -197,13 +198,13 @@ no_old_member() {
 }
 
 # check_idle VERB ROW SESSION MINUTES: a status or get row displaying
-# idle_screen: the fixture's state, MINUTES, the attach target, availability
-# available, no request detail (status: its exact key set) and a since made
-# during this case in the fixture's format.
+# idle_screen: the fixture's state and displayed_state, MINUTES, the attach
+# target, availability available, no request detail (status: its exact key
+# set) and a since made during this case in the fixture's format.
 check_idle() {
     local since_ms
     jq -e --slurpfile w "$fixtures/idle_screen.json" --arg s "$3" --argjson m "$4" \
-        '.state == $w[0].state and .unchanged_minutes == $m and .tmux_session_name == $s
+        '.state == $w[0].state and .displayed_state == $w[0].displayed_state and .unchanged_minutes == $m and .tmux_session_name == $s
          and .idle_screen_availability == "available" and (has("request_token") | not) and (has("tool_name") | not)
          and (.since | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"))' <<<"$2" >/dev/null ||
         fail "$1: not the displayed idle_screen of $3 with $4 minutes: $2"
@@ -265,11 +266,14 @@ public)
         jq -e '(.permission_requests | type == "array") and (.unproven_requests | type == "array")' <<<"$get" >/dev/null ||
             fail "$agent: get lost its request arrays"
         v="$(version "$id")"
-        listed="$(agent-director list --state idle_screen)" || fail "list exited non-zero"
-        jq -e --arg id "$id" --argjson k "$list_keys" --argjson o "$list_optional" \
-            '[.spawns[] | select(.instance_id == $id)] | length == 1 and (.[0] | .state == "idle_screen"
-            and .idle_screen_availability == "available" and (keys - $o) == $k)' <<<"$listed" >/dev/null ||
-            fail "$agent: list row: $listed"
+        # Either filter, the Displayed State or the real state (b.zpv), lists the row.
+        for filter in idle_screen working; do
+            listed="$(agent-director list --state "$filter")" || fail "list --state $filter exited non-zero"
+            jq -e --arg id "$id" --argjson k "$list_keys" --argjson o "$list_optional" \
+                '[.spawns[] | select(.instance_id == $id)] | length == 1 and (.[0] | .state == "working" and .displayed_state == "idle_screen"
+                and .idle_screen_availability == "available" and (keys - $o) == $k)' <<<"$listed" >/dev/null ||
+                fail "$agent: list --state $filter row: $listed"
+        done
         [[ "$(version "$id")" == "$v" ]] || fail "$agent: list re-committed the unchanged display"
         [[ "$(col "$id" state)" == working ]] || fail "$agent: the raw state moved"
         one_record "$id" working idle_screen "$(jq -r .since <<<"$status")"
@@ -328,28 +332,26 @@ cursor)
     no_old_member "$row" "Cursor quiet get"
     [[ "$(col cursor-quiet "observation_version || '|' || IFNULL(display_observation,'') || '|' || pane_since_ms")" == "$before" ]] ||
         fail "a Cursor row was observed by its pane"
-    token="$(jq -r .request_token "$fixtures/needs_intelligence.json")"
-    tool="$(jq -r .tool_name "$fixtures/needs_intelligence.json")"
     sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token,permission_epoch)
          VALUES('cursor-asks','check_permission','check_permission',0,'/tmp','cursor','on','ts-cursor-asks','1111111111111111',7)"
     sql "INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,created_at,settled_at,owner_launch_token,owner_permission_epoch,admitted_at,fallback_at,fallback_basis)
-         VALUES('cursor-asks',$(q "$token"),$(q "$tool"),'{}','2019-12-31 23:59:00',$old,'1111111111111111',7,$((old - 1000)),$old,'deadline')"
-    observe cursor-asks
-    jq -e --slurpfile w "$fixtures/needs_intelligence.json" --argjson k "$status_needs" '.state == $w[0].state
-        and .request_token == $w[0].request_token and .tool_name == $w[0].tool_name
-        and .idle_screen_availability == "unavailable" and keys == $k' <<<"$last" >/dev/null || fail "Cursor permission: $last"
+         VALUES('cursor-asks','aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa','Bash','{}','2019-12-31 23:59:00',$old,'1111111111111111',7,$((old - 1000)),$old,'deadline')"
+    # b.zpv: fallen back since 2020, the request keeps its row check_permission.
+    last="$(read_row status cursor-asks)"
+    jq -e --argjson k "$status_plain" '.state == "check_permission" and .idle_screen_availability == "unavailable" and keys == $k' <<<"$last" >/dev/null ||
+        fail "Cursor permission: $last"
     sql "INSERT INTO spawns(instance_id,state,settled_state,state_changed_ms,cwd,agent,relay_mode,tmux_session_name,launch_token)
          VALUES('codex-ended','ended','ended',0,'/tmp','codex','off','ts-codex-ended','3333333333333333')"
     listed="$(agent-director list)" || fail "list exited non-zero"
     jq -e '[.spawns[] | [.instance_id, .idle_screen_availability]] | sort ==
         [["codex-ended", "available"], ["cursor-asks", "unavailable"], ["cursor-quiet", "unavailable"]]' <<<"$listed" >/dev/null ||
         fail "availability on every row: $listed"
-    one_record cursor-asks check_permission needs_intelligence "$(jq -r .since <<<"$last")"
+    [[ "$(records cursor-asks)" == "[]" ]] || fail "the fallen-back Cursor request wrote a record: $(records cursor-asks)"
     [[ "$(records cursor-quiet)" == "[]" ]] || fail "the never-sampled Cursor row wrote a record: $(records cursor-quiet)"
     trail_clean
     jq -cn --arg q "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$quiet")" \
         --arg a "$(jq -r '[.state, .idle_screen_availability] | join("/")' <<<"$last")" \
-        '{case: "cursor", quiet_since_2020: $q, asks: $a, list: 3, records: {asks: 1, quiet: 0}}'
+        '{case: "cursor", quiet_since_2020: $q, asks: $a, list: 3, records: {asks: 0, quiet: 0}}'
     ;;
 *) fail "unknown mode $mode" ;;
 esac

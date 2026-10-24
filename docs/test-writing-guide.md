@@ -129,9 +129,12 @@ registered in
 not seed those columns with raw SQL or keep a second copy of the expected
 wire detail.
 
-- `SeedNeedsIntelligenceSurface` and `SeedIdleScreenSurface` rows have no
-  pane, so read them under `apitest.SettleOnConfig`, within its settle time,
-  to keep the committed detail.
+- `SeedNeedsIntelligenceSurface` rows are `check_permission` rows holding a
+  stored `needs_intelligence` display, which no read reports;
+  `SeedIdleScreenSurface` rows are `working` rows showing `idle_screen`.
+  The `idle_screen` rows have no pane, so read them under
+  `apitest.SettleOnConfig`, within its settle time, to keep the committed
+  detail.
 - A read that must commit is nonwaiting and best effort. Confirm it with
   `ObserveDisplayRead`, `commitUnlessBusy` in `internal/store`, or
   `apitest.RepeatUntilCommitted` directly when the commit is checked on
@@ -165,10 +168,11 @@ wire detail.
   The exceptions cover those two plans only.
 - Lifecycle and read-write coverage lives in
   `internal/store/display_lifecycle_test.go` (find-missing's repair, unreadable
-  display metadata, reads that write nothing, an unconfirmed commit, the fallback
-  clock rule) and `pkg/api/needs_intelligence_epoch_test.go` (a new interval never
-  inherits an old episode);
-  pane sampling, settling and the direct move in
+  display metadata, a stored `needs_intelligence` ended at the first read, an
+  unconfirmed commit, the fallback
+  clock rule) and `pkg/api/permission_state_contract_test.go` (a known
+  permission request stays `check_permission` however long it waits);
+  pane sampling and settling in
   `pkg/api/idle_screen_test.go` and `idle_screen_settle_test.go`.
 
 ## Context fullness captures and fixtures

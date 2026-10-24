@@ -106,7 +106,9 @@ func advRangeFollow(desc string, keys rangeKeys, value string) rangeKeys {
 	return keys
 }
 
-// advRangeAssertDefaults fails unless cfg's keys outside [tmux] all read as their defaults.
+// advRangeAssertDefaults fails unless cfg's keys outside [tmux] all read as
+// their defaults; [state] needs_intelligence_timeout_seconds has no effect
+// since b.zpv, so it has no effective value to read.
 func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 	t.Helper()
 	for _, k := range []struct {
@@ -119,7 +121,6 @@ func advRangeAssertDefaults(t *testing.T, cfg config.Config) {
 		{"pre_trust lock_wait_seconds", cfg.PreTrust.EffectiveLockWaitSeconds(), config.DefaultPreTrustLockWaitSeconds},
 		{"store busy_timeout_ms", cfg.Store.EffectiveBusyTimeoutMs(), config.DefaultStoreBusyTimeoutMs},
 		{"state settle_ms", cfg.State.EffectiveSettleMs(), config.DefaultStateSettleMs},
-		{"state needs_intelligence_timeout_seconds", cfg.State.EffectiveNeedsIntelligenceTimeoutSeconds(), config.DefaultNeedsIntelligenceTimeoutSeconds},
 		{"state idle_screen_timeout_seconds", cfg.State.EffectiveIdleScreenTimeoutSeconds(), config.DefaultIdleScreenTimeoutSeconds},
 	} {
 		if k.got != k.want {
