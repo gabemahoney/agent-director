@@ -96,8 +96,9 @@ func killCursorRuntime(t *testing.T, c *cursorSession) {
 func TestCursorExitAfterRuntimeDeathMakesOneFlushAttempt(t *testing.T) {
 	// Serial: real Run, report subprocess and PTY with a synthetic ACP peer.
 	barrier, opener := newMatchingRecordBarrier(t, "input_control", func(raw []byte) bool { return bytes.Contains(raw, []byte(`"control":"exit"`)) })
+	idle, opener := idleProofBarrier(t, opener)
 	c := longBusyCursorSession(t, opener)
-	token, release := idleDeferredProof(t, c)
+	token, release := idleDeferredProof(t, c, idle)
 	c.keys(t, "\x15/exit\r")
 	select {
 	case <-barrier.entered:

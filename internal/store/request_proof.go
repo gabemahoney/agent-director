@@ -90,6 +90,8 @@ func (p RequestProof) match() (frag string, args []any, ok bool, err error) {
 //     requests preserve their eligibility. Cursor unknown origin and child
 //     requests remain ineligible even without an AgentID: missing identity is
 //     no proof of main origin, and background work can outlive the main turn.
+//     A Cursor request's turn_end comes from its gateway instead, at the
+//     prompt turn's completion (ProveCursorTurnEnded).
 //
 // "Written before this hook started" is two cuts, both in the read and in
 // the write. The first is the hook's start (proof.RecordedBefore): only a

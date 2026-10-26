@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -139,6 +140,39 @@ func assertRelayPromptGuard(t *testing.T, f *spawnFix, r cursorfix.Runtime, id, 
 	}
 }
 
+// assertRetiredRefusal requires the refusal docs/caller-contract.md gives a
+// plain send-keys or pause on a relay-on Cursor row whose requests, rows, a
+// turn's end retired undelivered: ErrSendKeysWhileRelayed until their latest
+// confirm_by, ErrRelayFallenBack from it on. call returns the refusal's error
+// name; a call that straddles confirm_by may get either.
+func assertRetiredRefusal(t *testing.T, rows []store.PermissionRow, what string, call func() string) {
+	t.Helper()
+	var confirmBy time.Time
+	for _, row := range rows {
+		if row.SettledAt.After(confirmBy) {
+			confirmBy = row.SettledAt
+		}
+	}
+	start := time.Now()
+	got := call()
+	end := time.Now()
+	relayed, fallen := got == api.ErrSendKeysWhileRelayed.Error(), got == api.ErrRelayFallenBack.Error()
+	if (end.Before(confirmBy) && !relayed) || (!start.Before(confirmBy) && !fallen) || (!relayed && !fallen) {
+		t.Fatalf("%s on retired requests: got %s, called %s..%s with confirm_by %s", what, got, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano), confirmBy.Format(time.RFC3339Nano))
+	}
+}
+
+// refusalName is e's sentinel name when it is one assertRetiredRefusal
+// accepts, otherwise e as text.
+func refusalName(e error) string {
+	for _, sentinel := range []error{api.ErrSendKeysWhileRelayed, api.ErrRelayFallenBack} {
+		if errors.Is(e, sentinel) {
+			return sentinel.Error()
+		}
+	}
+	return fmt.Sprint(e)
+}
+
 func TestCursorRelayUnknownOriginRequiresCorrelatedExecution(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	const session = "proof-session"
@@ -169,7 +203,9 @@ func TestCursorRelayUnknownOriginRequiresCorrelatedExecution(t *testing.T) {
 	}
 }
 
-func TestCursorRelayTurnEndKeepsIndependentPlan(t *testing.T) {
+// b.gwj: a turn that ends with its permission and plan undecided retires both,
+// so the row reports waiting and a later decide reaches nothing.
+func TestCursorRelayTurnEndRetiresUndecidedPermissionAndPlan(t *testing.T) {
 	// Serial: the shared real-pane fixture changes HOME, PATH and tmux environment.
 	script := relayCapturedScenario(t)
 	script.CompleteBeforeAnswers = true
@@ -177,42 +213,55 @@ func TestCursorRelayTurnEndKeepsIndependentPlan(t *testing.T) {
 	if _, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: "end before answers"}); e != nil {
 		t.Fatal(e)
 	}
-	rows := relayRequests(t, f, launch.ID, 2)
-	waitFor(t, "normal outcome while approvals remain open", func() bool {
-		row := readRow(t, f.DBPath, launch.ID)
-		raw, e := os.ReadFile(row.JSONLPath.(string))
-		return e == nil && strings.Contains(string(raw), `"kind":"turn_outcome"`)
-	}, func() string { return fmt.Sprint(relayRequests(t, f, launch.ID, 2)) })
-	for _, row := range rows {
-		if !row.ProvenGoneAt.IsZero() || row.Decision != "" || row.MainTurnEndEligible {
-			t.Fatal("normal outcome released unknown-origin request")
+	admitted := relayRequests(t, f, launch.ID, 2)
+	diag := func() string {
+		return fmt.Sprint(readRow(t, f.DBPath, launch.ID).State, relayRequests(t, f, launch.ID, 2))
+	}
+	// The gateway stores the proofs before the Stop that moves the row.
+	waitFor(t, "turn end reports waiting", func() bool { return readRow(t, f.DBPath, launch.ID).State == "waiting" }, diag)
+	verdicts := map[string]string{}
+	for _, row := range relayRequests(t, f, launch.ID, 2) {
+		if row.ProvenGoneHow != "turn_end" || row.Decision != "" || !row.DeliveredAt.IsZero() || row.MainTurnEndEligible {
+			t.Fatalf("turn end did not retire unknown-origin request: %+v", row)
 		}
-	}
-	if readRow(t, f.DBPath, launch.ID).State != "check_permission" {
-		t.Fatal("turn end cleared blocking plan state")
-	}
-	assertRelayPromptGuard(t, f, r, launch.ID, "plan and permission still held")
-	for _, row := range rows {
+		// Only the plan's params carry a top-level toolCallId.
 		var p struct {
 			Tool string `json:"toolCallId"`
 		}
 		json.Unmarshal([]byte(row.ToolInput), &p)
+		verdicts[row.RequestToken] = "allow"
 		if p.Tool != "" {
-			if _, e := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: row.RequestToken, Decision: "deny"}); e != nil {
-				t.Fatal(e)
-			}
+			verdicts[row.RequestToken] = "deny"
+		}
+		got, e := f.API.Decide(api.DecideParams{InstanceID: launch.ID, RequestToken: row.RequestToken, Decision: verdicts[row.RequestToken]})
+		if e != nil || got.Delivery != "not_confirmed" {
+			t.Fatalf("late decide: %+v %v", got, e)
 		}
 	}
-	waitFor(t, "only plan answered", func() bool { return len(relayReplies(t, r)) == 1 }, func() string { return fmt.Sprint(relayReplies(t, r)) })
 	for _, row := range relayRequests(t, f, launch.ID, 2) {
-		if row.Decision == "" && !row.DeliveredAt.IsZero() {
-			t.Fatal("independent permission acquired plan acknowledgement")
-		}
-		if !row.ProvenGoneAt.IsZero() {
-			t.Fatal("plan answer supplied execution proof")
+		if row.Decision != verdicts[row.RequestToken] || row.ProvenGoneHow != "turn_end" || !row.DeliveredAt.IsZero() {
+			t.Fatalf("late decide not stored as given: %+v", row)
 		}
 	}
-	if pidGone(int(launch.Row.PanePID.(int64))) {
-		t.Fatal("gateway died while native request remains open")
+	gateway := int(launch.Row.PanePID.(int64))
+	if pidGone(gateway) {
+		t.Fatal("gateway died after its turn retired the requests")
+	}
+	const refused = "retired-requests-refuse-input"
+	assertRetiredRefusal(t, admitted, "send-keys after late decides", func() string {
+		_, e := f.API.SendKeys(api.SendKeysParams{InstanceID: launch.ID, Text: refused})
+		return refusalName(e)
+	})
+	// Once the gateway has exited, nothing more can reach the peer.
+	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/exit")
+	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
+	waitFor(t, "gateway and runtime exit", func() bool { return pidGone(paneRuntimePID(t, r)) && pidGone(gateway) }, diag)
+	for _, frame := range r.Frames(t) {
+		if len(frame["method"]) == 0 || string(frame["method"]) == `"session/cancel"` {
+			t.Fatalf("retired request answered or cancelled: %s", frame)
+		}
+		if strings.Contains(string(frame["params"]), refused) {
+			t.Fatalf("refused prompt reached the agent: %s", frame)
+		}
 	}
 }

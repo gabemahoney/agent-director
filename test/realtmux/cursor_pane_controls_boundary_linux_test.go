@@ -45,6 +45,29 @@ func panePublicRow(t *testing.T, c *paneCaller, id string) api.SpawnRow {
 	}
 	return row
 }
+
+// paneErrName is the err_name of c's failed verb call, or its whole response
+// when it names none. The CLI and Bun envelopes carry err_name at the top;
+// MCP carries it in the JSON-RPC error's data (docs/architecture.md "Error
+// envelope").
+func paneErrName(c *paneCaller, verb string, p map[string]any) string {
+	raw, err := c.call(verb, p)
+	var failure struct {
+		Name  string `json:"err_name"`
+		Error struct {
+			Data struct {
+				Name string `json:"err_name"`
+			} `json:"data"`
+		} `json:"error"`
+	}
+	json.Unmarshal(raw, &failure)
+	for _, name := range []string{failure.Name, failure.Error.Data.Name} {
+		if name != "" {
+			return name
+		}
+	}
+	return fmt.Sprintf("no err_name: response=%s err=%v", raw, err)
+}
 func paneRuntimePID(t *testing.T, r cursorfix.Runtime) int {
 	t.Helper()
 	var pid int
@@ -139,8 +162,10 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 	}
 }
 
-// Questions, cancellation and a new conversation cannot prove unknown-origin requests gone.
-func TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation(t *testing.T) {
+// Questions, caller recreation and a cancellation alone cannot prove unknown-origin
+// requests gone; the cancelled turn's completion does (b.gwj), and a new
+// conversation keeps that proof.
+func TestCursorPaneControlsPublicIndependentHoldsUntilTurnEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real pane independent public holds")
 	}
@@ -167,11 +192,15 @@ func TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation(t *testing.T) 
 			t.Fatalf("question authorized: %v", reply)
 		}
 	}
-	inspect := func() {
+	inspect := func(retired bool) {
 		t.Helper()
 		got := panePublicRow(t, c, id)
-		if got.State != store.StateCheckPermission {
-			t.Fatalf("independent hold state lost: %+v", got)
+		want := store.StateCheckPermission
+		if retired {
+			want = store.StateWaiting
+		}
+		if got.State != want {
+			t.Fatalf("row state %s, want %s: %+v", got.State, want, got)
 		}
 		for _, original := range rows {
 			raw := c.must("get-permission", map[string]any{"request_token": original.RequestToken})
@@ -181,15 +210,15 @@ func TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation(t *testing.T) 
 			}
 		}
 		for _, row := range relayRequests(t, f, id, 2) {
-			if row.MainTurnEndEligible || row.ProvenGone() || row.RequestToken == "" {
-				t.Fatalf("unknown hold acquired proof: %+v", row)
+			if row.MainTurnEndEligible || row.ProvenGone() != retired || (retired && row.ProvenGoneHow != "turn_end") || row.Decision != "" || row.RequestToken == "" {
+				t.Fatalf("unknown hold proof, want retired=%t: %+v", retired, row)
 			}
 		}
 	}
-	inspect()
+	inspect(false)
 	c.close()
 	c = newPaneCaller(t, f, "MCP", bin)
-	inspect()
+	inspect(false)
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "C-c")
 	waitFor(t, "actual cancellation notification", func() bool {
 		for _, frame := range r.Frames(t) {
@@ -199,32 +228,45 @@ func TestCursorPaneControlsPublicIndependentHoldsAcrossRecreation(t *testing.T) 
 		}
 		return false
 	}, diag)
+	// The peer holds its turn open until the release; only store reads come
+	// before it, as the gateway's turn-end write must land within cancelWait (3 s).
+	for _, row := range relayRequests(t, f, id, 2) {
+		if row.ProvenGone() {
+			t.Fatalf("cancellation alone proved a request gone: %+v", row)
+		}
+	}
+	if state := readRow(t, f.DBPath, id).State; state != store.StateCheckPermission {
+		t.Fatalf("cancellation alone moved the row to %s", state)
+	}
 	if err := os.WriteFile(r.Release, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "cancelled turn response recorded", func() bool { return paneRecordCount(t, path, "turn_outcome") == 1 }, diag)
-	// Local controls remain accessible even though public ordinary prompts/pause are held.
+	waitFor(t, "cancelled turn retires its requests", func() bool {
+		return paneRecordCount(t, path, "turn_outcome") == 1 && readRow(t, f.DBPath, id).State == store.StateWaiting
+	}, diag)
+	inspect(true)
+	// Local controls remain accessible even though public ordinary prompts/pause are refused.
 	r.Configure(t, cursorfix.Scenario{SessionID: script.SessionID})
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/new")
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
-	waitFor(t, "new conversation with original request holds", func() bool { return readRow(t, f.DBPath, id).SessionID != script.SessionID }, diag)
-	inspect()
-	raw, err := c.call("pause", map[string]any{"instance_id": id})
-	refusal := string(raw) + fmt.Sprint(err)
-	if !strings.Contains(refusal, "ErrSpawnNotPausable") && !strings.Contains(refusal, "ErrDialogMaybeOpen") && !strings.Contains(refusal, "ErrSendKeysWhileRelayed") && !strings.Contains(refusal, "ErrRelayFallenBack") {
-		t.Fatalf("public pause crossed holds or returned wrong error: %s", refusal)
-	}
-	assertRelayPromptGuard(t, f, r, id, "public-holds-must-remain")
+	waitFor(t, "new conversation keeps the retired requests", func() bool { return readRow(t, f.DBPath, id).SessionID != script.SessionID }, diag)
+	inspect(true)
+	assertRetiredRefusal(t, rows, "public pause", func() string {
+		return paneErrName(c, "pause", map[string]any{"instance_id": id})
+	})
+	assertRetiredRefusal(t, rows, "public send-keys", func() string {
+		return paneErrName(c, "send-keys", map[string]any{"instance_id": id, "text": "retired-requests-refuse-input"})
+	})
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "-l", "--", "/exit")
 	launch.rt.must(t, "send-keys", "-t", launch.Row.PaneID.(string), "Enter")
 	waitForObserved(t, 3*time.Second, "owned death before final guard raw observation", func() bool {
 		return pidGone(paneRuntimePID(t, r)) && pidGone(int(launch.Row.PanePID.(int64)))
 	}, diag)
-	assertPaneNoPromptBytes(t, r, "public-holds-must-remain")
+	assertPaneNoPromptBytes(t, r, "retired-requests-refuse-input")
 	if len(panePrompts(t, r)) != 1 {
 		t.Fatal("request inspection/recreation/new session replayed prompt")
 	}
-	t.Logf("instance=%s preserved unknown-origin tokens=%s/%s after questions/cancel/new", id, rows[0].RequestToken, rows[1].RequestToken)
+	t.Logf("instance=%s retired unknown-origin tokens=%s/%s at the cancelled turn's end, kept across /new", id, rows[0].RequestToken, rows[1].RequestToken)
 }
 
 // The caller never consumes its send response; independent admission cannot become a replay.

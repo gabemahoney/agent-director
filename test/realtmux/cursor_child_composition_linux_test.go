@@ -22,10 +22,11 @@ import (
 func cursorChildPermissionAcrossParentSwitch(t *testing.T, first *spawnFix, st *store.Store, public, cli *paneCaller, firstLaunch, beforeChild spawned, childPeer cursorfix.Runtime, parent apitest.SpawnColumns) func() {
 	t.Helper()
 	// A real independent child's permission survives unrelated parent work and a life switch.
+	// The child's turn stays open until its tool runs, because a turn's end retires
+	// its undecided requests (b.gwj).
 	permissionScript := relayCapturedScenario(t)
 	permissionScript.Requests = permissionScript.Requests[:1]
 	permissionScript.WaitForAfterAnswersRelease = true
-	permissionScript.CompleteBeforeAnswers = true
 	var envelope struct {
 		ToolCall struct {
 			ID string `json:"toolCallId"`
@@ -49,8 +50,8 @@ func cursorChildPermissionAcrossParentSwitch(t *testing.T, first *spawnFix, st *
 	observed := observeRelayCommit(t, childPeer, first.DBPath)
 	public.send(beforeChild.ID, "child permission across parent switch")
 	request := relayRequests(t, first, beforeChild.ID, 1)[0]
-	waitFor(t, "durable child turn outcome while permission remains held", func() bool {
-		return paneRecordCount(t, readRow(t, first.DBPath, beforeChild.ID).JSONLPath.(string), "turn_outcome") == 2 && readRow(t, first.DBPath, beforeChild.ID).State == store.StateCheckPermission
+	waitFor(t, "child turn open while permission remains held", func() bool {
+		return paneRecordCount(t, readRow(t, first.DBPath, beforeChild.ID).JSONLPath.(string), "turn_outcome") == 1 && readRow(t, first.DBPath, beforeChild.ID).State == store.StateCheckPermission
 	}, func() string { return fmt.Sprint(relayRequests(t, first, beforeChild.ID, 1)) })
 	request = relayRequests(t, first, beforeChild.ID, 1)[0]
 	var initialPermission api.GetPermissionResult
@@ -68,8 +69,8 @@ func cursorChildPermissionAcrossParentSwitch(t *testing.T, first *spawnFix, st *
 		pane, err := first.API.ReadPane(api.ReadPaneParams{InstanceID: firstLaunch.ID, NLines: 100})
 		return err == nil && strings.Contains(pane.Pane, "Synthetic reply: useful parent while child held") && readRow(t, first.DBPath, firstLaunch.ID).State == store.StateWaiting
 	}, nil)
-	if paneRecordCount(t, readRow(t, first.DBPath, beforeChild.ID).JSONLPath.(string), "turn_outcome") != 2 || readRow(t, first.DBPath, beforeChild.ID).State != store.StateCheckPermission {
-		t.Fatal("parent work changed completed child's permission hold")
+	if paneRecordCount(t, readRow(t, first.DBPath, beforeChild.ID).JSONLPath.(string), "turn_outcome") != 1 || readRow(t, first.DBPath, beforeChild.ID).State != store.StateCheckPermission {
+		t.Fatal("parent work changed child's permission hold")
 	}
 	assertRelayPromptGuard(t, first, childPeer, beforeChild.ID, "parent work cannot release child")
 	var cursorListing api.ListSubagentsResult
@@ -120,7 +121,7 @@ func cursorChildPermissionAcrossParentSwitch(t *testing.T, first *spawnFix, st *
 		t.Fatalf("parent settled child: %+v %v", heldPermission, err)
 	}
 	held := relayRequests(t, first, beforeChild.ID, 1)[0]
-	if held.RequestToken != request.RequestToken || held.Decision != "" || !held.ProvenGoneAt.IsZero() || !held.DeliveredAt.IsZero() || len(relayReplies(t, childPeer)) != 0 || paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") != 2 || childBeforeSwitch.State != store.StateCheckPermission {
+	if held.RequestToken != request.RequestToken || held.Decision != "" || !held.ProvenGoneAt.IsZero() || !held.DeliveredAt.IsZero() || len(relayReplies(t, childPeer)) != 0 || paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") != 1 || childBeforeSwitch.State != store.StateCheckPermission {
 		t.Fatal("parent supplied child delivery/proof")
 	}
 	assertRelayPromptGuard(t, first, childPeer, beforeChild.ID, "parent switch cannot release child")
@@ -135,18 +136,18 @@ func cursorChildPermissionAcrossParentSwitch(t *testing.T, first *spawnFix, st *
 	}
 	assertRelayCommittedAtRawResponse(t, childPeer, observed, map[string]string{`"permission"`: request.RequestToken})
 	delivered := relayRequests(t, first, beforeChild.ID, 1)[0]
-	if !delivered.ProvenGoneAt.IsZero() || delivered.DeliveredAt.IsZero() || delivered.RequestToken != request.RequestToken || delivered.Decision != "allow" || paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") != 2 || readRow(t, first.DBPath, beforeChild.ID).State != store.StateCheckPermission {
-		t.Fatalf("delivered child request lost its completed-turn hold: %+v", delivered)
+	if !delivered.ProvenGoneAt.IsZero() || delivered.DeliveredAt.IsZero() || delivered.RequestToken != request.RequestToken || delivered.Decision != "allow" || paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") != 1 || readRow(t, first.DBPath, beforeChild.ID).State != store.StateCheckPermission {
+		t.Fatalf("delivered child request lost its hold before execution proof: %+v", delivered)
 	}
 	assertRelayPromptGuard(t, first, childPeer, beforeChild.ID, "delivered alone cannot release child")
 	parentAfterSwitch := readRow(t, first.DBPath, firstLaunch.ID)
 	if err := os.WriteFile(childPeer.Release, nil, 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Idle execution proof retires the request; the next hook owns lifecycle state.
+	// The in-turn execution proof retires the request; the turn's Stop then reports waiting.
 	waitFor(t, "child correlated tool execution and completed outcomes", func() bool {
 		got := relayRequests(t, first, beforeChild.ID, 1)[0]
-		return got.InstanceID == beforeChild.ID && got.RequestToken == request.RequestToken && got.RequestID == request.RequestID && got.ToolUseID == envelope.ToolCall.ID && got.ToolInput == request.ToolInput && !got.ProvenGoneAt.IsZero() && got.ProvenGoneHow == "tool_ran" && !got.DeliveredAt.IsZero() && got.Decision == "allow" && paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") == 2
+		return got.InstanceID == beforeChild.ID && got.RequestToken == request.RequestToken && got.RequestID == request.RequestID && got.ToolUseID == envelope.ToolCall.ID && got.ToolInput == request.ToolInput && !got.ProvenGoneAt.IsZero() && got.ProvenGoneHow == "tool_ran" && !got.DeliveredAt.IsZero() && got.Decision == "allow" && paneRecordCount(t, childBeforeSwitch.JSONLPath.(string), "turn_outcome") == 2 && readRow(t, first.DBPath, beforeChild.ID).State == store.StateWaiting
 	}, nil)
 	var provenPermission api.GetPermissionResult
 	if err := json.Unmarshal(public.must("get-permission", map[string]any{"request_token": request.RequestToken}), &provenPermission); err != nil || provenPermission.ConfirmBy != initialPermission.ConfirmBy || provenPermission.Delivery != "delivered" || provenPermission.Decision == nil || *provenPermission.Decision != "allow" {

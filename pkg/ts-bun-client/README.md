@@ -430,7 +430,8 @@ tool ran or Cursor supplied validated exact matching invocation proof under
 MCP invocation that proves dialog closure without inferring execution or changing
 decision, delivery or pane-answer fields;
 `"turn_end"`, an eligible main request's turn ended under the age and identity
-guards; or `"agent_gone"`, a non-Cursor agent ended) say when and how the request's
+guards, or a Cursor turn ended with the request still unanswered; or
+`"agent_gone"`, a non-Cursor agent ended) say when and how the request's
 dialog was proven gone; `"delivered"` and a pane answer are
 agent-director's own records, not proof. `get`'s `unproven_requests` lists
 every request still holding the dialog, each with `unproven_since`. A request

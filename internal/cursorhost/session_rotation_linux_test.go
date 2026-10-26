@@ -123,7 +123,7 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 				if active {
 					initial = "HOLD"
 				}
-				c := postBootstrapCursorSession(t, initial)
+				c := postBootstrapCursorSession(t, "off", initial)
 				if active {
 					c.wait(t, "old prompt received", func() bool { return len(rotationPrompts(c, t)) == 1 })
 					c.keys(t, "old-queue-never-new\r")
@@ -243,7 +243,7 @@ func TestCursorRotationAliasesIdleAndActive(t *testing.T) {
 
 func TestCursorRotationPublicationAndEveryHoldPrecedePromotion(t *testing.T) {
 	// Serial: protected runtime and reporter subprocess use process environment.
-	c := postBootstrapCursorSession(t, "", true)
+	c := postBootstrapCursorSession(t, "off", "", true)
 	before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 	b, _ := c.e.s.ReadCursorRuntime(before.InstanceID)
 	gate := store.HookGate{Event: "PermissionRequest", ParentPID: b.GatewayPID, ParentStart: b.GatewayStart, SessionID: b.SessionID, Cursor: &b}
@@ -289,7 +289,7 @@ func TestCursorRotationFailureRefusesEveryHeldInput(t *testing.T) {
 	// Serial: real runtime/report subprocess and fault injection own environment.
 	for _, failure := range []string{"rejection", "missing ID", "malformed ID", "reused ID", "archive", "report after commit", "authority loss", "runtime death"} {
 		t.Run(failure, func(t *testing.T) {
-			c := postBootstrapCursorSession(t, "", true)
+			c := postBootstrapCursorSession(t, "off", "", true)
 			before, _ := c.e.s.GetSpawn(c.e.binding.InstanceID)
 			scenario := cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true}
 			switch failure {
@@ -366,7 +366,7 @@ func TestCursorRotationRepeatedControlsPreserveFirstDeadline(t *testing.T) {
 				c.wait(t, "configured startup ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 				c.e.runtime.Configure(t, cursorfix.Scenario{Modes: advertisedCursorModes(), WaitForMode: true})
 			} else {
-				c = postBootstrapCursorSession(t, "")
+				c = postBootstrapCursorSession(t, "off", "")
 				c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 			}
 			first := time.Now()
@@ -405,7 +405,7 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 			}
 			barrier, opener := newRecordBarrier(t, kind)
 			i := &completeInput{ready: make(chan struct{})}
-			c := postBootstrapCursorSessionWithInput(t, "", opener, i.start)
+			c := postBootstrapCursorSessionWithInput(t, "off", "", opener, i.start)
 			<-i.ready
 			func() {
 				defer func() {
@@ -457,7 +457,7 @@ func TestCursorRotationAfterKnownZeroByteRetirementNeedsNoPromptOutcome(t *testi
 func TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication(t *testing.T) {
 	// Serial: existing complete-input seam parks actual consumption before mailbox insertion.
 	i := &completeInput{ready: make(chan struct{})}
-	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	old := terminalInput{text: "old-admitted-late-insertion", accepted: i.admit()}
@@ -478,7 +478,7 @@ func TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication(t *test
 			}
 		}
 	}
-	i.submit(t, "fresh-explicit-after-delayed-old")
+	i.submit(t, c, "fresh-explicit-after-delayed-old")
 	c.wait(t, "fresh explicit complete", func() bool { return rotationRecordCount(c, t, "turn_outcome") == 1 })
 	c.stop(t)
 	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-2", "fresh-explicit-after-delayed-old"}}) {
@@ -489,7 +489,7 @@ func TestCursorDelayedOldAdmissionRetainsOutgoingSessionAfterPublication(t *test
 func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *testing.T) {
 	// Serial: parks the real admission callback; durable unknown proof owns release.
 	i := &completeInput{ready: make(chan struct{})}
-	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	b, err := c.e.s.ReadCursorRuntime(c.e.binding.InstanceID)
@@ -575,7 +575,7 @@ func TestCursorRotationAdmissionParkedAcrossPublicationRemainsProvisional(t *tes
 
 func TestCursorRotationRetiredNumericResponsesKeepSessionBoundaries(t *testing.T) {
 	// Serial: actual successive requests and retired responses, protected attribution.
-	c := postBootstrapCursorSession(t, "")
+	c := postBootstrapCursorSession(t, "off", "")
 	origins := map[string]string{"1": "", "2": "synthetic-session-1"}
 	for turn := 1; turn <= 2; turn++ {
 		session := fmt.Sprintf("synthetic-session-%d", turn)

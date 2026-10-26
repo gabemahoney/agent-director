@@ -52,14 +52,16 @@ Resume does not restore old choices or make replayed permission, plan or questio
 requests answerable. Load replay supplies no execution proof or readiness and
 cannot release independent durable holds; question denial still applies with
 either `disable_ask_user` value.
-Cancellation, a new session id and turn completion cannot prove unknown-origin
-requests gone or release independent permission or plan holds. `tool_name` is
-the supplied action title or plan name, `tool_use_id` is its actual
-`toolCallId`, and `tool_input` retains the complete supplied params JSON
-byte for byte, including options and absent versus null fields. Internal
-conversation context is not added to that input. A plan retains its supplied
-name, overview, plan and optional fields; it has no invented option list or
-session field. Accept and reject use the supported plan outcomes.
+Cancellation, interruption and a new session id do not by themselves prove
+unknown-origin requests gone or release independent permission or plan holds;
+the completion of the turn they end retires the requests the gateway never
+answered ("A turn's end" below). `tool_name` is the supplied action title or
+plan name, `tool_use_id` is its actual `toolCallId`, and `tool_input` retains
+the complete supplied params JSON byte for byte, including options and absent
+versus null fields. Internal conversation context is not added to that input.
+A plan retains its supplied name, overview, plan and optional fields; it has
+no invented option list or session field. Accept and reject use the supported
+plan outcomes.
 
 `decide --decision allow` selects only allow-once, or accepts this plan once;
 `deny` selects rejection. It never grants a persistent rule. An explicitly
@@ -93,20 +95,20 @@ owns fallback actions, expired choices, uncertain output and disconnects.
 
 Direct supported question cancellation rejects that question without resolving
 independent genuine requests. Unsupported shapes can require bounded session
-cancellation; this does not prove existing dialogs gone. Main/child turn
-completion, interruption and plan acceptance do not release unknown-origin
-requests. Validated proof for the exact matching shell or MCP invocation requires
-the current launch and conversation authority. Shell proof requires a completed
-or failed update with an integer exit code and non-null string stdout/stderr.
-An admitted MCP request requires a completed tool update whose `rawOutput`
-contains exactly `{"success":true}` or `{"error":"Tool execution error"}`.
+cancellation, which does not by itself prove existing dialogs gone. Plan
+acceptance does not release unknown-origin requests. Validated proof for the
+exact matching shell or MCP invocation requires the current launch and
+conversation authority. Shell proof requires a completed or failed update
+with an integer exit code and non-null string stdout/stderr. An admitted MCP
+request requires a completed tool update whose `rawOutput` contains exactly
+`{"success":true}` or `{"error":"Tool execution error"}`.
 The exact failed invocation proves only that its permission dialog is gone,
 using `proven_gone_how` `tool_ran`; it does not establish that the underlying
 server action ran or succeeded. It preserves decision, reason, decision time,
 delivery and pane-answer fields, without inferring an allow or pane answer.
 Status alone and other failed or ambiguous MCP output supply no proof.
-Only this validated invocation proof, or the owning launch ending (see
-below), releases their hold.
+Only this validated invocation proof, a turn's end for a request the gateway
+never answered (below), or the owning launch ending, releases their hold.
 A proof that finds the store locked by another writer is retried, and is
 stored before the row next reports waiting, publishes a rotated conversation
 or ends intentionally ([when it fails](caller-contract.md#cursor-operation-boundaries)).
@@ -117,12 +119,30 @@ Once `resume` starts a new launch, a request of an earlier launch holds
 nothing (plain `send-keys`, `pause`, prompt admission, queued input) and is
 not listed in `get`'s `unproven_requests`. A request recorded by an older
 binary, with no launch on record, still holds.
+
+**A turn's end.** When a prompt turn completes, whatever its stop reason
+(`cancelled` included), and when `/clear` or `/new` ends it, the gateway
+retires each request of that conversation it never answered, before the
+turn's end is reported: the request is proven gone, `proven_gone_how`
+`turn_end`. Its record is otherwise kept: it stays undelivered, undecided
+unless a decision was already recorded, and still reads as awaiting an
+answer, but it no longer holds the row or the dialog. The row then reads
+`waiting` unless another request still holds it; after `/clear` or `/new` the
+rotation publishes `waiting` on the same terms and held input can be admitted.
+Nothing is delivered for it later: its pane keys are gone, and a later
+`decide` records a verdict that never reaches the agent. For what
+`send-keys`, `pause` and `decide` meet on such a request, see the
+[caller contract](caller-contract.md#permission-relay). Not retired: a request
+already answered (`delivered`, or answered at the pane), which keeps its
+[dialog hold](#the-dialog-hold), and one whose tool already ran, which is
+proven `tool_ran` instead.
+
 Existing validated execution proof is preserved. The shared [dialog hold](#the-dialog-hold) defines the
 proof fields and relay-on prompt/pause guards; relay-off requests still block
 ordinary prompt admission while awaiting their native answer. Accepted
 [queued input](usage.md#fresh-cursor-use) waits for every durable decision
-hold to resolve before dispatch; a turn ending or a local request disappearing
-does not release it. Late exact-request invocation proof releases only that
+hold to resolve before dispatch; a local request disappearing does not
+release one. Late exact-request invocation proof releases only that
 request's hold. Pending-row, relay, pane-hash and pause safeguards still apply.
 The hook flow,
 hook envelope and hook timing below describe Claude and Codex; Cursor uses
@@ -750,9 +770,10 @@ Every relayed request carries its delivery facts. They are worked out each
 time the request is read, by `decide`, `get`, `list` and `get-permission`;
 the only writes for them are `hook_gone_at` and the time the request fell
 back. `proven_gone_at` and
-`proven_gone_how` are written by the agent's own hooks or validated Cursor
-invocation proof, by the close of its spawn's requests and, for a spawn already
-finished, by the upgrade to this release, never by a reader (see "The dialog hold" below):
+`proven_gone_how` are written by the agent's own hooks, validated Cursor
+invocation proof or a Cursor turn's end, by the close of its spawn's requests
+and, for a spawn already finished, by the upgrade to this release, never by a
+reader (see "The dialog hold" below):
 
 The `delivery` and `confirm_by` descriptions below apply to requests
 with a settle instant. Requests recorded by an older binary retain the
@@ -768,8 +789,8 @@ with a settle instant. Requests recorded by an older binary retain the
 | `tool_use_id` | The `tool_use_id` of the agent's hook input, or Cursor's supplied `toolCallId`; `null` when it gave none (always, on a Codex row). |
 | `pane_answer` | `none`: no pane answer recorded through agent-director (something outside it, such as a person at tmux, may still have answered). `intent`: a pane answer through `send-keys` was started, and whether its key was typed is unknown. `sent`: its key was sent or a Cursor native choice was recorded; neither establishes ACP delivery, receipt or proof. `outside`: a caller recorded it answered outside agent-director (`record-pane-answer`). `tool_ran`: Claude Code reported its tool ran, or the Cursor gateway validated matching execution; see [Cursor spawns](#cursor-spawns). `sent`, `outside` and `tool_ran` close the request. See "Answering at the pane" below. |
 | `pane_as` | The verdict a pane answer claims: `allow`, `deny`, or `unknown` (a record whose caller did not see the answer); `null` when none was recorded. Public pane operations store the caller's claim without screen interpretation or verdict verification. Cursor additionally requires a sent claim to match the actual selected option before answering ACP; native choices derive the verdict from that option. An outside claim never supplies ACP approval authority or proof. |
-| `proven_gone_at` | When the agent's own hooks or validated Cursor invocation proof established the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`, except for a Cursor request of an earlier launch. |
-| `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching invocation proof (never on a Codex row); the exact failed MCP invocation proves dialog closure only, as defined in [Cursor spawns](#cursor-spawns). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
+| `proven_gone_at` | When the agent's own hooks, validated Cursor invocation proof or a Cursor turn's end established the request's dialog gone; `null` until then. agent-director's own records (`delivered`, a pane answer, `record-pane-answer`) are no proof. While it is `null` on a live relay-on spawn, a plain `send-keys` without a pane hash is refused with `ErrDialogMaybeOpen`, except for a Cursor request of an earlier launch. |
+| `proven_gone_how` | `tool_ran`: a Claude `PostToolUse`/`PostToolUseFailure` carried its `tool_use_id`, or Cursor supplied validated matching invocation proof (never on a Codex row); the exact failed MCP invocation proves dialog closure only, as defined in [Cursor spawns](#cursor-spawns). `turn_end`: an eligible main request was written before the main turn ended; a missing `agent_id` alone does not establish eligibility. See [The dialog hold](#the-dialog-hold). On Cursor, the gateway retired the request unanswered when its turn ended (see [Cursor spawns](#cursor-spawns)). `agent_gone`: a non-Cursor spawn was marked `missing`, ended or resumed, or was already `ended` or `missing` when the store was upgraded. Cursor terminal closes leave proof unchanged. `null` until proven. |
 | `unproven_since` | For a request not proven gone that no longer awaits an answer in agent-director's records: when its record stopped awaiting one (its relay hook's ack, its pane answer, its `record-pane-answer`, or the close of its spawn's requests; for a request recorded by an older binary, its recorded verdict). `null` while it still awaits an answer, and once it is proven gone. |
 
 **`decision` is not the outcome.** `decision` is the verdict recorded,
@@ -872,12 +893,14 @@ move the row to `ask_user`; Claude and Codex `Stop` can move it to
 `waiting` with a child request still open. Codex tool events target `working`
 and remain subject to the request hold. Cursor working, Stop and Interrupt
 reports preserve a genuine unanswered, unproven `check_permission` hold,
-including a request recorded while the state update is in flight. A report
-can refresh activity without declaring readiness; ownership, current session
-and runtime checks still apply. Cursor admission and request lifetimes are
-described in [Cursor spawns](#cursor-spawns). Once no request holds the row,
-it moves on with the agent's next hook. The Cursor gateway sends no lifecycle
-report between a prompt and its completion, so there the gateway's stored
+including a request recorded while the state update is in flight; a turn's
+end first retires the requests the gateway never answered, so they don't hold
+its Stop. A report can refresh activity without declaring readiness;
+ownership, current session and runtime checks still apply. Cursor admission,
+request lifetimes and that retirement are described in
+[Cursor spawns](#cursor-spawns). Once no request holds the row, it moves on
+with the agent's next hook. The Cursor gateway sends no lifecycle report
+between a prompt and its completion, so there the gateway's stored
 invocation proof of an allowed request acts as Claude's `PostToolUse`: it
 moves a `check_permission` row no request still holds to `working`, but only
 while the prompt turn is still open and no conversation rotation is under way.
@@ -1178,10 +1201,12 @@ requests and new unknown-origin requests remain ineligible, including
 those with a null child id. An explicit ineligible value remains ineligible.
 A known child cannot gain main-turn proof even with contradictory stored
 metadata. Child or unknown-origin completion, interruption or session end
-is not proof; only matching tool-invocation evidence or the owning launch
-ending (the spawn closing, or `resume` replacing the launch) can release an
-ineligible request. A decision, delivery acknowledgement,
-pane answer or recorded outside answer never grants eligibility.
+is not proof; only matching tool-invocation evidence, the owning launch
+ending (the spawn closing, or `resume` replacing the launch) or, for a Cursor
+request the gateway never answered, its turn's end (`turn_end`; see
+[Cursor spawns](#cursor-spawns)) can release an ineligible request. A
+decision, delivery acknowledgement, pane answer or recorded outside answer
+never grants eligibility.
 
 The ack (`delivered`), a pane answer recorded `sent` and
 `record-pane-answer` prove nothing. Cursor invocation proof comes only from its

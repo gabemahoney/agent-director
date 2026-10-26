@@ -30,7 +30,7 @@ func TestCursorRotationHeldCapacityIsProvisional(t *testing.T) {
 	for _, capacity := range []string{"entries", "bytes", "individual"} {
 		t.Run(capacity, func(t *testing.T) {
 			i := &completeInput{ready: make(chan struct{})}
-			c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
+			c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, i.start)
 			c.waitFailureDiagnostics = true
 			<-i.ready
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
@@ -51,13 +51,13 @@ func TestCursorRotationHeldCapacityIsProvisional(t *testing.T) {
 				texts = []string{byteBoundaryText(0, 1024*1024)}
 			}
 			for _, text := range texts {
-				i.submit(t, text)
+				i.submit(t, c, text)
 			}
 			excess := "over-capacity-never-transmitted"
 			if capacity == "individual" {
 				excess = byteBoundaryText(9, 1024*1024+1)
 			}
-			i.submit(t, excess)
+			i.submit(t, c, excess)
 			c.wait(t, "provisional capacity accounted", func() bool {
 				return rotationRecordCount(c, t, "input_held") == len(texts) && rotationRecordCount(c, t, "submission_refused") == 1
 			})
@@ -110,7 +110,7 @@ func TestCursorRotationRetiredTrafficCannotAcquireCurrentAuthority(t *testing.T)
 	// Serial: actual protocol/controller, kernel evidence and protected records.
 	for _, traffic := range []string{"known old", "unattributed", "foreign", "owned death with old traffic"} {
 		t.Run(traffic, func(t *testing.T) {
-			c := postBootstrapCursorSession(t, "", true)
+			c := postBootstrapCursorSession(t, "off", "", true)
 			old := json.RawMessage(`{"method":"session/update","params":{"sessionId":"synthetic-session-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"old-output-not-current"}}}}`)
 			frames := []json.RawMessage{old, json.RawMessage(`{"id":2,"result":{"sessionId":"synthetic-session-1"}}`), json.RawMessage(`{"id":"old-child-auth","method":"session/request_permission","params":{"sessionId":"synthetic-session-1","agentId":"child","toolCall":{"toolCallId":"old","title":"Bash"},"options":[{"optionId":"yes","kind":"allow_once"}]}}`)}
 			if traffic == "unattributed" {
@@ -214,7 +214,7 @@ func TestCursorRotationExitInterruptAndEligiblePausePreemptPhases(t *testing.T) 
 				if phase == "cancellation" {
 					initial = "HOLD"
 				}
-				c := postBootstrapCursorSessionWithInput(t, initial, opener, starter, phase == "confirmation sync")
+				c := postBootstrapCursorSessionWithInput(t, "off", initial, opener, starter, phase == "confirmation sync")
 				defer barrier.unblock()
 				diagnosed := false
 				defer func() {
@@ -404,7 +404,7 @@ func TestCursorRotationConfirmedAndPublishedSyncFailureRefusesHeld(t *testing.T)
 				}
 				return tr, err
 			}
-			c := postBootstrapCursorSessionWithInput(t, "", opener, terminalLoop, true)
+			c := postBootstrapCursorSessionWithInput(t, "off", "", opener, terminalLoop, true)
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 			c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 			c.keys(t, "/new\r")
@@ -470,17 +470,17 @@ func (f *rotationSyncFailure) Sync() error {
 func TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue(t *testing.T) {
 	// Serial: real bounded input mailbox and independently blocked active ACP turn.
 	i := &completeInput{ready: make(chan struct{})}
-	c := postBootstrapCursorSessionWithInput(t, "HOLD", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "off", "HOLD", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "active receipt", func() bool { return len(rotationPrompts(c, t)) == 1 })
 	for n := 0; n < 32; n++ {
-		i.submit(t, fmt.Sprintf("old-full-%02d", n))
+		i.submit(t, c, fmt.Sprintf("old-full-%02d", n))
 	}
 	c.wait(t, "full old queue", func() bool { return rotationRecordCount(c, t, "submission_accepted") == 33 })
 	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true})
 	i.emit(terminalInput{text: "/clear"})
 	for n := 0; n < 32; n++ {
-		i.submit(t, fmt.Sprintf("fresh-full-%02d", n))
+		i.submit(t, c, fmt.Sprintf("fresh-full-%02d", n))
 	}
 	c.wait(t, "old canceled and new held independently", func() bool {
 		return rotationRecordCount(c, t, "submission_cancelled") == 32 && rotationRecordCount(c, t, "input_held") == 32
@@ -504,6 +504,9 @@ func TestCursorRotationProvisionalCapacityDoesNotBorrowOldQueue(t *testing.T) {
 	}
 }
 
+// b.gwj: the outgoing turn's end retires its unanswered permission and plan
+// requests (turn_end), so the rotation publishes waiting and the held input
+// reaches the fresh conversation, while their callbacks and keys stay retired.
 func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 	// Serial: real Run requests, durable holds and terminal menu keys, synthetic peer.
 	barrier, opener := newMatchingRecordBarrier(t, "retired_event", func(raw []byte) bool {
@@ -521,7 +524,7 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 		}
 		return json.Unmarshal(raw, &r) == nil && r.Data.Params.Session == "synthetic-session-1" && r.Data.Params.Update.Kind == "tool_call_update" && r.Data.Params.Update.Tool == "old-shell" && r.Data.Params.Update.Status == "completed"
 	})
-	c := postBootstrapCursorSessionWithInput(t, "", opener, terminalLoop)
+	c := postBootstrapCursorSessionWithInput(t, "off", "", opener, terminalLoop)
 	c.diagnosticBarrier = barrier
 	defer barrier.unblock()
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
@@ -540,11 +543,30 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 	newPlan, _ := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(`"delayed-old-plan"`), Method: "cursor/create_plan", Params: planParams})
 	staleExecution, _ := json.Marshal(frame{JSONRPC: "2.0", Method: "session/update", Params: executionUpdate("synthetic-session-1", "old-shell", "completed", `{"exitCode":0,"stdout":"done","stderr":""}`)})
 	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", WaitForNew: true, AfterNew: []json.RawMessage{permission, plan, newPlan, staleExecution}})
+	dir := rotationBarrier(t, "after")
 	c.keys(t, "/new\rheld-after-old-requests\r")
 	c.wait(t, "held new input", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
 	rotationRelease(t, c.e.runtime.Release)
 	c.wait(t, "new request", func() bool { return rotationNewCount(c, t) == 2 })
+	rows, err := c.e.s.PermissionRequestsForSpawn(c.e.binding.InstanceID)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("want the outgoing turn's two requests: %+v %v", rows, err)
+	}
+	for _, r := range rows {
+		if r.ProvenGoneHow != store.ProvenGoneTurnEnd || r.MainTurnEndEligible || r.Decision != "" || !r.DeliveredAt.IsZero() {
+			t.Fatalf("outgoing turn's end did not retire its unanswered request: %+v", r)
+		}
+	}
+	// The held input's prompt reads this scenario; session/new already read its own.
+	current, _ := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(`"current-permission"`), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-2", "fresh-shell", "execute")})
+	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{current}})
 	rotationRelease(t, c.e.runtime.NewRelease)
+	rotationEntered(c, t, dir)
+	if row, err := c.e.s.GetSpawn(c.e.binding.InstanceID); err != nil || row.SessionID != "synthetic-session-2" || row.State != store.StateWaiting {
+		t.Fatalf("rotation did not publish waiting: %+v %v", row, err)
+	}
+	rotationNoBytes(t, c, "held-after-old-requests")
+	rotationRelease(t, filepath.Join(dir, "release"))
 	c.wait(t, "retired callbacks inspected", func() bool {
 		select {
 		case <-barrier.entered:
@@ -558,21 +580,15 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 			t.Errorf("retired permission/plan callback falsely attributed to fresh conversation: %+v", record)
 		}
 	}
-	rows, err := c.e.s.PermissionRequestsForSpawn(c.e.binding.InstanceID)
+	rows, err = c.e.s.PermissionRequestsForSpawn(c.e.binding.InstanceID)
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("retired callbacks created requests: %+v %v", rows, err)
 	}
 	for _, r := range rows {
-		if r.ProvenGone() || r.MainTurnEndEligible || r.Decision != "" {
-			t.Fatalf("fresh identity/old completion fabricated hold proof: %+v", r)
+		if r.ProvenGoneHow != store.ProvenGoneTurnEnd || r.MainTurnEndEligible || r.Decision != "" || !r.DeliveredAt.IsZero() {
+			t.Fatalf("retired callbacks or old completion changed a retired request: %+v", r)
 		}
 	}
-	rotationNoBytes(t, c, "held-after-old-requests")
-	current, _ := json.Marshal(frame{JSONRPC: "2.0", ID: json.RawMessage(`"current-permission"`), Method: "session/request_permission", Params: cursorfix.Permission("synthetic-session-2", "fresh-shell", "execute")})
-	c.e.runtime.Configure(t, cursorfix.Scenario{SessionID: "synthetic-session-1", Requests: []json.RawMessage{current}})
-	// Sync parks the controller after its previous eligibility transaction and
-	// before its next one; this mutation supplies synthetic fixture proof only.
-	c.rotationFixtureSQL(t, barrier, 2, `UPDATE permission_requests SET proven_gone_at=? WHERE instance_id=? AND request_token IN (?,?)`, time.Now().UnixMilli(), c.e.binding.InstanceID, rows[0].RequestToken, rows[1].RequestToken)
 	barrier.unblock()
 	c.wait(t, "current genuine request", func() bool { return rotationRecordCount(c, t, "authorization_admitted") == 3 })
 	keys := regexp.MustCompile(`\[([^]]+)\] Allow once`).FindAllSubmatch(c.pane.bytes(), -1)
@@ -601,6 +617,9 @@ func TestCursorRotationRetiresPermissionPlanCallbacksAndChoices(t *testing.T) {
 	if replies != 1 {
 		t.Fatalf("current choice answer count %d", replies)
 	}
+	if got := rotationPrompts(c, t); !reflect.DeepEqual(got, []rotationPrompt{{"synthetic-session-1", "old-request-turn"}, {"synthetic-session-2", "held-after-old-requests"}}) {
+		t.Fatalf("held input did not reach the fresh conversation once: %+v", got)
+	}
 }
 
 func TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity(t *testing.T) {
@@ -618,7 +637,7 @@ func TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity(t *testing.
 					}
 				}, admit, choices...)
 			}
-			c := postBootstrapCursorSessionWithInput(t, "", openTranscript, starter)
+			c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, starter)
 			<-i.ready
 			c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 			before, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
@@ -630,7 +649,7 @@ func TestCursorRotationCommittedHookStallDoesNotLoseShutdownIdentity(t *testing.
 			first := time.Now()
 			i.emit(terminalInput{text: "/new"})
 			c.wait(t, "new pending", func() bool { return rotationNewCount(c, t) == 2 })
-			i.submit(t, "unreleased-hook-held")
+			i.submit(t, c, "unreleased-hook-held")
 			c.wait(t, "held", func() bool { return rotationRecordCount(c, t, "input_held") == 1 })
 			rotationRelease(t, c.e.runtime.NewRelease)
 			rotationEntered(c, t, dir)

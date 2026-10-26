@@ -138,7 +138,9 @@ Wait for `waiting` before sending. Fresh startup reports when Cursor confirms
 its new conversation, without a first prompt. Login or a runtime that has not
 reported remains `pending`, and can be noted `unreported`. A submitted prompt
 reads `working`; a correlated turn completion returns it to `waiting`
-subject to [request holds](permissions.md#the-dialog-hold).
+subject to [request holds](permissions.md#the-dialog-hold), after retiring the
+turn's unanswered requests (see
+[Cursor permissions](permissions.md#cursor-spawns)).
 
 The existing `inject_help_hook` setting also enables Cursor guidance; its default
 is off. When enabled, session setup supplies the current AD guidance before
@@ -708,7 +710,9 @@ showed the request's dialog gone: `tool_ran` (Claude tool execution or
 validated matching Cursor invocation proof, including an exact failed MCP
 invocation without execution or answer inference; see [Cursor permissions](permissions.md#cursor-spawns)),
 `turn_end` (an eligible main request
-was written before the main turn ended; see [The dialog hold](permissions.md#the-dialog-hold)) or
+was written before the main turn ended, see [The dialog hold](permissions.md#the-dialog-hold);
+or a Cursor request the gateway never answered when its turn ended, see
+[Cursor permissions](permissions.md#cursor-spawns)) or
 `agent_gone` (a non-Cursor agent ended). A Codex agent's request carries
 no `tool_use_id` (it reads `null`) and is never proven by `tool_ran`; see
 [how the hold differs on Codex rows](permissions.md#how-the-hold-differs-on-codex-rows). `delivered` and a pane answer are

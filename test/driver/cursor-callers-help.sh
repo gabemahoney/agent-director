@@ -139,7 +139,9 @@ ch_child_guard() {
 ch_child_refused() { ad read-pane --instance-id "$1" --n-lines 100 | jq -e '.pane|gsub("\n";"")|contains("Cursor input refused while starting or busy (starting, held, stale or cancellation); nothing sent")' >/dev/null; }
 ch_composed_admitted() { [[ $(sql "SELECT count(*) FROM permission_requests WHERE instance_id='child-composed-$id';") == 1 ]]; }
 ch_composed_completed() { [[ $(sql "SELECT state FROM spawns WHERE instance_id='child-composed-$id';") == waiting && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == "$1" ]]; }
-ch_composed_held() { [[ $(sql "SELECT count(*) FROM spawns s JOIN permission_requests p ON p.instance_id=s.instance_id WHERE s.instance_id='child-composed-$id' AND s.state='check_permission' AND p.request_token='$1' AND p.proven_gone_at IS NULL AND COALESCE(p.decision,'')='$2' AND (p.delivered_at IS NOT NULL)=$3;") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 2 ]]; }
+# One outcome: the held request's turn is still open, because a turn's end
+# retires its undecided requests (b.gwj).
+ch_composed_held() { [[ $(sql "SELECT count(*) FROM spawns s JOIN permission_requests p ON p.instance_id=s.instance_id WHERE s.instance_id='child-composed-$id' AND s.state='check_permission' AND p.request_token='$1' AND p.proven_gone_at IS NULL AND COALESCE(p.decision,'')='$2' AND (p.delivered_at IS NOT NULL)=$3;") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 1 ]]; }
 ch_composed_identity() {
  sql -readonly -json "SELECT parent_id,agent,session_id,life_number,launch_token,pane_pid,pane_starttime,jsonl_path,tmux_socket,tmux_server_pid,tmux_server_starttime FROM spawns WHERE instance_id='child-composed-$id'; SELECT * FROM cursor_runtimes WHERE bound_instance_id='child-composed-$id'; SELECT * FROM session_history WHERE instance_id='child-composed-$id';"
 }
@@ -148,9 +150,9 @@ ch_composed_independent() {
  cmp "$case_dir/child-switch-before.json" "$case_dir/child-current.json" || return
  [[ $(sql "SELECT count(*) FROM spawns s JOIN cursor_runtimes r ON r.bound_instance_id=s.instance_id WHERE s.instance_id='child-composed-$id' AND s.parent_id='$id' AND s.agent='cursor' AND s.session_id='$child_session' AND s.state NOT IN ('pending','ended','missing') AND r.bound_session_id=s.session_id AND r.bound_launch_token=s.launch_token AND r.bound_life_number=s.life_number AND r.bound_gateway_pid=s.pane_pid AND r.bound_gateway_start=s.pane_starttime AND r.bound_terminated=0;") == 1 ]]
 }
-# Idle proof retires the request; a subsequent hook supplies the lifecycle write.
+# The in-turn execution proof retires the request; the turn's Stop then reports waiting.
 ch_composed_proven() {
- [[ $(sql "SELECT count(*) FROM permission_requests p JOIN spawns s ON s.instance_id=p.instance_id WHERE p.instance_id='child-composed-$id' AND p.request_token='$token' AND p.tool_use_id='$child_tool' AND s.session_id='$child_session' AND p.proven_gone_how='tool_ran' AND p.proven_gone_at>0 AND p.delivered_at>0 AND p.decision='allow';") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 2 ]] || return
+ [[ $(sql "SELECT count(*) FROM permission_requests p JOIN spawns s ON s.instance_id=p.instance_id WHERE p.instance_id='child-composed-$id' AND p.request_token='$token' AND p.tool_use_id='$child_tool' AND s.session_id='$child_session' AND s.state='waiting' AND p.proven_gone_how='tool_ran' AND p.proven_gone_at>0 AND p.delivered_at>0 AND p.decision='allow';") == 1 && $(jq -s '[.[]|select(.kind=="turn_outcome")]|length' "$ch_child_path") == 2 ]] || return
  ch_composed_independent
 }
 ch_composed_reply() { jq -se '[.[]|select(has("method")|not)]|length==1 and .[0].id=="child-permission" and .[0].result.outcome.optionId=="allow-once"' "$case_dir/child-composed-trace.jsonl" >/dev/null; }
@@ -181,13 +183,13 @@ ch_composed() {
  check child.report-parent-unchanged cmp "$case_dir/route-before.json" "$case_dir/route-after.json"
  cp "$case_dir/route-after.json" "$case_dir/child-parent-report.json"
  cmp "$path" "$case_dir/child-parent-prefix"
- jq -cn --slurpfile captures "$capture" '($captures[0][]|select(.name=="execute")) as $p | {sessionId:$p.params.sessionId,completeBeforeAnswers:true,waitForAfterAnswersRelease:true,requests:[{jsonrpc:"2.0",id:"child-permission",method:$p.method,params:$p.params}],afterAnswers:[{jsonrpc:"2.0",method:"session/update",params:{sessionId:$p.params.sessionId,update:{sessionUpdate:"tool_call_update",toolCallId:$p.params.toolCall.toolCallId,status:"completed",rawOutput:{exitCode:0,stdout:"synthetic child execution",stderr:""}}}}]}' > "$case_dir/child-composed-scenario"
+ jq -cn --slurpfile captures "$capture" '($captures[0][]|select(.name=="execute")) as $p | {sessionId:$p.params.sessionId,waitForAfterAnswersRelease:true,requests:[{jsonrpc:"2.0",id:"child-permission",method:$p.method,params:$p.params}],afterAnswers:[{jsonrpc:"2.0",method:"session/update",params:{sessionId:$p.params.sessionId,update:{sessionUpdate:"tool_call_update",toolCallId:$p.params.toolCall.toolCallId,status:"completed",rawOutput:{exitCode:0,stdout:"synthetic child execution",stderr:""}}}}]}' > "$case_dir/child-composed-scenario"
  relay_observe
  cp "$case_dir/observer" "$case_dir/child-composed-observer"
  ad send-keys --instance-id "$child" --text 'held child across parent transition' >/dev/null
  check child.permission-admitted wait_until ch_composed_admitted
  token=$(sql "SELECT request_token FROM permission_requests WHERE instance_id='$child';")
- check child.completed-turn-held wait_until ch_composed_held "$token" '' 0
+ check child.open-turn-held wait_until ch_composed_held "$token" '' 0
  ad get-permission --request-token "$token" > "$case_dir/child-permission-before.json"
  confirm=$(jq -r '.confirm_by' "$case_dir/child-permission-before.json")
  check child.unknown-origin test "$(sql "SELECT main_turn_end_eligible||'|'||COALESCE(agent_id,'') FROM permission_requests WHERE instance_id='$child';")" = '0|'
@@ -224,7 +226,7 @@ ch_composed() {
  check child.actual-answer wait_until ch_composed_reply
  jq -se --arg token "$token" 'any(.[][];.request_token==$token and .decision=="allow" and .delivered_at!=null)' "$case_dir/commits.jsonl" >/dev/null
  ad get-permission --request-token "$token" | jq -e --arg confirm "$confirm" '.confirm_by==$confirm and .delivery=="delivered" and .decision=="allow"' >/dev/null
- check child.delivered-completed-turn-held ch_composed_held "$token" allow 1
+ check child.delivered-open-turn-held ch_composed_held "$token" allow 1
  ch_child_guard "$child" 'delivered alone cannot release child'
  ch_route_snapshot > "$case_dir/child-parent-proof-before.json"
  touch "$case_dir/child-composed-release"

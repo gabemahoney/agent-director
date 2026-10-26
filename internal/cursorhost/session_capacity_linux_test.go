@@ -15,7 +15,7 @@ import (
 func TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch(t *testing.T) {
 	// Serial: real Run, protected records and terminal fixture own environment.
 	i := &completeInput{ready: make(chan struct{})}
-	c := postBootstrapCursorSessionWithInput(t, "", openTranscript, i.start)
+	c := postBootstrapCursorSessionWithInput(t, "off", "", openTranscript, i.start)
 	<-i.ready
 	c.wait(t, "ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	before, err := c.e.s.GetSpawn(c.e.binding.InstanceID)
@@ -56,7 +56,7 @@ func TestCursorAdmissionBeforeInsertionRetainsCancellationEpoch(t *testing.T) {
 		t.Fatal("cancelled input has raw peer bytes")
 	}
 	c.wait(t, "recovery", func() bool { return bytes.Contains(c.pane.bytes(), []byte("submit a new prompt to continue")) })
-	i.submit(t, "later-explicit-after-admission-race")
+	i.submit(t, c, "later-explicit-after-admission-race")
 	c.wait(t, "later explicit peer receipt", func() bool { return len(c.prompts(t)) == 1 })
 	c.stop(t)
 	if got := c.prompts(t); !reflect.DeepEqual(got, []string{"later-explicit-after-admission-race"}) {
@@ -97,7 +97,7 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 		for _, delta := range []int{-1, 0, 1} {
 			t.Run(fmt.Sprintf("%s/%+d", scope, delta), func(t *testing.T) {
 				i := &completeInput{ready: make(chan struct{})}
-				c := postBootstrapCursorSessionWithInput(t, "HOLD", openTranscript, i.start)
+				c := postBootstrapCursorSessionWithInput(t, "off", "HOLD", openTranscript, i.start)
 				<-i.ready
 				c.wait(t, "active receipt", func() bool { return len(c.prompts(t)) == 1 })
 				var want []string
@@ -113,9 +113,9 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 					last = "!"
 				}
 				for _, text := range want {
-					i.submit(t, text)
+					i.submit(t, c, text)
 				}
-				i.submit(t, last)
+				i.submit(t, c, last)
 				if delta <= 0 {
 					want = append(want, last)
 				}
@@ -192,7 +192,7 @@ func TestCursorWaitingMailboxByteBoundaries(t *testing.T) {
 				if scope == "aggregate" && delta == 1 {
 					// Follow the capacity advice: after space is available, explicitly
 					// submit the exact refused text; inspection alone did not queue it.
-					i.submit(t, last)
+					i.submit(t, c, last)
 					c.wait(t, "explicitly resubmitted refused text completes", func() bool {
 						var resubmittedID string
 						for _, r := range c.records(t) {

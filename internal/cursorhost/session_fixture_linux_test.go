@@ -114,11 +114,11 @@ func (i *completeInput) start(in *os.File, out io.Writer, emit func(terminalInpu
 	return terminalLoop(in, out, emit, admit, choices...)
 }
 
-func (i *completeInput) submit(t *testing.T, text string) {
+// submit retries admission as a user retries a refused Enter: a busy turn's
+// eligibility check fails closed past admissionCheckWait (100 ms) under load.
+func (i *completeInput) submit(t *testing.T, c *cursorSession, text string) {
 	t.Helper()
-	if !i.admit() {
-		t.Fatal("completed input lacked consumption-time authority")
-	}
+	c.wait(t, "completed input consumption-time authority", i.admit)
 	i.emit(terminalInput{text: text, accepted: true})
 }
 
@@ -319,8 +319,13 @@ func newMatchingRecordBarrier(t *testing.T, kind string, match func([]byte) bool
 			close(f.release)
 		}
 	})
-	return f, func(home string, b store.CursorRuntime) (*transcript, error) {
-		tr, err := openTranscript(home, b)
+	return f, f.around(openTranscript)
+}
+
+// around gates the transcript open opens, so one barrier can wrap another's.
+func (f *recordBarrier) around(open func(string, store.CursorRuntime) (*transcript, error)) func(string, store.CursorRuntime) (*transcript, error) {
+	return func(home string, b store.CursorRuntime) (*transcript, error) {
+		tr, err := open(home, b)
 		if err == nil {
 			f.transcriptFile = tr.file
 			tr.file = f
