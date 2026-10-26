@@ -755,7 +755,10 @@ without the proof. While a control (an interrupt, rotation, `/exit` or `pause`)
 runs, the three-second cancellation deadline also applies: an interrupt or
 rotation still waiting at it fails the gateway (the rotation is refused), and
 an `/exit` or `pause` still waiting at it keeps the proof but ends the row
-`missing`, not `ended`.
+`missing`, not `ended`. Proving a finished turn's unanswered requests gone
+(see [Cursor spawns](permissions.md#cursor-spawns)) waits the same way, within
+the cancellation deadline while a control runs; a store still locked fails the
+gateway.
 These are asynchronous launch failures, not new typed spawn errors.
 
 Failure reasons identify the initiating operation (`initialize`, `session/new`,
@@ -1151,8 +1154,10 @@ with:
 - `ErrPaneAnswerInProgress`: another pane answer to this request is still
   being sent. Do nothing.
 - `ErrSendKeysWhileRelayed`: a relay hook of the agent may still answer
-  its request: answer the request it names with `decide`, or retry later
-  (a plain retry can then get `ErrDialogMaybeOpen`, below).
+  its request: answer the request it names with `decide`, or retry later (a
+  plain retry can then get `ErrDialogMaybeOpen`, below). Don't decide one
+  `get-permission` shows proven gone `turn_end`; see the Cursor turn-end
+  paragraph below.
 - `ErrAlreadyDecided` or `ErrNoOpenPermissionRequest`: the request is no
   longer open.
 
@@ -1194,11 +1199,9 @@ that read's `pane_sha256` as `--expect-pane-sha256`.
 On relay-on rows, after a permission request, a plain `send-keys` without
 `--expect-pane-sha256` is refused with `ErrDialogMaybeOpen` until the agent's
 hooks show the request's dialog gone. Follow the request's proof and delivery
-fields; completing or interrupting the main turn does not release a child or
-unknown-origin request, even when its child id is null. See
-[The dialog hold](permissions.md#the-dialog-hold). A Cursor row can stay
-`check_permission` across working, Stop and Interrupt reports while a genuine
-unanswered, unproven request holds it. Readiness requires the hold to resolve.
+fields. Apart from a Cursor turn's end (below), completing or interrupting the
+main turn does not release a child or unknown-origin request, even when its
+child id is null. See [The dialog hold](permissions.md#the-dialog-hold).
 Nothing is sent. Its
 `err_details` name the oldest such request, how agent-director's records
 say it closed and since when, and the agent's other such requests. Keep
@@ -1208,12 +1211,26 @@ person or an LLM read the pane and, having looked, send with that read's
 applies), and a changed pane is `ErrPaneChanged`. Never pass
 `--expect-pane-sha256` from an automatic flow.
 
-Late matching Cursor execution proof resolves only that request's hold; it does
-not immediately write `waiting` or replay a prior turn-end report. A matching proof of an
-allowed request that arrives while the prompt turn is still open, with no
-rotation under way, also moves a row no other request holds from
-`check_permission` to `working`; a late one does not (see "The row after the last answer" in
-[permissions.md](permissions.md#delivery)).
+A Cursor row can stay `check_permission` across working reports while a
+genuine unanswered, unproven request holds it; readiness requires the hold to
+resolve. Late matching Cursor execution proof resolves only that request's
+hold; it does not immediately write `waiting` or replay a prior turn-end
+report. A matching proof of an allowed request that arrives while the prompt
+turn is still open, with no rotation under way, also moves a row no other
+request holds from `check_permission` to `working`; a late one does not (see
+"The row after the last answer" in [permissions.md](permissions.md#delivery)).
+
+A request retired at a Cursor turn's end (see "A turn's end" in
+[Cursor spawns](permissions.md#cursor-spawns)) still reads as awaiting an
+answer: `get-permission` shows it with `proven_gone_how` `turn_end`, and if a
+later request moves the row to `check_permission`, `permission_requests`
+lists it beside that one. Don't choose it to decide, because a verdict on it
+reaches nothing. On a relay-on row, until its `confirm_by` (24 h + 4 s after
+admission at the default relay window) every `send-keys` and `pause` is
+refused with `ErrSendKeysWhileRelayed`, and `decide` does not lift that
+refusal. After `confirm_by`, a plain `send-keys` or `pause` gets
+`ErrRelayFallenBack` until `record-pane-answer` closes the request, which it
+accepts from 2 s past `confirm_by` (`ErrClaimTooSoon` before).
 
 `pause` is held like a plain `send-keys` without `--expect-pane-sha256`
 (`ErrSendKeysWhileRelayed`, `ErrRelayFallenBack`, `ErrDialogMaybeOpen`)

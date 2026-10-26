@@ -728,7 +728,10 @@ func closeToolRan(st HookStore, hc HandleConfig, instanceID string, gate store.H
 // request it proves no longer holds. It is fail-open: a store without it, or
 // a failed write, logs and changes nothing else, and the requests stay
 // unproven (plain send-keys stays refused, and one still awaiting an answer
-// keeps holding the row) until a later proof.
+// keeps holding the row) until a later proof. A Cursor gateway's request is
+// never eligible: at the turn's completion that gateway proves only the ones
+// it never answered (store ProveCursorTurnEnded), and a delivered one stays
+// unproven.
 func proveRequestsGone(st HookStore, hc HandleConfig, start time.Time, instanceID string, gate store.HookGate, res ClassifyResult, logger *log.Logger) {
 	var proof store.RequestProof
 	switch {

@@ -205,16 +205,18 @@ func TestCursorGenericToolProofCannotBypassControllerValidation(t *testing.T) {
 
 // b.eoe: once a relay-on Cursor row's last request is delivered and, for an
 // allow, its exact invocation is proven, the row leaves check_permission while
-// the turn goes on; a delivered deny waits for the turn's Stop, as on Claude,
-// and a proof arriving after the turn's Stop moves nothing.
+// the turn goes on; a delivered deny waits for the turn's Stop, as on Claude.
+// b.gwj: a turn that ends with its request undelivered retires it instead.
 func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 	// Serial: shared verified pane fixture sets HOME and PATH.
 	cases := []struct {
 		name, decision, kind, output string
 		otherOpen                    bool
-		// stoppedFirst: the turn's Stop arrives while the request still
-		// awaits its answer, so the proof comes after it with no turn open.
-		stoppedFirst    bool
+		// endedFirst: the turn completes while the request still awaits its
+		// answer, so the decision and the tool's output come with no turn open.
+		endedFirst bool
+		// proven is the state after the tool's proof; with endedFirst there
+		// is no proof, and it is the state after the late decision and output.
 		proven, stopped string
 	}{
 		{"allowed shell ran", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, false, false, store.StateWorking, store.StateWaiting},
@@ -224,13 +226,17 @@ func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 		// proof and the turn's Stop.
 		{"allowed shell ran beside an open request", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, true, false, store.StateCheckPermission, store.StateCheckPermission},
 		{"delivered deny", "deny", "shell", "", false, false, store.StateCheckPermission, store.StateWaiting},
-		{"late proof after a held Stop", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, false, true, store.StateCheckPermission, ""},
+		// b.gwj: the turn's end proves the undelivered request gone, so its
+		// Stop reports waiting, and a later decision and tool output change
+		// neither the peer nor the row.
+		{"turn end retires the undelivered request", "allow", "shell", `{"exitCode":0,"stdout":"","stderr":""}`, false, true, store.StateWaiting, store.StateWaiting},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newRequestEnv(t, "on", "synthetic-session")
 			gate := e.startTurn(t)
-			c := e.controller(t, &observedWire{}, io.Discard)
+			wire := &observedWire{}
+			c := e.controller(t, wire, io.Discard)
 			turnOpen := true
 			c.turnOpen = func() bool { return turnOpen }
 			params := cursorfix.Permission(e.binding.SessionID, "shell", "execute")
@@ -251,9 +257,39 @@ func TestCursorRowStateAfterLastDeliveredDecision(t *testing.T) {
 				}
 				e.wantState(t, step, want)
 			}
-			if tc.stoppedFirst {
-				stop("held turn completion", store.StateCheckPermission)
+			if tc.endedFirst {
+				key := displayedKey(t, c, r.token, "allow-once")
 				turnOpen = false
+				ended := c.endTurn()
+				if err := ended.write(time.Time{}); err != nil {
+					t.Fatal(err)
+				}
+				ended.settle()
+				if _, _, ok := c.key(key); ok {
+					t.Fatal("retired request's pane key still selects it")
+				}
+				stop("turn completed", tc.stopped)
+				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneTurnEnd || got.Decision != "" || !got.DeliveredAt.IsZero() {
+					t.Fatalf("turn's end did not retire the undelivered request: %+v", got)
+				}
+				e.decide(t, r.token, tc.decision)
+				if got := e.request(t, r.token); got.Decision != tc.decision {
+					t.Fatalf("late decision not stored: %+v", got)
+				}
+				if err := c.tick(); err != nil {
+					t.Fatal(err)
+				}
+				if r.queued || r.sent.Load() || len(wire.bytes()) != 0 {
+					t.Fatalf("decision on a retired request reached the peer: %q", wire.bytes())
+				}
+				if err := c.execution(executionUpdate(e.binding.SessionID, tc.kind, "completed", tc.output)); err != nil {
+					t.Fatal(err)
+				}
+				if got := e.request(t, r.token); got.ProvenGoneHow != store.ProvenGoneTurnEnd || !got.DeliveredAt.IsZero() {
+					t.Fatalf("late output changed the retired request: %+v", got)
+				}
+				e.wantState(t, "after the late decision and output", tc.proven)
+				return
 			}
 			e.decide(t, r.token, tc.decision)
 			if err := c.tick(); err != nil {

@@ -145,6 +145,8 @@ const (
 // Interrupt (Esc), or a verified Cursor main Stop/Interrupt, proves only a
 // durably main-turn-eligible request. Legacy non-Cursor main requests retain
 // eligibility; Cursor unknown origin never acquires it from NULL agent_id.
+// A Cursor request the gateway never answered is proven gone by its gateway
+// when the prompt turn that asked it completes (ProveCursorTurnEnded; b.gwj).
 // ProvenGoneAgentGone: a close of its Spawn's
 // requests (closeOrphanedRequests: find-missing's mark, the terminal
 // SessionEnd, resume's backstop) ran while the request was not yet proven, or

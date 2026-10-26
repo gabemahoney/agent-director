@@ -316,6 +316,51 @@ func TestCursorTrailProofFinalValuesAndDuplicate(t *testing.T) {
 	}
 }
 
+// b.gwj: a turn's end proves turn_end only the given requests that still hold
+// the row; one delivered, answered at the pane or already proven (the gateway
+// passes a proven one too) keeps what it had, and a stale binding writes nothing.
+func TestCursorTurnEndProvesOnlyHeldRequests(t *testing.T) {
+	e := newCursorTrailEnv(t)
+	for _, token := range []string{"unanswered", "delivered", "pane", "proven", "independent", "stale"} {
+		e.insert(t, token)
+	}
+	if ok, err := e.f.s.DecidePermissionRequest(e.b.InstanceID, "delivered", "allow", "", store.WriterProcessDecide); err != nil || !ok {
+		t.Fatalf("decide: %v %v", ok, err)
+	}
+	if _, ok, err := e.f.s.AckCursorDecision(e.b, "delivered", false, e.until, e.until, store.DefaultLockWait, cursorTrailCheck); err != nil || !ok {
+		t.Fatalf("ack: %v %v", ok, err)
+	}
+	if ok, err := e.f.s.ClaimCursorPaneAnswer(e.b, "pane", "allow", e.until, store.DefaultLockWait, cursorTrailCheck); err != nil || !ok {
+		t.Fatalf("native: %v %v", ok, err)
+	}
+	if err := e.f.s.ProveCursorToolRan(e.b, "proven", "tool-proven", false, cursorTrailCheck); err != nil {
+		t.Fatal(err)
+	}
+	kept := map[string]store.PermissionRow{}
+	for _, token := range []string{"delivered", "pane", "proven", "independent"} {
+		kept[token] = e.read(t, token)
+	}
+	mark := store.TrailMark(t)
+	if err := e.f.s.ProveCursorTurnEnded(e.b, []string{"unanswered", "delivered", "pane", "proven"}, e.until, cursorTrailCheck); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.read(t, "unanswered"); r.ProvenGoneHow != store.ProvenGoneTurnEnd || r.Decision != "" || !r.DeliveredAt.IsZero() || r.PaneAnswered() {
+		t.Fatalf("unanswered request not proven turn_end alone: %+v", r)
+	}
+	for token, before := range kept {
+		if after := e.read(t, token); !reflect.DeepEqual(before, after) {
+			t.Errorf("%s changed: before %+v after %+v", token, before, after)
+		}
+	}
+	if events := e.events(t, mark); len(events) != 0 {
+		t.Errorf("turn-end proof emitted mutation events: %v", events)
+	}
+	e.exec(t, `UPDATE spawns SET life_number=life_number+1 WHERE instance_id=?`, e.b.InstanceID)
+	if err := e.f.s.ProveCursorTurnEnded(e.b, []string{"stale"}, e.until, cursorTrailCheck); err == nil || e.read(t, "stale").ProvenGone() {
+		t.Fatalf("stale binding proved its request: %v", err)
+	}
+}
+
 func TestCursorTrailAcknowledgementAddsNoMutation(t *testing.T) {
 	for _, decision := range []string{"allow", "deny"} {
 		t.Run(decision, func(t *testing.T) {

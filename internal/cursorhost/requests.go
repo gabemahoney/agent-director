@@ -33,8 +33,10 @@ type pendingAuthorization struct {
 	sent                         atomic.Bool
 	retired                      atomic.Bool
 	terminal                     atomic.Bool
-	choice                       *nativeChoice
-	proof                        *deferredProof
+	// turnEnded: retired at its turn's completion (turnEnd).
+	turnEnded bool
+	choice    *nativeChoice
+	proof     *deferredProof
 }
 
 // A validated completion whose proof write met a competing writer. Its
@@ -560,6 +562,52 @@ func (f *proofFlush) settle() {
 		if p.stored {
 			p.r.proof = nil
 		}
+	}
+}
+
+// turnEnd retires, at a prompt turn's completion, the conversation's requests
+// the gateway never answered: none queued or sent, and none with a deferred
+// tool proof, which the Stop report's or the rotation's flush writes instead
+// (b.gwj). A cancellation's or rotation's earlier retirement counts as
+// unanswered too. Take and settle it on the controller goroutine; write
+// touches only its own snapshot, so it may run in await's worker.
+type turnEnd struct {
+	c       *requestController
+	binding store.CursorRuntime
+	retired []*pendingAuthorization
+	tokens  []string
+}
+
+func (c *requestController) endTurn() *turnEnd {
+	t := &turnEnd{c: c, binding: c.rep.binding}
+	for _, r := range c.requests {
+		if r.session == t.binding.SessionID && !r.turnEnded && !r.queued && !r.sent.Load() && r.proof == nil {
+			t.retired = append(t.retired, r)
+			t.tokens = append(t.tokens, r.token)
+		}
+	}
+	return t
+}
+
+// write proves the snapshot's requests gone, turn_end, under the binding's
+// authority, waiting for the write lock until the store's busy window ends or
+// until a nonzero until, whichever is sooner.
+func (t *turnEnd) write(until time.Time) error {
+	end := time.Now().Add(time.Duration(t.c.rep.cfg.Store.EffectiveBusyTimeoutMs()) * time.Millisecond)
+	if !until.IsZero() && until.Before(end) {
+		end = until
+	}
+	return t.c.rep.store.ProveCursorTurnEnded(t.binding, t.tokens, end, t.c.checkFor(t.binding))
+}
+
+// settle ends the snapshot's requests in the gateway once write has stored
+// their proof: no later delivery, and no pane key left to choose them.
+func (t *turnEnd) settle() {
+	for _, r := range t.retired {
+		r.turnEnded = true
+		r.terminal.Store(true)
+		r.retired.Store(true)
+		t.c.removeKeys(r.token)
 	}
 }
 

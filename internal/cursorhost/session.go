@@ -1600,13 +1600,28 @@ func runWithLoadPublicationObserver(options Options, in *os.File, out io.Writer,
 				requestDeadlineHeld = false
 				cancelled = false
 				phase = "idle"
+				if !rotating {
+					if cancelAt.IsZero() {
+						stopDeadline()
+					} else {
+						idleControl = true
+					}
+				}
+				// The turn's unanswered requests end with it, so they no
+				// longer hold the Stop's move to waiting, nor a rotation's
+				// state write: mid-rotation the binding is still the
+				// outgoing conversation's, and cancelAt bounds the write.
+				ended := requests.endTurn()
+				until := time.Time{}
+				if !cancelAt.IsZero() {
+					until = cancelAt.Add(cancelWait)
+				}
+				if err = await(func() error { return ended.write(until) }); err != nil {
+					return err
+				}
+				ended.settle()
 				if rotating {
 					continue
-				}
-				if cancelAt.IsZero() {
-					stopDeadline()
-				} else {
-					idleControl = true
 				}
 				waitingEpoch := inputs.epochValue()
 				if err = reportWaiting("Stop", func(check func() bool) { inputs.ifCurrent(waitingEpoch, func() { admission.waiting(check) }) }); err != nil {

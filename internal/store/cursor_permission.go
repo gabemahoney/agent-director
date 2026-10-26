@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gabemahoney/agent-director/internal/trail"
@@ -305,4 +306,33 @@ func (s *Store) proveCursorTool(b CursorRuntime, token, tool string, ran, turnOp
 		_ = trail.Emit(context.Background(), "ad.spawn.state_transition", map[string]any{"instance_id": b.InstanceID, "prior_state": StateCheckPermission, "new_state": StateWorking, "triggering_event_name": event, "soft_refresh": false, "source": "ad_spawn_store"})
 	}
 	return err
+}
+
+// ProveCursorTurnEnded proves gone, turn_end, every request among tokens that
+// still holds the row (holdsRowSQL), under b's launch and conversation
+// authority, as ProveCursorToolRan checks it. The gateway calls it when b's
+// prompt turn completes, with the turn's requests it never answered: once the
+// turn is over, a request still awaiting an answer no longer outranks the
+// agent's own report (b.gwj), so the turn's Stop, or a rotation's
+// RotateCursorSession, moves the row to waiting.
+// It writes no decision, delivery or pane answer; a request already
+// delivered, answered at the pane, closed or proven gone keeps what it has.
+// until bounds the wait for the write lock and the authority check. It emits
+// no trail event: the Stop's ad.spawn.state_transition records the move.
+func (s *Store) ProveCursorTurnEnded(b CursorRuntime, tokens []string, until time.Time, check CursorCheck) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	return s.inWriteTx(max(time.Until(until), 0), func(ctx context.Context, conn *sql.Conn) error {
+		if _, e := s.cursorAuthority(ctx, conn, b, until, check); e != nil {
+			return e
+		}
+		args := []any{millisArg(time.Now()), ProvenGoneTurnEnd, b.InstanceID}
+		for _, token := range tokens {
+			args = append(args, token)
+		}
+		_, e := conn.ExecContext(ctx, `UPDATE permission_requests AS pr SET proven_gone_at=?,proven_gone_how=?
+ WHERE pr.instance_id=? AND pr.request_token IN (`+strings.TrimSuffix(strings.Repeat("?,", len(tokens)), ",")+`) AND `+holdsRowSQL, args...)
+		return e
+	})
 }

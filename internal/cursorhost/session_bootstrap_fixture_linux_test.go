@@ -16,17 +16,18 @@ import (
 	"github.com/gabemahoney/agent-director/internal/testsupport/cursorfix"
 )
 
-func postBootstrapCursorSession(t *testing.T, initial string, guidance ...bool) *cursorSession {
+func postBootstrapCursorSession(t *testing.T, relay, initial string, guidance ...bool) *cursorSession {
 	t.Helper()
-	c := postBootstrapCursorSessionWithInput(t, initial, openTranscript, terminalLoop, guidance...)
+	c := postBootstrapCursorSessionWithInput(t, relay, initial, openTranscript, terminalLoop, guidance...)
 	c.wait(t, "confirmed ready", func() bool { return bytes.Contains(c.pane.bytes(), []byte("Cursor ready")) })
 	return c
 }
 
 // Rotation semantics start after real bootstrap; original caller assertions keep their bounds.
-func postBootstrapCursorSessionWithInput(t *testing.T, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, guidance ...bool) *cursorSession {
+// relay is the row's relay mode, "on" or "off".
+func postBootstrapCursorSessionWithInput(t *testing.T, relay, initial string, opener func(string, store.CursorRuntime) (*transcript, error), starter inputStarter, guidance ...bool) *cursorSession {
 	t.Helper()
-	e := newRequestEnv(t, "off", "synthetic-session-1")
+	e := newRequestEnv(t, relay, "synthetic-session-1")
 	mcpExecutable := ""
 	if len(guidance) > 0 && guidance[0] {
 		enableGuidance(t, e)
