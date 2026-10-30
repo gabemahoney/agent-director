@@ -394,10 +394,11 @@ observed for up to 2 s for hook-derived `working`, `ask_user` or
 `submission_confirmed: false` and `row_state`, without an `outcome`.
 Missing hooks can leave submission unknown even when input reached the agent.
 
-Codex fallback refuses invalid UTF-8, control characters other than LF after
-CR removal (including tabs and escape characters), and a final
-whitespace-delimited token beginning with `$`. Trailing horizontal whitespace
-still counts; LF, U+2028 or U+2029 after the token ends that match. Earlier
+Codex fallback accepts literal TAB and LF inside the paste. Codex may trim
+trailing whitespace, including TAB, before submission. It refuses invalid
+UTF-8, other control characters after CR removal (including ESC, NUL and C1),
+and a final whitespace-delimited token beginning with `$`. Trailing horizontal
+whitespace still counts; LF, U+2028 or U+2029 after the token ends that match. Earlier
 dollar tokens and dollars embedded in another token are not refused by this
 rule. These refusals return `ErrSubmissionUnconfirmed` with
 `outcome: "not_started"`, `phase: "pre_input"`, zero `bytes_attempted`,

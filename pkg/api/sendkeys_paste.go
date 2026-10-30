@@ -34,7 +34,8 @@ func codexPasteRefusal(text string) string {
 		return "Codex fallback paste requires valid UTF-8" + advice
 	}
 	for _, char := range text {
-		if unicode.IsControl(char) && char != '\n' {
+		// TAB and LF are literal data inside bracketed paste.
+		if unicode.IsControl(char) && char != '\n' && char != '\t' {
 			return "Codex fallback paste cannot safely deliver a control character" + advice
 		}
 	}

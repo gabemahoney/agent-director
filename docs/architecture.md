@@ -9688,8 +9688,9 @@ the [caller contract](caller-contract.md#ordinary-text-submission).
 
 `PasteKeysPane` checks `pane_in_mode` and `pane_input_off`, loads a unique
 `ad-input-<UUID>` buffer through `Invocation.Stdin`, then calls
-`paste-buffer -p -r -d` and one Enter only after paste succeeds. It preserves
-LF and avoids shared buffers, clipboard access and payload argv parsing.
+`paste-buffer -p -r -d` and one Enter only after paste succeeds. It carries TAB
+and LF literally and avoids shared buffers, clipboard access and payload argv
+parsing.
 Framing depends on the application's bracketed-paste mode and proves neither
 readiness nor acceptance. Failed or uncertain load/paste gets one bounded
 cleanup of its own buffer; cleanup errors are retained and input is never
