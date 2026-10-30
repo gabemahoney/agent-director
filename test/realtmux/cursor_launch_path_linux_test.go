@@ -115,8 +115,25 @@ func TestCursorCurrentRuntimePublicPaths(t *testing.T) {
 					pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
 					return err == nil && strings.Contains(pane.Pane, ready)
 				}, func() string { return fmt.Sprint(readRow(t, f.DBPath, id)) })
+				path := readRow(t, f.DBPath, id).JSONLPath.(string)
 				caller.must("send-keys", map[string]any{"instance_id": id, "text": "selected runtime effect", "allow_pending": verb == "resume"})
-				waitFor(t, "selected runtime completed prompt", func() bool { return readRow(t, f.DBPath, id).State == store.StateWaiting }, func() string { return fmt.Sprint(second.Frames(t)) })
+				waitFor(t, "selected runtime completed this prompt and reported waiting", func() bool {
+					if readRow(t, f.DBPath, id).State != store.StateWaiting {
+						return false
+					}
+					for _, prompt := range panePrompts(t, second) {
+						if prompt.Text != "selected runtime effect" {
+							continue
+						}
+						for _, record := range paneRecords(t, path) {
+							if record.Kind == "turn_outcome" && record.Data.Request == prompt.Request && record.Session == prompt.Session {
+								pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 100})
+								return err == nil && strings.Contains(pane.Pane, "Cursor turn complete")
+							}
+						}
+					}
+					return false
+				}, func() string { return fmt.Sprint(second.Frames(t)) })
 				if verb == "resume" {
 					after := readRow(t, f.DBPath, id)
 					if after.CWD != before.CWD || after.AgentArgs != before.AgentArgs || after.ExtraEnv != before.ExtraEnv || after.SessionID != before.SessionID || after.LifeNumber != before.LifeNumber {

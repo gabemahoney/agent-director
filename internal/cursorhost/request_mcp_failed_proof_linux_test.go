@@ -73,7 +73,7 @@ func TestCursorFailedMCPReleasesOnlyMatchingDeliveredHold(t *testing.T) {
 	tc := tmuxfix.NewRecorder().StartServer(li.Socket, tmuxfix.Server{PID: li.ServerPID, Start: li.ServerStart, ProcStart: li.ServerStarttime}).SeedSessions(li.Socket, tmuxfix.SeedSession{ID: "$0", Name: row.TmuxSessionName, Created: li.ServerStart, Label: tmux.Label{Kind: tmux.LabelValid, Token: li.Token, InstanceID: row.InstanceID, StoreID: e.s.StoreID()}, Panes: []tmuxfix.SeedPane{{ID: li.PaneID, PID: li.PanePID, AdPane: li.Token}}})
 	relay := api.RelayView{Procs: probe.NewProcChecker()}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
 	checkHeld := func() {
 		t.Helper()
 		if _, err := api.SendKeys(e.s, tc, api.SendKeysEnv{Relay: relay}, api.SendKeysParams{InstanceID: e.binding.InstanceID, Text: "continue"}); !errors.Is(err, api.ErrDialogMaybeOpen) {
@@ -115,12 +115,17 @@ func TestCursorFailedMCPReleasesOnlyMatchingDeliveredHold(t *testing.T) {
 	if _, err := api.SendKeys(e.s, tc, api.SendKeysEnv{Relay: relay}, api.SendKeysParams{InstanceID: e.binding.InstanceID, Text: "continue"}); err != nil {
 		t.Fatalf("continuation after all proofs: %v", err)
 	}
+	tc.AfterCall(tmuxfix.KeyCall("Enter"), func(_ tmuxfix.SocketCall, err error) {
+		if err == nil {
+			cancel()
+		}
+	})
 	// A cancelled pause wait proves command admission, without asserting gateway exit.
 	if _, err := api.Pause(ctx, e.s, tc, api.PauseEnv{Relay: relay}, 5, api.PauseParams{InstanceID: e.binding.InstanceID}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pause did not reach post-command wait: %v", err)
 	}
-	texts, keys, enters := tc.SocketCallsOf(tmux.CallSendText), tc.SocketCallsOf(tmux.CallSendKey), tc.SocketCallsOf(tmux.CallSendEnter)
-	if len(texts) != 2 || texts[0].Text != "continue" || texts[1].Text != "/exit" || len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Repeat != 127 || len(enters) != 2 {
+	texts, keys, enters := tc.SocketCallsOf(tmux.CallSendText), tc.SocketCallsOf(tmuxfix.KeyCall("C-u")), tc.SocketCallsOf(tmuxfix.KeyCall("Enter"))
+	if len(texts) != 2 || texts[0].Text != "continue" || texts[1].Text != "/exit" || len(keys) != 1 || keys[0].Key != "C-u" || keys[0].Repeat != 127 || len(enters) != 2 || len(tc.SocketCallsOf(tmux.CallSendKey)) != 3 || texts[0].PressEnter || texts[1].PressEnter {
 		t.Fatalf("public commands: %+v", tc.SocketCalls())
 	}
 }

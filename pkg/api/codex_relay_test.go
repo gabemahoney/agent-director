@@ -17,7 +17,6 @@ import (
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/procfix"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -127,7 +126,7 @@ func TestCodexEscapePaneAnswerOnFallenBackRequest(t *testing.T) {
 	if run.err != nil {
 		t.Fatalf("Escape pane answer: %v", run.err)
 	}
-	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", paneAnswerBeforeKey...)
 	if pr := p.request(t, tok); pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "deny" || pr.ProvenGone() {
 		t.Fatalf("request A = %+v; want pane_answer sent, deny, not proven gone", pr)
 	}

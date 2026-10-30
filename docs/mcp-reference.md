@@ -147,13 +147,13 @@ Return the full row: identity, state, session and tmux socket.
 
 ## Tool: send-keys
 
-Strip `\r`, keep `\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Strip `\r`, keep `\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. Cleanup: see caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Input schema
 
 - `instance_id`: type=string, required=true — Id of the live Spawn to drive.
 - `text`: type=string, required=false — Text to type into the Spawn's input. `\r` stripped pre-send; `\n` preserved as newline-in-input. Empty/omitted: nothing typed (Enter only, unless no_enter or key). Exclusive with key; must be empty on a pane answer.
-- `delivery_request_id`: type=string, required=false — Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.
+- `delivery_request_id`: type=string, required=false — Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.
 - `allow_pending`: type=bool, required=false — When true, also allows a pending row: a launch (spawn, reuse or resume) whose agent has not reported in yet. Keys are delivered only to a session started by the row's current launch. ended and missing rows are still rejected (ErrSpawnNotInteractive), including requests to reconcile stored or late proof.
 - `no_enter`: type=bool, required=false — Type text with no Enter after it. With neither text nor key: ErrInvalidFlags (nothing to send). A pane answer never presses Enter.
 - `key`: type=string, required=false — Send this one key instead of text, never followed by Enter: a named key (Escape, Enter, Up, Down, Tab), sent by name, or one character, typed literally. The caller picks the key; agent-director never interprets the screen. Required on a pane answer. Anything else: ErrInvalidFlags.
@@ -481,7 +481,7 @@ Return an agent's subagent records and their tracked status.
 
 ## Tool: pause
 
-Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/missing: no-op. `missing` is not proof of exit (see find-missing). ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Plain send-keys guards; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
+Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/missing: no-op. `missing` is not proof of exit (see find-missing). ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). Unusable recorded name: ErrInternal (see kill).
 
 ### Input schema
 
@@ -495,6 +495,7 @@ Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/mi
 
 - `ErrSpawnNotFound`
 - `ErrSpawnNotPausable`
+- `ErrSubmissionUnconfirmed`
 - `ErrSendKeysWhileRelayed`
 - `ErrRelayFallenBack`
 - `ErrDialogMaybeOpen`

@@ -24,7 +24,7 @@ func migrateV8Fixture(t *testing.T) (f v8Fixture, s *Store, storeID string) {
 	f = makeV8Fixture(t, t.TempDir())
 	storeID = assertOneStoreID(t, f.path)
 	writeSentinel(t, f.dir, 8, schemaVersion)
-	s, err := Open(f.path)
+	s, err := openMigrationTestStore(t, f.path)
 	if err != nil {
 		t.Fatalf("open the store to migrate: %v", err)
 	}

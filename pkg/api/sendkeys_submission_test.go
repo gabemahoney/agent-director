@@ -3,7 +3,9 @@ package api_test
 // Pending Codex submission uses raw same-launch turn activity, never pane text.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -11,24 +13,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
 
 // submissionStore injects hook/read races only after the keys have been sent.
 type submissionStore struct {
 	api.SendKeysStore
+	inputdelivery.Persistence
 	sent         bool
 	reads        int
 	read         func(int, api.Spawn) (api.Spawn, error)
 	waits        []time.Duration
+	preparation  []time.Duration
 	boundedReads bool
 }
 
 func (s *submissionStore) GetSpawnWithin(id string, maxWait time.Duration) (api.Spawn, error) {
-	s.waits = append(s.waits, maxWait)
+	if s.sent {
+		s.waits = append(s.waits, maxWait)
+	} else {
+		s.preparation = append(s.preparation, maxWait)
+	}
 	// Virtual poll budgets must not become real SQL deadlines in semantic tests.
 	read := s.SendKeysStore.GetSpawn
 	if s.boundedReads {
@@ -57,8 +67,13 @@ type submissionEnv struct {
 func newSubmissionEnv(t *testing.T) *submissionEnv {
 	t.Helper()
 	e := &submissionEnv{killEnv: newKillEnv(t)}
-	e.s = &submissionStore{SendKeysStore: e.store}
-	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { e.s.sent = true })
+	e.s = &submissionStore{SendKeysStore: e.store, Persistence: e.st}
+	e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { e.s.sent = true })
+	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
+		if c.Key == "Enter" {
+			e.s.sent = true // Enter-only input has no preceding text event.
+		}
+	})
 	e.env = api.SendKeysEnv{
 		Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()},
 		Sleep: func(d time.Duration) {
@@ -118,10 +133,12 @@ func TestSendKeysCodexSubmissionUnconfirmed(t *testing.T) {
 				if e.s.reads != 20 {
 					t.Errorf("submission reads = %d; want 20 before the deadline", e.s.reads)
 				}
+				assertInputWrites(t, e.killEnv, r, text)
 				if text == "" {
-					e.assertEnterOnly(t, r.Socket, r.Spawn.Identity.PaneID)
-				} else {
-					e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, text)
+					e.assertNoCalls(t, tmux.CallSendText)
+					if len(e.rec.SocketCallsOf(tmux.CallSendKey))+len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 1 {
+						t.Fatal("Enter-only input issued another key")
+					}
 				}
 				e.assertNoCalls(t, tmux.CallCapture)
 				e.assertRowUnchanged(t, r.ID, before)
@@ -151,7 +168,7 @@ func TestSendKeysCodexSubmissionActivity(t *testing.T) {
 				if e.waits != delay {
 					t.Errorf("waits = %d; want %d", e.waits, delay)
 				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+				assertInputWrites(t, e.killEnv, r, skpText)
 				e.assertNoCalls(t, tmux.CallCapture)
 			})
 		}
@@ -201,7 +218,7 @@ func TestSendKeysCodexSubmissionEvidenceLost(t *testing.T) {
 			if want := time.Duration(wantWaits) * 100 * time.Millisecond; e.slept != want {
 				t.Errorf("wait = %v; want %v before evidence was lost", e.slept, want)
 			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+			assertInputWrites(t, e.killEnv, r, skpText)
 			e.assertNoCalls(t, tmux.CallCapture)
 			e.assertRowUnchanged(t, r.ID, before)
 		})
@@ -252,13 +269,21 @@ func TestSendKeysCodexSubmissionRemainingReadBudget(t *testing.T) {
 		e.clock.Advance(650 * time.Millisecond)
 		return row, nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.env.Context = ctx
+	deadline, _ := ctx.Deadline()
+	callerRemaining := time.Until(deadline)
 	err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
 	assertSubmissionUnconfirmed(t, err, store.StatePending)
+	if got := e.s.preparation; len(got) != 1 || got[0] <= 0 || got[0] > 12*time.Second || got[0] > callerRemaining {
+		t.Errorf("preparation read budgets = %v; want one positive read <= 12s and caller remaining %v", got, callerRemaining)
+	}
 	want := []time.Duration{2 * time.Second, 1250 * time.Millisecond, 500 * time.Millisecond}
 	if !reflect.DeepEqual(e.s.waits, want) {
 		t.Errorf("submission read budgets = %v; want %v including time spent reading and sleeping", e.s.waits, want)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	assertInputWrites(t, e.killEnv, r, skpText)
 }
 
 func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
@@ -296,7 +321,7 @@ func TestSendKeysCodexSubmissionActivityReadDeadline(t *testing.T) {
 				if e.s.reads != 1 || e.waits != 0 {
 					t.Errorf("submission reads/waits = %d/%d; want 1/0", e.s.reads, e.waits)
 				}
-				e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+				assertInputWrites(t, e.killEnv, r, skpText)
 			})
 		}
 	}
@@ -357,10 +382,13 @@ func TestSendKeysCodexSubmissionConnectionContention(t *testing.T) {
 	if elapsed > time.Second {
 		t.Errorf("submission check took %v; want the remaining 50ms wait with scheduling allowance", elapsed)
 	}
+	if got := e.s.preparation; len(got) != 1 || got[0] <= 0 || got[0] > 12*time.Second {
+		t.Errorf("preparation read budgets = %v; want one positive read <= 12s", got)
+	}
 	if want := []time.Duration{2 * time.Second, 50 * time.Millisecond}; !reflect.DeepEqual(e.s.waits, want) {
 		t.Errorf("submission read budgets = %v; want %v", e.s.waits, want)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	assertInputWrites(t, e.killEnv, r, skpText)
 	e.assertNoCalls(t, tmux.CallCapture)
 	e.assertRowUnchanged(t, r.ID, before)
 }
@@ -398,7 +426,7 @@ func TestSendKeysSubmissionApplicability(t *testing.T) {
 
 func TestSendKeysCodexSubmissionTmuxFailurePrecedence(t *testing.T) {
 	t.Parallel()
-	for _, call := range []tmux.Call{tmux.CallSendText, tmux.CallSendEnter} {
+	for _, call := range []tmux.Call{tmux.CallSendText, tmux.CallSendKey} {
 		t.Run(string(call), func(t *testing.T) {
 			t.Parallel()
 			e := newSubmissionEnv(t)
@@ -406,8 +434,152 @@ func TestSendKeysCodexSubmissionTmuxFailurePrecedence(t *testing.T) {
 			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailTimeout}, call)
 			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
 			assertOneName(t, err, "ErrTmuxUnresponsive")
-			if e.s.reads != 0 || e.waits != 0 || api.ErrDetails(err) != nil {
-				t.Errorf("submission reads/waits/details = %d/%d/%+v; want none after tmux failure", e.s.reads, e.waits, api.ErrDetails(err))
+			var want any
+			if call == tmux.CallSendKey {
+				want = api.SubmissionUnconfirmedDetails{
+					Outcome: "submission_unconfirmed", Phase: "enter_attempted", BytesAttempted: len(skpText),
+					EnterMayHaveBeenSent: true, KeysSent: true, RowState: store.StatePending,
+					Reason: "text was sent; following Enter failed",
+				}
+			}
+			if e.s.reads != 0 || e.waits != 0 || api.ErrDetails(err) != want {
+				t.Errorf("submission reads/waits/details = %d/%d/%+v; want 0/0/%+v after tmux failure", e.s.reads, e.waits, api.ErrDetails(err), want)
+			}
+		})
+	}
+}
+
+// untypedSubmissionTmux keeps the recorded transport boundary but returns an
+// uncatalogued Enter error, as a third-party SendKeysTmux implementation may.
+type untypedSubmissionTmux struct{ *tmuxfix.Recorder }
+
+func (t untypedSubmissionTmux) SendKeyPane(socket, pane, key string) error {
+	if err := t.Recorder.SendKeyPane(socket, pane, key); err != nil {
+		return errors.New("transport reply unavailable")
+	}
+	return nil
+}
+
+// E3, t2.7tz.tb.ib round 2: "send-keys with empty text submits it" after a
+// separate Enter failure must retain progress and never repeat successful text.
+func TestAdviceFollow_E3_SeparateEnterFailurePreservesProgress(t *testing.T) {
+	t.Parallel()
+	adviceAssertManifest(t, "send-keys", "", advSendKeysEmptyTextManifest)
+	for _, tc := range []struct {
+		name             string
+		failure          tmux.Failure
+		reached, untyped bool
+		advice           string
+	}{
+		{"timeout before Enter", tmux.FailTimeout, false, false, advSendKeysEnterTimeout},
+		{"timeout after Enter", tmux.FailTimeout, true, false, advSendKeysEnterTimeout},
+		{"typed failure", tmux.FailUnrecognized, false, false, advSendKeysNotSubmitted},
+		{"untyped failure", tmux.FailUnrecognized, false, true, advSendKeysNotSubmitted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			ktrRestart(t, e.killEnv, &r) // Make the delivery consequence observable in the trail.
+			before := e.columns(t, r.ID)
+			in := watchPaneInput(e.killEnv, r.Spawn.Identity.PaneID, tc.reached)
+			lookupsAtEnter := 0
+			// The shared composer watches combined Enter. Observe this route's
+			// separate key through the same composer, without changing defaults.
+			e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, err error) {
+				lookupsAtEnter = len(e.rec.SocketCallsOf(tmux.CallLookup))
+				if c.Target == r.Spawn.Identity.PaneID && c.Key == "Enter" && in.reached(err) {
+					in.submit()
+				}
+			})
+			e.rec.Script(r.Socket, tmuxfix.Script{Failure: tc.failure, Times: 1}, tmux.CallSendKey)
+			var transport api.SendKeysTmux = e.rec
+			if tc.untyped {
+				transport = untypedSubmissionTmux{e.rec}
+			}
+			const text = "first\n界"
+			_, err := api.SendKeys(e.s, transport, e.env, api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界"})
+			assertOneName(t, err, "ErrTmuxUnresponsive")
+			adviceAssertAdvice(t, err, api.ErrTmuxUnresponsive, tc.advice)
+			want := api.SubmissionUnconfirmedDetails{
+				Outcome: "submission_unconfirmed", Phase: "enter_attempted", BytesAttempted: len(text),
+				EnterMayHaveBeenSent: true, KeysSent: true, RowState: store.StateWaiting,
+				Reason: "text was sent; following Enter failed",
+			}
+			if got := api.ErrDetails(err); got != want {
+				t.Fatalf("details=%+v; want %+v", got, want)
+			}
+			assertInputWrites(t, e.killEnv, r, text)
+			assertKeysDisagrees(t, e.killEnv, pendTrail(t, "ad.provenance.disagree", r.ID), r, "send-keys", apitest.OtherStoreID(e.storeID),
+				[]disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
+			followups := 1
+			if tc.failure == tmux.FailTimeout {
+				followups = 0
+				adviceAssertPhrase(t, err, fmt.Sprintf("tmux key send failed: no answer within %g s", e.cfg.EffectiveActionTimeout().Seconds()))
+			}
+			if got := len(e.rec.SocketCallsOf(tmux.CallLookup)) - lookupsAtEnter; got != followups {
+				t.Errorf("follow-up lookups=%d; want %d", got, followups)
+			}
+			if e.s.reads != 0 || e.waits != 0 {
+				t.Fatalf("submission reads/waits=%d/%d; want no polling after transport failure", e.s.reads, e.waits)
+			}
+			e.assertRowUnchanged(t, r.ID, before)
+
+			// Follow the existing advice literally; even a timed-out Enter that
+			// reached the composer must not lead to a second text submission.
+			e.rec.Reset()
+			if err := e.send(api.SendKeysParams{InstanceID: r.ID}); err != nil {
+				t.Fatalf("Enter-only follow-up: %v", err)
+			}
+			assertInputWrites(t, e.killEnv, r, "")
+			e.assertNoCalls(t, tmux.CallSendText)
+			if len(e.rec.SocketCallsOf(tmux.CallSendKey))+len(e.rec.SocketCallsOf(tmux.CallSendEnter)) != 1 {
+				t.Fatal("Enter-only follow-up issued another key")
+			}
+			in.assertSubmittedOnce(t, text)
+		})
+	}
+}
+
+// t2.7tz.tb.ib round 2: a real admission failure after text cannot report
+// pre_input/zero bytes or permit the following Enter under stale authority.
+func TestSendKeysPostTextAdmissionRetainsProgress(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"cancelled caller", "changed row revision"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			e := newSubmissionEnv(t)
+			r := e.seedRow(t, killRowSpec{})
+			ktrRestart(t, e.killEnv, &r)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			e.env.Context = ctx
+			if mode == "cancelled caller" {
+				e.rec.AfterCall(tmux.CallSendText, func(tmuxfix.SocketCall, error) { cancel() })
+			} else {
+				e.rowWriteAfter(t, tmux.CallSendText, r)
+			}
+			const text = "first\n界"
+			err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: "first\r\n界"})
+			assertOneName(t, err, "ErrSubmissionUnconfirmed")
+			want := api.SubmissionUnconfirmedDetails{
+				Outcome: "partial_input_unconfirmed", Phase: "text_attempted", BytesAttempted: len(text),
+				KeysSent: true, RowState: store.StateWaiting,
+				Reason: "input admission changed after text; Enter was not sent",
+			}
+			if got := api.ErrDetails(err); got != want {
+				t.Fatalf("details=%+v; want %+v", got, want)
+			}
+			adviceAssertAdvice(t, err, api.ErrSubmissionUnconfirmed, "unconfirmed input may still submit later; do not automatically replay text or Enter")
+			calls := e.rec.SocketCallsOf(tmux.CallSendText)
+			if len(calls) != 1 || calls[0].Text != text || calls[0].PressEnter || calls[0].Target != r.Spawn.Identity.PaneID || calls[0].Socket != r.Socket {
+				t.Fatalf("text writes=%+v; want the exact normalized bytes once to the owned pane", calls)
+			}
+			e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey, tmux.CallCapture)
+			assertKeysDisagrees(t, e.killEnv, pendTrail(t, "ad.provenance.disagree", r.ID), r, "send-keys", apitest.OtherStoreID(e.storeID),
+				[]disagreeWant{{reason: "server_restarted", server: "restarted", verdict: "ours", action: "text_sent", ours: true}})
+			if e.s.reads != 0 || e.waits != 0 {
+				t.Fatalf("submission reads/waits=%d/%d; want no polling after lost admission", e.s.reads, e.waits)
 			}
 		})
 	}
@@ -426,5 +598,5 @@ func TestAdviceFollow_E10_SubmissionUnconfirmedInspectGet(t *testing.T) {
 	if err != nil || row.State != store.StatePending {
 		t.Fatalf("Get after unconfirmed = %+v, %v; want pending, no error", row, err)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+	assertInputWrites(t, e.killEnv, r, skpText)
 }

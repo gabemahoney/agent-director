@@ -21,9 +21,7 @@ A `permissions` block has up to three string arrays:
   permission confirmations caused by these entries.
 
 The pattern grammar is Claude Code's; bare tool names match every
-invocation of that tool (`AskUserQuestion` denies every AUQ — see the
-empirical confirmation in
-`reference/permissions-deny-tool-name-research.md`).
+invocation of that tool (`AskUserQuestion` denies every AUQ).
 
 ## Cursor spawns
 
@@ -217,8 +215,7 @@ The setting controls Claude and Codex. For Cursor, either value retains
 synthesized `permissions.deny` array. The string `"AskUserQuestion"` is
 a bare tool name — Claude Code's matcher treats it as "deny every use
 of the AUQ tool" *and* removes the tool from the deferred-tool registry
-(the model never sees its schema). Confirmed in
-`reference/permissions-deny-tool-name-research.md`.
+(the model never sees its schema).
 
 Recommended for orchestrator-driven setups where every agent should
 make its own decisions rather than prompting a human. The deny is
@@ -307,9 +304,7 @@ hook fires, and its row stays `pending`.
 agent-director **does not strip** this flag. A caller passing
 `--dangerously-skip-permissions` through `agent_args` bypasses Claude
 Code's permission engine entirely — the per-Spawn `permissions` block
-becomes irrelevant for that Spawn. This is intentional per the PRD
-(the supervisor exposes the same trust boundary as the operator's own
-shell).
+becomes irrelevant for that Spawn.
 
 Operators who want to restrict callers from using this flag should not
 let untrusted parties spawn Claude instances through agent-director.
@@ -390,7 +385,7 @@ record (see [hooks.md](hooks.md#only-the-rows-own-agent-moves-the-row)).
 
 ### Envelope wire format
 
-SRD §6.3 / Claude Code 2.x nested shape (a Codex agent gets the same
+Claude Code 2.x nested shape (a Codex agent gets the same
 envelope, unchanged):
 
 ```json
@@ -412,7 +407,7 @@ envelope, unchanged):
   field is omitted entirely (Claude Code drops empty messages
   silently).
 
-### Fail-closed boundary (SRD §6.4)
+### Fail-closed boundary
 
 When `AGENT_DIRECTOR_RELAY_MODE=on` the hook handler treats every
 failure before the request is recorded as a deny — provided the event is
@@ -429,8 +424,8 @@ exits 0 with empty stdout, the agent asks in its own permission prompt,
 and the request falls back (its `delivery` reads `fallen_back` once a
 reader finds the hook gone). Claude Code acts on a hook's JSON whatever
 its exit code, so an answer written before its confirmation could reach
-the agent while `decide` and `get-permission` report that it did not. SRD
-§6.4 enumerates the failure modes:
+the agent while `decide` and `get-permission` report that it did not.
+The failure modes are:
 
 | Failure | Outcome |
 |---|---|
@@ -754,9 +749,11 @@ Codex move's `ended` deny both carry `find_missing`, so that writer can come
 from `pause`.
 
 A closed request stays closed after a `resume`: it no longer awaits an
-answer, so `get` and `list` do not show it, it no longer holds the spawn in
-`check_permission` or off `working`. On non-Cursor spawns, it is also proven
-gone, so it never refuses `send-keys`.
+answer, so it is omitted from `get` and `list`'s `permission_requests` and
+no longer holds the spawn in `check_permission` or off `working`. On
+non-Cursor spawns, it is also proven gone, so it never refuses `send-keys`.
+Cursor's independent dialog hold and `get.unproven_requests` follow
+[The dialog hold](#the-dialog-hold).
 `decide` refuses it as above, never with `ErrRelayFallenBack`.
 `get-permission` still reads it by its token, and its `delivery` follows
 the rules in "Delivery" below like any request's: `delivered` once its hook
@@ -771,8 +768,8 @@ time the request is read, by `decide`, `get`, `list` and `get-permission`;
 the only writes for them are `hook_gone_at` and the time the request fell
 back. `proven_gone_at` and
 `proven_gone_how` are written by the agent's own hooks, validated Cursor
-invocation proof or a Cursor turn's end, by the close of its spawn's requests
-and, for a spawn already finished, by the upgrade to this release, never by a
+invocation proof or a Cursor turn's end, by the close of a non-Cursor spawn's
+requests and, for a non-Cursor spawn already finished, by the upgrade to this release, never by a
 reader (see "The dialog hold" below):
 
 The `delivery` and `confirm_by` descriptions below apply to requests
@@ -1587,6 +1584,3 @@ processes, never the agent's screen. These cases are not covered:
   <https://docs.claude.com/en/docs/claude-code/iam#permission-rules>
 - Claude Code settings file:
   <https://docs.claude.com/en/docs/claude-code/settings>
-- Empirical investigation (gitignored, in-repo):
-  `reference/permissions-deny-tool-name-research.md`,
-  `reference/claude-settings-research.md`

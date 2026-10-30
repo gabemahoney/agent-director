@@ -24,15 +24,25 @@ import (
 // wellFormedID is the SR-5.1 store id form: 16 lowercase hex characters.
 var wellFormedID = regexp.MustCompile(`^[0-9a-f]{16}$`)
 
-// assertOneStoreID fails unless store_meta holds exactly one row, a
-// well-formed TEXT store_id, and returns it.
+// assertOneStoreID checks the exact metadata for this schema: one store_id,
+// plus the committed native authority on schemas that include the cutover.
 func assertOneStoreID(t *testing.T, path string) string {
 	t.Helper()
 	rows, present := readStoreMeta(t, path)
-	if !present || len(rows) != 1 || rows[0].key != "store_id" || rows[0].typ != "text" || !wellFormedID.MatchString(rows[0].value) {
+	if !present || len(rows) == 0 || rows[len(rows)-1].key != "store_id" || rows[len(rows)-1].typ != "text" || !wellFormedID.MatchString(rows[len(rows)-1].value) {
 		t.Fatalf("store_meta = %+v (present %v); want one well-formed TEXT store_id", rows, present)
 	}
-	return rows[0].value
+	id := rows[len(rows)-1].value
+	want := []storeMetaRow{{"store_id", id, "text"}}
+	for _, step := range migrationSteps {
+		if step.inputCutover && readUserVersion(t, path) > step.from {
+			want = append([]storeMetaRow{{inputAuthorityKey, inputAuthorityVersion + id, "text"}}, want...)
+		}
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("store_meta = %+v; want %+v", rows, want)
+	}
+	return id
 }
 
 // openStoreID opens path with open, returns StoreID() and closes the store.
@@ -143,8 +153,8 @@ func assertSpawnMatchesRaw(t *testing.T, sp Spawn, raw map[string]string) {
 }
 
 // TestStoreIDKept: a fresh store holds one well-formed id, StoreID(), unlike
-// another fresh store's; a reopen (Open or OpenOrInit), a fresh-create re-run
-// (user_version stamped 0) and a copy of the files all keep it (SR-5.1, SR-5.4).
+// another fresh store's; reopen and a restored copy keep it. An existing store
+// with a reset version is refused, never recreated over native authority.
 func TestStoreIDKept(t *testing.T) {
 	path, id := newClosedStore(t)
 	if raw := assertOneStoreID(t, path); raw != id {
@@ -158,10 +168,17 @@ func TestStoreIDKept(t *testing.T) {
 			t.Errorf("%s after reopen: StoreID() = %q; want %q", name, got, id)
 		}
 	}
+	saved := readDBFileSet(t, path)
 	stampUserVersion(t, path, 0)
-	if got := openStoreID(t, OpenOrInit, path); got != id || readUserVersion(t, path) != schemaVersion {
-		t.Errorf("fresh-create re-run: StoreID() = %q, user_version %d; want %q, %d", got, readUserVersion(t, path), id, schemaVersion)
+	reset := snapshotDBBytes(t, path)
+	if s, err := OpenOrInit(path); !errors.Is(err, ErrSchemaMismatch) {
+		if s != nil {
+			s.Close()
+		}
+		t.Fatalf("reset existing schema: %v; want refusal", err)
 	}
+	assertDBBytesUnchanged(t, path, reset)
+	writeDBFileSet(t, path, saved)
 	assertOneStoreID(t, path)
 
 	restored := filepath.Join(t.TempDir(), "state.db")
@@ -331,7 +348,7 @@ func TestDowngradeRecipe_KeepsRowsThenRemigratesToDefaults(t *testing.T) {
 	}
 
 	writeSentinel(t, filepath.Dir(path), 4, schemaVersion)
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatalf("Open(authorised re-migration): %v", err)
 	}

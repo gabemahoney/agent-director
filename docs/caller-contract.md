@@ -410,8 +410,8 @@ line/paragraph
 separators are refused. A first non-whitespace `/` or `!` requires an
 operator-controlled pane operation. Readiness is bounded by 12 s; input
 delivery by 60 s, followed by up to 12 s for transcript confirmation. Set a
-client timeout long enough to receive the result. A client timeout does not
-cancel a submission.
+client timeout long enough to receive the result. Timeout or cancellation does
+not prove non-delivery and cannot undo attempted input.
 
 For native delivery, supply `delivery_request_id` to identify one attempt
 within a launch. Repeat the same ID and normalized text to retrieve stored
@@ -423,8 +423,8 @@ identical text returns its existing result; this is not a general deduplication
 of every earlier turn. Observing an existing request requires the state,
 permission-relay and dialog guards to pass, and its exact launch and native
 session identity to match. This observation sends no input. An unresolved
-native attempt blocks new input even with a new ID or when capability becomes
-unavailable; fallback never resends an unresolved native attempt. Request IDs
+native attempt or unreadable/corrupt stored evidence blocks new input even with
+a new ID or when capability becomes unavailable; fallback never resends it. Request IDs
 do not give fallback sends native confirmation or deduplication. If a different
 request discovers late proof for its predecessor,
 it reports `not_started`; re-issue the new request only after the predecessor
@@ -448,6 +448,18 @@ unresolved, escalate to a human using
 [Unresolved ordinary input](operator-actions.md#unresolved-ordinary-input).
 Agent-director never retries text or Enter on missing evidence, including
 after a crash.
+
+Operational input authority is in the configured SQLite database. Persisted
+intent records what may have been attempted, not provider receipt. An uncertain
+commit or released writer lock proves neither delivery nor non-delivery.
+Only exact retained transcript proof confirms submission.
+
+If cleanup fails after native submission or matching-request observation,
+`ErrInternal` carries the unchanged submitted result in `err_details`, including
+its exact proof fields. The Go call also returns that same result. This is
+still confirmed submission: never resend because cleanup failed. An existing
+primary error keeps its classification and details, with the cleanup cause
+retained.
 
 ## Manual input ownership
 
@@ -477,6 +489,12 @@ retains its literal input path after manual input. A state, permission or pane r
 from `pause` does not change that contract. Manual input does not clear an
 unresolved attempt. Direct terminal writers must also be excluded during an
 automatic request; agent-director's lock cannot serialize them.
+
+Cleanup failure after manual, permission-pane or pause input does not erase
+what was attempted. Its details retain actual byte/key and Enter facts;
+a key-only send does not imply an added Enter. Follow those facts and the
+primary error rather than treating cleanup failure as proof that nothing was
+sent. Manual interference remains recorded and does not clear native uncertainty.
 
 ## Transcript recovery
 

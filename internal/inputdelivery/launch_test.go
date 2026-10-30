@@ -1,7 +1,6 @@
 package inputdelivery
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,7 +50,8 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 					}
 				}
 				originalEnvLen := len(env)
-				cmd, gotEnv, err := Prepare(id, []string{program}, env, mode != "unsafe args")
+				persist := &evidencePersistence{}
+				cmd, gotEnv, err := Prepare(id, []string{program}, env, mode != "unsafe args", persist)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -71,13 +71,12 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 					}
 					return
 				}
-				data, err := os.ReadFile(filepath.Join(dir, "launch.json"))
-				if err != nil {
-					t.Fatal(err)
+				if persist.launch == nil {
+					t.Fatal("capability was not committed")
 				}
-				var m manifest
-				if err = json.Unmarshal(data, &m); err != nil {
-					t.Fatal(err)
+				m := persist.launch.Capability
+				if _, err := os.Stat(filepath.Join(dir, "launch.json")); !os.IsNotExist(err) {
+					t.Fatalf("operational JSON created: %v", err)
 				}
 				if m.Token != id.Token || m.InstanceID != id.InstanceID || m.CWD != id.CWD || m.Socket != id.Socket || m.Created.IsZero() {
 					t.Fatalf("missing launch ownership: %+v", m)
@@ -111,7 +110,7 @@ func TestPreparePinsDiagnosticsToFreshLaunch(t *testing.T) {
 						}
 					}
 				}
-				if _, _, err := Prepare(id, []string{program}, env, true); err == nil {
+				if _, _, err := Prepare(id, []string{program}, env, true, persist); err == nil {
 					t.Fatal("reused stale launch diagnostic directory")
 				}
 			})
@@ -194,22 +193,18 @@ func TestPrepareClaudeForwardsInspectedEnvironment(t *testing.T) {
 				writeEvidence(t, filepath.Join(config, "keybindings.json"), []byte("[]"))
 			}
 			id := Identity{StoreID: "0123456789abcdef", Token: "fedcba9876543210", Agent: "claude", CWD: "/work", Socket: "/own/socket", InstanceID: "own"}
-			_, got, err := Prepare(id, []string{program}, env, true)
+			persist := &evidencePersistence{}
+			_, got, err := Prepare(id, []string{program}, env, true, persist)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got["HOME"] != home || got["CLAUDE_CONFIG_DIR"] != config {
 				t.Fatalf("launch environment=%+v want HOME=%s config=%s", got, home, config)
 			}
-			dir, err := launchDir(id.StoreID, id.Token)
-			if err != nil {
-				t.Fatal(err)
+			if persist.launch == nil {
+				t.Fatal("capability was not committed")
 			}
-			var m manifest
-			data, err := os.ReadFile(filepath.Join(dir, "launch.json"))
-			if err != nil || json.Unmarshal(data, &m) != nil {
-				t.Fatalf("cannot read launch manifest: %v", err)
-			}
+			m := persist.launch.Capability
 			wantSafe := mode != "relative config" && mode != "custom inherited bindings"
 			if m.Safe != wantSafe || !strings.HasPrefix(m.Transcript, filepath.Join(config, "projects")+string(filepath.Separator)) {
 				t.Fatalf("inspected configuration not bound to launch: %+v", m)

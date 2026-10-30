@@ -21,13 +21,11 @@ func TestSendKeysMCPEmptyText(t *testing.T) {
 
 			toolResult(t, callTool(t, e.d, "send_keys", tc.args))
 
-			for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
-				if c.Text != "" {
-					t.Errorf("text call typed %q; want nothing typed", c.Text)
-				}
+			if texts := e.rec.SocketCallsOf(tmux.CallSendText); len(texts) != 0 {
+				t.Errorf("text calls = %+v; want none, including no empty-text transport", texts)
 			}
-			if enters := e.rec.SocketCallsOf(tmux.CallSendEnter); len(enters) != 1 || enters[0].Target != apitest.TestPaneID {
-				t.Errorf("Enter calls = %+v; want one to the agent's pane %s", enters, apitest.TestPaneID)
+			if keys := e.rec.SocketCallsOf(tmux.CallSendKey); len(keys) != 1 || keys[0].Key != "Enter" || keys[0].Target != apitest.TestPaneID || keys[0].Socket != apitest.TestSocket {
+				t.Errorf("key calls = %+v; want one Enter to the agent's pane %s on %s", keys, apitest.TestPaneID, apitest.TestSocket)
 			}
 		})
 	}

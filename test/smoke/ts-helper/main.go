@@ -38,6 +38,9 @@
 //	                     state and the time of its last raw state change
 //	                     (apitest.SetSettle; b.3ie).
 //	json-schema          Print the result shapes of every subcommand.
+//	install-write-failure Install canonical failure SQL on an existing temp DB;
+//	                     returns a handle, without opening/migrating a Store.
+//	remove-write-failure  Remove exactly that handle on the same DB.
 package main
 
 import (
@@ -75,6 +78,8 @@ var availableSubcmds = []string{
 	"seed-needs-intelligence-surface",
 	"seed-idle-screen-surface",
 	"set-settle",
+	"install-write-failure",
+	"remove-write-failure",
 	"json-schema",
 }
 
@@ -114,6 +119,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return cmdSeedReadSurfaceStore(args[1:], stdout, stderr)
 	case "set-settle":
 		return cmdSetSettle(args[1:], stdout, stderr)
+	case "install-write-failure", "remove-write-failure":
+		return cmdWriteFailure(args[0], args[1:], stdout, stderr)
 	case "write-family-transition":
 		return cmdWriteFamilyTransition(args[1:], stdout, stderr)
 	case "json-schema":
@@ -551,7 +558,9 @@ func cmdSeedEmptyStore(args []string, stdout, stderr io.Writer) int {
 // result fields and their JSON types.  This is intentionally a simple
 // observability aid rather than a full JSON Schema document.
 var resultSchemas = map[string]map[string]string{
-	"fake-pane-owner": {"pid": "number", "start": "string"},
+	"install-write-failure": {"handle": "string"},
+	"remove-write-failure":  {"handle": "string"},
+	"fake-pane-owner":       {"pid": "number", "start": "string"},
 	"seed-spawn": {
 		"instance_id": "string",
 	},

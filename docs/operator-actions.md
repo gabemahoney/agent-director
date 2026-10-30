@@ -3,7 +3,7 @@
 Human-only procedures. Automated callers (programs, scripts, agents, MCP
 clients) must not perform them.
 
-`kill-finished` and `delete` are verbs of `agent-director-admin`
+`kill-finished`, `delete`, `migrate-journal` and `snapshot-store` are verbs of `agent-director-admin`
 (`~/.config/agent-director/admin/agent-director-admin`, never on PATH). Run it by that
 full path, only with a human's explicit approval for that run.
 
@@ -117,16 +117,17 @@ does not undo a turn or its effects.
 
 Manual input does not reset native delivery eligibility. To return to
 native ordinary input, use a fresh supported launch with an empty composer;
-`resume` does not provide that contract. Do not delete or edit input journals
-to bypass an unresolved attempt.
+`resume` does not provide that contract. Do not delete or edit stored input
+records or provider evidence to bypass an unresolved attempt. A released lock,
+timeout or uncertain database commit does not prove that input was not delivered.
 
 A manual `send-keys` can also return `ErrSubmissionUnconfirmed`
 with `outcome: "not_started"` when it cannot own the input writer or read or
 save its journal. `pause` returns `ErrInternal` for these failures. That call
 sent nothing. Let any active writer finish, then
-re-issue the call. For a persistent refusal, check access to the private
-[delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
-as the agents' user. Preserve its evidence; never clear it to force input.
+re-issue the call. For a persistent refusal, check access to the configured
+database and private [delivery evidence directory](settings.md#ordinary-delivery-launch-settings)
+as the agents' user. Preserve both; never clear either to force input.
 
 ## A finished row's own old session
 
@@ -402,6 +403,83 @@ binary changes. Never delete a row or edit `state.db`.
    2) and the sessions (step 1 of "Inspect and end a session by hand"): no live
    row and no session of the set remains. Stop every `serve`, then change the
    binary, keeping a copy of the previous one.
+
+For a native-input journal upgrade, this set must include every writer that
+can reach the store or its input roots, including untracked callers. Keep
+launchers, hooks, helpers, in-flight commands and all `serve` processes stopped
+through committed verification. Check actual process start times and access;
+stored `ended`/`missing`, a successful finished-row `kill` no-op and absent tmux
+sessions do not prove exit. Follow the maintenance window below.
+
+## Upgrading the native-input journal
+
+This upgrade moves operational input records into SQLite. Run it from an
+independent shell as the agents' user, with explicit operator authorization.
+The administrator checks actual processes on Linux and never kills them;
+unsupported hosts refuse the cutover.
+
+1. Establish and maintain the stopped-writer boundary above. Include the
+   actual configured database and every legacy input root. The invoking
+   `HOME`'s `.config/agent-director/input` and `.agent-director/input` roots are
+   included even with a custom database. Declare every additional root used
+   by another invoking home or installation; do not infer roots from the DB's
+   directory. Prevent privileged or untracked writers from starting too.
+2. Keep the matching prior release and a stopped-writer copy of the actual
+   DB, its existing `-wal`/`-shm`, and all legacy evidence before upgrading.
+   Preserve provider logs/transcripts outside those roots separately. Do not
+   open the only backup with a newer binary. The journal cutover also creates
+   an exclusive backup before any schema hop; it does not replace copies
+   needed before an old-directory move or config/template rewrite.
+3. Run this release's installer with the original flags plus:
+
+   ```sh
+   bash install.sh --journal-maintenance-window --journal-roots-complete --journal-backup /absolute/new-backup-directory --journal-legacy-root /absolute/additional/input
+   ```
+
+   Omit the last pair when no extra root exists; repeat it for each extra
+   root. The backup directory must not exist and must be outside all input
+   roots. A failed backup stays incomplete: keep it and use a new directory
+   on retry. `COMPLETE` attests to a finished copy. Its `manifest.json` maps
+   `database`, `database-wal`, `database-shm` and numbered `legacy-N` trees to
+   their original paths. Original lock files stay in place and are not copied.
+4. Keep the boundary until the administrator reports `authority: "sqlite"`
+   and the installer verifies the target version. Before commit the legacy
+   records remain authoritative; after commit SQLite remains authoritative
+   even with `retirement_pending: true`. Retained operational files are then
+   evidence, not permission to run an older writer. Logs, transcripts and
+   original launch locks are preserved. Restart only compatible callers.
+
+`ErrJournalMigrationRefused` reports a safe `reason`, process `pid`,
+`starttime`, `role` and required `action` when available. Live or unverifiable
+writers, unreadable process evidence, and unestablished root access refuse.
+Resolve the stated cause while keeping the boundary, then retry administrator
+verification directly:
+
+```sh
+~/.config/agent-director/admin/agent-director-admin --store-path /absolute/actual-state.db migrate-journal --maintenance-window --roots-complete --backup-dir /absolute/new-verification-backup --legacy-root /absolute/additional/input
+```
+
+Use the same invoking `HOME`, actual DB and complete root list as the failed
+run; omit or repeat `--legacy-root` as in step 3. Choose a new exclusive backup
+directory. This retry backup can contain the already-migrated store: retain
+the original pre-upgrade recovery backup separately. Require exit 0 and
+`authority: "sqlite"`; an authority field on an error is not successful
+verification. An already-current store needs no new sentinel. Rerunning the
+installer on it uses ordinary `list` and does not replace this administrator
+verification. If the schema transition is still pending, step 3 supplies its
+authorization.
+
+An uncertain commit may already have switched authority: never reset the
+version or reconstruct replayable journals. Recovery is
+[restore-only](#going-back-to-the-previous-release).
+
+Installer preflight reads a private consistent database/WAL snapshot through
+the candidate administrator; it leaves the original DB, sidecars and directory
+unchanged on a live/unreadable refusal. Candidate platform, architecture and
+version checks precede the first database query. Busy or hot-journal snapshot
+refusals need their cause resolved before retry. The operator-only
+[`snapshot-store` reference](admin-reference.md#snapshot-store) describes the
+private destination; it is not a recovery backup or migration authorization.
 
 ## agent-director was installed outside the caller's switch-over
 
@@ -916,22 +994,30 @@ when it cannot write the crontab back.
 ## Going back to the previous release
 
 For an upgrade within the current `~/.config/agent-director` layout,
-including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15,
-the old-layout steps below do not apply. Before upgrading, stop agents, servers and callers
-and keep a copy of the actual store (`[store] db_path` when set), including its `-wal` and
-`-shm` files.
-To roll back, stop them again, restore that pre-upgrade copy and install the
-previous release with its own `install.sh` and the original install flags.
-Restore the store with its companion files, removing a `-wal` or `-shm`
-that the copy lacks, as in step 4 below. This loses all writes made since
-the backup. The installer does not make this backup; a binary swap cannot
-make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary. There is
-no supported in-place downgrade from v15. The tested v12→v11 family-history
-recipe applies only to a genuine family-only v12 store and cannot operate
-on v13, v14 or v15; see the migration guide's emergency downgrade recipe. No supported
-in-place reverse path crosses v11→v10 or v10→v9. A copy made after migration
-cannot replace the pre-upgrade backup. Without a pre-upgrade copy, stop
-and obtain human help.
+including schema v9→v10 through v15→v16, the old-layout steps below do not
+apply. Before upgrading, stop all writers and keep a copy of the actual store
+(`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input
+evidence. Keep provider logs/transcripts outside those roots too. The journal
+cutover creates a separate stopped-writer backup before schema changes;
+other installer steps do not supply this complete recovery set.
+
+To roll back, maintain the same exclusion, preserve the post-upgrade evidence,
+and restore the matching pre-upgrade DB and input evidence at their original
+paths. Restore the DB with its companion files, removing a `-wal` or `-shm`
+that the copy lacks, as in step 4 below. Keep original launch-lock inodes;
+do not replace or delete them. Install the matching previous release with its
+own `install.sh` and the original flags. Before restarting any older runtime,
+reconcile uncertain attempts against the preserved evidence: restoration loses
+all later writes and can lose proof of input that already reached an agent.
+Never replay an attempt merely because the restored copy lacks its proof.
+
+Schema v16 has no supported in-place downgrade or replayable file-journal
+export. A binary swap or version reset cannot undo the cutover. Schema v15,
+v14 and v13 are also restore-only. The v12→v11 family-history recipe applies
+only to genuine family-only v12 stores; it cannot operate on v13–v16. No
+supported reverse path crosses v11→v10 or v10→v9. A copy made after migration
+cannot replace the pre-upgrade set. Without that set, or while an uncertain
+attempt remains unreconciled, stop and obtain human help.
 
 The numbered procedure below applies only to an upgrade that moved
 `~/.agent-director` to `~/.config/agent-director` and retained a
@@ -975,7 +1061,9 @@ the move.
 4. A store kept outside AD's directory (`[store] db_path`) was migrated in
    place by the upgrade. Put back the copy made before the upgrade: `state.db`
    with its `-wal` and `-shm`, deleting a `-wal` or `-shm` the copy lacks. Skip
-   this when the store was inside the directory.
+   this when the store was inside the directory. Restore any additional
+   legacy input roots from the same stopped-writer copy, preserving original
+   launch locks and keeping post-upgrade evidence for reconciliation.
 5. In `~/.claude/settings.json`, remove only the entries that hold a hook
    command starting with `~/.config/agent-director/bin/agent-director` (written
    out with your home directory). Leave every other entry. Check the result is
@@ -1009,7 +1097,9 @@ the move.
    upgrade: help hooks in the `settings.json` of other `CLAUDE_CONFIG_DIR`
    folders, Codex MCP and help entries, scripts, `$PATH` entries and an MCP
    registration made by hand.
-9. Start the caller's previous version.
+9. Reconcile uncertain input against the preserved post-upgrade evidence
+   before restarting any older runtime; a restored record cannot prove later
+   input was never delivered. Then start the caller's previous version.
 
 Delete the `after-upgrade` and `recreated` directories once the previous
 release is confirmed working; `uninstall.sh --purge` removes them.

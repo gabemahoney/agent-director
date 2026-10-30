@@ -113,10 +113,11 @@ func sendKeysHandlerWith(client *pkgapi.Client, args []string) error {
 	if err != nil {
 		return writeApiErrorAndDispatch("ErrInvalidFlags", err.Error())
 	}
-	if _, err := client.SendKeys(params); err != nil {
+	res, err := client.SendKeys(params)
+	if err != nil {
 		return writeVerbError(err)
 	}
-	return writeJSON(os.Stdout, struct{}{})
+	return writeJSON(os.Stdout, res)
 }
 
 // parseSendKeysFlags carves argv into a SendKeysParams. `--text` may contain

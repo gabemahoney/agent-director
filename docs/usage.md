@@ -759,8 +759,7 @@ your `--as`, `decision_reason` `pane`. `--as`, `--key` and
 `--expect-pane-sha256` are required; pass the same `--n-lines` you read
 with. agent-director never reads the pane: it compares the hash byte for
 byte, and `--as` is stored as your claim. What each refusal means is in the
-[caller contract](caller-contract.md#permission-relay); on a refusal nothing
-is sent.
+[caller contract](caller-contract.md#permission-relay).
 
 If an outside answer has genuinely not been recorded, use
 `record-pane-answer` (it types nothing). An attached Cursor menu choice is

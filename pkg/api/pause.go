@@ -40,9 +40,9 @@ type PauseTmux interface {
 // applied only if the row still has the snapshot Pause examined), the guarded
 // move of a Codex row whose agent is gone and which holds an end report to
 // ended (EndedMover; SR-6.5, SR-7.3) and this store's id, which every label
-// the lookup accepts ends with (SR-3.4). The adoption, hook_gone_at and, on a
-// Codex row only, that move are the only writes pause makes; a Claude row's
-// state is never written by pause. *store.Store satisfies it; tests use the shared killStore fixture, a wrapper over a real
+// the lookup accepts ends with (SR-3.4). Pause also uses its input session to
+// record manual interference under captured admission; it never writes a
+// Claude row's state. *store.Store satisfies it; tests use the shared killStore fixture, a wrapper over a real
 // store that can fail the state read, the requests read or the adoption
 // write.
 type PauseStore interface {
@@ -74,6 +74,7 @@ type PauseStore interface {
 // (SendKeysEnv), so pause's relay guard is evaluated exactly as send-keys'
 // is. The Client builds it from its own readers, clock and configuration.
 type PauseEnv struct {
+	// Input overrides input-writer ownership; nil uses the store-backed native adapter.
 	Input InputDeliveryBackend
 	// Relay judges the Spawn's relay hooks: its start-time reader (which also
 	// judges the lookup's server and an adopted pane, SR-3.3, SR-3.6), its own
@@ -223,10 +224,10 @@ var pauseSleep = time.Sleep
 //     attempt left typed.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// The calls are at most one lookup, one pane listing, the C-u (one call,
-// however many presses), the text call, the Enter call and, only after an
-// action failure other than a timeout, one follow-up lookup (SR-13.2); the
-// wait is not counted. On any error the wait does not start.
+// With an input session, admission rechecks repeat the lookup and pane listing
+// before clear, text and Enter. Each tmux call retains its configured limit;
+// these checks do not establish a single lookup/listing ceiling for Pause.
+// On any error the wait does not start.
 //
 // The wait, once C-u, `/exit` and Enter went through: the row's state is
 // polled at pausePollInterval until it is `ended` (nil) or timeoutSeconds
@@ -247,8 +248,8 @@ var pauseSleep = time.Sleep
 // move is returned as pause's error. A nil start-time reader makes no move.
 // Client.Pause passes pause.timeout_seconds through
 // config.Pause.EffectiveTimeoutSeconds. Pause never writes a Claude row's
-// state; its only store writes there are the adoption and the relay guard's
-// hook_gone_at, and on a Codex row also the move to ended.
+// state. It can write adoption, the relay guard's hook_gone_at and the input
+// session's manual-interference record; a Codex row can also move to ended.
 //
 // Pause is one-shot: it returns when the row reaches `ended`, when the
 // timeout expires, or when ctx is cancelled. There is no incremental
@@ -269,7 +270,7 @@ var pauseSleep = time.Sleep
 // env carries the relay judge (its start-time reader judges the lookup's
 // server, SR-3.3, and an adopted pane, SR-3.6, too) and the intent hold.
 func Pause(ctx context.Context, s PauseStore, t PauseTmux, env PauseEnv, timeoutSeconds int, params PauseParams) (PauseResult, error) {
-	r := &pauseRun{s: s, caller: callerIdentity(), procs: env.Relay.Procs}
+	r := &pauseRun{s: s, ctx: ctx, caller: callerIdentity(), procs: env.Relay.Procs}
 	delivered, err := r.exit(t, env, params)
 	// The tmux phase has decided: write its ad.provenance.disagree records
 	// now, before the wait. Source ad_send_keys, not a pause source: pause
@@ -321,6 +322,7 @@ func launchOf(row Spawn) launchKey { return launchKey{token: row.Identity.Token,
 // adoption write applied, the session concerned, the send and the follow-up
 // lookup) the call keeps for its trail.
 type pauseRun struct {
+	ctx context.Context
 	keysRun
 	s PauseStore
 	// caller is the invoking process's identity, collected once per call
@@ -377,7 +379,12 @@ func (r *pauseRun) endIfGoneInWait(instanceID string) func() (bool, error) {
 // clears the agent's input line before typing (keysRun.clear). It reports
 // whether C-u, `/exit` and Enter went through, so the wait is due; a finished
 // row, and a Codex row the end check moved to ended, are (false, nil). Every refusal before the lookup makes no tmux call.
-func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, error) {
+func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (sent bool, resultErr error) {
+	if r.ctx != nil {
+		if err := r.ctx.Err(); err != nil {
+			return false, err
+		}
+	}
 	row, err := r.s.GetSpawn(params.InstanceID)
 	if err != nil {
 		return false, err
@@ -429,12 +436,16 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 	}
 	var session InputDeliverySession
 	if row.Identity.Token != "" {
-		session, err = openInputDelivery(env.Input, deliveryIdentity(row, r.s.StoreID()))
+		session, err = openInputDelivery(r.ctx, env.Input, r.s, row, r.s.StoreID(), true)
 		if err != nil {
 			return false, fmt.Errorf("pause: exclusive input writer or delivery journal unavailable; no input attempted")
 		}
 		if session != nil {
-			defer session.Close()
+			defer func() {
+				if err := session.Close(); err != nil {
+					resultErr = inputCleanupError(row, r.found, SendKeysResult{}, resultErr, err)
+				}
+			}()
 		}
 	}
 	r.keysRun = newKeysRun(t, env.Relay.Procs, row, r.s.StoreID(), socket, r.s)
@@ -451,7 +462,27 @@ func (r *pauseRun) exit(t PauseTmux, env PauseEnv, params PauseParams) (bool, er
 		return false, err
 	}
 	if session != nil {
-		owned := row
+		if err = r.admitInput(r.ctx, session, r.s, func(current Spawn) error {
+			if current.State != store.StateWaiting {
+				return fmt.Errorf("%w: %s is %s", ErrSpawnNotPausable, current.InstanceID, current.State)
+			}
+			guard, err := relayGuard(r.s, newRelayJudge(env.Relay), env.IntentHold, current, SendKeysParams{}, retryLater)
+			if err != nil {
+				return err
+			}
+			return guard.refusal
+		}); err != nil {
+			return false, err
+		}
+		r.beforeWrite = func() error {
+			if r.ctx != nil {
+				if err := r.ctx.Err(); err != nil {
+					return err
+				}
+			}
+			return r.checkInputTarget(session)
+		}
+		owned := r.row
 		owned.Identity = r.adoption.Identity
 		if err = recordManualDelivery(session, deliveryIdentity(owned, r.s.StoreID())); err != nil {
 			return false, err
@@ -556,12 +587,18 @@ func waitEnded(ctx context.Context, s PauseStore, timeoutSeconds int, instanceID
 //
 // CLI: agent-director pause
 //
-// Input writer or delivery journal failures return ErrInternal before any
-// input is attempted by this pause call.
+// Failure to acquire the input writer or open its delivery journal returns
+// ErrInternal before this call attempts input. After dispatch, an admission or
+// cleanup failure can return ErrSubmissionUnconfirmed with attempted-input
+// facts; cleanup preserves any existing primary error. Follow "Manual input
+// ownership" in docs/caller-contract.md before sending more input.
 //
 // Errors:
 //   - [ErrSpawnNotFound]: no row exists for the instance id.
 //   - [ErrSpawnNotPausable]: the row's state is not waiting.
+//   - [ErrSubmissionUnconfirmed]: an admission or cleanup failure reports
+//     attempted-input facts without proving submission. Inspect those details
+//     and the session before more input; never blindly replay text or Enter.
 //   - [ErrSendKeysWhileRelayed]: relay_mode is on and a relay hook of the
 //     Spawn may still answer its request (its process runs, or cannot be
 //     checked and its request is open before its confirm_by); nothing was
@@ -617,5 +654,5 @@ func (c *Client) Pause(ctx context.Context, params PauseParams) (PauseResult, er
 	// given, 0 included. The relay view and intent hold are send-keys' own
 	// (sendKeysEnv), so pause's relay guard is judged as send-keys' is.
 	env := PauseEnv{Relay: c.relayView(), IntentHold: paneIntentHold(c.cfg.Tmux)}
-	return Pause(ctx, c.st, c.tmuxClient, env, c.cfg.Pause.EffectiveTimeoutSeconds(), params)
+	return Pause(ctx, c.st.WithContext(ctx), c.tmuxClient, env, c.cfg.Pause.EffectiveTimeoutSeconds(), params)
 }

@@ -1,6 +1,7 @@
 package inputdelivery
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -14,14 +15,64 @@ import (
 func evidenceSession(t *testing.T) (*nativeSession, *Attempt) {
 	t.Helper()
 	dir := t.TempDir()
-	s := &nativeSession{dir: dir, manifest: manifest{Agent: "claude", SessionID: uuid.NewString(), CWD: "/work", Version: "2.1.280", Created: time.Now()}}
+	s := &nativeSession{dir: dir, ctx: context.Background(), manifest: manifest{Agent: "claude", SessionID: uuid.NewString(), CWD: "/work", Version: "2.1.280", Created: time.Now()}}
 	s.manifest.Transcript = filepath.Join(dir, "native.jsonl")
 	a, err := NewAttempt(Identity{Agent: "claude", CWD: "/work"}, "hello\n🌍", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.EnterAttempted = true
+	p := &evidencePersistence{attempts: map[string][]byte{}}
+	s.store, s.launch = p, &Launch{EvidenceDir: dir, Revision: 1}
 	return s, a
+}
+
+// evidencePersistence isolates transcript parsing from storage. SQLite ownership,
+// transaction and exact-BLOB coverage lives in store/input_delivery_test.go.
+// Parser-only fixtures must reuse it; it does not qualify provider behavior.
+type evidencePersistence struct {
+	Persistence
+	launch   *Launch
+	attempts map[string][]byte
+}
+
+func (p *evidencePersistence) ReadInputPreparation(_ context.Context, id Identity) (Identity, error) {
+	return id, nil
+}
+func (p *evidencePersistence) CreateInputLaunch(_ context.Context, l Launch) error {
+	p.launch = &l
+	return nil
+}
+func (p *evidencePersistence) ReadInputLaunch(context.Context, string) (*Launch, error) {
+	return p.launch, nil
+}
+func (p *evidencePersistence) CheckInputGuard(context.Context, *Launch, Guard) error { return nil }
+func (p *evidencePersistence) SaveInputAttempt(_ context.Context, l Launch, _ Guard, a *Attempt) (*Launch, *Attempt, error) {
+	data, err := json.Marshal(a)
+	if err != nil {
+		return nil, nil, err
+	}
+	if p.attempts == nil {
+		p.attempts = map[string][]byte{}
+	}
+	p.attempts[a.RequestID] = data
+	l.CurrentRequestID = a.RequestID
+	p.launch = &l
+	return &l, a, nil
+}
+func (p *evidencePersistence) ReadInputAttempt(_ context.Context, _ Launch, id string) (*Attempt, error) {
+	data := p.attempts[id]
+	if data == nil {
+		return nil, nil
+	}
+	var a Attempt
+	if err := json.Unmarshal(data, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+func reopenEvidence(s *nativeSession) *nativeSession {
+	return &nativeSession{dir: s.dir, manifest: s.manifest, ctx: s.ctx, store: s.store, launch: s.launch}
 }
 
 func claudeRecord(t *testing.T, s *nativeSession, text string, change func(map[string]any)) []byte {

@@ -1139,11 +1139,13 @@ proves every request of the row gone together, closed now or before
 (`proven_gone_how` `agent_gone`; see "Hooks that prove a request's dialog
 gone" below).
 
-A closed request stays closed after a `resume`: it no longer holds the
-resumed agent's moves to `working`, is not listed by `get` or `list`,
-refuses no `send-keys`, and `decide` refuses it, never with
+A closed request stays closed after a `resume`: it no longer awaits an
+answer or holds the resumed agent's moves to `working`, and is omitted from
+`get` and `list`'s `permission_requests`. `decide` refuses it, never with
 `ErrRelayFallenBack` (see
 [permissions.md](permissions.md#a-request-of-a-finished-spawn-is-closed)).
+For Cursor's independent dialog hold and `get.unproven_requests`, see
+[The dialog hold](permissions.md#the-dialog-hold).
 
 ### Hooks that prove a request's dialog gone
 

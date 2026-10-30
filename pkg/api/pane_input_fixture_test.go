@@ -43,7 +43,7 @@ func watchPaneInput(e *killEnv, pane string, timeoutsReach bool) *paneInput {
 			in.box = in.box[:strings.LastIndex(in.box, "\n")+1]
 		case c.Call == tmux.CallSendText:
 			in.box += c.Text
-		case c.Call == tmux.CallSendEnter:
+		case recordedCall(c) == callEnterKey:
 			in.submit()
 		default:
 			return

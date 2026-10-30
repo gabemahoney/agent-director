@@ -552,18 +552,24 @@ describe("send-keys", () => {
           ignorePaths: loadIgnorePathsForVerb("send-keys"),
         });
 
-        // Each run: one lookup, one pane listing, then the text and Enter by
-        // pane id, all on the row's socket (SR-7.2, SR-3.7).
+        // Each run retains the initial target and revalidates it before writes.
+        // All reads and both input actions use the row's socket and pane.
         for (const log of [logCli, logClient]) {
           const calls = fakeTmuxCalls(log);
           expect(calls.map((argv) => argv.slice(1, 5))).toEqual([
             ["-u", "-S", socket, "display-message"], // the lookup: its server identity read first (b.47f)
             ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
+            ["-u", "-S", socket, "display-message"],
+            ["-u", "-S", socket, "list-panes"],
             ["-u", "-S", socket, "send-keys"],
           ]);
-          expect(calls[2].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
-          expect(calls[3].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
+          expect(calls[6].slice(4)).toEqual(["send-keys", "-t", paneId, "-l", "--", "hello"]);
+          expect(calls[9].slice(4)).toEqual(["send-keys", "-t", paneId, "Enter"]);
         }
       } finally {
         cleanup();

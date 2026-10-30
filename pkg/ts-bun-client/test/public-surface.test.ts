@@ -109,7 +109,7 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
   // Client class rather than the .d.ts goldens, so it holds independently
   // of golden regeneration: even if someone regenerates the surface goldens
   // after accidentally adding a migrate verb, this test still fails.
-  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate"];
+  const forbidden = ["migrate", "migrateSchema", "runMigration", "schemaMigrate", "migrateJournal", "journalMigrate"];
 
   const seen = new Set<string>();
   for (
@@ -139,8 +139,8 @@ test("public-surface: Client exposes no migrate method (SR-1)", () => {
   ).toBe(true);
 
   // The tracked .d.ts goldens must also stay migration-free (no method, option
-  // or param), the refusal's error class (b.cm7) aside. This part is
-  // golden-derived (informational), but the runtime checks above are the
+  // or param), the refusal's error class (b.cm7) aside.
+  // This part is golden-derived (informational), but the runtime checks above are the
   // load-bearing, regeneration-proof guarantee.
   for (const f of TRACKED) {
     const golden = fs.readFileSync(path.join(fixtureDir, `${f}.golden`), "utf-8");

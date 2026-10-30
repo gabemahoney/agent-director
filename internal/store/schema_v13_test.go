@@ -55,8 +55,10 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			prior := readQuotedRows(t, path, "spawns", "pre", "instance_id", cols)
 			priorRequests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", requestCols)
 			id := assertOneStoreID(t, path)
+			expectInputAuthority(before, id)
+			assertReleasedReentry(t, path, 12, 13)
 			writeSentinel(t, dir, 12, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,14 +79,6 @@ func TestV13MigrationStartupPreservation(t *testing.T) {
 			}
 			if (sp.ClaudeCapacity != nil) != (capacity != nil) || sp.ContextEvidence().CurrentClaudeCapacity() != nil {
 				t.Fatalf("capacity backfill/attribution: %+v", sp.ClaudeCapacity)
-			}
-			for run := 0; run < 2; run++ {
-				if err := migrateV12toV13(s.db); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := runMigrationChain(s.db, 13); err != nil {
-				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
@@ -161,7 +155,7 @@ func TestV13MigrationRefusesIncompatibleStartup(t *testing.T) {
 			seedV11StartupFixture(t, path, definition, value)
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 12, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}
@@ -219,7 +213,7 @@ func TestV13MigrationCommitRollbackAndRetry(t *testing.T) {
 	}
 	assertSentinel(t, dir, true)
 	mustExec(t, db, "PRAGMA journal_mode=WAL")
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +306,7 @@ func TestV13MigrationRefusesIncompatibleCapacity(t *testing.T) {
 			})
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 12, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}

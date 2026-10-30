@@ -2,7 +2,7 @@ package api_test
 
 // readme_timing_values_test.go pins docs/configuration.md's [tmux] example block and
 // timing table, and the listed user-doc and architecture statements of the
-// [tmux] timing defaults, safe minimums and kill and pause worst cases, to
+// [tmux] timing defaults, safe minimums and kill worst cases and pause bounds, to
 // the internal/config constants, and the user docs' per-agent (Claude Code,
 // Codex) minimum statements to each other (Epic 21, decision 6; SR-15.2). Key names come from
 // config.TmuxKey (SR-20.2), never spelt here. -run TestReadmeTimingValues
@@ -50,13 +50,12 @@ func keyCode(k config.TmuxKey) string { return "`" + k.Name() + "`" }
 // worstCases recomputes, at the defaults, SR-13.2's two kill paths, (i)
 // 2Q + 2A + E + 4W and (ii) 3Q + 2A + 5W; kill-finished on this id's own
 // abandoned launch, its follow-up then its wait, 3Q + 2A + E + 5W for one
-// session and 2A + 2W for each more (b.myx); and pause's tmux phase
-// 3Q + 3A + 6W (its line clear, C-u, b.9o4, one action call more than kill's
-// path (ii)).
-func worstCases() (kill1, kill2, abandoned, perSession, pause time.Duration) {
+// session and 2A + 2W for each more (b.myx). Guarded input has no aggregate
+// legacy tmux ceiling; its original admission and per-call bounds apply.
+func worstCases() (kill1, kill2, abandoned, perSession time.Duration) {
 	q, a := tmuxDefault(config.TmuxQueryTimeoutMs), tmuxDefault(config.TmuxActionTimeoutMs)
 	e, w := tmuxDefault(config.TmuxKillExitWaitMs), tmuxDefault(config.TmuxPipeCloseWaitMs)
-	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w, 3*q + 3*a + 6*w
+	return 2*q + 2*a + e + 4*w, 3*q + 2*a + 5*w, 3*q + 2*a + e + 5*w, 2*a + 2*w
 }
 
 // normalised collapses each run of whitespace in text to one space, so a
@@ -106,13 +105,13 @@ func statedNumbers(text string, anchors []string) ([]string, error) {
 }
 
 // docTimingStatements lists the pinned prose statements of the timing
-// defaults, minimums and kill and pause worst cases in the user docs and the
+// defaults, minimums and kill worst cases and pause bounds in the user docs and the
 // architecture doc.
 func docTimingStatements() []docStatement {
 	start, window := config.TmuxStartingSessionSeconds, config.TmuxStoppingWindowSeconds
 	pipe, exitWait := config.TmuxPipeCloseWaitMs, config.TmuxKillExitWaitMs
 	fixed := func(vals ...string) func([]string) []string { return func([]string) []string { return vals } }
-	p1, p2, abandoned, perSession, pause := worstCases()
+	p1, p2, abandoned, perSession := worstCases()
 	arch, conf := mdArchitecture, mdConfiguration
 	return []docStatement{
 		{"architecture Stop semantics: kill exit wait default", arch, stopSemanticsTitle,
@@ -128,8 +127,6 @@ func docTimingStatements() []docStatement {
 			[]string{"at most 3Q + 2A + 5W"}, fixed(docSeconds(p2))},
 		{"architecture Stop semantics: kill-finished on this id's own abandoned launch, one session and each more", arch,
 			stopSemanticsTitle, []string{"3Q + 2A + E + 5W (", "2A + 2W ("}, fixed(docSeconds(abandoned), docSeconds(perSession))},
-		{"architecture Stop semantics: pause's tmux phase", arch, stopSemanticsTitle,
-			[]string{"3Q + 3A + 6W,"}, fixed(docSeconds(pause))},
 		{"architecture Stop semantics: pause wait default", arch, stopSemanticsTitle,
 			[]string{"`pause.timeout_seconds`, default"}, fixed(strconv.Itoa(config.Default().Pause.TimeoutSeconds))},
 		{"architecture caller contract: stopping window and starting-session bound", arch, callerContractClassesTitle,
@@ -156,6 +153,14 @@ func docTimingStatements() []docStatement {
 // recomputed from the internal/config constants.
 func TestReadmeTimingValuesStatements(t *testing.T) {
 	t.Parallel()
+	// Guarded input's added target checks invalidate the old aggregate tmux
+	// formula. Preserve the replacement's per-call and admission bounds.
+	pauseBounds := normalised(sectionBody(t, readMD(t, mdArchitecture), stopSemanticsTitle))
+	for _, want := range []string{"Each tmux operation retains its configured limit", "session admission keeps its original deadline"} {
+		if !strings.Contains(pauseBounds, want) {
+			t.Errorf("pause timing contract lacks %q", want)
+		}
+	}
 	docs := map[string]mdDoc{}
 	for _, s := range docTimingStatements() {
 		t.Run(s.name, func(t *testing.T) {

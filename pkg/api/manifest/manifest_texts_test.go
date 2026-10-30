@@ -66,7 +66,7 @@ func manifestTextCases() []textCase {
 		{verb: "find-missing", field: "ids", c: tokens("Codex row moved to ended not listed",
 			"so is a Codex row the sweep moved to `ended` (its agent process gone and an end report held)")},
 		{verb: "pause", c: tokens("Codex end report ends the row",
-			"Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait).")},
+			"Codex: end report + exited agent ends row before keys or in wait.")},
 		{verb: "kill", c: apitest.DescKillManifest()},
 		{verb: "spawn", c: apitest.DescSpawnLaunchTimeoutRule()},
 		{verb: "spawn", c: apitest.DescSpawnScanRefusal()},

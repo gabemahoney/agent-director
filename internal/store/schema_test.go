@@ -221,7 +221,7 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			writeSentinel(t, dir, from, schemaVersion)
 			mark := TrailMark(t)
 
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatalf("Open(authorized v%d): %v", from, err)
 			}
@@ -261,8 +261,10 @@ func TestAuthorizedMigrationFromEveryVersion(t *testing.T) {
 			assertV8Defaults(t, path, "pre")
 			assertV9Defaults(t, path, "pre")
 			assertV15Defaults(t, path, "pre")
-			if raw := assertOneStoreID(t, path); raw != id {
-				t.Errorf("StoreID() = %q; raw store_id = %q", id, raw)
+			meta, present := readStoreMeta(t, path)
+			wantMeta := []storeMetaRow{{inputAuthorityKey, inputAuthorityVersion + id, "text"}, {"store_id", id, "text"}}
+			if !present || !wellFormedID.MatchString(id) || !reflect.DeepEqual(meta, wantMeta) {
+				t.Errorf("store metadata = %+v; want exact identity and authority %+v", meta, wantMeta)
 			}
 
 			for _, stale := range []bool{false, true} {
@@ -373,7 +375,7 @@ func TestGateRefusesBadSentinel(t *testing.T) {
 				}
 				// Correct the administrator's evidence and retry the same opener.
 				writeSentinel(t, dir, from, schemaVersion)
-				s, err := Open(path)
+				s, err := openMigrationTestStore(t, path)
 				if err != nil {
 					t.Fatalf("Open after corrected authorization: %v", err)
 				}
@@ -616,7 +618,7 @@ func TestMigrationRollback(t *testing.T) {
 			tc.breakIt(t, path)
 			before := dbDump(t, path)
 			writeSentinel(t, dir, tc.from, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err == nil {
 				_ = s.Close()
 				t.Fatal("Open succeeded; want a migration failure")
@@ -648,7 +650,7 @@ func TestConsumeDeleteFailure_LoudButOpenSucceeds(t *testing.T) {
 	path := makeVersionedDB(t, dir, 1)
 	writeSentinel(t, dir, 1, schemaVersion)
 	withRaw(t, path, func(db *sql.DB) {
-		if err := runMigrationChain(db, 1); err != nil {
+		if err := runMigrationChainWithInputWindow(db, 1, migrationTestWindow(t, path)); err != nil {
 			t.Fatalf("runMigrationChain: %v", err)
 		}
 	})

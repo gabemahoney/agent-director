@@ -368,6 +368,10 @@ const (
 	// WriteFailDisplayObservation fails the final report write after request
 	// clocks are written.
 	WriteFailDisplayObservation = writefailfix.DisplayObservation
+	WriteFailInputAttemptInsert = writefailfix.InputAttemptInsert
+	WriteFailInputTextIntent    = writefailfix.InputTextIntent
+	WriteFailInputCurrent       = writefailfix.InputCurrent
+	WriteFailInputAuthority     = writefailfix.InputAuthority
 )
 
 // InjectWriteFailure makes one kind of write to instanceID's rows fail with a
@@ -376,8 +380,11 @@ const (
 // connection to dbPath (the temp store file the test already holds) it
 // installs writefailfix's trigger for kind, scoped to instanceID, so other
 // rows, other ids and cleanup are unaffected; the test's cleanup removes it.
-// Seed the row first: several kinds also match seeding writes.
-func InjectWriteFailure(t *testing.T, dbPath string, kind WriteFailureKind, instanceID string) {
+// Seed the row first: several kinds also match seeding writes. InputAuthority
+// targets the metadata key "native_input_authority", and works on legacy DBs
+// without opening a Store or migrating. The returned remove function lifts the
+// failure early for retry assertions; calling it also makes t.Cleanup a no-op.
+func InjectWriteFailure(t *testing.T, dbPath string, kind WriteFailureKind, instanceID string) func() {
 	t.Helper()
 	raw := openRawStore(t, dbPath, "InjectWriteFailure")
 	h, err := writefailfix.Install(raw, kind, instanceID)
@@ -385,13 +392,21 @@ func InjectWriteFailure(t *testing.T, dbPath string, kind WriteFailureKind, inst
 	if err != nil {
 		t.Fatalf("storefix.InjectWriteFailure(%v, %q): %v", kind, instanceID, err)
 	}
-	t.Cleanup(func() {
+	removed := false
+	remove := func() {
+		if removed {
+			return
+		}
 		raw := openRawStore(t, dbPath, "InjectWriteFailure cleanup")
 		defer func() { _ = raw.Close() }()
 		if err := h.Remove(raw); err != nil {
 			t.Errorf("storefix.InjectWriteFailure cleanup (%v, %q): %v", kind, instanceID, err)
+			return
 		}
-	})
+		removed = true
+	}
+	t.Cleanup(remove)
+	return remove
 }
 
 // openRawStore opens a second raw connection to an existing store file,

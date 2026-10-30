@@ -141,7 +141,11 @@ func TestCursorPaneControlsPublicMixedQueueRetirement(t *testing.T) {
 					if row.State != store.StateWaiting {
 						return false
 					}
-					return tc.control != "/new" || row.SessionID != before.SessionID
+					if tc.control == "interrupt" {
+						pane, err := f.API.ReadPane(api.ReadPaneParams{InstanceID: id, NLines: 200})
+						return err == nil && strings.Contains(pane.Pane, "Cursor input cancelled; submit a new prompt to continue")
+					}
+					return row.SessionID != before.SessionID
 				}, diag)
 				c.must("pause", map[string]any{"instance_id": id})
 			}

@@ -202,7 +202,7 @@ check-sandbox-bypass:
 
 # Build the Docker test harness image. Always rebuilds the binary first so
 # the image picks up the latest source.
-test-image: build
+test-image: build ts-helper
 	docker build \
 		--build-arg CLAUDE_CODE_VERSION=$(CLAUDE_CODE_VERSION) \
 		-t $(TEST_IMAGE) \

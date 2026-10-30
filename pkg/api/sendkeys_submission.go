@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -11,10 +12,15 @@ import (
 
 // Exported aliases allow native evidence and durable storage to be injected.
 type InputDeliveryBackend = inputdelivery.Backend
+// InputDeliverySession owns a launch's writer lock, durable attempts and evidence reads.
 type InputDeliverySession = inputdelivery.Session
+// InputDeliveryIdentity binds delivery to one store, launch and process.
 type InputDeliveryIdentity = inputdelivery.Identity
+// InputDeliveryAttempt retains intent and proof for observation, never replay.
 type InputDeliveryAttempt = inputdelivery.Attempt
+// InputDeliveryWatermark records the transcript boundary captured before input.
 type InputDeliveryWatermark = inputdelivery.Watermark
+// InputDeliveryProof retains an exact native record and its provenance.
 type InputDeliveryProof = inputdelivery.Proof
 
 const (
@@ -28,15 +34,47 @@ const (
 
 // Default pane input needs no feature state until a native launch or attempt
 // exists. Explicit backends own their provisioning contract.
-func openInputDelivery(backend InputDeliveryBackend, id InputDeliveryIdentity) (InputDeliverySession, error) {
-	if backend == nil {
-		return (inputdelivery.Native{}).OpenExisting(id)
+func openInputDelivery(ctx context.Context, backend InputDeliveryBackend, storage any, row Spawn, storeID string, manual bool) (InputDeliverySession, error) {
+	id := deliveryIdentity(row, storeID)
+	if backend != nil {
+		return backend.Open(id)
 	}
-	return backend.Open(id)
+	persistence, ok := storage.(inputdelivery.Persistence)
+	if !ok {
+		return nil, fmt.Errorf("native input persistence is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return (inputdelivery.Native{Store: persistence, Context: ctx, Guard: deliveryGuard(row, storeID, manual)}).OpenExisting(id)
+}
+
+func deliveryGuard(row Spawn, storeID string, manual bool) inputdelivery.Guard {
+	return inputdelivery.Guard{Identity: deliveryIdentity(row, storeID), PermissionEpoch: row.PermissionEpoch, RowVersion: row.RowVersion, SessionID: row.SessionID, State: row.State, Manual: manual}
+}
+
+func bindInput(session InputDeliverySession, id inputdelivery.Identity, adopted bool) error {
+	if b, ok := session.(interface {
+		BindIdentity(inputdelivery.Identity, bool) error
+	}); ok {
+		return b.BindIdentity(id, adopted)
+	}
+	return nil
+}
+func checkInput(session InputDeliverySession) error {
+	if b, ok := session.(interface{ Check() error }); ok {
+		return b.Check()
+	}
+	return nil
+}
+func limitInput(session InputDeliverySession, end time.Time) {
+	if b, ok := session.(interface{ LimitTo(time.Time) }); ok {
+		b.LimitTo(end)
+	}
 }
 
 func deliveryIdentity(row Spawn, storeID string) inputdelivery.Identity {
-	return inputdelivery.Identity{StoreID: storeID, Token: row.Identity.Token, InstanceID: row.InstanceID, Socket: row.Identity.Socket, PaneID: row.Identity.PaneID, PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime, Agent: row.Agent, CWD: row.CWD}
+	return inputdelivery.Identity{StoreID: storeID, Token: row.Identity.Token, InstanceID: row.InstanceID, Socket: row.Identity.Socket, PaneID: row.Identity.PaneID, PID: row.Identity.PanePID, Starttime: row.Identity.PaneStarttime, Agent: row.Agent, CWD: row.CWD, LifeNumber: row.LifeNumber}
 }
 
 // Adapters may opt out when no native contract exists for this launch. Older
@@ -54,22 +92,33 @@ func deliveryNotStarted(row Spawn, reason string) error {
 	return deliveryError(row, nil, "not_started", reason)
 }
 
-func deliveryError(row Spawn, a *inputdelivery.Attempt, outcome, reason string) error {
+func submissionDetails(row Spawn, a *inputdelivery.Attempt, outcome, reason string) SubmissionUnconfirmedDetails {
 	d := SubmissionUnconfirmedDetails{Outcome: outcome, Phase: "pre_input", RowState: row.State, Reason: reason}
 	if a != nil {
 		d.RequestID, d.Phase, d.BytesAttempted, d.EnterMayHaveBeenSent, d.LastQueue = a.RequestID, a.Phase, a.BytesAttempted, a.EnterAttempted, a.LastQueue
 		d.KeysSent = a.BytesAttempted > 0 || a.EnterAttempted
 	}
+	return d
+}
+
+func deliveryError(row Spawn, a *inputdelivery.Attempt, outcome, reason string) error {
 	guidance := "unconfirmed input may still submit later; do not automatically replay text or Enter"
 	if outcome == "not_started" {
 		guidance = "no input was attempted by this request"
 	}
-	return &DetailedError{Err: fmt.Errorf("%w: send-keys: %s: %s (%s); %s", ErrSubmissionUnconfirmed, row.InstanceID, outcome, reason, guidance), Details: d}
+	return &DetailedError{Err: fmt.Errorf("%w: send-keys: %s: %s (%s); %s", ErrSubmissionUnconfirmed, row.InstanceID, outcome, reason, guidance), Details: submissionDetails(row, a, outcome, reason)}
 }
 
 func (r *sendKeysRun) sleepInput(d time.Duration) {
 	if r.env.Sleep != nil {
 		r.env.Sleep(d)
+	} else if r.env.Context != nil {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-t.C:
+		case <-r.env.Context.Done():
+		}
 	} else {
 		time.Sleep(d)
 	}
@@ -161,6 +210,8 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 	if err := r.waitInputReady(id, paneID, params); err != nil {
 		return deliveryNotStarted(row, err.Error())
 	}
+	deadline := r.j.now().Add(inputDeliveryTimeout)
+	limitInput(r.input, deadline)
 	marks, err := r.input.Watermark(id)
 	if err != nil {
 		return deliveryNotStarted(row, "transcript watermark unavailable")
@@ -172,6 +223,16 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 	a.NativeSessionID = row.SessionID
 	if params.DeliveryRequestID != "" {
 		a.RequestID = params.DeliveryRequestID
+		previous, err := r.input.LoadRequest(a.RequestID)
+		if err != nil {
+			return deliveryNotStarted(row, "request history cannot be read before input")
+		}
+		if previous != nil {
+			// Preserve the observed revision when asking the store to restart a
+			// confirmed not_started request. Its guarded transition still rejects
+			// any unresolved intent, different identity or superseded owner.
+			a.Revision = previous.Revision
+		}
 	}
 	if err = r.input.Save(a); err != nil {
 		return deliveryNotStarted(row, "cannot persist attempt before input")
@@ -180,11 +241,10 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 	if err != nil {
 		return deliveryNotStarted(row, err.Error())
 	}
-	deadline := r.j.now().Add(inputDeliveryTimeout)
 	if err = r.writeOrdinaryChunks(a, parts, paneID, params, deadline); err != nil {
 		return err
 	}
-	if err = r.revalidateInput(id, paneID, params); err != nil {
+	if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
 		return r.stopDelivery(a, err.Error())
 	}
 	if !r.j.now().Before(deadline) {
@@ -193,6 +253,12 @@ func (r *sendKeysRun) beginOrdinary(id inputdelivery.Identity, paneID, text stri
 	a.EnterAttempted, a.Phase = true, "enter_attempted"
 	if err = r.input.Save(a); err != nil {
 		return r.stopDelivery(a, "cannot persist Enter intent")
+	}
+	if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
+		return r.stopDelivery(a, err.Error())
+	}
+	if !r.j.now().Before(deadline) {
+		return r.stopDelivery(a, "input deadline exhausted after Enter intent commit")
 	}
 	// Exactly one Enter; neither transport errors nor missing proof retry it.
 	if err = r.t.SendKeyPane(r.socket, paneID, "Enter"); err != nil {
@@ -208,7 +274,7 @@ func (r *sendKeysRun) writeOrdinaryChunks(a *inputdelivery.Attempt, parts []stri
 		if !r.j.now().Before(deadline) {
 			return r.stopDelivery(a, "overall input deadline exhausted")
 		}
-		if err = r.revalidateInput(id, paneID, params); err != nil {
+		if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
 			return r.stopDelivery(a, err.Error())
 		}
 		if !r.j.now().Before(deadline) {
@@ -218,6 +284,12 @@ func (r *sendKeysRun) writeOrdinaryChunks(a *inputdelivery.Attempt, parts []stri
 		a.BytesAttempted += len(part)
 		if err = r.input.Save(a); err != nil {
 			return r.stopDelivery(a, "cannot persist text intent")
+		}
+		if err = r.revalidateInput(id, paneID, params, deadline); err != nil {
+			return r.stopDelivery(a, err.Error())
+		}
+		if !r.j.now().Before(deadline) {
+			return r.stopDelivery(a, "input deadline exhausted after text intent commit")
 		}
 		r.found.Sent = true
 		if err = r.t.SendKeysPane(r.socket, paneID, part, false); err != nil {
@@ -251,8 +323,37 @@ func (r *sendKeysRun) stopDelivery(a *inputdelivery.Attempt, reason string) erro
 	return deliveryError(r.row, a, unresolvedOutcome(a), reason)
 }
 
-func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, params SendKeysParams) error {
-	row, err := r.s.GetSpawnWithin(id.InstanceID, time.Second)
+func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, params SendKeysParams, end time.Time) error {
+	ctx := r.env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !r.j.now().Before(end) {
+		return fmt.Errorf("input validation deadline exhausted")
+	}
+	ctx, cancel := context.WithDeadline(ctx, end)
+	defer cancel()
+	s := r.s
+	// Preserve decorators around the scoped store, as the decide path does.
+	// All row/relay reads and writes share the phase's original deadline.
+	if contextual, ok := s.(interface {
+		WithSendKeysContext(context.Context) SendKeysStore
+	}); ok {
+		s = contextual.WithSendKeysContext(ctx)
+	} else if concrete, ok := s.(*store.Store); ok {
+		s = concrete.WithContext(ctx)
+	}
+	if err := checkInput(r.input); err != nil {
+		return fmt.Errorf("captured input authority is stale or unavailable")
+	}
+	remaining := end.Sub(r.j.now())
+	if remaining <= 0 {
+		return fmt.Errorf("input validation deadline exhausted")
+	}
+	row, err := s.GetSpawnWithin(id.InstanceID, min(time.Second, remaining))
 	if err != nil {
 		return fmt.Errorf("launch cannot be reread")
 	}
@@ -279,20 +380,26 @@ func (r *sendKeysRun) revalidateInput(id inputdelivery.Identity, paneID string, 
 	if _, ok := agentPane(panes, paneID, id.PID); !ok {
 		return fmt.Errorf("owned pane changed")
 	}
-	guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, row, params)
+	if !r.j.now().Before(end) {
+		return fmt.Errorf("input validation deadline exhausted")
+	}
+	guard, err := evaluateRelayGuard(s, r.j, r.env.IntentHold, row, params)
 	if err != nil || guard.refusal != nil {
 		return fmt.Errorf("permission or dialog guard no longer permits ordinary input")
 	}
-	return nil
+	// tmux and relay reads can wait too. Do not spend a newer row/epoch after
+	// the check at entry merely because those resources became available.
+	return checkInput(r.input)
 }
 
 func (r *sendKeysRun) waitInputReady(id inputdelivery.Identity, paneID string, params SendKeysParams) error {
 	end := r.j.now().Add(inputReadyTimeout)
+	limitInput(r.input, end)
 	for n := 0; n <= int(inputReadyTimeout/submissionPollInterval); n++ {
 		if !r.j.now().Before(end) {
 			break
 		}
-		if err := r.revalidateInput(id, paneID, params); err != nil {
+		if err := r.revalidateInput(id, paneID, params, end); err != nil {
 			return err
 		}
 		ready, err := r.input.Ready(id)
@@ -319,12 +426,13 @@ func (r *sendKeysRun) waitInputReady(id inputdelivery.Identity, paneID string, p
 
 func (r *sendKeysRun) drainInput(a *inputdelivery.Attempt, paneID string, params SendKeysParams, overall time.Time) error {
 	end := minTime(r.j.now().Add(inputDrainTimeout), overall)
+	limitInput(r.input, end)
 	var zeroAt time.Time
 	for n := 0; n <= int(inputDrainTimeout/inputDrainInterval); n++ {
 		if !r.j.now().Before(end) {
 			break
 		}
-		if err := r.revalidateInput(a.Identity, paneID, params); err != nil {
+		if err := r.revalidateInput(a.Identity, paneID, params, end); err != nil {
 			return err
 		}
 		sampleAt := r.j.now()
@@ -340,13 +448,16 @@ func (r *sendKeysRun) drainInput(a *inputdelivery.Attempt, paneID string, params
 			// Bound the gap from the first completed sample to the next call's
 			// start; time spent inside Queue cannot supply the spacing itself.
 			if !zeroAt.IsZero() && sampleAt.Sub(zeroAt) >= inputDrainInterval {
+				// Resume only the original writing budget after a successful
+				// drain. A failed drain keeps its deadline for error recording.
+				limitInput(r.input, overall)
 				return nil
 			}
 			zeroAt = r.j.now()
 		} else {
 			zeroAt = time.Time{}
 		}
-		r.sleepInput(inputDrainInterval)
+		r.sleepInput(min(inputDrainInterval, max(end.Sub(r.j.now()), 0)))
 	}
 	return fmt.Errorf("terminal queue did not drain within its bounded deadline")
 }
@@ -360,6 +471,7 @@ func minTime(a, b time.Time) time.Time {
 
 func (r *sendKeysRun) observeSubmission(a *inputdelivery.Attempt) error {
 	end := r.j.now().Add(submissionConfirmTimeout)
+	limitInput(r.input, end)
 	for n := 0; n <= int(submissionConfirmTimeout/submissionPollInterval); n++ {
 		if !r.j.now().Before(end) {
 			break
@@ -399,13 +511,18 @@ func confirmedDelivery(a *inputdelivery.Attempt) SendKeysResult {
 }
 
 func (r *sendKeysRun) recordManualInput() error {
-	if err := recordManualDelivery(r.input, deliveryIdentity(r.row, r.s.StoreID())); err != nil {
+	owned := r.row
+	owned.Identity = r.adoption.Identity
+	if err := recordManualDelivery(r.input, deliveryIdentity(owned, r.s.StoreID())); err != nil {
 		return deliveryNotStarted(r.row, err.Error())
 	}
 	return nil
 }
 
 func recordManualDelivery(session inputdelivery.Session, id inputdelivery.Identity) error {
+	if b, ok := session.(interface{ Manual() }); ok {
+		b.Manual()
+	}
 	old, err := session.Load()
 	if err != nil {
 		return fmt.Errorf("delivery journal cannot be read")

@@ -29,5 +29,6 @@ func TestCLIPauseTimeoutInspectionRequired(t *testing.T) {
 	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil || !reflect.DeepEqual(envelope.Details, want) {
 		t.Fatalf("pause envelope = %s (%v); want err_details %v", stderr, err, want)
 	}
-	assertInvocationKinds(t, home, "list-sessions", "list-panes", "send-keys", "send-keys", "send-keys")
+	assertInvocationKinds(t, home, "list-sessions", "list-panes", "list-sessions", "list-panes", "send-keys",
+		"list-sessions", "list-panes", "send-keys", "list-sessions", "list-panes", "send-keys")
 }

@@ -97,7 +97,7 @@ func TestPaneAnswerClosedWhileItsKeyGoesOut(t *testing.T) {
 			if run.err != nil {
 				t.Fatalf("pane answer: %v; want success, the key was sent", run.err)
 			}
-			assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+			assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 			if pr := p.request(t, tok); pr.PaneAnswer != tc.paneAnswer || pr.Decision != tc.decision || pr.DecisionReason != tc.reason ||
 				pr.Closed() != tc.closed {
 				t.Errorf("request A = %+v; want pane_answer %s, %s (%s), closed %v: the close's, not sent's", pr, tc.paneAnswer,
@@ -171,7 +171,7 @@ func TestPaneAnswerReleaseIsBounded(t *testing.T) {
 			run := p.sendKeysRun(p.answer(tok, "allow", "1"))
 
 			assertOneName(t, run.err, "")
-			assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+			assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 			adviceAssertPhrase(t, run.err, "the key was sent (err_details.key_sent), but recording it failed")
 			if d := api.ErrDetails(run.err); d != (api.PaneKeySentDetails{KeySent: true, RequestToken: tok}) ||
 				jsonOf(t, d) != `{"key_sent":true,"request_token":"`+tok+`"}` {

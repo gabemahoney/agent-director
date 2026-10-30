@@ -14,7 +14,7 @@ import (
 )
 
 // TestSendKeysCLIDeliversByPaneID: send-keys' --text, --allow-pending,
-// --no-enter and --key reach the verb: after one lookup and one pane listing,
+// --no-enter and --key reach the verb: after target lookups before each write,
 // a live row, and a pending row with --allow-pending, get the text and Enter
 // in the agent's pane by id; --text "" presses Enter only (b.9o4); --no-enter
 // types the text alone; --key sends that one key alone, a named key by name
@@ -47,19 +47,33 @@ func TestSendKeysCLIDeliversByPaneID(t *testing.T) {
 				t.Fatalf("send-keys exit = %d, stdout = %q, stderr = %q; want 0, {} and empty", code, stdout, stderr)
 			}
 			target := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID}
-			var invs [][]string
-			for _, argv := range fakeTmuxInvocations(t, home) {
-				if !slices.Equal(argv, append(slices.Clone(target), typed("")...)) { // an empty text call, if made, types ""
-					invs = append(invs, argv)
+			kinds := []string{"list-sessions", "list-panes", "list-sessions", "list-panes"}
+			if !slices.Contains(tc.args, "--key") {
+				kinds = append(kinds, "list-sessions", "list-panes")
+				if slices.Equal(tc.sends[len(tc.sends)-1], enter) {
+					if len(tc.sends) > 1 {
+						kinds = append(kinds, "send-keys")
+					}
+					kinds = append(kinds, "list-sessions", "list-panes")
+				}
+			}
+			kinds = append(kinds, "send-keys")
+			invs := assertInvocationKinds(t, home, kinds...)
+			var sends [][]string
+			for _, argv := range invs {
+				if len(argv) < 3 || !slices.Equal(argv[:3], []string{"-u", "-S", socket}) {
+					t.Fatalf("invocation = %q; want the row's socket %q", argv, socket)
+				}
+				if slices.Contains(argv, "send-keys") {
+					sends = append(sends, argv)
 				}
 			}
 			var want [][]string
-			for _, s := range tc.sends {
-				want = append(want, append(slices.Clone(target), s...))
+			for _, send := range tc.sends {
+				want = append(want, append(slices.Clone(target), send...))
 			}
-			if len(invs) != 2+len(want) || !slices.Contains(invs[0], "list-sessions") || !slices.Contains(invs[1], "list-panes") ||
-				!slices.EqualFunc(invs[2:], want, slices.Equal) {
-				t.Errorf("fake-tmux invocations = %q; want the lookup, the pane listing and %q", invs, want)
+			if !slices.EqualFunc(sends, want, slices.Equal) {
+				t.Errorf("input calls = %q; want exactly %q", sends, want)
 			}
 			allowPending := slices.Contains(tc.args, "--allow-pending")
 			sk := eventsOf(readTrailLines(t, home), "ad.send_keys.called")
@@ -106,9 +120,17 @@ func TestSendKeysCLIPaneAnswer(t *testing.T) {
 
 			invs := fakeTmuxInvocations(t, home)[mark:]
 			key := []string{"-u", "-S", socket, "send-keys", "-t", apitest.TestPaneID, "-l", "--", "1"}
-			if len(invs) != 4 || !slices.Contains(invs[0], "list-sessions") || !slices.Contains(invs[1], "list-panes") ||
-				!slices.Contains(invs[2], "capture-pane") || !slices.Equal(invs[3], key) {
-				t.Errorf("fake-tmux invocations = %q; want the lookup, the pane listing, the capture and %q alone", invs, key)
+			kinds := []string{"list-sessions", "list-panes", "capture-pane", "list-sessions", "list-panes", "capture-pane", "send-keys"}
+			if len(invs) != len(kinds) {
+				t.Fatalf("fake-tmux invocations = %q; want %v", invs, kinds)
+			}
+			for i, kind := range kinds {
+				if !slices.Contains(invs[i], kind) || len(invs[i]) < 3 || !slices.Equal(invs[i][:3], []string{"-u", "-S", socket}) {
+					t.Errorf("invocation %d = %q; want %s on socket %q", i, invs[i], kind, socket)
+				}
+			}
+			if !slices.Equal(invs[len(invs)-1], key) {
+				t.Errorf("input call = %q; want %q alone", invs[len(invs)-1], key)
 			}
 			if !failSent {
 				if code != 0 || stderr != "" || stdout != "{}\n" {

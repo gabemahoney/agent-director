@@ -16,7 +16,7 @@ import (
 //     through.
 //   - sendKeysActionTextSent: the text may have been typed with no submit
 //     known to have gone through: the text call timed out, or it went through
-//     and the Enter call then failed or timed out.
+//     and Enter or the admission check before it then failed.
 //   - sendKeysActionNothingSent: no text call was made (after a failed line
 //     clear of pause's too: C-u types no text), or the text call failed
 //     other than by timing out.
@@ -26,18 +26,17 @@ const (
 	sendKeysActionNothingSent = "nothing_sent"
 )
 
-// sendKeysAction is the call's action value from whether SendKeysPane was
-// called (sent; a failed line clear before it leaves sent false) and its
-// error (sendErr).
-func sendKeysAction(sent bool, sendErr error) string {
-	if !sent {
+// sendKeysAction retains successful text even when the separate Enter or
+// intervening admission failed. Error call labels alone cannot establish it.
+func sendKeysAction(f keysFacts) string {
+	if !f.Sent {
 		return sendKeysActionNothingSent
 	}
-	if sendErr == nil {
+	if f.SendErr == nil {
 		return sendKeysActionKeysSent
 	}
 	var ce *tmux.CallError
-	if errors.As(sendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {
+	if f.TextSent || errors.As(f.SendErr, &ce) && (ce.Failure == tmux.FailTimeout || enterFailedAfterText(ce)) {
 		return sendKeysActionTextSent
 	}
 	return sendKeysActionNothingSent

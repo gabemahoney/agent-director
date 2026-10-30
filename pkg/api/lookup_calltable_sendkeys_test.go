@@ -33,7 +33,7 @@ func sendKeysCallTableInvoke(allowPending bool) func(*testing.T, *killEnv, killR
 		if typed {
 			pane := labelledPane(t, r.Session, r.Session.Label.Token)
 			assertTextSent(t, e.rec, r.Socket, pane, callTableKeys)
-			for _, c := range e.rec.SocketCallsOf(tmux.CallSendEnter) {
+			for _, c := range e.rec.SocketCallsOf(callEnterKey) {
 				if c.Socket != r.Socket || c.Target != pane {
 					t.Errorf("Enter to %q on %s; want %q on %s", c.Target, c.Socket, pane, r.Socket)
 				}
@@ -85,7 +85,7 @@ func callTableSendKeys() callTableVerb {
 		name:        "send-keys",
 		invoke:      sendKeysCallTableInvoke(false),
 		firstAction: tmux.CallSendText,
-		actions:     []tmux.Call{tmux.CallSendText, tmux.CallSendEnter},
+		actions:     []tmux.Call{tmux.CallSendText, callEnterKey},
 		cells:       cells,
 	}
 }

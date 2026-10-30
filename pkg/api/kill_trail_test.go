@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -571,7 +572,9 @@ func TestTrailFailOpenChild(t *testing.T) {
 		t.Skip("run only as TestTrailFailOpen's child")
 	}
 	adDir := adConfigDir(apiTrailDir)
-	if err := os.MkdirAll(adDir, 0o700); err != nil {
+	// Keep the existing input-lock subtree writable while refusing creation
+	// of the trail file in its parent; the fault concerns only trail output.
+	if err := os.MkdirAll(filepath.Join(adDir, "input"), 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.Chmod(adDir, 0o500); err != nil {

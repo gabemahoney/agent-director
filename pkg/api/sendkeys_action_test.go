@@ -28,9 +28,9 @@ type keysAction struct {
 func (v paneVerb) actions() []keysAction {
 	if v.verb == apitest.PanePause {
 		return []keysAction{{tmux.CallSendKey, pauseClearCalls}, {tmux.CallSendText, pauseTextCalls},
-			{tmux.CallSendEnter, pauseSendCalls}}
+			{callEnterKey, pauseSendCalls}}
 	}
-	return []keysAction{{tmux.CallSendText, paneTextCalls}, {tmux.CallSendEnter, paneSendCalls}}
+	return []keysAction{{tmux.CallSendText, paneTextCalls}, {callEnterKey, paneSendCalls}}
 }
 
 // assertTyped fails unless v's keys reached r's agent pane up to action, the
@@ -42,14 +42,14 @@ func (v paneVerb) assertTyped(t *testing.T, e *killEnv, r killRow, action tmux.C
 	if v.verb == apitest.PanePause {
 		e.assertLineClearedTimes(t, r.Socket, pane, clearPresses(r))
 		if action == tmux.CallSendKey {
-			e.assertNoCalls(t, tmux.CallSendText, tmux.CallSendEnter)
+			e.assertNoCalls(t, tmux.CallSendText, callEnterKey)
 			return
 		}
 		text = exitText
 	}
 	assertTextSent(t, e.rec, r.Socket, pane, text)
-	enters := e.rec.SocketCallsOf(tmux.CallSendEnter)
-	if want := action == tmux.CallSendEnter; want != (len(enters) == 1) || len(enters) > 1 || (want && enters[0].Target != pane) {
+	enters := e.rec.SocketCallsOf(callEnterKey)
+	if want := action == callEnterKey; want != (len(enters) == 1) || len(enters) > 1 || (want && enters[0].Target != pane) {
 		t.Errorf("Enter calls = %+v; want one to %s: %v", enters, pane, want)
 	}
 }
@@ -131,10 +131,10 @@ func skaFollowUpLookup(s tmuxfix.Script) func(*testing.T, *killEnv, killRow, tmu
 func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 	t.Parallel()
 	gone := func(v apitest.PaneVerb, r killRow, action tmux.Call) apitest.DescCase {
-		return apitest.DescPaneGone(apitest.PaneGone{Verb: v, InstanceID: r.ID, Name: r.Name, FailedCall: action})
+		return apitest.DescPaneGone(apitest.PaneGone{Verb: v, InstanceID: r.ID, Name: r.Name, FailedCall: transportCall(action)})
 	}
 	unresponsive := func(_ apitest.PaneVerb, _ killRow, action tmux.Call) apitest.DescCase {
-		return apitest.DescUnrecognisedReply(action, "")
+		return apitest.DescUnrecognisedReply(transportCall(action), "")
 	}
 	noServer := tmuxfix.Script{Failure: tmux.FailNoServer}
 	exited := callTableFirstLine()
@@ -159,7 +159,7 @@ func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 		{"ours after a reply that reads like a server exit",
 			tmuxfix.Script{Failure: tmux.FailUnrecognized, FirstLine: exited, ExitStatus: 1}, nil, "ErrTmuxUnresponsive",
 			func(_ apitest.PaneVerb, _ killRow, action tmux.Call) apitest.DescCase {
-				return apitest.DescUnrecognisedReply(action, exited)
+				return apitest.DescUnrecognisedReply(transportCall(action), exited)
 			}},
 		{"unreadable, timeout", noServer, skaFollowUpLookup(tmuxfix.Script{Failure: tmux.FailTimeout}),
 			"ErrTmuxUnresponsive", unresponsive},
@@ -203,7 +203,7 @@ func TestKeysVerbsActionFailureFollowUp(t *testing.T) {
 						_, err := v.run(t, e, r)
 
 						desc := tc.desc(v.verb, r, a.call).AfterTextFailed()
-						if a.call == tmux.CallSendEnter {
+						if a.call == callEnterKey {
 							desc = tc.desc(v.verb, r, a.call).AfterEnterFailed(v.verb)
 						}
 						assertKeysFailed(t, e, v, r, before, err, tc.errName, desc, a.call, withFollowUp(a.calls))

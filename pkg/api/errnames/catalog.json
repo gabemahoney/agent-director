@@ -290,6 +290,11 @@
     "description": ""
   },
   {
+    "name": "ErrJournalMigrationRefused",
+    "package": "adminapi",
+    "description": ""
+  },
+  {
     "name": "ErrUnknownVerb",
     "package": "clisetup",
     "description": ""

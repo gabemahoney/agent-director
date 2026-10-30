@@ -257,6 +257,16 @@ once more at `main`, and the `schedule:` line says so.
 
 ## Upgrade
 
+Before crossing the native-input journal upgrade, establish the
+[maintenance window and complete recovery set](operator-actions.md#upgrading-the-native-input-journal),
+including every invoking-home input root and any custom database. Keep old
+writers excluded through committed verification. Pass
+`--journal-maintenance-window --journal-roots-complete --journal-backup
+<new-absolute-directory>` and one `--journal-legacy-root <absolute-input-root>`
+for each additional root. These flags assert the operator's boundary; they do
+not stop processes. Recovery belongs in the
+[operator runbook](operator-actions.md#going-back-to-the-previous-release).
+
 Run the install again by any path above, from a shell agent-director did not
 start (not one inside an agent's session). This release keeps its files in
 `~/.config/agent-director`; an earlier release kept them in `~/.agent-director`.

@@ -339,7 +339,7 @@ func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text str
 		if c.Text == text {
 			sent = append(sent, c)
 		}
-		if c.Call == api.TmuxCallSendEnter {
+		if c.Call == api.TmuxCallSendKey && c.Key == "Enter" {
 			enters = append(enters, c)
 		}
 	}
@@ -347,8 +347,8 @@ func assertSentToPane(t *testing.T, verb string, rec *tmuxfix.Recorder, text str
 		t.Fatalf("%s: %d calls carry %q; want 1, the text sent to the row's pane (calls: %+v)",
 			verb, len(sent), text, rec.SocketCalls())
 	}
-	if c := sent[0]; c.Target != apitest.TestPaneID || c.Socket != apitest.TestSocket || !c.PressEnter {
-		t.Errorf("%s: text sent to %q on %q (Enter %v); want pane %q on %q with Enter",
+	if c := sent[0]; c.Target != apitest.TestPaneID || c.Socket != apitest.TestSocket || c.PressEnter {
+		t.Errorf("%s: text sent to %q on %q (Enter %v); want pane %q on %q with separate Enter",
 			verb, c.Target, c.Socket, c.PressEnter, apitest.TestPaneID, apitest.TestSocket)
 	}
 	if len(enters) != 1 || enters[0].Target != apitest.TestPaneID || enters[0].Socket != apitest.TestSocket {
@@ -378,7 +378,7 @@ func assertExpiredRow(t *testing.T, verb string, res api.ExpireResult, dbPath, i
 func endRowAfterEnter(t *testing.T, rec *tmuxfix.Recorder, dbPath, id string) {
 	t.Helper()
 	ended := false
-	rec.AfterCall(api.TmuxCallSendEnter, func(_ tmuxfix.SocketCall, err error) {
+	rec.AfterCall(tmuxfix.KeyCall("Enter"), func(_ tmuxfix.SocketCall, err error) {
 		if err != nil || ended {
 			return
 		}

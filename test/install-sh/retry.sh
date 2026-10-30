@@ -228,9 +228,11 @@ report() {
 # new_home <name>: a fresh HOME in H, and the files of the run named <name>:
 # ERR (its stderr), OUT (its stdout) and STATE (the download count).
 H="" RC=0 ERR="" OUT="" STATE="" PATH_PREFIX="" SQLITERC="" UMASK="" HOOKS=""
+JOURNAL_WINDOW=0 JOURNAL_RUN=0
 new_home() {
     H="$(mktemp -d "$ROOT/home.XXXXXX")"
     STATE="$ROOT/$1.count" ERR="$ROOT/$1.err" OUT="$ROOT/$1.out"
+    JOURNAL_WINDOW=0
 }
 
 # run_install <fail-first> <fail-match> <install.sh args...>: install.sh
@@ -242,6 +244,11 @@ new_home() {
 run_install() {
     local fail_first="$1" fail_match="$2"; shift 2
     [[ -n "$HOOKS" ]] || set -- --no-hooks "$@"
+    if [[ "$JOURNAL_WINDOW" == 1 ]]; then
+        JOURNAL_RUN=$((JOURNAL_RUN+1))
+        set -- --journal-maintenance-window --journal-roots-complete \
+            --journal-backup "$ROOT/journal-backup-$JOURNAL_RUN" "$@"
+    fi
     (
         [[ -z "$UMASK" ]] || umask "$UMASK"
         env -i HOME="$H" PATH="${PATH_PREFIX:+$PATH_PREFIX:}$FAKES:$PATH" TMPDIR="$ROOT/tmp" \
@@ -408,9 +415,17 @@ locking_sqlite3() {
         printf '#!/bin/bash\nSQLITE=%q SLEEP=%q DB=%q LOG=%q\n' \
             "$(type -P sqlite3)" "$(type -P sleep)" "$1" "$ROOT/locks.log"
         cat <<'EOF'
+[[ "${!#}" == 'PRAGMA user_version;' ]] || exec "$SQLITE" "$@"
+# This seam holds the original for the two runtime version reads. Preflight
+# snapshot locking is exercised by the real held-writer move/store tests.
+for arg; do [[ "$arg" == -readonly ]] && exec "$SQLITE" "$@"; done
 mark="$LOG.$$" lock=held
-{ printf 'PRAGMA locking_mode=EXCLUSIVE;\nBEGIN EXCLUSIVE;\nSELECT 1;\n.system touch %s\n' "$mark"; "$SLEEP" 1; echo 'COMMIT;'; } \
-    | "$SQLITE" -bail "$DB" >/dev/null 2>&1 &
+( { printf 'PRAGMA locking_mode=EXCLUSIVE;\nBEGIN EXCLUSIVE;\nSELECT 1;\n.system touch %s\n' "$mark"; "$SLEEP" 1; echo 'COMMIT;'; } \
+    | "$SQLITE" -bail "$DB" >/dev/null 2>&1 ) &
+holder=$!
+# Reap the whole owned pipeline even when the foreground query fails early.
+# Record query elapsed time before this wait, preserving the lock oracle.
+trap 'wait "$holder"' EXIT
 for _ in {1..300}; do [[ -e "$mark" ]] && break; "$SLEEP" 0.01; done
 [[ -e "$mark" ]] || lock="no lock"
 start="${EPOCHREALTIME//[!0-9]/}"
@@ -423,16 +438,28 @@ EOF
     chmod 0755 "$ROOT/locking/sqlite3"
 }
 
-# older_store <name>: a first install under a new HOME, then its store set one
-# version back so the next install migrates it; sets db and schema (the
-# version this build writes).
+# pre_cutover_store <db> <current>: replace an owned, closed fixture with the
+# genuine pre-cutover schema. All old callers have returned; no other roots
+# exist outside this fixture HOME, and real admin inventory remains enabled.
+pre_cutover_store() {
+    rm -f "$1" "$1-wal" "$1-shm"
+    (umask 077; sqlite3 "$1" <"$HERE/testdata/pre-cutover-v15.sql") || die "create pre-cutover store"
+    sqlite3 "$1" 'PRAGMA journal_mode=WAL;' >/dev/null || die "initialize fixture WAL mode"
+    [[ "$(sqlite3 "$1" 'PRAGMA user_version;')" == "$(( $2 - 1 ))" ]] || die "pre-cutover fixture is not the preceding schema"
+    chmod 0600 "$1" || die "private fixture store"
+    JOURNAL_WINDOW=1
+}
+
+# older_store <name>: a first install under a new HOME, then a genuine
+# pre-cutover store so the next install migrates it; sets db and schema.
 older_store() {
     new_home "$1"
     db="$H/.config/agent-director/state.db"
     run_install 0 '*' --from-release v0.11.0-fake --no-symlink
     report "$1-first-install-exit-code" "$RC" "0"
     schema="$(sqlite3 "$db" 'PRAGMA user_version;')"
-    sqlite3 "$db" "PRAGMA user_version = $((schema - 1));"
+    cp -p "$db" "$ROOT/current-fixture.db" || die "retain current store for sentinel control"
+    pre_cutover_store "$db" "$schema"
 }
 
 # report_upgraded <name>: the upgrade of an older_store exited 0, its step-2
@@ -445,7 +472,7 @@ report_upgraded() {
     report "$1-no-sentinel-left" "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
 }
 
-# An upgrade (the store set one version back) whose user_version reads each
+# An upgrade of the genuine preceding schema whose user_version reads each
 # meet a briefly held store lock reads the right versions, before and after
 # the migrating open (b.ady).
 older_store locked-store
@@ -577,7 +604,9 @@ for name in v0 current older-mismatched; do
         v0)
             rm -f "$db"* && : >"$db"
             lines="  schema  : state.db at v0; no migration authorization needed" ;;
-        current) sqlite3 "$db" "PRAGMA user_version = $schema;" ;;
+        current)
+            rm -f "$db" "$db-wal" "$db-shm"
+            cp -p "$ROOT/current-fixture.db" "$db" || die "restore genuine current store" ;;
         older-mismatched)
             from=$((schema - 2)) left=""
             lines="  schema  : authorized migration v$((schema - 1))→v$schema (sentinel $sentinel)|  schema  : migration verified — state.db now at v$schema" ;;
@@ -601,7 +630,7 @@ with_config() {
 local_install() { run_install 0 '*' --binary "$BIN" --admin-binary "$ADMIN" --no-symlink "$@"; }
 
 # db_path_upgrade <name> <db> <shown> <dir>: under H's config, a fresh install
-# then an upgrade with the store one version back; <db> is the store install.sh
+# then an upgrade from the genuine preceding schema; <db> is the store install.sh
 # must read, authorize and verify (b.2io), <shown> how its messages name it
 # ("state.db" for the default, otherwise its path) and <dir> the clean directory
 # whose migrate-authorized authorizes it. Only a store outside the default
@@ -615,7 +644,7 @@ db_path_upgrade() {
     report "$name-fresh-create-read" "$(grep -cxF "  schema  : no existing $shown — fresh create on first open" "$OUT")" "1"
     v="$(sqlite3 "$db" 'PRAGMA user_version;')"
     report "$name-fresh-read" "$(grep '^  state\.db: ' "$OUT" | sed 's/^  state\.db: [0-7]* at //')" "$db (schema v$v)"
-    sqlite3 "$db" "PRAGMA user_version = $((v - 1));"
+    pre_cutover_store "$db" "$v"
     local_install
     report "$name-upgrade-exit-code" "$RC" "0"
     report "$name-upgrade-store-line" "$(grep '^  store   : ' "$OUT")" "$store_line"
@@ -660,7 +689,7 @@ local_install
 report db-path-stale-default-first-install-exit-code "$RC" "0"
 real="$H/.config/agent-director/real.db" stale="$H/.config/agent-director/state.db"
 v="$(sqlite3 "$real" 'PRAGMA user_version;')"
-sqlite3 "$real" "PRAGMA user_version = $((v - 1));"
+pre_cutover_store "$real" "$v"
 sqlite3 "$stale" "CREATE TABLE stale (x); PRAGMA user_version = $((v - 1));"
 stale_sum="$(sha256sum "$stale")"
 local_install
@@ -677,6 +706,7 @@ mkdir -p "$ROOT/timeout-log"
 {
     printf '#!/bin/bash\nSQLITE=%q LOG=%q\n' "$(type -P sqlite3)" "$ROOT/timeouts.log"
     cat <<'EOF'
+[[ "${!#}" == 'PRAGMA user_version;' ]] || exec "$SQLITE" "$@"
 prev=""
 for a; do [[ "$prev" == -cmd ]] && printf '%s\n' "$a" >>"$LOG"; prev="$a"; done
 exec "$SQLITE" "$@"
@@ -684,7 +714,7 @@ EOF
 } >"$ROOT/timeout-log/sqlite3"
 chmod 0755 "$ROOT/timeout-log/sqlite3"
 
-# [store] busy_timeout_ms (b.c7f): an upgrade's two user_version reads wait as
+# [store] busy_timeout_ms (b.c7f): preflight and both runtime version reads wait as
 # long as agent-director's store connections do: the configured busy timeout,
 # or the default for no key or 0. Per case <name>|<config>|<ms>.
 while IFS='|' read -r -u 3 name config ms; do
@@ -696,7 +726,7 @@ while IFS='|' read -r -u 3 name config ms; do
     local_install
     PATH_PREFIX=""
     report_upgraded "$name"
-    report "$name-read-timeouts" "$(paste -sd, "$ROOT/timeouts.log")" ".timeout $ms,.timeout $ms"
+    report "$name-read-timeouts" "$(paste -sd, "$ROOT/timeouts.log")" ".timeout $ms,.timeout $ms,.timeout $ms"
 done 3<<'EOF'
 none||10000
 zero|[store]\nbusy_timeout_ms = 0|10000
@@ -718,7 +748,7 @@ report busy-timeout-short-locked-exit-code "$RC" "5"
 report busy-timeout-short-locked-first-stderr-line "$(head -n 1 "$ERR")" "install.sh: reading state.db's schema version FAILED"
 report busy-timeout-short-locked-reads "$(sed 's/ [0-9]*$//' "$ROOT/locks.log" | paste -sd,)" "held"
 report busy-timeout-short-locked-nothing-authorized "$(ls -A "$H/.config/agent-director" | grep '^migrate-authorized')" ""
-# The stand-in's holder may still hold the lock: wait it out.
+# The stand-in has reaped its holder; the refused read changed no schema.
 report busy-timeout-short-locked-user-version "$(sqlite3 -cmd '.timeout 5000' "$db" 'PRAGMA user_version;')" "$((schema - 1))"
 
 # snap: every path under H with its type, mode, size, mtime and link target,

@@ -19,12 +19,12 @@ type MigratedV5 struct {
 }
 
 // MigrateV5Fixture builds the v5 fixture in a temp dir, migrates it via
-// writeSentinel(5, schemaVersion) + Open, and returns it closed.
+// writeSentinel(5, schemaVersion) + the administrator test window, and returns it closed.
 func MigrateV5Fixture(t *testing.T) MigratedV5 {
 	t.Helper()
 	f := makeV5Fixture(t, t.TempDir())
 	writeSentinel(t, f.dir, 5, schemaVersion)
-	openStoreID(t, Open, f.path)
+	openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, f.path)
 	if v := readUserVersion(t, f.path); v != schemaVersion {
 		t.Fatalf("MigrateV5Fixture: user_version = %d; want %d", v, schemaVersion)
 	}

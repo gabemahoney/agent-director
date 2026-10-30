@@ -180,7 +180,7 @@ func TestPlainSendKeysHashPassesTheHold(t *testing.T) {
 		{"A acked, unproven, no hash", []r7Step{r7Acked}, "", api.ErrDialogMaybeOpen, nil},
 		{"A acked, unproven, of an earlier launch, no hash", []r7Step{r7Acked, earlierLaunch}, "", api.ErrDialogMaybeOpen, nil},
 		{"A acked, unproven, the pane's hash", []r7Step{r7Acked}, "pane", nil,
-			[]tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}},
+			paneHashSendCalls},
 		{"A acked, unproven, a stale hash", []r7Step{r7Acked}, "stale", api.ErrPaneChanged, paneReadCalls},
 		{"A's relay hook alive, the pane's hash", []r7Step{r7HookAlive}, "pane", api.ErrSendKeysWhileRelayed, nil},
 		{"A fallen back, the pane's hash", nil, "pane", api.ErrRelayFallenBack, nil},

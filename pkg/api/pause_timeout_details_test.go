@@ -10,7 +10,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
-	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -46,7 +45,7 @@ func TestPauseTimeoutDetailsLastObservedState(t *testing.T) {
 	t.Parallel()
 	e := newKillEnv(t)
 	r := e.seedRow(t, killRowSpec{})
-	e.rec.AfterCall(tmux.CallSendEnter, func(_ tmuxfix.SocketCall, _ error) {
+	e.rec.AfterCall(callEnterKey, func(_ tmuxfix.SocketCall, _ error) {
 		if applied := apitest.ApplyAgentHook(t, e.dbPath, r.ID, "UserPromptSubmit", r.Spawn.SessionID); !applied.Applied {
 			t.Fatalf("UserPromptSubmit: %s", applied.Reason)
 		}

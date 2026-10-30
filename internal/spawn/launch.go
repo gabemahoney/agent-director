@@ -147,6 +147,7 @@ func Launch(s *store.Store, t LaunchTmux, pc tmux.ProcChecker, r Resolved, minte
 	req.Socket = socket
 	req.Token = token
 	req.StoreID = s.StoreID()
+	req.Input = s
 	out := CreateAndLabel(t, req)
 	recorded := false
 	if out.Kind == CreateLabelled {

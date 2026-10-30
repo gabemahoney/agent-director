@@ -413,6 +413,10 @@ func (h *moveHome) command(args ...string) *exec.Cmd {
 type moveRunning struct {
 	cmd            *exec.Cmd
 	stdout, stderr bytes.Buffer
+	mu             sync.Mutex // serialize signalling with the one reap
+	waited         bool
+	waitErr        error
+	result         moveResult
 }
 
 // StartInstall starts install.sh (the pair, h.Flags, then args) in its own
@@ -425,31 +429,48 @@ func (h *moveHome) StartInstall(args ...string) *moveRunning {
 	if err := r.cmd.Start(); err != nil {
 		h.t.Fatal(err)
 	}
-	h.OnRelease(func() { _ = syscall.Kill(-r.cmd.Process.Pid, syscall.SIGKILL) })
+	h.OnRelease(func() {
+		r.Signal(syscall.SIGKILL)
+		r.Wait(h.t)
+	})
 	return r
 }
 
 // Signal sends sig to install.sh and every process it started.
-func (r *moveRunning) Signal(sig syscall.Signal) { _ = syscall.Kill(-r.cmd.Process.Pid, sig) }
+func (r *moveRunning) Signal(sig syscall.Signal) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Until Wait reaps it, our child reserves this process-group id. Once
+	// reaped, never signal the numeric id again: it may have been reused.
+	if !r.waited {
+		_ = syscall.Kill(-r.cmd.Process.Pid, sig)
+	}
+}
 
 // Wait waits for install.sh to end and returns its result; a signal that ended
-// it gives Code 128+signal, as a shell reports it.
+// it gives Code 128+signal, as a shell reports it. Repeated calls return the
+// same result, including cleanup after an earlier successful Wait.
 func (r *moveRunning) Wait(t *testing.T) moveResult {
 	t.Helper()
-	err := r.cmd.Wait()
-	res := moveResult{Stdout: r.stdout.String(), Stderr: r.stderr.String()}
-	var ee *exec.ExitError
-	switch {
-	case err == nil:
-	case errors.As(err, &ee):
-		res.Code = ee.ExitCode()
-		if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-			res.Code = 128 + int(ws.Signal())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.waited {
+		r.waitErr = r.cmd.Wait()
+		r.waited = true
+		r.result = moveResult{Stdout: r.stdout.String(), Stderr: r.stderr.String()}
+		var ee *exec.ExitError
+		if errors.As(r.waitErr, &ee) {
+			r.result.Code = ee.ExitCode()
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				r.result.Code = 128 + int(ws.Signal())
+			}
+			r.waitErr = nil // the exit code belongs to the result
 		}
-	default:
-		t.Fatalf("install.sh: %v", err)
 	}
-	return res
+	if r.waitErr != nil {
+		t.Fatalf("install.sh: %v", r.waitErr)
+	}
+	return r.result
 }
 
 // Install runs install.sh (the pair, h.Flags, then args) to its end.
@@ -569,6 +590,7 @@ func (h *moveHome) Sqlite(db, input string, args ...string) string {
 // WriteStore creates a v0.11.1 store at path, from testdata/v0.11.1-store.sql.
 func (h *moveHome) WriteStore(path string) {
 	h.t.Helper()
+	h.authorizeJournalMigration()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		h.t.Fatal(err)
 	}
@@ -577,6 +599,20 @@ func (h *moveHome) WriteStore(path string) {
 		h.t.Fatal(err)
 	}
 	h.Sqlite(path, string(b))
+}
+
+// authorizeJournalMigration supplies the explicit operator window for the
+// fixture's owned temporary home and roots. Real inventory remains enabled.
+// Unauthorized cutover and preexisting-sentinel refusal use J34's direct runs.
+func (h *moveHome) authorizeJournalMigration() {
+	h.t.Helper()
+	for _, flag := range h.Flags {
+		if flag == "--journal-maintenance-window" {
+			return
+		}
+	}
+	h.Flags = append(h.Flags, "--journal-maintenance-window", "--journal-roots-complete",
+		"--journal-backup", filepath.Join(h.Root, "journal-backup"))
 }
 
 // moveLiveRow is the SQL that inserts a row in state, with the id live-<state>.
@@ -678,6 +714,16 @@ var moveSQLiteMagic = []byte("SQLite format 3\x00")
 // by its target; an -shm and an empty -wal not at all. Paths in ignore are left
 // out.
 func (h *moveHome) Snapshot(ignore ...string) moveTree {
+	return h.snapshot(false, ignore...)
+}
+
+// PhysicalSnapshot observes a refusal without opening SQLite: all file bytes,
+// modes, sizes and mtimes, including sidecars and directory mtimes, must stay.
+func (h *moveHome) PhysicalSnapshot() moveTree {
+	return h.snapshot(true)
+}
+
+func (h *moveHome) snapshot(physical bool, ignore ...string) moveTree {
 	h.t.Helper()
 	tree := moveTree{}
 	err := filepath.WalkDir(h.Home, func(p string, d fs.DirEntry, err error) error {
@@ -705,12 +751,23 @@ func (h *moveHome) Snapshot(ignore ...string) moveTree {
 		case mode.IsDir():
 			tree[rel] = fmt.Sprintf("dir %v", mode)
 		case mode.IsRegular():
-			tree[rel] = h.describeFile(p, rel, fi)
+			if physical {
+				b, err := os.ReadFile(p)
+				if err != nil {
+					return err
+				}
+				tree[rel] = fmt.Sprintf("file %x", sha256.Sum256(b))
+			} else {
+				tree[rel] = h.describeFile(p, rel, fi)
+			}
 			if tree[rel] == "" {
 				delete(tree, rel)
 			}
 		default:
 			tree[rel] = fmt.Sprintf("special %v", mode)
+		}
+		if physical {
+			tree[rel] = fmt.Sprintf("%v size=%d mtime=%d %s", mode, fi.Size(), fi.ModTime().UnixNano(), tree[rel])
 		}
 		return nil
 	})
@@ -771,6 +828,22 @@ type moveWant struct {
 	// Stderr and Stdout are substrings the stream holds; StderrRE are regular
 	// expressions it matches; NoStdout and NoStderr are substrings it lacks.
 	Stderr, Stdout, StderrRE, NoStdout, NoStderr []string
+	// TmpEntries names entries present before invocation when TMPDIR is an
+	// existing installation. Its default remains an empty temp directory.
+	TmpEntries []string
+}
+
+func (h *moveHome) tempEntries() []string {
+	h.t.Helper()
+	entries, err := os.ReadDir(h.Tmp)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
 }
 
 // expand replaces {HOME} and each {name} of h.Vars in s.
@@ -831,7 +904,7 @@ func (w moveWant) Check(t *testing.T, h *moveHome, res moveResult) {
 			t.Errorf("stderr holds %q:\n%s", s, res.Stderr)
 		}
 	}
-	if left, _ := filepath.Glob(filepath.Join(h.Tmp, "*")); len(left) > 0 {
-		t.Errorf("install.sh left temp files behind: %v", left)
+	if got := h.tempEntries(); strings.Join(got, "\n") != strings.Join(w.TmpEntries, "\n") {
+		t.Errorf("install.sh changed temp entries: got %v; want %v", got, w.TmpEntries)
 	}
 }

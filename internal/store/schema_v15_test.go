@@ -47,8 +47,10 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 			before := dbDump(t, path)
 			prior := readRawSpawn(t, path, "pre", spawnCols)
 			id := assertOneStoreID(t, path)
+			expectInputAuthority(before, id)
+			assertReleasedReentry(t, path, 14, 15)
 			writeSentinel(t, dir, 14, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,20 +78,17 @@ func TestV15MigrationPreservationAndReentry(t *testing.T) {
 				}
 			}
 			after := dbDump(t, path)
-			if len(added) == 0 && !reflect.DeepEqual(before, after) {
-				t.Fatal("migration of a store holding both columns changed it")
+			if len(added) == 0 {
+				// New input tables are checked by fresh-schema convergence above.
+				for key, want := range before {
+					if !reflect.DeepEqual(want, after[key]) {
+						t.Fatalf("migration of a store holding both columns changed %s", key)
+					}
+				}
 			}
 			for _, table := range []string{"permission_requests", "session_history", "store_meta", "cursor_runtimes", "subagents", "subagent_launches"} {
 				if !reflect.DeepEqual(before["rows "+table], after["rows "+table]) {
 					t.Errorf("changed %s", table)
-				}
-			}
-			for run := 0; run < 2; run++ {
-				if err := migrateV14toV15(s.db); err != nil {
-					t.Fatal(err)
-				}
-				if !reflect.DeepEqual(after, dbDump(t, path)) {
-					t.Fatal("reentry changed retained data")
 				}
 			}
 			if err := s.Close(); err != nil {
@@ -139,7 +138,7 @@ func TestV15MigrationRefusesIncompatibleColumns(t *testing.T) {
 			})
 			before := dbDump(t, path)
 			writeSentinel(t, dir, 14, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if s != nil {
 				s.Close()
 			}
@@ -216,7 +215,7 @@ func TestV15RefusalFollowsInstallAdvice(t *testing.T) {
 		withRaw(t, path, func(db *sql.DB) { mustExec(t, db, `ALTER TABLE spawns ADD COLUMN codex_turn BLOB`) })
 		before, preUpgrade = dbDump(t, path), readDBFileSet(t, path)
 		writeSentinel(t, dir, 13, schemaVersion)
-		s, err := Open(path)
+		s, err := openMigrationTestStore(t, path)
 		if s != nil {
 			s.Close()
 		}
@@ -264,7 +263,7 @@ func TestV15RefusalFollowsInstallAdvice(t *testing.T) {
 			t.Fatal("the stale authorization changed the store")
 		}
 		writeSentinel(t, dir, 14, schemaVersion)
-		s, err := Open(path)
+		s, err := openMigrationTestStore(t, path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -347,7 +346,7 @@ func TestV15MigrationCommitRollbackAndRetry(t *testing.T) {
 	}
 	assertSentinel(t, dir, true)
 	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "PRAGMA journal_mode=WAL") })
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

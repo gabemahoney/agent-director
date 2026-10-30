@@ -111,7 +111,7 @@ func TestCodexValidatedRolloutConfirmsAfterProcessExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeEvidence(t, path, append(meta, record...))
-	reopened := &nativeSession{dir: s.dir, manifest: s.manifest}
+	reopened := reopenEvidence(s)
 	if proof, err := reopened.Confirm(a); err != nil || proof == nil || proof.RecordID != "late-turn" {
 		t.Fatalf("validated late proof after exit=%+v %v", proof, err)
 	}
@@ -201,7 +201,7 @@ func TestCodexWatermarkRetainsPriorAttemptAfterWriterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A new writer has only the journal and no live descriptor association.
-	restarted := &nativeSession{dir: s.dir, manifest: s.manifest}
+	restarted := reopenEvidence(s)
 	marks, err := restarted.Watermark(a.Identity)
 	if err != nil {
 		t.Fatal(err)

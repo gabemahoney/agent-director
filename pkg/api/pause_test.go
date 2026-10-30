@@ -264,7 +264,7 @@ func (en ptrEntry) pause(ctx context.Context, t *testing.T, e *killEnv, id strin
 func ptrCancelAfterEnter(t *testing.T, e *killEnv) context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) { cancel() })
+	e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) { cancel() })
 	return ctx
 }
 
@@ -322,7 +322,7 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 		{name: "ours, row ends", seed: sktRow(killRowSpec{}, ptrEnds), outcome: "ok"},
 		{name: "ours, wait times out", seed: sktRow(killRowSpec{}), outcome: "ErrPauseTimeout", apiOnly: true},
 		{name: "ours, agent process gone, row left as it is", seed: sktRow(killRowSpec{Agent: agentGone}),
-			outcome: "ErrPauseTimeout", apiOnly: true},
+			outcome: "ErrInternal", apiOnly: true},
 		{name: "leftover", seed: sktRow(killRowSpec{NoSession: true}, sktLeftover), outcome: "ErrTmuxSessionConflict"},
 		{name: "pane not found", seed: sktRow(killRowSpec{NoSession: true}, rpnSeedPane), outcome: "ErrTmuxSessionConflict"},
 		{name: "gone", seed: sktRow(killRowSpec{NoSession: true}), outcome: "ErrTmuxSendKeys"},
@@ -334,9 +334,9 @@ func TestPauseTrailNoCallEvent(t *testing.T) {
 			outcome: "ErrTmuxNotAvailable"},
 		{name: "/exit call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
 			outcome: "ErrTmuxUnresponsive"},
-		{name: "Enter call failed, follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendEnter)),
+		{name: "Enter call failed, follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, callEnterKey)),
 			outcome: "ErrTmuxUnresponsive"},
-		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterListing), outcome: "ErrTmuxSendKeys"},
+		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterTextFailure), outcome: "ErrTmuxSendKeys"},
 	}
 	for _, entry := range ptrEntries {
 		for _, tc := range cases {

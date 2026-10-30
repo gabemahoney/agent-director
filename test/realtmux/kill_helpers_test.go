@@ -1,6 +1,7 @@
 package realtmux_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -137,7 +138,7 @@ type killCall struct {
 // open opens the production client on the fixture's store through api.New
 // with a config file giving the client timeouts and kill_exit_wait_ms = wait
 // (0: killDefaultWait), running tmuxCommand ("" is tmux on PATH).
-func (f *killFix) open(t testing.TB, wait time.Duration, tmuxCommand string) *api.Client {
+func (f *killFix) open(t testing.TB, wait time.Duration, tmuxCommand string, afterEnter ...context.CancelFunc) *api.Client {
 	t.Helper()
 	if wait == 0 {
 		wait = killDefaultWait
@@ -148,7 +149,11 @@ func (f *killFix) open(t testing.TB, wait time.Duration, tmuxCommand string) *ap
 		apitest.TmuxInt(config.TmuxActionTimeoutMs, clientTimeouts.Action.Milliseconds()),
 		apitest.TmuxInt(config.TmuxCreateTimeoutMs, clientTimeouts.Create.Milliseconds()),
 		apitest.TmuxInt(config.TmuxKillExitWaitMs, wait.Milliseconds()))
-	c, err := api.New(api.Options{StorePath: f.DBPath, ConfigPath: cfg, TmuxCommand: tmuxCommand})
+	opts := api.Options{StorePath: f.DBPath, ConfigPath: cfg, TmuxCommand: tmuxCommand}
+	if len(afterEnter) != 0 {
+		opts.TmuxClient = cancelAfterEnterTmux{Client: tmux.New(tmuxCommand, clientTimeouts), cancel: afterEnter[0]}
+	}
+	c, err := api.New(opts)
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}

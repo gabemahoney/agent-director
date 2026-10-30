@@ -160,7 +160,7 @@ func (d *LiveDispatcher) Call(ctx context.Context, toolName string, args json.Ra
 		if err := decodeParams(v, args, &p); err != nil {
 			return nil, err
 		}
-		return d.client.SendKeys(p)
+		return d.client.SendKeysContext(ctx, p)
 
 	case "read-pane":
 		var p api.ReadPaneParams

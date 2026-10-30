@@ -236,7 +236,7 @@ func TestAdviceFollow_B2_KillOrPauseThenResume(t *testing.T) {
 			fastPausePolls(t)
 			e.endAfterEnter(t, r.killRow)
 			exited := false
-			e.rec.AfterCall(tmux.CallSendEnter, func(tmuxfix.SocketCall, error) {
+			e.rec.AfterCall(callEnterKey, func(tmuxfix.SocketCall, error) {
 				if !exited {
 					exited = true
 					advResumeConditionEnds(t, e, r)

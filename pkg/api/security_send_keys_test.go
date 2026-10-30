@@ -42,7 +42,7 @@ func skSecSends(delivered bool) func(*testing.T, *securityScene, any) {
 			}
 		}
 		for _, c := range s.e.rec.SocketCalls() {
-			if (c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter) && planted[c.Target] {
+			if (c.Call == tmux.CallSendText || c.Call == tmux.CallSendEnter || c.Call == tmux.CallSendKey) && planted[c.Target] {
 				t.Errorf("%v targets planted pane %s", c.Call, c.Target)
 			}
 		}

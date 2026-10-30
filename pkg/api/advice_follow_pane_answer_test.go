@@ -176,15 +176,15 @@ func TestAdviceFollow_E12_PaneAnswerNotRecordedRecordPaneAnswer(t *testing.T) {
 	}
 }
 
-// TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill: E13 pause's "past ErrDialogMaybeOpen: answer any dialog,
-// send-keys `/exit` with expect_pane_sha256; or kill" (b.zdz), on a waiting row whose background subagent's acked
+// TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill: E13 pause's "ErrDialogMaybeOpen: answer dialog,
+// send-keys `/exit` with expect_pane_sha256, or kill" (b.zdz), on a waiting row whose background subagent's acked
 // request stays unproven. The dialog answered with the pane's hash, read with read-pane (pause still held), then /exit
 // with the hash of a fresh read ends the agent and pause is then a no-op; or kill sends its kill. Neither types through
 // pause.
 func TestAdviceFollow_E13_PauseHeldSendKeysExitWithHashOrKill(t *testing.T) {
 	t.Parallel()
-	adviceAssertManifest(t, "pause", "", "past ErrDialogMaybeOpen: answer any dialog, "+
-		"send-keys `/exit` with expect_pane_sha256; or kill")
+	adviceAssertManifest(t, "pause", "", "ErrDialogMaybeOpen: answer dialog, "+
+		"send-keys `/exit` with expect_pane_sha256, or kill")
 	tok := storefix.TestRequestTokenA
 	for _, way := range []string{"send-keys /exit with the pane's hash", "kill"} {
 		t.Run(way, func(t *testing.T) {

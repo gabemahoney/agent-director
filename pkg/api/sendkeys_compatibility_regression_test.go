@@ -9,7 +9,6 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/storefix"
-	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 )
@@ -38,8 +37,7 @@ func TestSendKeysPlainLaunchRetainsEstablishedInput(t *testing.T) {
 					}
 					e.assertNoCalls(t, tmux.CallSendEnter, tmux.CallSendKey)
 				} else {
-					assertTextSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID, strings.ReplaceAll(p.Text, "\r", ""))
-					assertEnterSent(t, e.rec, r.Socket, r.Spawn.Identity.PaneID)
+					assertInputWrites(t, e.killEnv, r, strings.ReplaceAll(p.Text, "\r", ""))
 				}
 			}
 		})
@@ -135,7 +133,7 @@ func TestSendKeysUnsupportedNativeCapabilityKeepsEstablishedInput(t *testing.T) 
 	if err != nil || result != (api.SendKeysResult{}) || e.b.current != nil {
 		t.Fatalf("unsupported native result=%+v err=%v attempt=%+v", result, err, e.b.current)
 	}
-	e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, payload)
+	assertInputWrites(t, e.killEnv, r, payload)
 }
 
 func TestSendKeysCapabilityLossNeverReplaysNativeAttempt(t *testing.T) {
@@ -182,7 +180,6 @@ func TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck(t *testing.T) {
 			e := newNativeSubmissionEnv(t)
 			r := e.seedRow(t, codexSpec(store.StatePending, agentAlive, false))
 			e.env.Input = nil
-			e.rec.AfterCall(tmux.CallSendEnter, func(_ tmuxfix.SocketCall, _ error) { e.s.sent = true })
 			e.s.read = func(row api.Spawn) (api.Spawn, error) { row.State = state; return row, nil }
 			result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
 			if state == store.StateWorking {
@@ -199,7 +196,7 @@ func TestSendKeysPendingCodexFallbackKeepsBoundedHookCheck(t *testing.T) {
 			if state == store.StatePending && e.slept != 2*time.Second {
 				t.Fatalf("hook observation bound=%v; want 2s", e.slept)
 			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
+			assertInputWrites(t, e.killEnv, r, skpText)
 		})
 	}
 }

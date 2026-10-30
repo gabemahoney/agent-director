@@ -62,6 +62,16 @@ type SocketCall struct {
 	Token, InstanceID, StoreID string
 }
 
+// KeyCall selects a particular SendKeyPane key in scripts, hooks and call
+// queries. Recorded calls and CallError.Call retain the actual CallSendKey
+// transport kind; selecting Enter never synthesizes a combined text/Enter call.
+// Tests must reuse KeyCall for key-specific scripts, hooks and queries.
+func KeyCall(key string) tmux.Call { return tmux.CallSendKey + " " + tmux.Call(key) }
+
+func (c SocketCall) matches(call tmux.Call) bool {
+	return c.Call == call || c.Call == tmux.CallSendKey && c.Key != "" && KeyCall(c.Key) == call
+}
+
 // effect applies a call's table effect on the socket's table and returns
 // its answer, or a table-derived failure. s is the call's script (zero when
 // none answers it). Callers hold r.mu.
@@ -76,7 +86,7 @@ func (r *Recorder) do(c SocketCall, eff effect) (any, error) {
 	r.socketCalls = append(r.socketCalls, c)
 	st := r.socket(c.Socket)
 	hasServer := st.server != nil || c.Call == tmux.CallCreate
-	s, scripted := r.takeScript(c.Socket, c.Call)
+	s, scripted := r.takeScript(c)
 	var ans any
 	var fail *tmux.CallError
 	switch {
@@ -331,7 +341,7 @@ func (r *Recorder) SocketCallsOf(call tmux.Call) []SocketCall {
 	defer r.mu.Unlock()
 	var out []SocketCall
 	for _, c := range r.socketCalls {
-		if c.Call == call {
+		if c.matches(call) {
 			out = append(out, c)
 		}
 	}

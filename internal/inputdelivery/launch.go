@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/inputjournal"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,13 +36,13 @@ func SafeArgs(args []string) bool {
 
 // Prepare provisions fresh native diagnostics for the exact launch. Unsupported
 // binaries still launch and retain the established pane input contract.
-func Prepare(id Identity, command []string, env map[string]string, safe bool) ([]string, map[string]string, error) {
+func Prepare(id Identity, command []string, env map[string]string, safe bool, persistence ...Persistence) ([]string, map[string]string, error) {
 	if len(command) == 0 {
 		return nil, nil, fmt.Errorf("missing agent command")
 	}
 	// Unsupported and resumed launches keep their original input contract and
 	// do not allocate native state or require a native launch identity.
-	if !safe || (id.Agent != "claude" && id.Agent != "codex") || !hexID.MatchString(id.StoreID) || !hexID.MatchString(id.Token) {
+	if !safe || (id.Agent != "claude" && id.Agent != "codex") || !inputjournal.ValidID(id.StoreID) || !inputjournal.ValidID(id.Token) {
 		return command, env, nil
 	}
 	program, err := resolveProgram(command[0], env)
@@ -52,6 +53,17 @@ func Prepare(id Identity, command []string, env map[string]string, safe bool) ([
 	if version == "" {
 		return command, env, nil
 	}
+	if len(persistence) != 1 || persistence[0] == nil {
+		return nil, nil, fmt.Errorf("native launch persistence is required")
+	}
+	// Life comes from the exact pending token, never from a previous reused
+	// row, a timestamp, or the caller's zero value.
+	prepareCtx, prepareCancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer prepareCancel()
+	id, err = persistence[0].ReadInputPreparation(prepareCtx, id)
+	if err != nil {
+		return nil, nil, err
+	}
 	dir, err := launchDir(id.StoreID, id.Token)
 	if err != nil {
 		return nil, nil, err
@@ -61,6 +73,24 @@ func Prepare(id Identity, command []string, env map[string]string, safe bool) ([
 	}
 	if err = os.Mkdir(dir, 0700); err != nil {
 		return nil, nil, fmt.Errorf("allocate fresh input launch: %w", err)
+	}
+	keepEvidence := false
+	defer func() {
+		if !keepEvidence {
+			_ = os.Remove(dir)
+		}
+	}()
+	lockPath := dir + ".lock"
+	if info, e := os.Lstat(lockPath); e == nil && !info.Mode().IsRegular() || e != nil && !os.IsNotExist(e) {
+		return nil, nil, ErrInvalidState
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lock.Close()
+	if err = inputjournal.LockWriter(lock); err != nil {
+		return nil, nil, err
 	}
 	m := manifest{Agent: id.Agent, CWD: id.CWD, Socket: id.Socket, Token: id.Token, InstanceID: id.InstanceID, Created: time.Now(), Safe: true, Version: version}
 	envs := make(map[string]string, len(env)+1)
@@ -105,15 +135,18 @@ func Prepare(id Identity, command []string, env map[string]string, safe bool) ([
 			cmd = append(cmd, "--session-id", m.SessionID, "--debug-file", filepath.Join(dir, "claude-debug.log"), "-d", "hooks")
 		}
 	}
-	if err = writeJSON(dir, "launch.json", m); err != nil {
-		return nil, nil, err
-	}
 	parent, err := os.Open(filepath.Dir(dir))
 	if err != nil {
 		return nil, nil, err
 	}
 	defer parent.Close()
 	if err = parent.Sync(); err != nil {
+		return nil, nil, err
+	}
+	// The command cannot start unless the capability intent is confirmed FULL.
+	// Keep evidence on an unknown commit; only committed SQLite decides authority.
+	keepEvidence = true
+	if err = persistence[0].CreateInputLaunch(prepareCtx, Launch{Identity: id, Capability: m, EvidenceDir: dir, Revision: 1}); err != nil {
 		return nil, nil, err
 	}
 	return cmd, envs, nil

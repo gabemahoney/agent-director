@@ -182,9 +182,9 @@ const (
 func advPaneEnterFailures(timedOut, failed string) []advPaneKeysFailure {
 	once := func(f tmux.Failure) tmuxfix.Script { return tmuxfix.Script{Failure: f, Times: 1} }
 	return []advPaneKeysFailure{
-		{name: "Enter timed out before reaching the pane", call: tmux.CallSendEnter, script: once(tmux.FailTimeout),
+		{name: "Enter timed out before reaching the pane", call: callEnterKey, script: once(tmux.FailTimeout),
 			advice: timedOut},
-		{name: "Enter failed, the follow-up lookup found the session", call: tmux.CallSendEnter,
+		{name: "Enter failed, the follow-up lookup found the session", call: callEnterKey,
 			script: once(tmux.FailNoServer), advice: failed},
 	}
 }
@@ -192,7 +192,7 @@ func advPaneEnterFailures(timedOut, failed string) []advPaneKeysFailure {
 // advPaneEnterSubmitted is a timed-out Enter that submitted what was typed,
 // its description carrying advice.
 func advPaneEnterSubmitted(what, advice string) advPaneKeysFailure {
-	return advPaneKeysFailure{name: "Enter timed out after submitting " + what, call: tmux.CallSendEnter,
+	return advPaneKeysFailure{name: "Enter timed out after submitting " + what, call: callEnterKey,
 		script: tmuxfix.Script{Failure: tmux.FailTimeout, Times: 1}, reached: true, advice: advice}
 }
 
@@ -351,7 +351,7 @@ func advAssertPaneAnswered(t *testing.T, e *killEnv, r killRow, token string, ru
 	if run.err != nil {
 		t.Fatalf("pane answer (send-keys with request_token %s): %v; want it accepted", token, run.err)
 	}
-	assertOneKey(t, run.calls, r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 	if pr, err := e.st.GetPermissionRequest(r.ID, token); err != nil || pr.PaneAnswer != store.PaneAnswerSent || pr.Decision != "allow" {
 		t.Errorf("request %s = %+v, %v; want pane_answer sent, decision allow", token, pr, err)
 	}
@@ -567,7 +567,7 @@ func TestAdviceFollow_E7_RelayFallenBackAnswerAtPaneOrRecord(t *testing.T) {
 					if run.err != nil {
 						t.Fatalf("pane answer: %v", run.err)
 					}
-					assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+					assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "Escape", paneAnswerBeforeKey...)
 				} else {
 					p.setPane("answered by a person at tmux\n")
 					p.now = p.now.Add(2 * time.Second) // the refusal recorded hook_gone_at
@@ -620,7 +620,7 @@ func TestAdviceFollow_E7_DecideFallenBackOtherRequestHoldsGuard(t *testing.T) {
 	if run.err != nil {
 		t.Fatalf("pane answer on A once B's hook delivered: %v; want it accepted", run.err)
 	}
-	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture)
+	assertOneKey(t, run.calls, p.r.Spawn.Identity.PaneID, "1", paneAnswerBeforeKey...)
 }
 
 // TestAdviceFollow_E7_DecideFallenBackAnswerAtPane: E7 "answer it at the pane

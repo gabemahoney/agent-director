@@ -429,9 +429,11 @@ dialog refusals before native selection, bounded pending-Codex hook observation,
 and unresolved native ownership blocking fallback resends. Tests of manual
 transport should explicitly choose a manual operation.
 
-Native adapter tests in `internal/inputdelivery` use private temporary launch
-manifests and native JSONL records. Reuse `evidenceSession`, `claudeRecord`,
-`writeEvidence` and the Codex record fixtures. Check exact new content and
+Native adapter/parser tests in `internal/inputdelivery` reuse `evidenceSession`
+with its in-memory `evidencePersistence`, plus private native JSONL records from
+`claudeRecord`, `writeEvidence` and the Codex fixtures. SQLite authority tests
+reuse `sqliteSubmission`/`sqliteDeliveryBackend` in `pkg/api`; the parser fixture
+does not prove persistence. Check exact new content and
 session/process provenance, prefix watermarks, late evidence and durable
 reconciliation. Include an older identical record in a newly discovered Codex
 path so a descriptor discovered after input cannot masquerade as fresh proof.

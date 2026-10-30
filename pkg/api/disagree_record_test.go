@@ -89,9 +89,9 @@ func keysDisagreeCases() []keysDisagreeCase {
 		{name: "server_restarted, text call timed out",
 			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendText)}, want: restarted("text_sent")},
 		{name: "server_restarted, Enter call timed out",
-			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, tmux.CallSendEnter)}, want: restarted("text_sent")},
+			setup: setups{ktrRestart, ktrScript(tmux.FailTimeout, callEnterKey)}, want: restarted("text_sent")},
 		{name: "server_restarted, Enter call failed",
-			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendEnter)}, want: restarted("text_sent")},
+			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, callEnterKey)}, want: restarted("text_sent")},
 		{name: "server_restarted on the lookup and the follow-up, text call failed",
 			setup: setups{ktrRestart, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)}, want: restarted("nothing_sent")},
 		{name: "server_mismatch", setup: setups{ktrRebind}, want: []disagreeWant{

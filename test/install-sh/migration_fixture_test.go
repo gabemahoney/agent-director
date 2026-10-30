@@ -44,11 +44,17 @@ func (h *moveHome) migLay(dir string, store migStoreKind, config string, files .
 		h.t.Fatal(err)
 	}
 	db := filepath.Join(dir, "state.db")
+	if store == migStoreV9 || store == migStoreV10 {
+		h.authorizeJournalMigration()
+	}
 	switch store {
 	case migStoreAt, migStoreV9, migStoreV10:
 		h.migMakeStore(db)
 		if store == migStoreV9 || store == migStoreV10 {
-			// Remove later-hop DDL as well as the version stamp.
+			// This empty synthetic fixture has never accepted input. Remove
+			// native authority/DDL as well as the earlier hop's DDL: a mere
+			// version reset of a current store must remain refused.
+			h.Sqlite(db, "DROP TABLE input_attempts; DROP TABLE input_launches; DROP TABLE input_imports; DELETE FROM store_meta WHERE key='native_input_authority';")
 			h.Sqlite(db, "ALTER TABLE permission_requests DROP COLUMN main_turn_end_eligible;")
 			if store == migStoreV9 {
 				h.Sqlite(db, "DROP TABLE cursor_runtimes; PRAGMA user_version=9;")

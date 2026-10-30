@@ -61,7 +61,10 @@ func flushPaneProof(t *testing.T, got store.PermissionRow) {
 // that need the request still unproven check that themselves.
 func answerFlushRequestAtPane(t *testing.T, c *cursorSession) string {
 	t.Helper()
-	keys := regexp.MustCompile(`\[([^]]+)\] Allow once`).FindAllSubmatch(c.pane.bytes(), -1)
+	choice := regexp.MustCompile(`\[([^]]+)\] Allow once`)
+	// Durable admission precedes rendering; wait for the actual offered choice.
+	c.wait(t, "flush-proof pane choice rendered", func() bool { return choice.Match(c.pane.bytes()) })
+	keys := choice.FindAllSubmatch(c.pane.bytes(), -1)
 	if len(keys) != 1 {
 		t.Fatalf("want one pane choice: %s", c.pane.bytes())
 	}

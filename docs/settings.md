@@ -19,10 +19,8 @@ covers the entries a Codex folder needs by hand.
 ## What `--settings` carries
 
 Every `spawn` of a Claude agent synthesizes a single inline JSON document and hands
-it to `claude` via `--settings <inline-json>`. The JSON is delivered as
-a direct argv element to `tmux new-session` (no shell parsing — see
-`reference/tmux-direct-argv-research.md`), so the payload arrives
-byte-for-byte regardless of which shell the operator has configured.
+it to `claude` via `--settings <inline-json>`. The payload arrives byte-for-byte
+regardless of which shell the operator has configured.
 
 The synthesized payload contains:
 
@@ -133,9 +131,12 @@ The evidence directory is
 `~/.config/agent-director/input/<store_id>/<launch_token>/`, under
 agent-director's `HOME`, even with a custom database path or agent config
 directory. It is private (0700; evidence files and the adjacent lock are 0600)
-and persists after the session exits. It retains native diagnostics and
-delivery evidence, including full normalized prompts and matching transcript
-records. There is no automatic cleanup. Follow
+and persists after the session exits. It retains provider diagnostics and logs;
+provider transcripts remain at their provider paths. Operational launch,
+current-attempt and request-history records, full normalized prompts and exact
+retained transcript proof are private records in the configured SQLite
+database. The adjacent lock synchronizes writers; it carries no delivery
+authority. There is no automatic cleanup. Follow
 [Operator actions](operator-actions.md#unresolved-ordinary-input) for unresolved
 input.
 
@@ -495,5 +496,3 @@ Resulting per-spawn merge:
 - Claude Code settings: <https://docs.claude.com/en/docs/claude-code/settings>
 - Claude Code CLI flags (incl. `--setting-sources`):
   <https://docs.claude.com/en/docs/claude-code/cli-reference>
-- Empirical investigation (gitignored, in-repo):
-  `reference/claude-settings-research.md`

@@ -183,8 +183,8 @@ func ExampleClient_SendKeys() {
 		switch call.Call {
 		case tmux.CallSendText:
 			fmt.Printf("%s %q to pane %s\n", call.Call, call.Text, call.Target)
-		case tmux.CallSendEnter:
-			fmt.Printf("%s to pane %s\n", call.Call, call.Target)
+		case tmux.CallSendKey:
+			fmt.Printf("%s %s to pane %s\n", call.Call, call.Key, call.Target)
 		default:
 			fmt.Println(call.Call)
 		}
@@ -193,8 +193,14 @@ func ExampleClient_SendKeys() {
 	// Output:
 	// lookup
 	// pane listing
+	// lookup
+	// pane listing
+	// lookup
+	// pane listing
 	// text send "what is 2+2?" to pane %42
-	// Enter send to pane %42
+	// lookup
+	// pane listing
+	// key send Enter to pane %42
 }
 
 // ExampleClient_Kill demonstrates ending a live Spawn's agent (SR-6.1): the

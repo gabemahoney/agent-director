@@ -252,6 +252,9 @@ outcomes and recovery are in
 [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission).
 Allow sufficient `callTimeoutMs` for that delivery window; a timeout does not
 cancel submission.
+After confirmed native delivery, a cleanup `ErrInternal` retains the submitted
+receipt through `AgentDirectorError.errDetails`; follow the caller contract's
+cleanup and no-replay rules. No additional typed proof fields are exposed.
 
 Pass `allow_pending: true` to also allow a `pending` row: a launch (spawn,
 reuse or resume) whose agent has not reported in yet, for example to dismiss a
@@ -730,7 +733,7 @@ Only a GONE error means the row's session is not there (for `kill`, GONE is succ
 |---|---|
 | `ErrConfigMalformed` | The CLI refused its config file, `~/.config/agent-director/config.toml`: it cannot be read, does not parse as TOML, or sets a value agent-director refuses (for example a negative `[pause] timeout_seconds`). The description names the file and why: the parse error, or every refused key with its value and the values it allows. Every call that opens the store fails this way until an operator fixes the file. See the caller contract for handling. |
 | `ErrStoreOpen` | The CLI could not open its store; the description says what failed. This includes `HOME` unset or empty with no `home` option (`api: expand config path: …`): every call that opens the store is then refused, whatever `storePath` is. With `createIfMissing: false` it includes a store that does not exist (`database not initialized`); nothing was created. It says nothing about any agent. |
-| `ErrSchemaMismatch` | The CLI refused to open its store: the store was written by a newer agent-director than the binary (`found user_version=<N>, want <M>`), or it has no valid store id. The description says which. Nothing was written, and every call that opens the store fails this way until an operator acts: a newer store needs the agent-director release that wrote it. See Operator actions for recovery. It says nothing about any agent. |
+| `ErrSchemaMismatch` | The CLI refused to open its store: its schema is newer than the binary (`found user_version=<N>, want <M>`), its store id is invalid, or its current-schema input authority is incompatible or uncommitted. The description says which. Nothing was written; an operator must act before store-opening calls can run. A newer store needs the release that wrote it. See [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) for input-authority recovery. This says nothing about any agent. |
 | `ErrSchemaMigrationRequired` | The CLI refused to open its store: the store is older than the binary and must be migrated first. The description gives both schema versions. Nothing was written, and every call that opens the store fails this way until an administrator migrates the store; no call through this client can. See the caller contract for handling. It says nothing about any agent. |
 | `ErrOldLayout` | The CLI refused to open its store: it was about to open the default store (no `storePath`, and no `[store] db_path` in its config file), no store exists in `~/.config/agent-director`, and the old directory exists. Nothing was created, and every call that opens the store fails this way until an operator runs this release's `install.sh`. See the caller contract for handling. It says nothing about any agent. |
 

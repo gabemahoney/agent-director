@@ -85,7 +85,7 @@ var errEmptyPath = errors.New("empty database path")
 
 // schemaVersion is the current schema version this package writes and reads.
 // Bump (and add a migration) whenever the DDL in schema.go changes.
-const schemaVersion = 15
+const schemaVersion = 16
 
 // agentRenameHopVersion is the user_version the agent-rename hop (v8 to v9,
 // migrateV8toV9, b.ssz) produces. install.sh holds the same number as
@@ -241,6 +241,10 @@ func busyTimeoutOrDefault(busyTimeoutMs int) int {
 // mode, and ensures the schema is current. It is the shared backend for
 // OpenWithBusyTimeout and OpenOrInitWithBusyTimeout.
 func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
+	return openDBWithInputWindow(resolved, busyTimeoutMs, nil)
+}
+
+func openDBWithInputWindow(resolved string, busyTimeoutMs int, window *inputMigrationWindow) (*Store, error) {
 	busyTimeoutMs = busyTimeoutOrDefault(busyTimeoutMs)
 
 	// foreign_keys is a per-connection PRAGMA. The context-aware connector
@@ -286,7 +290,7 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 		return nil, fmt.Errorf("store: chmod db file: %w", err)
 	}
 
-	if err := ensureSchema(db, resolved); err != nil {
+	if err := ensureSchemaWithInputWindow(db, resolved, window); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -298,6 +302,11 @@ func openDB(resolved string, busyTimeoutMs int) (*Store, error) {
 	if err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+
+	if err := inputAuthority(context.Background(), db, storeID); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: native input authority is not committed", ErrSchemaMismatch)
 	}
 
 	absolutePath, err := filepath.Abs(resolved)

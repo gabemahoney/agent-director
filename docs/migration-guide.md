@@ -11,102 +11,62 @@ learned the hard way against the production database.
 
 ## 1. Architecture as it exists today
 
-Schema dispatch and fresh-store DDL live in `internal/store/schema.go`, with
-the version constant and typed errors in `internal/store/store.go`. The v9→v10 hop and shared
-runtime-table DDL live in
-`internal/store/cursor_runtime.go`; the v10→v11 proof-eligibility hop lives in
-`internal/store/request_eligibility.go`; the v11→v12 family-history hop lives
-in `internal/store/family_schema.go`; the v12→v13 Codex startup and
-Claude capacity provenance hop lives in `internal/store/codex_startup.go`
-with `migrateClaudeCapacity` in `internal/store/claude_capacity.go`; the
-v13→v14 display observation and ownership hop lives in
-`internal/store/display_schema.go`; the current v14→v15 Codex turn hop lives
-in `internal/store/codex_turn.go`.
-The current schema has seven tables: `spawns`, `permission_requests`,
-`session_history`, `store_meta`, `subagents`, `subagent_launches` and
-`cursor_runtimes`.
+Schema dispatch and fresh-store DDL live in `internal/store/schema.go`;
+`schemaVersion` in `store.go` is **16**. The ten tables are `spawns`,
+`permission_requests`, `session_history`, `store_meta`, `subagents`,
+`subagent_launches`, `cursor_runtimes`, `input_launches`, `input_attempts` and
+`input_imports`. `inputDeliveryDDL` in `input_delivery_schema.go` is shared by
+fresh creation and the administrator import in `input_delivery_migration.go`.
+Earlier hops retain their owning files: `cursor_runtime.go`,
+`request_eligibility.go`, `family_schema.go`, `codex_startup.go` /
+`claude_capacity.go`, `display_schema.go` and `codex_turn.go`.
 
-**The version contract.** `schemaVersion` (`store.go`, currently `15`) is the
-version this binary writes and reads. Every opened DB carries its own version
-in SQLite's `PRAGMA user_version` (0 on a brand-new file). `ensureSchema(db,
-dbPath)` (`schema.go`) is called from `openDB` on every `Open`/`OpenOrInit`
-(passing the *resolved* DB path) and dispatches on that pragma:
+**The version contract.** Every open reads `PRAGMA user_version` and checks:
 
-| `user_version` on disk                 | `ensureSchema` does                                                 |
-| -------------------------------------- | ------------------------------------------------------------------- |
-| `== schemaVersion`                     | nothing — no-op, already current                                    |
-| `0`                                    | `createSchema(db)` — full latest-schema DDL + store id + stamp      |
-| `0 < v < schemaVersion` (older-than-binary) | **gated** — refuse with `ErrSchemaMigrationRequired` unless an administrator authorization sentinel exact-matches; when authorized, run the chained migration steps (see §1a) |
-| `> schemaVersion`                      | wrap `ErrSchemaMismatch` (typed error), run **no** DDL              |
+| Version on disk | Result |
+|---|---|
+| 0, empty schema | Fresh v16 DDL, store id, native-input authority and stamp commit together with FULL on the actual connection. |
+| 0, nonempty schema | `ErrSchemaMismatch`; resetting a version is not fresh creation. |
+| 1–15 | `ErrSchemaMigrationRequired` before any hop unless both exact schema authorization and the administrator input-migration window are present. |
+| 16 | Validate the store id and native-input authority; never reimport files. |
+| Above 16 | `ErrSchemaMismatch`; no DDL. |
 
-**The store never auto-migrates on open.** An older-than-binary DB is *not*
-silently upgraded — that was the b.8dr incident class (§5). The migration only
-runs when an administrator has placed a valid, exact-match authorization
-sentinel next to the DB file; otherwise the open is refused with the typed
-`ErrSchemaMigrationRequired` (`store.go`) and the DB file is left byte-identical
-(zero DB writes). See §1a for the sentinel gate and §1b for the refusal.
+Ordinary opens never construct the maintenance window. An exact preexisting
+sentinel therefore cannot trigger even an earlier hop on the way to v16. The
+administrator includes the invoking HOME's current and old input roots plus
+all declared roots, verifies real process identity/access, and requires the
+operator to maintain exclusion through committed verification. A per-store
+lock alone cannot exclude old or untracked mutators.
 
-The newer-than-binary arm is the guard rail: a DB from a *newer* binary (say
-`user_version=16` opened by a v15 binary) returns `ErrSchemaMismatch` (`store.go`)
-rather than touching the file. Callers detect it with
-`errors.Is(err, ErrSchemaMismatch)`.
+**Store identity and authority.** `store_meta.store_id` remains 16 lowercase
+hex characters, created once by fresh creation or the v4→v5 hop and retained
+by later hops. Invalid identity refuses. The second metadata fact,
+`native_input_authority=sqlite-v1:<store_id>`, commits with fresh DDL or the
+complete v15→v16 import. Every open and input operation checks it; missing or
+wrong-store authority is corruption, not permission to use legacy files.
 
-**The store id.** Schema v5 and later have a `store_meta` table (`key TEXT PRIMARY KEY,
-value TEXT NOT NULL`) whose one row, `store_id`, identifies the store: 64
-random bits from `crypto/rand`, written as 16 lowercase hex characters
-(`storeid.go`). It is written only when the store gets its v5 schema: by
-`createSchema` for a fresh store, or by `migrateV4toV5` for a migrated one. The
-insert is guarded (`insertStoreIDOnceSQL`, `INSERT … SELECT … WHERE NOT
-EXISTS`), so it never replaces an id that is already there. No other statement
-writes `store_meta`, no verb changes the id, and later hops (`migrateV5toV6`,
-`migrateV6toV7`, `migrateV7toV8`, `migrateV8toV9`, `migrateV9toV10`,
-`migrateV10toV11`, `migrateV11toV12`, `migrateV12toV13`, `migrateV13toV14`,
-`migrateV14toV15`) keep it.
-After `ensureSchema` succeeds,
-`openDB` reads the id once (`readStoreID`), and `(*Store).StoreID()` returns
-it. A current-version store with no `store_meta` table, no `store_id` row, or a
-value that is not 16 lowercase hex characters fails the open with an error that
-wraps `ErrSchemaMismatch`. The error never contains the value, the DB is
-closed, and nothing is written. Only a hand edit leaves a store in that state;
-the v5 → v4 recipe (§5) stamps v4, which a v5, v6, v7, v8, v9, v10, v11, v12, v13, v14 or v15 binary refuses
-with `ErrSchemaMigrationRequired`.
+**The registry.** Fifteen entries cover v1→v2 through v15→v16. The final
+entry is `{from:15, inputCutover:true, apply:migrateV15toV16}`; `runMigrationChainWithInputWindow` invokes
+the administrator importer for it. Earlier `apply` steps remain unchanged
+and individually transactional. Inspect the actual registry for later work;
+no next schema number is reserved here.
 
-**A registry of steps, not a switch.** Version transitions are no longer
-`case` arms. Each single-version upgrade is a `migrationStep{from: N, apply:
-migrateV<N>toV<N+1>}` entry in the ordered `migrationSteps` registry
-(`schema.go`); today that registry holds fourteen entries, one per hop from
-v1→v2 through v14→v15. The released `migrateV8toV9` remains unchanged,
-as do the separate v9→v10 runtime-binding, v10→v11 eligibility,
-v11→v12 family-history, v12→v13 provenance and v13→v14 display hops.
-`migrateV14toV15` is the current worked example.
-The next version is v16: append its own step rather than changing these
-settled earlier hops. See §1a's "Adding a step".
-
-**One transaction per step, stamp included.** Every `apply` func opens a single
-`db.Begin()` transaction and does *all* of its DDL/DML **and** the
-`user_version` stamp inside it. Any error rolls the whole thing back with
-`tx.Rollback()`, leaving `user_version` at the previous value. This
-per-step atomicity is what makes the chain safe: a crash between steps leaves
-the DB stamped at the last successfully-committed version, never at an
-intermediate un-stamped state. Earlier committed hops remain after a later
-hop fails. A re-open requires authorization matching that resulting version;
-rerunning the supported installer reads it and refreshes authorization.
-Look at the shape of `migrateV1toV2`: begin → DDL → stamp → commit, with
-a rollback on every error path. `createSchema` follows the same
-begin/exec/stamp/commit pattern (`schemaDDL`, then the guarded store-id
-insert, then the stamp) so a crash mid-creation leaves `user_version` at 0 and
-the next open retries. A retry, or any run on a DB whose tables already exist
-with `user_version` stamped back to 0, keeps the existing tables and store id:
-the DDL is `IF NOT EXISTS` and the insert is guarded.
+**One transaction per step, stamp included.** Each hop commits its DDL/DML
+and version together. A failed hop rolls back; earlier committed hops remain.
+Retry authorization must match that resulting version. The v16 transaction
+also commits the complete import and authority marker. An uncertain commit
+does not authorize replay: reopening verifies committed authority. Fresh
+creation shares the latest DDL and FULL commit discipline; it never accepts
+a nonempty hand-reset schema as a fresh store.
 
 ## 1a. The chained step engine and the sentinel gate
 
-**The chain.** Once an older-than-binary open is authorized (below),
-`runMigrationChain(db, from)` (`schema.go`) loops while `version <
+**The chain.** Once an older-than-binary administrator open is authorized (below),
+`runMigrationChainWithInputWindow(db, from, window)` (`schema.go`) loops while `version <
 schemaVersion`, looking up the registered step for the current version
 (`migrationStepFrom`), applying it, and incrementing. It upgrades a DB across
-*multiple* versions in a single open — a v1 DB opened by the current v15 binary
-runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15 in one pass, each step its own transaction. There is no
+*multiple* versions in a single open — a v1 DB opened by the current v16 administrator
+runs v1→v2→v3→v4→v5→v6→v7→v8→v9→v10→v11→v12→v13→v14→v15→v16 in one pass, each step its own transaction. There is no
 return-after-one-hop: the loop keeps going until the DB reaches `schemaVersion`.
 If the loop finds itself below `schemaVersion` with no registered step for the
 current version, that is a gap in the registry — it fails loudly with
@@ -121,7 +81,7 @@ six-step sentinel flow"); consult it for how an operator triggers a
 migration.
 
 **The authorization sentinel.** `authorizeMigration(dbPath, current)`
-(`migrate_auth.go`) gates the chain. It looks for a sentinel file named
+(`migrate_auth.go`) gates the chain in addition to the administrator window. It looks for a sentinel file named
 `migrate-authorized` sibling to the *resolved* DB path — i.e. in the same
 directory as the DB file, so it authorizes the right store even under a custom
 store path (never hard-coded to `~/.config/agent-director`). The sentinel is a single
@@ -159,7 +119,7 @@ outcome leaves the sentinel **in place as admin evidence**:
   partially honored.
 
 A stale sentinel left behind is provably inert: after a successful migration the
-next open short-circuits on the `== schemaVersion` no-op arm, and a future
+next open validates current authority without importing, and a future
 version bump makes `from` mismatch the DB's now-current version → a refusal that
 just preserves it as evidence. It never triggers an unwanted migration.
 
@@ -177,26 +137,49 @@ never touching `state.db`) — there is no logger plumbed into the store:
   **succeeds** (the migration is already done and correct; the stale sentinel is
   inert per above).
 
-**Adding a step.** To add the next version (v16, generalizing to any vN→vN+1),
-use the v14→v15 worked example below and the validate-first pattern (§2):
+**Adding a step.** For a later vN→vN+1, use the validate-first pattern (§2):
 
-1. Bump `schemaVersion` to `16` (`store.go`).
-2. Evolve `schemaDDL` so a fresh DB is created directly at v16 (the two-places
-   rule — §1, §4). Keep `store_meta` and `createSchema`'s guarded store-id
-   insert. A v15→v16 hop must preserve the existing id.
-3. Write `migrateV15toV16(db)` using one transaction, with validation before
-   mutation and the version stamp last (§2).
-4. Append `{from: 15, apply: migrateV15toV16}` to `migrationSteps` (`schema.go`).
+1. Bump `schemaVersion` to the chosen next version (`store.go`).
+2. Evolve fresh DDL to that version (the two-places rule — §1, §4), preserving
+   the store id and existing authority.
+3. Write the new hop using one transaction, validation before mutation and
+   the version stamp last (§2).
+4. Append its entry to `migrationSteps` (`schema.go`).
 5. Document the recovery policy in §5. Where an in-place reverse recipe is
    supported, add its matching test copy to `TestDowngradeRecipe_MatchesGuide`
    and chain the applicable older recipe to it. Otherwise record the technical
    exception and require a stopped-writer pre-upgrade backup and restore;
    never imply that an older recipe can operate on the new schema.
 
-The chain engine walks the registry up to `schemaVersion` automatically;
-appending the step makes both a v15→v16 upgrade and a v1→v16 chain work.
+The engine walks the actual registry; do not fold later changes into settled hops.
 
-### Current worked example: v14 → v15
+### Current worked example: v15 → v16
+
+The administrator-only input cutover imports legacy launch/current/history
+records into the shared input tables. The original current file takes precedence
+over history after an interrupted legacy save. Exact normalized payloads and
+raw proof bytes/provenance are retained; readable ambiguous/corrupt/conflicting
+or bad-proof evidence remains an unresolved blocker. Unreadable evidence or
+wrong-store/launch attribution refuses rather than assigning it to another owner.
+
+The import, current/history ownership, `input_imports` source bytes/hash,
+store-bound authority marker and v16 stamp share one transaction. FULL is
+verified on its actual connection. Precommit files remain authoritative; after
+commit SQLite is authoritative even if postcommit verification or retirement
+fails. Reentry verifies committed authority and cannot reimport files over newer
+SQLite state. Original launch-lock inodes, provider logs and transcripts survive;
+retirement affects only imported operational JSON. Imported unknown confirmation
+times are not invented. Fresh and migrated stores converge on the same schema.
+
+Before any hop the administrator creates an exclusive stopped-writer backup
+of the actual DB/WAL/SHM and complete legacy roots, with manifest and `COMPLETE`
+written last. Lock files are retained in place, not copied; provider evidence
+outside the roots is not rewritten or included automatically. Failure leaves
+an incomplete backup for inspection, never a reusable destination. Recovery
+is restore-only (§5), including later-write loss and uncertain-attempt
+reconciliation before an older runtime restarts.
+
+### Previous worked example: v14 → v15
 
 `migrateV14toV15` (`codex_turn.go`) appends two nullable `spawns` columns,
 `codex_turn TEXT` and `codex_turn_ended TEXT`, with no default and no
@@ -707,7 +690,10 @@ bytes. What they cover, step by step:
 2. **Authorize the upgrade, then open once.**
    `TestAuthorizedMigrationFromEveryVersion` seeds a row in each older
    version, writes an exact-match sentinel (`writeSentinel(t, dir, from,
-   schemaVersion)`) and opens with `Open`. It asserts `user_version ==
+   schemaVersion)`) and opens with `openMigrationTestStore` from
+   [`migration_fixtures_test.go`](../internal/store/migration_fixtures_test.go).
+   That adapter supplies the test-owned input-migration window; ordinary
+   refusal tests still use `Open`. It asserts `user_version ==
    schemaVersion`, the pre-existing row read with v3's, v5's, v6's and v7's
    `spawns` columns at their defaults (the `GetSpawn` field check, which
    covers v7's `idle_since`, `assertV5Defaults` and `assertV6Defaults`; a new
@@ -822,14 +808,15 @@ see §5.
 ## 4. `createSchema` must always be the latest schema
 
 Restating the two-places rule because it is the most common way a migration
-goes wrong: **fresh databases never replay hops.** The current v15 fresh DDL
+goes wrong: **fresh databases never replay hops.** The current v16 fresh DDL
 includes `cursorRuntimeDDL`, the eligibility column, the three v12
 family-history columns, nullable `spawns.codex_startup TEXT` and
 `spawns.claude_capacity TEXT`, the eight `spawns` and five
 `permission_requests` columns of the v14 display observation and
 ownership, and nullable `spawns.codex_turn TEXT` and
 `spawns.codex_turn_ended TEXT`; the v9→v10, v10→v11, v11→v12, v12→v13,
-v13→v14 and v14→v15 hops use the same respective definitions. Future changes must update
+v13→v14 and v14→v15 hops use the same respective definitions; v16 shares
+`inputDeliveryDDL` and commits its input authority with fresh creation. Future changes must update
 both fresh DDL and the next hop. The §3 step 4
 `schemaShape` comparison guards that both paths land in the same place. If you
 only touch the hop, fresh installs are stuck on the old schema; if you only
@@ -842,13 +829,13 @@ an older DB with `ErrSchemaMigrationRequired` unless an administrator
 authorization is present. **That gate does not make the sandbox rule optional.**
 Two open-time DB writes remain, and both are reachable from a test run:
 
-- `createSchema` writes the full latest schema to any `user_version==0` file on
-  the very first open — a schema-bumping branch stamps fresh DBs at the *new*
-  version.
-- The migration chain **does** fire when a valid sentinel is present, and
-  migration tests write their own `migrate-authorized` sentinel next to their
-  fixture DB to exercise the authorized path. A test that resolves the DB path
-  to the real store, and drops a matching sentinel, will migrate the real store.
+- `createSchema` writes the full latest schema to a fresh, empty
+  `user_version==0` store. A nonempty version-zero store is refused; fresh DBs
+  are stamped at the branch's new version.
+- The migration chain runs with an exact sentinel and the required
+  input-migration window. Migration fixtures supply both through
+  `openMigrationTestStore`; ordinary `Open` still refuses the cutover. A test
+  that targets the real store with those authorizations can migrate it.
 
 So the instant a binary or test built from a schema-bumping branch opens a store
 under the right conditions, it can rewrite that store to the new version — there
@@ -899,7 +886,7 @@ ALTER TABLE <table> DROP COLUMN <added_col>;   -- reverse the v(N-1)→vN DDL
 PRAGMA user_version = <N-1>;      -- stamp back to the version the old binary reads
 ```
 
-This illustrates the historical pattern, not a recipe for v9, v10, v11, v12, v13, v14 or v15. Never
+This illustrates the historical pattern, not a recipe for v9 through v16. Never
 merely reset the version pragma. Confirm the starting version and use only the
 matching tested recipe before letting an older binary open the file. The store
 does not downgrade automatically.
@@ -911,25 +898,23 @@ the v8 → v7 recipe, then the v7 → v6 recipe, and to v5 by those two, then th
 v6 → v5 recipe. Each recipe assumes the store is at its own starting version
 and changes nothing a newer version added, so never skip one.
 
-**Current recovery policy.** Schema v15 is restore-only: there is no
-supported v15→v14 reverse recipe for the Codex turn columns, no supported
-v14→v13 reverse recipe for the display observation and ownership
-columns, and no supported v13→v12 reverse recipe for the context provenance
-columns. The v12 → v11 recipe below applies only to genuine family-only v12
-stores; it must never be run against v13, v14 or v15, or a store whose version was
-merely reset. There is no supported v11→v10 or v10→v9 reverse recipe either
-(technical exceptions to an in-place reverse recipe). Before upgrading,
-stop writers and back up the actual configured database and its WAL/SHM
-companions. Restore that matching pre-upgrade set with the matching prior
-binary and that release's own installer/flags; writes since the backup are
-lost and the installer creates no backup. A backup taken after migration
-cannot reconstruct the pre-upgrade schema or recover earlier overwritten
-state; without a pre-upgrade copy, stop and obtain human help. Do not drop
-any of these columns or reset `user_version` as a downgrade substitute.
-The complete current-layout and
-historical directory-move procedure is owned by
+**Current recovery policy.** Schema v16 is restore-only: neither a reverse
+DDL recipe nor a replayable file-journal export can preserve native input
+authority and uncertainty. Keep all writers excluded, restore the matching
+pre-upgrade DB/WAL/SHM and legacy evidence, preserve original lock inodes and
+use the matching prior binary. Later writes are lost; reconcile uncertain
+attempts against retained post-upgrade evidence before any older runtime starts.
+Never reset `user_version`, synthesize a replayable journal or infer non-delivery
+from missing restored proof. The cutover's completed backup supplements the
+operator's copies; it does not cover earlier directory/config rewrites or
+external provider evidence. Without the matching recovery set, stop for help.
+
+Schemas v15, v14 and v13 also have no supported reverse recipe. The v12→v11
+recipe below is only for genuine family-only v12, never v13–v16 or a hand-reset
+store. No supported reverse path crosses v11→v10 or v10→v9. The v8-and-older
+recipes remain limited to their stated starting versions. The complete
+current-layout and directory-move procedure is owned by
 [Going back to the previous release](operator-actions.md#going-back-to-the-previous-release).
-The v8-and-older recipes below are inapplicable to v9, v10, v11, v12, v13, v14 and v15.
 
 There is no v9 → v8 recipe. The v8 → v9 hop (`migrateV8toV9`, b.ssz) renames
 six columns, adds three columns to `spawns` (`agent`, `end_reported_at` and
@@ -941,10 +926,10 @@ installing. The installer does not make that copy.
 #### v12 → v11 (reverses `migrateV11toV12`)
 
 Use this only on a genuine family-only v12 store whose `PRAGMA user_version;`
-prints `12`, to allow a schema-v11 binary to open it. A v13, v14 or v15 store cannot use
+prints `12`, to allow a schema-v11 binary to open it. A v13, v14, v15 or v16 store cannot use
 this recipe, even if someone resets its version: the context provenance
 columns (and, from v14, the permission columns; from v15, the Codex turn
-columns) would remain and the result would not match schema v11. Stop every agent, server and other caller
+columns, plus v16 input authority/tables) would remain and the result would not match schema v11. Stop every agent, server and other caller
 that can hold or write the store. Back up the actual configured `state.db`
 and its `-wal` and `-shm` companions before changing anything. Use SQLite
 3.35.5 or later, as required by the older `DROP COLUMN` recipes below.

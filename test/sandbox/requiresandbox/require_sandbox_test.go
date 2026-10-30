@@ -539,7 +539,7 @@ func TestRequireSandbox_Passes(t *testing.T) {
 		// b.uc7: with no guarded goal no recipe waits for the guard; in the sandbox
 		// the guard passes and the recipes that wait for it run.
 		{name: "test_docker_j8_outside_sandbox", args: []string{"-j8", "test-docker", "EPIC=harness-smoke"},
-			wantCalls: append([]string{"docker build", "docker run"}, builds...)},
+			wantCalls: append([]string{"docker build", "docker run", "go build ./test/smoke/ts-helper/"}, builds...)},
 		{name: "sandbox_marker_test_docker_generate_j8", args: []string{"-j8", "test-docker", "generate", "EPIC=harness-smoke"},
 			env: []string{"AGENT_DIRECTOR_TEST_SANDBOX=1"}, wantCalls: append([]string{"docker build", "docker run"}, generateAndBuilds...)},
 	} {
@@ -560,7 +560,7 @@ func TestRequireSandbox_Passes(t *testing.T) {
 
 // generateAndBuilds are the go calls of make generate test-docker: go generate,
 // and test-docker's builds (through test-image).
-var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin"}
+var generateAndBuilds = []string{"go generate ./...", "go build ./cmd/agent-director", "go build ./cmd/agent-director-admin", "go build ./test/smoke/ts-helper/"}
 
 // testDockerGenerateAdvice is the advice for make test-docker generate EPIC=harness-smoke.
 const testDockerGenerateAdvice = `make test-docker 'EPIC=harness-smoke' && ` +

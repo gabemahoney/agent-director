@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"io"
 	"log"
 	"time"
@@ -345,6 +346,7 @@ func reuseChangeAndLaunch(d reuseDeps, r spawn.Resolved, ex reuseExamined) (Spaw
 	req.Socket = socket
 	req.Token = token
 	req.StoreID = d.storeID
+	req.Input, _ = d.rs.(inputdelivery.Persistence)
 	out := spawn.CreateAndLabel(d.t, req)
 	emitReused(id, ex, archived, r.DroppedArgs)
 	if err := d.launchOnto(ex, resetVersion, fresh.LaunchOwner).outcome(out, req); err != nil {

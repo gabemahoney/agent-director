@@ -637,7 +637,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "send-keys",
-		Description: "Strip `\\r`, keep `\\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. ErrTmuxSendKeys (GONE: the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Strip `\\r`, keep `\\n`, add Enter (empty text: Enter only). request_token: one key. Native: readiness, 512-byte UTF-8 chunks/drain, one Enter, exact proof; else pane input. ErrSubmissionUnconfirmed: no auto-retry text/Enter; see hook-derived get/status, escalate if unknown. Cleanup: see caller-contract.md. ErrTmuxSendKeys (GONE: no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -661,7 +661,7 @@ var Verbs = []VerbDef{
 			},
 			{
 				Name: "delivery_request_id", Type: "string",
-				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Existing unresolved native input blocks fallback resends too. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
+				Description: "Owns one native ordinary text attempt on this launch (1-128 letters, digits, underscore or hyphen). Retry the same id and normalized text to observe without replay, after state, relay and dialog guards pass. A fresh id permits an intentional identical native turn. Omitted ids conservatively reuse the last confirmed identical native payload. Unresolved or unreadable/corrupt native evidence blocks fallback resends too; discovering old proof never dispatches a different request. Fallback pane input has no native request deduplication guarantee. Exclusive with manual key, no_enter, pane hash and permission answers.",
 				Required:    false, Nullable: false, AllowEmpty: true,
 			},
 			{
@@ -1303,7 +1303,7 @@ var Verbs = []VerbDef{
 	},
 	{
 		Name:        "pause",
-		Description: "Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/missing: no-op. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. Codex: once the agent is gone with an end report, ends the row (before the keys or in the wait). Plain send-keys guards; past ErrDialogMaybeOpen: answer any dialog, send-keys `/exit` with expect_pane_sha256; or kill. ErrTmuxSendKeys (GONE: only it means the row's session is not there), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
+		Description: "Send `/exit` to a waiting row; await `ended` for pause.timeout_seconds. Ended/missing: no-op. " + missingNotProofShort + " ErrPauseTimeout: inspection_required; inspect get/read-pane before more keys; no blind retries. ErrSubmissionUnconfirmed: inspect attempted-input facts (caller-contract.md). Codex: end report + exited agent ends row before keys or in wait. Plain send-keys guards; ErrDialogMaybeOpen: answer dialog, send-keys `/exit` with expect_pane_sha256, or kill. ErrTmuxSendKeys (GONE: only it means no session), ErrTmuxUnresponsive (UNAVAILABLE), ErrTmuxSessionConflict (CONFLICT), ErrTmuxNotAvailable (ENVIRONMENT). " + unusableNamePointer,
 		Callable:    true,
 		HandleFree:  false,
 		Params: []ParamDef{
@@ -1321,6 +1321,7 @@ var Verbs = []VerbDef{
 		ErrorNames: []string{
 			"ErrSpawnNotFound",
 			"ErrSpawnNotPausable",
+			"ErrSubmissionUnconfirmed",
 			"ErrSendKeysWhileRelayed",
 			"ErrRelayFallenBack",
 			"ErrDialogMaybeOpen",

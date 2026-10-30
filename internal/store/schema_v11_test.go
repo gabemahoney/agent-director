@@ -31,8 +31,10 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			priorSpawns := readQuotedRows(t, path, "spawns", "pre", "instance_id", spawnCols)
 			priorRequests := readQuotedRows(t, path, "permission_requests", "pre", "request_id", priorCols)
 			id := assertOneStoreID(t, path)
+			expectInputAuthority(before, id)
+			assertReleasedReentry(t, path, 10, 13)
 			writeSentinel(t, dir, 10, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -54,18 +56,6 @@ func TestV11MigrationEligibilityPreservation(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotShape, wantShape) {
 				t.Fatal("fresh/migrated shape differs")
-			}
-			if err := migrateV10toV11(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err := migrateV11toV12(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err := migrateV12toV13(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err := runMigrationChain(s.db, 13); err != nil {
-				t.Fatal(err)
 			}
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
@@ -124,8 +114,11 @@ func TestV11MigrationExistingColumn(t *testing.T) {
 				mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input,agent_id,main_turn_end_eligible) VALUES('pre',?,'Bash','{}',?,`+tc.value+`)`, tokenA, tc.child)
 			})
 			before := dbDump(t, path)
+			if !tc.refusal {
+				assertReleasedReentry(t, path, 10, 13)
+			}
 			writeSentinel(t, dir, 10, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if tc.refusal {
 				if s != nil {
 					s.Close()
@@ -148,18 +141,6 @@ func TestV11MigrationExistingColumn(t *testing.T) {
 			pr, err := s.GetPermissionRequest("pre", tokenA)
 			if err != nil || pr.MainTurnEndEligible != (tc.value == "1") {
 				t.Fatalf("request %+v %v", pr, err)
-			}
-			if err = migrateV10toV11(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err = migrateV11toV12(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err = migrateV12toV13(s.db); err != nil {
-				t.Fatal(err)
-			}
-			if err = runMigrationChain(s.db, 13); err != nil {
-				t.Fatal(err)
 			}
 			s.Close()
 			s, err = Open(path)
@@ -185,7 +166,7 @@ func TestV11MigrationBackfillRollbackAndRetry(t *testing.T) {
 	before := dbDump(t, path)
 	id := assertOneStoreID(t, path)
 	writeSentinel(t, dir, 10, schemaVersion)
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if s != nil {
 		s.Close()
 	}
@@ -200,7 +181,7 @@ func TestV11MigrationBackfillRollbackAndRetry(t *testing.T) {
 		t.Fatal("failed mutation stamped a version")
 	}
 	withRaw(t, path, func(db *sql.DB) { mustExec(t, db, "DROP TRIGGER fail_eligibility") })
-	s, err = Open(path)
+	s, err = openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +211,7 @@ func TestLegacyNullAgentGatedWritesAndProof(t *testing.T) {
 			path := makeVersionedDB(t, dir, 10)
 			seedV10EligibilityFixture(t, path, nil, nil)
 			writeSentinel(t, dir, 10, schemaVersion)
-			s, err := Open(path)
+			s, err := openMigrationTestStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -303,7 +284,7 @@ func TestV11MigrationOrphanDoesNotAcquireMainProof(t *testing.T) {
 		mustExec(t, db, `INSERT INTO permission_requests(instance_id,request_token,tool_name,tool_input) VALUES('orphan',?,'Bash','{}')`, tokenA)
 	})
 	writeSentinel(t, dir, 10, schemaVersion)
-	s, err := Open(path)
+	s, err := openMigrationTestStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}

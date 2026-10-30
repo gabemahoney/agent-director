@@ -4,16 +4,48 @@ agent-director-admin is an operator tool. Do not run any of its commands without
 
 # agent-director-admin reference
 
-install.sh installs agent-director-admin at `~/.config/agent-director/admin/agent-director-admin` and never on PATH. It opens the same store, with the same config, as agent-director.
+install.sh installs agent-director-admin at `~/.config/agent-director/admin/agent-director-admin` and never on PATH. Store and configuration requirements are described below for each action.
 
 ## Global flags
 
-The global flags are agent-director's, parsed and applied the same way: give the ones agent-director's runs use, if any, so that agent-director-admin opens the same store and reaches the same tmux. Each goes before or after the verb, as --flag value or --flag=value.
+For kill-finished and delete, use agent-director's store, home and tmux overrides. migrate-journal uses the configured store unless --store-path overrides it. snapshot-store requires an explicit --store-path and loads no config. Each global flag goes before or after the verb, as --flag value or --flag=value.
 
-- `--store-path <path>`: Open the store at <path> instead of the configured one ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db).
+- `--store-path <path>`: Use <path> instead of the configured store ([store] db_path in ~/.config/agent-director/config.toml, by default ~/.config/agent-director/state.db). Required for snapshot-store, which reads the existing source without opening it through SQLite.
 - `--home <dir>`: Use <dir> as HOME for this run, so the config, the store and every other ~/ path resolve under it.
 - `--tmux-command <path>`: Run <path> as tmux instead of the tmux on PATH.
-- `--create-if-missing <true|false>`: With false, refuse a store that does not exist (ErrStoreOpen) and create none of it; with true, or when omitted, create a missing store (parent directories, file and schema).
+- `--create-if-missing <true|false>`: For kill-finished and delete: false refuses a missing store (ErrStoreOpen); true or omitted creates its parent directories, file and schema. migrate-journal and snapshot-store require an existing source and never create it.
+
+## snapshot-store
+
+`agent-director-admin --store-path <absolute-path> snapshot-store --directory <private-directory> [--busy-timeout-ms <ms>]`
+
+Copy a consistent database and committed WAL for installer preflight without opening the original through SQLite or changing its files. The directory must exist, be empty and have mode 0700; the caller removes it after reading the snapshot. Read-only POSIX locks guard capture on Linux and macOS; busy, unreadable, changing or unsupported sources refuse with ErrStoreOpen. No config is loaded and no schema is initialized or migrated. Run in a separate process with no other source database descriptors. An error prints one JSON envelope ({err_name, err_description}) on stderr and exits 1.
+
+### Flags
+
+- `--directory <path>`: Absolute path of an existing empty private directory. Required.
+- `--busy-timeout-ms <ms>`: Capture and lock-wait budget, in milliseconds, 1 through 2147483647; default 10000.
+
+### Output
+
+{path}: the private state.db snapshot. Read it with SQLite so committed WAL frames are included; the original remains untouched.
+
+## migrate-journal
+
+`agent-director-admin migrate-journal --maintenance-window --roots-complete --backup-dir <new-absolute-dir> [--legacy-root <absolute-dir>...]`
+
+Cut over the configured store's legacy native-input journals under an operator-maintained maintenance window. Stop incompatible MCP servers, helpers, hooks, commands and launch preparation and prevent new old-runtime invocations through committed verification. A pending schema transition requires an exact authorization sentinel; already-current verification requires none. Invoking HOME's current and old input roots are always included, even for a custom database; declare every additional root. Unreadable inventory refuses without killing processes. SQLite remains authoritative after commit even if file retirement fails. After a committed or uncertain refusal, follow the direct verification retry in docs/operator-actions.md Upgrading the native-input journal. Recovery restores the stopped-writer backup and matching prior binary: later writes are lost; reconcile uncertain attempts before restarting an older runtime. Never reset the schema version or reconstruct replayable journals. Errors include ErrJournalMigrationRefused with structured refusal/result details. Run it as the agents' user and in their tmux environment.
+
+### Flags
+
+- `--maintenance-window`: Assert that the operator has established and will maintain the admission boundary through verification. Required.
+- `--roots-complete`: Assert that every legacy input root relevant to this store identity is established and declared. Required.
+- `--legacy-root <absolute-dir>`: Additional legacy input root containing store-id/launch-token directories. Repeatable.
+- `--backup-dir <new-absolute-dir>`: Exclusive new directory for the stopped-writer database/WAL/SHM and legacy-evidence backup. Required.
+
+### Output
+
+{store_id, authority, backup, retirement_pending}; authority sqlite means the committed marker was verified, never permission to restart old mutators.
 
 ## kill-finished
 

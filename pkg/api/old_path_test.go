@@ -154,6 +154,7 @@ func oldPathRules(t testing.TB) *scanRules {
 	t.Helper()
 	list := []scanException{
 		{file: "internal/layout/old.go", reason: "SR-11.7: the presence rule looks for the old directory"},
+		{file: "internal/adminapi/journal_migration.go", block: "func MigrateJournal(", reason: "operator-only migration inventories both invoking-home input roots before SQLite cutover"},
 		{file: "internal/testsupport/sandboxguard/sandboxguard.go", reason: "SR-14.1: the guard names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-test.sh", reason: "SR-14.1: the gate names both directories"},
 		{file: "skills/release-agent-director/gates/coverage/bun-extra-scripts.sh", reason: "SR-14.1: the gate names both directories"},
@@ -166,6 +167,7 @@ func oldPathRules(t testing.TB) *scanRules {
 		{file: "docs/operator-actions.md", heading: "`install.sh` refuses with `ErrAgentsLive`", reason: "SR-11.7: the refusal names the old directory"},
 		{file: "docs/operator-actions.md", heading: "`install.sh` stops with `ErrMoveFailed`", reason: "SR-11.7: the stop names the old directory"},
 		{file: "docs/operator-actions.md", heading: "Going back to the previous release", reason: "SR-11.7: going back names the old directory"},
+		{file: "docs/operator-actions.md", heading: "Upgrading the native-input journal", reason: "the administrator must inventory the genuine legacy input root before SQLite cutover"},
 		{file: "docs/architecture.md", heading: "Moving agent-director's directory", reason: "SR-11.7: the move's design names the old directory"},
 		{file: installSkillMD, heading: "Upgrading an install from the old directory", anyLevel: true, reason: "SR-11.7, SR-15.3: the skill's upgrade steps name the old directory"},
 		{file: installSkillMD, heading: "Going back to the previous release", anyLevel: true, reason: "SR-11.7, SR-15.3: the skill's way back names the old directory"},

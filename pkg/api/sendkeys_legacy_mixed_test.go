@@ -113,7 +113,7 @@ func TestLegacyRecoveryMixedModernDelivery(t *testing.T) {
 						want = api.ErrDialogMaybeOpen
 					case "valid_hash":
 						params.ExpectPaneSHA256 = p.hash()
-						calls = []tmux.Call{tmux.CallLookup, tmux.CallListPanes, tmux.CallCapture, tmux.CallSendText, tmux.CallSendEnter}
+						calls = paneHashSendCalls
 					case "stale_hash":
 						params.ExpectPaneSHA256 = api.PaneSHA256("an earlier dialog\n")
 						want, calls = api.ErrPaneChanged, paneReadCalls

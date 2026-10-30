@@ -6,10 +6,12 @@ package installsh_test
 // the whole home tree as it was, and the layouts it accepts.
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -412,7 +414,8 @@ fi`)
 				withMoveConfig(func(*moveHome) string { return moveConfig("", 200) })),
 			hold: func(t *testing.T, h *moveHome) { h.HoldSQLite(filepath.Join(h.Old, "state.db"), "BEGIN EXCLUSIVE;") },
 			want: live("The live rows could not be read (the store was busy past its busy timeout of 200 ms, or is unreadable)",
-				"A re-run reads them again.", "database is locked"),
+				"A re-run reads them again.", `"err_name":"ErrStoreOpen"`,
+				"readonly SQLite snapshot ", "context deadline exceeded"),
 		},
 		moveRefusal{
 			name: "rows-cannot-be-read-store-is-not-a-database",
@@ -439,15 +442,118 @@ fi`)
 				}
 				h.OnRelease(func() { _ = os.Chmod(db, fi.Mode().Perm()) })
 			},
-			want: live("The live rows could not be read", "A re-run reads them again.", "unable to open database file"),
+			want: live("The live rows could not be read", "A re-run reads them again.",
+				`"err_name":"ErrStoreOpen"`, "open {HOME}/.agent-director/state.db: permission denied"),
 		},
 	)
 	runMoveRefusals(t, rows)
 }
 
-// TestMovePreflightPasses covers the layouts the live check lets through: an
-// earlier release's pair then ends the install at exit 3, after "pre-flight
-// OK", with nothing moved or changed.
+// Strict no-touch refusal: a stopped writer left the only live row in WAL,
+// and no SHM exists. Reading must see that commit without creating an index
+// beside the original database or altering any original bytes or timestamps.
+func TestMoveWALOnlyLiveRowRefusalLeavesFilesUntouched(t *testing.T) {
+	h := newMoveHome(t)
+	h.BuildOld(withMoveLive("working"))
+	db := filepath.Join(h.Old, "state.db")
+	mainOnly := filepath.Join(h.Root, "main-only.db")
+	h.Copy(db, mainOnly, 0600)
+	if got := h.Sqlite(mainOnly, "SELECT count(*) FROM spawns WHERE state='working';", "-readonly"); got != "0\n" {
+		t.Fatalf("live row was not WAL-only: main file has %q working rows", got)
+	}
+	// BuildOld already stopped and reaped the only writer. A missing transient
+	// index is a valid recovery state; no live writer's sidecar is removed.
+	if err := os.Remove(db + "-shm"); err != nil {
+		t.Fatal(err)
+	}
+	before := h.PhysicalSnapshot()
+	res := h.Install()
+	moveWant{Code: 5, Err: "ErrAgentsLive", Stderr: []string{
+		"Rows in a live state (state, instance id):", "    working live-working",
+		"Nothing was installed or changed."}, NoStdout: []string{"install.sh: pre-flight OK"}}.Check(t, h, res)
+	if d := moveDiff(before, h.PhysicalSnapshot()); d != "" {
+		t.Fatalf("WAL-visible refusal changed the original install:\n%s", d)
+	}
+	if _, err := os.Stat(filepath.Join(h.Root, "journal-backup")); !os.IsNotExist(err) {
+		t.Fatalf("live-row refusal began cutover backup: %v", err)
+	}
+}
+
+// Release downloads happen before live-row refusal. Even a caller's TMPDIR
+// inside the old installation must not leave a directory-mtime mutation.
+func TestMoveReleaseLiveRowRefusalLeavesTMPDIRUntouched(t *testing.T) {
+	h := newMoveHome(t)
+	h.BuildOld(withMoveLive("working"))
+	h.Tmp = h.Old
+	stub := schedStub{h}
+	stub.Curl() // Existing fake-network fixture serves the real candidate pair.
+	h.WriteTool("curl", "exec "+moveQuote(filepath.Join(h.Tools, "curl-stub"))+` "$@"`)
+	args := append([]string{"--from-release", "v9.9.9"}, h.Flags...)
+	for i, path := range []string{h.Pair.Main, h.Pair.Admin} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, []string{"--sha256", "--admin-sha256"}[i], fmt.Sprintf("%x", sha256.Sum256(data)))
+	}
+	moveSetTime(t, h.Old, "2001-02-03 04:05:06")
+	before := h.PhysicalSnapshot()
+	tmpEntries := h.tempEntries()
+	res := schedRunArgv(t, h, h.S.Install, false, args)
+	moveWant{Code: 5, Err: "ErrAgentsLive", TmpEntries: tmpEntries, NoStdout: []string{"install.sh: pre-flight OK", "move    :"},
+		Stdout: []string{"version-check: agent-director-admin stamp matches (" + moveVersion + " " + moveCommit + ")"},
+		Stderr: []string{"    working live-working", "Nothing was installed or changed.", "Re-run this install after the change."}}.Check(t, h, res)
+	if t.Failed() {
+		t.FailNow() // A physical-diff failure must follow the intended refusal.
+	}
+	base := "https://github.com/gabemahoney/agent-director/releases/download/v9.9.9/"
+	wantURLs := []string{base + "agent-director-" + runtime.GOOS + "-" + runtime.GOARCH,
+		base + "agent-director-admin-" + runtime.GOOS + "-" + runtime.GOARCH}
+	if got := stub.CurlURLs(); strings.Join(got, "\n") != strings.Join(wantURLs, "\n") {
+		t.Fatalf("release downloads = %v; want both exact candidates %v", got, wantURLs)
+	}
+	if d := moveDiff(before, h.PhysicalSnapshot()); d != "" {
+		t.Errorf("release refusal changed the original install:\n%s", d)
+	}
+}
+
+// Staging must reject physical containment before creating even a temporary
+// file: cleanup cannot undo the original directory's mtime change.
+func TestMoveStageRefusalLeavesTMPDIRUntouched(t *testing.T) {
+	for _, name := range []string{"old_root", "old_root_alias", "partial_new_root_alias"} {
+		t.Run(name, func(t *testing.T) {
+			h := newMoveHome(t)
+			h.BuildOld()
+			root := h.Old
+			if name == "partial_new_root_alias" {
+				root = h.New
+				moveMarkerStale(h, "")
+				h.Write(filepath.Join(root, "partial.txt"), "an earlier interrupted move\n", 0600)
+			}
+			h.Tmp = root
+			if name != "old_root" {
+				h.Tmp = filepath.Join(h.Root, "tmp-alias")
+				h.Link(root, h.Tmp)
+			}
+			moveSetTime(t, root, "2001-02-03 04:05:06")
+			before := h.PhysicalSnapshot()
+			tmpEntries := h.tempEntries()
+			res := h.Install()
+			moveWant{Code: 5, Err: "ErrMoveFailed", TmpEntries: tmpEntries,
+				Stdout:   []string{"install.sh: pre-flight OK"},
+				NoStdout: []string{"move    :"},
+				Stderr:   []string{"is inside AD's directories; set TMPDIR to a directory outside them"},
+			}.Check(t, h, res)
+			if d := moveDiff(before, h.PhysicalSnapshot()); d != "" {
+				t.Errorf("stage refusal changed the original install:\n%s", d)
+			}
+		})
+	}
+}
+
+// TestMovePreflightPasses uses valid candidates to reach the live check, then
+// refuses staging before any installation change. Earlier candidates must now
+// be rejected before the first snapshot read; they cannot prove this boundary.
 func TestMovePreflightPasses(t *testing.T) {
 	earlier := func(s *moveShared) movePair { return s.NoConfigDir }
 	// passes: pre-flight ends OK and no move starts; noted says whether stdout
@@ -517,6 +623,20 @@ func TestMovePreflightPasses(t *testing.T) {
 			want: passes(false),
 		},
 	}
+	for i := range rows[:len(rows)-1] {
+		setup := rows[i].setup
+		rows[i].pair = nil // The real candidate provides snapshot-store.
+		rows[i].setup = func(t *testing.T, h *moveHome) {
+			setup(t, h)
+			h.WrapTool("mktemp", `if [[ "${!#}" == agent-director.stage.* ]]; then
+    echo 'test: stage temp refused' >&2
+    exit 1
+fi`)
+		}
+		rows[i].want.Code = 5
+		rows[i].want.Err = "ErrMoveFailed"
+		rows[i].want.Stderr = []string{"test: stage temp refused", "cannot make a temp file to hold a copy of {main}"}
+	}
 	runMoveRefusals(t, rows)
 }
 
@@ -528,22 +648,28 @@ func TestMoveEarlierReleaseRefused(t *testing.T) {
 	curAdmin := func(s *moveShared) string { return s.Current.Admin }
 	none := func(s *moveShared) string { return s.NoConfigDir.Main }
 	other := func(s *moveShared) string { return s.OtherDir.Main }
-	earlier := func(main, admin string) moveWant {
-		return moveWant{Code: 3, Stdout: []string{"install.sh: pre-flight OK"}, NoStdout: []string{"move    :"},
+	earlier := func(main, admin string, fresh bool) moveWant {
+		w := moveWant{Code: 3, NoStdout: []string{"move    :"},
 			Stderr: []string{
 				"install.sh: a binary to install is from an earlier release (its version output lacks config_dir ~/.config/agent-director); refusing to install.",
 				"  agent-director      : {main} (config_dir: " + main + ")",
 				"  agent-director-admin: {admin} (config_dir: " + admin + ")",
 				"rerun with --from-release (omit --binary and --admin-binary)",
 			}}
+		if fresh {
+			w.Stdout = []string{"install.sh: pre-flight OK"}
+		} else {
+			w.NoStdout = append(w.NoStdout, "install.sh: pre-flight OK")
+		}
+		return w
 	}
 	old := moveOldWith(nil)
 	rows := []moveRefusal{
-		{name: "neither-binary-has-config-dir", pair: pairs(none, none), setup: old, want: earlier("<none>", "<none>")},
-		{name: "both-name-another-dir", pair: pairs(other, other), setup: old, want: earlier("~/.agent-director", "~/.agent-director")},
-		{name: "only-the-main-binary-lacks-config-dir", pair: pairs(none, curAdmin), setup: old, want: earlier("<none>", "~/.config/agent-director")},
-		{name: "only-the-admin-binary-names-another-dir", pair: pairs(cur, other), setup: old, want: earlier("~/.config/agent-director", "~/.agent-director")},
-		{name: "fresh-install", pair: pairs(none, none), setup: func(*testing.T, *moveHome) {}, want: earlier("<none>", "<none>")},
+		{name: "neither-binary-has-config-dir", pair: pairs(none, none), setup: old, want: earlier("<none>", "<none>", false)},
+		{name: "both-name-another-dir", pair: pairs(other, other), setup: old, want: earlier("~/.agent-director", "~/.agent-director", false)},
+		{name: "only-the-main-binary-lacks-config-dir", pair: pairs(none, curAdmin), setup: old, want: earlier("<none>", "~/.config/agent-director", false)},
+		{name: "only-the-admin-binary-names-another-dir", pair: pairs(cur, other), setup: old, want: earlier("~/.config/agent-director", "~/.agent-director", false)},
+		{name: "fresh-install", pair: pairs(none, none), setup: func(*testing.T, *moveHome) {}, want: earlier("<none>", "<none>", true)},
 	}
 	runMoveRefusals(t, rows)
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -135,10 +136,15 @@ type SendKeysParams struct {
 // SendKeysResult carries native proof for a supported ordinary request. Other
 // pane operations return an empty object and make no exact-proof claim.
 type SendKeysResult struct {
-	RequestID    string `json:"request_id,omitempty"`
-	Outcome      string `json:"outcome,omitempty"`
-	SessionID    string `json:"session_id,omitempty"`
-	RecordID     string `json:"record_id,omitempty"`
+	// RequestID identifies the confirmed native request.
+	RequestID string `json:"request_id,omitempty"`
+	// Outcome is submitted when exact native proof confirms the request.
+	Outcome string `json:"outcome,omitempty"`
+	// SessionID is the native session named by the confirming record.
+	SessionID string `json:"session_id,omitempty"`
+	// RecordID is the provider's confirming record ID, when available.
+	RecordID string `json:"record_id,omitempty"`
+	// RecordSHA256 hashes the exact retained bytes of the confirming record.
 	RecordSHA256 string `json:"record_sha256,omitempty"`
 }
 
@@ -146,6 +152,8 @@ type SendKeysResult struct {
 // store and tmux surface (b.146 rules 7, 8 and 14). The Client builds it from
 // its own readers, clock and configuration.
 type SendKeysEnv struct {
+	// Context bounds native admission, persistence and dispatch. Nil has no caller deadline.
+	Context context.Context
 	// Input supplies native readiness, terminal facts, and the durable launch
 	// journal. Nil uses the platform implementation.
 	Input InputDeliveryBackend
@@ -358,11 +366,13 @@ type sendKeysGuard struct {
 // refusals still end "retry later"; so do a key's and a no_enter text's.
 //
 // Every tmux call uses the row's socket and every action targets a pane id.
-// Manual calls are at most one lookup, one pane listing, one capture, the text
-// or key call, the Enter call and, only after an action failure other than a
-// timeout, one follow-up lookup (SR-13.2). SendKeys never writes the row's
-// state. Ordinary delivery revalidates ownership and guards before every write
-// and queue sample, within bounded readiness, drain and confirmation loops.
+// Manual admission rechecks may repeat the lookup and pane listing before
+// text, a key or Enter. When a hash is supplied, the pane is recaptured after
+// waited admission checks before the first dispatch; the following Enter does
+// not compare that hash against this call's own text. An action failure other
+// than a timeout adds one follow-up lookup (SR-13.2). SendKeys never writes the
+// row's state. Ordinary delivery revalidates ownership and guards before every
+// write and queue sample, within bounded readiness, drain and confirmation loops.
 //
 // Trail (SR-7.4, SR-14): SendKeys writes at most one ad.provenance.disagree
 // record per distinct reason per call (source ad_send_keys), fail-open, and
@@ -430,7 +440,7 @@ func sendKeys(s SendKeysStore, t SendKeysTmux, env SendKeysEnv, params SendKeysP
 }
 
 // run is the send-keys flow; the returned error is SendKeys'.
-func (r *sendKeysRun) run(params SendKeysParams) error {
+func (r *sendKeysRun) run(params SendKeysParams) (resultErr error) {
 	plan, err := planSendKeys(params)
 	if err != nil {
 		return err
@@ -463,14 +473,17 @@ func (r *sendKeysRun) run(params SendKeysParams) error {
 		return fmt.Errorf("instance %s: %w", row.InstanceID, err)
 	}
 	if row.Identity.Token != "" {
-		id := deliveryIdentity(row, r.s.StoreID())
-		r.input, err = openInputDelivery(r.env.Input, id)
+		r.input, err = openInputDelivery(r.env.Context, r.env.Input, r.s, row, r.s.StoreID(), plan.answer || plan.key != nil || plan.hash != "" || !plan.enter || plan.text == "")
 		if err != nil {
 			return deliveryNotStarted(row, "exclusive input writer or delivery journal is unavailable")
 		}
 	}
 	if r.input != nil {
-		defer r.input.Close()
+		defer func() {
+			if err := r.input.Close(); err != nil {
+				resultErr = inputCleanupError(row, r.found, r.deliveryResult, resultErr, err)
+			}
+		}()
 		id := deliveryIdentity(row, r.s.StoreID())
 		r.automatic = supportsInput(r.input, id) && !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != ""
 		if !plan.answer && plan.key == nil && plan.hash == "" && plan.enter && plan.text != "" {
@@ -515,23 +528,89 @@ func (r *sendKeysRun) send(plan sendKeysPlan, params SendKeysParams) error {
 	if err != nil {
 		return err
 	}
+	if !plan.answer && plan.hash != "" {
+		if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+			return err
+		}
+	}
+	if r.input != nil {
+		if err := r.admitInput(r.env.Context, r.input, r.s, func(current Spawn) error {
+			if err := sendKeysStateGuard(current, params); err != nil {
+				return err
+			}
+			guard, err := evaluateRelayGuard(r.s, r.j, r.env.IntentHold, current, params)
+			if err != nil {
+				return err
+			}
+			if guard.refusal != nil {
+				return guard.refusal
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		r.beforeWrite = func() error {
+			if err := r.checkInputTarget(r.input); err != nil {
+				return deliveryNotStarted(r.row, "input admission changed after intent")
+			}
+			return nil
+		}
+	}
 	if r.automatic {
 		return r.deliverOrdinary(paneID, launch, plan, params)
 	}
 	if plan.answer {
 		return r.paneAnswer(paneID, launch, plan, params)
 	}
-	if plan.hash != "" {
-		if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
-			return err
-		}
-	}
 	if plan.key != nil {
+		if plan.hash != "" {
+			prior := r.beforeWrite
+			r.beforeWrite = func() error {
+				if prior != nil {
+					if err := prior(); err != nil {
+						return err
+					}
+				}
+				if r.input != nil {
+					if err := checkInput(r.input); err != nil {
+						return err
+					}
+				}
+				if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+					return err
+				}
+				if r.env.Context != nil && r.env.Context.Err() != nil {
+					return deliveryNotStarted(r.row, "input admission expired during pane capture")
+				}
+				return nil
+			}
+		}
 		return r.sendKey(paneID, launch, *plan.key)
 	}
 	if r.input != nil {
 		if err := r.recordManualInput(); err != nil {
 			return err
+		}
+	}
+	if plan.hash != "" {
+		prior := r.beforeWrite
+		r.beforeWrite = func() error {
+			if prior != nil {
+				if err := prior(); err != nil {
+					return err
+				}
+			}
+			// Admission may have waited while the pane changed. Check after
+			// that wait, but never compare the caller's hash after our text.
+			if !r.found.Sent {
+				if err := r.paneMatches(paneID, launch, plan, ""); err != nil {
+					return err
+				}
+				if r.env.Context != nil && r.env.Context.Err() != nil {
+					return deliveryNotStarted(r.row, "input admission expired during pane capture")
+				}
+			}
+			return nil
 		}
 	}
 	return r.typeText(paneID, launch, plan.text, plan.enter)
@@ -571,18 +650,26 @@ func (r *sendKeysRun) sendKey(paneID string, launch tmux.Launch, k paneKey) erro
 			return err
 		}
 	}
+	if r.beforeWrite != nil {
+		if err := r.beforeWrite(); err != nil {
+			return err
+		}
+	}
 	r.found.Sent = true
 	call, err := tmux.CallSendKey, error(nil)
 	if k.name != "" {
+		r.found.EnterAttempted = k.name == "Enter"
 		err = r.t.SendKeyPane(r.socket, paneID, k.name)
 	} else {
 		call = tmux.CallSendText
+		r.found.BytesAttempted = len(k.char)
 		err = r.t.SendKeysPane(r.socket, paneID, k.char, false)
 	}
 	if err != nil {
 		r.found.SendErr = err
 		return r.sendFailed(err, call, launch)
 	}
+	r.found.TextSent = k.char != ""
 	return nil
 }
 
@@ -626,6 +713,37 @@ func (r *sendKeysRun) paneAnswer(paneID string, launch tmux.Launch, plan sendKey
 	if !written {
 		return fmt.Errorf("%w: %s request %s no longer awaits an answer; nothing was sent",
 			store.ErrNoOpenPermissionRequest, id, token)
+	}
+	priorCheck := r.beforeWrite
+	r.beforeWrite = func() error {
+		if priorCheck != nil {
+			if err := priorCheck(); err != nil {
+				return err
+			}
+		}
+		if checker, ok := r.s.(interface {
+			CheckPaneIntent(context.Context, string, string, PaneIntent) error
+		}); ok {
+			ctx := r.env.Context
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := checker.CheckPaneIntent(ctx, id, token, intent); err != nil {
+				return err
+			}
+		}
+		if r.input != nil {
+			if err := checkInput(r.input); err != nil {
+				return err
+			}
+		}
+		if err := r.paneMatches(paneID, launch, plan, token); err != nil {
+			return err
+		}
+		if r.env.Context != nil && r.env.Context.Err() != nil {
+			return deliveryNotStarted(r.row, "input admission expired during pane capture")
+		}
+		return nil
 	}
 	if err := r.sendKey(paneID, launch, *plan.key); err != nil {
 		r.releaseIntent(id, token, intent)
@@ -869,14 +987,20 @@ func isInteractiveState(state string) bool {
 //   - [ErrTmuxNotAvailable]: the tmux binary could not be run, the socket is
 //     not accessible to this user, or this is not the tmux server the agent
 //     was launched on.
-//   - [ErrSubmissionUnconfirmed]: ordinary delivery could not establish exact
-//     native proof. Details distinguish no input, partial text and possible
-//     Enter delivery. Never replay uncertain text or Enter; passively observe
-//     the original delivery_request_id or use operator-controlled recovery.
+//   - [ErrSubmissionUnconfirmed]: ordinary delivery lacks exact native proof,
+//     or manual/permission dispatch or cleanup could not confirm its outcome.
+//     Details retain attempted-input facts. Never replay uncertain text, Enter
+//     or permission keys; follow docs/caller-contract.md's input ownership rules.
 //
 // Nondeterminism: the relay guard depends on the clock and on whether each
 // relay hook, and a pane answer's sender, runs.
 func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
+	return c.SendKeysContext(context.Background(), params)
+}
+
+// SendKeysContext carries cancellation through native admission and intent
+// commits. A begun transport can still be ambiguous; it is never retried here.
+func (c *Client) SendKeysContext(ctx context.Context, params SendKeysParams) (SendKeysResult, error) {
 	if err := c.checkClosed(); err != nil {
 		return SendKeysResult{}, err
 	}
@@ -888,7 +1012,9 @@ func (c *Client) SendKeys(params SendKeysParams) (SendKeysResult, error) {
 	// action timeout plus the pipe-close wait plus 2 s. The caller identity
 	// is collected inside agent-director, never from caller-asserted params
 	// (SR-5.2), once per call by sendKeys.
-	facts, result, err := sendKeys(c.st, c.tmuxClient, c.sendKeysEnv(), params)
+	env := c.sendKeysEnv()
+	env.Context = ctx
+	facts, result, err := sendKeys(c.st.WithContext(ctx), c.tmuxClient, env, params)
 	// Exactly one ad.send_keys.called per call past the closed check, on
 	// every outcome (SR-7.4, SR-5.2), fail-open.
 	emitSendKeysCalled(params, facts, err)

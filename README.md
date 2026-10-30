@@ -76,5 +76,3 @@ reported its exit) instead of leaving it `working` or `waiting`. Run it often.
 
 `expire` deletes finished rows older than the retention window (31 days by
 default), so the store does not grow forever. Running it daily is enough.
-
-See [Maintenance](docs/maintenance.md) for details.

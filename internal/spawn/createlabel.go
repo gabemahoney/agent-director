@@ -31,6 +31,7 @@ type LaunchTmux interface {
 // STORE). StoreID is the writing store's (*store.Store).StoreID(); the step
 // never invents or defaults one.
 type CreateRequest struct {
+	Input             inputdelivery.Persistence
 	Agent             string
 	OrdinaryInputSafe bool
 	Socket            string
@@ -111,7 +112,7 @@ type CreateOutcome struct {
 // create and label by id carries req.StoreID as the label's last field.
 func CreateAndLabel(t LaunchTmux, req CreateRequest) CreateOutcome {
 	if req.Agent != "" {
-		command, env, err := inputdelivery.Prepare(inputdelivery.Identity{StoreID: req.StoreID, Token: req.Token, InstanceID: req.InstanceID, Socket: req.Socket, CWD: req.CWD, Agent: req.Agent}, req.Command, req.Env, req.OrdinaryInputSafe)
+		command, env, err := inputdelivery.Prepare(inputdelivery.Identity{StoreID: req.StoreID, Token: req.Token, InstanceID: req.InstanceID, Socket: req.Socket, CWD: req.CWD, Agent: req.Agent}, req.Command, req.Env, req.OrdinaryInputSafe, req.Input)
 		if err != nil {
 			return CreateOutcome{Kind: CreateFailed, Cause: asCallError(tmux.CallCreate, err)}
 		}

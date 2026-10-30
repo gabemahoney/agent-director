@@ -14,7 +14,28 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the previous release and runs both installers")
 	}
-	doc, err := os.ReadFile("../../docs/operator-actions.md")
+	const skillPath = "../../skills/install-agent-director/SKILL.md"
+	skill, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pointer, ok := strings.Cut(string(skill), "## Going back to the previous release\n")
+	if !ok {
+		t.Fatal("install skill recovery pointer missing")
+	}
+	_, link, ok := strings.Cut(pointer, "Follow [Going back to the previous release](")
+	if !ok {
+		t.Fatal("install skill recovery link missing")
+	}
+	target, _, ok := strings.Cut(link, ")")
+	const sourceURL = "https://github.com/gabemahoney/agent-director/blob/main/"
+	if !ok || target != sourceURL+"docs/operator-actions.md#going-back-to-the-previous-release" {
+		t.Fatalf("install skill recovery link changed: %q", target)
+	}
+	// The absolute URL also works beside a standalone install.sh. Resolve its
+	// repository path in the frozen source so the offline test follows this
+	// candidate's canonical procedure, rather than an unrelated deployed version.
+	doc, err := os.ReadFile(filepath.Join("../..", strings.TrimPrefix(strings.Split(target, "#")[0], sourceURL)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,42 +43,36 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 	if !ok {
 		t.Fatal("rollback advice heading missing")
 	}
-	for _, copy := range []struct{ path, end string }{
-		{"../../skills/install-agent-director/SKILL.md", ""},
-		{"../../tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md", "\nEOF\n"},
-	} {
-		b, err := os.ReadFile(copy.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
-		if copy.end != "" {
-			var complete bool
-			got, _, complete = strings.Cut(got, copy.end)
-			if !complete {
-				t.Fatalf("%s: incomplete expected recovery text", copy.path)
-			}
-			got += "\n"
-		}
-		if !found || got != section {
-			t.Fatalf("%s: complete recovery text differs from operator advice", copy.path)
-		}
+	const expectedPath = "../../tickets/testplans/b.75s/t1.75s.f7/t2.75s.f7.wb/t2.75s.f7.wb.md"
+	b, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, got, found := strings.Cut(string(b), "## Going back to the previous release\n")
+	got, _, complete := strings.Cut(got, "\nEOF\n")
+	if !found || !complete || got+"\n" != section {
+		t.Fatalf("%s: complete recovery text differs from linked operator advice", expectedPath)
 	}
 	advice := strings.Join(strings.Fields(strings.Split(section, "\n1.")[0]), " ")
 	for _, phrase := range []string{
-		"including schema v9→v10, v10→v11, v11→v12, v12→v13, v13→v14 and v14→v15, the old-layout steps below do not apply",
-		"stop agents, servers and callers and keep a copy of the actual",
-		"store (`[store] db_path` when set), including its `-wal` and `-shm` files",
-		"restore that pre-upgrade copy and install the previous release with its own",
-		"`install.sh` and the original install flags",
+		"including schema v9→v10 through v15→v16, the old-layout steps below do not apply",
+		"stop all writers and keep a copy of the actual store (`[store] db_path` when set), its existing `-wal`/`-shm`, and all legacy input evidence",
+		"Keep provider logs/transcripts outside those roots too",
+		"maintain the same exclusion, preserve the post-upgrade evidence",
+		"restore the matching pre-upgrade DB and input evidence at their original paths",
 		"removing a `-wal` or `-shm` that the copy lacks",
-		"and the original install flags",
-		"This loses all writes made since the backup",
-		"The installer does not make this backup",
-		"A copy made after migration cannot replace the pre-upgrade backup",
-		"make a v15 store readable by a v9, v10, v11, v12, v13 or v14 binary",
-		"There is no supported in-place downgrade from v15",
-		"The tested v12→v11 family-history recipe applies only to a genuine family-only v12 store and cannot operate on v13, v14 or v15",
+		"Keep original launch-lock inodes; do not replace or delete them",
+		"Install the matching previous release with its own `install.sh` and the original flags",
+		"Before restarting any older runtime, reconcile uncertain attempts against the preserved evidence",
+		"restoration loses all later writes and can lose proof of input that already reached an agent",
+		"Never replay an attempt merely because the restored copy lacks its proof",
+		"The journal cutover creates a separate stopped-writer backup before schema changes; other installer steps do not supply this complete recovery set",
+		"A copy made after migration cannot replace the pre-upgrade set",
+		"Schema v16 has no supported in-place downgrade or replayable file-journal export",
+		"A binary swap or version reset cannot undo the cutover",
+		"Schema v15, v14 and v13 are also restore-only",
+		"The v12→v11 family-history recipe applies only to genuine family-only v12 stores; it cannot operate on v13–v16",
+		"Without that set, or while an uncertain attempt remains unreconciled, stop and obtain human help",
 	} {
 		if !strings.Contains(advice, phrase) {
 			t.Fatalf("rollback advice changed; recheck the literal follow: missing %q", phrase)
@@ -109,6 +124,8 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			preservedQuery := "SELECT launch_token,life_number,row_version,pid,proc_starttime,pane_id,pane_pid,pane_starttime FROM spawns; SELECT * FROM permission_requests; SELECT * FROM session_history; SELECT * FROM store_meta;"
 			preserved := h.Sqlite(db, preservedQuery)
 			h.S, h.Pair = moveFixture(t), moveFixture(t).Current
+			originalFlags := append([]string(nil), h.Flags...)
+			h.authorizeJournalMigration()
 			moveMustInstall(t, h)
 			if v, current := h.migStoreVersion(db), moveCurrentVersion(t, h); v != current {
 				t.Fatalf("upgrade schema = %s; want %s", v, current)
@@ -128,12 +145,21 @@ func TestAdviceFollow_CurrentLayoutRollback(t *testing.T) {
 			postUpgradeCopy := rollbackStoreCopy(t, db)
 			// Stop the post-upgrade writer too; its WAL must not survive restore.
 			h.HoldSQLite(db, "PRAGMA wal_autocheckpoint=0; UPDATE spawns SET cwd='/after', labels='{}' WHERE instance_id='before'; INSERT INTO spawns(instance_id,state,cwd,tmux_session_name,relay_mode,agent) VALUES ('after','ended','/after','ad-after','off','claude');").Kill()
+			// Preserve the later evidence before either restore. Inspect a separate
+			// copy so SQLite cannot checkpoint or remove its saved WAL/SHM.
+			postUpgradeEvidence := rollbackStoreCopy(t, db)
+			inspection := filepath.Join(t.TempDir(), "state.db")
+			rollbackRestoreStore(t, h, inspection, postUpgradeEvidence)
+			if got := h.Sqlite(inspection, "SELECT instance_id,cwd FROM spawns ORDER BY instance_id; SELECT count(*) FROM input_attempts; SELECT count(*) FROM input_launches;"); got != "after|/after\nbefore|/after\n0\n0\n" {
+				t.Fatalf("preserved evidence must retain later writes and establish no input to reconcile before older runtime use: %q", got)
+			}
 			rollbackRestoreStore(t, h, db, postUpgradeCopy)
 			if got := h.Run(previous.Main, "list"); got.Code == 0 || !strings.Contains(got.Stderr, "ErrSchemaMismatch") {
 				t.Fatalf("copy made after migration replaced the required pre-upgrade backup: %+v", got)
 			}
 			rollbackRestoreStore(t, h, db, backup)
 			h.S, h.Pair = &old, previous
+			h.Flags = originalFlags
 			moveMustInstall(t, h) // previous release's own installer, same flags
 			if got := h.Run(filepath.Join(h.New, "bin", "agent-director"), "get", "--instance-id", "before"); got.Code != 0 || !strings.Contains(got.Stdout, "original-session") || !strings.Contains(got.Stdout, "/before") {
 				t.Fatalf("restored previous release cannot read original row: %+v", got)

@@ -138,6 +138,23 @@ func paneIntentOwnerArgs(intent PaneIntent) []any {
 	return append([]any{millisArg(intent.At)}, processIdentityArgs(intent.Sender)...)
 }
 
+// CheckPaneIntent keeps the original pane claim across a waited native-input
+// intent commit. It does not renew the claim or choose a response.
+func (s *Store) CheckPaneIntent(ctx context.Context, instanceID, token string, intent PaneIntent) error {
+	return s.WithContext(ctx).readWithin(DefaultLockWait, "store: check pane intent", func(ctx context.Context, conn *sql.Conn) error {
+		args := append([]any{instanceID, token, intent.As}, paneIntentOwnerArgs(intent)...)
+		var matched int
+		err := conn.QueryRowContext(ctx, `SELECT count(*) FROM permission_requests AS pr WHERE pr.instance_id=? AND pr.request_token=? AND pr.pane_as=? AND `+paneIntentOwnerSQL+` AND `+awaitingAnswerSQL, args...).Scan(&matched)
+		if err != nil {
+			return err
+		}
+		if matched != 1 {
+			return ErrNoOpenPermissionRequest
+		}
+		return ctx.Err()
+	})
+}
+
 // paneSentSQL is RecordPaneSent's statement.
 const paneSentSQL = `UPDATE permission_requests
 	   SET pane_answer = 'sent', decision = pane_as, decision_reason = ?, decided_at = CURRENT_TIMESTAMP

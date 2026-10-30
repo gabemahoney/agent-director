@@ -25,7 +25,7 @@ func TestV6MigrationKeepsV5Rows(t *testing.T) {
 	f := makeV5Fixture(t, t.TempDir())
 	id := assertOneStoreID(t, f.path)
 	writeSentinel(t, f.dir, 5, schemaVersion)
-	if got := openStoreID(t, Open, f.path); got != id {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, f.path); got != id {
 		t.Errorf("StoreID() after the hop = %q; want %q kept", got, id)
 	}
 	assertSentinel(t, f.dir, false)
@@ -104,7 +104,7 @@ func TestDowngradeV6ToV5_KeepsRowsThenRemigrates(t *testing.T) {
 	}
 
 	writeSentinel(t, filepath.Dir(path), 5, schemaVersion)
-	if got := openStoreID(t, Open, path); got != storeID {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, path); got != storeID {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV6Defaults(t, path, id)

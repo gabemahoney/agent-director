@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/apitest"
 )
@@ -29,14 +30,31 @@ type paneCall struct {
 	Err  error
 }
 
+// Cancel only after the real transport successfully sends Enter. Cancelling
+// before Pause now correctly prevents admission and cannot stand in for a wait.
+type cancelAfterEnterTmux struct {
+	*tmux.Client
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterEnterTmux) SendKeyPane(socket, pane, key string) error {
+	err := c.Client.SendKeyPane(socket, pane, key)
+	if err == nil && key == "Enter" {
+		c.cancel()
+	}
+	return err
+}
+
 // paneVerb opens the production client (open) and calls verb on instanceID:
 // read-pane; send-keys of text with allow_pending (a live row ignores it); or
-// pause, typing /exit, with a cancelled context so its wait ends at once:
-// that wait's context.Canceled means /exit and Enter went through, and is
+// pause, cancelling only after /exit and its real Enter succeed so its wait
+// ends at once. That wait's context.Canceled means both went through, and is
 // returned as success.
 func (f *killFix) paneVerb(t testing.TB, verb apitest.PaneVerb, instanceID, text string) paneCall {
 	t.Helper()
-	c := f.open(t, 0, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := f.open(t, 0, "", cancel)
 	defer c.Close() //nolint:errcheck
 	switch verb {
 	case apitest.PaneReadPane:
@@ -46,8 +64,6 @@ func (f *killFix) paneVerb(t testing.TB, verb apitest.PaneVerb, instanceID, text
 		_, err := c.SendKeys(api.SendKeysParams{InstanceID: instanceID, Text: text, AllowPending: true})
 		return paneCall{Err: err}
 	case apitest.PanePause:
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
 		_, err := c.Pause(ctx, api.PauseParams{InstanceID: instanceID})
 		if errors.Is(err, context.Canceled) {
 			err = nil

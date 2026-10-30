@@ -3,9 +3,10 @@
 //
 // This is a LEAF test-support package, like procstarttimefix: it imports
 // nothing from internal/store (or any other agent-director package). Its one
-// installer is storefix.InjectWriteFailure, which every test that fails a
+// Go installer is storefix.InjectWriteFailure, which every test that fails a
 // write by kind uses, internal/store's own (package store_test, e.g.
-// store_errors_test.go) included.
+// store_errors_test.go) included. The test-only ts-helper CLI calls Install
+// and Handle.Remove for shell consumers, without opening or migrating a Store.
 //
 // Every trigger's SQL text lives in this file and nowhere else. A trigger is
 // fixed text per kind; the instance id it applies to is never spliced into the
@@ -25,6 +26,8 @@ package writefailfix
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // Kind names one kind of write to make fail. The zero value is not a kind.
@@ -105,6 +108,23 @@ const (
 	MissingDeadlineOverrun Kind = 8
 	// DisplayObservation fails the final report write after request clocks are written.
 	DisplayObservation Kind = 9
+	// InputAttemptInsert fails INSERT on the id's input_attempts, including
+	// the INSERT side of an UPSERT of an existing request, at any phase.
+	// Direct UPDATE/DELETE and other instances are unaffected.
+	InputAttemptInsert Kind = 10
+	// InputTextIntent has the same operation/instance scope, but only when
+	// the inserted record has bytes_attempted > 0. Initial zero-byte intent
+	// and Enter-only intent are unaffected; later positive-byte phases match.
+	InputTextIntent Kind = 11
+	// InputCurrent fails UPDATE on the id's input_launches (binding and
+	// current/history saves included); INSERT/DELETE are unaffected.
+	InputCurrent Kind = 12
+	// InputAuthority fails INSERT of store_meta's native_input_authority.
+	// This is a store-wide marker, not a spawn row: the target argument must
+	// be the metadata key "native_input_authority". Other keys and UPDATE
+	// are unaffected. Install on the existing legacy DB through a raw
+	// connection, never Store.Open, which would try to activate its schema.
+	InputAuthority Kind = 13
 )
 
 // String names the kind, for test failure messages.
@@ -128,6 +148,14 @@ func (k Kind) String() string {
 		return "missing deadline overrun"
 	case DisplayObservation:
 		return "display observation"
+	case InputAttemptInsert:
+		return "input attempt insert"
+	case InputTextIntent:
+		return "input text intent"
+	case InputCurrent:
+		return "input current"
+	case InputAuthority:
+		return "input authority"
 	default:
 		return fmt.Sprintf("writefailfix.Kind(%d)", int(k))
 	}
@@ -135,7 +163,7 @@ func (k Kind) String() string {
 
 // Kinds lists every kind, for table-driven tests.
 func Kinds() []Kind {
-	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation}
+	return []Kind{ReuseArchive, ReuseReset, ReusePermissionDelete, ReuseRestore, LaunchIdentityWrite, PermissionDecision, SubagentRecord, MissingDeadlineOverrun, DisplayObservation, InputAttemptInsert, InputTextIntent, InputCurrent, InputAuthority}
 }
 
 // createTargetsTable creates the bookkeeping table: one row per installed
@@ -161,6 +189,27 @@ type trigger struct {
 // triggersByKind holds every trigger's SQL: the single source (SR-20.3).
 // The kind number in each WHEN clause is the Kind constant's fixed value.
 var triggersByKind = map[Kind][]trigger{
+	InputAttemptInsert: {{name: "ad_test_fail_input_attempt", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_input_attempt
+ BEFORE INSERT ON input_attempts
+ WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+              WHERE kind=10 AND instance_id=json_extract(NEW.record, '$.identity.InstanceID'))
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: input attempt insert'); END`}},
+	InputTextIntent: {{name: "ad_test_fail_input_text_intent", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_input_text_intent
+ BEFORE INSERT ON input_attempts
+ WHEN json_extract(NEW.record, '$.bytes_attempted')>0
+ AND EXISTS (SELECT 1 FROM ad_test_write_failure
+             WHERE kind=11 AND instance_id=json_extract(NEW.record, '$.identity.InstanceID'))
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: input text intent'); END`}},
+	InputCurrent: {{name: "ad_test_fail_input_current", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_input_current
+ BEFORE UPDATE ON input_launches
+ WHEN EXISTS (SELECT 1 FROM ad_test_write_failure
+              WHERE kind=12 AND instance_id=json_extract(OLD.record, '$.Identity.InstanceID'))
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: input current'); END`}},
+	InputAuthority: {{name: "ad_test_fail_input_authority", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_input_authority
+ BEFORE INSERT ON store_meta
+ WHEN NEW.key='native_input_authority'
+ AND EXISTS (SELECT 1 FROM ad_test_write_failure WHERE kind=13 AND instance_id=NEW.key)
+ BEGIN SELECT RAISE(ABORT, 'injected write failure: input authority'); END`}},
 	DisplayObservation: {{name: "ad_test_fail_display_observation", create: `CREATE TRIGGER IF NOT EXISTS ad_test_fail_display_observation
  BEFORE UPDATE OF display_observation ON spawns
  WHEN NEW.row_version IS OLD.row_version AND NEW.permission_epoch IS OLD.permission_epoch
@@ -357,6 +406,21 @@ type Handle struct {
 	rowID int64
 }
 
+// String returns the opaque handle passed between ts-helper install/remove
+// invocations. It identifies one installation, even with overlapping targets.
+func (h Handle) String() string { return fmt.Sprintf("%d:%d", h.kind, h.rowID) }
+
+// ParseHandle decodes a handle returned by Install, for test-only CLI callers.
+func ParseHandle(value string) (Handle, error) {
+	k, row, ok := strings.Cut(value, ":")
+	kind, kindErr := strconv.Atoi(k)
+	rowID, rowErr := strconv.ParseInt(row, 10, 64)
+	if _, known := triggersByKind[Kind(kind)]; !ok || !known || kindErr != nil || rowErr != nil || rowID <= 0 {
+		return Handle{}, fmt.Errorf("writefailfix: invalid handle %q", value)
+	}
+	return Handle{kind: Kind(kind), rowID: rowID}, nil
+}
+
 // Install makes kind's writes on instanceID fail, in one transaction on db
 // (a connection to the test's temp store). The failure stays until Remove;
 // installing the same kind for several ids, or twice for one id, is allowed.
@@ -364,6 +428,9 @@ func Install(db *sql.DB, kind Kind, instanceID string) (Handle, error) {
 	triggers, ok := triggersByKind[kind]
 	if !ok {
 		return Handle{}, fmt.Errorf("writefailfix: unknown kind %v", kind)
+	}
+	if instanceID == "" || kind == InputAuthority && instanceID != "native_input_authority" {
+		return Handle{}, fmt.Errorf("writefailfix: invalid target %q for %v", instanceID, kind)
 	}
 	tx, err := db.Begin()
 	if err != nil {

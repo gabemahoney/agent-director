@@ -292,6 +292,19 @@ type Spawn struct {
 	FamilyState string
 }
 
+// RawFields returns the full stored-row projection, clearing only the derived
+// presentation fields. It preserves State and every other field, including new
+// fields added to Spawn, so whole-row comparisons remain conservative by default.
+// Consumers comparing stored rows MUST use this projection instead of comparing
+// settled presentation or narrowing the comparison to RowSnapshot. This is a
+// value copy, not a fresh read or an authority check; callers still own their
+// raw-state and revision guards and any permitted preparation transitions.
+func (sp Spawn) RawFields() Spawn {
+	sp.ReportedState = ""
+	sp.FamilyState = ""
+	return sp
+}
+
 // The tracking flag every launch write stores (b.xjn, SR-9): the launch's
 // agent decides it. A claude launch's synthesized settings always register
 // SubagentStart and SubagentStop, so it stores 1; a codex launch's settings

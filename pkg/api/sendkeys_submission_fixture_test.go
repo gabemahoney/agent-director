@@ -1,15 +1,22 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
+	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
 	"github.com/gabemahoney/agent-director/pkg/api"
+	"github.com/google/uuid"
 )
 
 // deliveryBackend replaces native process/evidence I/O; store and tmux guards stay real.
@@ -95,6 +102,7 @@ func (s *deliverySession) Confirm(a *api.InputDeliveryAttempt) (*api.InputDelive
 
 type nativeSubmissionStore struct {
 	api.SendKeysStore
+	inputdelivery.Persistence
 	sent bool
 	read func(api.Spawn) (api.Spawn, error)
 	get  func(api.Spawn) api.Spawn
@@ -129,7 +137,7 @@ func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 	t.Helper()
 	e := &nativeSubmissionEnv{killEnv: newKillEnv(t), b: &deliveryBackend{}}
 	e.rec.WithVirtualTime(e.clock, tmux.Timeouts{Query: time.Nanosecond, Action: time.Nanosecond})
-	e.s = &nativeSubmissionStore{SendKeysStore: e.store}
+	e.s = &nativeSubmissionStore{SendKeysStore: e.store, Persistence: e.store}
 	e.rec.AfterCall(tmux.CallSendKey, func(c tmuxfix.SocketCall, _ error) {
 		if c.Key == "Enter" {
 			e.s.sent = true
@@ -137,6 +145,168 @@ func newNativeSubmissionEnv(t *testing.T) *nativeSubmissionEnv {
 	})
 	e.env = api.SendKeysEnv{Input: e.b, Relay: api.RelayView{Procs: e.pc, Now: e.clock.Now, Window: sendKeysWindow()}, Sleep: func(d time.Duration) { e.slept += d; e.clock.Advance(d) }}
 	return e
+}
+
+// sqliteSubmission uses the production Native session and SQLite, replacing only
+// the terminal ioctl queue probe. Logs, proof files, guards and commits stay real.
+// SQLite-backed native tests must reuse it and sqliteDeliveryBackend's fault seams.
+func sqliteSubmission(t *testing.T, relay ...bool) (*nativeSubmissionEnv, killRow, inputdelivery.Launch) {
+	t.Helper()
+	e := newNativeSubmissionEnv(t)
+	e.clock.Advance(time.Now().Sub(e.clock.Now()))
+	r := e.seedRow(t, killRowSpec{State: store.StatePending, SessionID: uuid.NewString(), CWD: t.TempDir(), RelayOn: len(relay) > 0 && relay[0]})
+	return e, r, e.enableSQLiteSubmission(t, r, r.Spawn.SessionID)
+}
+
+// enableSQLiteSubmission must be reused when a native case needs an existing
+// row (including an initial report-in). It retains sqliteSubmission's capability.
+func (e *nativeSubmissionEnv) enableSQLiteSubmission(t *testing.T, r killRow, sessionID string) inputdelivery.Launch {
+	t.Helper()
+	id := sqliteInputIdentity(r.Spawn, e.storeID)
+	id.PaneID, id.PID, id.Starttime = "", 0, ""
+	dir := t.TempDir()
+	l := inputdelivery.Launch{Identity: id, Revision: 1, EvidenceDir: dir, Capability: inputdelivery.Capability{
+		Agent: id.Agent, Version: "2.1.280", SessionID: sessionID, CWD: id.CWD, Socket: id.Socket,
+		Token: id.Token, InstanceID: id.InstanceID, Transcript: filepath.Join(dir, "native.jsonl"), Created: time.Now().UTC(), Safe: true,
+	}}
+	if err := e.st.CreateInputLaunch(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "claude-debug.log"), []byte("Terminal capabilities:"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	e.env.Input = &sqliteDeliveryBackend{e: e, ctx: context.Background()}
+	return l
+}
+
+func sqliteInputIdentity(row api.Spawn, storeID string) inputdelivery.Identity {
+	i := row.Identity
+	return inputdelivery.Identity{StoreID: storeID, Token: i.Token, InstanceID: row.InstanceID, Socket: i.Socket,
+		PaneID: i.PaneID, PID: i.PanePID, Starttime: i.PaneStarttime, Agent: row.Agent, CWD: row.CWD, LifeNumber: row.LifeNumber}
+}
+
+func sqliteGuard(row api.Spawn, storeID string) inputdelivery.Guard {
+	return inputdelivery.Guard{Identity: sqliteInputIdentity(row, storeID), RowVersion: row.RowVersion, PermissionEpoch: row.PermissionEpoch, SessionID: row.SessionID, State: row.State}
+}
+
+// sqliteDeliveryBackend must be reused for SQLite-backed native tests; it keeps
+// real admission and persistence while exposing optional I/O and fault seams.
+type sqliteDeliveryBackend struct {
+	e           *nativeSubmissionEnv
+	ctx         context.Context
+	afterSave   func(*api.InputDeliveryAttempt) error
+	afterClose  func() error
+	limit       func(time.Time) time.Time
+	beforeCheck func()
+}
+
+func (b *sqliteDeliveryBackend) Open(id api.InputDeliveryIdentity) (api.InputDeliverySession, error) {
+	row, err := b.e.st.GetSpawn(id.InstanceID)
+	if err != nil {
+		return nil, err
+	}
+	g := inputdelivery.Guard{Identity: id, RowVersion: row.RowVersion, PermissionEpoch: row.PermissionEpoch, SessionID: row.SessionID, State: row.State}
+	s, err := (inputdelivery.Native{Store: b.e.store, Context: b.ctx, Guard: g}).Open(id)
+	if err != nil {
+		return nil, err
+	}
+	return &sqliteDeliverySession{InputDeliverySession: s, afterSave: b.afterSave, afterClose: b.afterClose, limit: b.limit, beforeCheck: b.beforeCheck}, nil
+}
+
+type sqliteDeliverySession struct {
+	api.InputDeliverySession
+	afterSave   func(*api.InputDeliveryAttempt) error
+	afterClose  func() error
+	limit       func(time.Time) time.Time
+	beforeCheck func()
+}
+
+// Close preserves production cleanup, then optionally loses its acknowledgement.
+func (s *sqliteDeliverySession) Close() error {
+	if err := s.InputDeliverySession.Close(); err != nil {
+		return err
+	}
+	if s.afterClose != nil {
+		return s.afterClose()
+	}
+	return nil
+}
+
+func (s *sqliteDeliverySession) Queue(api.InputDeliveryIdentity) (int, error) { return 0, nil }
+func (s *sqliteDeliverySession) Check() error {
+	if s.beforeCheck != nil {
+		s.beforeCheck()
+	}
+	return s.InputDeliverySession.(interface{ Check() error }).Check()
+}
+
+// sqliteAdmissionWaitContext observes the actual held operation lane: Done is
+// first read to select the context-aware path, then to wait for the occupied slot.
+// It preserves the caller's deadline and cancellation channel without sleeps.
+type sqliteAdmissionWaitContext struct {
+	context.Context
+	armed  atomic.Bool
+	looks  atomic.Int32
+	onWait func()
+}
+
+func (c *sqliteAdmissionWaitContext) Done() <-chan struct{} {
+	if c.armed.Load() && c.looks.Add(1) == 2 {
+		c.onWait()
+	}
+	return c.Context.Done()
+}
+func (s *sqliteDeliverySession) LimitTo(t time.Time) {
+	if s.limit != nil {
+		t = s.limit(t)
+	}
+	s.InputDeliverySession.(interface{ LimitTo(time.Time) }).LimitTo(t)
+}
+func (s *sqliteDeliverySession) BindIdentity(id api.InputDeliveryIdentity, adopted bool) error {
+	return s.InputDeliverySession.(interface {
+		BindIdentity(api.InputDeliveryIdentity, bool) error
+	}).BindIdentity(id, adopted)
+}
+func (s *sqliteDeliverySession) Admit(g inputdelivery.Guard, target api.InputDeliveryIdentity) error {
+	return s.InputDeliverySession.(interface {
+		Admit(inputdelivery.Guard, api.InputDeliveryIdentity) error
+	}).Admit(g, target)
+}
+func (s *sqliteDeliverySession) Manual() { s.InputDeliverySession.(interface{ Manual() }).Manual() }
+func (s *sqliteDeliverySession) Supports(id api.InputDeliveryIdentity) bool {
+	return s.InputDeliverySession.(interface {
+		Supports(api.InputDeliveryIdentity) bool
+	}).Supports(id)
+}
+func (s *sqliteDeliverySession) Save(a *api.InputDeliveryAttempt) error {
+	if err := s.InputDeliverySession.Save(a); err != nil {
+		return err
+	}
+	if s.afterSave != nil {
+		return s.afterSave(a)
+	}
+	return nil
+}
+
+func sqliteAttempt(t *testing.T, e *nativeSubmissionEnv, r killRow) (*inputdelivery.Launch, *api.InputDeliveryAttempt) {
+	t.Helper()
+	l, err := e.st.ReadInputLaunch(context.Background(), r.Token)
+	if err != nil || l == nil {
+		t.Fatalf("launch=%+v %v", l, err)
+	}
+	a, err := e.st.ReadInputAttempt(context.Background(), *l, l.CurrentRequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return l, a
+}
+
+// sqliteProofRecord retains noncanonical JSON whitespace and literal HTML bytes.
+func sqliteProofRecord(t *testing.T, l inputdelivery.Launch, payload string) []byte {
+	t.Helper()
+	text, _ := json.Marshal(payload)
+	return []byte(fmt.Sprintf(" \t{ \"type\":\"user\", \"uuid\":\"cde93519-6972-4b1b-a650-830a0042e876\", \"sessionId\":%q, \"cwd\":%q, \"version\":\"2.1.280\", \"message\":{\"role\":\"user\",\"content\":%s} } \t", l.Capability.SessionID, l.Identity.CWD, text))
 }
 func (e *nativeSubmissionEnv) send(p api.SendKeysParams) (api.SendKeysResult, error) {
 	return api.SendKeys(e.s, e.rec, e.env, p)
@@ -153,9 +323,21 @@ func assertDeliveryError(t *testing.T, err error, outcome string, bytes int, ent
 }
 func assertOrdinaryWrites(t *testing.T, e *killEnv, r killRow, text string) {
 	t.Helper()
+	for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
+		if len(c.Text) > 512 {
+			t.Fatalf("oversized native chunk: %d", len(c.Text))
+		}
+	}
+	assertInputWrites(t, e, r, text)
+}
+
+// assertInputWrites checks exact bytes/target/one Enter without depending on
+// the number of authority reads or whether tmux spells Enter as a key call.
+func assertInputWrites(t *testing.T, e *killEnv, r killRow, text string) {
+	t.Helper()
 	var joined string
 	for _, c := range e.rec.SocketCallsOf(tmux.CallSendText) {
-		if c.Target != r.Spawn.Identity.PaneID || c.Socket != r.Socket || c.PressEnter || len(c.Text) > 512 {
+		if c.Target != r.Spawn.Identity.PaneID || c.Socket != r.Socket || c.PressEnter {
 			t.Fatalf("unsafe text write %+v", c)
 		}
 		joined += c.Text

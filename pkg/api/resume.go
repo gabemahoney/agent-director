@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"io"
 	"log"
 	"os"
@@ -638,6 +639,7 @@ func resumeAfterJsonl(d resumeDeps, row Spawn, sessionID string) (ResumeResult, 
 		return ResumeResult{}, err
 	}
 
+	req.Input, _ = d.s.(inputdelivery.Persistence)
 	out := spawn.Relaunch(d.t, req)
 	_ = trail.Emit(context.Background(), "ad.resume.moved_to_pending", map[string]any{
 		"instance_id": id,

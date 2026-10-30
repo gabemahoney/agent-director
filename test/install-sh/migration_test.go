@@ -6,10 +6,19 @@ package installsh_test
 // move of AD's directory is due. What it refuses is migration_refusals_test.go's.
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/gabemahoney/agent-director/internal/store"
 )
 
 const (
@@ -312,4 +321,163 @@ func TestMigrationWhileTheMoveIsDue(t *testing.T) {
 			t.Errorf("backups = %v, want none", all)
 		}
 	})
+}
+
+// G10 (doc-review D3): "restart administrator verification" after commit,
+// following the operator's direct command when the cause clears.
+func TestAdviceFollow_G10_PostcommitAdministratorVerification(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("administrator process inventory requires Linux")
+	}
+	h := newMoveHome(t)
+	moveMustInstall(t, h)
+	t.Setenv("HOME", h.Home)
+	current := moveCurrentVersion(t, h)
+	db := filepath.Join(h.Home, "custom", "state.db")
+	h.WriteStore(db) // genuine released schema, never a reset current store
+	prior := h.migStoreVersion(db)
+	h.Sqlite(db, moveLiveRow("ended"))
+	h.Write(filepath.Join(h.New, "config.toml"), moveConfig(db, 5000), 0600)
+	roots := []string{filepath.Join(h.New, "input"), filepath.Join(h.Old, "input"), filepath.Join(h.Home, "additional-one"), filepath.Join(h.Home, "additional-two")}
+	for _, root := range roots {
+		if root == filepath.Join(h.Old, "input") {
+			continue // established absent; both invoking-HOME roots still belong in the manifest
+		}
+		if err := os.MkdirAll(root, 0700); err != nil {
+			t.Fatal(err)
+		}
+		h.Write(filepath.Join(root, "provider.log"), "preserved provider evidence\x00\xff", 0600)
+	}
+	extra := roots[2:]
+	roots = append([]string(nil), roots...)
+	sort.Strings(roots)
+	recovery := filepath.Join(h.Home, "original-recovery")
+	verification := filepath.Join(h.Home, "verification-backup")
+	sentinel := filepath.Join(filepath.Dir(db), "migrate-authorized")
+	h.Write(sentinel, fmt.Sprintf(`{"from":%s,"to":%s}`, prior, current), 0600)
+	checks := 0
+	lostAccess := errors.New("postcommit root access lost")
+	result, err := store.MigrateInputJournal(context.Background(), db, roots, recovery, func(context.Context, string, []string) error {
+		checks++
+		if checks == 3 { // existing verification seam, after the atomic commit
+			if err := os.Chmod(extra[1], 0755); err != nil {
+				t.Fatal(err)
+			}
+			return lostAccess
+		}
+		return nil
+	})
+	if !errors.Is(err, lostAccess) || checks != 3 || result.Authority != "sqlite" || result.Backup != recovery || err.Error() != "SQLite cutover committed; keep the maintenance boundary and restart administrator verification: postcommit root access lost" {
+		t.Fatalf("must reach postcommit verification failure: %+v, %v (checks %d)", result, err, checks)
+	}
+	if got := h.Sqlite(db, "PRAGMA user_version; SELECT value FROM store_meta WHERE key='native_input_authority';"); got != current+"\nsqlite-v1:"+result.StoreID+"\n" {
+		t.Fatalf("failure did not leave committed SQLite authority: %q", got)
+	}
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("committed transition did not consume its original sentinel: %v", err)
+	}
+	// Preserve a real later database write across the current-authority retry.
+	h.Sqlite(db, "UPDATE spawns SET labels='{\"after_commit\":\"retained\"}' WHERE instance_id='live-ended';")
+	retained := h.PhysicalSnapshot() // never open the sole recovery DB copy
+	moveMustInstall(t, h, "--journal-legacy-root", extra[0], "--journal-legacy-root", extra[1])
+	wantDB := h.Sqlite(db, ".dump")
+	if _, err := os.Stat(verification); !os.IsNotExist(err) {
+		t.Fatalf("ordinary installer created a verification backup: %v", err)
+	}
+
+	doc := h.migRead("../../docs/operator-actions.md")
+	_, section, ok := strings.Cut(doc, "## Upgrading the native-input journal\n")
+	if !ok {
+		t.Fatal("journal upgrade procedure missing")
+	}
+	section, _, _ = strings.Cut(section, "\n## ")
+	var command string
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "~/.config/agent-director/admin/agent-director-admin ") {
+			if command != "" {
+				t.Fatal("ambiguous direct administrator command")
+			}
+			command = line
+		}
+	}
+	const expectedCommand = "~/.config/agent-director/admin/agent-director-admin --store-path /absolute/actual-state.db migrate-journal --maintenance-window --roots-complete --backup-dir /absolute/new-verification-backup --legacy-root /absolute/additional/input"
+	if command != expectedCommand {
+		t.Fatalf("direct administrator verification command changed: %q", command)
+	}
+	const expectedOutcome = "Use the same invoking `HOME`, actual DB and complete root list as the failed run; omit or repeat `--legacy-root` as in step 3. Choose a new exclusive backup directory. This retry backup can contain the already-migrated store: retain the original pre-upgrade recovery backup separately. Require exit 0 and `authority: \"sqlite\"`; an authority field on an error is not successful verification. An already-current store needs no new sentinel. Rerunning the installer on it uses ordinary `list` and does not replace this administrator verification. If the schema transition is still pending, step 3 supplies its authorization."
+	if !strings.Contains(strings.Join(strings.Fields(section), " "), expectedOutcome) {
+		t.Fatal("postcommit verification conditions changed; recheck the literal follow")
+	}
+	// Substitute only the documented operands, repeating the additional-root
+	// pair for our two roots; execute the command read from the actual runbook.
+	command = strings.NewReplacer(
+		"/absolute/actual-state.db", moveQuote(db),
+		"/absolute/new-verification-backup", moveQuote(verification),
+		"/absolute/additional/input", moveQuote(extra[0])+" --legacy-root "+moveQuote(extra[1]),
+	).Replace(command)
+	refused := h.Run(h.S.Bash, "-c", command)
+	var failure struct {
+		Name    string `json:"err_name"`
+		Details struct {
+			Refusal struct{ Reason, Action string }
+		} `json:"details"`
+	}
+	if err := json.Unmarshal([]byte(refused.Stderr), &failure); err != nil || refused.Code != 1 || refused.Stdout != "" || failure.Name != "ErrJournalMigrationRefused" || failure.Details.Refusal.Reason != "legacy_root_access_unestablished" || failure.Details.Refusal.Action != "keep the maintenance boundary, stop incompatible mutators, and restart administrator verification" {
+		t.Fatalf("direct verification must still refuse the unresolved root: %+v (%v)", refused, err)
+	}
+	if _, err := os.Stat(verification); !os.IsNotExist(err) {
+		t.Fatalf("refused verification created a backup: %v", err)
+	}
+	if err := os.Chmod(extra[1], 0700); err != nil {
+		t.Fatal(err)
+	}
+	passed := h.Run(h.S.Bash, "-c", command)
+	var verified store.InputMigrationResult
+	if err := json.Unmarshal([]byte(passed.Stdout), &verified); err != nil || passed.Code != 0 || passed.Stderr != "" || verified != (store.InputMigrationResult{StoreID: result.StoreID, Authority: "sqlite", Backup: verification}) {
+		t.Fatalf("cause-clears direct verification must succeed: %+v, result %+v (%v)", passed, verified, err)
+	}
+	if got := h.Sqlite(db, ".dump"); got != wantDB {
+		t.Fatalf("verification changed committed database state:\n%s", got)
+	}
+	if _, err := os.Lstat(sentinel); !os.IsNotExist(err) {
+		t.Fatalf("current-authority retry manufactured a sentinel: %v", err)
+	}
+	for _, backup := range []string{recovery, verification} {
+		if got := h.migRead(filepath.Join(backup, "COMPLETE")); got != "stopped-writer pre-upgrade backup\n" {
+			t.Fatalf("incomplete backup %s: %q", backup, got)
+		}
+		var manifest struct {
+			Database string
+			Roots    []string
+		}
+		if err := json.Unmarshal([]byte(h.migRead(filepath.Join(backup, "manifest.json"))), &manifest); err != nil || manifest.Database != db || !reflect.DeepEqual(manifest.Roots, roots) {
+			t.Fatalf("backup did not retain the actual database and every root: %+v (%v)", manifest, err)
+		}
+		for i := range roots {
+			if roots[i] == filepath.Join(h.Old, "input") {
+				if _, err := os.Lstat(filepath.Join(backup, fmt.Sprintf("legacy-%d", i))); !os.IsNotExist(err) {
+					t.Fatalf("backup invented the absent invoking-home root: %v", err)
+				}
+				continue
+			}
+			if got := h.migRead(filepath.Join(backup, fmt.Sprintf("legacy-%d", i), "provider.log")); got != "preserved provider evidence\x00\xff" {
+				t.Fatalf("backup omitted evidence in root %d: %q", i, got)
+			}
+		}
+		// Inspect separate copies, preserving both retained backup sets exactly.
+		inspection := filepath.Join(t.TempDir(), "state.db")
+		rollbackRestoreStore(t, h, inspection, rollbackStoreCopy(t, filepath.Join(backup, "database")))
+		wantVersion := prior
+		if backup == verification {
+			wantVersion = current
+			if got := h.Sqlite(inspection, ".dump"); got != wantDB {
+				t.Fatal("verification backup is not the existing committed authority")
+			}
+		}
+		if got := h.migStoreVersion(inspection); got != wantVersion {
+			t.Fatalf("backup version = %s, want %s", got, wantVersion)
+		}
+	}
+	migUnchanged(t, retained, h.PhysicalSnapshot(), "original-recovery")
+	t.Log("postcommit failure, ordinary installer bypass, direct refusal, cause-clears verification: PASS; original recovery retained, no new sentinel or reimport")
 }

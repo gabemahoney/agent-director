@@ -64,7 +64,7 @@ func TestV8MigrationKeepsV7Rows(t *testing.T) {
 	f := makeV7Fixture(t, t.TempDir())
 	storeID := assertOneStoreID(t, f.path)
 	writeSentinel(t, f.dir, 7, schemaVersion)
-	if got := openStoreID(t, Open, f.path); got != storeID {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, f.path); got != storeID {
 		t.Errorf("StoreID() after the hop = %q; want %q kept", got, storeID)
 	}
 	assertSentinel(t, f.dir, false)
@@ -152,7 +152,7 @@ func TestDowngradeV8ToV7_KeepsRowsThenRemigrates(t *testing.T) {
 	}
 
 	writeSentinel(t, filepath.Dir(path), 7, schemaVersion)
-	if got := openStoreID(t, Open, path); got != storeID {
+	if got := openStoreID(t, func(path string) (*Store, error) { return openMigrationTestStore(t, path) }, path); got != storeID {
 		t.Errorf("StoreID() after re-migration = %q; want %q", got, storeID)
 	}
 	assertV8Defaults(t, path, id)

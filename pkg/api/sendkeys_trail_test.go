@@ -95,11 +95,12 @@ func sktDuplicate(_ *testing.T, e *killEnv, r *killRow) {
 	e.rec.SeedSessions(r.Socket, tmuxfix.SeedSession{Name: "dup", Label: r.current()})
 }
 
-// sktSessionGoesAfterListing removes r's session once the pane listing
-// returns; a bystander keeps the server holding a session.
-func sktSessionGoesAfterListing(t *testing.T, e *killEnv, r *killRow) {
+// sktSessionGoesAfterTextFailure removes r's session after the failed physical
+// text call, so the failure follow-up observes Gone after admission succeeded.
+func sktSessionGoesAfterTextFailure(t *testing.T, e *killEnv, r *killRow) {
 	e.seedBystander(t, r.Socket)
-	e.rec.RemoveSessionAfter(tmux.CallListPanes, r.Socket, r.Session.ID)
+	e.rec.Script(r.Socket, tmuxfix.Script{Failure: tmux.FailUnrecognized}, tmux.CallSendText)
+	e.rec.RemoveSessionAfter(tmux.CallSendText, r.Socket, r.Session.ID)
 }
 
 // sktRebindAfterText binds a new server on r's socket once the text call returns.
@@ -162,11 +163,11 @@ func TestSendKeysTrailCalledPerReturnPath(t *testing.T) {
 			outcome: "ErrTmuxNotAvailable", rowState: "waiting"},
 		{name: "text call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendText)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "Enter call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, tmux.CallSendEnter)),
+		{name: "Enter call timed out", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailTimeout, callEnterKey)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
 		{name: "follow-up ours", seed: sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText)),
 			outcome: "ErrTmuxUnresponsive", rowState: "waiting"},
-		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterListing),
+		{name: "follow-up gone", seed: sktRow(killRowSpec{}, sktSessionGoesAfterTextFailure),
 			outcome: "ErrTmuxSendKeys", rowState: "waiting"},
 		{name: "follow-up different server",
 			seed:    sktRow(killRowSpec{}, ktrScript(tmux.FailUnrecognized, tmux.CallSendText), sktRebindAfterText),

@@ -17,9 +17,11 @@ import (
 
 // paneActionFailure holds what a pane verb gives the action-failure mapping.
 type paneActionFailure struct {
-	// Call is the action call that failed: tmux.CallCapture (read-pane),
-	// tmux.CallSendText for the text and Enter calls (send-keys, pause; the
-	// error names which) or tmux.CallSendKey (pause's line clear).
+	// Call is the action label: tmux.CallCapture (read-pane),
+	// tmux.CallSendText for literal text or compatibility combined text/Enter
+	// calls (send-keys, pause; the typed error identifies the failed step), or
+	// tmux.CallSendKey for a separate key, including Enter sent for guarded or
+	// empty input.
 	Call tmux.Call
 	// Gone is the verb's gone sentinel: tmux.ErrTmuxCaptureFailed
 	// (read-pane) or tmux.ErrTmuxSendKeys (send-keys, pause).
@@ -41,6 +43,9 @@ type paneActionFailure struct {
 	// descriptions say what may have happened instead of that nothing was
 	// done (keysReached). read-pane leaves it false.
 	Keys bool
+	// TextSent records successful literal input before a separate Enter or
+	// another admission failure, independently of the failing call's label.
+	TextSent bool
 	// Next, in Keys mode, is the verb's next step after a failure that may
 	// have left its text in the pane, in place of "retry later" (b.9o4):
 	// send-keys passes sendKeysNext; pause passes the zero value and keeps
@@ -94,7 +99,7 @@ func enterFailedAfterText(ce *tmux.CallError) bool {
 }
 
 // keysReached applies the "keys may have reached the pane" mode to a keys
-// action's failure ce (SR-1.4, SR-7.3), returning the gone error's inputs
+// action's failure ce and observed textSent progress (SR-1.4, SR-7.3), returning the gone error's inputs
 // and the other classes' refusal with their sentences set; next is the
 // verb's next step (b.9o4), which only an ErrTmuxUnresponsive description
 // gives:
@@ -108,13 +113,14 @@ func enterFailedAfterText(ce *tmux.CallError) bool {
 //     class say "the text may be typed but not submitted", and neither
 //     "nothing was sent" nor "nothing was done"; the retry sentence is
 //     next.NotSubmitted;
-//   - any other failure of the line clear or the text call, or an error that
-//     is not a *tmux.CallError (counted as the failed call's unrecognised
-//     reply): pane and r unchanged, since no key was typed.
+//   - any failure after known successful text: preserve the unsubmitted-text
+//     consequence even for a separate key call or an untyped error;
+//   - other failures of the line clear or text call leave pane and r
+//     unchanged; an untyped error counts as an unrecognised reply.
 //
 // A retry sentence left "" is "retry later".
-func keysReached(ce *tmux.CallError, pane paneRefusal, r cantTellRefusal, next keysNext) (paneRefusal, cantTellRefusal) {
-	enter := enterFailedAfterText(ce)
+func keysReached(ce *tmux.CallError, pane paneRefusal, r cantTellRefusal, next keysNext, textSent bool) (paneRefusal, cantTellRefusal) {
+	enter := textSent || enterFailedAfterText(ce)
 	switch {
 	case ce != nil && ce.Failure == tmux.FailTimeout:
 		r.Consequence = keysMayHaveBeenDelivered
@@ -194,7 +200,7 @@ func paneActionFailureError(actionErr error, f paneActionFailure, t TmuxLookup, 
 	}
 	pane, r := f.Pane, f.Refusal
 	if f.Keys {
-		pane, r = keysReached(ce, pane, r, f.Next)
+		pane, r = keysReached(ce, pane, r, f.Next, f.TextSent)
 	}
 	r.Socket = launch.Socket
 	r.Call = f.Call

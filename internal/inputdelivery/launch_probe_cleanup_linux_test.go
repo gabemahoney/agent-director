@@ -70,7 +70,7 @@ func assertPrepareStopsProbeChild(t *testing.T, launcher string, limit time.Dura
 		"CLAUDE_CONFIG_DIR": filepath.Join(root, "config"),
 	}
 	started := time.Now()
-	command, _, err := Prepare(id, []string{wrapper}, env, true)
+	command, _, err := Prepare(id, []string{wrapper}, env, true, &evidencePersistence{})
 	if err != nil {
 		t.Fatal(err)
 	}

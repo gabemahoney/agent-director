@@ -393,7 +393,11 @@ cannot be used (empty, with a control character, or with a character tmux
 stores differently) returns an error classified `ErrInternal`, with no tmux
 call; nothing was sent.
 
-See `(*Client).SendKeys` godoc.
+`SendKeysContext(ctx, params)` uses the caller's context; `SendKeys` uses a
+background context. Cancellation cannot undo attempted input. A cleanup error
+can accompany a confirmed result: `api.ErrDetails(err)` retains that exact
+result. Follow the [caller contract](../../docs/caller-contract.md#ordinary-text-submission)
+before deciding whether another call is safe. See `(*Client).SendKeys` godoc.
 
 #### `AllowPending` — reaching a `pending` launch
 
@@ -700,7 +704,7 @@ Common sentinels across verbs:
 | `ErrSpawnNotFound` | No row for the given `instance_id` |
 | `ErrClientClosed` | Called after `Close()` |
 | `ErrStoreNotInitialized` | Store file absent and `CreateIfMissing` is false |
-| `ErrSchemaMismatch` | DB schema is newer than the binary, or the store has no valid store id; see [Operator actions](../../docs/operator-actions.md#a-migration-write-failed-after-the-binary-swap) |
+| `ErrSchemaMismatch` | DB schema is newer than the binary, the store has no valid store id, or its current-schema input authority is incompatible or uncommitted; see [Operator actions](../../docs/operator-actions.md#upgrading-the-native-input-journal) |
 | `ErrOldLayout` | From `New`, when it is about to open the default store (no `StorePath`, no `[store] db_path` in `config.toml`), no store exists in `~/.config/agent-director` and the old directory exists. Nothing was created; take no action, a human runs this release's `install.sh` (see [Operator actions](../../docs/operator-actions.md#a-verb-refuses-with-erroldlayout)) |
 | `ErrSpawnNotInteractive` | New input requires a live conversational state; with `AllowPending`, a `pending` row is refused when its launch start or token is not recorded or only a session of an earlier launch is found. `ended` and `missing` rows are refused even when observing an existing delivery request; see [Ordinary text submission](../../docs/caller-contract.md#ordinary-text-submission) |
 | `ErrSendKeysWhileRelayed` | The Spawn's request relay may still answer (from `SendKeys` and `Pause`) — the message distinguishes an undecided request from a recorded verdict still being delivered; see [Permission relay](../../docs/caller-contract.md#permission-relay) for handling |

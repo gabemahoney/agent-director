@@ -8,6 +8,7 @@ package store
 // arrangements lives only here (SR-20.3).
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -83,11 +84,32 @@ func makeVersionedDB(t *testing.T, dir string, v int) string {
 		if !ok {
 			t.Fatalf("no migration step from %d", from)
 		}
-		if err := step.apply(db); err != nil {
+		var err error
+		if step.inputCutover {
+			err = migrateInputJournal(db, migrationTestWindow(t, path), from+1)
+		} else {
+			err = step.apply(db)
+		}
+		if err != nil {
 			t.Fatalf("step %d→%d: %v", from, from+1, err)
 		}
 	}
 	return path
+}
+
+// migrationTestWindow supplies a test-owned, empty legacy root for schema-only
+// tests. Real OS exclusion is covered separately by adminapi and Docker cases.
+func migrationTestWindow(t *testing.T, path string) *inputMigrationWindow {
+	t.Helper()
+	return &inputMigrationWindow{ctx: context.Background(), path: path,
+		roots: []string{t.TempDir()}, verify: func(context.Context, string, []string) error { return nil }}
+}
+
+// openMigrationTestStore keeps exact sentinel authorization while admitting the
+// administrator-only hop. Ordinary runtime refusal tests must still call Open.
+func openMigrationTestStore(t *testing.T, path string) (*Store, error) {
+	t.Helper()
+	return openDBWithInputWindow(path, DefaultBusyTimeoutMs, migrationTestWindow(t, path))
 }
 
 // userVersion reads db's PRAGMA user_version.
@@ -276,6 +298,47 @@ func dbDump(t *testing.T, path string) map[string]any {
 		}
 	})
 	return out
+}
+
+// expectInputAuthority extends a legacy dump by exactly the new authority row.
+// All prior metadata rows, their order and types remain part of the expectation.
+func expectInputAuthority(dump map[string]any, id string) {
+	dump["rows store_meta"] = append(slices.Clone(dump["rows store_meta"].([]string)),
+		fmt.Sprintf("%#v", []any{inputAuthorityKey, inputAuthorityVersion + id}))
+}
+
+// assertReleasedReentry checks the old hop's exact idempotence on a copy of
+// its released fixture. Re-running an old hop on a current journal would reset
+// its version, which is intentionally refused instead of being a downgrade.
+func assertReleasedReentry(t *testing.T, path string, from, to int) {
+	t.Helper()
+	copyPath := filepath.Join(t.TempDir(), "state.db")
+	for p, data := range readDBFileSet(t, path) {
+		if err := os.WriteFile(copyPath+strings.TrimPrefix(p, path), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apply := func() {
+		withRaw(t, copyPath, func(db *sql.DB) {
+			for v := from; v < to; v++ {
+				step, ok := migrationStepFrom(v)
+				if !ok || step.apply == nil {
+					t.Fatalf("not a released primitive hop: %d", v)
+				}
+				if err := step.apply(db); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	apply()
+	want := dbDump(t, copyPath)
+	for run := 0; run < 2; run++ {
+		apply()
+		if readUserVersion(t, copyPath) != to || !reflect.DeepEqual(want, dbDump(t, copyPath)) {
+			t.Fatal("released-hop reentry changed retained schema, data or version")
+		}
+	}
 }
 
 // columnSpec is one column a migration step adds; dflt is table_info's
@@ -743,14 +806,14 @@ func makeV7Fixture(t *testing.T, dir string) v7Fixture {
 	t.Helper()
 	f := v7Fixture{dir: dir, path: makeVersionedDB(t, dir, 7), rows: map[string]map[string]string{}}
 	withRaw(t, f.path, func(db *sql.DB) {
-		for _, st := range v7States {
+		for n, st := range v7States {
 			var launch any
 			if st == StatePending {
 				launch = int64(1_790_000_000_123)
 			}
 			mustExec(t, db, `INSERT INTO spawns (claude_instance_id, state, cwd, tmux_session_name, relay_mode, row_version,
 				launch_started_at, launch_token, tmux_socket, liveness_note) VALUES (?, ?, '/work/v7', ?, 'on', 4, ?,
-				'0123456789abcdef', '/tmp/ad-v7/sock', 'probe_eacces')`, v7ID(st), st, "ad-"+v7ID(st), launch)
+				?, '/tmp/ad-v7/sock', 'probe_eacces')`, v7ID(st), st, "ad-"+v7ID(st), launch, fmt.Sprintf("%016x", n+1))
 		}
 		mustExec(t, db, `INSERT INTO permission_requests (claude_instance_id, request_token, tool_name, tool_input,
 			hook_pid, hook_starttime, tool_use_id, settled_at) VALUES (?, 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa', 'Bash', '{}',
@@ -912,7 +975,7 @@ func makeV4HistoryFixture(t *testing.T, dir string) v4HistoryFixture {
 func migrateV4Fixture(t *testing.T, f v4HistoryFixture) {
 	t.Helper()
 	writeSentinel(t, f.dir, 4, schemaVersion)
-	s, err := Open(f.path)
+	s, err := openMigrationTestStore(t, f.path)
 	if err != nil {
 		t.Fatalf("Open(authorised v4): %v", err)
 	}
@@ -1581,7 +1644,6 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 		requests: map[string][]map[string]string{}, history: map[string][]map[string]string{}}
 	f.ids = []string{v8LiveID, v8PendingID, v8RelayID, v8UnsettledID, v8ReusedID, v8OptedOutID, v8MissingID}
 	const (
-		token  = "0123456789abcdef"
 		socket = "/tmp/ad-v8/sock"
 		pidns  = "pid:[4026531836]"
 	)
@@ -1595,7 +1657,7 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 		return row
 	}
 	identity := func(pane string, pid int) map[string]any {
-		return map[string]any{"launch_token": token, "tmux_socket": socket, "tmux_server_pid": 4100,
+		return map[string]any{"launch_token": fmt.Sprintf("%016x", pid), "tmux_socket": socket, "tmux_server_pid": 4100,
 			"tmux_server_started": 1767225600, "tmux_server_starttime": "123", "pane_id": pane, "pane_pid": pid, "pane_starttime": "456"}
 	}
 	merge := func(base, more map[string]any) map[string]any {
@@ -1611,7 +1673,7 @@ func makeV8Fixture(t *testing.T, dir string) v8Fixture {
 			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns,
 			"idle_since": "2026-05-01 10:03:00", "state_changed_ms": 1790000000000}, identity("%2", 4242))),
 		spawn(v8PendingID, map[string]any{"state": "pending", "settled_state": "pending", "row_version": 1,
-			"launch_started_at": int64(1790000000123), "launch_token": token, "tmux_socket": socket,
+			"launch_started_at": int64(1790000000123), "launch_token": "0123456789abcdef", "tmux_socket": socket,
 			"launch_owner_pid": 4300, "launch_owner_starttime": "12345", "launch_owner_pidns": pidns}),
 		spawn(v8RelayID, map[string]any{"state": "check_permission", "settled_state": "check_permission", "relay_mode": "on", "row_version": 4}),
 		spawn(v8UnsettledID, map[string]any{"state": "working", "settled_state": "waiting", "parent_id": v8LiveID,

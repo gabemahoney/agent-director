@@ -10,10 +10,14 @@ package api_test
 // check_permission), so no case steps it.
 
 import (
+	"context"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/gabemahoney/agent-director/internal/inputdelivery"
 	"github.com/gabemahoney/agent-director/internal/store"
 	"github.com/gabemahoney/agent-director/internal/testsupport/tmuxfix"
 	"github.com/gabemahoney/agent-director/internal/tmux"
@@ -258,47 +262,100 @@ func TestSendKeysPendingNoLaunchIdentity(t *testing.T) {
 
 // TestSendKeysPendingRowChangesBeforeSend: on a fresh spawn's or a reuse's
 // pending launch, a gated SessionStart, or a versioned write on a lost reply
-// (the adoption then not applied), between the row read and the send (after
-// the listing, which is all the adoption write follows) still sends to the
-// same pane.
+// (the adoption then not applied), between the row read and the send still
+// sends to the same pane. R11B1 (t2.7tz.tb.ib) also covers the earlier empty
+// journal reconciliation window, before target discovery or admission.
 func TestSendKeysPendingRowChangesBeforeSend(t *testing.T) {
 	t.Parallel()
+	cases := []struct {
+		name    string
+		shape   pendingShape
+		when    tmux.Call
+		session bool
+		native  bool
+	}{
+		{"SessionStart after the listing", pendingOurs, tmux.CallListPanes, true, false},
+		{"lost reply, row write after the listing", pendingLostReply, tmux.CallListPanes, false, false},
+		{"SessionStart before journal load", pendingOurs, beforeJournalLoad, true, false},
+		{"liveness write before journal load", pendingOurs, beforeJournalLoad, false, false},
+		{"native SessionStart before journal load", pendingOurs, beforeJournalLoad, true, true},
+		{"native liveness write before journal load", pendingOurs, beforeJournalLoad, false, true},
+	}
 	for _, k := range skpKinds {
-		t.Run(k.String()+"/SessionStart after the listing", func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedPending(t, k, pendingOurs)
-			e.sessionStartAfter(t, tmux.CallListPanes, r, "sess-start-"+uuid.NewString()[:8])
+		for _, tc := range cases {
+			t.Run(k.String()+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				e := newNativeSubmissionEnv(t)
+				e.env.Input = nil
+				e.clock.Advance(time.Now().Sub(e.clock.Now()))
+				r := e.seedPending(t, k, tc.shape)
+				pane := labelledPane(t, r.Session, r.Token)
+				before := e.adoption(t, r.ID)
+				if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || launch != nil {
+					t.Fatalf("want empty native journal, launch=%+v error=%v", launch, err)
+				}
+				sessionID := uuid.NewString()
+				var raw []byte
+				if tc.native {
+					launch := e.enableSQLiteSubmission(t, r, sessionID)
+					raw = sqliteProofRecord(t, launch, skpText)
+					e.rec.AfterCall(tmuxfix.KeyCall("Enter"), func(tmuxfix.SocketCall, error) {
+						_, attempt := sqliteAttempt(t, e, r)
+						if attempt == nil || attempt.Phase != "enter_attempted" || !attempt.EnterAttempted {
+							t.Fatalf("Enter before committed intent: %+v", attempt)
+						}
+						if err := os.WriteFile(launch.Capability.Transcript, append(raw, '\n'), 0600); err != nil {
+							t.Fatal(err)
+						}
+					})
+				}
+				if tc.session {
+					e.sessionStartAfter(t, tc.when, r, sessionID)
+				} else {
+					e.rowWriteAfter(t, tc.when, r)
+				}
 
-			if err := skpSend(e, r.ID); err != nil {
-				t.Fatalf("SendKeys: %v", err)
-			}
-			e.assertDelivered(t, r.Socket, r.Spawn.Identity.PaneID, skpText)
-			if got := e.columns(t, r.ID).State; got == store.StatePending {
-				t.Errorf("state after the SessionStart = %v; want the row turned live", got)
-			}
-		})
-		t.Run(k.String()+"/lost reply, row write after the listing", func(t *testing.T) {
-			t.Parallel()
-			e := newKillEnv(t)
-			r := e.seedPending(t, k, pendingLostReply)
-			pane := labelledPane(t, r.Session, r.Token)
-			before := e.adoption(t, r.ID)
-			e.rowWriteAfter(t, tmux.CallListPanes, r)
-
-			if err := skpSend(e, r.ID); err != nil {
-				t.Fatalf("SendKeys: %v", err)
-			}
-			e.assertDelivered(t, r.Socket, pane, skpText)
-			want := before
-			want.RowVersion++
-			if after := e.adoption(t, r.ID); after != want {
-				t.Errorf("adoption = %+v; want only the row write's row_version +1 %+v", after, want)
-			}
-			if n := adoptedRecords(t, "send-keys", r.ID); n != 0 {
-				t.Errorf("adopted records = %d; want none (the write did not apply)", n)
-			}
-		})
+				result, err := e.send(api.SendKeysParams{InstanceID: r.ID, Text: skpText, AllowPending: true})
+				if err != nil {
+					t.Fatalf("SendKeys: %v; details=%+v; calls=%+v", err, api.ErrDetails(err), e.rec.SocketCalls())
+				}
+				if tc.native {
+					assertOrdinaryWrites(t, e.killEnv, r, skpText)
+				} else {
+					e.assertDelivered(t, r.Socket, pane, skpText)
+				}
+				if tc.native && (result.Outcome != "submitted" || result.SessionID != sessionID || result.RecordSHA256 != inputdelivery.Hash(raw)) {
+					t.Fatalf("native result=%+v; want exact post-Enter proof", result)
+				}
+				row, err := e.st.GetSpawn(r.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if sqliteInputIdentity(row, e.storeID) != sqliteInputIdentity(r.Spawn, e.storeID) {
+					t.Fatalf("launch identity changed: before=%+v after=%+v", r.Spawn, row)
+				}
+				if row.RowVersion <= r.Spawn.RowVersion {
+					t.Fatal("real preparation write did not advance the captured row version")
+				}
+				if tc.session {
+					if row.State == store.StatePending {
+						t.Errorf("state after the SessionStart = %v; want the row turned live", row.State)
+					}
+				} else {
+					want := before
+					want.RowVersion++
+					if after := e.adoption(t, r.ID); after != want {
+						t.Errorf("adoption = %+v; want only the row write's row_version +1 %+v", after, want)
+					}
+					if n := adoptedRecords(t, "send-keys", r.ID); n != 0 {
+						t.Errorf("adopted records = %d; want none", n)
+					}
+				}
+				if launch, err := e.st.ReadInputLaunch(context.Background(), r.Token); err != nil || (launch != nil) != tc.native {
+					t.Fatalf("plain send invented native authority: launch=%+v error=%v", launch, err)
+				}
+			})
+		}
 	}
 }
 

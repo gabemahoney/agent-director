@@ -58,6 +58,7 @@ type StateDetail struct {
 	// RequestToken and ToolName belong to needs_intelligence, which nothing
 	// shows yet; a permission request never sets them.
 	RequestToken string `json:"request_token,omitempty"`
+	// ToolName is reserved for needs_intelligence; no current reader sets it.
 	ToolName     string `json:"tool_name,omitempty"`
 	// UnchangedMinutes is the completed minutes, rounded down, of the
 	// committed unchanged observation period; only while idle_screen.

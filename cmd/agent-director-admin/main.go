@@ -1,15 +1,18 @@
 // Command agent-director-admin is agent-director's operator tool (b.vqr). It
-// runs the two operator-only actions that the agent-facing agent-director
+// runs the operator-only actions that the agent-facing agent-director
 // CLI, its MCP tools and the Go and TypeScript client libraries do not offer:
-// kill-finished (kill's finished-row opt-in) and delete. install.sh installs
+// kill-finished (kill's finished-row opt-in), delete, migrate-journal and
+// snapshot-store.
+// install.sh installs
 // it at ~/.config/agent-director/admin/agent-director-admin and never on PATH.
 //
 // Like cmd/agent-director it is a thin shim: it parses and applies
 // agent-director's global flags (--store-path, --home, --tmux-command,
 // --create-if-missing) with the same code (clisetup.ParseGlobalFlags,
-// GlobalFlags.Apply), parses the
-// verb's flags, opens the pkg/api Client exactly as agent-director does
-// (clisetup.Open), calls through internal/adminapi and prints the result as
+// GlobalFlags.Apply), parses the verb's flags and calls through internal/adminapi.
+// kill-finished and delete open the pkg/api Client with clisetup.Open;
+// migrate-journal and snapshot-store intentionally bypass Client initialization.
+// It prints the result as
 // JSON on stdout, or one {err_name, err_description} envelope on stderr with
 // exit code 1. help, --help, -h, version, --version, -v, the no-verb run and
 // every verb's --help or -h open no store and load no config, and every help
@@ -17,6 +20,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -27,6 +31,7 @@ import (
 
 	"github.com/gabemahoney/agent-director/internal/adminapi"
 	"github.com/gabemahoney/agent-director/internal/clisetup"
+	"github.com/gabemahoney/agent-director/internal/config"
 	"github.com/gabemahoney/agent-director/internal/oldnames"
 	pkgapi "github.com/gabemahoney/agent-director/pkg/api"
 	"github.com/gabemahoney/agent-director/pkg/api/errnames"
@@ -37,6 +42,7 @@ import (
 type errorEnvelope struct {
 	ErrName        string `json:"err_name"`
 	ErrDescription string `json:"err_description"`
+	Details        any    `json:"details,omitempty"`
 }
 
 // The err_names this binary writes itself; the verbs' own come from
@@ -67,15 +73,56 @@ var errDispatch = errors.New("dispatch error")
 // first argument after the global flags.
 func handlers(o clisetup.Overrides) map[string]func([]string) error {
 	return map[string]func([]string) error{
-		"help":          helpHandler,
-		"--help":        helpHandler,
-		"-h":            helpHandler,
-		"version":       versionHandler,
-		"--version":     versionHandler,
-		"-v":            versionHandler,
-		"kill-finished": func(args []string) error { return killFinishedHandler(o, args) },
-		"delete":        func(args []string) error { return deleteHandler(o, args) },
+		"help":            helpHandler,
+		"--help":          helpHandler,
+		"-h":              helpHandler,
+		"version":         versionHandler,
+		"--version":       versionHandler,
+		"-v":              versionHandler,
+		"kill-finished":   func(args []string) error { return killFinishedHandler(o, args) },
+		"delete":          func(args []string) error { return deleteHandler(o, args) },
+		"migrate-journal": func(args []string) error { return migrateJournalHandler(o, args) },
+		"snapshot-store":  func(args []string) error { return snapshotStoreHandler(o, args) },
 	}
+}
+
+// The cutover must not construct a Client: even its initial schema probe needs
+// the explicit exclusion boundary when an old authorization sentinel exists.
+func migrateJournalHandler(o clisetup.Overrides, args []string) error {
+	var options adminapi.JournalMigrationOptions
+	fs := flag.NewFlagSet("migrate-journal", flag.ContinueOnError)
+	fs.BoolVar(&options.MaintenanceWindow, "maintenance-window", false, "operator maintains exclusion of old mutators through verification")
+	fs.BoolVar(&options.RootsComplete, "roots-complete", false, "operator established all legacy input roots")
+	fs.Var((*stringSlice)(&options.LegacyRoots), "legacy-root", "additional absolute legacy input root (repeatable)")
+	fs.StringVar(&options.BackupDir, "backup-dir", "", "new absolute stopped-writer backup directory")
+	if done, err := parseFlags(fs, args); done {
+		return err
+	}
+	cfg, err := config.Load(clisetup.ConfigPath)
+	if err != nil {
+		return writeError("ErrConfigMalformed", err.Error())
+	}
+	path := o.StorePath
+	if path == "" {
+		path, err = cfg.Store.EffectiveDbPath()
+		if err != nil {
+			return writeError("ErrStoreOpen", err.Error())
+		}
+	}
+	result, err := adminapi.MigrateJournal(context.Background(), path, options)
+	if err != nil {
+		var refusal *adminapi.JournalRefusal
+		var details any = result
+		if errors.As(err, &refusal) {
+			details = struct {
+				Refusal *adminapi.JournalRefusal `json:"refusal"`
+				Result  any                      `json:"result"`
+			}{refusal, result}
+		}
+		_ = json.NewEncoder(os.Stderr).Encode(errorEnvelope{ErrName: "ErrJournalMigrationRefused", ErrDescription: err.Error(), Details: details})
+		return errDispatch
+	}
+	return writeJSON(result)
 }
 
 func main() {
